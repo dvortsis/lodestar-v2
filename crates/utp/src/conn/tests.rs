@@ -615,3 +615,166 @@ fn data_in_flight_is_governed_by_retransmission_not_idle() {
     let d = a.deadline().unwrap();
     assert!(d - t0 <= Duration::from_secs(2), "{:?}", d - t0);
 }
+
+/// Two connected endpoints taken out of a clean simulation, to be driven
+/// by hand.
+fn connected(seed: u64) -> (Connection, Connection, Instant) {
+    let mut sim = Sim::new(seed, CLEAN, 1, 1);
+    while sim.b.is_none() || sim.a.state() != State::Connected {
+        assert!(sim.step());
+    }
+    // B learns the handshake finished from A's confirming ACK.
+    while sim.b.as_ref().unwrap().state() != State::Connected {
+        assert!(sim.step());
+    }
+    let t0 = sim.t0;
+    let b = sim.b.take().unwrap();
+    let a = std::mem::replace(&mut sim.a, Connection::connect(9, 1, LIMITS, t0, t0));
+    (a, b, sim.now)
+}
+
+fn drain(c: &mut Connection, now: Instant) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut packets = Vec::new();
+    while c.poll_transmit(now, &mut out) {
+        packets.push(out.clone());
+    }
+    packets
+}
+
+fn deliver(to: &mut Connection, packets: &[Vec<u8>], now: Instant) {
+    for p in packets {
+        to.on_packet(&parse(p).unwrap(), now);
+    }
+}
+
+#[test]
+fn a_lost_retransmission_is_fast_retransmitted_again() {
+    let (mut a, mut b, now) = connected(11);
+    for _ in 0..8 {
+        a.cc.on_ack(MSS, 1000, now);
+    }
+    a.write(&payload(5 * MSS, 3)).unwrap();
+    let first = drain(&mut a, now);
+    assert_eq!(first.len(), 5);
+    let hole = parse(&first[0]).unwrap().header.seq_nr;
+    // The first is lost; three later ones get through: fast retransmit.
+    deliver(&mut b, &first[1..4], now);
+    deliver(&mut a, &drain(&mut b, now), now);
+    let resend = drain(&mut a, now);
+    assert_eq!(parse(&resend[0]).unwrap().header.seq_nr, hole);
+    assert_eq!(a.retransmits, 1);
+    // The resend is lost too. A packet sent before it arriving says
+    // nothing about it.
+    deliver(&mut b, &first[4..5], now);
+    deliver(&mut a, &drain(&mut b, now), now);
+    assert!(drain(&mut a, now).is_empty(), "no new evidence yet");
+    // Three packets sent after the resend do.
+    a.write(&payload(3 * MSS, 4)).unwrap();
+    let later = drain(&mut a, now);
+    assert_eq!(later.len(), 3, "the halved window still has room");
+    for p in &later {
+        deliver(&mut b, std::slice::from_ref(p), now);
+        deliver(&mut a, &drain(&mut b, now), now);
+    }
+    let again = drain(&mut a, now);
+    assert_eq!(
+        parse(&again[0]).unwrap().header.seq_nr,
+        hole,
+        "resent again without waiting for the timer"
+    );
+    assert_eq!(a.retransmits, 2);
+    deliver(&mut b, &again, now);
+    let mut buf = vec![0u8; 8 * MSS];
+    assert_eq!(b.read(&mut buf).unwrap(), 8 * MSS);
+}
+
+#[test]
+fn backoff_stays_capped_across_timeouts_separated_by_progress() {
+    let (mut a, mut b, mut now) = connected(12);
+    let mut first_waits = Vec::new();
+    for i in 0..8u8 {
+        a.write(&[i; 100]).unwrap();
+        let lost = drain(&mut a, now);
+        assert_eq!(lost.len(), 1);
+        let d = a.deadline().unwrap();
+        first_waits.push(d - now);
+        now = d;
+        a.on_timeout(now);
+        // The resend gets through and is acknowledged: progress, but no
+        // round-trip sample (Karn).
+        let resent = drain(&mut a, now);
+        deliver(&mut b, &resent, now);
+        deliver(&mut a, &drain(&mut b, now), now);
+        assert!(a.inflight.is_empty());
+    }
+    assert!(!a.is_closed());
+    let base = first_waits[0];
+    for w in &first_waits {
+        assert!(
+            *w <= base * (1 << crate::ledbat::PROGRESS_BACKOFF_CAP),
+            "{first_waits:?}"
+        );
+    }
+    assert!(
+        first_waits[1] > base,
+        "without a sample the backoff is kept: {first_waits:?}"
+    );
+}
+
+#[test]
+fn a_round_trip_jump_costs_few_retransmissions() {
+    // The round trip jumps from 20 ms to 1.8 s, well past the 500 ms
+    // timeout. Resetting the backoff on any progress would resend each
+    // of these one-packet messages twice; Karn keeps it until a first
+    // transmission gets through, which then gives a sample.
+    let mut sim = Sim::new(13, CLEAN, 1, 1);
+    while sim.b.is_none() || sim.a.state() != State::Connected {
+        assert!(sim.step());
+    }
+    sim.link.delay_ms = 900;
+    let mut buf = [0u8; 256];
+    for i in 0..20u8 {
+        sim.a.write(&[i; 200]).unwrap();
+        let mut got = Vec::new();
+        for _ in 0..10_000 {
+            if let Some(b) = sim.b.as_mut()
+                && let Ok(n @ 1..) = b.read(&mut buf)
+            {
+                got.extend_from_slice(&buf[..n]);
+            }
+            if got.len() == 200 && sim.a.inflight.is_empty() {
+                break;
+            }
+            assert!(sim.step());
+        }
+        assert_eq!(got, [i; 200]);
+    }
+    assert!(sim.a.retransmits <= 3, "{} resends", sim.a.retransmits);
+}
+
+#[test]
+fn a_peer_that_talks_but_never_acknowledges_is_given_up_on() {
+    let (mut a, mut b, mut now) = connected(14);
+    a.write(&payload(3 * MSS, 5)).unwrap();
+    let mut fired = 0;
+    while !a.is_closed() {
+        assert!(fired <= MAX_TIMEOUTS + 1, "never gave up");
+        // A's data is lost every time; its ACKs of B's data get through.
+        for p in drain(&mut a, now) {
+            if parse(&p).unwrap().header.ty != PacketType::Data {
+                deliver(&mut b, &[p], now);
+            }
+        }
+        // B keeps sending, with an open window, acknowledging nothing new.
+        let d = a.deadline().expect("data in flight keeps the timer armed");
+        now = d - Duration::from_millis(1);
+        b.write(&[7; 100]).unwrap();
+        deliver(&mut a, &drain(&mut b, now), now);
+        now = d;
+        a.on_timeout(now);
+        fired += 1;
+    }
+    assert_eq!(a.state(), State::Closed(Closed::TimedOut));
+    assert_eq!(fired, MAX_TIMEOUTS + 1);
+}

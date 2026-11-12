@@ -76,6 +76,10 @@ struct Sent {
     ty: PacketType,
     payload: Vec<u8>,
     sent_at: Instant,
+    /// When its latest transmission went out relative to every other
+    /// packet's (`Connection::next_order`): a selective ACK of a packet
+    /// sent later is evidence this transmission was lost.
+    order: u64,
     transmissions: u32,
     acked: bool,
     /// Considered lost; goes out again when the window allows.
@@ -112,9 +116,14 @@ pub(crate) struct Connection {
     rtt: Rtt,
     timer: Option<Instant>,
     /// Whether any packet arrived since the timer was last armed: a
-    /// timeout only counts towards giving up when the peer went silent
-    /// (a live peer with a full window isn't dead).
+    /// timeout doesn't count towards giving up when the peer answered
+    /// with a closed window (a live receiver that's full isn't dead).
     heard: bool,
+    /// Whether an ACK acknowledged something since the last timeout, so
+    /// the next timeout grows the backoff only up to its cap.
+    progressed: bool,
+    /// Transmission counter behind `Sent::order`.
+    next_order: u64,
     /// When the last packet from the peer arrived (or the connection was
     /// created), for the idle timeout.
     last_recv: Instant,
@@ -166,6 +175,7 @@ impl Connection {
             ty: PacketType::Syn,
             payload: Vec::new(),
             sent_at: now,
+            order: 0,
             transmissions: 0,
             acked: false,
             lost: true,
@@ -229,6 +239,8 @@ impl Connection {
             rtt: Rtt::new(),
             timer: None,
             heard: false,
+            progressed: false,
+            next_order: 0,
             last_recv: now,
             handshake_deadline: None,
             timeouts: 0,
@@ -401,7 +413,12 @@ impl Connection {
             self.close_with(Closed::Done);
             return;
         }
-        if !self.heard {
+        // A peer that answers with a closed window is flow control, not
+        // loss: we keep probing. Anything else that acknowledged nothing
+        // since the last timeout counts, even if the peer kept sending:
+        // one that talks but never acknowledges our data must not hold
+        // the connection open for ever.
+        if !(self.heard && self.peer_wnd < MSS as u32) {
             self.timeouts += 1;
         }
         let limit = if self.state == State::SynSent {
@@ -418,7 +435,7 @@ impl Connection {
             self.flight -= p.payload.len();
         }
         self.cc.on_timeout();
-        self.rtt.back_off();
+        self.rtt.back_off(std::mem::take(&mut self.progressed));
         self.dup_acks = 0;
         // Re-armed when the retransmission goes out.
         self.timer = None;
@@ -516,23 +533,15 @@ impl Connection {
         for s in self.inflight.iter_mut().take(cumulative) {
             mark(s, &mut self.unacked_bytes, &mut self.flight);
         }
-        let mut sacked_past_hole = 0;
         if let Some(mask) = p.sack {
-            for (j, byte) in mask.iter().enumerate() {
-                for bit in 0..8 {
-                    if byte & (1 << bit) == 0 {
-                        continue;
-                    }
-                    let seq = ack.wrapping_add(2 + (j * 8 + bit) as u16);
-                    let idx = seq.wrapping_sub(una) as usize;
-                    if idx < len {
-                        mark(
-                            &mut self.inflight[idx],
-                            &mut self.unacked_bytes,
-                            &mut self.flight,
-                        );
-                        sacked_past_hole += 1;
-                    }
+            for seq in sacked(ack, mask) {
+                let idx = seq.wrapping_sub(una) as usize;
+                if idx < len {
+                    mark(
+                        &mut self.inflight[idx],
+                        &mut self.unacked_bytes,
+                        &mut self.flight,
+                    );
                 }
             }
         }
@@ -548,6 +557,7 @@ impl Connection {
         }
         if acked_bytes > 0 || progressed {
             self.cc.on_ack(acked_bytes, p.header.timestamp_diff_us, now);
+            self.progressed = true;
             self.timeouts = 0;
             self.dup_acks = 0;
             if !self.time_wait {
@@ -564,12 +574,32 @@ impl Connection {
             self.dup_acks += 1;
         }
         // Fast retransmit: the oldest packet is presumed lost once three
-        // later packets got through, or three duplicate ACKs arrive.
+        // packets sent after its latest transmission got through. That
+        // covers a lost retransmission too, which would otherwise wait for
+        // a backed-off timeout. Three duplicate ACKs also count, but only
+        // for a first transmission: they may answer packets sent before a
+        // resend.
+        let Some(front) = self.inflight.front() else {
+            return;
+        };
+        // The selective ACK describes the packets after the hole it
+        // leaves; only when that hole is our oldest does it tell us
+        // anything about it.
+        let sent_after = match p.sack {
+            Some(mask) if front.seq == ack.wrapping_add(1) => sacked(ack, mask)
+                .filter(|seq| {
+                    self.inflight
+                        .get(seq.wrapping_sub(front.seq) as usize)
+                        .is_some_and(|s| s.order > front.order)
+                })
+                .count(),
+            _ => 0,
+        };
         if let Some(front) = self.inflight.front_mut()
             && !front.acked
             && !front.lost
-            && front.transmissions == 1
-            && (sacked_past_hole >= DUP_ACK_THRESHOLD || self.dup_acks >= DUP_ACK_THRESHOLD)
+            && (sent_after >= DUP_ACK_THRESHOLD as usize
+                || (front.transmissions == 1 && self.dup_acks >= DUP_ACK_THRESHOLD))
         {
             front.lost = true;
             self.flight -= front.payload.len();
@@ -654,6 +684,8 @@ impl Connection {
                 s.lost = false;
                 s.transmissions += 1;
                 s.sent_at = now;
+                s.order = self.next_order;
+                self.next_order += 1;
                 if s.transmissions > 1 {
                     self.retransmits += 1;
                 }
@@ -705,10 +737,12 @@ impl Connection {
             ty,
             payload,
             sent_at: now,
+            order: self.next_order,
             transmissions: 1,
             acked: false,
             lost: false,
         });
+        self.next_order += 1;
         self.seq_nr = self.seq_nr.wrapping_add(1);
     }
 
@@ -780,6 +814,16 @@ impl Connection {
     pub fn buffered(&self) -> usize {
         self.unsent.len() + self.unacked_bytes + self.readable.len() + self.ooo_bytes
     }
+}
+
+/// The sequence numbers a selective-ACK mask acknowledges: bit `k` is
+/// `ack + 2 + k` (BEP 29; `ack + 1` is the hole).
+fn sacked(ack: u16, mask: &[u8]) -> impl Iterator<Item = u16> + '_ {
+    mask.iter().enumerate().flat_map(move |(j, byte)| {
+        (0..8)
+            .filter(move |bit| byte & (1 << bit) != 0)
+            .map(move |bit| ack.wrapping_add(2 + (j * 8 + bit) as u16))
+    })
 }
 
 fn closed_error(why: Closed, writing: bool) -> io::Error {
