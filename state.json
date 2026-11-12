@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T03:41:56Z",
+  "updated_at": "2026-11-12T04:01:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7078,6 +7078,11 @@
       "id": "owner-flag-out2-budgets",
       "note": "\u00a72.19 flag owed: OUT-2 budgets: FiltersScreen first view 31.14->31.24 KB and SourcesScreen 31.1->31.2 KB approved (\u00a72.26, registry-entry precedent); Settings section (45.1 KB, already over \u00a710.1 45 KB) NOT raised, OUT-2 must recover >= 62 B",
       "at": "2026-11-12T03:21:26Z"
+    },
+    {
+      "id": "X-filters-budget-headroom",
+      "note": "Settings FiltersScreen (first view) is at exactly 31.14 of 31.14 kB on main (reported by #729); the next string in that chunk may not fit. Split or trim, or a measured raise under \u00a72.26 with owner flag.",
+      "at": "2026-11-12T04:01:05Z"
     }
   ],
   "main_health": [
@@ -7642,6 +7647,11 @@
       "pr": 726,
       "sha": "91af6c9db189a4523a93b57bc5cc448ec9619e80",
       "at": "2026-11-12T03:14:46Z"
+    },
+    {
+      "pr": 727,
+      "sha": "07e07b4361c1c292b219874fa38139ef7cfc076f",
+      "at": "2026-11-12T04:01:05Z"
     }
   ],
   "active_sessions": {
@@ -7876,7 +7886,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T03:41:56Z",
+    "updated": "2026-11-12T04:01:05Z",
     "items": [
       {
         "slot": 1,
@@ -7941,11 +7951,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-wk-own-lease-lost",
+        "slice": "X-wk-out-set-polish",
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
-        "doing": "brief sent; #712 WK-20 merged as 46b2a5dd",
-        "since": "2026-11-12T00:33:17Z",
+        "doing": "rv-727 Importants: real race test (spin flag, alternate order, both outcomes), out-set memory numbers in decisions + WK-G notes, nits",
+        "since": "2026-11-12T04:01:05Z",
         "status": "active"
       },
       {
@@ -8038,7 +8048,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T03:41:56Z",
+  "updated": "2026-11-12T04:01:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
