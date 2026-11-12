@@ -625,7 +625,7 @@ struct Timing {
     /// adds time, so it can't read faster than the engine; it takes three
     /// passes that fast, so one lucky pass can't set it either; and up to
     /// four slowed passes of seven leave it alone, where the median moves
-    /// once the fourth is slowed (#429's job 126950288443).
+    /// once the fourth is slowed (#429's CI filter-budget job).
     at: f64,
     /// How far `at` is above the fastest pass, as a share. A shared host's
     /// neighbours can slow most of a case's passes while the calibrations
@@ -650,7 +650,7 @@ fn timing(mut passes: Vec<f64>) -> Timing {
 
 #[test]
 fn a_case_disturbed_mid_run_has_a_wide_spread() {
-    // X-filter-budget-8573C's dispatch on a 7763 (job 124112699853): the
+    // X-filter-budget-8573C's dispatch on a 7763 (the CI job on that slice): the
     // mixed set while the host was busy, and the neutralized case right
     // after. Five of seven passes slowed: `at` moves, and the spread says so.
     let t = timing(vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6]);
@@ -663,7 +663,7 @@ fn a_case_disturbed_mid_run_has_a_wide_spread() {
 
 #[test]
 fn a_few_slowed_passes_leave_the_time_alone_and_show_as_jitter() {
-    // #429's job 126950288443 (an EPYC 9V74): three passes near 60 µs and
+    // #429's CI job (an EPYC 9V74): three passes near 60 µs and
     // two a little slow (37.2 and 37.9). The median read 37.9 µs, the
     // fourth pass, and the gate failed at 50.8 µs. The third-fastest is
     // 37.2 µs, 2% over the fastest: slowed passes can only raise it.
@@ -813,7 +813,7 @@ fn an_unlisted_model_scales_by_the_calibration() {
 
 #[test]
 fn a_listed_model_scales_by_its_calibration_and_skew() {
-    // #210's job 124095631213, as fixed inputs: calibration 9.86 µs, mixed
+    // #210's CI job, as fixed inputs: calibration 9.86 µs, mixed
     // 43.4 µs (its median pass, as the gate read it then).
     // 9.86 ÷ 10.59 × 1.097 = 1.021381.
     let s = scaling("INTEL(R) XEON(R) PLATINUM 8573C", 9.86, 43.4);

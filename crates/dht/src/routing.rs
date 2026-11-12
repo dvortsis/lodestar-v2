@@ -401,6 +401,25 @@ impl RoutingTable {
             .collect()
     }
 
+    /// The refresh a node runs once it has joined (Kademlia: "refresh all
+    /// buckets farther than the closest neighbour"): one random-looking
+    /// target at every prefix length shorter than the closest node we
+    /// know shares with us, whether or not the table has split that far.
+    /// So the far keyspace is known from the start, not first at the
+    /// stale-bucket refresh. At most `max` levels, from the farthest: a
+    /// neighbour sharing a long prefix by chance (or by design) can't
+    /// make the join cost more. `fill` supplies the random bits.
+    pub fn join_targets(&self, max: usize, mut fill: impl FnMut() -> [u8; 20]) -> Vec<NodeId> {
+        let closest = self
+            .entries()
+            .map(|e| prefix_len(&self.own, &e.info.id))
+            .max()
+            .unwrap_or(0);
+        (0..closest.min(max).min(159))
+            .map(|i| id_in_bucket(&self.own, i, fill()))
+            .collect()
+    }
+
     fn split(&mut self) {
         let last = self.buckets.len() - 1;
         let old = std::mem::take(&mut self.buckets[last]);
@@ -677,6 +696,35 @@ mod tests {
         t.failed(&nodes[2].id, 2);
         let got: Vec<u8> = t.closest(&target, 3, 2).iter().map(|n| n.id.0[0]).collect();
         assert_eq!(got, [0x20, 0x10, 0x40]);
+    }
+
+    #[test]
+    fn join_targets_cover_every_level_above_the_closest_neighbour() {
+        let own = NodeId([0; 20]);
+        let mut t = RoutingTable::new(own, false);
+        assert!(
+            t.join_targets(32, || [0xff; 20]).is_empty(),
+            "no neighbour, no levels"
+        );
+        // The closest neighbour shares 13 bits: levels 0..13, each target
+        // in its level, whatever the table has split into.
+        let mut id = [0; 20];
+        id[1] = 0x04;
+        t.insert(
+            NodeInfo {
+                id: NodeId(id),
+                addr: "10.0.0.1:1".parse().unwrap(),
+            },
+            Contact::Response,
+            0,
+        );
+        let targets = t.join_targets(32, || [0x5a; 20]);
+        let levels: Vec<usize> = targets.iter().map(|x| prefix_len(&own, x)).collect();
+        assert_eq!(levels, (0..13).collect::<Vec<_>>());
+        // Capped from the farthest level.
+        let capped = t.join_targets(5, || [0x5a; 20]);
+        let levels: Vec<usize> = capped.iter().map(|x| prefix_len(&own, x)).collect();
+        assert_eq!(levels, (0..5).collect::<Vec<_>>());
     }
 
     #[test]

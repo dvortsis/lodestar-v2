@@ -57,6 +57,11 @@ pub(crate) struct Lookup {
     /// CR-1b: an exploration lookup whose prefix target hasn't been sent
     /// yet; its first send moves the explore cursor.
     pub prefix_pending: bool,
+    /// The self-lookup of a bootstrap round ([`super::actor`]'s
+    /// `start_bootstrap`): its end lets parked requests start and plans
+    /// the join refresh. Marked explicitly, since BEP 42 can change our
+    /// id, and so the target, while it runs.
+    pub bootstrap: bool,
     pub started: Instant,
 }
 
@@ -74,6 +79,7 @@ impl Lookup {
             scrape: false,
             explore: false,
             prefix_pending: false,
+            bootstrap: false,
             started: Instant::now(),
         }
     }

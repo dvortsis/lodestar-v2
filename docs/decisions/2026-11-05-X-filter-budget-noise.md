@@ -14,14 +14,14 @@ Both are in `crates/filter/tests/props.rs`, as separate commits. This supersedes
 - the logs of 72 `filter budget` jobs, 2026-10-31 to 11-05: 37 on the 7763, 17 on the 9V74, 8 on the 9V45, 5 on the 8573C, 4 on the 8370C and 1 on the 6973P-C, all rustc 1.99.1;
 - 20 + 25 local release runs (an unlisted 4-core Intel Xeon @ 2.30 GHz).
 
-- **#429's failure is noise (a).** Run 41937126100, job 126950288443, EPYC 9V74, failed the neutralized case at 50.8 µs.
+- **#429's failure is noise (a).** Run 41937126100, its CI job, EPYC 9V74, failed the neutralized case at 50.8 µs.
   - **Its seven passes:** 37.2 36.4 59.8 37.9 63.9 60.9 36.4 µs.
     - Three passes spiked near 60 µs, and two more ran 2–4% slow.
     - Sorted, the median is the fourth pass: 37.9 µs, a slowed one.
   - **Why the spread check missed it:** the median was only 4% above the fastest (36.4 µs), under `DRIFT` (15%), so no re-measure fired.
   - **Why the calibration drift check missed it:** the calibration was steady on both sides (9.1 and 9.2 µs fastest).
   - **On clean passes it passes:** the fastest clean pass (36.4 µs) reads 48.8 µs, and the third-fastest (37.2 µs) reads 49.9 µs, both under the old constants.
-- **A second failure isn't noise: the scaling constants are stale.** Run 41908317816, job 126848927600, EPYC 9V45 (slice/ENR-6), failed the neutralized case at 50.2 µs.
+- **A second failure isn't noise: the scaling constants are stale.** Run 41908317816, its CI job, EPYC 9V45 (slice/ENR-6), failed the neutralized case at 50.2 µs.
   - **Its passes were steady:** 25.0–26.2 µs.
   - **The cause:** 7763 hosts calibrate in two bands, about 10.45–10.6 µs and 10.97–11.14 µs, at the same engine time:
     - the mixed set ran 42.3–44.6 µs raw in both bands (the 46.0 µs in the table below is one host outside both, calibrating at 11.92 µs, on 2026-10-31);
@@ -51,7 +51,7 @@ Both are in `crates/filter/tests/props.rs`, as separate commits. This supersedes
   - This is the smallest robust choice.
 - **The spread check keeps its job:**
   - **The rule:** a held case whose third-fastest pass is more than `DRIFT` (15%) above its fastest is a disturbed attempt, measured again.
-  - **When it fires:** now only when five or more passes slowed. X-filter-budget-8573C's job 124112699853 still trips it, at 15.6%.
+  - **When it fires:** now only when five or more passes slowed. X-filter-budget-8573C's first dispatch still trips it, at 15.6%.
 - **New: an attempt over budget while busy measures again.**
   - **The rule:** if every held case over budget had a pass more than `DRIFT` over its own fastest (`jitter`), the host was busy during those cases. The gate measures again, within the same three attempts. Noise in some other case doesn't count: a steady case over budget fails the attempt at once.
   - **What still fails:**
@@ -85,12 +85,12 @@ Each `ENGINE_SPEED` entry and `REFERENCE` lists its run IDs, dates and the first
 
   | Job | CPU | R | Old gate, mixed / neutralized | New gate |
   |---|---|---|---|---|
-  | 126986469384 | 7763 | 4.01 | 42.0 / 42.7 | 41.8 / 42.6 |
-  | 126991634314 | 7763 | 4.04 | 42.4 / 42.5 | 42.4 / 42.4 |
-  | 126993334096 | 9V45 | 3.27 | 40.6 / 42.3 | 36.7 / 38.1 |
+  | CI job 1 | 7763 | 4.01 | 42.0 / 42.7 | 41.8 / 42.6 |
+  | CI job 2 | 7763 | 4.04 | 42.4 / 42.5 | 42.4 / 42.4 |
+  | CI job 3 | 9V45 | 3.27 | 40.6 / 42.3 | 36.7 / 38.1 |
 
   - **The 9V45 job reads 13% below the 7763.** Its R (3.27) is far below the 9V45's in-sample 3.59–3.88 (skews 0.892–0.965 × 4.02), so its engine ran fast for its calibration. That is a 9V45 host spread of about ±9%, which no single skew can follow. It is under `MODEL_DRIFT`, so it doesn't warn.
-  - **What that costs:** on such a host, a regression up to about 13% would read no higher than the 7763 does today. Under the old constants the same job read 3% low, but the old constants failed steady 9V45 hosts like job 126848927600.
+  - **What that costs:** on such a host, a regression up to about 13% would read no higher than the 7763 does today. Under the old constants the same job read 3% low, but the old constants failed steady 9V45 hosts like the second failure's job.
   - **Why it's still the better trade:** the skew is the documented median, and a median skew reads half a model's hosts low and half high by construction. The 7763 reads raw and decides most jobs, so a regression on it fails whatever the 9V45 reads.
   - **Next step (runner, which owns this check):** read the first ten or so 9V45 jobs after merge, and re-derive in its own PR if their R settles away from 3.79. Every listed model now reads within about 1–2 µs of the 7763's raw time:
 
@@ -147,7 +147,7 @@ Each cell is min / median / max. The 8 failures before mixed slowed passes the m
 
 **Tests** (debug, with the rest of `props`):
 - `Timing` on #429's passes: time 37.2, spread under 3%, jitter over 15%;
-- job 124112699853's disturbed set still has a spread over 15%;
+- the first dispatch's disturbed set still has a spread over 15%;
 - a uniform slowdown scales the time and keeps spread and jitter;
 - the noise property;
 - the 8573C hand-computed divisor, now 9.86 ÷ 10.59 × 1.097 = 1.021381;
