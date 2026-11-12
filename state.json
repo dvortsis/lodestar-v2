@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:15:32Z",
+  "updated_at": "2026-11-12T07:16:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7118,6 +7118,11 @@
       "id": "UN-1-rejudge-keys",
       "note": "pipeline/src/unverified.rs judge_item (~1322) removes non-20-byte keys on re-judge; UN-1 (or a pipeline slice before it) must judge usenet items by claims and never drop them for key length (UN-0 heads-up 07:06Z)",
       "at": "2026-11-12T07:13:28Z"
+    },
+    {
+      "id": "runner-pr-slices-note",
+      "note": "slices.yaml D-outputs-guide note: \"Sonarr port 5000 vs 5045 trap\" is wrong; they are Newznab category ids (Sonarr defaults 5030/5040, add 5000/5045). Fix in next runner PR.",
+      "at": "2026-11-12T07:16:24Z"
     }
   ],
   "main_health": [
@@ -8015,14 +8020,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:13:28Z",
+    "updated": "2026-11-12T07:16:24Z",
     "items": [
       {
         "slot": 1,
         "slice": "UP-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: step 1 (restate plan \u00a75 in decisions file), runner confirms before code; /security-review",
+        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: step 1 (0a7fbfae) confirmed 07:17Z; building. Owner flag due: upload rate bucket 30 burst/1 per s/10k IPs (\u00a72.26); stricter Sec-Fetch-Site refusal",
         "since": "2026-11-12T07:11:01Z",
         "status": "active"
       },
@@ -8148,7 +8153,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:15:32Z",
+  "updated": "2026-11-12T07:16:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
