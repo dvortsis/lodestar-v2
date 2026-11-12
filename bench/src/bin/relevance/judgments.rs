@@ -14,8 +14,9 @@
 //! A key is a corpus key with `--dir` alone, and an info hash with
 //! `--data-dir`: 40 hex digits, either case, the v1 hash (for a v2-only
 //! torrent, the first 40 digits of its v2 hash, which is what the store
-//! keys it by). A 64-digit v2 hash is refused: for a hybrid torrent it
-//! names nothing the store can look up.
+//! keys it by). Key a hybrid torrent by its v1 hash: the first 40 digits
+//! of its v2 hash aren't looked up, so it would count as not in the
+//! store. A 64-digit v2 hash is refused for the same reason.
 //!
 //! The file is treated as untrusted: it's capped at [`MAX_BYTES`], the
 //! parser never panics, and every error names its line. With `redact`,
@@ -96,11 +97,14 @@ pub const MESSAGES: &[&str] = &[
     "expected a 40-hex-digit info hash",
     "a 64-digit v2 hash: use the v1 hash (or a v2-only torrent's first 40 digits)",
     "a grade line with no torrents",
+    "empty rationale",
 ];
 
 pub fn parse(text: &str, keys: &Keys<'_>) -> Result<Vec<Judged>, ParseError> {
     let mut out: Vec<Judged> = Vec::new();
     let mut seen = HashSet::new();
+    // Windows editors may start a UTF-8 file with a byte-order mark.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for (n, line) in text.lines().enumerate() {
         let n = n + 1;
         let err = |what, detail: Option<&str>| ParseError {
@@ -138,6 +142,9 @@ pub fn parse(text: &str, keys: &Keys<'_>) -> Result<Vec<Judged>, ParseError> {
             '=' => {
                 if !last.why.is_empty() {
                     return Err(err("a second rationale line", None));
+                }
+                if rest.is_empty() {
+                    return Err(err("empty rationale", None));
                 }
                 last.why = rest.to_string();
                 continue;
@@ -241,6 +248,8 @@ mod tests {
         let j = parse(&text, &Keys::Hash).unwrap();
         assert_eq!(j[0].grades[H1], Grade::Graded(3));
         assert_eq!(j[0].grades[H2], Grade::Forbidden);
+        let bom = format!("\u{feff}{text}");
+        assert_eq!(parse(&bom, &Keys::Hash).unwrap(), j);
         assert_eq!(hash_bytes(H1).unwrap()[..3], [0x00, 0x11, 0x22]);
     }
 
@@ -295,6 +304,7 @@ mod tests {
                 "? q\n= w\n3\n".into(),
                 "judgments.txt:3: a grade line with no torrents",
             ),
+            ("? q\n=\n".into(), "judgments.txt:2: empty rationale"),
         ];
         for (text, want) in cases {
             let e = parse(&text, &Keys::Hash).unwrap_err();

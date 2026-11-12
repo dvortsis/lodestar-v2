@@ -34,10 +34,11 @@
 //! torrents by info hash ([`judgments`] has the format), and the queries
 //! run over that data directory, opened read-only ([`data_dir`]). A judged
 //! torrent the store doesn't hold is counted and left out of the scores;
-//! a query left with nothing to find is skipped and counted. Results past
-//! the first page aren't read, so only the top 50 are checked for
-//! forbidden torrents. The baseline also records the store's torrent
-//! count and the index version, and the gate fails when either changed.
+//! a query left with nothing to find, or nothing judged at all, is
+//! skipped and counted. Results past the first page aren't read, so only
+//! the top 50 are checked for forbidden torrents. The baseline also
+//! records the store's torrent count and the index version, and the gate
+//! fails when either changed.
 //!
 //! **`--held-out`** is for judged sets that mustn't leave the machine
 //! (the owner's pilot data): it prints only the overall figures and
@@ -625,7 +626,7 @@ struct Set {
 
 type Fail = Box<dyn std::error::Error>;
 
-/// A file of `dir`, capped at the judgments' limit.
+/// A file read whole, capped at the judgments' limit.
 fn read_capped(path: &Path) -> Result<String, String> {
     use std::io::Read as _;
     let shown = || path.display().to_string();
@@ -686,6 +687,8 @@ fn data_set(a: &Args, dir: &Path) -> Result<Set, Fail> {
         .collect();
     hashes.sort_unstable();
     let ids = data.ids(&hashes)?;
+    // That was the last store read.
+    data.check_unchanged()?;
     let positive = |j: &Judged| {
         j.grades
             .values()
@@ -694,9 +697,11 @@ fn data_set(a: &Args, dir: &Path) -> Result<Set, Fail> {
     let mut kept = Vec::with_capacity(judged.len());
     let mut skipped = 0;
     for mut j in judged {
-        let had = positive(&j);
+        let (had, judged_any) = (positive(&j), !j.grades.is_empty());
         j.grades.retain(|k, _| ids.contains_key(k));
-        if had && !positive(&j) {
+        // Left with nothing to find, or nothing at all to check: scoring
+        // it would count a 1 that tested nothing.
+        if (had && !positive(&j)) || (judged_any && j.grades.is_empty()) {
             skipped += 1;
         } else {
             kept.push(j);
@@ -811,7 +816,10 @@ fn run(a: &Args) -> Result<bool, Fail> {
     println!("  recall@50   {recall:.4}");
     println!("  forbidden   {} queries", forbidden.len());
     if set.corpus.is_none() {
-        println!("  not in store {} judged torrents", set.not_in_store);
+        println!(
+            "  missing     {} judged torrents not in this store",
+            set.not_in_store
+        );
         println!(
             "  skipped     {} queries (nothing they grade is in this store)",
             set.skipped
@@ -859,9 +867,7 @@ fn run(a: &Args) -> Result<bool, Fail> {
         println!("\n  baseline written: NDCG@10 {ndcg:.4}");
         return Ok(ok);
     }
-    let read =
-        std::fs::read_to_string(&baseline).map_err(|e| format!("{}: {e}", baseline.display()));
-    match read.map(|t| parse_baseline(&t)) {
+    match read_capped(&baseline).map(|t| parse_baseline(&t)) {
         Ok(Ok(base)) => {
             let floor = base.ndcg - a.tolerance;
             let pass = ndcg >= floor;
@@ -880,9 +886,15 @@ fn run(a: &Args) -> Result<bool, Fail> {
                 );
             }
             if base.inputs != current.inputs || base.queries != current.queries {
-                println!(
-                    "  FAIL the corpus or judgments changed since the baseline: run with --write-baseline and commit it"
-                );
+                if set.corpus.is_some() {
+                    println!(
+                        "  FAIL the corpus or judgments changed since the baseline: run with --write-baseline and commit it"
+                    );
+                } else {
+                    println!(
+                        "  FAIL the judgments changed since the baseline: run with --write-baseline"
+                    );
+                }
                 ok = false;
             }
             if base.store != current.store {

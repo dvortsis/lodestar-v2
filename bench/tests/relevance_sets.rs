@@ -29,7 +29,12 @@ const TORRENTS: &[(&str, &str)] = &[
 const MISSING_1: &str = "0123456789abcdef0123456789abcdef01234567";
 const MISSING_2: &str = "fedcba9876543210fedcba9876543210fedcba98";
 /// The queries, as typed: none may show up in `--held-out` output.
-const QUERIES: &[&str] = &["kestrel harbor", "marrow creek", "zephyr lantern"];
+const QUERIES: &[&str] = &[
+    "kestrel harbor",
+    "marrow creek",
+    "zephyr lantern",
+    "orchid vale",
+];
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -131,14 +136,16 @@ fn hex(b: &[u8]) -> String {
 
 /// A judgments folder: q1 finds kestrel (3) but not quillon (2); q2
 /// finds marrow (2), never the hidden adult copy (x), and not a missing
-/// torrent (3); q3 grades only a missing torrent, so it's skipped.
+/// torrent (3); q3 grades only a missing torrent and q4 forbids only one,
+/// so both are skipped.
 fn judgments(f: &Fixture) -> tempfile::TempDir {
     let h = |k: &str| f.hashes[k].clone();
     let text = format!(
         "# invented\n\
          ? {}\n= the film\n3 {}\n2 {}\n\n\
          ? {}\n= the series\n2 {}\nx {}\n3 {}\n\n\
-         ? {}\n= nothing stored\n3 {}\n",
+         ? {}\n= nothing stored\n3 {}\n\n\
+         ? {}\n= nothing to check\nx {}\n",
         QUERIES[0],
         h("kestrel").to_uppercase(),
         h("quillon"),
@@ -147,6 +154,8 @@ fn judgments(f: &Fixture) -> tempfile::TempDir {
         h("adult"),
         MISSING_1,
         QUERIES[2],
+        MISSING_2,
+        QUERIES[3],
         MISSING_2,
     );
     let dir = tempfile::tempdir().unwrap();
@@ -204,8 +213,12 @@ fn scores_match_a_hand_computation() {
     // Recall: q1 1 of 2, q2 1 of 1.
     assert_eq!(figure(&out, "recall@50"), "0.7500", "{out}");
     assert_eq!(figure(&out, "forbidden"), "0 queries", "{out}");
-    assert_eq!(figure(&out, "not in store"), "2 judged torrents", "{out}");
-    assert!(figure(&out, "skipped").starts_with("1 queries"), "{out}");
+    assert_eq!(
+        figure(&out, "missing"),
+        "2 judged torrents not in this store",
+        "{out}"
+    );
+    assert!(figure(&out, "skipped").starts_with("2 queries"), "{out}");
     assert!(
         out.contains("4 torrents (index v") && out.contains("2 queries judged"),
         "{out}"
@@ -324,9 +337,24 @@ fn another_schema_or_an_open_log_is_refused() {
     std::fs::rename(&current, root.join("v1-t1")).unwrap();
     refused(&run_on(older.path(), set.path(), &[]), "found v1-t1");
 
-    let logged = copy_of(f);
-    std::fs::write(logged.path().join("lodestar.db-wal"), b"not folded in").unwrap();
-    refused(&run_on(logged.path(), set.path(), &[]), "write-ahead log");
+    // A server that hasn't written yet has an empty log; a lone -shm is
+    // a store that's open or wasn't closed cleanly.
+    for (side, body) in [
+        ("lodestar.db-wal", &b"not folded in"[..]),
+        ("lodestar.db-wal", b""),
+        ("lodestar.db-shm", b""),
+    ] {
+        let logged = copy_of(f);
+        std::fs::write(logged.path().join(side), body).unwrap();
+        refused(&run_on(logged.path(), set.path(), &[]), "closed cleanly");
+    }
+
+    // An index copied without its meta lock: a reader would create it.
+    let bare = copy_of(f);
+    std::fs::remove_file(index_dir(&bare.path().join("index")).join(".tantivy-meta.lock")).unwrap();
+    let before = snapshot(bare.path());
+    refused(&run_on(bare.path(), set.path(), &[]), ".tantivy-meta.lock");
+    assert_eq!(snapshot(bare.path()), before);
 
     refused(
         &run_on(&f.data.join("nope"), set.path(), &[]),
@@ -343,7 +371,11 @@ fn held_out_prints_aggregates_only() {
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(figure(&out, "queries"), "2 scored", "{out}");
     assert_eq!(figure(&out, "recall@50"), "0.7500", "{out}");
-    assert_eq!(figure(&out, "not in store"), "2 judged torrents", "{out}");
+    assert_eq!(
+        figure(&out, "missing"),
+        "2 judged torrents not in this store",
+        "{out}"
+    );
     let all = format!("{out}{err}").to_lowercase();
     let mut secrets: Vec<String> = f.hashes.values().cloned().collect();
     secrets.extend([MISSING_1.into(), MISSING_2.into()]);
@@ -384,6 +416,21 @@ fn held_out_errors_name_only_the_line() {
         "error: judgments.txt:3: expected a 40-hex-digit info hash"
     );
     assert!(!format!("{out}{err}").contains("secret"));
+
+    // A query that doesn't parse: its error would quote it.
+    let bad_query = format!("? kestrel sise:1\n= why\n3 {}\n", f.hashes["kestrel"]);
+    std::fs::write(set.path().join("judgments.txt"), bad_query).unwrap();
+    let o = run_on(&f.data, set.path(), &["--held-out"]);
+    let (out, err) = text(&o);
+    assert!(!o.status.success());
+    assert_eq!(err.trim(), "error: judgments.txt:1: the query failed");
+    assert!(!format!("{out}{err}").contains("sise"));
+
+    // Larger than the cap: refused before it's parsed.
+    let big = "# padding\n".repeat((16 << 20) / 10 + 1);
+    std::fs::write(set.path().join("judgments.txt"), big).unwrap();
+    let o = run_on(&f.data, set.path(), &["--held-out"]);
+    assert!(text(&o).1.contains("larger than 16 MiB"), "{:?}", text(&o));
 
     for extra in ["--all", "--gate", "--write-baseline"] {
         let o = run_on(&f.data, set.path(), &["--held-out", extra]);
