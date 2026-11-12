@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:29:37Z",
+  "updated_at": "2026-11-12T13:30:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7319,6 +7319,11 @@
       "id": "owner-q-enr14-notice",
       "note": "Ask owner: add Wikidata to Legal Notice \u00a72 when External consent gate lifts (runner recommends same slice). Send with ENR-14 merge FYI.",
       "at": "2026-11-12T13:29:37Z"
+    },
+    {
+      "id": "runner-notes-761-fixups",
+      "note": "Next runner PR: owner_queue entry for the Wikimedia bulk-backfill ToS question (rv-761 I1); runner-notes.md:30 wording \u2014 7.5 also matches plain words like \"invalid credentials\", \"timed out\", \"no results\" (I2); plus rv-761 nits (sentence ref, scrub reason line 43 incl. architecture.md, define L3, D-outputs-guide 5030/5040 note, owns lists for X-watch-env/X-dht-bep42-rejoin/X-always-adult-detail-mask tests).",
+      "at": "2026-11-12T13:30:19Z"
     }
   ],
   "main_health": [
@@ -8424,7 +8429,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:29:37Z",
+  "updated": "2026-11-12T13:30:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
