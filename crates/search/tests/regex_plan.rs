@@ -191,7 +191,7 @@ fn sample(h: &Hir, rng: &mut Rng, out: &mut String) -> Option<()> {
 const LEAVES: &[&str] = &[
     "a", "b", "c", "ab", "abc", "the", "S", "s", "k", "K", "ſ", "\u{212A}", "ß", "İ", "ı", "Σ",
     "σ", "ς", "ǅ", "ﬀ", "千", "と", "0", "1", "e", "E", ".", r"\d", r"\w", r"\s", r"\b", "^", "$",
-    "[a-c]", "[Ss]", "[^a]", "[0-9]", "[xyz]", r"\pL", r"[^\s\S]", "",
+    "[a-c]", "[Ss]", "[^a]", "[0-9]", "[xyz]", r"\pL", r"[^\s\S]", r"[\D]", r"[[^a]b]", "",
 ];
 
 const REPEATS: &[&str] = &[
@@ -289,8 +289,9 @@ fn worst_cases_stay_within_the_caps() {
 }
 
 /// Each documented worst case is accepted and parses well within a
-/// bound, and one step past it is refused (I1). Release builds measured
-/// about 8 ms for the slowest; the bound is generous enough for an
+/// bound, and one step past it is refused (I1, I2). Release builds
+/// measured about 9 ms for the slowest (two bare `\p{Any}`; a randomized
+/// search over bracket shapes found none slower); the bound is generous enough for an
 /// unoptimized build on a slow CI runner, so it catches a lost limit
 /// (hundreds of times slower) without flaking.
 #[test]
@@ -310,19 +311,47 @@ fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
             r"\P{Any}".repeat(3),
             Reason::ClassTooLarge,
         ),
+        // Inside brackets, the bracket folds its whole set again, once per
+        // level, negated items at full width (B2): one each.
         (
+            r"[\P{Any}]".into(),
             r"[\P{Any}]".repeat(2),
-            r"[\P{Any}]".repeat(3),
             Reason::ClassTooLarge,
         ),
         (
+            r"[^\p{Any}]".into(),
             r"[^\p{Any}]".repeat(2),
-            r"[^\p{Any}]".repeat(3),
             Reason::ClassTooLarge,
         ),
         (
+            r"[\x{0}-\x{10FFFF}]".into(),
             r"[\x{0}-\x{10FFFF}]".repeat(2),
-            r"[\x{0}-\x{10FFFF}]".repeat(3),
+            Reason::ClassTooLarge,
+        ),
+        (r"[\S]".into(), r"[\S]".repeat(2), Reason::ClassTooLarge),
+        (r"[\D]".into(), r"[\D]".repeat(2), Reason::ClassTooLarge),
+        (r"[^\D]".into(), r"[^\D]".repeat(2), Reason::ClassTooLarge),
+        (
+            r"[[^a]b]".into(),
+            r"[[^a]b]".repeat(2),
+            Reason::ClassTooLarge,
+        ),
+        (
+            r"[b[^a]]".into(),
+            r"[b[^a]]".repeat(2),
+            Reason::ClassTooLarge,
+        ),
+        (
+            r"[[:^alpha:]]".into(),
+            r"[[:^alpha:]]".repeat(2),
+            Reason::ClassTooLarge,
+        ),
+        // A set operation is charged every codepoint, so one with a
+        // negated operand is refused outright.
+        (r"[a--b]".into(), r"[\D--a]".into(), Reason::ClassTooLarge),
+        (
+            r"[\w.-]".repeat(8),
+            r"[\w.-]".repeat(9),
             Reason::ClassTooLarge,
         ),
         (r"\w".repeat(17), r"\w".repeat(18), Reason::ClassTooLarge),

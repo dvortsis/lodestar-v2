@@ -291,6 +291,7 @@ pub fn parse(pattern: &str) -> Result<Pattern, RegexError> {
             repeats: Vec::new(),
             codepoints: 0,
             weight: 0,
+            brackets: 0,
         },
     )?;
     let hir = regex_syntax::hir::translate::TranslatorBuilder::new()
@@ -316,6 +317,8 @@ struct Bounds<'a> {
     repeats: Vec<u64>,
     /// Codepoints the classes cover so far.
     codepoints: u64,
+    /// How many brackets enclose the class item being visited.
+    brackets: u64,
     /// The compiled-size estimate so far.
     weight: u64,
 }
@@ -350,6 +353,37 @@ impl Bounds<'_> {
     /// `\P{Any}` (empty) folds all of `\p{Any}`: a negated class is charged
     /// its complement, which is what gets folded (`\W` costs `\w`).
     fn named_class(&mut self, span: &ast::Span, negated: bool) -> Result<(), RegexError> {
+        let (width, ranges) = self.measure(span)?;
+        // What gets folded is the class before negation: the complement.
+        let width = if negated {
+            UNICODE_SCALARS.saturating_sub(width)
+        } else {
+            width
+        };
+        self.leaf(width, ranges)
+    }
+
+    /// A class item inside brackets. The bracket folds its whole set, so
+    /// whatever is negated inside it (`[\S]`, `[\P{Any}]`, `[[:^alpha:]]`,
+    /// a nested `[^…]`, a set operation) can be folded at its full width
+    /// on either side of the negation: those are charged every codepoint.
+    /// A budget may over-charge, never under-charge (runner review B2).
+    fn bracket_class(&mut self, span: &ast::Span, negated: bool) -> Result<(), RegexError> {
+        let (width, ranges) = self.measure(span)?;
+        self.in_bracket(if negated { UNICODE_SCALARS } else { width }, ranges)
+    }
+
+    /// Charges an item inside brackets. Translation folds the item, then
+    /// each enclosing bracket folds its whole set again (measured: a
+    /// `\p{Any}` one bracket deep costs about three bare ones), so the
+    /// codepoints count once per bracket level and once more.
+    fn in_bracket(&mut self, codepoints: u64, ranges: u64) -> Result<(), RegexError> {
+        self.leaf(codepoints.saturating_mul(self.brackets + 1), ranges)
+    }
+
+    /// The codepoints and ranges of a Unicode or Perl class item's own text,
+    /// translated case-sensitively.
+    fn measure(&self, span: &ast::Span) -> Result<(u64, u64), RegexError> {
         let text = self
             .pattern
             .get(span.start.offset..span.end.offset)
@@ -367,23 +401,16 @@ impl Bounds<'_> {
                 _ => RegexError::new(Reason::Syntax, "invalid class"),
             })?;
         // An empty class (`\P{Any}`) translates to the byte class "fail".
-        let (width, ranges) = match hir.kind() {
+        Ok(match hir.kind() {
             HirKind::Class(Class::Unicode(c)) => (
                 c.ranges()
                     .iter()
                     .map(|r| u64::from(r.end()) - u64::from(r.start()) + 1)
                     .sum(),
-                c.ranges().len() as u64,
+                (c.ranges().len() as u64).max(1),
             ),
             _ => (0, 1),
-        };
-        // What gets folded is the class before negation: the complement.
-        let width = if negated {
-            UNICODE_SCALARS.saturating_sub(width)
-        } else {
-            width
-        };
-        self.leaf(width, ranges.max(1))
+        })
     }
 
     fn node(&mut self) -> Result<(), RegexError> {
@@ -452,6 +479,7 @@ impl ast::Visitor for Bounds<'_> {
             Ast::Dot(_) => self.leaf(0, 4)?,
             Ast::ClassUnicode(c) => self.named_class(&c.span, c.is_negated())?,
             Ast::ClassPerl(c) => self.named_class(&c.span, c.negated)?,
+            Ast::ClassBracketed(_) => self.brackets = 1,
             Ast::Repetition(r) => {
                 use ast::{RepetitionKind as K, RepetitionRange as R};
                 let factor = match r.op.kind {
@@ -475,8 +503,19 @@ impl ast::Visitor for Bounds<'_> {
     }
 
     fn visit_post(&mut self, ast: &Ast) -> Result<(), RegexError> {
-        if let Ast::Repetition(_) = ast {
-            self.repeats.pop();
+        match ast {
+            Ast::Repetition(_) => {
+                self.repeats.pop();
+            }
+            Ast::ClassBracketed(_) => self.brackets = 0,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn visit_class_set_item_post(&mut self, item: &ast::ClassSetItem) -> Result<(), RegexError> {
+        if let ast::ClassSetItem::Bracketed(_) = item {
+            self.brackets = self.brackets.saturating_sub(1);
         }
         Ok(())
     }
@@ -484,27 +523,44 @@ impl ast::Visitor for Bounds<'_> {
     fn visit_class_set_item_pre(&mut self, item: &ast::ClassSetItem) -> Result<(), RegexError> {
         self.node()?;
         match item {
-            ast::ClassSetItem::Literal(_) => self.leaf(1, 1),
+            ast::ClassSetItem::Literal(_) => self.in_bracket(1, 1),
             ast::ClassSetItem::Range(r) => {
                 let width = u64::from(r.end.c).saturating_sub(u64::from(r.start.c)) + 1;
-                self.leaf(width, 1)
+                self.in_bracket(width, 1)
             }
-            // `[[:alpha:]]`: ASCII only, a few ranges.
-            ast::ClassSetItem::Ascii(_) => self.leaf(128, 4),
-            ast::ClassSetItem::Unicode(c) => self.named_class(&c.span, c.is_negated()),
-            ast::ClassSetItem::Perl(c) => self.named_class(&c.span, c.negated),
-            // Their items are visited on their own.
-            ast::ClassSetItem::Empty(_)
-            | ast::ClassSetItem::Bracketed(_)
-            | ast::ClassSetItem::Union(_) => Ok(()),
+            // `[[:alpha:]]`: ASCII only, a few ranges; `[[:^alpha:]]` is
+            // everything else.
+            ast::ClassSetItem::Ascii(c) if c.negated => self.in_bracket(UNICODE_SCALARS, 4),
+            ast::ClassSetItem::Ascii(_) => self.in_bracket(128, 4),
+            ast::ClassSetItem::Unicode(c) => self.bracket_class(&c.span, c.is_negated()),
+            ast::ClassSetItem::Perl(c) => self.bracket_class(&c.span, c.negated),
+            // A nested bracket is one more level of folding for its items.
+            // A nested `[^…]` can be folded at full width, whatever its
+            // items are (`[[^a]b]`); its items are charged on their own too.
+            ast::ClassSetItem::Bracketed(b) => {
+                // Charged at its parent's depth: the parent folds it.
+                let charged = if b.negated {
+                    self.in_bracket(UNICODE_SCALARS, 1)
+                } else {
+                    Ok(())
+                };
+                self.brackets += 1;
+                charged
+            }
+            // Its items are visited on their own.
+            ast::ClassSetItem::Empty(_) | ast::ClassSetItem::Union(_) => Ok(()),
         }
     }
 
+    /// `[a--b]`, `[a&&b]`, `[a~~b]`: the operands are folded as sets and
+    /// combined, which can produce anything, so the operation is charged
+    /// every codepoint on top of its operands' own items.
     fn visit_class_set_binary_op_pre(
         &mut self,
         _: &ast::ClassSetBinaryOp,
     ) -> Result<(), RegexError> {
-        self.node()
+        self.node()?;
+        self.in_bracket(UNICODE_SCALARS, 1)
     }
 }
 
@@ -991,6 +1047,18 @@ mod tests {
         // Negated classes fold their complement before negating (B1).
         assert_eq!(refused(&r"\P{Any}".repeat(3)), Reason::ClassTooLarge);
         assert_eq!(refused(&r"[\P{Any}]".repeat(3)), Reason::ClassTooLarge);
+        // Inside brackets the whole set is folded, negated items included,
+        // and again at each bracket level (B2).
+        for p in [
+            r"[\S]",
+            r"[\D]",
+            r"[[^a]b]",
+            r"[\D--a]",
+            r"[[:^alpha:]]",
+            r"[^\D]",
+        ] {
+            assert_eq!(refused(&p.repeat(3)), Reason::ClassTooLarge, "{p}");
+        }
         assert_eq!(
             refused(&format!("abc|{}", r"\P{Any}".repeat(72))),
             Reason::ClassTooLarge
