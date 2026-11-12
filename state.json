@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:11:56Z",
+  "updated_at": "2026-11-12T13:14:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8039,6 +8039,11 @@
       "pr": 759,
       "sha": "70317f0c7b8ca1aed0ddba5f7a0b1427a4b19479",
       "at": "2026-11-12T12:42:43Z"
+    },
+    {
+      "pr": 753,
+      "sha": "840512099d710f22d5dcae1faf5083705d79fddc",
+      "at": "2026-11-12T13:14:00Z"
     }
   ],
   "active_sessions": {
@@ -8276,15 +8281,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T12:42:43Z",
+    "updated": "2026-11-12T13:14:00Z",
     "items": [
       {
         "slot": 1,
         "slice": "UP-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: runner chose (b) feed gate masks PRIVACY; fix round (408 deadline etc.), then PR",
-        "since": "2026-11-12T07:11:01Z",
+        "doing": "#753 UP-0 merged; next UP-1 (brief pending, N1-N3 from UP-1-brief-notes)",
+        "since": "2026-11-12T13:14:00Z",
         "status": "active"
       },
       {
@@ -8409,7 +8414,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:11:56Z",
+  "updated": "2026-11-12T13:14:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
