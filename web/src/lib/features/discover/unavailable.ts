@@ -35,6 +35,8 @@ export function unavailableText(reason: Unavailable): UnavailableText {
 			return { text: m.discover_unavailable_no_content_files() };
 		case 'needs_v2_files':
 			return { text: m.discover_unavailable_needs_v2_files() };
+		case 'payload_not_specific':
+			return { text: m.discover_unavailable_payload_not_specific() };
 		default: {
 			const unreachable: never = reason;
 			return unreachable;

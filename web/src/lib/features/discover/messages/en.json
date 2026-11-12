@@ -23,6 +23,7 @@
 	"discover_unavailable_needs_piece_roots": "Finding the same file in other torrents isn't available in this version.",
 	"discover_unavailable_no_content_files": "This torrent has no content files, so there's nothing to match.",
 	"discover_unavailable_needs_v2_files": "Finding the same file needs a v2 or hybrid torrent. This one is v1 only.",
+	"discover_unavailable_payload_not_specific": "This torrent's files are too small or too common in size to tell identical copies apart from unrelated torrents.",
 	"discover_unavailable_label": "Not available",
 	"discover_adult_hidden": "Adult content is hidden. Turn on Show adult content in Settings to see it.",
 	"discover_adult_hidden_action": "Open settings",

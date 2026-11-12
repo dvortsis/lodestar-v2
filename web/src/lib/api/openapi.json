@@ -25698,7 +25698,8 @@
           "needs_payload_signature",
           "needs_piece_roots",
           "no_content_files",
-          "needs_v2_files"
+          "needs_v2_files",
+          "payload_not_specific"
         ]
       },
       "UnderstandKpi": {

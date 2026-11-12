@@ -316,23 +316,27 @@ fn reason(group: &Value) -> (&str, &str) {
     )
 }
 
-/// Payload A (two files) under several names and orders, a different
-/// payload, and clones a filter rule hid or that are Adult.
+/// Payload A (two files, both of distinctive size: specific under CS-8a's
+/// rule) under several names and orders, a different payload, and clones
+/// a filter rule hid or that are Adult.
 fn clones() -> Vec<T> {
     let mut hidden = v1(
         "Clone.Hidden",
-        &[("x/a.mkv", 7_000_001), ("x/b.srt", 2_003)],
+        &[("x/a.mkv", 7_000_001), ("x/b.srt", 70_003)],
     );
     hidden.flags = flags::HIDDEN;
-    let mut adult = v1("Clone.Adult", &[("y/a.mkv", 7_000_001), ("y/b.srt", 2_003)]);
+    let mut adult = v1(
+        "Clone.Adult",
+        &[("y/a.mkv", 7_000_001), ("y/b.srt", 70_003)],
+    );
     adult.adult = true;
     vec![
-        v1("Payload.A", &[("a.mkv", 7_000_001), ("b.srt", 2_003)]),
+        v1("Payload.A", &[("a.mkv", 7_000_001), ("b.srt", 70_003)]),
         v1(
             "Renamed.Copy",
-            &[("subs.srt", 2_003), ("movie.mkv", 7_000_001)],
+            &[("subs.srt", 70_003), ("movie.mkv", 7_000_001)],
         ),
-        v1("Other.Payload", &[("a.mkv", 7_000_001), ("b.srt", 2_004)]),
+        v1("Other.Payload", &[("a.mkv", 7_000_001), ("b.srt", 70_004)]),
         hidden,
         adult,
         v1("Single.File", &[("", 7_000_001)]),
@@ -427,18 +431,23 @@ async fn a_backfilling_index_marks_the_groups_partial() {
     let sig = g.get("payload_sig").unwrap() + 1;
     let root = g.get("file.pieces_root").unwrap() + 1;
     let gens = g.with("payload_sig", sig).with("file.pieces_root", root);
-    let f = fixture(&shared(), false, Some(gens));
+    // Payload A's torrents (specific, v1), then the v2 ones (index 6).
+    let both = || clones().into_iter().chain(shared()).collect::<Vec<T>>();
+    let f = fixture(&both(), false, Some(gens));
     let c = session(&f).await;
     let body = siblings(&f, &c, 0).await;
     assert_eq!(body["identical_payload_partial"], true);
     assert_eq!(body["identical_payload"]["status"], "available");
+    let body = siblings(&f, &c, 6).await;
     assert_eq!(body["same_file_partial"], true);
     assert_eq!(body["same_file"]["status"], "available");
     // Complete again once nothing backfills.
-    let f = plain(&shared());
+    let f = plain(&both());
     let c = session(&f).await;
     let body = siblings(&f, &c, 0).await;
     assert_eq!(body["identical_payload_partial"], false);
+    assert_eq!(names(&body["identical_payload"]), ["Renamed.Copy"]);
+    let body = siblings(&f, &c, 6).await;
     assert_eq!(body["same_file_partial"], false);
 }
 
@@ -447,7 +456,7 @@ async fn a_backfilling_index_marks_the_groups_partial() {
 #[tokio::test]
 async fn the_groups_are_bounded() {
     let mut torrents: Vec<T> = (0..25)
-        .map(|i| v1(&format!("Many.{i}"), &[("", 123_457)]))
+        .map(|i| v1(&format!("Many.{i}"), &[("", 60_000_001)]))
         .collect();
     let files: Vec<(String, i64, u8)> = (0..SAME_FILE_ROOTS + 3)
         .map(|i| (format!("f{i}.bin"), 1000 + i as i64, i as u8))
@@ -463,4 +472,33 @@ async fn the_groups_are_bounded() {
     let body = siblings(&f, &c, 25).await;
     assert_eq!(body["same_file_capped"], true);
     assert_eq!(body["same_file"]["status"], "available");
+}
+
+/// CS-8a's specificity rule (the runner's refinement of §6): a payload
+/// small or round enough for unrelated torrents to share by chance isn't
+/// matched, whatever shares its sizes; a specific one still is.
+#[tokio::test]
+async fn a_payload_that_isnt_specific_is_never_matched() {
+    let torrents = vec![
+        v1("Small.One", &[("", 1 << 20)]),
+        v1("Small.Two", &[("", 1 << 20)]),
+        v1("Round.One", &[("a.bin", 4 << 20), ("b.bin", 8 << 20)]),
+        v1("Round.Two", &[("c.bin", 4 << 20), ("d.bin", 8 << 20)]),
+        v1("Big.One", &[("", 60_000_001)]),
+        v1("Big.Two", &[("", 60_000_001)]),
+    ];
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    for i in [0, 2] {
+        let body = siblings(&f, &c, i).await;
+        assert_eq!(
+            reason(&body["identical_payload"]),
+            ("unavailable", "payload_not_specific"),
+            "{i}"
+        );
+        assert_eq!(body["identical_payload"]["hits"], json!([]));
+    }
+    // 50 MB or more is specific on its own.
+    let body = siblings(&f, &c, 4).await;
+    assert_eq!(names(&body["identical_payload"]), ["Big.Two"]);
 }

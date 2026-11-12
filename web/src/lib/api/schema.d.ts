@@ -10599,7 +10599,7 @@ export interface components {
          * @description Why a section isn't available. Stable keys; the UI words them.
          * @enum {string}
          */
-        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files";
+        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files" | "payload_not_specific";
         UnderstandKpi: {
             /**
              * Format: int64

@@ -127,4 +127,8 @@ pub enum Unavailable {
     /// The same file elsewhere needs v2 piece roots, which a v1-only
     /// torrent doesn't have.
     NeedsV2Files,
+    /// The torrent's payload is too small, or made only of round sizes,
+    /// for an equal signature to mean the same content (CS-8a's
+    /// specificity rule), so identical payloads aren't matched.
+    PayloadNotSpecific,
 }

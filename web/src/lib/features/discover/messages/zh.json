@@ -23,6 +23,7 @@
 	"discover_unavailable_needs_piece_roots": "此版本不支持在其他种子中查找同一文件。",
 	"discover_unavailable_no_content_files": "此种子没有内容文件，无法匹配。",
 	"discover_unavailable_needs_v2_files": "查找同一文件需要 v2 或混合种子，此种子仅为 v1。",
+	"discover_unavailable_payload_not_specific": "此种子的文件太小或大小太常见，无法区分完全相同的副本与无关的种子。",
 	"discover_unavailable_label": "不可用",
 	"discover_adult_hidden": "成人内容已隐藏。在设置中开启“显示成人内容”即可查看。",
 	"discover_adult_hidden_action": "打开设置",

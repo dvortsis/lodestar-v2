@@ -206,11 +206,22 @@ pub(crate) async fn siblings(
             (Some(id), Some(index)) => other_versions(&s, index, row.id, id, adult, &cancel)?,
         };
         let own = tree(&s.reader, row.id)?;
-        let sizes = content_sizes(&own);
-        let (identical_payload, identical_payload_partial) = match (&s.index, sizes.is_empty()) {
-            (_, true) => (HitGroup::unavailable(Unavailable::NoContentFiles), false),
-            (None, false) => (HitGroup::unavailable(Unavailable::SearchDisabled), false),
-            (Some(index), false) => identical_payload(&s, index, row.id, sizes, adult, &cancel)?,
+        // CS-8a's specificity rule, the one copy (`filter::payload_sig`):
+        // a payload small or round enough for unrelated torrents to share
+        // by chance isn't matched at all.
+        let payload =
+            lodestar_filter::payload_sig(&lodestar_classify::file_infos(&own.files, own.encoding));
+        let (identical_payload, identical_payload_partial) = match (&s.index, payload) {
+            (_, None) => (HitGroup::unavailable(Unavailable::NoContentFiles), false),
+            (_, Some(p)) if !p.specific => (
+                HitGroup::unavailable(Unavailable::PayloadNotSpecific),
+                false,
+            ),
+            (None, Some(_)) => (HitGroup::unavailable(Unavailable::SearchDisabled), false),
+            (Some(index), Some(p)) => {
+                let sizes = content_sizes(&own);
+                identical_payload(&s, index, row.id, p.sig, sizes, adult, &cancel)?
+            }
         };
         let roots = file_roots(&own);
         let (same_file, same_file_partial, same_file_capped) = match (&s.index, &roots) {
@@ -346,13 +357,15 @@ fn content_sizes(tree: &FileTree) -> Vec<u64> {
 /// Identical-payload clones (§6 "Grouping/dedup"): torrents whose
 /// `payload_sig` is this one's, found as `sig:` finds them, each then
 /// confirmed by its stored file sizes, so a signature collision never
-/// shows. `sizes` are this torrent's ([`content_sizes`]), not empty.
+/// shows. `sig` and `sizes` are this torrent's (its payload signature,
+/// which is specific, and [`content_sizes`]).
 /// Partial (the flag) while the index backfills the field: torrents it
 /// hasn't reached yet can't be found.
 fn identical_payload(
     s: &ApiState,
     search: &lodestar_search::SearchHandle,
     id: i64,
+    sig: u64,
     sizes: Vec<u64>,
     adult: bool,
     cancel: &CancelToken,
@@ -367,9 +380,6 @@ fn identical_payload(
         ));
     }
     let partial = !availability.complete();
-    let Some(sig) = lodestar_classify::payload::payload_sig_of_sizes(sizes.clone()) else {
-        return Ok((HitGroup::unavailable(Unavailable::NoContentFiles), false));
-    };
     let node = shown(
         &Node::Sig {
             sig: lodestar_search::query::sig_hex(sig),
@@ -1391,14 +1401,9 @@ mod tests {
 
     fn payload_of(s: &ApiState, id: i64, cancel: &CancelToken) -> ApiResult<(HitGroup, bool)> {
         let tree = tree(&s.reader, id).unwrap();
-        identical_payload(
-            s,
-            s.index.as_ref().unwrap(),
-            id,
-            content_sizes(&tree),
-            false,
-            cancel,
-        )
+        let sizes = content_sizes(&tree);
+        let sig = lodestar_classify::payload::payload_sig_of_sizes(sizes.clone()).unwrap();
+        identical_payload(s, s.index.as_ref().unwrap(), id, sig, sizes, false, cancel)
     }
 
     /// The corpus's torrents are one 1 GiB file each: every one is a clone
