@@ -4863,7 +4863,10 @@ export interface components {
          * @enum {string}
          */
         EmailSecurity: "tls" | "starttls" | "none";
-        /** @description The source behind an adult-enrichment match. */
+        /**
+         * @description The source behind an enrichment answer: an adult-enrichment match or
+         *     an identification.
+         */
         EnrichmentSource: {
             /** Format: int32 */
             id: number;
@@ -5744,6 +5747,105 @@ export interface components {
         IdBody: {
             /** Format: int64 */
             id: number;
+        };
+        /** @description One plugin's answer. */
+        Identification: {
+            /** @description Other titles the work is known by, at most 32. */
+            alt_titles: components["schemas"]["IdentifiedTitle"][];
+            /** @description The work's own title in the plugin's database. */
+            canonical_title: string | null;
+            /**
+             * @description This answer names the title a resolved record shows (the surest
+             *     with a canonical title). At most one answer is chosen; none when
+             *     the chosen one's source isn't shown to this caller.
+             */
+            chosen: boolean;
+            /**
+             * Format: int32
+             * @description How sure the plugin is of the match, 0–100 percent.
+             */
+            confidence: number;
+            /** @description Normalised genres, at most 16. */
+            genres: string[];
+            /**
+             * @description The work's ids, at most 32, in the closed schemes enrichment
+             *     writes: imdb, tmdb, tvdb, anidb, anilist, mbid, olid, igdb,
+             *     discogs, steam, wikidata.
+             */
+            ids: components["schemas"]["IdentifiedId"][];
+            /** @description The plugin that answered: "Identified by Wikidata". */
+            source: components["schemas"]["EnrichmentSource"];
+            /**
+             * Format: int32
+             * @description The work's year.
+             */
+            year: number | null;
+        };
+        /**
+         * @description What general enrichment plugins (Wikidata, TMDB, …) identified a
+         *     torrent as (ENR-10, ENR-12; architecture §6, §10.5). Every text was
+         *     judged by the content filter before it was stored, and nothing is
+         *     judged again here.
+         * @example {
+         *       "alternatives": [
+         *         {
+         *           "alt_titles": [
+         *             {
+         *               "language": "ja",
+         *               "title": "ショーシャンクの空に"
+         *             }
+         *           ],
+         *           "canonical_title": "The Shawshank Redemption",
+         *           "chosen": true,
+         *           "confidence": 92,
+         *           "genres": [
+         *             "drama"
+         *           ],
+         *           "ids": [
+         *             {
+         *               "scheme": "imdb",
+         *               "value": "tt0111161"
+         *             },
+         *             {
+         *               "scheme": "wikidata",
+         *               "value": "Q172241"
+         *             }
+         *           ],
+         *           "source": {
+         *             "id": 7,
+         *             "name": "Wikidata",
+         *             "plugin": "wikidata"
+         *           },
+         *           "year": 1994
+         *         }
+         *       ],
+         *       "resolved_via": null
+         *     }
+         */
+        IdentifiedAs: {
+            /**
+             * @description Each plugin's answer, the surest first (ties by source id). Two
+             *     plugins that disagree are both kept.
+             */
+            alternatives: components["schemas"]["Identification"][];
+            /**
+             * @description How the effective title was resolved: `files`, `folder` or
+             *     `structure`; null when the name said it itself.
+             */
+            resolved_via: string | null;
+        };
+        /** @description A work's id in one scheme. */
+        IdentifiedId: {
+            /** @description `imdb`, `tmdb`, `wikidata`, … */
+            scheme: string;
+            /** @description In the scheme's one spelling (`tt0111161`, `Q172241`). */
+            value: string;
+        };
+        /** @description An alternative title and its language. */
+        IdentifiedTitle: {
+            /** @description A BCP 47 tag, lower case; `und` when the plugin didn't say. */
+            language: string;
+            title: string;
         };
         /** @description One setting an import changes. */
         ImportChange: {
@@ -10298,6 +10400,14 @@ export interface components {
             hash_v2: string | null;
             /** Format: int64 */
             id: number;
+            /**
+             * @description What general enrichment identified the torrent as (ENR-10, §6):
+             *     each plugin's answer, surest first. **Absent**, never null or
+             *     empty, when there's none to show: no answer is stored, the torrent
+             *     is hidden, held, private or Adult, or every answer came from a
+             *     source this caller may not see.
+             */
+            identified_as?: components["schemas"]["IdentifiedAs"];
             /**
              * Format: int64
              * @description Null = never scraped.

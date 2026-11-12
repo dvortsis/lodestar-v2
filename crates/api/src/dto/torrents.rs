@@ -40,6 +40,14 @@ pub struct TorrentDetail {
     #[schema(required = true)]
     pub hash_v2: Option<String>,
     pub id: i64,
+    /// What general enrichment identified the torrent as (ENR-10, §6):
+    /// each plugin's answer, surest first. **Absent**, never null or
+    /// empty, when there's none to show: no answer is stored, the torrent
+    /// is hidden, held, private or Adult, or every answer came from a
+    /// source this caller may not see.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub identified_as: Option<IdentifiedAs>,
     /// Null = never scraped.
     #[schema(required = true)]
     pub last_scrape_at: Option<i64>,
@@ -116,7 +124,80 @@ pub struct AdultEnrichment {
     pub studio: Option<String>,
 }
 
-/// The source behind an adult-enrichment match.
+/// What general enrichment plugins (Wikidata, TMDB, …) identified a
+/// torrent as (ENR-10, ENR-12; architecture §6, §10.5). Every text was
+/// judged by the content filter before it was stored, and nothing is
+/// judged again here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "alternatives": [{
+        "alt_titles": [{"language": "ja", "title": "ショーシャンクの空に"}],
+        "canonical_title": "The Shawshank Redemption",
+        "chosen": true,
+        "confidence": 92,
+        "genres": ["drama"],
+        "ids": [{"scheme": "imdb", "value": "tt0111161"}, {"scheme": "wikidata", "value": "Q172241"}],
+        "source": {"id": 7, "name": "Wikidata", "plugin": "wikidata"},
+        "year": 1994
+    }],
+    "resolved_via": null
+}))]
+pub struct IdentifiedAs {
+    /// Each plugin's answer, the surest first (ties by source id). Two
+    /// plugins that disagree are both kept.
+    pub alternatives: Vec<Identification>,
+    /// How the effective title was resolved: `files`, `folder` or
+    /// `structure`; null when the name said it itself.
+    #[schema(required = true)]
+    pub resolved_via: Option<String>,
+}
+
+/// One plugin's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Identification {
+    /// Other titles the work is known by, at most 32.
+    pub alt_titles: Vec<IdentifiedTitle>,
+    /// The work's own title in the plugin's database.
+    #[schema(required = true)]
+    pub canonical_title: Option<String>,
+    /// This answer names the title a resolved record shows (the surest
+    /// with a canonical title). At most one answer is chosen; none when
+    /// the chosen one's source isn't shown to this caller.
+    pub chosen: bool,
+    /// How sure the plugin is of the match, 0–100 percent.
+    pub confidence: u8,
+    /// Normalised genres, at most 16.
+    pub genres: Vec<String>,
+    /// The work's ids, at most 32, in the closed schemes enrichment
+    /// writes: imdb, tmdb, tvdb, anidb, anilist, mbid, olid, igdb,
+    /// discogs, steam, wikidata.
+    pub ids: Vec<IdentifiedId>,
+    /// The plugin that answered: "Identified by Wikidata".
+    pub source: EnrichmentSource,
+    /// The work's year.
+    #[schema(required = true)]
+    pub year: Option<u16>,
+}
+
+/// An alternative title and its language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct IdentifiedTitle {
+    /// A BCP 47 tag, lower case; `und` when the plugin didn't say.
+    pub language: String,
+    pub title: String,
+}
+
+/// A work's id in one scheme.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct IdentifiedId {
+    /// `imdb`, `tmdb`, `wikidata`, …
+    pub scheme: String,
+    /// In the scheme's one spelling (`tt0111161`, `Q172241`).
+    pub value: String,
+}
+
+/// The source behind an enrichment answer: an adult-enrichment match or
+/// an identification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct EnrichmentSource {
     pub id: u8,
