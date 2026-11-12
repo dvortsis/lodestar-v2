@@ -1,5 +1,5 @@
 //! `/export` (§9, §10.4): a search, a selection or a collection as a
-//! CSV, NDJSON or magnet-list download.
+//! CSV, NDJSON, magnet-list or bitmagnet-import download.
 
 use lodestar_search::query::Node;
 
@@ -31,11 +31,11 @@ pub struct ExportRequest {
     pub hashes: Option<Vec<String>>,
     /// A collection's id: its torrents in the collection's order.
     pub collection: Option<i64>,
-    /// `csv` (the default), `json` (NDJSON) or `magnets`.
+    /// `csv` (the default), `json` (NDJSON), `magnets` or `bitmagnet`.
     pub format: Option<ExportFormat>,
     /// A comma-separated subset of [`ExportField`] names, written in
     /// that type's order whatever the order given. Every field but
-    /// `magnet` by default; `magnets` takes none.
+    /// `magnet` by default; `magnets` and `bitmagnet` take none.
     #[schema(example = "hash,name,size,seeders")]
     pub fields: Option<String>,
 }
@@ -59,6 +59,17 @@ pub enum ExportFormat {
     /// One magnet link per line (`text/plain`), exactly as the detail
     /// view's `magnet`.
     Magnets,
+    /// The JSON lines bitmagnet's `POST /import` endpoint reads
+    /// (`application/x-ndjson`), one object per line in this key order:
+    /// `infoHash` (40 lowercase hex digits), `name`, `size` (bytes),
+    /// `source` (always `lodestar`), `publishedAt` (when Lodestar first
+    /// saw it, RFC 3339 UTC) and `contentType` (bitmagnet's names, left
+    /// out where Lodestar's type has none, so bitmagnet classifies it
+    /// itself). No trailer: bitmagnet would read it as a torrent. Never
+    /// includes hidden torrents (`hidden=true` is refused), BEP 27
+    /// private ones or unverified remote ones, since bitmagnet looks up
+    /// every imported hash on the DHT.
+    Bitmagnet,
 }
 
 /// A field an export can write: the torrent summary of

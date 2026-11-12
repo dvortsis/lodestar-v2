@@ -401,14 +401,16 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
     );
 }
 
+/// The sources the binary registers, and which start on. This began as
 /// G1 of the v0.5.2 manifest (`docs/plan/2026-11-06-v052-feature-manifest.md`
-/// §3.3): a release build registers exactly three sources, the DHT, the
-/// torrent cache and the Sonarr/Radarr webhooks, and only the DHT starts
-/// on. Every other plugin in `sources-plugins` is compiled in but must stay
-/// unregistered; registering one changes what v0.5.2 ships, so it fails
-/// here until the manifest and this list say so.
+/// §3.3), which stays pinned to its three sources on `release/v0.5.2`. On
+/// `main` the set follows owner §2.55 and X-prowlarr-register: the DHT
+/// (on), the torrent cache, the Sonarr/Radarr webhooks and Prowlarr /
+/// Jackett (all off). Every other plugin in `sources-plugins` is compiled
+/// in but must stay unregistered; registering one changes what ships (and
+/// the Legal Notice's section 2), so it fails here until this list says so.
 #[test]
-fn the_binary_registers_only_the_dht_the_torrent_cache_and_the_webhooks() {
+fn the_binary_registers_only_its_four_sources() {
     let dir = tempfile::tempdir().unwrap();
     let s = Server::start_with(dir.path(), true, true);
     let sources = s.get_json("/api/v1/sources");
@@ -431,9 +433,20 @@ fn the_binary_registers_only_the_dht_the_torrent_cache_and_the_webhooks() {
         [
             ("arr_webhooks".to_owned(), false),
             ("dht".to_owned(), true),
+            ("prowlarr".to_owned(), false),
             ("torrent_cache".to_owned(), false),
         ],
         "{sources}"
     );
+    // Prowlarr is the one Account source: off by default and still
+    // needing its API key. The consent gate's refusal to turn it on is
+    // `consent_gate.rs`'s `prowlarr_is_registered_off_and_its_settings_save`.
+    let prowlarr = list
+        .iter()
+        .find(|x| x["plugin"] == "prowlarr")
+        .unwrap_or_else(|| panic!("{sources}"));
+    assert_eq!(prowlarr["consent"], "account", "{prowlarr}");
+    assert_eq!(prowlarr["needs"], "credentials", "{prowlarr}");
+    assert_ne!(prowlarr["health"]["running"], true, "{prowlarr}");
     s.stop();
 }

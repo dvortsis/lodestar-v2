@@ -2846,7 +2846,7 @@
           {
             "name": "hidden",
             "in": "query",
-            "description": "Include torrents a filter rule hid (§20.3).",
+            "description": "Include torrents a filter rule hid (§20.3); refused with `bitmagnet`.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -2865,7 +2865,7 @@
           {
             "name": "format",
             "in": "query",
-            "description": "`csv` (the default), `json` (NDJSON) or `magnets`.",
+            "description": "`csv` (the default), `json` (NDJSON), `magnets` or `bitmagnet` (bitmagnet's `/import` lines).",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/ExportFormat"
@@ -2895,7 +2895,7 @@
                 "schema": {
                   "type": "string"
                 },
-                "description": "`attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt>`."
+                "description": "`attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt|bitmagnet.ndjson>`."
               },
               "X-Export-Job": {
                 "schema": {
@@ -2925,7 +2925,7 @@
             }
           },
           "400": {
-            "description": "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them).",
+            "description": "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`); `ast` or `hashes` in the query string is a `bad_parameter` (POST them).",
             "content": {
               "application/json": {
                 "schema": {
@@ -14934,7 +14934,8 @@
         "enum": [
           "csv",
           "json",
-          "magnets"
+          "magnets",
+          "bitmagnet"
         ]
       },
       "ExportJob": {
@@ -14991,7 +14992,7 @@
               "string",
               "null"
             ],
-            "description": "A comma-separated subset of [`ExportField`] names, written in\nthat type's order whatever the order given. Every field but\n`magnet` by default; `magnets` takes none.",
+            "description": "A comma-separated subset of [`ExportField`] names, written in\nthat type's order whatever the order given. Every field but\n`magnet` by default; `magnets` and `bitmagnet` take none.",
             "default": null,
             "example": "hash,name,size,seeders"
           },
@@ -15002,7 +15003,7 @@
               },
               {
                 "$ref": "#/components/schemas/ExportFormat",
-                "description": "`csv` (the default), `json` (NDJSON) or `magnets`."
+                "description": "`csv` (the default), `json` (NDJSON), `magnets` or `bitmagnet`."
               }
             ],
             "default": null
