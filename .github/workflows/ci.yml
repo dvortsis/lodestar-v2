@@ -118,6 +118,7 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$BASE"
           python3 .github/scripts/test_log_lint.py
+          python3 .github/scripts/test_workflow_concurrency.py
           python3 .github/scripts/log_lint.py --base FETCH_HEAD
 
   openapi:

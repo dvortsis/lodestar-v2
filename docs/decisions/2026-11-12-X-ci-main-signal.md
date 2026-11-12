@@ -17,5 +17,7 @@ More CI minutes on main. At worst one extra full run per merge burst (the pendin
 ## Pull requests
 No change. A newer push to a PR still cancels that PR's superseded run.
 
-## Follow-up
-The new test is not yet run by CI (workflows run `.github/scripts` tests file by file). Wiring it in needs a job or step change, which this slice may not make; the next brief touching these workflows should add it next to `test_ci_changes.py`.
+## The test runs in CI
+`test_workflow_concurrency.py` runs in `ci.yml`'s lint job ("logging check" step), next to `test_log_lint.py` (runner-approved edit outside the slice's paths). That job runs only when the `rust` output is true. A change to `ci.yml` sets it (`EVERYTHING` in `ci_changes.py`), so editing the concurrency block there is always checked. A change to only `web.yml`, `e2e.yml` or the test file does not set it, so the test would not run on such a PR. The filter is left as is, pending the runner's call.
+
+`e2e.yml` keeps its edit: it still stops a manual dispatch and the nightly run from cancelling each other, and it keeps the three workflows uniform.
