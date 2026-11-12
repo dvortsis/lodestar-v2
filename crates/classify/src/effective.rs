@@ -25,9 +25,10 @@ impl ResolvedVia {
     /// The listed methods: what `/search/fields` and the query language's
     /// hints offer. [`ResolvedVia::Plugin`] isn't listed yet: ENR-10's own
     /// lookups never resolve a title (runner, 2026-11-12), so offering it
-    /// would match nothing. The slice that first makes it fire lists it,
-    /// with its label. [`from_name`](Self::from_name) still reads it, so
-    /// stored records and `resolved:plugin` queries work.
+    /// would match nothing, and `resolved:plugin` stays refused, as
+    /// `docs/query-language.md` documents. The slice that first makes it
+    /// fire lists it, with its label and the doc. Stored records read it
+    /// through [`from_stored`](Self::from_stored).
     pub const ALL: [ResolvedVia; 3] = [
         ResolvedVia::File,
         ResolvedVia::Folder,
@@ -44,11 +45,15 @@ impl ResolvedVia {
         }
     }
 
+    /// A listed method by name, as `resolved:` queries read it.
     pub fn from_name(name: &str) -> Option<ResolvedVia> {
-        ResolvedVia::ALL
-            .into_iter()
-            .chain([ResolvedVia::Plugin])
-            .find(|v| v.as_str() == name)
+        ResolvedVia::ALL.into_iter().find(|v| v.as_str() == name)
+    }
+
+    /// Any method by name, [`ResolvedVia::Plugin`] included, as a stored
+    /// record reads it back.
+    pub fn from_stored(name: &str) -> Option<ResolvedVia> {
+        ResolvedVia::from_name(name).or((name == "plugin").then_some(ResolvedVia::Plugin))
     }
 }
 
@@ -393,7 +398,12 @@ mod tests {
         assert_eq!(r.resolved, Some(ResolvedVia::Plugin));
         assert_eq!(r.confidence, MAX_PLUGIN_CONFIDENCE);
         assert!(r.ambiguous && r.resolved_from.is_none());
-        assert_eq!(ResolvedVia::from_name("plugin"), Some(ResolvedVia::Plugin));
+        assert_eq!(ResolvedVia::from_name("plugin"), None, "not a query value");
+        assert_eq!(
+            ResolvedVia::from_stored("plugin"),
+            Some(ResolvedVia::Plugin)
+        );
+        assert_eq!(ResolvedVia::from_stored("files"), Some(ResolvedVia::File));
         assert!(
             !ResolvedVia::ALL.contains(&ResolvedVia::Plugin),
             "not listed yet"
@@ -441,6 +451,28 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A record resolved via a plugin encodes, decodes and reads back as
+    /// such, though `plugin` isn't a query value.
+    #[test]
+    fn a_plugin_resolved_record_round_trips() {
+        let mut c = crate::classify("New Folder", &[]);
+        c.title = via_plugin(
+            &c.title,
+            PluginTitle {
+                title: "The Work",
+                year: Some(1999),
+                confidence: 90,
+            },
+        )
+        .unwrap();
+        let r = crate::Record::new(&c);
+        assert_eq!(r.resolved, Some(ResolvedVia::Plugin));
+        let back = crate::Record::decode(&r.encode()).unwrap();
+        assert_eq!(back, r);
+        assert_eq!(back.resolved, Some(ResolvedVia::Plugin));
+        assert_eq!(back.release("title"), Some("The Work"));
     }
 
     #[test]
