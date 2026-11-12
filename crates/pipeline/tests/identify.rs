@@ -835,7 +835,11 @@ async fn a_restart_resumes_the_backfill() {
     })
     .await;
     r.stop().await;
-    assert_eq!(again.titles(), ["Item2 Plain Film"], "the count and cursor survived");
+    assert_eq!(
+        again.titles(),
+        ["Item2 Plain Film"],
+        "the count and cursor survived"
+    );
 }
 
 /// Runs `found` through the writer's ingest, with `enrichers` the
