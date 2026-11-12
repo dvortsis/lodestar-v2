@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:06:37Z",
+  "updated_at": "2026-11-12T04:21:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7083,6 +7083,11 @@
       "id": "X-filters-budget-headroom",
       "note": "Settings FiltersScreen (first view) is at exactly 31.14 of 31.14 kB on main (reported by #729); the next string in that chunk may not fit. Split or trim, or a measured raise under \u00a72.26 with owner flag.",
       "at": "2026-11-12T04:01:05Z"
+    },
+    {
+      "id": "X-spool-open-size",
+      "note": "Spool::open sizes a segment with entry.metadata().len() (crates/pipeline spool.rs ~:971); on Windows a directory listing's size can lag the real file size, so after a crash the start-up byte count can be low until the next open. Pre-existing; use the open handle's metadata. Reported by X-spool-damage-log (#724).",
+      "at": "2026-11-12T04:21:20Z"
     }
   ],
   "main_health": [
@@ -7896,7 +7901,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:06:37Z",
+    "updated": "2026-11-12T04:21:20Z",
     "items": [
       {
         "slot": 1,
@@ -8058,7 +8063,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:06:37Z",
+  "updated": "2026-11-12T04:21:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
