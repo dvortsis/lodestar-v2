@@ -18,6 +18,7 @@
     - uninstall keeps the data unless run with REMOVE_DATA=1
     - registers the "Lodestar update helper" scheduled task: SYSTEM runs `lodestar.exe update-helper`
       at boot and when the service starts it (plan 2026-11-06 Q13, owner-decisions 2.47)
+    - or, chosen in the wizard, joins an existing Lodestar as a worker (join.wxs, slice WK-18w)
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension"
@@ -72,6 +73,7 @@
       <ComponentRef Id="FirewallWeb" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="EventSources" />
+      <ComponentGroupRef Id="JoinWorker" />
     </Feature>
 
     <!-- ===== Folders ===== -->
@@ -110,7 +112,7 @@
                         Start="auto"
                         ErrorControl="normal"
                         Account="NT SERVICE\Lodestar"
-                        Arguments="serve"
+                        Arguments="[LodestarServiceArgs]"
                         Vital="yes">
           <ServiceConfig DelayedAutoStart="yes" PreShutdownDelay="60000"
                          FailureActionsWhen="failedToStopOrReturnedError"
@@ -119,6 +121,8 @@
                               ThirdFailureActionType="none" RestartServiceDelayInSeconds="60"
                               ResetPeriodInDays="1" />
         </ServiceInstall>
+        <!-- LodestarServiceArgs is "serve", or "worker" for a PC that joined an existing Lodestar
+             (join.wxs): never with a token or token file. -->
         <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
 
@@ -183,6 +187,8 @@
     <!-- ===== Start menu: opens the web UI ===== -->
     <DirectoryRef Id="StartMenuDir">
       <Component Id="StartMenuShortcut" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A05" Win64="yes">
+        <!-- A worker has no web page of its own. -->
+        <Condition>NOT (LODESTAR_MODE = "worker")</Condition>
         <util:InternetShortcut Id="WebUiShortcut" Name="Lodestar" Target="http://localhost:8090/"
                                IconFile="[INSTALLFOLDER]lodestar.exe" IconIndex="0" />
         <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />
@@ -302,13 +308,21 @@
 
         <Control Id="WebBox" Type="CheckBox" X="20" Y="184" Width="330" Height="18"
                  Property="WEB_FIREWALL" CheckBoxValue="1"
-                 Text="Let other PCs on my private network open the Lodestar web page" />
+                 Text="Let other PCs on my private network open the Lodestar web page">
+          <Condition Action="hide">LODESTAR_MODE = "worker"</Condition>
+          <Condition Action="show">NOT (LODESTAR_MODE = "worker")</Condition>
+        </Control>
         <Control Id="WebText" Type="Text" X="38" Y="204" Width="312" Height="28" NoPrefix="yes"
-                 Text="Leave this off unless you need it. The web page on this PC works either way." />
+                 Text="Leave this off unless you need it. The web page on this PC works either way.">
+          <Condition Action="hide">LODESTAR_MODE = "worker"</Condition>
+          <Condition Action="show">NOT (LODESTAR_MODE = "worker")</Condition>
+        </Control>
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
-          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">WIX_UPGRADE_DETECTED</Publish>
+          <Publish Event="NewDialog" Value="ModeDlg">NOT WIX_UPGRADE_DETECTED AND NOT (LODESTAR_MODE = "worker")</Publish>
+          <Publish Event="NewDialog" Value="JoinDlg">NOT WIX_UPGRADE_DETECTED AND LODESTAR_MODE = "worker"</Publish>
         </Control>
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
           <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
@@ -318,9 +332,12 @@
         </Control>
       </Dialog>
 
-      <!-- Licence -> Options -> Ready (and back the same way): no install-folder page, because the
+      <!-- Licence -> Mode -> [worker: Join ->] Options -> Ready (and back the same way; an upgrade
+           keeps its mode and skips Mode and Join): no install-folder page, because the
            program and the scripts SYSTEM runs must stay in Program Files. -->
-      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="OptionsDlg" Order="3">LicenseAccepted = "1"</Publish>
+      <UIRef Id="JoinWorkerUI" />
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="ModeDlg" Order="3">LicenseAccepted = "1" AND NOT WIX_UPGRADE_DETECTED</Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="OptionsDlg" Order="4">LicenseAccepted = "1" AND WIX_UPGRADE_DETECTED</Publish>
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="OptionsDlg" Order="3">NOT Installed</Publish>
     </UI>
   </Product>

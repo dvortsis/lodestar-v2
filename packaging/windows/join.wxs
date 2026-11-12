@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  "Join an existing Lodestar as a worker" (slice WK-18w; docs/decisions/2026-11-12-WK-18w.md).
+  Included by build-msi.ps1 next to main.wxs, which refers to the JoinWorker component group
+  and the JoinWorkerUI dialogs.
+
+  The default, "This PC runs Lodestar" (LODESTAR_MODE=main), installs exactly as before. In
+  worker mode (LODESTAR_MODE=worker, wizard only):
+    - the wizard asks for the main Lodestar's address (JOIN_ADDRESS) and a join token
+      (JOIN_TOKEN, a password field);
+    - JOIN_TOKEN is Hidden (MsiHiddenProperties), and the two actions that carry it are
+      HideTarget, so the MSI log never shows it. It is never written to the registry or a file
+      the product keeps;
+    - JoinWorker, a deferred action run once as SYSTEM after the data folder is secured and
+      before the service starts, hands the token to join-worker.ps1 on stdin. That script puts
+      it in a SYSTEM/Administrators-only temporary file, runs
+      lodestar.exe worker with the join, token-file and join-only options, with a deadline,
+      and deletes the file whatever happens. A failed join stops and rolls back the install,
+      with a message that may name the address and never holds the token;
+    - the service runs plain `lodestar.exe worker` (no join or token-file option), under the
+      same account, SID and privileges as in the default mode;
+    - Software\Lodestar\Mode = "worker" remembers the mode, so a Repair or upgrade (also a
+      silent one by the updater) keeps it and never asks for a token again.
+
+  $(env.LODESTAR_JOIN_CA): the JoinWorker custom action DLL, built by build-msi.ps1 from
+  join-ca\.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- "main" or "worker". Public, so the wizard's choice reaches the install. -->
+    <Property Id="LODESTAR_MODE" Value="main" Secure="yes" />
+    <Property Id="LODESTAR_MODE_PREV">
+      <RegistrySearch Id="LodestarModePrev" Root="HKLM" Key="Software\Lodestar" Name="Mode" Type="raw" Win64="yes" />
+    </Property>
+    <Property Id="JOIN_ADDRESS" Secure="yes" />
+    <!-- Hidden: listed in MsiHiddenProperties, so its value never appears in the MSI log. -->
+    <Property Id="JOIN_TOKEN" Secure="yes" Hidden="yes" />
+    <!-- JoinWorker's CustomActionData holds the token too: hidden from the log's property list. -->
+    <Property Id="JoinWorker" Hidden="yes" />
+    <!-- What the service runs. Private (mixed case), so it can't be set from the command line;
+         SetServiceArgsWorker below makes it "worker". -->
+    <Property Id="LodestarServiceArgs" Value="serve" />
+
+    <!-- A Repair or upgrade keeps the mode it was installed in, whatever the command line or
+         the wizard says: the mode that installed the data folder is the one that can run it. -->
+    <CustomAction Id="KeepWorkerMode" Property="LODESTAR_MODE" Value="worker" />
+    <CustomAction Id="KeepMainMode" Property="LODESTAR_MODE" Value="main" />
+    <CustomAction Id="SetServiceArgsWorker" Property="LodestarServiceArgs" Value="worker" />
+
+    <CustomAction Id="WorkerNeedsWizard"
+                  Error="Joining an existing Lodestar needs the setup wizard, so the join token is typed into it and never onto a command line. Run the installer without /qn, /qb or /passive." />
+    <CustomAction Id="WorkerNeedsDetails"
+                  Error="Joining an existing Lodestar needs the main Lodestar's address and a join token. Run the installer again and fill both in." />
+
+    <!-- The token's only way into the install script. HideTarget on both: no value in the log. -->
+    <CustomAction Id="SetJoinWorker" Property="JoinWorker" HideTarget="yes"
+                  Value="INSTALLFOLDER=[INSTALLFOLDER];DATADIR=[DataFolderDir];ADDRESS=[JOIN_ADDRESS];TOKEN=[JOIN_TOKEN]" />
+    <CustomAction Id="JoinWorker" BinaryKey="LodestarJoinCA" DllEntry="JoinWorker"
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <Binary Id="LodestarJoinCA" SourceFile="$(env.LODESTAR_JOIN_CA)" />
+
+    <InstallUISequence>
+      <Custom Action="KeepWorkerMode" After="AppSearch">(Installed OR WIX_UPGRADE_DETECTED) AND LODESTAR_MODE_PREV = "worker"</Custom>
+      <Custom Action="KeepMainMode" After="KeepWorkerMode">(Installed OR WIX_UPGRADE_DETECTED) AND NOT (LODESTAR_MODE_PREV = "worker")</Custom>
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="KeepWorkerMode" After="AppSearch">(Installed OR WIX_UPGRADE_DETECTED) AND LODESTAR_MODE_PREV = "worker"</Custom>
+      <Custom Action="KeepMainMode" After="KeepWorkerMode">(Installed OR WIX_UPGRADE_DETECTED) AND NOT (LODESTAR_MODE_PREV = "worker")</Custom>
+      <Custom Action="WorkerNeedsWizard" After="KeepMainMode">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND UILevel &lt; 5</Custom>
+      <Custom Action="WorkerNeedsDetails" After="WorkerNeedsWizard">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND (JOIN_ADDRESS = "" OR JOIN_TOKEN = "")</Custom>
+      <Custom Action="SetServiceArgsWorker" After="CostFinalize">LODESTAR_MODE = "worker"</Custom>
+      <!-- After the data folder is secured (SecureDataFolder and the actions after
+           InstallServices in main.wxs), before the service is started. First install only. -->
+      <Custom Action="SetJoinWorker" Before="JoinWorker">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="JoinWorker" Before="StartServices">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+    </InstallExecuteSequence>
+
+    <ComponentGroup Id="JoinWorker">
+      <ComponentRef Id="WorkerMode" />
+      <ComponentRef Id="JoinScripts" />
+    </ComponentGroup>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <!-- Only in worker mode: the remembered mode (never the token or the address). -->
+      <Component Id="WorkerMode" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A08" Win64="yes">
+        <Condition>LODESTAR_MODE = "worker"</Condition>
+        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="Mode" Type="string" Value="worker" KeyPath="yes" />
+      </Component>
+      <!-- Only in worker mode: the scripts JoinWorker runs (dacl-check.ps1 is in ProgramFiles). -->
+      <Component Id="JoinScripts" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A09" Win64="yes">
+        <Condition>LODESTAR_MODE = "worker"</Condition>
+        <File Id="JoinWorkerPs1" Name="join-worker.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\join-worker.ps1" KeyPath="yes" />
+        <File Id="JoinTokenFilePs1" Name="join-token-file.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\join-token-file.ps1" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <UI Id="JoinWorkerUI">
+      <!-- Licence -> Mode -> [worker: Join ->] Options -> Ready. main.wxs wires Licence and Options to it. -->
+      <Dialog Id="ModeDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}How will this PC use Lodestar?" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="If you are not sure, keep the first choice." />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="ModeGroup" Type="RadioButtonGroup" X="20" Y="58" Width="330" Height="38" Property="LODESTAR_MODE">
+          <RadioButtonGroup Property="LODESTAR_MODE">
+            <RadioButton Value="main" X="0" Y="0" Width="330" Height="16" Text="This PC runs Lodestar (recommended)" />
+            <RadioButton Value="worker" X="0" Y="20" Width="330" Height="16" Text="Join an existing Lodestar as a worker" />
+          </RadioButtonGroup>
+        </Control>
+        <Control Id="MainText" Type="Text" X="20" Y="106" Width="330" Height="36" NoPrefix="yes"
+                 Text="This PC runs Lodestar: it crawls, keeps the database and serves the web page. Choose this for your first or only Lodestar." />
+        <Control Id="WorkerText" Type="Text" X="20" Y="148" Width="330" Height="72" NoPrefix="yes"
+                 Text="Join as a worker: this PC crawls for a Lodestar you already run on another computer and sends it what it finds. It has no web page or database of its own. You need that Lodestar's address and a join token from its Settings, Workers, Add worker." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="JoinDlg">LODESTAR_MODE = "worker"</Publish>
+          <Publish Event="NewDialog" Value="OptionsDlg">NOT (LODESTAR_MODE = "worker")</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+
+      <Dialog Id="JoinDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Join an existing Lodestar" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Where the main Lodestar is, and the token that lets this PC in." />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="AddressLabel" Type="Text" X="20" Y="56" Width="330" Height="12" NoPrefix="yes"
+                 Text="The main Lodestar's address (its cluster port, 8091 unless you changed it):" />
+        <Control Id="Address" Type="Edit" X="20" Y="70" Width="330" Height="18" Property="JOIN_ADDRESS" Text="{300}" />
+        <Control Id="AddressHint" Type="Text" X="20" Y="91" Width="330" Height="12" NoPrefix="yes"
+                 Text="For example https://192.168.1.10:8091" />
+
+        <Control Id="TokenLabel" Type="Text" X="20" Y="112" Width="330" Height="12" NoPrefix="yes"
+                 Text="Join token:" />
+        <Control Id="Token" Type="Edit" X="20" Y="126" Width="330" Height="18" Property="JOIN_TOKEN" Password="yes" Text="{200}" />
+        <Control Id="TokenHint" Type="Text" X="20" Y="148" Width="330" Height="80" NoPrefix="yes"
+                 Text="On the main Lodestar, open Settings, Workers, Add worker, and copy the token. It works once, within 15 minutes.&#13;&#10;&#13;&#10;Setup uses it once to join and then deletes it. It is not saved on this PC, and it is not shown in setup's log. If joining fails, setup is undone and tells you why: make a new token and try again." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="ModeDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="SpawnDialog" Value="JoinMissingDlg">JOIN_ADDRESS = "" OR JOIN_TOKEN = ""</Publish>
+          <Publish Event="NewDialog" Value="OptionsDlg">JOIN_ADDRESS &lt;&gt; "" AND JOIN_TOKEN &lt;&gt; ""</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+
+      <Dialog Id="JoinMissingDlg" Width="260" Height="85" Title="[ProductName] Setup" NoMinimize="yes">
+        <Control Id="Text" Type="Text" X="15" Y="15" Width="230" Height="40" NoPrefix="yes"
+                 Text="Fill in both the main Lodestar's address and the join token." />
+        <Control Id="OK" Type="PushButton" X="102" Y="60" Width="56" Height="17" Default="yes" Cancel="yes" Text="OK">
+          <Publish Event="EndDialog" Value="Return">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>
