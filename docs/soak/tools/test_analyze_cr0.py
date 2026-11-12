@@ -1115,7 +1115,8 @@ def screen_r5_replay(h):
 
 
 def screen_r4_replay(h):
-    """A fail, shaped like r4's collector: no mapping gauge and no main-index segment
+    """r4's memory behaviour on a binary with the memory gauges (rc.4 or later; r4's
+    own rc.3 had none, see screen_r4_rc3): no mapping gauge and no main-index segment
     count (so mmap_cache_excess[main] is absent), mimalloc nearly flat, and anonymous
     memory outside it growing 22.9 MiB per 1,000 stored (47 x 0.63 / (1.9 x 680 / 1,000))."""
     values, prom = screen_r5_replay(h)
@@ -1125,6 +1126,23 @@ def screen_r4_replay(h):
     del prom['mem_anon_mappings{size="128k_512k"}'], prom['search_segments{index="main"}']
     prom["mem_mimalloc_committed_bytes"] = committed * SCREEN_MIB
     prom["mem_rss_anon_bytes"] = (committed + 60 + 22.9 * (stored - 900) / 1000) * SCREEN_MIB
+    return values, prom
+
+
+def screen_r4_rc3(h):
+    """r4 as its rc.3 binary recorded it: no memory gauges at all (X-mem-gauges first
+    shipped in rc.4), so the growth outside mimalloc can't be read."""
+    values, prom = screen_r4_replay(h)
+    for k in ("mem_mimalloc_committed_bytes", "mem_rss_anon_bytes", "fetch_held_bytes"):
+        del prom[k]
+    return values, prom
+
+
+def screen_r5_early_fill(h):
+    """r5 with mimalloc committing ahead of residency while it fills (to hour 4): the
+    input outside mimalloc falls during the fill, and a fall never trips."""
+    values, prom = screen_r5_replay(h)
+    prom["mem_rss_anon_bytes"] -= 15 * max(0.0, 4 - abs(h - 4)) * SCREEN_MIB
     return values, prom
 
 
@@ -1199,6 +1217,54 @@ class ScreenCalibrationTests(unittest.TestCase):
             # What it went without is still named in the JSON.
             self.assertIn("mmap_cache_excess[main]", self.without(c))
             self.assertIn("anon_mappings_128k_512k", self.without(c))
+
+    def test_r4s_own_rc3_evidence_cant_trip_and_says_why(self):
+        """What the owner's replay of r4 will print: no memory gauges, so ok on the
+        rest, naming the memory inputs. An ok here is not a pass, and not a clean run."""
+        cps = self.checkpoints(screen_points(screen_r4_rc3))
+        for c in cps:
+            self.assertEqual(c["status"], "ok")
+            self.assertEqual(c["line"], "ok(without absent:mmap_cache_excess[main], "
+                                        "absent:segments_per_1000_stored[main], absent:segments[main], "
+                                        "absent:anon_mappings_128k_512k_per_1000_stored, "
+                                        "absent:anon_mappings_128k_512k, absent:mimalloc_committed_mib, "
+                                        "absent:anon_outside_mimalloc_mib_per_1000_stored, absent:fetch_held_mib)")
+
+    def test_an_early_fill_ahead_of_residency_reads_low_not_high(self):
+        cps = self.checkpoints(screen_points(screen_r5_early_fill))
+        self.assertEqual([c["line"] for c in cps], ["ok", "ok", "ok"])
+        self.assertLess(cps[0]["counters"]["anon_outside_mimalloc_mib_per_1000_stored"]["value"], 0)
+
+    def no_reading_case(self, change):
+        """r5's points to hour 4, with `change` applied; fetch_pending stays ok."""
+        from analyze_cr0 import screen_checkpoint
+        pts = [(h, dict(p)) for h, p in screen_points(screen_r5_replay) if h <= 4]
+        change(pts)
+        return screen_checkpoint(pts, 4.0, 3, self.run)
+
+    def test_too_little_stored_spread_is_named_not_blocking(self):
+        from analyze_cr0 import screen_checkpoint
+        pts = [(h, dict(p, stored=900.0)) for h, p in screen_points(screen_r5_replay) if h <= 4]
+        out = screen_checkpoint(pts, 4.0, 3, self.run)
+        self.assertEqual(out["status"], "ok", out["line"])  # the bounds still read
+        self.assertIn("too_little_stored:anon_outside_mimalloc_mib_per_1000_stored", out["without"])
+
+    def test_an_input_gone_at_the_checkpoint_is_named_not_blocking(self):
+        def gone_at_3(pts):
+            for h, p in pts:
+                if h > 2.9:
+                    p.pop("fetch_held_mib", None)
+        out = self.no_reading_case(gone_at_3)
+        self.assertEqual(out["status"], "ok", out["line"])
+        self.assertEqual(out["without"], ["absent_at_checkpoint:fetch_held_mib"])
+
+    def test_an_unusable_reading_is_the_reason_given_even_beside_an_ok(self):
+        from analyze_cr0 import screen_checkpoint
+        pts = [(i / 10, {"stored": 1000.0 * i, "fetch_pending": 1.0,
+                         "anon_outside_mimalloc_mib": 1e307 * (1 + i)}) for i in range(41)]
+        out = screen_checkpoint(pts, 4.0, 3, self.run)
+        self.assertEqual(out["counters"]["fetch_pending"]["status"], "ok")
+        self.assertEqual(out["line"], "not_available(unusable:anon_outside_mimalloc_mib_per_1000_stored)")
 
     def test_each_absent_input_is_named_and_the_rest_still_decide(self):
         for name, counters in SCREEN_INPUT_COUNTERS.items():

@@ -103,8 +103,9 @@ never changes it.
     binary, or on Windows, which has no mapping gauge and no RssAnon.
   - `trip(<counter>, <value>, <threshold>)`: **stop the run and investigate**.
     You stop it: the collector never does.
-  - `not_available(<reason>)`: no input had a reading, a checkpoint wasn't
-    reached, or the thresholds aren't usable.
+  - `not_available(<reason>)`: no input had a reading, an input couldn't be
+    judged (`unusable`), a checkpoint wasn't reached, or the thresholds aren't
+    usable.
   - Mimalloc's committed growth per 1,000 stored is shown as `info` and never
     judged. Its level bound still trips.
   - **`ok` never means the soak passed.**

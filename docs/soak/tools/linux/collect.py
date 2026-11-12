@@ -324,8 +324,9 @@ def screen_checkpoint(points, last_hour, hour, run):
         out["status"] = "ok"
     if out["status"] != "not_available" and missing:
         out["without"] = missing
-    if out["status"] == "not_available":
-        out["reason"] = next(f"{s}:{n}" for n, s in states if s != "ok")
+    if out["status"] == "not_available":  # an unusable reading first: it's the cause
+        out["reason"] = next((f"{s}:{n}" for n, s in states if s != "ok" and s not in SCREEN_MISSING),
+                             next(f"{s}:{n}" for n, s in states if s != "ok"))
     return screen_line(out)
 
 
