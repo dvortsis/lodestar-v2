@@ -504,13 +504,14 @@ fn same_file(
     }
     let partial = !availability.complete() || !index.files_caught_up();
     cancel.check().map_err(search::search_error)?;
-    let roots: Vec<[u8; 32]> = files.iter().map(|(_, r)| *r).collect();
     // Visibility applied in the index, before the window (B13's one base
-    // query): withheld torrents never fill it.
+    // query), and the pairs matched there on size and root: withheld
+    // torrents and wrong-size claims never fill it.
     let visible = shown(&Node::All, adult);
     let (ids, more) = index
-        .torrents_with_pieces_roots(&roots, &visible, SAME_FILE_CANDIDATES, cancel)
+        .torrents_with_pieces_roots(files, &visible, SAME_FILE_CANDIDATES, cancel)
         .map_err(search::search_error)?;
+    let pairs: std::collections::HashSet<(u64, [u8; 32])> = files.iter().copied().collect();
     // Newest first.
     let ids = ids.into_iter().rev().map(|t| (t as i64, 0.0));
     let group = confirmed(
@@ -524,7 +525,7 @@ fn same_file(
             tree.files
                 .iter()
                 .filter(|f| !f.is_padding())
-                .any(|f| f.pieces_root.is_some_and(|r| files.contains(&(f.size, r))))
+                .any(|f| f.pieces_root.is_some_and(|r| pairs.contains(&(f.size, r))))
         },
     )?;
     Ok((group, partial, more))
@@ -1537,10 +1538,10 @@ mod tests {
         assert!(run(&collided).hits.is_empty());
     }
 
-    /// The same file's candidates stop at the next one when the request
-    /// is cancelled, as clones' and other versions' do.
+    /// The candidate loop both new groups share ([`confirmed`]) stops at
+    /// the next candidate when the request is cancelled.
     #[test]
-    fn a_cancel_during_same_file_candidates_stops_at_the_next() {
+    fn a_cancel_during_confirmation_stops_at_the_next() {
         let (s, ids, _dir) = corpus(&[entry("A"), entry("B"), entry("C")], None);
         let cancel = CancelToken::new();
         let visits = Arc::new(AtomicUsize::new(0));
