@@ -103,7 +103,7 @@ function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
     $log = Join-Path $Root 'stub/calls.log'
-    $calls = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() }
+    $calls = @(if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log })  # stays an array with one line
     [PSCustomObject]@{ Code = $code; Out = $out; Calls = $calls }
 }
 
@@ -160,6 +160,7 @@ foreach ($t in @(
         @{ Name = 'non-ASCII letters'; In = "caf$([char]0xE9) $([char]0x202E)x"; Out = 'caf x' },
         @{ Name = 'skips a control-only line'; In = "${e}`a`nsecond"; Out = 'second' },
         @{ Name = 'first line only'; In = "one`ntwo 999988887777"; Out = 'one' },
+        @{ Name = 'a lone CR mid-line is stripped, not a line break'; In = "one`rtwo"; Out = 'onetwo' },
         @{ Name = 'nothing left'; In = "${e}`a"; Out = '(no reason given)' },
         @{ Name = 'empty'; In = ''; Out = '(no reason given)' },
         @{ Name = 'cut at 200'; In = ('x' * 250); Out = ('x' * 200) })) {
@@ -244,3 +245,5 @@ try {
 
 if ($script:failures -gt 0) { Write-Host "$($script:failures) failure(s)"; exit 1 }
 Write-Host 'all passed'
+# Explicitly: the last case's child pwsh exits 1 by design, and a caller reads $LASTEXITCODE.
+exit 0

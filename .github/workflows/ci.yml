@@ -483,7 +483,9 @@ jobs:
   # Cloud infrastructure (X-cloud-infra, docs/decisions/2026-11-08-X-cloud-infra.md).
   # No credentials, no terraform plan or apply, and nothing runs against AWS
   # or Akamai. No script that can reach a cloud runs here; pure test files may
-  # (the runner, OP-2a).
+  # (the runner, OP-2a). The one exception is Deploy-AwsWindows.ps1, which runs
+  # only against a stub AWS CLI, with every AWS_* variable removed
+  # (X-ci-deploy-aws-test).
   infra:
     name: infra
     needs: changes
@@ -556,6 +558,17 @@ jobs:
       - name: StateBackend.ps1 test
         shell: pwsh
         run: ./infra/akamai/terraform/tests/Test-StateBackend.ps1
+      # The deploy script against a stub AWS CLI (X-ci-deploy-aws-test): no
+      # network, no credentials. Every AWS_* variable is removed first, and the
+      # test itself checks that `aws` resolves to its stub before any case runs.
+      - name: Deploy-AwsWindows.ps1 offline test
+        shell: pwsh
+        run: |
+          Get-ChildItem Env: | Where-Object { $_.Name -clike 'AWS_*' } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+          ./infra/akamai/terraform/tests/Test-DeployAwsWindows.ps1
+          # GitHub's pwsh wrapper already exits with $LASTEXITCODE; this keeps it
+          # visible and independent of the wrapper.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # The update manifest (PK-manifest): the builder's tests, then a round trip
   # through the verifier clients run, signed with the minisign CLI as
