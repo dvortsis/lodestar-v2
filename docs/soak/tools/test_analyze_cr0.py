@@ -952,6 +952,85 @@ class AnalyzerTests(unittest.TestCase):
         self.rows([sample(0, phase="startup")])
         self.assertEqual(analyze(self.root)["memory_attribution"]["refused"], "no_baseline")
 
+    # ---- Windows 1.0 checks (M8-WIN-1) ----
+    def svc_rows(self, pid_at=lambda i: 700, start=1000):
+        return [sample(i * 60, i, service_pid=pid_at(i), service_start_ticks=pid_at(i) * 10,
+                       values={"start_time_seconds": start, "dht_peer_admitted_total": i,
+                               "dht_peer_active": 3, "dht_peer_queued": 0,
+                               "dht_sample_cooling": 200000, "dht_sample_inflight": 0})
+                for i in range(5)]
+
+    def life(self, **parts):
+        (self.root / "lifecycle.json").write_text(json.dumps({"schema_version": 1, **parts}))
+
+    GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0-rc.1", "service_running": True,
+               "data_present": True, "torrents_before": 500, "torrents_after": 520}
+    GOOD_UN = {"service_present": False, "program_files_present": False,
+               "data_present": True, "data_policy": "kept"}
+
+    def checks(self, rows=None, **parts):
+        self.rows(rows if rows is not None else self.svc_rows())
+        if parts:
+            self.life(**parts)
+        return analyze(self.root)["windows_checks"]
+
+    def test_memory_fit_constants_are_unchanged(self):
+        from analyze_cr0 import MEMORY_FIT
+        self.assertEqual((MEMORY_FIT["field"], MEMORY_FIT["from_hour"], MEMORY_FIT["to_hour"],
+                          MEMORY_FIT["bar_mib_per_hour"], MEMORY_FIT["min_samples"]),
+                         ("private_bytes", 12.0, 24.0, 2.0, 30))
+
+    def test_old_evidence_reports_absent_not_failed(self):
+        self.rows([sample(0, 1), sample(60, 2)])
+        checks = analyze(self.root)["windows_checks"]
+        self.assertEqual({c["status"] for c in checks.values()}, {"absent"})
+        self.assertIn("absent", markdown(analyze(self.root)))
+
+    def test_service_restart_pass_and_fail(self):
+        self.assertEqual(self.checks()["service_restart"]["status"], "pass")
+        pid = self.checks(self.svc_rows(lambda i: 700 if i < 3 else 701))
+        self.assertEqual(pid["service_restart"]["status"], "fail")
+        start = self.checks(self.svc_rows(start=1000)[:3] + self.svc_rows(start=2000)[3:])
+        self.assertEqual(start["service_restart"]["status"], "fail")
+
+    def test_service_exit_recorded_fails_restart_check(self):
+        self.rows(self.svc_rows())
+        (self.root / "result.json").write_text(json.dumps(
+            {"schema_version": 2, "reason": "process_exited_1", "samples": 5}))
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+
+    def test_upgrade_pass_and_fail(self):
+        self.assertEqual(self.checks(upgrade=self.GOOD_UP)["upgrade"]["status"], "pass")
+        for change in ({"service_running": False}, {"data_present": False}, {"torrents_after": 10},
+                       {"torrents_before": 0}, {"to_version": "0.5.1"}, {"to_version": "C:\\Users\\x"},
+                       {"torrents_after": None}):
+            self.assertEqual(self.checks(upgrade={**self.GOOD_UP, **change})["upgrade"]["status"],
+                             "fail", change)
+
+    def test_uninstall_pass_and_fail(self):
+        self.assertEqual(self.checks(uninstall=self.GOOD_UN)["uninstall"]["status"], "pass")
+        removed = {**self.GOOD_UN, "data_present": False, "data_policy": "removed"}
+        self.assertEqual(self.checks(uninstall=removed)["uninstall"]["status"], "pass")
+        for change in ({"service_present": True}, {"program_files_present": True},
+                       {"data_present": False}, {"data_policy": "removed"}, {"data_policy": "maybe"}):
+            self.assertEqual(self.checks(uninstall={**self.GOOD_UN, **change})["uninstall"]["status"],
+                             "fail", change)
+
+    def test_invalid_lifecycle_file_is_absent_for_both_steps(self):
+        self.rows(self.svc_rows())
+        (self.root / "lifecycle.json").write_text("{not json")
+        checks = analyze(self.root)["windows_checks"]
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("absent", "absent"))
+
+    def test_detached_service_result_is_not_a_failed_shutdown(self):
+        self.rows(self.svc_rows())
+        (self.root / "result.json").write_text(json.dumps(
+            {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
+             "service_detached": True, "shutdown": {"exit_confirmed": False}}))
+        report = analyze(self.root)
+        self.assertIsNone(report["clean_shutdown"])
+        self.assertEqual(report["run_state"], "detached_service_running")
+
 
 if __name__ == "__main__":
     unittest.main()

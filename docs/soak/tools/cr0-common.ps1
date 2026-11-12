@@ -20,7 +20,8 @@ function Test-SoakLaunchEnvironment([string]$Bind,
     [scriptblock]$Listeners = {
         $net = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
         @{ tcp=@($net.GetActiveTcpListeners()); udp=@($net.GetActiveUdpListeners()) }
-    }) {
+    },
+    [bool]$Attach = $false) {
     $uri = $null
     if (-not [Uri]::TryCreate("http://$Bind", [UriKind]::Absolute, [ref]$uri) -or
         $uri.Host -ne '127.0.0.1' -or $uri.Port -lt 1024 -or $uri.Port -gt 65535 -or
@@ -28,10 +29,12 @@ function Test-SoakLaunchEnvironment([string]$Bind,
         throw 'Use an explicit unprivileged IPv4 loopback HTTP bind.'
     }
     $names = @(& $Processes)
-    if ($names | Where-Object { $_ -like 'lodestar*' }) { throw 'Another Lodestar process is running.' }
+    # Service mode attaches to the installed service, which owns the process and ports.
+    if (-not $Attach -and ($names | Where-Object { $_ -like 'lodestar*' })) { throw 'Another Lodestar process is running.' }
     if ($names | Where-Object { $_ -in @('Docker Desktop', 'com.docker.backend', 'dockerd', 'docker-proxy') }) {
         throw 'Docker must remain stopped for the native baseline.'
     }
+    if ($Attach) { return }
     $ports = & $Listeners
     if ($ports.tcp | Where-Object Port -eq $uri.Port) { throw 'HTTP port is already owned.' }
     if ($ports.udp | Where-Object Port -eq 6881) { throw 'DHT port is already owned.' }
@@ -179,4 +182,51 @@ function Complete-SoakEvidence($Result, [string]$StatusPath, [string]$ResultPath
         try { & $Save $Result $StatusPath } catch { }
     }
     return $failures
+}
+
+# ---- Windows 1.0 soak: service identity and lifecycle records (M8-WIN-1) ----
+# Aggregate-only: versions, booleans and counts. No paths, user names or addresses.
+function Get-SoakServiceIdentity([string]$Name,
+    [scriptblock]$Query = { param($n) $svc = Get-CimInstance Win32_Service -Filter "Name='$n'"
+        if ($svc -and $svc.ProcessId) { $proc = Get-Process -Id $svc.ProcessId
+            @{ pid = [int]$svc.ProcessId; start_ticks = $proc.StartTime.ToUniversalTime().Ticks } } }) {
+    $found = & $Query $Name
+    if ($null -eq $found) { throw 'Service is not running.' }
+    return $found
+}
+
+function Save-SoakLifecycle([string]$Path, [string]$Step, [hashtable]$Fields) {
+    # Merge one step ('upgrade' or 'uninstall') into lifecycle.json.
+    $record = if ([IO.File]::Exists($Path)) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable } else { @{ schema_version = 1 } }
+    $record[$Step] = $Fields
+    Save-SoakJson $record $Path
+}
+
+function Get-SoakTorrentCount([string]$Bind) {
+    $text = (Invoke-WebRequest "http://$Bind/metrics" -TimeoutSec 5).Content
+    $match = [regex]::Match($text, '(?m)^lodestar_torrents ([0-9.]+)\r?$')
+    if (-not $match.Success) { throw 'Missing metric: torrents' }
+    return [long][double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [long]$TorrentsBefore, [string]$Bind = '127.0.0.1:8484',
+    [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
+    [string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe')) {
+    # Run after the MSI upgrade finished and the service is back.
+    Save-SoakLifecycle $Path 'upgrade' @{
+        from_version = $FromVersion; to_version = ((Get-SoakExecutableVersion $Exe) -replace '^\S+\s+', '')
+        service_running = ((Get-Service $Service).Status -eq 'Running')
+        data_present = [bool](Get-ChildItem -LiteralPath $DataDir -ErrorAction SilentlyContinue | Select-Object -First 1)
+        torrents_before = $TorrentsBefore; torrents_after = (Get-SoakTorrentCount $Bind)
+    }
+}
+
+function Save-SoakUninstall([string]$Path, [ValidateSet('kept', 'removed')][string]$DataPolicy,
+    [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
+    [string]$ProgramDir = (Join-Path $env:ProgramFiles 'Lodestar')) {
+    Save-SoakLifecycle $Path 'uninstall' @{
+        service_present = [bool](Get-Service $Service -ErrorAction SilentlyContinue)
+        program_files_present = Test-Path -LiteralPath $ProgramDir
+        data_present = Test-Path -LiteralPath $DataDir; data_policy = $DataPolicy
+    }
 }

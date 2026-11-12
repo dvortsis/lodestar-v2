@@ -850,9 +850,62 @@ def memory_context(rows):
     return out
 
 
+VERSION = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,24})?")
+
+
+def windows_checks(root, rows, result):
+    """The 1.0 Windows soak checks beside the memory rule (M8-WIN-1, plan OQ3):
+    no service restart, upgrade from the last release, clean uninstall. Each is
+    pass, fail or absent (the evidence predates the field); none touches MEMORY_FIT."""
+    checks = {}
+    seen = {(r["service_pid"], r.get("service_start_ticks")) for r in rows
+            if number(r.get("service_pid"))}
+    starts = {r["values"]["start_time_seconds"] for r in rows
+              if r.get("service_pid") is not None and number(r["values"].get("start_time_seconds"))}
+    exited = str((result or {}).get("reason", "")).startswith("process_exited_")
+    if not seen:
+        checks["service_restart"] = ("absent", "no service identity in the samples")
+    elif len(seen) > 1 or len(starts) > 1 or exited:
+        checks["service_restart"] = ("fail", f"{len(seen)} service process identities, "
+                                     f"{len(starts)} start times, service exit recorded: {exited}")
+    else:
+        checks["service_restart"] = ("pass", f"one service process across {len(rows)} samples")
+    life = {}
+    try:
+        life = read_json(root / "lifecycle.json") if (root / "lifecycle.json").exists() else {}
+    except (ValueError, OSError):
+        life = {"invalid": True}
+    up = life.get("upgrade")
+    if not isinstance(up, dict):
+        checks["upgrade"] = ("absent", "no upgrade record")
+    else:
+        old, new = up.get("from_version"), up.get("to_version")
+        before, after = up.get("torrents_before"), up.get("torrents_after")
+        ok = (isinstance(old, str) and isinstance(new, str) and VERSION.fullmatch(old)
+              and VERSION.fullmatch(new) and old != new and up.get("service_running") is True
+              and up.get("data_present") is True and number(before) and number(after)
+              and before > 0 and after >= before)
+        checks["upgrade"] = ("pass" if ok else "fail",
+                             f"{old} -> {new}, running {up.get('service_running')}, "
+                             f"data present {up.get('data_present')}, torrents {before} -> {after}")
+    un = life.get("uninstall")
+    if not isinstance(un, dict):
+        checks["uninstall"] = ("absent", "no uninstall record")
+    else:
+        policy = un.get("data_policy")
+        ok = (un.get("service_present") is False and un.get("program_files_present") is False
+              and policy in ("kept", "removed") and un.get("data_present") is (policy == "kept"))
+        checks["uninstall"] = ("pass" if ok else "fail",
+                               f"service present {un.get('service_present')}, program files present "
+                               f"{un.get('program_files_present')}, data {policy}, data present {un.get('data_present')}")
+    return {name: {"status": s, "evidence": e} for name, (s, e) in checks.items()}
+
+
 def result_state(result):
     if result is None:
         return "completion_unknown"
+    if result.get("service_detached") is True:
+        return "detached_service_running"
     if result.get("schema_version", 1) >= 2:
         shutdown = result.get("shutdown")
         return "stopped" if isinstance(shutdown, dict) and shutdown.get("exit_confirmed") is True else "completion_unknown"
@@ -862,8 +915,8 @@ def result_state(result):
 
 
 def clean_shutdown(result):
-    if result is None:
-        return None
+    if result is None or result.get("service_detached") is True:
+        return None  # a service is left running by design; the restart check covers it
     if result_state(result) != "stopped":
         return False
     if result.get("schema_version", 1) == 1:
@@ -1136,6 +1189,7 @@ def analyze(root, max_gap=90, now=None, intensity=None, allocator=None, screen=T
         },
         "baseline_status": status, "baseline_required_hours": hours,
         "memory_fit": fit,
+        "windows_checks": windows_checks(root, rows, result),
         "memory_context": memory_context(rows),
         "search": search_summary(rows),
         "memory_attribution": memory_attribution(rows, malloc),
@@ -1316,6 +1370,9 @@ def markdown(report):
                 "| --- | ---: | ---: | ---: | ---: |"]
         for name, b in p["bounds"].items():
             out.append(f"| {name} | {fmt(b['max'])} | {b['limit']} | {b['at_capacity_samples']} | {b['over_capacity_samples']} |")
+    out += ["", "## Windows 1.0 checks (service restart, upgrade, uninstall)", ""]
+    out += [f"- {name.replace('_', ' ')}: **{c['status']}** ({c['evidence']})"
+            for name, c in report["windows_checks"].items()]
     out += ["", "## Interpretation", ""] + [f"- {s}" for s in report["limitations"]]
     if "screen" in report:  # after everything else, so the gate's lines are unchanged
         out += screen_markdown(report["screen"])
