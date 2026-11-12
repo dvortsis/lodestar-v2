@@ -1,0 +1,180 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lodestar X-test-vm: a dedicated IAM user Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the Windows test instance the Lodestar guardrails allow (c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, mandatory tags with ExpiresAt), and read EC2, SSM and cost data. Owner decision 2026-11-12Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs: they are parameters.",
+  "Parameters": {
+    "SubnetId": {
+      "Type": "AWS::EC2::Subnet::Id",
+      "Description": "The Lodestar Windows subnet: the value of LODESTAR_AWS_SUBNET_ID on your PC."
+    },
+    "SecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Description": "The Lodestar Windows security group: the value of LODESTAR_AWS_SECURITY_GROUP_ID on your PC."
+    },
+    "InstanceRoleName": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z0-9+=,.@_-]{1,64}$",
+      "Description": "The IAM role inside the instance profile named by LODESTAR_AWS_INSTANCE_PROFILE (often the same name)."
+    },
+    "UserName": {
+      "Type": "String",
+      "Default": "lodestar-claude-testvm",
+      "AllowedPattern": "^[A-Za-z0-9+=,.@_-]{1,64}$"
+    }
+  },
+  "Resources": {
+    "ClaudeTestVmUser": {
+      "Type": "AWS::IAM::User",
+      "Properties": {
+        "UserName": { "Ref": "UserName" },
+        "ManagedPolicyArns": [ "arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy" ],
+        "Tags": [ { "Key": "Project", "Value": "Lodestar" }, { "Key": "Purpose", "Value": "X-test-vm" } ],
+        "Policies": [
+          {
+            "PolicyName": "LodestarClaudeTestVm",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ReadInventoryAndCost",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:Describe*",
+                    "ec2:GetConsoleOutput",
+                    "ssm:DescribeInstanceInformation",
+                    "ssm:DescribeInstanceProperties",
+                    "ssm:GetCommandInvocation",
+                    "ssm:ListCommandInvocations",
+                    "ssm:ListCommands",
+                    "cloudformation:DescribeStacks",
+                    "cloudformation:ListStacks",
+                    "iam:GetInstanceProfile",
+                    "iam:ListInstanceProfiles",
+                    "ce:GetCostAndUsage",
+                    "budgets:ViewBudget"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "RunOnlyTheGuardedInstance",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*" },
+                  "Condition": {
+                    "StringEquals": {
+                      "ec2:InstanceType": "c6a.xlarge",
+                      "ec2:MetadataHttpTokens": "required",
+                      "aws:RequestTag/Project": "Lodestar",
+                      "aws:RequestTag/Environment": "Test",
+                      "aws:RequestTag/ManagedBy": "Terraform"
+                    },
+                    "Null": { "aws:RequestTag/ExpiresAt": "false" },
+                    "ForAllValues:StringEquals": { "aws:TagKeys": [ "Project", "Environment", "ManagedBy", "ExpiresAt", "Name" ] }
+                  }
+                },
+                {
+                  "Sid": "RunOnlyEncryptedBoundedVolumes",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:volume/*" },
+                  "Condition": {
+                    "Bool": { "ec2:Encrypted": "true" },
+                    "NumericLessThanEquals": { "ec2:VolumeSize": "100" },
+                    "StringEquals": { "aws:RequestTag/Project": "Lodestar" }
+                  }
+                },
+                {
+                  "Sid": "RunOnlyInTheLodestarNetwork",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": [
+                    { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:subnet/${SubnetId}" },
+                    { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:security-group/${SecurityGroupId}" }
+                  ]
+                },
+                {
+                  "Sid": "RunNetworkInterfaceOnlyInThatSubnet",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:network-interface/*" },
+                  "Condition": { "StringEquals": { "ec2:Subnet": { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:subnet/${SubnetId}" } } }
+                },
+                {
+                  "Sid": "RunOnlyAmazonImages",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": [ "arn:aws:ec2:us-east-1::image/*", "arn:aws:ec2:us-east-1::snapshot/*" ],
+                  "Condition": { "StringEquals": { "ec2:Owner": "amazon" } }
+                },
+                {
+                  "Sid": "TagOnlyAtLaunch",
+                  "Effect": "Allow",
+                  "Action": "ec2:CreateTags",
+                  "Resource": [
+                    { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*" },
+                    { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:volume/*" }
+                  ],
+                  "Condition": { "StringEquals": { "ec2:CreateAction": "RunInstances" } }
+                },
+                {
+                  "Sid": "PassOnlyTheInstanceRoleToEc2",
+                  "Effect": "Allow",
+                  "Action": "iam:PassRole",
+                  "Resource": { "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/${InstanceRoleName}" },
+                  "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+                },
+                {
+                  "Sid": "ManageOnlyLodestarTestInstances",
+                  "Effect": "Allow",
+                  "Action": [ "ec2:TerminateInstances", "ec2:StopInstances", "ec2:StartInstances", "ec2:RebootInstances" ],
+                  "Resource": { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*" },
+                  "Condition": {
+                    "StringEquals": {
+                      "ec2:ResourceTag/Project": "Lodestar",
+                      "ec2:ResourceTag/Environment": "Test",
+                      "ec2:InstanceType": "c6a.xlarge"
+                    }
+                  }
+                },
+                {
+                  "Sid": "RunCommandsOnlyOnLodestarTestInstances",
+                  "Effect": "Allow",
+                  "Action": "ssm:SendCommand",
+                  "Resource": { "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*" },
+                  "Condition": {
+                    "StringEquals": {
+                      "ssm:resourceTag/Project": "Lodestar",
+                      "ssm:resourceTag/Environment": "Test"
+                    }
+                  }
+                },
+                {
+                  "Sid": "RunCommandsOnlyWithThePowerShellDocument",
+                  "Effect": "Allow",
+                  "Action": "ssm:SendCommand",
+                  "Resource": "arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript"
+                },
+                {
+                  "Sid": "CancelOwnCommands",
+                  "Effect": "Allow",
+                  "Action": "ssm:CancelCommand",
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "NothingOutsideUsEast1",
+                  "Effect": "Deny",
+                  "Action": [ "ec2:*", "ssm:*" ],
+                  "Resource": "*",
+                  "Condition": { "StringNotEquals": { "aws:RequestedRegion": "us-east-1" } }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "UserName": { "Value": { "Ref": "ClaudeTestVmUser" } },
+    "SignInUrl": { "Value": { "Fn::Sub": "https://${AWS::AccountId}.signin.aws.amazon.com/console" } }
+  }
+}
