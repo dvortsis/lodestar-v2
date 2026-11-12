@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:18Z",
+  "updated_at": "2026-11-12T23:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7712,6 +7712,11 @@
       "id": "flag-791-bnd-addr",
       "note": "\u00a72.19 flag: NOS-2a checks the proxy BND.ADDR for form only, not against the destination policy (it is the proxy outbound socket, not the destination). Runner accepted (rv-791 I1).",
       "added": "2026-11-12T23:18Z"
+    },
+    {
+      "id": "merged-782",
+      "note": "#782 CMP-D merged 74dec644; owner screenshots pending in SHOTLIST (Unraid flash share, qBittorrent Web UI 127.0.0.1).",
+      "added": "2026-11-12T23:22Z"
     }
   ],
   "main_health": [
@@ -8734,7 +8739,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:18Z",
+    "updated": "2026-11-12T23:22Z",
     "items": [
       {
         "slot": 1,
@@ -8750,9 +8755,9 @@
         "slice": "CMP-D",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCvzTA2axHkbRfaczr: relaunched 2026-11-12 (the PK-ops session had declined the peer assignment); briefs/CMP-D.md",
-        "since": "2026-11-12T20:59:35Z",
-        "status": "active"
+        "doing": "#782 merged 74dec644 after runner delta check (B1, I1-I7 fixed); session archived",
+        "since": "2026-11-12T23:22Z",
+        "status": "idle"
       },
       {
         "slot": 3,
@@ -9082,7 +9087,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:18Z",
+  "updated": "2026-11-12T23:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
