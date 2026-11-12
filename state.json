@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:22:00Z",
+  "updated_at": "2026-11-12T13:29:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7304,6 +7304,21 @@
       "id": "X-unverified-cap-index",
       "at": "2026-11-12T13:19:13Z",
       "note": "From UN-1 measurement: at the 1M usenet cap each adding write costs ~95-110 ms more (2.3 s writer time per 4,096-result poll on fast disk; seconds more on NAS). Fix in SRC-3b migration or a store slice: index unverified_items(network, id) for eviction; per-network count so counting runs only past the cap. Must land before usenet writes can default on. Runner perf call (\u00a72.26)."
+    },
+    {
+      "id": "X-identify-route-switch",
+      "note": "Read PluginEgress route state into the identify kill-switch gate (services.rs passes always-not-tripped Switches); pipeline change. From ENR-14 self-review; runner accepted as follow-up 2026-11-12.",
+      "at": "2026-11-12T13:29:37Z"
+    },
+    {
+      "id": "ext-consent-lift-prereqs",
+      "note": "Slice that lifts the External consent gate must: record real Wikidata fixtures; read Wikimedia API policy/ToS directly; owner adds Wikidata to Legal Notice \u00a72 in the same slice (owner wording).",
+      "at": "2026-11-12T13:29:37Z"
+    },
+    {
+      "id": "owner-q-enr14-notice",
+      "note": "Ask owner: add Wikidata to Legal Notice \u00a72 when External consent gate lifts (runner recommends same slice). Send with ENR-14 merge FYI.",
+      "at": "2026-11-12T13:29:37Z"
     }
   ],
   "main_health": [
@@ -8409,7 +8424,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:22:00Z",
+  "updated": "2026-11-12T13:29:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
