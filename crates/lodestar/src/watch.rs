@@ -308,24 +308,26 @@ impl Watcher {
         let opened = blocking(move || {
             Folder::open(&path, &data).and_then(|f| {
                 let (names, whole) = f.list().map_err(|_| Problem::Unreadable)?;
+                // Every name listed, so one whose entry couldn't be read
+                // this time is never forgotten (rv-765 P1).
+                let listed = whole.then(|| names.iter().cloned().collect::<HashSet<_>>());
                 let entries: Vec<_> = resume_order(names, cursor.as_deref())
                     .into_iter()
                     .filter_map(|n| f.entry(&n).map(|e| (n, e)))
                     .collect();
-                Ok((entries, whole, f))
+                Ok((entries, listed, f))
             })
         })
         .await;
-        let (entries, whole, folder) = match opened {
-            Ok((entries, whole, f)) => (entries, whole, std::sync::Arc::new(f)),
+        let (entries, listed, folder) = match opened {
+            Ok((entries, listed, f)) => (entries, listed, std::sync::Arc::new(f)),
             Err(p) => {
                 out.problem = Some(p);
                 return out;
             }
         };
         // rv-765 O1: a whole listing shows which remembered names are gone.
-        if whole {
-            let listed: HashSet<&OsString> = entries.iter().map(|(n, _)| n).collect();
+        if let Some(listed) = listed {
             self.stuck.retain(|n, _| listed.contains(n));
             self.left.retain(|n| listed.contains(n));
         }
@@ -339,7 +341,7 @@ impl Watcher {
                 seen.extend(self.seen.remove_entry(&name));
                 break;
             }
-            if self.retry_stuck(&folder, &name, &entry).await {
+            if self.retry_stuck(&folder, &name, &entry, &mut out).await {
                 continue;
             }
             match entry {
@@ -418,12 +420,14 @@ impl Watcher {
     /// For a file taken before but not moved: retries its move quietly
     /// (no count, no log) and says it's handled. A file that changed since
     /// is a new file: forgotten here, and judged afresh. One still over
-    /// the cap stays stuck under its name, however it grows.
+    /// the cap stays stuck under its name, however it grows. A problem
+    /// with `added/` or `failed/` stops the poll (rv-765 P3).
     async fn retry_stuck(
         &mut self,
         folder: &std::sync::Arc<Folder>,
         name: &OsStr,
         entry: &Entry,
+        out: &mut Polled,
     ) -> bool {
         let Some(stuck) = self.stuck.get(name).copied() else {
             return false;
@@ -439,8 +443,12 @@ impl Watcher {
             self.stuck.remove(name);
             return false;
         }
-        if self.put_away(folder, name, stuck.cause).await.is_ok() {
-            self.stuck.remove(name);
+        match self.put_away(folder, name, stuck.cause).await {
+            Ok(()) => {
+                self.stuck.remove(name);
+            }
+            Err(MoveError::Subfolder(p)) => out.problem = Some(p),
+            Err(_) => {}
         }
         true
     }
@@ -599,6 +607,7 @@ enum MoveError {
     Subfolder(Problem),
     Io,
     /// A link entry that isn't moved (Windows): left where it is.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Left,
 }
 
@@ -806,15 +815,19 @@ impl Folder {
     fn move_out(&self, name: &OsStr, cause: Option<Cause>) -> Result<(), MoveError> {
         let sub = if cause.is_some() { FAILED } else { ADDED };
         self.subfolder(sub).map_err(MoveError::Subfolder)?;
+        // A link entry stays where it is on Windows (see
+        // `rename_no_replace`), told by its own entry and nothing else, so
+        // no other refusal (a share without hard links) leaves a file
+        // that would be read again (rv-765 P2).
+        #[cfg(windows)]
+        if std::fs::symlink_metadata(self.path.join(name)).is_ok_and(|m| is_link(&m)) {
+            return Err(MoveError::Left);
+        }
         for n in 0..MAX_SUFFIX {
             let target = target_name(name, cause, n);
             match self.rename_no_replace(name, sub, &target) {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                // Only the Windows link refusal below says this.
-                Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::Unsupported => {
-                    return Err(MoveError::Left);
-                }
                 Err(_) => return Err(MoveError::Io),
             }
         }
