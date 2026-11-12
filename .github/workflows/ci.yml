@@ -560,7 +560,8 @@ jobs:
         run: ./infra/akamai/terraform/tests/Test-StateBackend.ps1
       # The deploy script against a stub AWS CLI (X-ci-deploy-aws-test): no
       # network, no credentials. Every AWS_* variable is removed first, and the
-      # test itself checks that `aws` resolves to its stub before any case runs.
+      # test itself checks that `aws` resolves to its stub before the deploy
+      # script is run.
       - name: Deploy-AwsWindows.ps1 offline test
         shell: pwsh
         run: |

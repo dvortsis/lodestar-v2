@@ -107,7 +107,7 @@ function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
     [PSCustomObject]@{ Code = $code; Out = $out; Calls = $calls }
 }
 
-# Before any case: under the test's PATH, the deploy script's own resolver
+# Before the deploy script is run (the table cases above never call aws): under the test's PATH, the deploy script's own resolver
 # (AwsCli.ps1's Resolve-AwsCli) must find the stub and nothing else.
 function Assert-StubResolves([string]$Root) {
     $savedPath = $env:PATH
