@@ -438,7 +438,7 @@ pub const SKIP_MANUAL: &str = "manual";
 pub const MANUAL_ID: &str = "manual-";
 
 /// What a manual Roll back needs from the install that passed probation:
-/// its versions, the store's snapshots before it, and the snapshot it took
+/// its versions, its start type before, and the snapshot it took
 /// (by name). Kept in staging, which only SYSTEM and Administrators can
 /// write, so nothing in the data folder decides a rollback. Replaced by
 /// the next install that passes, removed by a finished rollback; one whose
@@ -448,7 +448,6 @@ pub struct Installed {
     pub format: u32,
     pub from: String,
     pub to: String,
-    pub snapshots_before: Vec<String>,
     /// The earliest pre-migration snapshot `to` took ([`choose`]'s rule),
     /// named while it was certainly there; `None` when it took none (it
     /// didn't migrate the store, so a rollback keeps it).
@@ -526,7 +525,6 @@ fn keep_installed(ctx: &Context, j: &Journal) {
         format: FORMAT,
         from: j.from.clone(),
         to: j.to.clone(),
-        snapshots_before: j.snapshots_before.clone(),
         snapshot,
         start_before: j.start_before,
     };
@@ -546,6 +544,14 @@ fn keep_installed(ctx: &Context, j: &Journal) {
 /// closed: a record it can't read, a version that doesn't parse or isn't
 /// older, a missing or mismatched MSI and a missing snapshot all refuse.
 pub fn manual_plan(ctx: &Context, running: &Version) -> Result<ManualPlan, ManualRefusal> {
+    plan_with_record(ctx, running).map(|(plan, _)| plan)
+}
+
+/// [`manual_plan`], with the record it came from.
+fn plan_with_record(
+    ctx: &Context,
+    running: &Version,
+) -> Result<(ManualPlan, Installed), ManualRefusal> {
     if read(ctx)
         .map_err(|e| ManualRefusal::Io(e.to_string()))?
         .is_some()
@@ -564,11 +570,32 @@ pub fn manual_plan(ctx: &Context, running: &Version) -> Result<ManualPlan, Manua
             )));
         }
     }
-    Ok(ManualPlan {
-        from: rec.from,
-        to: rec.to,
-        snapshot: rec.snapshot,
-    })
+    let plan = ManualPlan {
+        from: rec.from.clone(),
+        to: rec.to.clone(),
+        snapshot: rec.snapshot.clone(),
+    };
+    Ok((plan, rec))
+}
+
+/// Run once the service has stopped, so nothing deletes a snapshot after
+/// it: the snapshot a manual Roll back restores, still as the record names
+/// it (the service's retention purge may have deleted it since the plan).
+fn manual_snapshot(ctx: &Context, j: &Journal) -> Result<Option<String>, String> {
+    let rec: Installed = layout::read_json(&ctx.staging.dir.join(INSTALLED))
+        .map_err(|e| format!("{INSTALLED}: {e}"))?
+        .ok_or_else(|| format!("{INSTALLED} is gone"))?;
+    if rec.from != j.from || rec.to != j.to {
+        return Err(format!("{INSTALLED} is for another update"));
+    }
+    if let Some(name) = &rec.snapshot {
+        let all = snapshots::list(&ctx.data_dir.join(STORE))
+            .map_err(|e| format!("the store's snapshots: {e}"))?;
+        if !all.iter().any(|s| &s.name == name) {
+            return Err(format!("the snapshot {name} that {} took is gone", rec.to));
+        }
+    }
+    Ok(rec.snapshot)
 }
 
 /// The record for `running`, checked.
@@ -597,6 +624,15 @@ fn installed(ctx: &Context, running: &Version) -> Result<Installed, ManualRefusa
     }
     if from >= to {
         return Err(none("the recorded previous version isn't older"));
+    }
+    // Tied to what the helper itself keeps: the install leaves `to`'s MSI
+    // as `current\`. A record a hand install or an older helper left
+    // stale doesn't match it.
+    let current = layout::read_json::<Pins>(&ctx.staging.current().join(PINS))
+        .ok()
+        .flatten();
+    if current.is_none_or(|p| p.version != rec.to) {
+        return Err(none("the helper didn't install the running version"));
     }
     // Names beside the store, nothing else: `restore` checks again.
     if let Some(n) = &rec.snapshot
@@ -632,8 +668,7 @@ pub fn manual_journal(
     {
         return Err(ManualRefusal::Io("the request's id is invalid".into()));
     }
-    let plan = manual_plan(ctx, running)?;
-    let rec = installed(ctx, running)?;
+    let (plan, rec) = plan_with_record(ctx, running)?;
     let all = snapshots::list(&ctx.data_dir.join(STORE))
         .map_err(|e| ManualRefusal::Io(format!("the store's snapshots: {e}")))?;
     let before = all
@@ -851,6 +886,10 @@ enum Stop {
     /// The reinstall was handed to the helper's copy; the run that
     /// follows it finishes.
     HandedOff,
+    /// A manual Roll back found, with the service stopped, that it can't
+    /// go on: before the marker or the skip, so the service is started
+    /// again and nothing was changed.
+    Undo(String),
 }
 
 fn halt_on<T>(r: Result<T, String>) -> Result<T, Stop> {
@@ -863,7 +902,8 @@ fn roll_back(ctx: &Context, sys: &dyn System, mut j: Journal) -> Outcome {
         Ok(()) => {
             let healthy = sys.healthy();
             clear(ctx);
-            // `to` is gone: nothing is left to roll back by hand.
+            // `previous\` no longer holds the record's `from`: nothing is
+            // left to roll back by hand.
             let _ = std::fs::remove_file(ctx.staging.dir.join(INSTALLED));
             Outcome::RolledBack {
                 failed: j.to.clone(),
@@ -873,6 +913,12 @@ fn roll_back(ctx: &Context, sys: &dyn System, mut j: Journal) -> Outcome {
         }
         Err(Stop::Retry(why)) => Outcome::RollbackPending { why },
         Err(Stop::HandedOff) => Outcome::HandedOff,
+        Err(Stop::Undo(why)) => {
+            let _ = sys.set_start(j.start_before.unwrap_or(Start::Auto));
+            sys.start_service();
+            j.touched = false;
+            halt(ctx, sys, j, 0, why, Cause::Step)
+        }
         Err(Stop::Halt(why)) => {
             let done = done_of(&j);
             halt(ctx, sys, j, done, why, Cause::Step)
@@ -916,7 +962,8 @@ fn halt(
     // nothing was changed.
     // A journal without the field (an earlier build) counts any rollback
     // state as touched, as before the field existed.
-    let touched = j.touched || matches!(j.state, State::RollingBack { .. });
+    // A manual one starts rolling back at step 0, and always has the field.
+    let touched = j.touched || (!is_manual(&j) && matches!(j.state, State::RollingBack { .. }));
     let step = if touched { done.max(1) } else { 0 };
     let recovery = recovery(ctx, &j, step, &why, cause);
     // The Event Log gets the same steps with fixed text: every local user
@@ -1084,6 +1131,11 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
             save(j, &snapshot, done)?;
         }
         stopped(sys)?;
+        if is_manual(j) {
+            // Checked again with the service stopped: its retention purge
+            // can't delete the snapshot after this.
+            manual_snapshot(ctx, j).map_err(Stop::Undo)?;
+        }
         let bin = halt_on(
             Bin::existing(&ctx.data_dir)
                 .map_err(|e| format!("bin: {e}"))
@@ -1109,6 +1161,16 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
     }
     if done < 2 {
         snapshot = halt_on(choose(ctx, &j.snapshots_before))?;
+        if is_manual(j) {
+            // Exactly the recorded one, or the store would be kept (or the
+            // wrong one restored) under a version that can't read it.
+            let want = halt_on(manual_snapshot(ctx, j))?;
+            if snapshot.as_ref().map(|s| &s.name) != want.as_ref() {
+                return Err(Stop::Halt(
+                    "the snapshot found isn't the one the update took".into(),
+                ));
+            }
+        }
         sys.copied("chosen");
         done = 2;
         save(j, &snapshot, done)?;
@@ -1612,6 +1674,16 @@ mod tests {
         std::fs::write(ctx.data_dir.join(STORE), b"old store").unwrap();
         std::fs::write(ctx.data_dir.join("lodestar.pre-v5.db"), b"an older one").unwrap();
         keep_previous(&ctx, OLD_MSI);
+        // The helper keeps the installed 0.7.0 MSI as `current\`.
+        let current = ctx.staging.current();
+        std::fs::create_dir_all(&current).unwrap();
+        let pins = Pins {
+            version: "0.7.0".into(),
+            channel: Channel::Stable,
+            sha256: Sha256::of(b"new").to_hex(),
+            size: 3,
+        };
+        std::fs::write(current.join(PINS), serde_json::to_vec(&pins).unwrap()).unwrap();
         Env { _tmp: tmp, ctx }
     }
 
@@ -1652,7 +1724,6 @@ mod tests {
         let rec = record(&env).unwrap();
         assert_eq!((rec.from.as_str(), rec.to.as_str()), ("0.6.0", "0.7.0"));
         assert_eq!(rec.snapshot.as_deref(), Some(SNAP));
-        assert_eq!(rec.snapshots_before, vec!["lodestar.pre-v5.db".to_string()]);
         assert!(read(&env.ctx).unwrap().is_none(), "the journal went");
         assert_eq!(
             manual_plan(&env.ctx, &v("0.7.0")).unwrap(),
@@ -1709,6 +1780,15 @@ mod tests {
         std::fs::remove_dir_all(ctx.staging.previous()).unwrap();
         assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
         keep_previous(ctx, OLD_MSI);
+        // `current\` isn't the running version: the record is stale.
+        let current = ctx.staging.current().join(PINS);
+        let kept = std::fs::read(&current).unwrap();
+        std::fs::remove_file(&current).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        std::fs::write(&current, kept).unwrap();
+        std::fs::remove_dir_all(ctx.staging.previous()).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        keep_previous(ctx, OLD_MSI);
         assert!(manual_plan(ctx, &v("0.7.0")).is_ok());
     }
 
@@ -1721,7 +1801,6 @@ mod tests {
             format: FORMAT,
             from: "0.6.0".into(),
             to: "0.7.0".into(),
-            snapshots_before: vec![],
             snapshot: None,
             start_before: None,
         };
@@ -1841,6 +1920,62 @@ mod tests {
         assert_eq!(pins.version, "0.6.0");
         // Once 0.6.0 runs, there's nothing to roll back.
         assert!(manual_plan(&env.ctx, &v("0.6.0")).is_err());
+    }
+
+    #[test]
+    fn a_snapshot_purged_before_the_service_stopped_undoes_the_rollback() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        write(&env.ctx, &j).unwrap();
+        // The service's retention purge, between the plan and the stop.
+        std::fs::remove_file(env.ctx.data_dir.join(SNAP)).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = roll_back(&env.ctx, &fake, j);
+        let Outcome::RollbackHalted { why, recovery } = out else {
+            panic!("{out:?}");
+        };
+        assert!(why.contains("is gone"), "{why}");
+        assert!(recovery.contains("couldn't start"), "{recovery}");
+        // Nothing was changed: the store, no marker, no skip, no journal,
+        // and the service started again as it was.
+        let store = std::fs::read(env.ctx.data_dir.join(STORE)).unwrap();
+        assert_eq!(store, b"new store");
+        assert!(!env.ctx.data_dir.join("bin").join(MARKER).exists());
+        let skipped: Option<serde_json::Value> = Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .read(super::super::check::SKIPPED_FILE)
+            .unwrap();
+        assert!(skipped.is_none(), "{skipped:?}");
+        assert!(read(&env.ctx).unwrap().is_none());
+        let calls = fake.calls();
+        assert!(!calls.iter().any(|c| c.starts_with("msiexec")), "{calls:?}");
+        assert_eq!(
+            calls[..4],
+            ["set_start Disabled", "stop", "set_start Auto", "start"],
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_manual_rollback_without_its_msi_changes_nothing() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        write(&env.ctx, &j).unwrap();
+        std::fs::remove_dir_all(env.ctx.staging.previous()).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = roll_back(&env.ctx, &fake, j);
+        assert!(matches!(out, Outcome::RollbackHalted { .. }), "{out:?}");
+        // Not touched: the journal goes and the service was never stopped.
+        assert!(read(&env.ctx).unwrap().is_none());
+        let calls = fake.calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c == "stop" || c.starts_with("set_start")),
+            "{calls:?}"
+        );
     }
 
     #[test]
