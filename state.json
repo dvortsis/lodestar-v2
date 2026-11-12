@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:46:40Z",
+  "updated_at": "2026-11-12T04:58:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7679,6 +7679,11 @@
       "pr": 728,
       "sha": "0fd80630dcd5cd836494220783bfeb23602c9c0b",
       "at": "2026-11-12T04:27:50Z"
+    },
+    {
+      "pr": 732,
+      "sha": "b8e19931e59a324e95fe7c1bb09eea2693aadf37",
+      "at": "2026-11-12T04:58:20Z"
     }
   ],
   "active_sessions": {
@@ -7913,7 +7918,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:46:40Z",
+    "updated": "2026-11-12T04:58:20Z",
     "items": [
       {
         "slot": 1,
@@ -8005,12 +8010,12 @@
       },
       {
         "slot": 11,
-        "slice": "X-tz0-polish",
+        "slice": null,
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnCR29cy7AsWtULXHBJ: rv-715 polish (409 text, RSS channel link, writer departure note, settings help path)",
-        "since": "2026-11-12T02:54:18Z",
-        "status": "active"
+        "agent": null,
+        "doing": "free after #732 merged; next launch pending",
+        "since": "2026-11-12T04:58:20Z",
+        "status": "idle"
       },
       {
         "slot": 12,
@@ -8080,7 +8085,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:46:40Z",
+  "updated": "2026-11-12T04:58:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
