@@ -66,7 +66,7 @@
 	"settings_outputs_bitmagnet_truncated": "文件在 {cap} 个种子的上限处停止，因此不完整。",
 	"settings_outputs_bitmagnet_cancelled": "导出在 {done} 个种子后被取消。文件不完整：请删除它。",
 	"settings_outputs_bitmagnet_failed": "导出在 {done} 个种子后失败。文件不完整：请删除它后重试。",
-	"settings_outputs_bitmagnet_lost": "Lodestar 找不到这次导出的进度。如果没有下载到文件，请查看“任务”后重试。",
+	"settings_outputs_bitmagnet_lost": "Lodestar 找不到这次导出的进度。如果没有下载到文件，请重试。",
 	"settings_outputs_bitmagnet_jobs": "打开“任务”",
 	"settings_outputs_adult_heading": "导出中的成人种子",
 	"settings_outputs_adult_label": "包含成人种子",
@@ -81,6 +81,7 @@
 	"settings_outputs_dialog_close": "关闭",
 	"settings_outputs_adult_load_failed": "无法加载此设置。",
 	"settings_outputs_adult_read_only": "由 Lodestar 的配置设置，无法在此更改。",
-	"settings_outputs_bitmagnet_stale": "Lodestar 无法更新这次导出的进度，它可能仍在运行：请查看“任务”。",
-	"settings_outputs_bitmagnet_example": "导入命令示例"
+	"settings_outputs_bitmagnet_stale": "Lodestar 无法更新这次导出的进度，它可能仍在运行。",
+	"settings_outputs_bitmagnet_example": "导入命令示例",
+	"settings_outputs_bitmagnet_warning": "警告："
 }

@@ -51,6 +51,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
 	initLocale('en');
+	heldCount = 0;
 	calls = [];
 	jobs = [];
 	replies = {
@@ -108,6 +109,45 @@ afterEach(async () => {
 });
 
 const writes = () => calls.filter((c) => c.method !== 'GET');
+
+/** A running bitmagnet export job started now, as the server lists it. */
+const exportJob = (id: number, over: Record<string, unknown> = {}) => ({
+	id,
+	kind: 'export',
+	state: 'running',
+	started_at: Math.floor(Date.now() / 1000),
+	finished_at: null,
+	done: 0,
+	skipped: 0,
+	total: null,
+	total_approx: false,
+	rate: null,
+	eta_s: null,
+	export: { cap: 1_000_000, format: 'bitmagnet', truncated: false },
+	...over
+});
+
+let heldCount = 0;
+/** Holds the next GET of `path` until the returned function runs; its answer is read then. */
+function hold(path: string): () => void {
+	let release!: () => void;
+	const gate = new Promise<void>((done) => (release = done));
+	const stub = globalThis.fetch as unknown as import('vitest').Mock;
+	const inner = stub.getMockImplementation()!;
+	let taken = false;
+	stub.mockImplementation(async (url: string, init: RequestInit = {}) => {
+		const at = new URL(url, 'http://x').pathname.replace('/api/v1', '');
+		if (!taken && (init.method ?? 'GET') === 'GET' && at === path) {
+			taken = true;
+			heldCount++;
+			await gate;
+		}
+		return inner(url, init);
+	});
+	return release;
+}
+/** How many replies `hold` has taken so far. */
+const held = () => heldCount;
 
 async function password(name: RegExp) {
 	const dialog = await screen.findByRole('dialog', { name }, { timeout: 10_000 });
@@ -427,8 +467,8 @@ describe('bitmagnet export', () => {
 		};
 		jobs = [old];
 		render(OutputsScreen);
-		await until(() => expect(calls.some((c) => c.path === '/jobs')).toBe(true));
 		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
 		link.addEventListener('click', (e) => e.preventDefault());
 		await fireEvent.click(link);
 		const polls = () => calls.filter((c) => c.path === '/jobs').length;
@@ -446,8 +486,8 @@ describe('bitmagnet export', () => {
 
 	it('keeps the last progress when /jobs stops answering after the job was found', async () => {
 		render(OutputsScreen);
-		await until(() => expect(calls.some((c) => c.path === '/jobs')).toBe(true));
 		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
 		link.addEventListener('click', (e) => e.preventDefault());
 		jobs = [
 			{
@@ -476,6 +516,112 @@ describe('bitmagnet export', () => {
 		expect(screen.getByTestId('outputs-bitmagnet-count').textContent).toContain('Exported 5 of 10');
 		expect(screen.getByTestId('outputs-bitmagnet-progress').textContent).not.toContain(
 			"couldn't find"
+		);
+	});
+
+	it('a press before the first /jobs read answers still finds its job', async () => {
+		// The server creates the export's job before it answers the read the screen sent when it
+		// opened, so that answer already holds the new job: ids can't tell it apart, the clock can.
+		const release = hold('/jobs');
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		link.addEventListener('click', (e) => e.preventDefault());
+		await until(() => expect(held()).toBe(1));
+		await fireEvent.click(link);
+		jobs = [exportJob(1, { done: 3, total: 10 })];
+		release();
+		await until(() =>
+			expect(screen.getByTestId('outputs-bitmagnet-count').textContent).toContain(
+				'Exported 3 of 10'
+			)
+		);
+	});
+
+	it("a second press never shows the first press's answer", async () => {
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
+		link.addEventListener('click', (e) => e.preventDefault());
+		const region = screen.getByTestId('outputs-bitmagnet-progress');
+		// The first press's poll is in flight when the second press comes.
+		const release = hold('/jobs');
+		jobs = [exportJob(1, { done: 1, total: 10 })];
+		await fireEvent.click(link);
+		await until(() => expect(held()).toBe(1));
+		const seenTexts: string[] = [];
+		const watch = new MutationObserver(() => seenTexts.push(region.textContent ?? ''));
+		watch.observe(region, { subtree: true, childList: true, characterData: true });
+		await fireEvent.click(link);
+		// The first press's poll answers now, with its own job: the second press must ignore it.
+		const answered = calls.filter((c) => c.path === '/jobs').length;
+		release();
+		await until(() =>
+			expect(calls.filter((c) => c.path === '/jobs').length).toBeGreaterThan(answered)
+		);
+		jobs = [exportJob(2, { done: 7, total: 10 }), exportJob(1, { done: 1, total: 10 })];
+		await until(() => expect(region.textContent).toContain('Exported 7 of 10'));
+		watch.disconnect();
+		expect(seenTexts.filter((t) => t.includes('Exported 1 of 10'))).toEqual([]);
+	});
+
+	it("a later press doesn't take an earlier press's job that is still running", async () => {
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
+		link.addEventListener('click', (e) => e.preventDefault());
+		const region = screen.getByTestId('outputs-bitmagnet-progress');
+		jobs = [exportJob(1, { done: 4, total: 10 })];
+		await fireEvent.click(link);
+		await until(() => expect(region.textContent).toContain('Exported 4 of 10'));
+		const seenTexts: string[] = [];
+		const watch = new MutationObserver(() => seenTexts.push(region.textContent ?? ''));
+		watch.observe(region, { subtree: true, childList: true, characterData: true });
+		await fireEvent.click(link);
+		const polls = calls.filter((c) => c.path === '/jobs').length;
+		await until(() =>
+			expect(calls.filter((c) => c.path === '/jobs').length).toBeGreaterThan(polls + 1)
+		);
+		expect(region.textContent).toContain('Starting the export');
+		jobs = [exportJob(2, { done: 2, total: 9 }), exportJob(1, { done: 5, total: 10 })];
+		await until(() => expect(region.textContent).toContain('Exported 2 of 9'));
+		watch.disconnect();
+		expect(seenTexts.filter((t) => /Exported [45] of 10/.test(t))).toEqual([]);
+	});
+
+	it('finds the job after a server restart reset the ids', async () => {
+		jobs = [exportJob(5, { state: 'done', finished_at: 1, done: 9, total: 9 })];
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
+		link.addEventListener('click', (e) => e.preventDefault());
+		// Restarted: the old jobs are gone and ids begin again at 1.
+		jobs = [exportJob(1, { done: 6, total: 8 })];
+		await fireEvent.click(link);
+		await until(() =>
+			expect(screen.getByTestId('outputs-bitmagnet-count').textContent).toContain('Exported 6 of 8')
+		);
+	});
+
+	it('says a capped file is incomplete inside the announced region', async () => {
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
+		link.addEventListener('click', (e) => e.preventDefault());
+		jobs = [
+			exportJob(1, {
+				state: 'done',
+				finished_at: Math.floor(Date.now() / 1000),
+				done: 1_000_000,
+				total: 1_200_000,
+				export: { cap: 1_000_000, format: 'bitmagnet', truncated: true }
+			})
+		];
+		await fireEvent.click(link);
+		const region = screen.getByTestId('outputs-bitmagnet-progress');
+		await until(() =>
+			expect(within(region).getByTestId('outputs-bitmagnet-truncated').textContent).toContain(
+				"Warning: The file stopped at the limit of 1,000,000 torrents, so it isn't complete."
+			)
 		);
 	});
 

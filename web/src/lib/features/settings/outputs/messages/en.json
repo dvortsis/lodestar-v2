@@ -66,7 +66,7 @@
 	"settings_outputs_bitmagnet_truncated": "The file stopped at the limit of {cap} torrents, so it isn't complete.",
 	"settings_outputs_bitmagnet_cancelled": "The export was cancelled after {done} torrents. The file is incomplete: delete it.",
 	"settings_outputs_bitmagnet_failed": "The export failed after {done} torrents. The file is incomplete: delete it and try again.",
-	"settings_outputs_bitmagnet_lost": "Lodestar couldn't find this export's progress. If no file downloaded, check Jobs and try again.",
+	"settings_outputs_bitmagnet_lost": "Lodestar couldn't find this export's progress. If no file downloaded, try again.",
 	"settings_outputs_bitmagnet_jobs": "Open Jobs",
 	"settings_outputs_adult_heading": "Adult torrents in exports",
 	"settings_outputs_adult_label": "Include adult torrents",
@@ -81,6 +81,7 @@
 	"settings_outputs_dialog_close": "Close",
 	"settings_outputs_adult_load_failed": "Couldn't load this setting.",
 	"settings_outputs_adult_read_only": "Lodestar's configuration sets this, so it can't be changed here.",
-	"settings_outputs_bitmagnet_stale": "Lodestar couldn't update this export's progress. It may still be running: check Jobs.",
-	"settings_outputs_bitmagnet_example": "Example import command"
+	"settings_outputs_bitmagnet_stale": "Lodestar couldn't update this export's progress. It may still be running.",
+	"settings_outputs_bitmagnet_example": "Example import command",
+	"settings_outputs_bitmagnet_warning": "Warning:"
 }

@@ -15,6 +15,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
+	import IconWarning from '~icons/ph/warning';
 	import { EXPORT_URL, exportView, keepPolling, lastExportId, ourExport, type Job } from './logic';
 
 	const CONTENT = { path: { section: 'content' } } as const;
@@ -35,11 +36,14 @@
 	// The export: when it was started (Unix seconds), and its job once found.
 	let clickedAt = $state<number | null>(null);
 	let job = $state.raw<Job | null>(null);
-	/** The highest export job id seen before the click (`lastExportId`); null until `/jobs` answers. */
+	/**
+	 * The highest export job id seen so far (`lastExportId`): from the read when the screen opens,
+	 * then every job a press found. Null until a read answers. A press matches its job by an id
+	 * above it, so the browser's and the server's clocks never have to agree.
+	 */
 	let seen: number | null = null;
-	/** The first `/jobs` read, which sets `seen`; polls wait for it, so a quick click still
-	 * matches by id. It never rejects. */
-	let ready: Promise<void> = Promise.resolve();
+	/** Whether a read has set `seen` (shown on the link, so tests can wait for it). */
+	let idsKnown = $state(false);
 	// No job was ever found (`lost`), or one was and `/jobs` stopped answering (`stale`).
 	let lost = $state(false);
 	let stale = $state(false);
@@ -107,25 +111,32 @@
 		}
 	}
 
-	function poll(mine: number) {
+	/**
+	 * One poll for press `mine`, whose job has an id above `after`, or (with `after` null) started
+	 * within the fallback's slack of the click: the press came before any read answered, or the
+	 * server restarted and its ids began again.
+	 */
+	function poll(mine: number, after: number | null) {
 		if (!live || clickedAt === null || mine !== press) return;
 		const since = clickedAt;
-		// `seen` changes only once a job has finished, so it's the click's value throughout.
-		const after = seen;
 		api.get('/jobs').then(
 			(r) => {
 				if (!live || mine !== press) return;
 				misses = 0;
 				stale = false;
+				// Every export id below the press's: the server restarted (or the old jobs expired),
+				// so ids can't tell old from new any more.
+				if (after !== null && lastExportId(r.jobs) < after) after = null;
 				job = ourExport(r.jobs, after, since) ?? job;
+				// A job once found is never a later press's.
+				if (job) seen = Math.max(seen ?? 0, job.id);
 				const waited = Date.now() / 1000 - since;
-				if (keepPolling(job, waited)) timer = setTimeout(() => poll(mine), POLL_MS);
+				if (keepPolling(job, waited)) timer = setTimeout(() => poll(mine, after), POLL_MS);
 				else if (!job) lost = true;
-				else seen = Math.max(seen ?? 0, lastExportId(r.jobs));
 			},
 			() => {
 				if (!live || mine !== press) return;
-				if (++misses < MISSES) timer = setTimeout(() => poll(mine), POLL_MS);
+				if (++misses < MISSES) timer = setTimeout(() => poll(mine, after), POLL_MS);
 				// A job already found keeps its last state; only a never-found one is lost.
 				else if (job) stale = true;
 				else lost = true;
@@ -142,17 +153,18 @@
 		misses = 0;
 		clickedAt = Math.floor(Date.now() / 1000);
 		const mine = ++press;
-		void ready.then(() => {
-			if (live && mine === press) timer = setTimeout(() => poll(mine), POLL_MS / 2);
-		});
+		const after = seen;
+		timer = setTimeout(() => poll(mine, after), POLL_MS / 2);
 	}
 
 	onMount(() => {
 		void loadAdult();
 		// The ids already taken, so the next export's job is told apart without comparing clocks.
-		ready = api.get('/jobs').then(
+		// A press before this answers uses the clock fallback (`ourExport`).
+		api.get('/jobs').then(
 			(r) => {
-				if (seen === null) seen = lastExportId(r.jobs);
+				seen = Math.max(seen ?? 0, lastExportId(r.jobs));
+				idsKnown = true;
 			},
 			() => {}
 		);
@@ -206,6 +218,7 @@
 				href={EXPORT_URL}
 				download
 				onclick={started}
+				data-ids-known={idsKnown}
 				data-testid="outputs-bitmagnet-start">{m.settings_outputs_bitmagnet_start()}</a
 			>
 			<!-- eslint-enable svelte/no-navigation-without-resolve -->
@@ -250,6 +263,16 @@
 						{m.settings_outputs_bitmagnet_skipped({ skipped: n(view.skipped) })}
 					</p>{/if}
 			{/if}
+			{#if clickedAt !== null && !lost && view.state === 'done' && view.truncated}
+				<!-- Inside the region, so it's announced; a status banner inserted with its text isn't. -->
+				<p class="flex items-start gap-2" data-testid="outputs-bitmagnet-truncated">
+					<IconWarning class="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
+					<span
+						><span class="sr-only">{m.settings_outputs_bitmagnet_warning()}</span>
+						{m.settings_outputs_bitmagnet_truncated({ cap: n(view.cap) })}</span
+					>
+				</p>
+			{/if}
 			{#if stale}
 				<p data-testid="outputs-bitmagnet-stale">
 					{m.settings_outputs_bitmagnet_stale()}
@@ -260,13 +283,7 @@
 			{/if}
 		</div>
 		{#if clickedAt !== null && !lost}
-			{#if view.state === 'done' && view.truncated}
-				<Banner kind="warning"
-					><span data-testid="outputs-bitmagnet-truncated"
-						>{m.settings_outputs_bitmagnet_truncated({ cap: n(view.cap) })}</span
-					></Banner
-				>
-			{:else if view.state === 'cancelled' || view.state === 'failed'}
+			{#if view.state === 'cancelled' || view.state === 'failed'}
 				<Banner kind="error"
 					><span data-testid="outputs-bitmagnet-count"
 						>{view.state === 'cancelled'
@@ -283,6 +300,7 @@
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<pre
 		tabindex="0"
+		role="region"
 		aria-label={m.settings_outputs_bitmagnet_example()}
 		class="overflow-x-auto rounded-box bg-base-200 p-3 font-mono text-small {FOCUS_RING}"
 		data-testid="outputs-bitmagnet-curl"><code
