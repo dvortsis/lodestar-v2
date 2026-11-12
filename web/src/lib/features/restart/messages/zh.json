@@ -27,5 +27,7 @@
 	"restart_page_check_logs": "容器日志，查看停止的原因。",
 	"restart_page_check_healthcheck": "在 Lodestar 运行的位置执行 lodestar healthcheck。",
 	"restart_page_try_again": "继续等待",
-	"restart_page_reload": "重新加载"
+	"restart_page_reload": "重新加载",
+	"restart_page_moving": "Lodestar 正在重启，之后将位于 {address}。",
+	"restart_page_open": "打开 {address}"
 }

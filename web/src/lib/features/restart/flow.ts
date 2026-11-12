@@ -104,3 +104,26 @@ export async function waitForServer(o: WaitOptions): Promise<'up' | 'timeout' | 
 		await o.sleep(backoffMs(attempt));
 	}
 }
+
+/** Waits until the probe stops answering: `down`, `timeout`, or `aborted`. */
+export async function waitUntilDown(
+	o: Pick<WaitOptions, 'probe' | 'now' | 'sleep' | 'signal' | 'giveUpMs'>
+): Promise<'down' | 'timeout' | 'aborted'> {
+	const started = o.now();
+	const limit = o.giveUpMs ?? GIVE_UP_MS;
+	for (let attempt = 0; ; attempt++) {
+		if (o.signal?.aborted) return 'aborted';
+		if (!(await o.probe())) return 'down';
+		if (o.now() - started >= limit) return 'timeout';
+		await o.sleep(backoffMs(attempt));
+	}
+}
+
+/** Whether `url` is a different origin from this page: the CSP only lets the page fetch itself. */
+export function isOtherOrigin(url: string | null, here: string): boolean {
+	try {
+		return url !== null && new URL(url).origin !== here;
+	} catch {
+		return false;
+	}
+}

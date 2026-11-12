@@ -29,13 +29,14 @@ export interface Waiting {
 
 /** What the banner shows: nothing, or the pending changes. */
 export function pendingOf(system: System | undefined): Pending | null {
-	if (!system || system.restart_required.length === 0) return null;
+	// A partial `/system` (a test's fixture, an older server) has nothing pending.
+	if (!system?.restart_required?.length) return null;
 	const change = system.address_change;
 	return {
 		fields: system.restart_required,
-		canRestart: system.restart.available,
-		hint: system.restart.hint,
-		estimateSeconds: system.restart.estimated_seconds,
+		canRestart: system.restart?.available ?? false,
+		hint: system.restart?.hint ?? null,
+		estimateSeconds: system.restart?.estimated_seconds ?? 0,
 		newUrl:
 			system.restart_required.includes('network.http_bind') && change?.state === 'awaiting_restart'
 				? change.url

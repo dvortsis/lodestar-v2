@@ -27,5 +27,7 @@
 	"restart_page_check_logs": "The container's logs, for the reason it stopped.",
 	"restart_page_check_healthcheck": "Run lodestar healthcheck where Lodestar runs.",
 	"restart_page_try_again": "Keep waiting",
-	"restart_page_reload": "Reload"
+	"restart_page_reload": "Reload",
+	"restart_page_moving": "Lodestar is restarting and will be at {address}.",
+	"restart_page_open": "Open {address}"
 }

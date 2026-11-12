@@ -1,19 +1,18 @@
 <script lang="ts">
 	// "3 changes apply after a restart · Review · Restart now" on every Settings screen and the
-	// Overview (§10.10.6). This is all a Settings first view carries; Review's list (it reads the
-	// form engine), the confirmation dialog, the Restarting page and "Keep this address?" load when
-	// they are needed.
+	// Overview (§10.10.6), and "Keep this address?" wherever the UI is while a new address waits.
+	// It floats at the bottom of the viewport, so it never moves the screen under it. It is mounted by
+	// `watch.svelte.ts` and is announced by that file's live region; Review's list (it reads the form
+	// engine), the dialog and the Restarting page load when they are needed.
 	import { onMount, type Component } from 'svelte';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import type { Pending, System, Waiting } from './logic';
 	import { restart } from './restart.svelte';
+	import { countText } from './text';
 
-	// The count is a small whole number, so it goes in as is: `$lib/format` is 0.8 KB gzipped that a
-	// Settings first view otherwise doesn't carry.
 	const door = () => import('./door');
-	const REFRESH_MS = 15_000;
 	let reviewing = $state(false);
 	let Review = $state<Component<{ fields: string[] }>>();
 	let Dialog =
@@ -22,49 +21,17 @@
 	let Restarting = $state<Component<Waiting>>();
 	let confirming = $state(false);
 
-	const pending = $derived(restart.pending);
-	const countText = $derived(
-		pending
-			? (pending.fields.length === 1 ? m.restart_banner_one : m.restart_banner)({
-					count: pending.fields.length
-				})
-			: ''
-	);
-	// The banner arrives as one unit, with the live region empty until the next frame: a text that
-	// is inserted together with its region is not announced by every screen reader.
-	let ready = $state(false);
+	const onSettings = $derived(page.url.pathname.startsWith('/settings'));
+	const pending = $derived(onSettings ? restart.pending : null);
 	const awaiting = $derived(restart.system?.address_change?.state === 'awaiting_confirmation');
 
-	// Where `/system` was last asked: it is asked on a Settings screen's first view, on focus, on
-	// each navigation inside Settings (a save there may have added a field) and every REFRESH_MS.
-	let asked = 0;
-	function refresh() {
-		asked = Date.now();
-		void restart.refresh();
-	}
-	onMount(() => {
-		const frame = requestAnimationFrame(() => (ready = true));
-		const every = setInterval(() => {
-			if (!document.hidden && Date.now() - asked >= REFRESH_MS) refresh();
-		}, 1_000);
-		window.addEventListener('focus', refresh);
-		return () => {
-			cancelAnimationFrame(frame);
-			clearInterval(every);
-			window.removeEventListener('focus', refresh);
-		};
-	});
-	$effect(() => {
-		void page.url.pathname;
-		refresh();
-	});
+	onMount(() => void restart.refresh());
 	$effect(() => {
 		if (awaiting && !Prompt)
 			void door()
 				.then((d) => d.parts.prompt())
 				.then((c) => (Prompt = c));
 	});
-
 	// The full-page state is the store's, so it outlives the dialog and the prompt that began it.
 	$effect(() => {
 		if (restart.waiting && !Restarting)
@@ -83,37 +50,39 @@
 	}
 </script>
 
-{#if awaiting && Prompt && restart.system}<Prompt system={restart.system} />{/if}
-
-{#if pending}
-	<div class="flex flex-col gap-3" data-testid="restart-banner">
-		<!-- Announced politely: a live region that is already in the page when its text arrives -->
-		<p class="sr-only" role="status" data-testid="restart-announce">{ready ? countText : ''}</p>
-		<!-- Plain markup on purpose: this is all of the feature a Settings first view carries. -->
-		<div
-			class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-box border border-info bg-base-100 p-3"
-		>
-			<span class="min-w-0 flex-1">
-				<span data-testid="restart-count">{countText}</span>
-				{#if !pending.canRestart && pending.hint}
-					<span data-testid="restart-hint"> · {pending.hint}</span>
-				{/if}
-			</span>
-			<button
-				type="button"
-				class="btn btn-ghost {FOCUS_RING} {TARGET_MIN}"
-				aria-expanded={reviewing}
-				onclick={() => void review()}>{m.restart_review()}</button
-			>
-			{#if pending.canRestart}
-				<button
-					type="button"
-					class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
-					onclick={() => void openDialog()}>{m.restart_now()}</button
+{#if (pending || (awaiting && Prompt)) && !restart.waiting}
+	<div class="restart-tray" data-testid="restart-tray">
+		{#if awaiting && Prompt && restart.system}<Prompt system={restart.system} />{/if}
+		{#if pending}
+			<div class="flex flex-col gap-3" data-testid="restart-banner">
+				<div
+					class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-box border border-info bg-base-100 p-3"
 				>
-			{/if}
-		</div>
-		{#if reviewing && Review}<Review fields={pending.fields} />{/if}
+					<span class="min-w-0 flex-1">
+						<span data-testid="restart-count">{countText(pending)}</span>
+						{#if !pending.canRestart && pending.hint}
+							<span data-testid="restart-hint"> · {pending.hint}</span>
+						{/if}
+					</span>
+					<button
+						type="button"
+						class="btn btn-ghost {FOCUS_RING} {TARGET_MIN}"
+						aria-expanded={reviewing}
+						onclick={() => void review()}>{m.restart_review()}</button
+					>
+					{#if pending.canRestart}
+						<button
+							type="button"
+							class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
+							onclick={() => void openDialog()}>{m.restart_now()}</button
+						>
+					{/if}
+				</div>
+				{#if reviewing && Review}<div class="restart-review">
+						<Review fields={pending.fields} />
+					</div>{/if}
+			</div>
+		{/if}
 	</div>
 {/if}
 
@@ -126,3 +95,28 @@
 {/if}
 
 {#if Restarting && restart.waiting}<Restarting {...restart.waiting} />{/if}
+
+<style>
+	.restart-tray {
+		position: fixed;
+		inset-inline: calc(var(--spacing) * 4);
+		bottom: calc(var(--spacing) * 4);
+		z-index: 40;
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--spacing) * 3);
+	}
+	.restart-review {
+		max-height: 40vh;
+		overflow-y: auto;
+		border-radius: var(--radius-box);
+		background: var(--color-base-100);
+		padding: calc(var(--spacing) * 3);
+	}
+	@media (min-width: 640px) {
+		.restart-tray {
+			inset-inline-start: auto;
+			max-width: 32rem;
+		}
+	}
+</style>

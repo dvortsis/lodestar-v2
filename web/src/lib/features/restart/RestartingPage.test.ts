@@ -18,7 +18,13 @@ beforeEach(() => {
 	api.get.mockReset();
 	assign.mockReset();
 	reload.mockReset();
-	vi.stubGlobal('location', { hostname: 'nas.local', assign, reload });
+	vi.stubGlobal('location', {
+		hostname: 'nas.local',
+		origin: 'http://nas.local:8090',
+		pathname: '/settings',
+		assign,
+		reload
+	});
 });
 afterEach(() => {
 	vi.useRealTimers();
@@ -62,19 +68,33 @@ it('says so when something still waits for a restart, and offers Reload', async 
 	expect(reload).not.toHaveBeenCalled();
 });
 
-it('goes to the new address, found with an opaque no-cors probe', async () => {
+it('never fetches another origin: it waits for this address to go quiet, then goes once', async () => {
+	const probe = vi.fn<typeof fetch>(async () => Promise.reject(new TypeError('down')));
+	vi.stubGlobal('fetch', probe);
+	render(RestartingPage, {
+		props: { target: 'http://nas.local:9000/', startedAt: 1, estimateSeconds: 1 }
+	});
+	// The way there is always on the page.
+	expect(screen.getByTestId('restarting-open').getAttribute('href')).toBe(
+		'http://nas.local:9000/settings'
+	);
+	await vi.advanceTimersByTimeAsync(6_000);
+	await until(() => expect(assign).toHaveBeenCalledTimes(1));
+	expect(assign).toHaveBeenCalledWith('http://nas.local:9000/settings');
+	for (const [url] of probe.mock.calls) expect(String(url)).toBe('/healthz');
+});
+
+it('stays on the page, with the link, while the old address still answers', async () => {
 	const probe = fetchOk();
 	vi.stubGlobal('fetch', probe);
 	render(RestartingPage, {
-		props: {
-			target: 'http://nas.local:9000/',
-			startedAt: 1,
-			estimateSeconds: 0
-		}
+		props: { target: 'http://nas.local:9000/', startedAt: 1, estimateSeconds: 1 }
 	});
-	await vi.advanceTimersByTimeAsync(1_500);
-	await until(() => expect(assign).toHaveBeenCalledWith('http://nas.local:9000/settings'));
-	expect(probe.mock.calls[0]![1]).toMatchObject({ mode: 'no-cors' });
+	await vi.advanceTimersByTimeAsync(10_000);
+	expect(assign).not.toHaveBeenCalled();
+	expect(screen.getByTestId('restarting-open')).toBeTruthy();
+	expect(screen.getByRole('status').textContent).toMatch(/nas\.local:9000/);
+	for (const [url] of probe.mock.calls) expect(String(url)).toBe('/healthz');
 });
 
 it('gives up after two minutes and says what to check', async () => {

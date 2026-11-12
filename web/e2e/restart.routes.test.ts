@@ -157,4 +157,67 @@ test.describe('restart banner', () => {
 		await expect(dialog).toHaveCount(0);
 		await expect(page.getByRole('button', { name: 'Restart now' })).toBeFocused();
 	});
+
+	test('the banner floats: it does not move the heading when it appears after load', async ({
+		page,
+		go,
+		mock
+	}) => {
+		let waiting = false;
+		mock.on('getSystem', (() =>
+			systemWith(mock, waiting ? pending : { restart_required: [] })) as never);
+		await go('/settings');
+		const heading = page.getByRole('heading', { name: 'Needs attention' });
+		await expect(heading).toBeVisible(DEADLINE);
+		const before = await heading.boundingBox();
+		waiting = true;
+		// The watch starts on the first interaction and asks again when the tab is focused.
+		await expect(async () => {
+			await page.keyboard.press('Shift');
+			await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+			await expect(page.getByTestId('restart-count')).toBeVisible({ timeout: 1_000 });
+		}).toPass({ timeout: 15_000 });
+		const after = await heading.boundingBox();
+		expect(after?.y).toBe(before?.y);
+		expect(after?.x).toBe(before?.x);
+		await expect(page.getByTestId('restart-announce')).toHaveText(
+			/2 changes apply after a restart/
+		);
+	});
+
+	test('Keep this address? shows through the watch, with nothing pending a restart', async ({
+		page,
+		go,
+		mock
+	}) => {
+		let kept = false;
+		mock.on('getSystem', (() =>
+			systemWith(mock, {
+				restart_required: [],
+				address_change: kept
+					? null
+					: {
+							deadline: Math.floor(Date.now() / 1000) + 300,
+							kind: 'http_bind',
+							previous_url: 'http://192.168.1.5:8090/',
+							state: 'awaiting_confirmation',
+							stored: true,
+							url: 'http://192.168.1.5:9000/'
+						}
+			})) as never);
+		mock.on('keepAddress', (() => {
+			kept = true;
+			return { address_change: null, restarting: false };
+		}) as never);
+		await go('/settings');
+		const keep = page.getByRole('button', { name: 'Keep this address' });
+		await expect(async () => {
+			await page.keyboard.press('Shift');
+			await expect(keep).toBeVisible({ timeout: 1_000 });
+		}).toPass({ timeout: 15_000 });
+		await expect(page.getByTestId('keep-countdown')).toContainText(/\d:\d\d/);
+		await keep.click();
+		await expect.poll(() => mock.calls('keepAddress').length, DEADLINE).toBe(1);
+		await expect(keep).toHaveCount(0, DEADLINE);
+	});
 });

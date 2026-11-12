@@ -125,5 +125,7 @@
 {:else}
 	{@render link({})}
 {/if}
-<!-- Always present, so a change into "Stalled" or "Starting" is announced; empty otherwise. -->
-<span class="sr-only" role="status" data-testid="status-pill-announce">{helpText}</span>
+<!-- Always present, so a change into "Stalled" or "Starting" is announced; empty otherwise. "Restart needed" is announced by the restart watch's own region, so it is left out here. -->
+<span class="sr-only" role="status" data-testid="status-pill-announce"
+	>{state.kind === 'restart' ? '' : helpText}</span
+>
