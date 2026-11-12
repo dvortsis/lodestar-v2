@@ -257,6 +257,25 @@ fn many_unknown_keys_are_read_in_linear_time() {
     assert!(s.page.whole(), "{:?}", s.page);
 }
 
+/// Many alias languages, each an empty list, are a bounded scan a key:
+/// past `max_texts` they're passed over, and the entity says so.
+#[test]
+fn many_empty_alias_lists_are_read_in_linear_time() {
+    let n = 300_000;
+    let keys: String = (0..n).map(|i| format!(r#""k{i}":[],"#)).collect();
+    let body = format!(
+        r#"{{"entities":{{"Q5":{{"id":"Q5","type":"item","aliases":{{{keys}"en":[]}}}}}}}}"#
+    );
+    assert!(body.len() < ENTITY_LIMITS.max_bytes);
+    let started = std::time::Instant::now();
+    let e = parse_entities(body.as_bytes(), &ENTITY_LIMITS);
+    // A generous bound on the slowest debug runner; the quadratic draft
+    // took minutes here.
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert!(e.page.whole(), "{:?}", e.page);
+    assert!(e.entities[0].truncated);
+}
+
 #[test]
 fn repeats_of_what_is_read_spoil_it() {
     let label = |l: &str| format!(r#""{l}":{{"language":"{l}","value":"Film"}}"#);

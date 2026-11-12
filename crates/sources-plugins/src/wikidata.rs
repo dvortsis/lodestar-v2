@@ -188,6 +188,12 @@ impl Identifier for Wikidata {
         query: &'a Query,
     ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
         Box::pin(async move {
+            // A title of nothing but punctuation can name no item: nothing
+            // is sent.
+            let want = fold(query.title());
+            if want.is_empty() {
+                return Ok(Lookup::NoMatch);
+            }
             self.not_held()?;
             let res = self.answer(kit.http.send(&search_request(query.title())?).await)?;
             let found = wikidata::parse_search(&res.body, &SEARCH_LIMITS);
@@ -195,7 +201,6 @@ impl Identifier for Wikidata {
             // Only results that matched on the title itself are fetched,
             // once each: a search also finds items by words in a longer
             // title, and every entity fetched is up to megabytes.
-            let want = fold(query.title());
             let mut ids: Vec<Qid> = Vec::new();
             for hit in found.hits {
                 let named = hit.texts.iter().any(|t| fold(t) == want);
@@ -203,7 +208,7 @@ impl Identifier for Wikidata {
                     ids.push(hit.id);
                 }
             }
-            if ids.is_empty() || want.is_empty() {
+            if ids.is_empty() {
                 return Ok(Lookup::NoMatch);
             }
             let res = self.answer(kit.http.send(&entities_request(&ids)?).await)?;
@@ -223,11 +228,14 @@ impl Identifier for Wikidata {
                     body: Vec::new(),
                 },
             )?;
-            // Only the items asked about count, in the search's order.
-            let entities = ids
-                .iter()
-                .filter_map(|id| got.entities.iter().find(|e| e.id == *id))
-                .collect::<Vec<_>>();
+            // Only the items asked about count, in the search's order, and
+            // each must be there: one left out (missing, or keyed by a
+            // redirect's target) is an error, never cached as a miss.
+            let mut entities = Vec::with_capacity(ids.len());
+            for id in &ids {
+                let e = got.entities.iter().find(|e| e.id == *id);
+                entities.push(e.ok_or_else(|| fail(BAD_ANSWER))?);
+            }
             Ok(choose(query, &entities))
         })
     }

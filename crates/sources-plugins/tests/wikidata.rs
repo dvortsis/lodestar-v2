@@ -344,6 +344,46 @@ async fn an_oversize_answer_is_an_error() {
     assert_eq!(e, "Wikidata's answer wasn't understood");
 }
 
+/// An id the search named but the entities answer leaves out (missing,
+/// or keyed by a redirect's target) is an error, never a cached miss.
+#[tokio::test(start_paused = true)]
+async fn a_requested_id_left_out_is_an_error() {
+    let dir = fixture("wikidata_match");
+    let read = |f: &str| std::fs::read(dir.join(f)).unwrap();
+    let head = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+    for body in [
+        &br#"{"entities":{},"success":1}"#[..],
+        br#"{"entities":{"Q172241":{"id":"Q172241","missing":""}},"success":1}"#,
+        br#"{"entities":{"Q999":{"id":"Q999","type":"item"}},"success":1}"#,
+    ] {
+        let r = Arc::new(Replayer::new(vec![
+            parse_exchange(&head("001.http"), read("001.body"), Vec::new()).unwrap(),
+            parse_exchange(&head("002.http"), body.to_vec(), Vec::new()).unwrap(),
+        ]));
+        let got = Wikidata::new()
+            .lookup(&kit(r.clone()), &movie(SHAWSHANK, Some(1994)))
+            .await;
+        assert_eq!(
+            got.unwrap_err().0,
+            "Wikidata's answer wasn't understood",
+            "{}",
+            String::from_utf8_lossy(body)
+        );
+        r.finish().unwrap();
+    }
+}
+
+/// A title that folds to nothing is no match, and nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn a_title_of_punctuation_sends_nothing() {
+    let wire = Arc::new(Silent::default());
+    let got = Wikidata::new()
+        .lookup(&kit(wire.clone()), &movie("...", None))
+        .await;
+    assert_eq!(got.unwrap(), Lookup::NoMatch);
+    assert_eq!(wire.0.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test(start_paused = true)]
 async fn lookups_are_paced_at_the_host_rate() {
     let replayer = Arc::new(Replayer::load(&fixture("wikidata_two_lookups")).unwrap());

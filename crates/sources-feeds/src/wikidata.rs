@@ -682,7 +682,10 @@ impl<'a> Parser<'a, '_> {
                 }
                 "labels" => p.map(|p, lang| {
                     // A repeated language is found among the kept labels.
-                    if e.labels.iter().any(|t| t.language == lang) {
+                    if e.labels
+                        .iter()
+                        .any(|t| t.language.eq_ignore_ascii_case(lang))
+                    {
                         s.set(Bad::Malformed);
                     }
                     if e.labels.len() + e.aliases.len() >= p.l.max_texts {
@@ -694,14 +697,19 @@ impl<'a> Parser<'a, '_> {
                     Ok(())
                 })?,
                 "aliases" => {
+                    // The languages read, at most `max_texts`: past it the
+                    // rest are passed over unchecked, so an answer of many
+                    // empty lists costs a bounded scan a key.
                     let mut langs: Vec<&str> = Vec::new();
                     p.map(|p, lang| {
-                        if langs.contains(&lang) {
-                            s.set(Bad::Malformed);
-                        }
-                        if e.labels.len() + e.aliases.len() >= p.l.max_texts {
+                        if langs.len() >= p.l.max_texts
+                            || e.labels.len() + e.aliases.len() >= p.l.max_texts
+                        {
                             e.truncated = true;
                             return p.skip_in(&mut s);
+                        }
+                        if langs.iter().any(|l| l.eq_ignore_ascii_case(lang)) {
+                            s.set(Bad::Malformed);
                         }
                         langs.push(lang);
                         let shape = p.arr(|p, _| {
