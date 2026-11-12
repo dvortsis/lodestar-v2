@@ -964,12 +964,20 @@ class AnalyzerTests(unittest.TestCase):
         (self.root / "lifecycle.json").write_text(json.dumps({"schema_version": 1, **parts}))
 
     GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0-rc.1", "service_running": True,
+               "service_restarted": True, "image_matches_installed": True,
                "data_present": True, "torrents_before": 500, "torrents_after": 520}
     GOOD_UN = {"service_present": False, "program_files_present": False,
                "data_present": True, "data_policy": "kept"}
 
-    def checks(self, rows=None, **parts):
+    def done(self, **changes):
+        (self.root / "result.json").write_text(json.dumps(
+            {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
+             "service_detached": True, "shutdown": {"exit_confirmed": False}, **changes}))
+
+    def checks(self, rows=None, finished=True, **parts):
         self.rows(rows if rows is not None else self.svc_rows())
+        if finished:
+            self.done()
         if parts:
             self.life(**parts)
         return analyze(self.root)["windows_checks"]
@@ -993,15 +1001,22 @@ class AnalyzerTests(unittest.TestCase):
         start = self.checks(self.svc_rows(start=1000)[:3] + self.svc_rows(start=2000)[3:])
         self.assertEqual(start["service_restart"]["status"], "fail")
 
-    def test_service_exit_recorded_fails_restart_check(self):
-        self.rows(self.svc_rows())
-        (self.root / "result.json").write_text(json.dumps(
-            {"schema_version": 2, "reason": "process_exited_1", "samples": 5}))
-        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+    def test_unfinished_or_aborted_service_run_fails_restart_check(self):
+        # A restart or reboot ends the loop before another sample, so one PID proves nothing.
+        self.assertEqual(self.checks(finished=False)["service_restart"]["status"], "fail")
+        for reason in ("process_exited_1", "collector_error"):
+            self.rows(self.svc_rows())
+            self.done(reason=reason)
+            self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail", reason)
+
+    def test_sample_without_service_identity_fails_restart_check(self):
+        rows = self.svc_rows()
+        del rows[2]["service_pid"]
+        self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
 
     def test_upgrade_pass_and_fail(self):
         self.assertEqual(self.checks(upgrade=self.GOOD_UP)["upgrade"]["status"], "pass")
-        for change in ({"service_running": False}, {"data_present": False}, {"torrents_after": 10},
+        for change in ({"service_running": False}, {"service_restarted": False}, {"image_matches_installed": False}, {"data_present": False}, {"torrents_after": 10},
                        {"torrents_before": 0}, {"to_version": "0.5.1"}, {"to_version": "C:\\Users\\x"},
                        {"torrents_after": None}):
             self.assertEqual(self.checks(upgrade={**self.GOOD_UP, **change})["upgrade"]["status"],
@@ -1016,17 +1031,15 @@ class AnalyzerTests(unittest.TestCase):
             self.assertEqual(self.checks(uninstall={**self.GOOD_UN, **change})["uninstall"]["status"],
                              "fail", change)
 
-    def test_invalid_lifecycle_file_is_absent_for_both_steps(self):
+    def test_invalid_lifecycle_file_fails_both_steps(self):
         self.rows(self.svc_rows())
         (self.root / "lifecycle.json").write_text("{not json")
         checks = analyze(self.root)["windows_checks"]
-        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("absent", "absent"))
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("fail", "fail"))
 
     def test_detached_service_result_is_not_a_failed_shutdown(self):
         self.rows(self.svc_rows())
-        (self.root / "result.json").write_text(json.dumps(
-            {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
-             "service_detached": True, "shutdown": {"exit_confirmed": False}}))
+        self.done()
         report = analyze(self.root)
         self.assertIsNone(report["clean_shutdown"])
         self.assertEqual(report["run_state"], "detached_service_running")

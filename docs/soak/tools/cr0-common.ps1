@@ -209,13 +209,22 @@ function Get-SoakTorrentCount([string]$Bind) {
     return [long][double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
 }
 
-function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [long]$TorrentsBefore, [string]$Bind = '127.0.0.1:8484',
-    [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
+function Get-SoakInstalledVersion([string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe')) {
+    (Get-SoakExecutableVersion $Exe) -replace '^\S+\s+', ''
+}
+
+function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [long]$TorrentsBefore, [long]$PreviousStartTicks,
+    [string]$Bind = '127.0.0.1:8484', [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
     [string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe')) {
-    # Run after the MSI upgrade finished and the service is back.
+    # Run after the MSI upgrade finished. FromVersion and PreviousStartTicks are measured
+    # before it (Get-SoakInstalledVersion, Get-SoakServiceIdentity).
+    $now = Get-SoakServiceIdentity $Service
+    $image = (Get-Process -Id $now.pid).Path
     Save-SoakLifecycle $Path 'upgrade' @{
-        from_version = $FromVersion; to_version = ((Get-SoakExecutableVersion $Exe) -replace '^\S+\s+', '')
+        from_version = $FromVersion; to_version = (Get-SoakInstalledVersion $Exe)
         service_running = ((Get-Service $Service).Status -eq 'Running')
+        service_restarted = ($now.start_ticks -gt $PreviousStartTicks)
+        image_matches_installed = ((Get-FileHash -LiteralPath $image).Hash -eq (Get-FileHash -LiteralPath $Exe).Hash)
         data_present = [bool](Get-ChildItem -LiteralPath $DataDir -ErrorAction SilentlyContinue | Select-Object -First 1)
         torrents_before = $TorrentsBefore; torrents_after = (Get-SoakTorrentCount $Bind)
     }

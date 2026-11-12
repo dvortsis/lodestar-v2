@@ -93,8 +93,8 @@ if (-not $serviceMode) {
     $env:LODESTAR_UPDATES = 'off'
 }
 $settings = @{
-    data = $data; http_bind = $Bind; dht_port = 6881; intensity = 'balanced'
-    transport = 'TCP'; encryption = 'prefer'; updates = 'off'; fresh_data = (-not $serviceMode); service_mode = $serviceMode
+    data = if ($serviceMode) { 'service default' } else { $data }; http_bind = $Bind; dht_port = 6881; intensity = 'balanced'
+    transport = 'TCP'; encryption = 'prefer'; updates = $(if ($serviceMode) { 'set in the service (runbook: off)' } else { 'off' }); fresh_data = (-not $serviceMode); service_mode = $serviceMode
     storage_guardrails = @{ start_free_bytes = $MinFreeBytes; warn_free_bytes = $WarnFreeBytes; stop_free_bytes = $StopFreeBytes; max_redirected_log_bytes = $MaxLogBytes; check_seconds = 10; volumes = $volumes }; query_timeout_seconds = 4; suppression_seconds = 21604; cooldown_floor_seconds = 60
     targets = 'random'; warmup_minutes = $WarmupMinutes; baseline_hours = $BaselineHours
     ui = $Ui; all_other_settings = 'commit defaults'
@@ -123,6 +123,7 @@ $baselineStart = $null
 $baselineAt = $null
 $endAt = $null
 $suppressionSeen = $false
+$sawFirstMetrics = $false
 $suppressionEndAt = $null
 $badHealth = 0; $badMetrics = 0; $badBounds = 0; $badMemory = 0
 $lastCompleted = 0; $lastProgressAt = 0.0
@@ -213,6 +214,8 @@ try {
         if ($metricsOk) {
             Write-Evidence (Join-Path $Root ('metrics/{0:D5}.prom' -f $sample)) $metrics
             if ($values.dht_sample_suppression_seconds -gt 0) { $suppressionSeen = $true }
+            # A service attached after its start-up pause already ended shows 0 on its first sample.
+            if ($serviceMode -and -not $sawFirstMetrics) { $sawFirstMetrics = $true; if ($values.dht_sample_suppression_seconds -eq 0) { $suppressionSeen = $true } }
             if ($suppressionSeen -and $values.dht_sample_suppression_seconds -eq 0 -and $null -eq $baselineAt) {
                 $suppressionEndAt = $stamp.ToString('o')
                 $baselineAt = $elapsed + $WarmupMinutes * 60

@@ -1,6 +1,6 @@
 # Windows 1.0 soak: runbook
 
-This is the owner's run for gate **G-v1-windows**. It tests the release candidate (RC) installer on your Windows PC, the way a normal user runs Lodestar: as a Windows service. It takes about **26 hours**, of which you are busy for about 40 minutes.
+This is the owner's run for gate **G-v1-windows**. It tests the release candidate (RC) installer on your Windows PC, the way a normal user runs Lodestar: as a Windows service. It takes about **32 hours** (a restarted Lodestar pauses its crawler's sampling for up to 6 hours first), of which you are busy for about 40 minutes.
 
 **Pass means all four hold:**
 
@@ -17,7 +17,7 @@ A *service* is a program Windows starts by itself and keeps running in the backg
 - At least 50 GB free on `C:`. Docker Desktop stopped. Windows set not to sleep (Settings → System → Power).
 - Two installers: the **v0.5.1** MSI (`lodestar-0.5.1-x86_64.msi`) and the RC MSI. Check both as [section 4.2 of the user guide](../user/04-install-on-windows-and-linux.md#42-check-the-download-before-you-run-it) describes.
 - A copy of this repository, for `docs/soak/tools`.
-- Remove any earlier Lodestar first, with its data (`REMOVE_DATA=1`), so this run starts clean.
+- Remove any earlier Lodestar first, so this run starts clean. This **deletes its data**: `Start-Process msiexec -ArgumentList '/x', '<old-msi>', 'REMOVE_DATA=1' -Wait`.
 
 All commands run in an **elevated** PowerShell 7 (Start → `pwsh` → Run as administrator). Set these once. The run folder must not exist yet.
 
@@ -32,24 +32,31 @@ New-Item -ItemType Directory C:\LodestarSoak | Out-Null
 ## Phase 1: install v0.5.1 and let it fill (about 1 h)
 
 1. Install `lodestar-0.5.1-x86_64.msi` with the default options. Open `http://localhost:8090/`, finish first-run setup, and leave it crawling.
-2. Wait until the torrent count is above zero (about 30 minutes). Then write it down:
+2. In Lodestar's settings, set **Intensity** to **Balanced** and automatic updates to **Off**. The analyzer's limits assume Balanced.
+3. Wait until the torrent count is above zero (about 30 minutes). Then record where you start, before the upgrade:
 
    ```powershell
-   $Before = Get-SoakTorrentCount '127.0.0.1:8090'; $Before
+   $Before  = Get-SoakTorrentCount '127.0.0.1:8090'
+   $FromVer = Get-SoakInstalledVersion
+   $OldPid  = Get-SoakServiceIdentity Lodestar
    ```
 
 ## Phase 2: upgrade to the RC (about 10 min)
 
-1. Install the RC MSI over the top: `msiexec /i lodestar-<rc>-x86_64.msi`, default options. Do not uninstall first. Accept the administrator prompt.
-2. Wait for `Get-Service Lodestar` to show `Running`, then record the upgrade:
+1. Install the RC MSI over the top, default options. Do not uninstall first. Accept the administrator prompt. The command waits until the installer finishes:
 
    ```powershell
-   Save-SoakUpgrade $Life -FromVersion 0.5.1 -TorrentsBefore $Before -Bind 127.0.0.1:8090
+   Start-Process msiexec -ArgumentList '/i', 'lodestar-<rc>-x86_64.msi' -Wait
+   ```
+2. Wait for `Get-Service Lodestar` to show `Running` (the upgrade restarts it), then record the upgrade:
+
+   ```powershell
+   Save-SoakUpgrade $Life -FromVersion $FromVer -TorrentsBefore $Before -PreviousStartTicks $OldPid.start_ticks -Bind 127.0.0.1:8090
    ```
 
-   **Result:** `lifecycle.json` holds the two versions, whether the service runs, whether the data folder is non-empty, and the torrent count before and after. **Pass needs** `torrents_after` at least `torrents_before`.
+   **Result:** `lifecycle.json` holds the two versions, whether the service runs, restarted and runs the installed program, whether the data folder is non-empty, and the torrent count before and after. **Pass needs** `torrents_after` at least `torrents_before`.
 
-## Phase 3: the 24 h soak (about 25 h)
+## Phase 3: the 24 h soak (about 31 h)
 
 Start the collector. It watches the service and never stops or restarts it. It waits for the crawler's start-up pause to end, then a 30-minute warm-up, then records 24 hours.
 
@@ -60,7 +67,7 @@ pwsh -File "$Tools\cr0-soak.ps1" -Exe 'C:\Program Files\Lodestar\lodestar.exe' -
 
 Leave the window open and the PC awake. To check progress, read `$Run\status.json`. To stop early, create the file `$Run\stop.request`: the run then does not count.
 
-**Result:** the window ends with `reason: baseline_window_complete` in `$Run\result.json`. Don't restart the service, Windows or the PC during the run; a restart fails the run, and you start again.
+**Result:** the window ends with `reason: baseline_window_complete` in `$Run\result.json`. If the service restarts, or Windows restarts, the run ends early and the restart check fails; start again. Don't restart the service, Windows or the PC during the run; a restart fails the run, and you start again.
 
 ## Phase 4: uninstall (about 5 min)
 
@@ -68,11 +75,11 @@ Leave the window open and the PC awake. To check progress, read `$Run\status.jso
 
    ```powershell
    Move-Item $Life "$Run\lifecycle.json"
-   msiexec /x lodestar-<rc>-x86_64.msi
+   Start-Process msiexec -ArgumentList '/x', 'lodestar-<rc>-x86_64.msi' -Wait
    Save-SoakUninstall "$Run\lifecycle.json" -DataPolicy kept
    ```
 
-   Use the same MSI file you installed. To also check data removal, add `REMOVE_DATA=1` to the `msiexec` line and pass `-DataPolicy removed`.
+   Use the same MSI file you installed. To also check data removal, add `'REMOVE_DATA=1'` to the `-ArgumentList` and pass `-DataPolicy removed`.
 
    **Result:** the service and `C:\Program Files\Lodestar` are gone; `C:\ProgramData\Lodestar` is still there (kept) or gone (removed).
 
@@ -86,6 +93,6 @@ Open `report.md`. The **Memory gate** says "meets the bar", and the **Windows 1.
 
 ## What to send back
 
-Send the runner **`report.md`**, plus `$Run\run.json`, `$Run\result.json` and `$Run\lifecycle.json`. They hold versions, counts, memory figures and pass/fail lines only.
+Send the runner **`report.md`** (its `run.json` `sha256` is checked against the RC's published checksums), plus `$Run\run.json`, `$Run\result.json` and `$Run\lifecycle.json`. They hold versions, counts, memory figures and pass/fail lines only.
 
 **Never send** the raw `samples.jsonl` or `metrics` folder unless asked, the database, anything under `C:\ProgramData\Lodestar` (logs, keys, the setup token), your password, or screenshots of the web page. Keep them private.
