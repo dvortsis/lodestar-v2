@@ -17,7 +17,9 @@ ip6tables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
 #    to the endpoint never use the tunnel, so they keep their mark clear.
 iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
 ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
-# 3. No "port unreachable" replies outside the tunnel: with the tunnel
+# 3. No "port unreachable" replies outside the tunnel, except to this
+#    container's own addresses (loopback keeps its errors): with the tunnel
 #    down, the endpoint's packets would draw them from the host's address.
-iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -j DROP
-ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -j DROP
+#    Only this ICMP type is dropped; web-UI replies are TCP.
+iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP
+ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP

@@ -6,8 +6,8 @@
 #   docs/decisions/2026-11-09-OP-3a.md), with PIA through its custom WireGuard
 #   provider and its firewall on (the kill switch under test). The leak test
 #   starts it alone.
-# - gluetun's post-rules file (configs.gluetun-post-rules below), mounted
-#   read-only: without it, gluetun lets connections that were open before the
+# - gluetun's post-rules file (configs.gluetun-post-rules below), copied in
+#   as a 0444 file: without it, gluetun lets connections that were open before the
 #   tunnel dropped leave by eth0 (docs/decisions/2026-11-12-X-gluetun-leak.md).
 # - lodestar in gluetun's network namespace, with every capability dropped
 #   except the three it needs to drop root. Its image comes from the screen's
@@ -33,8 +33,9 @@ services:
       TZ: Etc/UTC
     volumes:
       - ./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro
-    # Compose mounts a config read-only. gluetun reads the file once, when it
-    # turns its firewall on, before the tunnel starts.
+    # Compose copies a config into the container (mode 0444, so only gluetun's
+    # own root could change it). gluetun reads it once, when it turns its
+    # firewall on, before the tunnel starts.
     configs:
       - source: gluetun-post-rules
         target: /iptables/post-rules.txt
@@ -130,7 +131,9 @@ configs:
       #    to the endpoint never use the tunnel, so they keep their mark clear.
       iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
       ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
-      # 3. No "port unreachable" replies outside the tunnel: with the tunnel
+      # 3. No "port unreachable" replies outside the tunnel, except to this
+      #    container's own addresses (loopback keeps its errors): with the tunnel
       #    down, the endpoint's packets would draw them from the host's address.
-      iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -j DROP
-      ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -j DROP
+      #    Only this ICMP type is dropped; web-UI replies are TCP.
+      iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP
+      ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP

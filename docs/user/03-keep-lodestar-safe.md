@@ -69,24 +69,41 @@ In words: Lodestar sends everything through the gluetun container to your VPN pr
 To use it:
 
 1. Install gluetun first. The template expects the container to be named `gluetun`.
-2. In the gluetun container, publish port `8090`, the web UI port. Lodestar can't publish ports itself.
-3. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
+2. Add Lodestar's post-rules to gluetun, as in [Close gluetun's gap when the VPN drops](#close-gluetuns-gap-when-the-vpn-drops) below.
+3. In the gluetun container, publish port `8090`, the web UI port. Lodestar can't publish ports itself.
+4. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
    **Result:** Lodestar starts on gluetun's network.
-4. Open the web UI at your server address and the port you published on gluetun.
-5. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
+5. Open the web UI at your server address and the port you published on gluetun.
+6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
 
 ### Close gluetun's gap when the VPN drops
 
 gluetun's firewall is its kill switch. When the VPN drops, it blocks every new connection. On its own, though, it lets packets of connections that were already open leave through your normal network, with your home IP. Lodestar's post-rules file closes that gap.
 
 > [!IMPORTANT]
-> Add the post-rules file to gluetun. Without it, a few packets can leave outside the VPN each time the tunnel drops. **Recommended:** add it before you start Lodestar.
+> Add the post-rules file to gluetun before you start Lodestar. Without it, a few packets can leave outside the VPN each time the tunnel drops.
 
-1. Download [`gluetun-post-rules.txt`](../../packaging/companions/gluetun-post-rules.txt) and save it as `/mnt/cache/appdata/gluetun/post-rules.txt`.
-2. In the gluetun container, add a **Path**: container path `/iptables/post-rules.txt`, host path the file from step 1, access mode **Read Only**.
-3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`; gluetun's own default is `tun0`.
-4. Apply, then open gluetun's log.
-   **Result:** The log shows `[firewall] enabled successfully`. If gluetun stops with `post-rules.txt: is a directory`, the file wasn't at the host path, so Docker made a folder there. Delete the folder, save the file in its place, and start gluetun again.
+1. Open the Unraid terminal (**>_** in the top bar) and save the file:
+
+    ```sh
+    mkdir -p /mnt/cache/appdata/gluetun
+    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://github.com/dvortsis/lodestar-v2/raw/main/packaging/companions/gluetun-post-rules.txt
+    ```
+
+2. Edit the gluetun container and add a **Path**: container path `/iptables/post-rules.txt`, host path `/mnt/cache/appdata/gluetun/post-rules.txt`, access mode **Read Only**.
+3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`, and gluetun's own default is `tun0`. Without this variable the rules do nothing. It works for OpenVPN too, because it only names the tunnel.
+4. Select **Apply**, then open gluetun's log.
+   **Result:** The log shows `[firewall] enabled successfully`.
+5. If Lodestar already runs, restart it now.
+
+If gluetun stops instead:
+
+| Log line | What to do |
+|---|---|
+| `post-rules.txt: is a directory` | The file wasn't at the host path, so Docker made a folder there. Delete the folder, repeat step 1, and start gluetun again. |
+| `ip6tables is required` | Your server's kernel has no IPv6 firewall. Delete the three lines that start with `ip6tables` from the file, then start gluetun again. |
+
+To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
 
 With the file, a connection that used the VPN never leaves any other way. The rules never let anything new through. The companion templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
 

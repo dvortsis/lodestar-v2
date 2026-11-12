@@ -44,6 +44,8 @@ NOT_RUN=222  # a probe whose container never ran its command: never counts as bl
 fails=0
 block=""
 counter=""
+flow=""
+FLOW=lodestar-leak-flow
 cap_pid=""
 not_run=""
 
@@ -59,7 +61,11 @@ finish() {
 cleanup() {
   [[ -n $cap_pid ]] && kill "$cap_pid" 2>/dev/null
   # The endpoint block never outlives the test, whatever ended it.
-  [[ -n $counter ]] && iptables -D DOCKER-USER $counter 2>/dev/null
+  [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
+  # A failed delete in a phase can leave a counter behind; remove every copy.
+  if [[ -n $counter ]]; then
+    for _ in 1 2 3; do iptables -D DOCKER-USER $counter 2>/dev/null || break; done
+  fi
   [[ -n $block ]] && iptables -D DOCKER-USER $block 2>/dev/null
   return 0
 }
@@ -97,14 +103,27 @@ tunnel_up() {  # recreate gluetun alone from the committed compose file and the 
   LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
 }
-# post_rules_on family iface: gluetun loaded its post-rules (compose.yaml), so a
-# connection that used the tunnel can't leave by another interface. gluetun
-# skips a missing file without a word, so this is checked, not assumed. Its
-# image has both iptables backends; the rule is in whichever it uses.
+# post_rules_on family iface proto icmpword: gluetun loaded its post-rules
+# (compose.yaml) for this interface, and they head OUTPUT, above every accept
+# gluetun adds. gluetun skips a missing file without a word, so this is
+# checked, not assumed. Its image has both iptables backends; the rules are in
+# whichever it uses.
 post_rules_on() {
   docker exec gluetun sh -c 'for t in "$1" "$1-nft" "$1-legacy"; do
-    command -v "$t" >/dev/null 2>&1 && "$t" -C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP 2>/dev/null && exit 0
-  done; exit 1' rules "$1" "$2"
+    command -v "$t" >/dev/null 2>&1 || continue
+    "$t" -C OUTPUT -o "$2" -j CONNMARK --set-xmark 0x800000/0x800000 2>/dev/null || continue
+    "$t" -C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP 2>/dev/null || continue
+    "$t" -C OUTPUT ! -o "$2" -p "$3" --"$4"-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP 2>/dev/null || continue
+    [ "$("$t" -S OUTPUT 2>/dev/null | sed -n 2,4p | grep -Ec -- "-j (DROP|CONNMARK)")" = 3 ] && exit 0
+  done; exit 1' rules "$1" "$2" "$3" "$4"
+}
+# A connection opened through the tunnel that keeps sending through both
+# down phases (an unprivileged ping), so the leak gluetun's post-rules close
+# is exercised every run, not only when gluetun happens to hold one open.
+flow_start() {
+  timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1  # one left by a run that died
+  timeout 60 docker run -d --rm --name "$FLOW" --network container:gluetun --cap-drop ALL "$PROBE_IMAGE" \
+    ping -q -i 0.5 1.1.1.1 >/dev/null 2>&1
 }
 # The host-side counter: packets the compose bridge forwards out of the egress
 # interface. It sits just below the endpoint block, so the endpoint's own UDP
@@ -122,7 +141,7 @@ judge_counter() {  # $1: phase
     n=$(read_counter)
     iptables -D DOCKER-USER $counter 2>/dev/null && counter=""
   fi
-  echo "count host_egress_packets_$1 ${n:-0}"
+  [[ -n $n ]] && echo "count host_egress_packets_$1 $n"  # no line when it couldn't be read
   if [[ -n $n && $n == 0 ]]; then pass "no_host_egress_$1"; else bad "no_host_egress_$1"; fi
 }
 start_capture() {  # $1: phase
@@ -135,7 +154,7 @@ judge_capture() {  # $1: phase. The capture must have run through every probe, t
   local alive="" captured=""
   if kill -0 "$cap_pid" 2>/dev/null; then alive=1; pass "capture_alive_$1"; else bad "capture_alive_$1"; fi
   kill "$cap_pid" 2>/dev/null; wait "$cap_pid" 2>/dev/null; cap_pid=""
-  if timeout 30 tcpdump -r "$work/cap-$1.pcap" -n >"$work/cap-$1.txt" 2>/dev/null; then
+  if timeout 30 tcpdump -r "$work/cap-$1.pcap" -n -q >"$work/cap-$1.txt" 2>/dev/null; then
     captured=$(grep -c . "$work/cap-$1.txt")
     pass "capture_read_$1"
   else
@@ -144,9 +163,9 @@ judge_capture() {  # $1: phase. The capture must have run through every probe, t
   echo "count captured_packets_$1 ${captured:-0}"
   if [[ -n $captured ]]; then  # by class, for the evidence: TCP, UDP, ICMP (v4 and v6), the rest
     local tcp udp icmp
-    tcp=$(grep -c 'Flags \[' "$work/cap-$1.txt")
-    udp=$(grep -c ': UDP' "$work/cap-$1.txt")
-    icmp=$(grep -Ec ': ICMP6? ' "$work/cap-$1.txt")
+    tcp=$(grep -c ': tcp ' "$work/cap-$1.txt")  # tcpdump -q: ": tcp <len>", ": UDP, length", ": ICMP ...", ": ICMP6, ..."
+    udp=$(grep -c ': UDP,' "$work/cap-$1.txt")
+    icmp=$(grep -Ec ': ICMP6?[ ,]' "$work/cap-$1.txt")
     echo "count captured_tcp_$1 $tcp"
     echo "count captured_udp_$1 $udp"
     echo "count captured_icmp_$1 $icmp"
@@ -198,12 +217,12 @@ docker pull "$PROBE_IMAGE" >/dev/null 2>&1 || { bad probe_image; finish; }
 check probe_tools probe sh -c 'command -v curl && command -v nc && command -v dig && command -v ip'
 iface=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' gluetun 2>/dev/null \
   | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
-iface=${iface:-wg0}  # gluetun's WireGuard default; compose.yaml sets it explicitly
+iface=${iface:-tun0}  # gluetun's image default; compose.yaml sets wg0, the name the post-rules use
 [[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || { bad vpn_interface; finish; }
 # The rules name the interface; a name gluetun didn't use would make them inert.
 check vpn_interface_live iface_up
-check post_rules_ipv4 post_rules_on iptables "$iface"
-check post_rules_ipv6 post_rules_on ip6tables "$iface"
+check post_rules_ipv4 post_rules_on iptables "$iface" icmp icmp
+check post_rules_ipv6 post_rules_on ip6tables "$iface" ipv6-icmp icmpv6
 
 # Tunnel up: IPv4 leaves through PIA (not the host's address), TCP to a literal
 # address works (the positive control for the down probes), IPv6 fails, and DNS
@@ -219,6 +238,8 @@ check tcp_literal_up probe nc -z -w 5 1.1.1.1 443
 refute ipv6_blocked_up probe curl -6 -s -m 10 "$V6_URL"
 check dns_up resolves example.com 5
 check dns_local probe grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf
+check ping_up probe ping -c 2 -W 3 1.1.1.1  # ICMP through the tunnel, no capabilities
+if flow_start; then flow=1; pass flow_started; else bad flow_started; fi
 
 # Down, phase A: the endpoint dropped in DOCKER-USER (gluetun keeps running).
 idx=$(docker exec gluetun cat /sys/class/net/eth0/iflink 2>/dev/null | tr -dc '0-9')
@@ -228,7 +249,7 @@ pass veth_found
 # The compose bridge (the veth's master) and the host's egress interface.
 bridge=$(ip -o link show dev "$veth" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p' | head -n 1)
 egress=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p' | head -n 1)
-IFNAME='^[A-Za-z0-9_.-]{1,15}$'
+IFNAME='^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,14}$'
 if [[ ! $bridge =~ $IFNAME || ! $egress =~ $IFNAME || $bridge == "$egress" ]]; then bad egress_found; finish; fi
 pass egress_found
 block="-d $ep_ip/32 -p udp --dport $ep_port -j DROP"
@@ -239,19 +260,24 @@ start_capture down
 down_probes down example.net
 judge_capture down
 judge_counter down
+check flow_alive_down running "$FLOW"
 
 # Down, phase B: also take gluetun's VPN interface down inside the namespace, so
 # nothing is routed into the tunnel and only gluetun's firewall holds. (The
 # endpoint stays blocked, so a reconnecting gluetun can't bring the tunnel back.)
-check vpn_interface_down probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down
+# The counter and capture start first, so the open flows' first packets after
+# the interface goes are seen too.
 start_counter
 start_capture ifdown
+check vpn_interface_down probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down
 down_probes ifdown example.edu
 # gluetun's own VPN restart could bring the interface back mid-phase: fail
 # closed unless it's still down (or gone) after the last probe.
 refute vpn_interface_stayed_down iface_up
 judge_capture ifdown
 judge_counter ifdown
+check flow_alive_ifdown running "$FLOW"
+timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1 && flow=""
 
 # Recovery: lift the block, recreate gluetun (its interface comes back), and the
 # tunnel must be healthy again, through the same exit.

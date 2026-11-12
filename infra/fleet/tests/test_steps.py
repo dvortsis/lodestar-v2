@@ -373,8 +373,8 @@ class Compose(unittest.TestCase):
             "ip6tables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000",
             "iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP",
             "ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP",
-            "iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -j DROP",
-            "ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -j DROP",
+            "iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP",
+            "ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP",
         ])
         # Never loosens gluetun's firewall: each rule marks or drops, on the interface
         # the leak test reads, for IPv4 and IPv6 alike.
@@ -439,6 +439,7 @@ case "$1" in
       *Health*) if [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; then echo unhealthy; else echo healthy; fi ;;
       *Config.Env*) printf 'PATH=/usr/bin\nVPN_INTERFACE=%s\n' "${VPN_IFACE-wg0}" ;;
       *Running*gluetun) echo true ;;
+      *Running*lodestar-leak-flow) [ -e "$STUB/flow" ] && [ -z "$FLOW_DIES" ] && echo true || echo false ;;
       *Running*lodestar) [ -n "$LODESTAR" ] && echo true || echo false ;;
     esac ;;
   ps)
@@ -452,11 +453,12 @@ case "$1" in
       *) bad "$*" ;;
     esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
+  rm) [ "$*" = "rm -f lodestar-leak-flow" ] || bad "$*"; rm -f "$STUB/flow" ;;
   exec)
     case "$*" in
       "exec gluetun cat /sys/class/net/eth0/iflink") echo 7 ;;
       # post_rules_on: exactly the script's check, with the family and gluetun's interface.
-      "exec gluetun sh -c "*" rules iptables ${VPN_IFACE-wg0}"|"exec gluetun sh -c "*" rules ip6tables ${VPN_IFACE-wg0}")
+      "exec gluetun sh -c "*" rules iptables ${VPN_IFACE-wg0} icmp icmp"|"exec gluetun sh -c "*" rules ip6tables ${VPN_IFACE-wg0} ipv6-icmp icmpv6")
         case "$*" in *'-C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP'*) ;; *) bad "$*" ;; esac
         [ -n "$NO_POST_RULES" ] && exit 1; exit 0 ;;
       *) bad "$*" ;;
@@ -464,6 +466,12 @@ case "$1" in
   network) [ "$*" = "network inspect -f {{.EnableIPv6}} lodestar_default" ] || bad "$*"
            [ -n "$BRIDGE_V6" ] && echo true || echo false ;;
   run)
+    # The long-lived flow: exactly this, detached, without capabilities.
+    case "$*" in
+      "run -d --rm --name lodestar-leak-flow --network container:gluetun --cap-drop ALL nicolaka/netshoot@sha256:"????????????????????????????????????????????????????????????????" ping -q -i 0.5 1.1.1.1")
+        [ -n "$FLOW_FAILS" ] && exit 125; : > "$STUB/flow"; echo 0123abcd; exit 0 ;;
+      "run -d"*) bad "$*" ;;
+    esac
     # Exactly: run --rm --network container:gluetun --cap-drop ALL [--cap-add NET_ADMIN]
     #          <pinned netshoot> sh -c '"$@"; printf "\nprobe_rc=%s\n" "$?"' probe <command...>
     [ "$1 $2 $3 $4 $5 $6" = "run --rm --network container:gluetun --cap-drop ALL" ] || bad "$*"
@@ -499,6 +507,7 @@ case "$1" in
         "sh -c ip -6 -o addr show scope global | grep -q .") [ -n "$NS_V6" ] || exit 1; exit 0 ;;
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
+        "ping -c 2 -W 3 1.1.1.1") [ -n "$NO_PING" ] && exit 1; exit 0 ;;
         "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
         *) exit 99 ;;
       esac
@@ -552,8 +561,8 @@ case "$*" in
       # What the VM saw (X-gluetun-leak): an open flow's teardown, and a port
       # unreachable to the endpoint.
       if [ -n "$FIREWALL_OFF" ] || [ -n "$NO_POST_RULES" ]; then
-        echo "00:00:01.000000 IP 10.2.0.2.40000 > 192.0.2.53.853: Flags [F.], seq 1, ack 1, length 0"
-        echo "00:00:01.100000 IP 10.2.0.2.40000 > 192.0.2.53.853: Flags [.], ack 2, length 0"
+        echo "00:00:01.000000 IP 10.2.0.2.40000 > 192.0.2.53.853: tcp 0"
+        echo "00:00:01.100000 IP 10.2.0.2.40000 > 192.0.2.53.853: tcp 0"
         echo "00:00:01.200000 IP 172.20.0.2 > 192.0.2.77: ICMP 172.20.0.2 udp port 40001 unreachable, length 36"
       fi ;;
     esac
@@ -643,7 +652,8 @@ class VMScripts(unittest.TestCase):
             for n in ("captured_packets", "captured_tcp", "captured_udp", "captured_icmp", "captured_other",
                       "host_egress_packets"):
                 self.assertIn(f"count {n}_{phase} 0", lines)
-        names += ["vpn_interface_live", "post_rules_ipv4", "post_rules_ipv6", "egress_found"]
+        names += ["vpn_interface_live", "post_rules_ipv4", "post_rules_ipv6", "egress_found", "ping_up",
+                  "flow_started", "flow_alive_down", "flow_alive_ifdown"]
         for name in names:
             self.assertIn(f"ok {name}", lines)
         self.assertFalse(any(ln.startswith("fail ") for ln in lines))
@@ -655,6 +665,12 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(self.log().count(f"iptables -I DOCKER-USER 2 {counter}"), 2)
         self.assertEqual(self.log().count(f"iptables -D DOCKER-USER {counter}"), 2)
         self.assertFalse((self.stub / "counter").exists())
+        self.assertFalse((self.stub / "flow").exists())  # the flow is gone before gluetun is recreated
+        log = self.log()
+        self.assertLess(log.index("--name lodestar-leak-flow"), log.index("-I DOCKER-USER 1"))  # open before phase A
+        self.assertLess(log.rindex("rm -f lodestar-leak-flow"), log.rindex(" up -d --force-recreate gluetun"))
+        # Phase B's counter is in place before the interface goes down.
+        self.assertLess(log.rindex(f"-I DOCKER-USER 2 {counter}"), log.index("--cap-add NET_ADMIN"))
         self.assertIn("docker compose -f " + str(self.stack / "compose.yaml"), self.log())
         self.assertIn(" up -d --force-recreate gluetun", self.log())  # gluetun alone, from the current wg0.conf
         probes = (self.stub / "probes").read_text()
@@ -697,6 +713,9 @@ class VMScripts(unittest.TestCase):
             "no compose bridge on the veth": ({"NO_BRIDGE": 1}, "egress_found"),
             # gluetun's tunnel isn't the interface its config (and the rules) name.
             "the named interface isn't gluetun's": ({"IFACE_MISSING": 1}, "vpn_interface_live"),
+            "no ICMP through the tunnel": ({"NO_PING": 1}, "ping_up"),
+            "the flow can't start": ({"FLOW_FAILS": 1}, "flow_started"),
+            "the flow died": ({"FLOW_DIES": 1}, "flow_alive_down"),
             "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
@@ -721,6 +740,7 @@ class VMScripts(unittest.TestCase):
                 self.assertEqual(lines[-1], "fail leak_test")
                 self.assertFalse((self.stub / "blocked").exists())  # the block is always lifted
                 self.assertFalse((self.stub / "counter").exists())  # and so is the counter
+                self.assertFalse((self.stub / "flow").exists())  # and the flow
                 if failed.startswith(("capture_alive", "capture_read")):  # never read as zero packets
                     self.assertIn("fail no_egress_captured_down", lines)
 
@@ -797,6 +817,12 @@ class VMScripts(unittest.TestCase):
         self.assertIn("count captured_packets_ifdown 3", lines)
         self.assertIn("fail no_host_egress_ifdown", lines)
         self.assertFalse((self.stub / "blocked").exists())
+
+    def test_an_unreadable_counter_prints_no_count(self):
+        rc, lines, _ = self.run_script("leak-test.sh", COUNTER_UNREADABLE=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail no_host_egress_down", lines)
+        self.assertFalse(any(ln.startswith("count host_egress_packets_") for ln in lines))  # never a made-up 0
 
     def test_gluetun_without_its_post_rules_leaks_open_flows_in_phase_b(self):
         """X-gluetun-leak: what the VM saw. No new connection leaves, so every probe

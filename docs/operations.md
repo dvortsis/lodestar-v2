@@ -242,8 +242,10 @@ Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
   `/iptables/post-rules.txt` in gluetun and set `VPN_INTERFACE=wg0` (gluetun's
   default is `tun0`, which the rules don't name). Then a connection that used
   the tunnel never leaves another way. Every rule only marks or drops traffic.
-  In compose, a `configs:` entry with the file's text does the same without a
-  host file (`infra/fleet/steps/vm/compose.yaml`).
+  In compose, a `configs:` entry with the file's text copies it in, with no
+  host file (`infra/fleet/steps/vm/compose.yaml`). If gluetun then stops with
+  `ip6tables is required`, the kernel has no IPv6 firewall: remove the
+  `ip6tables` lines. Restart Lodestar after gluetun.
 
 ### 4.4 IPv6
 `dht.bind` accepts at most one IPv4 and one IPv6 address in `config.toml`
