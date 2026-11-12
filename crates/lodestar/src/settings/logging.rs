@@ -206,8 +206,13 @@ pub struct Logging {
     pub file_max_age_days: u32,
     /// The logs folder never goes over this, in MiB.
     pub file_total_mib: u32,
-    // Nothing writes to the Windows Event Log (the Legal Notice says so),
-    // and the UI doesn't show this.
+    // Lodestar's logging never writes to the Windows Event Log, and this
+    // setting changes nothing. Two fixed notes do go to the Application
+    // log, outside logging, as the Legal Notice (section 5) allows: the
+    // service's note when it refuses to start or waits for a rollback
+    // (`windows::service::event_log_text`), and the update helper's note
+    // when an update fails (`update::windows::helper`). The UI doesn't
+    // show this setting.
     /// Unused; kept so settings files and exports from earlier versions
     /// still load.
     pub event_log_errors: bool,
@@ -432,7 +437,8 @@ impl Section for Logging {
             .advanced()
             .unit("mebibytes")
             .preview(),
-        // Hidden in the UI: nothing writes to the Windows Event Log.
+        // Hidden in the UI: logging never writes to the Windows Event Log.
+        // Only the service's and the update helper's fixed notes do.
         Field::new("event_log_errors").group("event_log").advanced(),
     ];
 

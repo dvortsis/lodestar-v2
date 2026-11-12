@@ -296,6 +296,8 @@ if ($Msi) {
   $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
   & $icacls $dataDir /grant "*${me}:(OI)(CI)F" /T /C /Q | Out-Null
   Assert ($LASTEXITCODE -eq 0) 'could not add the administrator entry for the test'
+  # A little before the start, so a clock step can't hide the refusal's note.
+  $refusedSince = (Get-Date).AddSeconds(-5)
   Start-Service Lodestar -ErrorAction SilentlyContinue
   $deadline = (Get-Date).AddSeconds(60)
   do {
@@ -309,6 +311,22 @@ if ($Msi) {
   $reason = Get-Content -LiteralPath (Join-Path $env:SystemRoot 'Temp\lodestar-service.log') -Tail 1
   Assert ($reason -match [regex]::Escape($me)) "the refusal doesn't name the extra account's SID: $reason"
   Assert ($reason -match [regex]::Escape("/remove:g *$me /T /C")) "the refusal doesn't give the icacls fix: $reason"
+  # The Application log has the refusal's note (Legal Notice section 5), written by the
+  # service's own account, NT SERVICE\Lodestar: the folder and the fix, never the
+  # account. A bounded wait: the service writes it as it stops.
+  $svcSid = ((& sc.exe showsid Lodestar) | Select-String -Pattern 'S-1-5-80-[0-9-]+').Matches.Value | Select-Object -First 1
+  Assert ($svcSid) 'sc showsid gave no service SID for Lodestar'
+  $note = $null
+  $deadline = (Get-Date).AddSeconds(30)
+  do {
+    $note = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Lodestar'; Id = 3; StartTime = $refusedSince } -MaxEvents 1 -ErrorAction SilentlyContinue
+    if ($note) { break }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+  Assert ($null -ne $note) 'no Application log event from the source Lodestar (ID 3) within 30 s of the refused start'
+  Assert ($note.UserId -and $note.UserId.Value -eq $svcSid) "the refusal's Event Log note was written by '$($note.UserId)', expected the service account NT SERVICE\Lodestar ($svcSid)"
+  Assert ($note.Message -match 'Repair') "the refusal's Event Log note doesn't give the fix: $($note.Message)"
+  Assert ($note.Message -notmatch [regex]::Escape($me)) "the refusal's Event Log note names the extra account; section 5 allows the folder and the fix only: $($note.Message)"
   # Another account beside it: Repair must still refuse.
   $other = 'S-1-5-32-545'   # Users: an account icacls can name
   & $icacls $dataDir /grant "*${other}:(OI)(CI)R" /C /Q | Out-Null

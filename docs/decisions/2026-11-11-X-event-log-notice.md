@@ -1,4 +1,4 @@
-# X-event-log-notice decisions
+# X-event-log-notice decisions (#702)
 
 - **Legal Notice version 5, section 5's fifth exception (owner §2.55, option A).** Both copies (`docs/legal/legal-notice.md`, `crates/api/src/legal/notice.md`) gain the owner-approved clause word for word, as the fourth item, before "and the optional safe-restart switch…", and "four exceptions" becomes "five exceptions". The version line reads "Version 5 · 2026-11-11". Nothing else in the notice changes. `NOTICE_VERSION` goes from 4 to 5, so every admin sees the notice once more at their next request.
 - **One version for both of §2.55's changes.** X-prowlarr-register adds its section 2 text later under the same version 5, with no second raise, because no release is cut between the two. If a release has to be cut in between, X-prowlarr-register moves to version 6 instead (§2.55).
