@@ -31,6 +31,7 @@ mod thp;
 mod torrent_cache;
 mod update;
 mod upload;
+mod watch;
 mod web;
 #[cfg(test)]
 mod web_build;

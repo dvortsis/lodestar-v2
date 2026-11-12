@@ -46,6 +46,8 @@ pub mod storage;
 pub mod trackers;
 pub mod transport;
 pub mod updates;
+#[path = "watch.rs"]
+pub mod watch_folder;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -1393,6 +1395,7 @@ impl Registry {
         registry.register::<crawler::Crawler>(config)?;
         registry.register::<transport::Transport>(config)?;
         registry.register::<storage::Storage>(config)?;
+        registry.register::<watch_folder::Watch>(config)?;
         registry.register::<search::Search>(config)?;
         registry.register::<trackers::Trackers>(config)?;
         registry.register::<content::Content>(config)?;

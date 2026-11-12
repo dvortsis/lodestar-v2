@@ -372,5 +372,7 @@
 	"settings_logging_file_level_option_warn": "Warning",
 	"settings_logging_file_level_option_info": "Info",
 	"settings_logging_file_level_option_debug": "Debug",
-	"settings_logging_file_level_option_trace": "Trace"
+	"settings_logging_file_level_option_trace": "Trace",
+	"settings_watch_after_option_move": "Move to added/ or failed/",
+	"settings_watch_after_option_delete": "Delete after adding"
 }
