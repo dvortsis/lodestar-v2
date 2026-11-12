@@ -223,12 +223,12 @@ terraform apply -refresh-only
 All of these need `LODESTAR_AWS_ACCOUNT_ID`, `LODESTAR_AWS_AMI_ID`, `LODESTAR_AWS_SUBNET_ID`, `LODESTAR_AWS_SECURITY_GROUP_ID` and `LODESTAR_AWS_INSTANCE_PROFILE` set in the operator's local environment (or passed as parameters). The scripts have no built-in values and refuse to run without them.
 
 1. **MFA sign-in:** `aws sts get-caller-identity --profile lodestar-provisioner`
-2. **Dry run:** `.\scripts\Deploy-AwsWindows.ps1 -DryRun -Hours 48`. Before the launch check, it reads the security group and refuses if the group has **any inbound rule**: the instance gets a public IPv4 at launch, and SSM needs outbound traffic only. Remove the rules and run again, and keep the group free of inbound rules while the instance runs: the check happens only at launch. If the dry run fails with `UnauthorizedOperation`, `LodestarRestrictedEC2` may not allow a public IPv4 at launch; that policy is the owner's to change.
+2. **Dry run:** `.\scripts\Deploy-AwsWindows.ps1 -DryRun -Hours 48`. Before the launch check, it reads the security group and refuses if the group has **any inbound rule**: the instance gets a public IPv4 at launch, and SSM needs outbound traffic only. Remove the rules and run again, and keep the group free of inbound rules while the instance runs: the check happens only at launch. If the dry run fails with `UnauthorizedOperation`, `LodestarRestrictedEC2` may not allow a public IPv4 at launch; that policy is the owner's to change. The security-group read needs `ec2:DescribeSecurityGroups` on `LodestarProvisioner`; without it the script stops with `Could not read security group` and prints AWS's `UnauthorizedOperation` line (ARNs, access key IDs, account IDs and IPv4/IPv6 addresses masked). Granting it is the owner's decision too.
 3. **Deploy:** `.\scripts\Deploy-AwsWindows.ps1 -Hours 48` (add `-RootVolumeGiB <50-100>` for a larger disk; the IAM policy caps it at 100). Asks the human to type `DEPLOY 1 AWS WINDOWS INSTANCE`. State is kept in `state\aws-fleet-state.json` (git-ignored).
 4. **Partial deployment:** the deploy script refuses to run while any instance tagged `Project=Lodestar` is active, and lists it. Remove it with `Destroy-AwsWindows.ps1` before trying again.
 5. **Teardown:** `.\scripts\Destroy-AwsWindows.ps1`. Asks the human to type `DESTROY 1 AWS WINDOWS INSTANCE`, with no bypass. With more than one candidate instance, it stops and asks for `-InstanceId`.
 
-The live test suite `tests\Test-LodestarAutomation.ps1` calls AWS with several profiles, so it is human-run only too. `tests/Test-DeployAwsWindows.ps1` is offline: it runs a copy of the deploy script against a stub AWS CLI (Linux or macOS `pwsh`).
+The live test suite `tests\Test-LodestarAutomation.ps1` calls AWS with several profiles, so it is human-run only too. `tests\Test-DeployAwsWindows.ps1` is offline: it runs a copy of the deploy script against a stub AWS CLI (Linux or macOS `pwsh`).
 
 ---
 

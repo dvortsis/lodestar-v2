@@ -81,13 +81,14 @@ jq -e --arg r "$region" 'any(.regions[]?; .id == $r)' "$work/servers.json" >/dev
 jq -e --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0] | type == "object"' \
   "$work/servers.json" >/dev/null 2>&1 || fail13 "region $region has no WireGuard server"
 # jq checks the characters first, as bash's $(...) drops NUL bytes ("a\u0000b"
-# would come out as "ab"). Anything else becomes "invalid:" and a JSON-escaped
+# would come out as "ab"). \A and \z anchor the whole string: jq's $ also
+# matches before a final newline, which $(...) would then strip. Anything else becomes "invalid:" and a JSON-escaped
 # copy, which the hostname check below rejects and reports.
 wg_ip=$(jq -er --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0].ip
-  | select(type == "string" and test("^[0-9.]{7,15}$"))' "$work/servers.json" 2>/dev/null) \
+  | select(type == "string" and test("\\A[0-9.]{7,15}\\z"))' "$work/servers.json" 2>/dev/null) \
   || fail13 "region $region: the WireGuard server's address is not IPv4"
 wg_cn=$(jq -er --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0].cn
-  | select(type == "string") | if test("^[A-Za-z0-9.-]{1,253}$") then . else "invalid:" + (.[:80] | @json) end' \
+  | select(type == "string") | if test("\\A[A-Za-z0-9.-]{1,253}\\z") then . else "invalid:" + (.[:80] | @json) end' \
   "$work/servers.json" 2>/dev/null) || fail13 "region $region: the certificate name is not a string"
 [[ $wg_ip =~ $IPV4 ]] || fail13 "region $region: the WireGuard server's address is not IPv4"
 # PIA's certificate names are DNS names; some carry capitals. Names match without
@@ -102,13 +103,15 @@ priv=$(wg genkey)
 pub=$(printf '%s' "$priv" | wg pubkey)
 [[ $priv =~ $WGKEY && $pub =~ $WGKEY ]] || fail 14
 #    No --fail: a refusal's status and PIA's reason are what stage 15 reports.
+#    Success needs curl's exit 0 as well as a 2xx status and "status": "OK".
+rc=0
 http=$(curl --silent --max-time 30 --max-filesize 65536 --get \
   --connect-to "$wg_cn::$wg_ip:" --cacert "$work/pia-ca.crt" \
   --data-urlencode "pt@$work/token" --data-urlencode "pubkey=$pub" \
   --output "$work/addkey.json" --write-out '%{http_code}' \
-  "https://$wg_cn:1337/addKey" 2>/dev/null) || true
+  "https://$wg_cn:1337/addKey" 2>/dev/null) || rc=$?
 [[ $http =~ ^[0-9]{3}$ ]] || http=000  # 000: no HTTP reply (connection, TLS or timeout)
-if ! [[ $http =~ ^2 ]] || ! jq -e '.status == "OK"' "$work/addkey.json" >/dev/null 2>&1; then
+if (( rc != 0 )) || ! [[ $http =~ ^2 ]] || ! jq -e '.status == "OK"' "$work/addkey.json" >/dev/null 2>&1; then
   # One line: the HTTP status, and PIA's .status and .message if the reply is a
   # JSON object. Never the reply itself; the token and key are masked, to be sure.
   st="" msg=""
@@ -121,8 +124,8 @@ if ! [[ $http =~ ^2 ]] || ! jq -e '.status == "OK"' "$work/addkey.json" >/dev/nu
   st=$(clean "${st:0:4096}") msg=$(clean "${msg:0:4096}")
   st=${st//"$token"/[token]} msg=${msg//"$token"/[token]}
   st=${st//"$priv"/[key]} msg=${msg//"$priv"/[key]}
-  printf 'pia-wireguard: stage 15: addKey refused: http %s, status "%s", message "%s"\n' \
-    "$http" "${st:0:32}" "${msg:0:200}" >&2
+  printf 'pia-wireguard: stage 15: addKey refused: curl %d, http %s, status "%s", message "%s"\n' \
+    "$rc" "$http" "${st:0:32}" "${msg:0:200}" >&2
   fail 15
 fi
 rm -f -- "$work/token"

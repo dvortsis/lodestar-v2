@@ -31,6 +31,10 @@ $stubBody = @'
 #!/bin/sh
 # Records each call, one line: CALL <arg> <arg> ...
 { printf 'CALL'; for a in "$@"; do printf ' <%s>' "$a"; done; printf '\n'; } >> "$STUB_DIR/calls.log"
+# Whether any AWS credential variable reached the stub (never the values).
+for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE; do
+  eval "[ -n \"\${$v+set}\" ]" && echo "$v" >> "$STUB_DIR/creds.log"
+done
 case "$1 $2" in
   "sts get-caller-identity")
     for a in "$@"; do
@@ -41,7 +45,7 @@ case "$1 $2" in
     printf '{"Account":"111122223333","Arn":"arn:aws:sts::111122223333:assumed-role/LodestarProvisioner/test"}\n' ;;
   "ec2 describe-instances") cat "$STUB_DIR/instances.txt" ;;
   "ec2 describe-security-groups")
-    if [ -f "$STUB_DIR/sg.exit" ]; then echo 'An error occurred (UnauthorizedOperation)' >&2; exit "$(cat "$STUB_DIR/sg.exit")"; fi
+    if [ -f "$STUB_DIR/sg.exit" ]; then cat "$STUB_DIR/sg.err" >&2; exit "$(cat "$STUB_DIR/sg.exit")"; fi
     cat "$STUB_DIR/sg.txt" ;;
   "ec2 run-instances")
     for a in "$@"; do
@@ -54,6 +58,9 @@ case "$1 $2" in
   *) echo "stub: unexpected call $1 $2" >&2; exit 98 ;;
 esac
 '@
+
+# The one PATH every child sees: the stub first, then only /usr/bin and /bin.
+function Get-TestPath([string]$Root) { "$(Join-Path $Root 'stub'):/usr/bin:/bin" }
 
 function New-Sandbox {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ("deploy-aws-test-" + [guid]::NewGuid().ToString('N'))
@@ -70,11 +77,17 @@ function New-Sandbox {
 function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
     $saved = @{}
     $vars = @{
-        PATH                        = "$(Join-Path $Root 'stub'):/usr/bin:/bin"
+        PATH                        = (Get-TestPath $Root)
         STUB_DIR                    = (Join-Path $Root 'stub')
         AWS_CONFIG_FILE             = '/nonexistent'
         AWS_SHARED_CREDENTIALS_FILE = '/nonexistent'
         AWS_EC2_METADATA_DISABLED   = 'true'
+        # No credentials reach the child, even should the stub not resolve.
+        AWS_ACCESS_KEY_ID           = $null
+        AWS_SECRET_ACCESS_KEY       = $null
+        AWS_SESSION_TOKEN           = $null
+        AWS_PROFILE                 = $null
+        AWS_DEFAULT_PROFILE         = $null
         LODESTAR_AWS_ACCOUNT_ID     = '111122223333'
     }
     foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
@@ -95,16 +108,40 @@ function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
     [PSCustomObject]@{ Code = $code; Out = $out; Calls = $calls }
 }
 
+# Before any case: under the test's PATH, the deploy script's own resolver
+# (AwsCli.ps1's Resolve-AwsCli) must find the stub and nothing else.
+function Assert-StubResolves([string]$Root) {
+    $savedPath = $env:PATH
+    $env:PATH = Get-TestPath $Root
+    try {
+        . (Join-Path (Join-Path $Root 'scripts') 'AwsCli.ps1')
+        $resolved = $script:AwsCli
+    } finally { $env:PATH = $savedPath }
+    $stub = Join-Path (Join-Path $Root 'stub') 'aws'
+    if ($resolved -cne $stub) {
+        Write-Host "FAIL aws resolves to '$resolved', not the stub; no case was run"
+        exit 1
+    }
+    Write-Host 'ok   aws resolves to the stub'
+}
+
 function Check([string]$Name, [bool]$Ok, [string]$Detail) {
     if ($Ok) { Write-Host "ok   $Name" } else { Write-Host "FAIL $Name : $Detail"; $script:failures++ }
 }
 
 function Calls-Of($Result, [string]$Op) { @($Result.Calls | Where-Object { $_.StartsWith("CALL <ec2> <$Op>") }) }
 
+# A refusal as AWS words it, with an ARN, an account ID, an address, a control
+# character, the encoded message and a second line, none of which may be printed.
+# It opens with a line of control characters only, which must be skipped, and its
+# first real line runs past 200 characters once masked, so the cut is exercised.
+$script:sgError = "`e`a`e`nAn error occurred (UnauthorizedOperation) when calling the DescribeSecurityGroups operation: You are not authorized to perform this operation. User: (arn:aws:sts::999988887777:assumed-role/LodestarProvisioner/x) key AKIAABCDEFGHIJKLMNOP in account_999988887777 from 198.51.100.7 and 2001:db8::7 `e[31m. Encoded authorization failure message: SECRETBLOB`nsecond line 999988887777"
+
 $roots = [System.Collections.Generic.List[string]]::new()
 try {
     # 1. No inbound rules: the dry run asks for a public IPv4 on one interface.
     $root = New-Sandbox; $roots.Add($root)
+    Assert-StubResolves $root
     $r = Invoke-Deploy $root -DryRun
     $run = @(Calls-Of $r 'run-instances')
     $sgCalls = @(Calls-Of $r 'describe-security-groups')
@@ -121,6 +158,9 @@ try {
     $sgIndex = [array]::FindIndex([string[]]$r.Calls, [Predicate[string]] { param($c) $c.StartsWith('CALL <ec2> <describe-security-groups>') })
     $runIndex = [array]::FindIndex([string[]]$r.Calls, [Predicate[string]] { param($c) $c.StartsWith('CALL <ec2> <run-instances>') })
     Check 'the group is checked before the launch' ($sgIndex -ge 0 -and $sgIndex -lt $runIndex) "order $sgIndex, $runIndex"
+    $credLog = Join-Path $root 'stub/creds.log'
+    $leaked = if (Test-Path -LiteralPath $credLog) { (Get-Content -LiteralPath $credLog) -join ', ' } else { '' }
+    Check 'no AWS credential variable reaches the CLI' (-not $leaked) "set: $leaked"
     Check 'it says a public IPv4 is attached, outbound only' ($r.Out -match 'Public IPv4:\s+attached at launch' -and $r.Out -match 'reachable outbound only') $r.Out
     Check 'the plan names the public IPv4 charge' ($r.Out -match 'public IPv4 is billed on top') $r.Out
 
@@ -128,16 +168,31 @@ try {
     foreach ($case in @(
             @{ Name = 'one inbound rule'; Sg = "$SG`t1"; Expect = "has 1 inbound rule\(s\)" },
             @{ Name = 'several inbound rules'; Sg = "$SG`t3"; Expect = "has 3 inbound rule\(s\)" },
-            @{ Name = 'the call fails'; Exit = '254'; Expect = 'Could not read security group' },
+            @{ Name = 'the call fails'; Exit = '254'; Expect = 'Could not read security group.*ec2:DescribeSecurityGroups' },
             @{ Name = 'no such group'; Sg = ''; Expect = 'Unexpected answer' },
             @{ Name = 'another group answers'; Sg = "sg-0fedcba98765432100`t0"; Expect = 'Unexpected answer' },
             @{ Name = 'two groups answer'; Sg = "$SG`t0`n$SG`t0"; Expect = 'Unexpected answer' },
             @{ Name = 'a non-number count'; Sg = "$SG`tNone"; Expect = 'Unexpected answer' })) {
         $root = New-Sandbox; $roots.Add($root)
-        if ($case.ContainsKey('Exit')) { Set-Content -LiteralPath (Join-Path $root 'stub/sg.exit') -Value $case.Exit }
+        if ($case.ContainsKey('Exit')) {
+            Set-Content -LiteralPath (Join-Path $root 'stub/sg.exit') -Value $case.Exit
+            Set-Content -LiteralPath (Join-Path $root 'stub/sg.err') -Value $script:sgError
+        }
         else { Set-Content -LiteralPath (Join-Path $root 'stub/sg.txt') -Value $case.Sg }
         $r = Invoke-Deploy $root -DryRun
         Check "refused: $($case.Name)" ($r.Code -ne 0 -and $r.Out -match $case.Expect -and $r.Out -match 'No deployment performed') "exit $($r.Code): $($r.Out)"
+        if ($case.ContainsKey('Exit')) {
+            Check 'the refusal gives AWS''s reason' ($r.Out -match 'AWS said: An error occurred \(UnauthorizedOperation\) when calling the DescribeSecurityGroups operation') $r.Out
+            $said = @(($r.Out -split "`n") | Where-Object { $_.Contains('AWS said:') })
+            $line = if ($said.Count -eq 1) { $said[0].Substring($said[0].IndexOf('AWS said:')) } else { '' }
+            Check 'the reason is masked and bounded' ($said.Count -eq 1 -and $line.Length -le ('AWS said: '.Length + 200) -and
+                $line.Length -ge ('AWS said: '.Length + 190) -and $line -cmatch '^[\x20-\x7E]+$' -and
+                $line.Contains('[arn]') -and $line.Contains('[ip]') -and $line.Contains('[account]') -and
+                $line.Contains('[key-id]') -and $line.Contains('(UnauthorizedOperation)') -and
+                -not $line.Contains('AKIAABCDEFGHIJKLMNOP') -and -not $line.Contains('2001:db8') -and -not $line.Contains('arn:aws') -and
+                -not $line.Contains('198.51.100.7') -and -not $r.Out.Contains('999988887777') -and
+                -not $r.Out.Contains('SECRETBLOB') -and -not $r.Out.Contains('second line')) $line
+        }
         Check "no launch: $($case.Name)" (@(Calls-Of $r 'run-instances').Count -eq 0) ($r.Calls -join ' | ')
     }
 
