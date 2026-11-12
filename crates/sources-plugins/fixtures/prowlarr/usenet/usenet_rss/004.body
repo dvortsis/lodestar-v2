@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+  <channel>
+    <title>Example Open Usenet</title>
+    <item>
+      <title>Spring.2019.2160p.WEB-USENET</title>
+      <guid isPermaLink="true">a1b2c3d4e5f6</guid>
+      <prowlarrindexer id="8" type="public">Example Open Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/8/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Da1b2c3d4e5f6%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <enclosure url="http://prowlarr.example:9696/8/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Da1b2c3d4e5f6%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2000" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+  </channel>
+</rss>

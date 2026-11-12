@@ -298,8 +298,11 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
             // Never for a private find: a private tracker's reference can
             // be a passkey URL. Plugins drop it too; this enforces it in
             // one place (runner, security pre-audit L3).
+            // A usenet item's is the exception: it's the plugin's own
+            // `usenet:<indexer>:<guid>`, built from a GUID it checked can't
+            // fetch anything (UN-1), and send needs it.
             external_ref: p
-                .filter(|_| !d.found.private_source)
+                .filter(|_| !d.found.private_source || d.found.is_usenet())
                 .and_then(|p| p.external_ref.clone()),
             published_at: p.and_then(|p| p.published_at),
             confidence: match p.map(|p| p.confidence) {
@@ -318,7 +321,7 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
     // The trackers last, in the room the rest leaves under the total.
     // None for a private find: a private tracker's announce URL can carry
     // a passkey, which the host guard doesn't look for (runner, L3).
-    if !d.found.private_source {
+    if !d.found.private_source && !d.found.is_usenet() {
         let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
         out.trackers = stored_trackers(&c.trackers, room);
     }
@@ -494,7 +497,31 @@ pub fn judge_in(
     adult: bool,
     now: i64,
 ) -> Option<Hold> {
-    let hashes = vec![key];
+    judge_texts(engine, vec![key], c, context, sealer, adult, now)
+}
+
+/// [`judge`] for a usenet item's claims (UN-1), which have no swarm hash:
+/// every text the same way, with no hash to match a list. A hold means
+/// the item isn't stored; there's no store hold for a usenet key (UN-0).
+pub fn judge_usenet(
+    engine: &Engine,
+    c: &Claims,
+    sealer: Option<&Sealer>,
+    adult: bool,
+    now: i64,
+) -> Option<Hold> {
+    judge_texts(engine, Vec::new(), c, None, sealer, adult, now)
+}
+
+fn judge_texts(
+    engine: &Engine,
+    hashes: Vec<[u8; 20]>,
+    c: &Claims,
+    context: Option<&str>,
+    sealer: Option<&Sealer>,
+    adult: bool,
+    now: i64,
+) -> Option<Hold> {
     let files = claimed_files(c);
     let size = c
         .size
@@ -881,6 +908,20 @@ pub fn ingest(
             UnverifiedStats::add(&stats.invalid, 1);
             continue;
         }
+        // A usenet result (UN-1): judged by its claims alone, since it has
+        // no swarm hash, and never an enrichment answer about a stored
+        // torrent. Any hold stores nothing: the store has no hold for a
+        // usenet key, so it's judged again when it's found again.
+        if d.found.is_usenet() {
+            c.adult = None;
+            let adult = ctx.adult.has(d.source);
+            if judge_usenet(engine, &c, ctx.sealer, adult, now).is_some() {
+                UnverifiedStats::add(&stats.dropped, 1);
+            } else {
+                keep.push((d, Some(c)));
+            }
+            continue;
+        }
         // Only an enrichment source may attach an adult section (ENR-1b).
         // Any other source's claims go on without it, by the usual path.
         if c.adult.is_some() && !ctx.enrichers.has(d.source) {
@@ -995,8 +1036,14 @@ pub fn ingest(
         let items: Vec<NewUnverified<'_>> = group
             .iter()
             .map(|(d, c)| NewUnverified {
-                network: Network::Bt,
-                key: &d.found.key.0,
+                network: match d.found.usenet {
+                    Some(_) => Network::Usenet,
+                    None => Network::Bt,
+                },
+                key: match &d.found.usenet {
+                    Some(k) => &k[..],
+                    None => &d.found.key.0,
+                },
                 source,
                 private_source: d.found.private_source,
                 claims: c.as_ref(),
@@ -1387,15 +1434,21 @@ fn judge_item(
         // finder's next claims (SRC-1).
         return i.unreadable.then_some((i.id, None));
     };
-    // Not a swarm hash (no network but clearnet BitTorrent exists yet):
-    // it can't be judged by hash, so it's removed rather than kept.
-    let Ok(key) = <[u8; 20]>::try_from(i.key.as_slice()) else {
-        return Some((i.id, None));
-    };
     // Only the floor and the core hold; any other rule removes the item
     // and holds nothing (runner, #383). An item any always-adult source
     // found is judged as adult too, whichever source's claims it holds.
     let adult = ctx.adult.any(i.sources) || ctx.adult.has(i.source);
+    // A usenet item (UN-1) is judged by its claims, never by its key's
+    // length. Any hold removes it and holds nothing: there's no store
+    // hold for a usenet key (UN-0).
+    if i.network == Network::Usenet {
+        return judge_usenet(engine, claims, ctx.sealer, adult, now).map(|_| (i.id, None));
+    }
+    // Not a swarm hash (no other network exists yet): it can't be judged
+    // by hash, so it's removed rather than kept.
+    let Ok(key) = <[u8; 20]>::try_from(i.key.as_slice()) else {
+        return Some((i.id, None));
+    };
     judge(engine, key, claims, ctx.sealer, adult, now).map(|h| (i.id, h.core.then_some(h)))
 }
 
@@ -1530,5 +1583,117 @@ mod tests {
         };
         let s = format!("{h:?}");
         assert!(!s.contains("sealed-secret") && !s.contains("115"), "{s}");
+    }
+    /// UN-1: the re-judge sweep keeps a usenet item, whose key isn't a
+    /// 20-byte swarm hash, and removes one only when its claims match.
+    #[test]
+    fn a_rejudged_usenet_item_is_kept_and_judged_by_its_claims() {
+        use lodestar_filter::{Core, CsList, Lists, Switches, TermSet};
+        use lodestar_sources::Found;
+        const T: i64 = 1_700_000_000;
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let src = store.register_source("prowlarr", "1", T).unwrap();
+        let lists = Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        };
+        let filter = Handle::new(Engine::new(Core::new(
+            lists,
+            CsList::default(),
+            Switches::default(),
+        )));
+        let find = |guid: &str, name: &str| Discovery {
+            source: src,
+            found: Found::usenet("7", guid, 1)
+                .unwrap()
+                .with_claims(lodestar_sources::Claims {
+                    name: Some(name.into()),
+                    ..Default::default()
+                }),
+            at: T,
+            reply: false,
+        };
+        let key = |guid: &str| {
+            *lodestar_store::unverified::UsenetKey::new("7", guid)
+                .unwrap()
+                .as_bytes()
+        };
+        let stats = UnverifiedStats::default();
+        let batch = [
+            find("g1", "Plain Film"),
+            find("g2", "Badword Film"),
+            find("g3", "Rolea Lexa"),
+        ];
+        let ctx = Ctx::default();
+        ingest(
+            &mut store,
+            &filter.current(),
+            ctx,
+            &batch,
+            &stats,
+            T,
+            &|_, _| {},
+        )
+        .unwrap();
+        // The core's hit is dropped at ingest and nothing is held.
+        assert_eq!(stats.stored.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.held.load(Ordering::Relaxed), 0);
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g3"))
+                .unwrap()
+                .is_none()
+        );
+        let sweep = |store: &mut Store| {
+            let v = filter.current().version;
+            let s = refile_step(
+                store,
+                &filter,
+                v,
+                Phase::Items,
+                0,
+                (0, 0),
+                ctx,
+                T,
+                &|_, _| {},
+            )
+            .unwrap();
+            assert!(!s.rejected && s.held.is_empty());
+            s.removed
+        };
+        // Re-judged with nothing matching: both kept.
+        assert_eq!(sweep(&mut store), 0);
+        assert_eq!(store.unverified_count(Network::Usenet).unwrap(), 2);
+        // A rule their claims match: only that item goes, holding nothing.
+        filter.update_engine(|e| {
+            let notes = e.load_rules(&lodestar_store::RuleSet {
+                rules: vec![lodestar_store::RuleRow {
+                    id: 1,
+                    query: "badword".into(),
+                    action: Action::Drop.code(),
+                    enabled: true,
+                    shadow_until: None,
+                    unless_query: None,
+                }],
+                ..Default::default()
+            });
+            assert!(notes.is_empty(), "{notes:?}");
+            e.version += 1;
+        });
+        assert_eq!(sweep(&mut store), 1);
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g1"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g2"))
+                .unwrap()
+                .is_none()
+        );
     }
 }

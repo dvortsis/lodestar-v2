@@ -1548,9 +1548,21 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             // (SRC-2), never fetched from here: verification fetches go
             // through the writer's cursor, behind its switch. A held key
             // is refused first, as below, and the store refuses it too.
+            // A usenet result (UN-1) has no swarm hash: it's judged and
+            // stored by the writer as a usenet item, never claimed, fetched,
+            // looked up or checked as a hash. Without claims there's
+            // nothing to store.
+            let usenet = d.found.is_usenet();
+            if usenet && d.found.claims.is_none() {
+                io.stats.refused.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             if d.found.claims.is_some() {
                 let key = d.found.key.0;
-                if io.held.contains(&key) || io.filter.current().blocked_hash(&[key]).is_some() {
+                let held = !usenet
+                    && (io.held.contains(&key)
+                        || io.filter.current().blocked_hash(&[key]).is_some());
+                if held {
                     io.stats.refused.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }

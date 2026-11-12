@@ -259,6 +259,13 @@ pub struct Found {
     /// to the [`claims`](crate::claims) limits.
     pub claims: Option<Box<Claims>>,
     pub provenance: Option<Box<Provenance>>,
+    /// A usenet item's key (UN-0's `UsenetKey`), built only by
+    /// [`Found::usenet`]. Such a find is stored as a usenet item and goes
+    /// nowhere else: never to the fetch pool, peer finding or a hash
+    /// check, since it has no swarm hash. Its [`key`](Found::key) is then
+    /// the usenet key's first 20 bytes, so maps keyed by `key` keep finds
+    /// apart; it's never used as an info hash.
+    pub usenet: Option<[u8; 32]>,
 }
 
 impl Found {
@@ -271,7 +278,27 @@ impl Found {
             interest: false,
             claims: None,
             provenance: None,
+            usenet: None,
         }
+    }
+
+    /// A usenet result (UN-1), keyed by the indexer's id and the result's
+    /// GUID (`lodestar_store::unverified::UsenetKey`), always
+    /// `private_source` (§18.7). `Err` for an empty part or one over
+    /// 1,024 bytes.
+    pub fn usenet(indexer: &str, guid: &str, strategy: u8) -> Result<Found, lodestar_store::Error> {
+        let key = *lodestar_store::unverified::UsenetKey::new(indexer, guid)?.as_bytes();
+        let mut prefix = [0u8; 20];
+        prefix.copy_from_slice(&key[..20]);
+        let mut found = Found::key(InfoHash(prefix), strategy);
+        found.usenet = Some(key);
+        found.private_source = true;
+        Ok(found)
+    }
+
+    /// A usenet result ([`Found::usenet`]): never an info hash.
+    pub fn is_usenet(&self) -> bool {
+        self.usenet.is_some()
     }
 
     pub fn with_peers(mut self, peers: Vec<SocketAddr>) -> Found {
