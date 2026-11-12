@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T09:50:03Z",
+  "updated_at": "2026-11-12T11:03:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7223,6 +7223,26 @@
       "id": "owner-fyi-un0",
       "at": "2026-11-12T09:48:47Z",
       "note": "Sent with the #748 merge FYI: UN-0 store usenet key merged, dormant (no writer yet); \u00a72.19: snapshot tier-purge retention journals nothing for usenet rows."
+    },
+    {
+      "id": "X-lease-requeue-restore",
+      "note": "Low priority: authority method to take an expired marked lease key back from the re-grant queue so an in-intake result commits (rv-752; restore_if_free refuses queued keys, leases.rs:683). Also covers drained-worker eviction drop.",
+      "at": "2026-11-12T11:03:21Z"
+    },
+    {
+      "id": "owner-flag-752",
+      "note": "\u00a72.19: a fetched (marked) lease now expires a TTL after the mark (\u00a719.3 refinement); holder claim on a marked lease is Denied{Stored}.",
+      "at": "2026-11-12T11:03:21Z"
+    },
+    {
+      "id": "X-fuzz-lock-sha2",
+      "note": "fuzz/Cargo.lock stale since UN-0 (#748): sha2 missing from lodestar-store deps (reported by UN-2). Fold into next runner PR or a slice touching fuzz/.",
+      "at": "2026-11-12T11:03:21Z"
+    },
+    {
+      "id": "X-dht-lookup-converge-flag-update",
+      "note": "\u00a72.19 note must say: join refresh planned per family, parking released per family, ~200-450 find_node once per start (not \"no join refresh\").",
+      "at": "2026-11-12T11:03:21Z"
     }
   ],
   "main_health": [
@@ -7918,6 +7938,11 @@
       "pr": 748,
       "sha": "9a6fcb485e81a472954337f314d24fd88562b469",
       "at": "2026-11-12T09:48:47Z"
+    },
+    {
+      "pr": 752,
+      "sha": "7d47fa86ea1b923dd2613b22b696a80bd0f225fd",
+      "at": "2026-11-12T11:03:21Z"
     }
   ],
   "active_sessions": {
@@ -8155,7 +8180,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T09:50:03Z",
+    "updated": "2026-11-12T11:03:21Z",
     "items": [
       {
         "slot": 1,
@@ -8186,11 +8211,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-wk-fetched-lease",
+        "slice": "X-wk-fetched-lease-nits",
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
-        "doing": "session_01MMjhnCfcVrMUCDWwedtr7c: #737 merged d3ac57bb; X-wk-fetched-lease (a-prime) on a fresh branch; report if past ~400 lines",
-        "since": "2026-11-12T07:55:22Z",
+        "doing": "#752 merged; nits follow-up (stale-count reasons, docs, 2 edge tests)",
+        "since": "2026-11-12T11:03:21Z",
         "status": "active"
       },
       {
@@ -8288,7 +8313,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T09:50:03Z",
+  "updated": "2026-11-12T11:03:21Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
