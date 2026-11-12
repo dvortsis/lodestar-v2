@@ -581,6 +581,7 @@ fn prepare(data: &Path) -> io::Result<PathBuf> {
     let companions = data.join("companions");
     let dir = companions.join(FOLDER);
     plain_folder(&companions, fs::DirBuilder::new())?;
+    #[cfg_attr(windows, allow(unused_mut))] // only Unix sets a mode
     let mut private = fs::DirBuilder::new();
     #[cfg(unix)]
     {

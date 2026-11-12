@@ -965,6 +965,7 @@ async fn check_samples(client: &Client, args: &Args, r: &mut Report) -> Result<(
 }
 
 /// The "Available" column of `df -P -k` output, in bytes.
+#[cfg_attr(not(unix), allow(dead_code))] // the Windows build has no `df`; tests still parse it
 fn parse_df(out: &str) -> Option<u64> {
     let line = out.lines().filter(|l| !l.trim().is_empty()).nth(1)?;
     let fields: Vec<&str> = line.split_whitespace().collect();
