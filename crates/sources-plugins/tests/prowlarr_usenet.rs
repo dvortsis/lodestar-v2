@@ -224,6 +224,14 @@ async fn usenet_indexers_are_polled_hourly_and_torrent_ones_as_before() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_failed_usenet_page_is_asked_again_on_the_next_poll() {
+    // A 500 isn't a poll: 15 minutes on, the indexer is asked again, not
+    // an hour later, and its results arrive.
+    let got = replay(&plugin(true), "usenet_retry", 4, 3).await;
+    assert!(got.iter().all(|d| d.found.is_usenet()));
+}
+
+#[tokio::test(start_paused = true)]
 async fn torrent_results_from_the_same_source_are_unchanged() {
     let got = replay(&plugin(true), "usenet_rss", 4, 6).await;
     let mut torrents: Vec<Found> = got
@@ -270,7 +278,8 @@ async fn usenet_results_are_off_by_default() {
     let c = Config::from_json(r#"{"url":"http://p.example","manager":"prowlarr"}"#).unwrap();
     assert!(!c.usenet());
     let schema: serde_json::Value = serde_json::from_str(off.policy().config_schema).unwrap();
-    assert_eq!(schema["properties"]["usenet"]["default"], false);
+    // The switch isn't on the settings form until UN-3.
+    assert!(schema["properties"].get("usenet").is_none());
 }
 
 #[test]

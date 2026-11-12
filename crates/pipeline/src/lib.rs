@@ -1556,6 +1556,12 @@ struct Intake {
 /// The built-in worker claims key by key: the lease table is a function
 /// call away, so batching (≤ 512 or 250 ms) is a concern of the wire
 /// protocol, not of this boundary.
+/// Whether the intake may claim `d`'s key for the pool: never for a
+/// usenet find, whose key is only a writer-map key (UN-1).
+fn claimable(d: &Discovery) -> bool {
+    !d.found.is_usenet()
+}
+
 async fn intake(mut io: Intake, mut shutdown: Shutdown) {
     loop {
         let (mut d, retried) = tokio::select! {
@@ -1632,6 +1638,13 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
                 }
                 continue;
             }
+        }
+        // Defensive (X-un1-nits): a usenet find has no swarm hash, so
+        // whatever path brought it here (a retry, say), its key is never
+        // claimed, leased or looked up as one.
+        if !claimable(&d) {
+            io.stats.refused.fetch_add(1, Ordering::Relaxed);
+            continue;
         }
         let claim = Claim {
             key: d.found.key,
@@ -1731,6 +1744,20 @@ pub fn save_hot(store: &mut Store, hot: &HotColumns, dir: &Path) -> Result<(), E
 mod tests {
     use super::*;
     use lodestar_metainfo::InfoHash;
+
+    #[test]
+    fn a_usenet_find_is_never_claimable() {
+        let d = |found| Discovery {
+            source: SourceId::new(1).unwrap(),
+            found,
+            at: 0,
+            reply: false,
+        };
+        let usenet = lodestar_sources::Found::usenet("7", "g", 0).unwrap();
+        assert!(!claimable(&d(usenet)));
+        let bt = lodestar_sources::Found::key(InfoHash([1; 20]), 0);
+        assert!(claimable(&d(bt)));
+    }
 
     #[test]
     fn a_saved_refetch_is_matched_by_code_and_owner() {
