@@ -310,6 +310,7 @@ placement:
   - X-lease-test-polish
   - X-spool-damage-log
   - X-wk-own-lease-lost
+  - X-wk-out-set-polish
 - ws: ws-web
   match:
   - W*
@@ -408,6 +409,18 @@ placement:
   - OP-*
   - X-op4-polish
   - X-tripwire-reviews-lookback
+  - X-flake-dht-scrape-join
+  - X-win-clippy
+  - X-filters-budget-headroom
+  - X-banner-live-region
+  - X-prowlarr-no-fetch-wait
+  - X-svc-eventcreate-bounded
+  - X-win-fs-followups
+  - X-flake-portable-restart-3
+  - X-restart-banner-polish
+  - X-restart-save-lag
+  - X-win-upd-history-polish
+  - X-win-upd-history-nits
 - ws: ws-cut
   match:
   - CR-COL
@@ -436,6 +449,7 @@ placement:
   - X-consent-gate-052
   - X-consent-gate-polish
   - X-consent-gate-lift
+  - X-tokio-1541-v052
   - LEGAL-3a
 - ws: ws-cr-build
   match:
@@ -500,6 +514,7 @@ placement:
   - GS-gate
   - RX-0
   - TZ-0
+  - X-tz0-polish
   - UP-0
   - ENR-9
   - ENR-9b
@@ -586,6 +601,7 @@ placement:
   - X-cmp4b-mounts
   - X-cmp9b-catch
   - X-cmp13-installer-pins
+  - X-companion-pins-polish
   - X-macos-pidfile-fifo
 - ws: ws-m6
   match:

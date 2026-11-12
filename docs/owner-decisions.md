@@ -644,6 +644,14 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Why:** the old line said `main`'s notice applied to 0.5.2. It doesn't: 0.5.2 ships version 4, and `main` is at version 5. The new line claims no release, and it names the copy each release carries.
     - **`NOTICE_VERSION` stays 5.** The change is editorial and no released build has shown version 5, so no admin is asked to accept the notice again for it (`crates/api/src/legal.rs`). Details are in `docs/decisions/2026-11-12-runner-notice-applies.md`.
 
+58. **The yanked tokio 1.54.0: fixed in v0.5.2, no v0.5.1.x for now** (owner, relayed by the dashboard session at 2026-11-12T04:35Z): "go with the runner's recommendation".
+    - **What happened:** tokio 1.54.0 was yanked for a use-after-free in `Interval` (tokio#8695). The published v0.5.1 ships it; the DHT actor's `select!` waits on `interval.tick()`.
+    - **The runner's recommendation, now decided:**
+      - `main` moves to tokio 1.54.1 (X-flake-dht-scrape-join, #731).
+      - The same bump goes into `release/v0.5.2` by a release PR before the v0.5.2 tag (X-tokio-1541-v052).
+      - No v0.5.1.x is cut now.
+    - **If v0.5.2 slips by more than a few days,** the runner prepares v0.5.1.1 with only the bump and asks the owner before anything is cut or tagged. Cutting and tagging releases stays the owner's.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
