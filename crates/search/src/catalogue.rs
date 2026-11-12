@@ -29,7 +29,8 @@ pub enum ValueType {
     Keyword,
     /// `yes` or `no` (`true`/`false` and `1`/`0` also parse).
     Flag,
-    /// 40 hex digits.
+    /// Hex digits: an info hash (40), or for `sig:` also a payload
+    /// signature (16).
     Hash,
     /// A magnet link's `?xt=urn:btih:…`.
     Magnet,
@@ -223,6 +224,8 @@ fn shape(kind: FieldKind) -> (ValueType, &'static [Op], Vec<&'static str>) {
             query::Network::ALL.map(query::Network::as_str).to_vec(),
         ),
         FieldKind::TimeOfDay => (ValueType::Time, TIME, Vec::new()),
+        // A payload signature (16 hex digits) or an info hash.
+        FieldKind::Sig => (ValueType::Hash, ONE, Vec::new()),
         FieldKind::Later(_) => unreachable!("left out of the catalogue"),
     }
 }
@@ -329,7 +332,7 @@ mod tests {
         }
         assert_eq!(find(true, "discovered").unwrap().aliases, ["age"]);
         assert!(find(true, "age").is_none());
-        assert!(find(true, "sig").is_none(), "not accepted yet");
+        assert_eq!(find(true, "sig").unwrap().value, ValueType::Hash);
     }
 
     #[test]

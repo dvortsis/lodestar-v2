@@ -123,6 +123,7 @@ fn a_promoted_torrent_below_the_watermark_becomes_searchable() {
         count_only: false,
         stems: false,
         stoppable: false,
+        hold_unresolved: true,
     }];
     let limits = PercolateLimits {
         keep: 100,

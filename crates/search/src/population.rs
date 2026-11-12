@@ -66,7 +66,8 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     ("verified", 1),
     ("source", 1),
     ("network", 1),
-    ("payload_sig", 0),
+    // GS-0: `lodestar_classify::payload::payload_sig`, the hash CS-8a reads.
+    ("payload_sig", 1),
     ("group_key", 0),
     ("group_minhash", 0),
     ("name_trigram", 0),
@@ -378,10 +379,8 @@ mod tests {
     #[test]
     fn a_fresh_index_is_complete_at_this_builds_generations() {
         let t = PopState::fresh(&gens(), Side::Torrents);
-        assert_eq!(
-            t.availability("payload_sig"),
-            Some(Availability::NoProducer)
-        );
+        assert_eq!(t.availability("group_key"), Some(Availability::NoProducer));
+        assert_eq!(t.availability("payload_sig"), Some(Availability::Ready));
         assert_eq!(t.availability("verified"), Some(Availability::Ready));
         assert_eq!(t.availability("file.category"), None, "another side");
         assert_eq!(t.pending(), None);
@@ -395,8 +394,10 @@ mod tests {
 
     #[test]
     fn a_producer_shipping_starts_a_walk_that_resumes_and_completes() {
-        let mut s = PopState::fresh(&gens(), Side::Torrents);
-        let shipped = gens().with("payload_sig", 1);
+        // An index built before GS-0 shipped the `payload_sig` producer.
+        let mut s = PopState::fresh(&gens().with("payload_sig", 0), Side::Torrents);
+        let shipped = gens();
+        assert_eq!(shipped.get("payload_sig"), Some(1));
         s.reconcile(&shipped, Side::Torrents, 500);
         let backfilling = |done| Some(Availability::Backfilling { done, upto: 500 });
         assert_eq!(s.availability("payload_sig"), backfilling(0));

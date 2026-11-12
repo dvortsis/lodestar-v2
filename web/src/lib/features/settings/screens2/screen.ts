@@ -1,6 +1,5 @@
 // The Settings screens built by S-settings-2 and S-settings-2b (§10.10.8). Hand-built bodies load
 // when the screen opens; Trackers is generated, so it carries no body.
-import IconLanguage from '~icons/ph/translate';
 import { m } from '$lib/paraglide/messages.js';
 import type { Screen } from '../shell/screens';
 
@@ -13,7 +12,7 @@ export const screens: Screen[] = [
 		group: 'preferences',
 		title: () => m.settings_screen_language_title(),
 		about,
-		icon: IconLanguage,
+		iconLoad: () => import('./icons').then((m) => ({ default: m.language })),
 		load: () => import('./LanguageScreen.svelte')
 	},
 	// Per-tracker health has no endpoint of its own (`GET /insights/index` reports it, rolled up),

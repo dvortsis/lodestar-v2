@@ -893,7 +893,6 @@ mod population {
                 none("group_key"),
                 none("group_minhash"),
                 none("name_trigram"),
-                none("payload_sig"),
             ]
         );
         assert_eq!(index.availability("file.category"), Availability::Ready);
@@ -901,7 +900,7 @@ mod population {
         assert_eq!(index.availability("name"), Availability::Ready);
         // Only a complete field may be prefiltered on.
         assert!(index.availability("file.category").complete());
-        assert!(!index.availability("payload_sig").complete());
+        assert!(!index.availability("group_key").complete());
         assert!(index.availability("name").complete());
     }
 
@@ -1031,7 +1030,7 @@ mod population {
             assert_eq!(index.availability(f), backfilling(0, 12), "{f}");
         }
         // Fields without a producer have nothing to backfill.
-        assert_eq!(index.availability("payload_sig"), Availability::NoProducer);
+        assert_eq!(index.availability("group_key"), Availability::NoProducer);
         let mut w = index.writer(HEAP).unwrap();
         while w.catch_up(&mut store, 5).unwrap() > 0 {}
         w.commit().unwrap();
@@ -1044,18 +1043,21 @@ mod population {
         let tmp = tempfile::tempdir().unwrap();
         let dir = index_dir(tmp.path());
         let mut store = indexed(tmp.path(), 8);
-        let shipped = Generations::current().with("payload_sig", 1);
+        let shipped = Generations::current().with("group_key", 1);
         let index = SearchIndex::open(&dir)
             .unwrap()
             .with_generations(shipped.clone())
             .unwrap();
-        assert_eq!(index.availability("payload_sig"), backfilling(0, 8));
-        assert_eq!(index.availability("group_key"), Availability::NoProducer);
+        assert_eq!(index.availability("group_key"), backfilling(0, 8));
+        assert_eq!(
+            index.availability("group_minhash"),
+            Availability::NoProducer
+        );
         let mut w = index.writer(HEAP).unwrap();
         let c = w.catch_up_counted(&mut store, 100).unwrap();
         assert_eq!(c.backfilled, 8);
         w.commit().unwrap();
-        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        assert_eq!(index.availability("group_key"), Availability::Ready);
         assert_eq!(index.num_docs(), 8, "replaced, not duplicated");
         drop(w);
         drop(index);
@@ -1065,8 +1067,8 @@ mod population {
             .unwrap()
             .with_generations(shipped)
             .unwrap();
-        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        assert_eq!(index.availability("group_key"), Availability::Ready);
         let index = SearchIndex::open(&dir).unwrap();
-        assert_eq!(index.availability("payload_sig"), Availability::NoProducer);
+        assert_eq!(index.availability("group_key"), Availability::NoProducer);
     }
 }
