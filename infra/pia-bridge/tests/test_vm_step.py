@@ -38,10 +38,17 @@ case "$STUB_MODE:$url" in
   tokenfail:*token) exit 22 ;;
   *:*token) cat "$STUB/token.json" ;;
   *:*servers/v6) cat "$STUB/servers.json"; printf '\nSIGNATURE\n' ;;
-  addkeyfail:*addKey) printf '{"status":"ERROR"}' ;;
   *:*addKey)
     for a in "$@"; do case "$a" in pt@*) [ "$(cat "${a#pt@}")" = "$TOKEN" ] || exit 3 ;; esac; done
-    cat "$STUB/addkey.json" ;;
+    # As curl does: the body to --output, then --write-out's %{http_code}.
+    o=""; prev=""; for a in "$@"; do [ "$prev" = --output ] && o=$a; prev=$a; done
+    [ -n "$o" ] || exit 98
+    case "$STUB_MODE" in
+      addkeyfail) printf '{"status":"ERROR"}' > "$o"; printf 200 ;;
+      addkeydown) printf 000; exit 7 ;;  # connection refused: no body, no status
+      addkeyreply) cat "$STUB/reply" > "$o"; printf '%s' "$(cat "$STUB/http")" ;;
+      *) cat "$STUB/addkey.json" > "$o"; printf 200 ;;
+    esac ;;
   *) exit 99 ;;
 esac
 """
@@ -134,6 +141,8 @@ class VMStep(unittest.TestCase):
                     {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10\nx", "cn": "c"}]}}]})), 13),
                 ("bad cn", lambda: (self.stub / "servers.json").write_text(json.dumps(
                     {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "x::1.2.3.4:"}]}}]})), 13),
+                ("NUL in the endpoint", lambda: (self.stub / "servers.json").write_text(json.dumps(
+                    {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.1\u00000", "cn": "c"}]}}]})), 13),
                 ("cn with a space", lambda: (self.stub / "servers.json").write_text(json.dumps(
                     {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "a b"}]}}]})), 13),
                 # Bash arithmetic would run this as root, were the digits check not first.
@@ -151,6 +160,93 @@ class VMStep(unittest.TestCase):
                 self.assertFalse(self.work.exists())
                 self.assertFalse(self.out.exists())
                 self.assertFalse((self.stub / "pwned").exists())
+
+    def servers_cn(self, cn):
+        (self.stub / "servers.json").write_text(json.dumps(
+            {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": cn}]}}]}))
+
+    def test_pia_style_certificate_names_pass_lowercased(self):
+        # PIA's names are DNS names, some with capitals (us-brooklyn's failed the
+        # old lowercase-only check every time). Each is pinned and used lowercased.
+        for cn in ("catest401", "Brooklyn402", "NewYork-Brooklyn401", "US-Brooklyn.Privacy.Network",
+                   "a", "x" * 63, ".".join(["a" * 63] * 3) + "." + "b" * 61, "b-1.c-2"):
+            with self.subTest(cn=cn):
+                self.setUp()
+                self.servers_cn(cn)
+                r = self.run_step()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(r.stderr, "")
+                low = cn.lower()
+                self.assertIn(f"--connect-to {low}::192.0.2.10:", self.argv())
+                self.assertIn(f"https://{low}:1337/addKey", self.argv())
+
+    def test_names_that_are_not_hostnames_fail_closed(self):
+        bad = ["", "a" * 64, ".".join(["a" * 63] * 4), "-lead", "trail-", "a.-b", "a-.b", "a..b", ".a", "a.",
+               "a:1", "x::1.2.3.4:", "a/b", "evil@host", "a b", "a\tb", "a\nb", "a\rb", "a\x00b", "a\x1bb",
+               "a_b", "a%2fb", "a?b", "a#b", "a\\b", "é.example", "a\u0131b", "[::1]", "a;id", "$(id)",
+               "a\u0000:1.2.3.4:", 401, None, ["a"]]
+        for cn in bad:
+            with self.subTest(cn=repr(cn)):
+                self.setUp()
+                self.servers_cn(cn)
+                r = self.run_step()
+                self.assertEqual(r.returncode, 13)
+                self.assertNotIn("addKey", self.argv())  # never used
+                self.assertFalse(self.work.exists())
+                self.assertFalse(self.out.exists())
+                if cn and isinstance(cn, str):  # one bounded, printable line naming the stage
+                    self.assertTrue(r.stderr.startswith("pia-wireguard: stage 13: "), r.stderr)
+                    self.assertEqual(r.stderr.count("\n"), 1)
+                    self.assertLessEqual(len(r.stderr), 200)
+                    self.assertTrue(all(" " <= c <= "~" for c in r.stderr[:-1]))
+
+    def addkey_reply(self, http, body):
+        (self.stub / "http").write_text(http)
+        (self.stub / "reply").write_bytes(body if isinstance(body, bytes) else body.encode())
+        return self.run_step("addkeyreply")
+
+    def assert_stage15(self, r, expect):
+        self.assertEqual(r.returncode, 15)
+        self.assertFalse(self.work.exists())
+        self.assertFalse(self.out.exists())
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(r.stderr, expect)
+
+    def test_stage_15_reports_the_http_status_and_pias_reason(self):
+        r = self.addkey_reply("401", json.dumps({"status": "ERROR", "message": "Login failed!", "peer_ip": "10.9.9.9"}))
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 401, status "ERROR", message "Login failed!"\n')
+        self.setUp()
+        r = self.run_step("addkeyfail")  # 200 but not OK
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 200, status "ERROR", message ""\n')
+        self.setUp()
+        r = self.run_step("addkeydown")
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 000, status "", message ""\n')
+        self.setUp()  # not JSON: the status alone, never the body
+        r = self.addkey_reply("502", "<html>Bad Gateway 10.9.9.9</html>")
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 502, status "", message ""\n')
+        self.setUp()  # JSON, but not an object
+        r = self.addkey_reply("500", '["ERROR", "x"]')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 500, status "", message ""\n')
+        self.setUp()  # a full OK reply behind a non-2xx status still fails
+        r = self.addkey_reply("302", json.dumps(ADDKEY))
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 302, status "OK", message ""\n')
+
+    def test_stage_15_message_is_bounded_stripped_and_never_leaks(self):
+        hostile = ("\x1b]0;pwned\x07line1\nline2\r" + TOKEN + "\u202e" + PRIV + SERVER_KEY + "z" * 5000)
+        r = self.addkey_reply("403", json.dumps({"status": "ERR\x1b[31m" + "S" * 100, "message": hostile,
+                                                 "server_key": SERVER_KEY, "peer_ip": "10.9.9.9"}))
+        self.assertEqual(r.returncode, 15)
+        line = r.stderr
+        self.assertTrue(line.startswith('pia-wireguard: stage 15: addKey refused: http 403, status "ERR[31mSSS'), line)
+        self.assertEqual(line.count("\n"), 1)
+        self.assertTrue(line.endswith('"\n'))
+        self.assertTrue(all(" " <= c <= "~" for c in line[:-1]))  # no control or non-ASCII character
+        self.assertLessEqual(len(line), 320)
+        self.assertIn("[token]", line)
+        for secret in (TOKEN, USER, PASSWORD, "10.9.9.9"):
+            self.assertNotIn(secret, line)
+        self.assertNotIn(PRIV, line)  # the private key never leaves the VM; nor is it printed
+        self.assertFalse(self.work.exists())
 
     def test_a_hangup_deletes_the_login(self):
         os.mkfifo(self.stub / "fifo")
