@@ -404,6 +404,7 @@ placement:
   - X-collect-checklist-launch-2
   - X-cloud-infra
   - X-cloud-infra-2
+  - X-test-vm
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
