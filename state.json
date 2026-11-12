@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:28:34Z",
+  "updated_at": "2026-11-12T05:51:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7107,9 +7107,9 @@
       "note": "Closed, no change (runner \u00a72.26): Filters first view 31144 B local vs 31140 B limit (CI green on main, so CI is at or just under). Dialogs already lazy; no unused code; folding Rules remove buttons into a snippet grew it +83 B; moving add-forms on demand only moves cost into Filters dialogs (35.88/35.9 kB). Rule: the next PR adding to that chunk gets a measured raise (measured + ~10%) with an owner flag. Session archived."
     },
     {
-      "id": "runner-pr-741",
-      "at": "2026-11-12T05:27:33Z",
-      "note": "Runner PR #741 (\u00a72.58 + 15 slice entries) open, head a56463ca; fresh review running on b055ffef + self-checked delta (entry removed)"
+      "id": "owner-fyi-741",
+      "at": "2026-11-12T05:51:57Z",
+      "note": "owner FYI owed: #741 merged: \u00a72.58 recorded (tokio 1.54.1 in v0.5.2, no v0.5.1.x unless v0.5.2 slips)"
     }
   ],
   "main_health": [
@@ -7714,6 +7714,11 @@
       "pr": 733,
       "sha": "2151e97d9b38223cc1450a45b8c387371ebd28c0",
       "at": "2026-11-12T05:19:17Z"
+    },
+    {
+      "pr": 741,
+      "sha": "63eb76b9aaa5efbe08696afc51f3e8ab61515e97",
+      "at": "2026-11-12T05:51:57Z"
     }
   ],
   "active_sessions": {
@@ -7948,7 +7953,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:28:34Z",
+    "updated": "2026-11-12T05:51:57Z",
     "items": [
       {
         "slot": 1,
@@ -8112,7 +8117,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:28:34Z",
+  "updated": "2026-11-12T05:51:57Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
