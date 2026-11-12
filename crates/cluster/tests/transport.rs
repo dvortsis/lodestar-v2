@@ -1794,3 +1794,38 @@ async fn an_older_coordinator_is_never_sent_a_list() {
     })
     .await;
 }
+
+/// The gap before `Fetched`: the worker marked a lease's result committed
+/// (its batch was accepted) and listed it before its `Fetched` report went
+/// out. Listed, the lease is never given back: the mark and the commit
+/// then land on it as usual, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lease_committed_before_its_fetched_report_is_listed_and_kept() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let first = c.session(&nas).await;
+        let t = token_of(&first.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+        drop(first);
+        let a = c.session(&nas).await;
+        assert_eq!(a.holding(vec![held(1, t)]).await.unwrap(), done(0, 0, 1));
+        a.report(vec![OutcomeItem {
+            key: key(1),
+            token: t,
+            outcome: Outcome::Fetched,
+        }])
+        .await
+        .unwrap();
+        a.heartbeat().await.unwrap();
+        let k = InfoHash(key(1));
+        let w = nas.worker();
+        assert!(c.server.authority().commit(w, &k, Token(t)).is_some());
+        let s = c.server.snapshot();
+        assert_eq!(
+            (s.fetched, s.stale_reports, s.reconcile_returned),
+            (1, 0, 0)
+        );
+        assert_eq!((s.leases, s.pending, s.regrants), (0, 0, 0));
+    })
+    .await;
+}
