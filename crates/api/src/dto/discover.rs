@@ -131,4 +131,7 @@ pub enum Unavailable {
     /// for an equal signature to mean the same content (CS-8a's
     /// specificity rule), so identical payloads aren't matched.
     PayloadNotSpecific,
+    /// Only part of the torrent's file list is stored (an import that
+    /// dropped files), so its sizes aren't its payload.
+    PartialFileList,
 }

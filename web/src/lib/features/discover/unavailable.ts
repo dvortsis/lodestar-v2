@@ -37,6 +37,8 @@ export function unavailableText(reason: Unavailable): UnavailableText {
 			return { text: m.discover_unavailable_needs_v2_files() };
 		case 'payload_not_specific':
 			return { text: m.discover_unavailable_payload_not_specific() };
+		case 'partial_file_list':
+			return { text: m.discover_unavailable_partial_file_list() };
 		default: {
 			const unreachable: never = reason;
 			return unreachable;

@@ -302,11 +302,11 @@ fn works() -> Vec<T<'static>> {
         ),
         t(
             "Show.Name.S01E03.1080p.WEB.x264-AAA",
-            &[("Show.Name.S01E03.1080p.mkv", GB)],
+            &[("Show.Name.S01E03.1080p.mkv", GB + 3)],
         ),
         t(
             "Show.Name.S02E02.1080p.WEB.x264-AAA",
-            &[("Show.Name.S02E02.1080p.mkv", GB)],
+            &[("Show.Name.S02E02.1080p.mkv", GB + 5)],
         ),
         hidden,
         adult,

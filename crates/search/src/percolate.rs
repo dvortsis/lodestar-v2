@@ -304,13 +304,13 @@ fn may_hold(seg: &SegmentReader, after: i64, upto: i64) -> Result<bool> {
 /// match was left out, and how many matched in all. With a token, it stops collecting once the
 /// token does (checked every [`CHECK_EVERY`] documents) and sets
 /// `stopped`: the result is then incomplete and isn't used.
-struct TopIds {
-    keep: usize,
-    cancel: Option<CancelToken>,
-    stopped: Arc<AtomicBool>,
+pub(crate) struct TopIds {
+    pub(crate) keep: usize,
+    pub(crate) cancel: Option<CancelToken>,
+    pub(crate) stopped: Arc<AtomicBool>,
 }
 
-struct TopIdsSegment {
+pub(crate) struct TopIdsSegment {
     col: tantivy::columnar::Column<u64>,
     keep: usize,
     /// A min-heap of the highest ids so far.

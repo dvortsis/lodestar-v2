@@ -1743,16 +1743,20 @@ impl SearchIndex {
     }
 
     /// The torrents with a file whose v2 `pieces_root` is one of `roots`
-    /// ("the same file elsewhere", GS-1), from the file index's current
-    /// snapshot under `cancel`: the `limit` highest ids, sorted and
-    /// distinct, and whether there were more (a popular file can be in
-    /// very many torrents). Whether the answer is complete is
-    /// [`SearchIndex::availability`] of `file.pieces_root`; the caller
-    /// decides what an incomplete one means. A file index without the
+    /// ("the same file elsewhere", GS-1) that `visible` also matches (the
+    /// caller's visibility clauses, the ones its search applies, with no
+    /// relative dates): the `limit` highest ids, sorted, and whether more
+    /// matched. Visibility is applied before the limit, so torrents the
+    /// caller may not see never fill it or show in the flag. The file
+    /// index's ids are matched on the torrent index's snapshot, under
+    /// `cancel`, checked before and during collection. Whether the answer
+    /// is complete is [`SearchIndex::availability`] of `file.pieces_root`
+    /// and [`SearchIndex::files_caught_up`]; a file index without the
     /// field answers no torrent.
     pub fn torrents_with_pieces_roots(
         &self,
         roots: &[[u8; 32]],
+        visible: &Node,
         limit: usize,
         cancel: &crate::CancelToken,
     ) -> Result<(Vec<u64>, bool)> {
@@ -1771,9 +1775,49 @@ impl SearchIndex {
             }
             key.push(',');
         }
-        let searcher = self.files.reader.searcher();
-        let ids = files::torrent_ids(&searcher, &query, &key, &self.files.cache, cancel)?;
-        ids.newest(limit, cancel)
+        let files = self.files.reader.searcher();
+        let ids = files::torrent_ids(&files, &query, &key, &self.files.cache, cancel)?;
+        if ids.is_empty() {
+            return Ok((Vec::new(), false));
+        }
+        let compiled = self.query_cancelled(visible, 0, 0, cancel)?;
+        let both = BooleanQuery::new(vec![
+            (Occur::Must, compiled.query),
+            (
+                Occur::Must,
+                Box::new(files::IdsQuery { ids: Arc::new(ids) }) as Box<dyn Query>,
+            ),
+        ]);
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let collector = PostFilter {
+            ranges: &compiled.filters,
+            hot: compiled.hot.as_ref(),
+            inner: crate::percolate::TopIds {
+                keep: limit,
+                cancel: Some(cancel.clone()),
+                stopped: stopped.clone(),
+            },
+        };
+        let (top, more, _) = self.reader.searcher().search(&both, &collector)?;
+        if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+            cancel.check()?;
+            return Err(Error::Cancelled);
+        }
+        let mut out: Vec<u64> = top.into_iter().map(|id| id as u64).collect();
+        out.sort_unstable();
+        Ok((out, more))
+    }
+
+    /// Whether the file index holds every torrent the torrent index does
+    /// (its committed watermark has reached the torrent index's). It lags
+    /// after it's recreated or rebuilt, until it catches up: a file-index
+    /// answer is then incomplete, whatever its fields' population says.
+    pub fn files_caught_up(&self) -> bool {
+        let view = self
+            .population
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        view.last_ids[1] >= view.last_ids[0]
     }
 
     /// The stored names of some hits (for tests and tools; the API reads
@@ -2415,8 +2459,9 @@ mod population_tests {
     fn torrents_with_pieces_roots_is_bounded_and_cancellable() {
         use lodestar_bencode::{OwnedValue, to_vec};
         let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
-        // Torrent i (id i + 1): one v2 file, root [1] for even i, [2] odd.
-        for i in 0..6u8 {
+        // Torrent i (id i + 1): one v2 file, root [1] for even i, [2] odd;
+        // torrent 6 (id 7, root [1]) is hidden by a filter rule.
+        for i in 0..7u8 {
             let d = |e: Vec<(&str, OwnedValue)>| {
                 OwnedValue::Dict(
                     e.into_iter()
@@ -2446,7 +2491,11 @@ mod population_tests {
                     raw_info: Some(&raw),
                     discovered_at: 1_700_000_000,
                     metadata_at: 1_700_000_001,
-                    extra_flags: 0,
+                    extra_flags: if i == 6 {
+                        lodestar_store::flags::HIDDEN
+                    } else {
+                        0
+                    },
                     source: lodestar_store::SourceId::new(0).unwrap(),
                 }])
                 .unwrap();
@@ -2455,12 +2504,15 @@ mod population_tests {
         let mut w = index.writer(HEAP).unwrap();
         while w.catch_up(&mut store, 100).unwrap() > 0 {}
         w.commit().unwrap();
+        assert!(index.files_caught_up());
         let cancel = crate::CancelToken::new();
+        let visible = Node::All.without_hidden();
         let find = |roots: &[[u8; 32]], limit| {
             index
-                .torrents_with_pieces_roots(roots, limit, &cancel)
+                .torrents_with_pieces_roots(roots, &visible, limit, &cancel)
                 .unwrap()
         };
+        // The hidden torrent (id 7) is never found, counted or flagged.
         assert_eq!(find(&[[1; 32]], 10), (vec![1, 3, 5], false));
         assert_eq!(
             find(&[[1; 32], [2; 32]], 10),
@@ -2471,11 +2523,22 @@ mod population_tests {
         assert_eq!(find(&[[1; 32]], 3), (vec![1, 3, 5], false));
         assert_eq!(find(&[[9; 32]], 10), (vec![], false));
         assert_eq!(find(&[], 10), (vec![], false));
+        // With every torrent visible, it is.
+        let all = index
+            .torrents_with_pieces_roots(&[[1; 32]], &Node::All, 3, &cancel)
+            .unwrap();
+        assert_eq!(all, (vec![3, 5, 7], true));
         let stopped = crate::CancelToken::new();
         stopped.cancel();
         assert!(matches!(
-            index.torrents_with_pieces_roots(&[[1; 32]], 10, &stopped),
+            index.torrents_with_pieces_roots(&[[1; 32]], &visible, 10, &stopped),
             Err(Error::Cancelled)
+        ));
+        // A token whose budget is spent stops the collection too.
+        let spent = crate::CancelToken::new().with_budget(std::time::Duration::ZERO);
+        assert!(matches!(
+            index.torrents_with_pieces_roots(&[[1; 32]], &visible, 10, &spent),
+            Err(Error::OutOfTime)
         ));
     }
 
@@ -2499,6 +2562,7 @@ mod population_tests {
         }
         std::fs::remove_dir_all(path.join("files")).unwrap();
         let index = SearchIndex::open(&path).unwrap();
+        assert!(!index.files_caught_up(), "the recreated file index lags");
         // `Walk.7.mkv` is torrent 8's only file: `7` is a rare word.
         let node = crate::parse("file:(ext:mkv -7)").unwrap();
         let ids = |index: &SearchIndex| {
@@ -2529,6 +2593,7 @@ mod population_tests {
         assert_eq!(index.num_files(), 0, "the snapshot is stale");
         assert!(ids(&index).is_empty(), "a stale snapshot");
         w.commit().unwrap();
+        assert!(index.files_caught_up());
         let mut want: Vec<u64> = (1..=20).collect();
         want.retain(|&id| id != 8);
         assert_eq!(ids(&index), want);

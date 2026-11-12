@@ -125,13 +125,18 @@ fn metainfo(t: &T) -> Vec<u8> {
                     .files
                     .iter()
                     .map(|(p, len, _)| {
-                        d(vec![
+                        let mut e = vec![
                             ("length", OwnedValue::Int(*len)),
                             (
                                 "path",
                                 OwnedValue::List(p.split('/').map(|s| b(s.as_bytes())).collect()),
                             ),
-                        ])
+                        ];
+                        // BEP 47 padding, by its conventional folder.
+                        if p.starts_with(".pad/") {
+                            e.push(("attr", b(b"p")));
+                        }
+                        d(e)
                     })
                     .collect();
                 entries.push(("files", OwnedValue::List(list)));
@@ -387,19 +392,28 @@ async fn identical_payloads_are_found_and_withheld_as_other_versions_are() {
 /// v2 and hybrid torrents sharing a file (its piece root) are found under
 /// any name; another root isn't.
 fn shared() -> Vec<T> {
-    let mut adult = v2("Adult.Share", &[("p.bin", 500, 1)]);
+    let mut adult = v2("Adult.Share", &[("p.bin", A_BYTES, 1)]);
     adult.adult = true;
-    let mut hidden = v2("Hidden.Share", &[("q.bin", 500, 1)]);
+    let mut hidden = v2("Hidden.Share", &[("q.bin", A_BYTES, 1)]);
     hidden.flags = flags::HIDDEN;
     vec![
-        v2("Pack.V2", &[("a.bin", 500, 1), ("b.bin", 300, 2)]),
-        v2("Other.Pack", &[("renamed.bin", 500, 1), ("c.bin", 50, 3)]),
-        hybrid("Hybrid.One", 300, 2),
-        v2("Unrelated", &[("z.bin", 500, 9)]),
+        v2("Pack.V2", &[("a.bin", A_BYTES, 1), ("b.bin", B_BYTES, 2)]),
+        v2(
+            "Other.Pack",
+            &[("renamed.bin", A_BYTES, 1), ("c.bin", 50, 3)],
+        ),
+        hybrid("Hybrid.One", B_BYTES, 2),
+        v2("Unrelated", &[("z.bin", A_BYTES, 9)]),
         adult,
         hidden,
+        // Root 1, but another size: a claim that isn't the same file.
+        v2("Wrong.Size", &[("w.bin", A_BYTES + 1, 1)]),
     ]
 }
+
+/// Sizes of the shared files: past the 1 MiB floor.
+const A_BYTES: i64 = 3 << 20;
+const B_BYTES: i64 = (2 << 20) + 7;
 
 #[tokio::test]
 async fn the_same_file_is_found_in_v2_and_hybrid_torrents() {
@@ -458,11 +472,21 @@ async fn the_groups_are_bounded() {
     let mut torrents: Vec<T> = (0..25)
         .map(|i| v1(&format!("Many.{i}"), &[("", 60_000_001)]))
         .collect();
+    // A pack with more files than are looked up, and 25 others sharing
+    // its largest file: the visible list fills, so capped is said.
+    let mb = 1i64 << 20;
     let files: Vec<(String, i64, u8)> = (0..SAME_FILE_ROOTS + 3)
-        .map(|i| (format!("f{i}.bin"), 1000 + i as i64, i as u8))
+        .map(|i| (format!("f{i}.bin"), mb + i as i64, i as u8))
         .collect();
     let refs: Vec<(&str, i64, u8)> = files.iter().map(|(p, l, r)| (p.as_str(), *l, *r)).collect();
     torrents.push(v2("Big.Pack", &refs));
+    let top = SAME_FILE_ROOTS + 2;
+    for i in 0..25 {
+        torrents.push(v2(
+            &format!("Sharer.{i}"),
+            &[("x.bin", mb + top as i64, top as u8)],
+        ));
+    }
     let f = plain(&torrents);
     let c = session(&f).await;
     let body = siblings(&f, &c, 0).await;
@@ -470,8 +494,86 @@ async fn the_groups_are_bounded() {
     assert_eq!(listed, MAX_SIBLINGS);
     assert_eq!(body["identical_payload"]["truncated"], true);
     let body = siblings(&f, &c, 25).await;
+    assert_eq!(
+        body["same_file"]["hits"].as_array().unwrap().len(),
+        MAX_SIBLINGS
+    );
     assert_eq!(body["same_file_capped"], true);
-    assert_eq!(body["same_file"]["status"], "available");
+    // A sharer finds only the pack (its one file): a short list, never
+    // capped, whatever the pack's size.
+    let body = siblings(&f, &c, 26).await;
+    assert_eq!(body["same_file_capped"], false);
+}
+
+/// B13: withheld torrents never fill the same-file window or show in its
+/// flags. More hidden and Adult torrents than the window holds share the
+/// file; the response is exactly what it is with none of them.
+#[tokio::test]
+async fn withheld_sharers_leave_no_trace() {
+    // The visible match is older than every withheld one, so a window
+    // taken before visibility would hold only withheld torrents.
+    let mut torrents = vec![
+        v2("Visible.Ref", &[("a.bin", A_BYTES, 1)]),
+        v2("Visible.Old", &[("b.bin", A_BYTES, 1)]),
+    ];
+    for i in 0..1_010 {
+        let mut t = v2(&format!("Withheld.{i}"), &[("a.bin", A_BYTES, 1)]);
+        if i % 2 == 0 {
+            t.flags = flags::HIDDEN;
+        } else {
+            t.adult = true;
+        }
+        torrents.push(t);
+    }
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(names(&body["same_file"]), ["Visible.Old"]);
+    assert_eq!(body["same_file_capped"], false);
+    assert_eq!(body["same_file"]["truncated"], false);
+    assert!(!body.to_string().contains("Withheld"), "{body}");
+}
+
+/// Only files of at least 1 MiB are looked up, and on (size, root): a
+/// small shared file lists nothing, and a root claimed with another size
+/// isn't the same file.
+#[tokio::test]
+async fn small_files_and_mismatched_sizes_are_not_the_same_file() {
+    let torrents = vec![
+        v2("Small.Note", &[("nfo.txt", 900, 5)]),
+        v2("Also.Note", &[("nfo.txt", 900, 5)]),
+    ];
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(
+        reason(&body["same_file"]),
+        ("unavailable", "payload_not_specific")
+    );
+    let f = plain(&shared());
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert!(!names(&body["same_file"]).contains(&"Wrong.Size".to_owned()));
+}
+
+/// An import that kept only part of a file list: its sizes aren't its
+/// payload, so it gets a reason, and it's never listed as another's clone.
+#[tokio::test]
+async fn a_partial_file_list_is_never_a_clone() {
+    let mut torrents = clones();
+    let mut partial = v1("Partial.Import", &[("a.mkv", 7_000_001), ("b.srt", 70_003)]);
+    partial.flags = flags::FILES_PARTIAL;
+    torrents.push(partial);
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(names(&body["identical_payload"]), ["Renamed.Copy"]);
+    let last = torrents.len() - 1;
+    let body = siblings(&f, &c, last).await;
+    assert_eq!(
+        reason(&body["identical_payload"]),
+        ("unavailable", "partial_file_list")
+    );
 }
 
 /// CS-8a's specificity rule (the runner's refinement of §6): a payload
@@ -501,4 +603,27 @@ async fn a_payload_that_isnt_specific_is_never_matched() {
     // 50 MB or more is specific on its own.
     let body = siblings(&f, &c, 4).await;
     assert_eq!(names(&body["identical_payload"]), ["Big.Two"]);
+}
+
+/// Requirement 2: a torrent with only padding files has no signature and
+/// no roots, so both groups say so, and it never lists the other
+/// signature-less torrents.
+#[tokio::test]
+async fn a_torrent_with_only_padding_files_matches_nothing() {
+    let torrents = vec![
+        v1("Pad.Only.One", &[(".pad/16384", 16_384)]),
+        v1("Pad.Only.Two", &[(".pad/16384", 16_384)]),
+        v1("Payload.A", &[("a.mkv", 7_000_001), ("b.srt", 70_003)]),
+    ];
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    for group in ["identical_payload", "same_file"] {
+        assert_eq!(
+            reason(&body[group]),
+            ("unavailable", "no_content_files"),
+            "{group}"
+        );
+        assert_eq!(body[group]["hits"], json!([]), "{group}");
+    }
 }

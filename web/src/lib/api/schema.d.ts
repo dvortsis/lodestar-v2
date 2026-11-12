@@ -2408,11 +2408,11 @@ export interface paths {
         };
         /**
          * Torrents related to one (§10.5): other versions of the same work,
-         *     identical-payload clones (GS-0's `payload_sig`) and the same file
-         *     elsewhere (v2 piece roots, v2 and hybrid torrents only). Each group
-         *     is confirmed against the stored state and withheld as other versions
-         *     are; the `*_partial` flags say when a backfill means some may be
-         *     missing.
+         *     clones with an identical payload (equal file sizes) and other torrents
+         *     with one of its files (v2 and hybrid torrents only). Each group is
+         *     confirmed against the stored state and withheld as other versions
+         *     are; the `*_partial` flags say when the index is still filling in
+         *     what a group needs, so some may be missing.
          */
         get: operations["getTorrentSiblings"];
         put?: never;
@@ -10599,7 +10599,7 @@ export interface components {
          * @description Why a section isn't available. Stable keys; the UI words them.
          * @enum {string}
          */
-        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files" | "payload_not_specific";
+        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files" | "payload_not_specific" | "partial_file_list";
         UnderstandKpi: {
             /**
              * Format: int64
