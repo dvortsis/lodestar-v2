@@ -904,7 +904,7 @@ mod spec_tests {
     use lodestar_sources_plugins::full_scrape::{LookupError, PrivateTrackers, SystemClock};
     use lodestar_sources_plugins::{
         StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa,
-        prowlarr, stashdb, torrent_cache, tpdb,
+        prowlarr, stashdb, torrent_cache, tpdb, wikidata,
     };
     use serde_json::{Value, json};
 
@@ -948,6 +948,10 @@ mod spec_tests {
             ),
             (torrent_cache::ID, *cache.policy()),
             (tpdb::ID, *AdultEnricher::policy(&tpdb::Tpdb::new(creds()))),
+            (
+                wikidata::ID,
+                *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata),
+            ),
         ]
     }
 

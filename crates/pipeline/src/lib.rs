@@ -1532,9 +1532,12 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
         };
         if !retried {
             io.stats.received.fetch_add(1, Ordering::Relaxed);
-            // An enrichment match (ENR-1b) is an answer about a stored
-            // torrent, not a key the source harvested.
-            if !adult_enrich::is_match(&d, io.enrichers) {
+            // An enrichment match (ENR-1b) or identification (ENR-10) is
+            // an answer about a stored torrent, not a key the source
+            // harvested.
+            if !adult_enrich::is_match(&d, io.enrichers)
+                && !unverified::is_identification(&d, io.enrichers)
+            {
                 io.rollups.add(
                     d.at,
                     metric::HARVESTED,

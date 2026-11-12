@@ -362,6 +362,11 @@ impl Services {
             Prowlarr::at_start(saved.as_deref(), credentials).await
         };
         plugins.push(Arc::new(prowlarr));
+        // Wikidata (ENR-14), through ENR-10's identification runtime: an
+        // External source, registered off. Nothing is sent until you
+        // enable it and its consent holds, and then only what the
+        // runtime's gate lets through.
+        plugins.push(identify_source(config, filter.clone(), control.clone()).await?);
         // Companion recovery runs before anything could start one (CMP-5).
         let companions = if crate::fixture::active() {
             None
@@ -1051,6 +1056,57 @@ impl Handles {
         }
         lodestar_log::log_event!(crate::logging::events::APP_STOPPED_CLEANLY);
         Ok(())
+    }
+}
+
+/// The runtime's own connection, and the always-adult sources the store
+/// has registered (this run's or an earlier one's), so an item only one of
+/// them found is never sent. The plugin's egress refuses every request
+/// while its route is down, so its gate's kill switch reads as not
+/// tripped here.
+async fn identify_source(
+    config: &Config,
+    filter: Arc<lodestar_filter::Handle>,
+    control: Arc<Mutex<Store>>,
+) -> Result<Arc<dyn SourcePlugin>, BoxError> {
+    use lodestar_pipeline::identify::{Config as IdentifyConfig, IdentifySource};
+    use lodestar_pipeline::source_adult::AdultSources;
+    use lodestar_sources_plugins::{catalogue, wikidata::Wikidata};
+    let (db, store_config) = (config.db_path(), config.store_config());
+    let store = tokio::task::spawn_blocking(move || Store::open(db, store_config)).await??;
+    let adult = tokio::task::spawn_blocking(move || {
+        let rows = control
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sources()?;
+        let always: Vec<_> = catalogue::always_adult().collect();
+        Ok::<_, lodestar_store::Error>(AdultSources::of(rows.iter().flat_map(|r| {
+            always
+                .iter()
+                .filter(move |m| m.id == r.plugin)
+                .map(move |m| (r.id, *m))
+        })))
+    })
+    .await??;
+    let (source, _interest) = IdentifySource::new(
+        Arc::new(Wikidata),
+        Arc::new(Mutex::new(store)),
+        filter,
+        adult,
+        Arc::new(EgressEnforced),
+        IdentifyConfig::default(),
+    )
+    .map_err(|_| "the Wikidata plugin wasn't admitted")?;
+    Ok(Arc::new(source))
+}
+
+/// The identification gate's kill switch: the plugin's egress enforces it
+/// on every request (SRC-5), so the gate never reads it as tripped.
+struct EgressEnforced;
+
+impl lodestar_pipeline::identify::Switches for EgressEnforced {
+    fn kill_switch_tripped(&self) -> bool {
+        false
     }
 }
 

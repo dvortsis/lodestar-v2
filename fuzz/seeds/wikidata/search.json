@@ -1,0 +1,51 @@
+{
+ "searchinfo": {
+  "search": "The Shawshank Redemption"
+ },
+ "search": [
+  {
+   "id": "Q172241",
+   "title": "Q172241",
+   "pageid": 1,
+   "display": {
+    "label": {
+     "value": "SENTINEL-LABEL",
+     "language": "en"
+    }
+   },
+   "repository": "wikidata",
+   "url": "//www.wikidata.org/wiki/Q172241",
+   "concepturi": "http://www.wikidata.org/entity/Q172241",
+   "label": "SENTINEL-LABEL",
+   "description": "SENTINEL-DESCRIPTION",
+   "match": {
+    "type": "label",
+    "language": "en",
+    "text": "The Shawshank Redemption"
+   }
+  },
+  {
+   "id": "Q900002",
+   "title": "Q900002",
+   "pageid": 1,
+   "display": {
+    "label": {
+     "value": "SENTINEL-LABEL",
+     "language": "en"
+    }
+   },
+   "repository": "wikidata",
+   "url": "//www.wikidata.org/wiki/Q900002",
+   "concepturi": "http://www.wikidata.org/entity/Q900002",
+   "label": "SENTINEL-LABEL",
+   "description": "SENTINEL-DESCRIPTION",
+   "match": {
+    "type": "label",
+    "language": "en",
+    "text": "The Shawshank Redemption"
+   }
+  }
+ ],
+ "search-continue": 2,
+ "success": 1
+}
