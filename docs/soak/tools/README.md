@@ -96,16 +96,25 @@ never changes it.
   `screen baseline hour N:` line to `events.log`. The analyzer prints a
   `screen:` line and a "Screen" section after everything else, under the
   JSON key `screen`; `--no-screen` leaves it out.
-- **Reading it:** `ok`; `trip(<counter>, <value>, <threshold>)`: **stop the
-  run and investigate** (you stop it: the collector never does); or
-  `not_available(<reason>)`: an input is missing (an older binary, or Windows,
-  which has no mapping gauge), a checkpoint isn't reached, or the thresholds
-  aren't usable. **`ok` never means the soak passed.**
-- **The in-run screen advises only until it's calibrated:** its mapping gauge
-  needs a clean reading from the release build, and its mimalloc and segment
-  thresholds need a replay over r4's and r5's evidence (the decision's
-  "Preconditions"). Until then, treat an in-run trip as a prompt to look, not
-  a reason to stop on its own. The CI sweep isn't affected.
+- **Reading it:**
+  - `ok`: nothing tripped.
+  - `ok(without <state>:<counter>, …)`: nothing tripped among the inputs that
+    were there, and the named ones had no reading. That happens with an older
+    binary, or on Windows, which has no mapping gauge and no RssAnon.
+  - `trip(<counter>, <value>, <threshold>)`: **stop the run and investigate**.
+    You stop it: the collector never does.
+  - `not_available(<reason>)`: no input had a reading, a checkpoint wasn't
+    reached, or the thresholds aren't usable.
+  - Mimalloc's committed growth per 1,000 stored is shown as `info` and never
+    judged. Its level bound still trips.
+  - **`ok` never means the soak passed.**
+- **The in-run screen advises only until it's calibrated.** Two steps remain:
+  - Its mapping gauge needs a clean reading from the release build.
+  - The owner needs to replay r4 and r5 with this analyzer and relay the
+    `screen:` lines (`docs/decisions/2026-11-12-X-soak-screen-calibrate.md`).
+
+  Until then, treat an in-run trip as a prompt to look, not a reason to stop
+  on its own. The CI sweep isn't affected.
 - **The thresholds** are in `docs/soak/screen-thresholds.json`, each with its
   reason, clean value and margin. The collector copies the file into the run
   and records its SHA-256 in `run.json`; the analyzer judges by that copy,
