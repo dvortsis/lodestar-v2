@@ -158,6 +158,46 @@ for (const mode of ['light', 'dark'] as const) {
 			await ready(page);
 			await capture(page, `sources-${mode}`, page.getByTestId('source-1'));
 		});
+
+		// Settings → Outputs (OUT-2; docs/user chapter 7.2): the Torznab address and a key named
+		// for its app, outlined. No secret is on screen: Lodestar shows one only in the reveal dialog.
+		test(`outputs-${mode}`, async ({ page, go, mock }) => {
+			const content = {
+				section: 'content',
+				revision: 1,
+				restart_required: [],
+				fields: {
+					export_adult: { value: false, env: null, read_only: false, source: 'default' }
+				}
+			};
+			new SettingsBackend(undefined, [
+				content as unknown as components['schemas']['SectionValues']
+			]).attach(mock as unknown as MockLike);
+			const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
+			on('listKeys', {
+				keys: [
+					{
+						id: 1,
+						name: 'Prowlarr',
+						kind: 'api_key',
+						scopes: ['torznab'],
+						status: 'active',
+						prefix: 'ls_k7Qd',
+						created_at: NOW - 3 * DAY,
+						last_used_at: NOW - 600,
+						expires_at: null,
+						revoked_at: null,
+						saved_search_id: null
+					}
+				]
+			});
+			on('listJobs', { jobs: [] });
+			await go('/settings/outputs');
+			await expect(page.getByTestId('outputs-key')).toContainText('Prowlarr');
+			await expect(page.getByTestId('outputs-adult')).toBeVisible();
+			await ready(page);
+			await capture(page, `outputs-${mode}`, page.getByTestId('outputs-torznab'));
+		});
 	});
 }
 

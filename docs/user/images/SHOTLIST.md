@@ -21,5 +21,8 @@ The setup illustration uses labels from `web/src/lib/features/auth/messages/en.j
 | 5.2 | Torrent detail drawer | Existing mock fixtures | Present; pending v0.5.1 verification (`detail-light.png`, `detail-dark.png`) |
 | 5.3 | Discover and Insights | Existing mock fixtures | Present; pending v0.5.1 verification (`discover-{light,dark}.png`, `insights-{light,dark}.png`) |
 | 5.3 | Status pill in normal and stalled states | Release UI | Pending release capture |
+| 7.2 | Settings → Outputs with the Torznab address and a key named Prowlarr | Mock fixtures | Present (`outputs-light.png`, `outputs-dark.png`, from `npm run docs:shots`); newer than v0.5.1. The address shows the test server's origin |
+| 7.3 | Prowlarr's Generic Torznab form with URL, API Path `/api` and API Key | Owner | Pending capture from Prowlarr, with the key hidden and the version in the caption |
+| 7.7 | bitmagnet export showing Done | Fixture capture | Pending; needs an export-job fixture in `web/e2e/docs/shots.docs.ts` (newer than v0.5.1) |
 
 `setup-notice.png`, `setup-screen.png` and `sources-{light,dark}.png` remain development assets. They are not used as v0.5.1 setup or Sources instructions. Sources, webhook setup and safe restart are outside this release guide.

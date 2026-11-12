@@ -132,7 +132,7 @@ The child-safety core of the content filters is always on. A change that would w
 
 The five optional packs cover malware, lures, fakes, spam and scams. They are off by default in v0.5.1. Default-on packs, unauthorised-copy rules and pack-version controls belong to later releases.
 
-API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
+API keys, which let other apps such as [Torznab](glossary.md#torznab) clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 
 ## 3.7 Back up and restore
 <!-- index: backup; restore; seal.key; data folder -->
