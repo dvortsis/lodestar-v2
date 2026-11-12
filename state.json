@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:51:58Z",
+  "updated_at": "2026-11-12T07:55:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7808,6 +7808,11 @@
       "pr": 745,
       "sha": "65ecfe20182cb51bedcd527f6c49cf017736502a",
       "at": "2026-11-12T07:37:09Z"
+    },
+    {
+      "pr": 737,
+      "sha": "d3ac57bb51dd825a677f893fd5e1d4816a04107f",
+      "at": "2026-11-12T07:55:22Z"
     }
   ],
   "active_sessions": {
@@ -8045,7 +8050,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:38:35Z",
+    "updated": "2026-11-12T07:55:22Z",
     "items": [
       {
         "slot": 1,
@@ -8076,11 +8081,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-wk-out-set-polish",
+        "slice": "X-wk-fetched-lease",
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
-        "doing": "#737 option B (180 s grace, window named; a-prime spec in decisions); then X-wk-fetched-lease (a-prime: Outcome::Fetched on Accepted, holder claim on fetched lease -> Denied{Stored}) in same session; fresh Opus review",
-        "since": "2026-11-12T04:01:05Z",
+        "doing": "session_01MMjhnCfcVrMUCDWwedtr7c: #737 merged d3ac57bb; X-wk-fetched-lease (a-prime) on a fresh branch; report if past ~400 lines",
+        "since": "2026-11-12T07:55:22Z",
         "status": "active"
       },
       {
@@ -8088,7 +8093,7 @@
         "slice": "RX-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: #717 rv-717-4a37e94b CHANGES (B3 fold-table codepoints ~5x undercharged, 54 ms accepted; I3 [\\W_] refused) relayed; fix round, then fresh delta review",
+        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: #717 e9350c1d (B3 fold-cost model, I3 relieved) CI running; fresh delta review running",
         "since": "2026-11-11T21:46:53Z",
         "status": "active"
       },
@@ -8106,7 +8111,7 @@
         "slice": "D-outputs-guide",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: D-outputs-guide PR #747 (2ac5eaff) CI running; then X-out2-curl-wrap (Outputs curl example clipped at 1366 px; example host to match guide) in same session",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: #747 ready (2ac5eaff), fresh review running; X-out2-curl-wrap PR next",
         "since": "2026-11-12T07:13:28Z",
         "status": "active"
       },
@@ -8178,7 +8183,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:51:58Z",
+  "updated": "2026-11-12T07:55:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
