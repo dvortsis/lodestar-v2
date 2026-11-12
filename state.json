@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:27:50Z",
+  "updated_at": "2026-11-12T04:36:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7089,7 +7089,8 @@
       "note": "Spool::open sizes a segment with entry.metadata().len() (crates/pipeline spool.rs ~:971); on Windows a directory listing's size can lag the real file size, so after a crash the start-up byte count can be low until the next open. Pre-existing; use the open handle's metadata. Reported by X-spool-damage-log (#724).",
       "at": "2026-11-12T04:21:20Z"
     },
-    "Next runner PR: slice entries X-win-fs-followups (slot 1, same session as #728), X-wk-out-set-polish (slot 8), X-win-upd-history-nits (slot 5); owner FYI: #728, #729, #730 merged"
+    "Next runner PR: slice entries X-win-fs-followups (slot 1, same session as #728), X-wk-out-set-polish (slot 8), X-win-upd-history-nits (slot 5); owner FYI: #728, #729, #730 merged",
+    "Next runner PR: docs/owner-decisions.md \u00a72.58 tokio 1.54.0 release decision (owner 2026-11-12T04:35Z via dashboard: \"go with the runner's recommendation\"): no v0.5.1.x; backport 1.54.1 to release/v0.5.2 before the tag; v0.5.1.1 (bump only) only if v0.5.2 slips more than a few days, and the owner is asked before cutting it"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7907,7 +7908,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:27:50Z",
+    "updated": "2026-11-12T04:36:06Z",
     "items": [
       {
         "slot": 1,
@@ -8066,10 +8067,15 @@
       "at": "2026-11-07T18:00Z",
       "ref": "\u00a72.52 (runner PR #588)",
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
+    },
+    {
+      "id": "tokio-1540-release",
+      "at": "2026-11-12T04:35:27Z",
+      "words": "go with the runner's recommendation"
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:27:50Z",
+  "updated": "2026-11-12T04:36:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
