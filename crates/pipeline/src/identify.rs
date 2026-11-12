@@ -86,6 +86,9 @@ pub const ROUND_REST_SECS: i64 = 86_400;
 /// to do, or nothing may be looked up, before trying again.
 pub const IDLE: Duration = Duration::from_secs(60);
 
+/// How long one lookup may take by default ([`Config::lookup_timeout`]).
+pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// The shortest [`Config::idle`] a host can set.
 pub const MIN_IDLE: Duration = Duration::from_millis(10);
 
@@ -343,7 +346,7 @@ pub fn check(
 }
 
 /// The runtime's limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// Lookups a UTC day, opened and background together (Q12); never
     /// above [`PER_DAY`].
@@ -360,6 +363,13 @@ pub struct Config {
     /// The wait before trying again when there's nothing to do, or nothing
     /// may be looked up.
     pub idle: Duration,
+    /// The longest one lookup may take; past it, the lookup counts as
+    /// failed (already charged to the day's count) and the runtime goes on,
+    /// so a plugin that never answers can't stall it.
+    pub lookup_timeout: Duration,
+    /// The clock, in Unix seconds (the day's count, the cache, the round's
+    /// rest). Tests pin it.
+    pub clock: fn() -> i64,
 }
 
 impl Default for Config {
@@ -371,6 +381,8 @@ impl Default for Config {
             rest_secs: ROUND_REST_SECS,
             background: true,
             idle: IDLE,
+            lookup_timeout: LOOKUP_TIMEOUT,
+            clock: crate::unix_now,
         }
     }
 }
@@ -532,7 +544,7 @@ impl IdentifySource {
                     _ = tokio::time::sleep_until(at + self.config.interval) => {}
                 }
             }
-            let now = crate::unix_now();
+            let now = (self.config.clock)();
             let next = waiting
                 .take()
                 .map(Ok)
@@ -647,7 +659,7 @@ impl IdentifySource {
 
     /// One item: the cache, the gate, the day's count, then the plugin.
     async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
-        let now = crate::unix_now();
+        let now = (self.config.clock)();
         if Cache::fresh(state, id, now).await {
             bump(&self.stats.cached);
             return Step::Skipped;
@@ -703,7 +715,12 @@ impl IdentifySource {
         let lookup = tokio::select! {
             biased;
             _ = ctx.shutdown.requested() => return Step::Shutdown,
-            r = self.plugin.lookup(kit, &candidate.query) => r,
+            r = tokio::time::timeout(self.config.lookup_timeout, self.plugin.lookup(kit, &candidate.query)) => r,
+        };
+        // A lookup that took too long failed: dropped, as on shutdown.
+        let Ok(lookup) = lookup else {
+            bump(&self.stats.failed);
+            return Step::Asked;
         };
         match lookup {
             Ok(Lookup::Match(answer)) => {

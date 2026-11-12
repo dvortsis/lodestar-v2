@@ -67,12 +67,16 @@ static MANIFEST: Manifest = Manifest {
 
 /// An info dict named `name` holding one 900 MB video file.
 fn info_dict(name: &str) -> Vec<u8> {
+    info_with_file(name, &format!("{}.mkv", name.replace(' ', ".")))
+}
+
+/// An info dict named `name` holding one 900 MB file called `file`.
+fn info_with_file(name: &str, file: &str) -> Vec<u8> {
     let mut f = BTreeMap::new();
     f.insert(b"length".to_vec(), OwnedValue::Int(900 << 20));
-    let file = format!("{}.mkv", name.replace(' ', "."));
     f.insert(
         b"path".to_vec(),
-        OwnedValue::List(vec![OwnedValue::from(file.as_str())]),
+        OwnedValue::List(vec![OwnedValue::from(file)]),
     );
     let mut d = BTreeMap::new();
     d.insert(
@@ -94,7 +98,18 @@ fn put(
     extra: i64,
     adult: bool,
 ) -> (i64, InfoHash) {
-    let raw = info_dict(name);
+    put_raw(store, name, &info_dict(name), source, extra, adult)
+}
+
+fn put_raw(
+    store: &mut Store,
+    name: &str,
+    raw: &[u8],
+    source: SourceId,
+    extra: i64,
+    adult: bool,
+) -> (i64, InfoHash) {
+    let raw = raw.to_vec();
     let info = Info::parse(&raw).unwrap();
     let id = store
         .insert(&[NewTorrent {
@@ -190,6 +205,8 @@ struct Recorder {
     answer: Mutex<Option<Identification>>,
     kinds: Vec<MediaKind>,
     fail: AtomicBool,
+    /// Never answers the first lookup.
+    hang_first: AtomicBool,
 }
 
 impl Recorder {
@@ -199,6 +216,7 @@ impl Recorder {
             answer: Mutex::new(answer),
             kinds: MediaKind::ALL.to_vec(),
             fail: AtomicBool::new(false),
+            hang_first: AtomicBool::new(false),
         })
     }
 
@@ -238,6 +256,9 @@ impl Identifier for Recorder {
                 query.year().unwrap_or(0)
             );
             let _ = kit.http.send(&Request::get(&url)).await;
+            if self.hang_first.swap(false, Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             if self.fail.load(Ordering::SeqCst) {
                 return Err(PluginError("down".into()));
             }
@@ -345,14 +366,19 @@ fn fast() -> Policy {
 fn interest_only() -> Config {
     Config {
         background: false,
-        idle: Duration::from_millis(10),
-        ..Config::default()
+        ..background()
     }
+}
+
+/// Noon UTC on a fixed day: the day's count never rolls over mid-test.
+fn noon() -> i64 {
+    20_000 * 86_400 + 43_200
 }
 
 fn background() -> Config {
     Config {
         idle: Duration::from_millis(10),
+        clock: noon,
         ..Config::default()
     }
 }
@@ -568,6 +594,19 @@ fn each_refusal_has_its_reason() {
     filter.update(|core| core.cs.add_hash(h.0, lodestar_filter::Origin::Imported));
     let engine2 = filter.current();
     let (unnamed, _) = put(&mut s, "New Folder", dht, 0, false);
+    // BEP 27 private, verified or (a remote worker's row) not yet.
+    let (bep27, _) = put(&mut s, &movie(4, "Plain"), dht, flags::PRIVATE, false);
+    let (remote, _) = put(
+        &mut s,
+        &movie(5, "Plain"),
+        dht,
+        flags::REMOTE_UNVERIFIED,
+        false,
+    );
+    // An uninformative name over a show's episode: classified TV from its
+    // files, but the name says nothing, so nothing is sent.
+    let raw = info_with_file("New Folder (2)", "Show.Name.S01E02.1080p.WEB-DL.mkv");
+    let (episode, _) = put_raw(&mut s, "New Folder (2)", &raw, dht, 0, false);
     let why = |s: &mut Store, e: &Engine, id| identify::check(s, e, ctx, id, T).unwrap().err();
     let c = identify::check(&mut s, &engine, ctx, plain, T)
         .unwrap()
@@ -580,6 +619,17 @@ fn each_refusal_has_its_reason() {
         why(&mut s, &engine, private),
         Some(Ineligible::PrivateSource)
     );
+    assert_eq!(why(&mut s, &engine, bep27), Some(Ineligible::PrivateSource));
+    assert_eq!(
+        why(&mut s, &engine, remote),
+        Some(Ineligible::PrivateSource)
+    );
+    assert_eq!(
+        lodestar_classify::ContentType::from_code(s.content_type(episode).unwrap().unwrap()),
+        Some(ContentType::Tv),
+        "a kind the plugin serves"
+    );
+    assert_eq!(why(&mut s, &engine, episode), Some(Ineligible::NoQuery));
     assert_eq!(why(&mut s, &engine, adult), Some(Ineligible::Adult));
     assert_eq!(
         why(&mut s, &engine, held),
@@ -1349,4 +1399,43 @@ fn the_backfill_resolves_an_identified_title() {
         lodestar_pipeline::enrich::mark_matched(&mut s, &[id, plain]).unwrap(),
         vec![id]
     );
+}
+
+/// A plugin that never answers can't stall the runtime: the lookup times
+/// out, counts as failed (charged to the day's count), and the next item
+/// goes.
+#[tokio::test]
+async fn a_hung_lookup_times_out() {
+    let (mut s, dht, src) = store();
+    let (a, _) = put(&mut s, &movie(0, "Plain"), dht, 0, false);
+    let (b, _) = put(&mut s, &movie(1, "Plain"), dht, 0, false);
+    let plugin = Recorder::new(None);
+    plugin.hang_first.store(true, Ordering::SeqCst);
+    let state = Arc::new(MemoryState::new());
+    let config = Config {
+        // Past the client's one-second host floor, so the next lookup's
+        // request can go within it.
+        lookup_timeout: Duration::from_secs(2),
+        ..interest_only()
+    };
+    let r = run(
+        plugin.clone(),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        config,
+        state.clone(),
+        &[a, b],
+    );
+    until("the timeout, then the next lookup", || {
+        n(&r.stats.failed) == 1 && n(&r.stats.missed) == 1
+    })
+    .await;
+    r.stop().await;
+    assert_eq!(plugin.titles(), ["Item0 Plain Film", "Item1 Plain Film"]);
+    // Both charged to the day's count.
+    let v = state.get(identify::BUDGET_KEY).await.unwrap().unwrap();
+    assert_eq!(u32::from_be_bytes(v[8..12].try_into().unwrap()), 2);
 }
