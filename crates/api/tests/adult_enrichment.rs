@@ -237,9 +237,13 @@ mod item {
     /// Found by an always-adult source and matched, then you said Not
     /// adult (a `class_corrections` row).
     pub const ALWAYS_ADULT_NOT_ADULT: usize = 14;
+    /// Found only by a registered source this build doesn't run (not in
+    /// the listing), not classified Adult, matched: its finder can't be
+    /// vouched for, which must not make it adult.
+    pub const GHOST: usize = 15;
 }
 
-const NAMES: [&str; 15] = [
+const NAMES: [&str; 16] = [
     "Garden.Scene.XXX.1080p.mp4",
     "Foreign.Link.XXX.1080p.mp4",
     "Private.Claim.XXX.1080p.mp4",
@@ -255,6 +259,7 @@ const NAMES: [&str; 15] = [
     "Partial.Import.XXX.1080p.mp4",
     "Shadowed.Scene.XXX.1080p.mp4",
     "Holiday.Photos.2020.1080p.mkv",
+    "Ghost.Clips.2021.1080p.mkv",
 ];
 
 /// Source 4 is always adult.
@@ -348,6 +353,8 @@ fn fixture(interest: bool) -> Fixture {
     let adult_site = store
         .register_source("adultsite", "1", 1_700_000_000)
         .unwrap();
+    let ghost = store.register_source("ghost", "1", 1_700_000_000).unwrap();
+    assert_eq!(ghost.get(), 5);
     assert_eq!(
         [dht, stash, prowlarr, tpdb, adult_site].map(SourceId::get),
         [0, 1, 2, 3, 4]
@@ -358,6 +365,7 @@ fn fixture(interest: bool) -> Fixture {
         let (source, extra_flags) = match i {
             item::PRIVATE_ITEM => (prowlarr, flags::PRIVATE_SOURCE),
             item::ALWAYS_ADULT | item::ALWAYS_ADULT_NOT_ADULT => (adult_site, 0),
+            item::GHOST => (ghost, 0),
             _ => (dht, 0),
         };
         store
@@ -387,6 +395,7 @@ fn fixture(interest: bool) -> Fixture {
                     item::NOT_ADULT,
                     item::ALWAYS_ADULT,
                     item::ALWAYS_ADULT_NOT_ADULT,
+                    item::GHOST,
                 ]
                 .contains(&i),
             ),
@@ -477,6 +486,12 @@ fn fixture(interest: bool) -> Fixture {
             item::ALWAYS_ADULT,
             stash,
             claims_of(section("scene-11"), own_link.clone()),
+            false,
+        ),
+        (
+            item::GHOST,
+            stash,
+            claims_of(section("scene-15"), own_link.clone()),
             false,
         ),
         (
@@ -873,6 +888,12 @@ async fn interest_is_offered_only_with_show_adult_content_on() {
     assert_eq!(a["adult_enrichment"], b["adult_enrichment"]);
     let b = ok(&bare, &bare_cookie, item::ALWAYS_ADULT_NOT_ADULT, ip(7)).await;
     assert!(absent(&b), "{b}");
+    // A finder the listing can't vouch for never makes a torrent adult
+    // here: that would widen the section. With the drawer or without.
+    for (fx, c) in [(&f, &cookie), (&bare, &bare_cookie)] {
+        let body = ok(fx, c, item::GHOST, ip(7)).await;
+        assert!(absent(&body), "{body}");
+    }
 }
 
 #[tokio::test]

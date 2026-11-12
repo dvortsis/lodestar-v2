@@ -670,8 +670,9 @@ pub(crate) async fn detail(
     let adult_shown = s.adult.shown();
     let names = plugin_names(&s).await;
     // The drawer's mask, when the host installs one; the catalogue's,
-    // from the manifests, always (X-always-adult-detail-mask). Both come
-    // from the same manifests, so they agree; the union is used anyway.
+    // from the manifests, always (X-always-adult-detail-mask). They should
+    // agree (a host builds the drawer's from `AdultSources` over the same
+    // manifests); the union keeps any extra drawer bit.
     let drawer_adult = interest.as_ref().map_or(0, |i| i.0.0.always_adult);
     let (detail, wanted) = tokio::task::spawn_blocking(move || {
         let (row, tree) = load(&s, &hash, adult_shown)?;

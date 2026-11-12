@@ -25,8 +25,9 @@ Slice X-always-adult-detail-mask (runner brief, 2026-11-12), the follow-up to #7
 ## ENR-7's adult section (brief requirement 3)
 - **It had the same dependence:** "found by an always-adult source unless you said Not adult" read only the drawer's mask, so in the binary such a torrent that wasn't yet reclassified Adult got no adult section.
 - **Fixed the same way, but with the known always-adult bits only.** For ENR-7, counting a finder as always adult *widens* (it makes the torrent adult, so the section shows and a lookup may be offered). So unknown finders don't count there: the safe direction is the opposite of "Identified as"'s.
-  - It's still only for the admin with "Show adult content" on, never for a held, hidden or private torrent, and never after you said Not adult.
+  - It's still only for the admin with "Show adult content" on, never for a held or hidden torrent or one found through a private source, and with no lookup offered for a BEP 27 private torrent or a partial import (`held_back`, `lookup_wanted`, unchanged), and never after you said Not adult.
   - Drawer interest is still offered only when a host installs `DrawerInterest`.
+  - A test shows a torrent found only by a source the listing doesn't include gets no adult section, with the drawer or without, so swapping in the fail-closed bits here would be caught.
 
 ## The two windows (brief requirement 4)
 - **Before `adult_by_source` reclassifies a torrent** an always-adult source found, its stored type isn't Adult yet. The finder rule now hides "Identified as" anyway, drawer or not.
