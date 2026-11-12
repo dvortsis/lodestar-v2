@@ -369,8 +369,10 @@ fn plain(text: &str) -> String {
         .collect()
 }
 
-/// Unicode's Cf, Zl and Zp characters (Unicode 15).
-fn invisible(c: char) -> bool {
+/// Unicode's Cf, Zl and Zp characters (Unicode 15): format and separator
+/// characters that render as nothing or reorder text. Shared with the
+/// service's Event Log note (`service::event_log_text`).
+pub(super) fn invisible(c: char) -> bool {
     matches!(
         c,
         '\u{00ad}'

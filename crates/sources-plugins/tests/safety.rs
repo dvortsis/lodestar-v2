@@ -971,8 +971,10 @@ fn the_full_scrape_is_unwired_or_wired_with_a_store_backed_private_tracker_looku
 #[test]
 fn torznab_and_stremio_outputs_are_not_built_yet() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    // Each output's private_source test, once it exists: none yet.
-    const COVERED: &[&str] = &[];
+    // Each output's private_source test, once it exists. Torznab (TZ-0):
+    // `private_hidden_and_unverified_are_never_served` and
+    // `stored_rows_decide_when_the_index_lags` in crates/api/tests/torznab.rs.
+    const COVERED: &[&str] = &["torznab"];
     let mut files = Vec::new();
     for c in ["crates/api/src", "crates/lodestar/src"] {
         rust_files(&root.join(c), &mut files);

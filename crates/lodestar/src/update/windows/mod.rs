@@ -16,6 +16,7 @@
 
 pub mod check;
 pub mod helper;
+pub mod history;
 pub mod msi;
 pub mod portable;
 pub mod rollback;

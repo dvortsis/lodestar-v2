@@ -20,10 +20,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class OpenPgp:
-    """A detached OpenPGP signature at `<artifact URL><suffix>`, by one of `keys`."""
+    """A detached OpenPGP signature at `<artifact URL><suffix>`, by one of `keys`.
+
+    `key_sources` are where a pin run may fetch the one pinned key while
+    `keys/<FINGERPRINT>.asc` isn't committed yet: (URL, hosts) pairs, each
+    of which must serve that primary key, checked by fingerprint after
+    import. They're for availability: the fingerprint here is the trust
+    anchor (docs/decisions/2026-11-12-X-cmp13-installer-pins.md)."""
 
     suffix: str
     keys: tuple[str, ...]
+    key_sources: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -44,25 +51,57 @@ class Recipe:
     # standing for the version; None: a given tag must equal `tag`. It ties
     # the tag to the version the pins are labelled with.
     tag_pattern: str | None = None
+    # An installer's own release folder (a catalogue.rs INSTALLER_SOURCES
+    # host, read only at pin time) and its per-version folder in it.
+    installer_release: str | None = None
+    installer_dir: str | None = None
+    # What ties the signed bytes to the version: the host's own folder feed
+    # (size and MD5 per path) and the GitHub repository and annotated tag
+    # whose date the signature mustn't predate.
+    installer_feed: str | None = None
+    installer_tag_repo: str | None = None
+    installer_tag: str | None = None
 
 
 USERDOCS = Unsigned(
     "userdocs/qbittorrent-nox-static publishes the static binaries and build-info JSON as "
     "GitHub release assets, with no .asc or .sig beside them"
 )
+# qBittorrent's release manager, sledgehammer999, signs the release tags
+# on GitHub and the files on SourceForge with this key
+# (docs/decisions/2026-11-12-X-cmp13-installer-pins.md).
+QBITTORRENT_KEY = "D8F3DA77AAC6741053599C136E4A2D025B7CC9A2"
+QBITTORRENT_INSTALLER = OpenPgp(
+    ".asc",
+    (QBITTORRENT_KEY,),
+    key_sources=(
+        (
+            f"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x{QBITTORRENT_KEY}",
+            ("keyserver.ubuntu.com",),
+        ),
+        ("https://github.com/sledgehammer999.gpg", ("github.com",)),
+    ),
+)
 PROWLARR = Unsigned("Prowlarr publishes tar.gz and zip builds as GitHub release assets, with no signature files")
 
 RECIPES: dict[str, Recipe] = {
-    # The Windows installer (CMP-11) is not here: the official one is on
-    # SourceForge and FossHub only, never a fetch host, and the catalogue
-    # format has no per-artifact release folder for it yet. The tool refuses it.
+    # The Windows installer (CMP-11) is official only on SourceForge and
+    # FossHub, never fetch hosts. It's read from SourceForge at pin time only
+    # and pinned only with the release key's signature on it.
     "qbittorrent": Recipe(
         tag=None,  # "release-<qBittorrent>_v<libtorrent>": give --tag
         files={
             "linux-x86_64": "x86_64-qbittorrent-nox",
             "linux-aarch64": "aarch64-qbittorrent-nox",
+            # The libtorrent 2.0 build; SourceForge also has an `_lt12_` one.
+            "windows-x86_64": "qbittorrent_{version}_x64_setup.exe",
         },
-        signature={"linux-x86_64": USERDOCS, "linux-aarch64": USERDOCS},
+        signature={"linux-x86_64": USERDOCS, "linux-aarch64": USERDOCS, "windows-x86_64": QBITTORRENT_INSTALLER},
+        installer_release="https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/",
+        installer_dir="qbittorrent-{version}",
+        installer_feed="https://sourceforge.net/projects/qbittorrent/rss?path=/qbittorrent-win32/qbittorrent-{version}",
+        installer_tag_repo="qbittorrent/qBittorrent",
+        installer_tag="release-{version}",
         image_tag="{version}",
         tag_pattern=r"release-{version}_v[0-9]+(\.[0-9]+){1,3}",
     ),

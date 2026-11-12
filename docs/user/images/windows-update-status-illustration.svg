@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="220" viewBox="0 0 720 220" role="img" aria-label="The Updates screen's status card: Lodestar 0.5.3 available, with the Install now, Skip this version and Check now buttons. Illustration, not a live screenshot.">
+  <title>The Updates status card (Illustration, not a live screenshot)</title>
+  <rect x="1" y="1" width="718" height="218" rx="8" fill="#FFFFFF" stroke="#DFDFDF" stroke-width="1.5"/>
+  <path d="M1 9 Q1 1 9 1 L711 1 Q719 1 719 9 L719 46 L1 46 Z" fill="#263C44"/>
+  <text x="18" y="29" fill="#FFFFFF" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="14" font-weight="700">Settings → Updates</text>
+  <rect x="492" y="11" width="214" height="24" rx="12" fill="#FFFFFF" fill-opacity="0.16" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <text x="599" y="27" text-anchor="middle" fill="#FFFFFF" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="11" font-weight="600">Illustration, not a live screenshot</text>
+  <text x="20" y="76" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12" font-weight="600">Status</text>
+  <text x="20" y="104" fill="#263C44" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="15">0.5.3 available · Fix, Security</text>
+  <rect x="20" y="124" width="124" height="34" rx="6" fill="#263C44"/>
+  <text x="82" y="146" text-anchor="middle" fill="#FFFFFF" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="13" font-weight="600">Install now</text>
+  <rect x="156" y="124" width="150" height="34" rx="6" fill="#FFFFFF" stroke="#DFDFDF" stroke-width="1.5"/>
+  <text x="231" y="146" text-anchor="middle" fill="#263C44" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="13">Skip this version</text>
+  <rect x="318" y="124" width="104" height="34" rx="6" fill="#FFFFFF" stroke="#DFDFDF" stroke-width="1.5"/>
+  <text x="370" y="146" text-anchor="middle" fill="#263C44" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="13">Check now</text>
+  <text x="20" y="194" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">While it installs the card shows: Downloading, then Installing</text>
+</svg>

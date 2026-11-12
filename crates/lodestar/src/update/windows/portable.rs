@@ -66,6 +66,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use super::check::{SKIP_FAILED, add_skip};
+use super::history;
 use crate::update::layout::{self, Bin, Lock};
 use crate::update::log_events::{
     UPDATE_INSTALL_FAILED, UPDATE_PROBATION_FAILED, UPDATE_PROBATION_PASSED, UPDATE_STATE_UNSAVED,
@@ -674,6 +675,14 @@ fn rolling_back(sys: &dyn Sys, bin: &Bin, db: &Path, j: Journal) -> Start {
         log_event!(UPDATE_INSTALL_FAILED, error = "skip_unsaved");
     }
     let _ = std::fs::remove_file(bin.path(FAILED));
+    history::record_portable(
+        bin,
+        &j.from,
+        &j.to,
+        history::Outcome::RolledBack,
+        &j.new_sha256,
+        crate::unix_now(),
+    );
     clear(bin);
     log_event!(UPDATE_INSTALL_FAILED, error = "rolled_back");
     Start::Normal
@@ -749,6 +758,14 @@ pub fn passed(sys: &dyn Sys, data_dir: &Path) {
         return;
     }
     let _ = std::fs::remove_file(bin.path(PREVIOUS));
+    history::record_portable(
+        &bin,
+        &j.from,
+        &j.to,
+        history::Outcome::Installed,
+        &j.new_sha256,
+        crate::unix_now(),
+    );
     clear(&bin);
     log_event!(UPDATE_PROBATION_PASSED);
 }
@@ -1563,6 +1580,11 @@ mod tests {
             skipped.contains("\"0.5.5\"") && skipped.contains("failed"),
             "{skipped}"
         );
+        // Recorded once the rollback finishes, in the old version.
+        assert_eq!(
+            history_of(&f),
+            [("0.5.5".into(), history::Outcome::RolledBack)]
+        );
     }
 
     #[test]
@@ -1612,6 +1634,22 @@ mod tests {
         assert!(f.journal().is_none() && f.at(PREVIOUS).is_none());
         assert_eq!(f.program_bytes().as_deref(), Some(NEW));
         assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
+        // One history entry, and none for the repeat.
+        passed(&f, &f.data());
+        assert_eq!(
+            history_of(&f),
+            [("0.5.5".into(), history::Outcome::Installed)]
+        );
+    }
+
+    fn history_of(f: &Fake) -> Vec<(String, history::Outcome)> {
+        let bin = Bin::open(&f.data()).unwrap();
+        history::read(&bin)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| (e.version, e.result))
+            .collect()
     }
 
     #[test]

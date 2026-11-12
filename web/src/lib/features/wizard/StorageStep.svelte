@@ -25,11 +25,10 @@
 	});
 </script>
 
-{#if warning}
-	<div data-testid="wizard-storage-fs">
-		<Banner kind="warning">{warning} {m.wizard_storage_fs_note()}</Banner>
-	</div>
-{/if}
+<!-- Always in the DOM, empty until the warning arrives, so assistive tech hears the change. -->
+<div role="status" class="contents" data-testid="wizard-storage-fs">
+	{#if warning}<Banner kind="warning">{warning} {m.wizard_storage_fs_note()}</Banner>{/if}
+</div>
 <FieldsStep
 	bind:this={step}
 	id="wizard.storage"
