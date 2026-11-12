@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:55:22Z",
+  "updated_at": "2026-11-12T07:55:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7143,6 +7143,11 @@
       "id": "UN-1-cap-cost",
       "note": "UN-0: the 1M cap count+evict costs ~160 ms per adding batch at 1M items inside the writer txn. Fix: (network,id) index in SRC-3b migration or a kept count; UN-1 must measure before enabling.",
       "at": "2026-11-12T07:51:58Z"
+    },
+    {
+      "id": "index-size-headroom",
+      "note": "GS-0: torrent index 476.6 B/torrent (+29.9), 35.4 B headroom under 512 left for GS-2, RX-1, ENR-11; each must run size-report. Owner \u00a72.19 flags due: GS-0 sig: needs all 16 hex (arch \u00a78 shows 8); sig:<hash> resolves from the query snapshot, partial notice while backfilling.",
+      "at": "2026-11-12T07:55:55Z"
     }
   ],
   "main_health": [
@@ -8183,7 +8188,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:55:22Z",
+  "updated": "2026-11-12T07:55:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
