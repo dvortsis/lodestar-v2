@@ -505,9 +505,9 @@ impl IdentifySource {
     async fn run_inner(&self, mut ctx: SourceCtx) -> Result<(), PluginError> {
         // One run at a time holds the interest queue.
         let mut interest = self.interest.lock().await;
-        // Opened while no run was going: the drawer has long closed, and
-        // each condition may have failed then. Dropped, never sent later.
-        while interest.try_recv().is_ok() {}
+        // Items opened before this run started (at most INTEREST_QUEUE) are
+        // kept and tried first. Each still passes the whole gate when it's
+        // tried, so nothing goes that isn't eligible then.
         let state = ctx.kit.state.clone();
         // The plugin gets the same client, and its state without the
         // runtime's keys.
