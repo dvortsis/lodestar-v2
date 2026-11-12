@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T21:14:01Z",
+  "updated_at": "2026-11-12T21:26:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7487,6 +7487,11 @@
       "id": "runner-pr-X-test-vm-entry",
       "note": "add X-test-vm to slices.yaml (with placement) in the next runner PR; dashboard flags slot 13",
       "added": "2026-11-12T21:14:01Z"
+    },
+    {
+      "id": "X-win-soak-attach-proc-hash",
+      "note": "rv-777 O1: attach compares running process image hash and -Exe hash with ImagePath hash",
+      "added": "2026-11-12T21:26:11Z"
     }
   ],
   "main_health": [
@@ -8509,7 +8514,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T21:14:01Z",
+    "updated": "2026-11-12T21:26:11Z",
     "items": [
       {
         "slot": 1,
@@ -8561,7 +8566,7 @@
         "slice": "M8-WIN-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBMmuzWf5Xm5VJkAbP: Windows 1.0 soak runbook + analyzer checks (briefs/M8-WIN-1.md, Sonnet)",
+        "doing": "session_01MMjhnBMmuzWf5Xm5VJkAbP: #777 delta MERGE at 908a48c6; one round for I1 hash wording, I2 WU pause 1 week + resume, I3 real temp files in producer tests; then self-check + merge",
         "since": "2026-11-12T18:52:01Z",
         "status": "active"
       },
@@ -8606,7 +8611,7 @@
         "slice": "M8-REL-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mh12Mrj1m33EM83f: launched, building relevance --data-dir and --held-out",
+        "doing": "session_01MMjhn8mh12Mrj1m33EM83f: #783 open at ddbd5ea5 (bench/README section runner-approved); review on ready",
         "since": "2026-11-12T20:46:15Z",
         "status": "active"
       },
@@ -8713,7 +8718,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T21:14:01Z",
+  "updated": "2026-11-12T21:26:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
