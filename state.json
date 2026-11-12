@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:12Z",
+  "updated_at": "2026-11-12T23:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7692,6 +7692,11 @@
       "id": "review-798",
       "note": "#798 P-master-plan-r4 (82246b02a, docs): fresh Opus review when a slot frees; then steps 2-9 into runner PR; owner points (v0.6 tag conditions vs r4 \u00a72.25; import pilots off Unraid, \u00a72.52) to owner summary.",
       "added": "2026-11-12T23:12Z"
+    },
+    {
+      "id": "nos-1-nip-reread",
+      "note": "NOS-1 brief: re-read NIP-01 and NIP-35 at a recorded revision (plan \u00a75.3; deferred from NOS-0, rv-789 I3).",
+      "added": "2026-11-12T23:16Z"
     }
   ],
   "main_health": [
@@ -8714,7 +8719,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:12Z",
+    "updated": "2026-11-12T23:16Z",
     "items": [
       {
         "slot": 1,
@@ -9062,7 +9067,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:12Z",
+  "updated": "2026-11-12T23:16Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
