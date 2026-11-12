@@ -1,0 +1,27 @@
+{
+  "recorded_from": "Built from SABnzbd 4.5.5 source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey), not a live recording; same modes and texts on the develop branch",
+  "note": "mode=auth&key=<the API key>",
+  "request": {
+    "method": "POST",
+    "path": "/api",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json;charset=UTF-8"
+      ],
+      [
+        "pragma",
+        "no-cache"
+      ],
+      [
+        "server",
+        "CherryPy/18.10.0"
+      ]
+    ],
+    "body": "{\"auth\": \"apikey\"}"
+  }
+}
