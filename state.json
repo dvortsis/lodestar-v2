@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:53:04Z",
+  "updated_at": "2026-11-12T05:54:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7719,6 +7719,16 @@
       "pr": 724,
       "sha": "5b68f0c7ef72a5aa1b7de74c82a40dae6f76ffca",
       "at": "2026-11-12T05:53:04Z"
+    },
+    {
+      "pr": 739,
+      "sha": "a84b3da251fbec96983199fe2b65b1465debe565",
+      "at": "2026-11-12T05:54:51Z"
+    },
+    {
+      "pr": 742,
+      "sha": "903ae0990192ba762946722a99d00987e1b3e426",
+      "at": "2026-11-12T05:54:51Z"
     }
   ],
   "active_sessions": {
@@ -7953,7 +7963,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:53:04Z",
+    "updated": "2026-11-12T05:54:51Z",
     "items": [
       {
         "slot": 1,
@@ -8023,12 +8033,9 @@
       },
       {
         "slot": 9,
-        "slice": "X-restart-banner-polish",
-        "role": "Sonnet slice (tests only)",
-        "agent": "claude",
-        "doing": "rv-718 nits, test-only (Sonnet session: no store logic)",
-        "since": "2026-11-12T05:16:30Z",
-        "status": "active"
+        "status": "idle",
+        "doing": "free: #739 merged (self-checked; mutant re-run); session archived. Next queued here: X-restart-save-lag (Opus) when review load drops",
+        "since": "2026-11-12T05:54:51Z"
       },
       {
         "slot": 10,
@@ -8115,7 +8122,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:53:04Z",
+  "updated": "2026-11-12T05:54:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
