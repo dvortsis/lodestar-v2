@@ -1,0 +1,27 @@
+{
+  "recorded_from": "SABnzbd 4.5.5, built from its source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey); not a live recording",
+  "note": "mode=addfile that SABnzbd could not queue (a duplicate it fails, an unreadable NZB)",
+  "request": {
+    "method": "POST",
+    "path": "/api",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json;charset=UTF-8"
+      ],
+      [
+        "pragma",
+        "no-cache"
+      ],
+      [
+        "server",
+        "CherryPy/18.10.0"
+      ]
+    ],
+    "body": "{\"status\": false, \"nzo_ids\": []}"
+  }
+}

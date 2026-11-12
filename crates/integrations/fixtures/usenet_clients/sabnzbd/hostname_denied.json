@@ -1,0 +1,23 @@
+{
+  "recorded_from": "SABnzbd 4.5.5, built from its source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey); not a live recording",
+  "note": "the Host header is not in host_whitelist",
+  "request": {
+    "method": "POST",
+    "path": "/api",
+    "query": null
+  },
+  "response": {
+    "status": 403,
+    "headers": [
+      [
+        "content-type",
+        "text/html;charset=utf-8"
+      ],
+      [
+        "server",
+        "CherryPy/18.10.0"
+      ]
+    ],
+    "body": "Access denied - Hostname verification failed: https://sabnzbd.org/hostname-check"
+  }
+}

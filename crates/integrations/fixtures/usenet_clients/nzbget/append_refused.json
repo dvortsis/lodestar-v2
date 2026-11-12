@@ -1,0 +1,23 @@
+{
+  "recorded_from": "nzbget-ng v24.8, built from its source (daemon/remote/XmlRpc.cpp BuildResponse and BuildErrorResponse, WebServer.cpp SendAuthResponse); not a live recording",
+  "note": "append the scanner could not add: nzbId stays -1",
+  "request": {
+    "method": "POST",
+    "path": "/jsonrpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "server",
+        "nzbget-24.8"
+      ]
+    ],
+    "body": "{\n\"version\" : \"1.1\",\n\"id\" : 1,\n\"result\" : -1\n}"
+  }
+}

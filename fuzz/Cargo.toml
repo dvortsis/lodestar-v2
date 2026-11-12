@@ -281,3 +281,17 @@ path = "fuzz_targets/regex_plan.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sabnzbd_answer"
+path = "fuzz_targets/sabnzbd_answer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nzbget_answer"
+path = "fuzz_targets/nzbget_answer.rs"
+test = false
+doc = false
+bench = false
