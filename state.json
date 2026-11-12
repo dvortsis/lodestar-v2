@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:39:51Z",
+  "updated_at": "2026-11-12T06:41:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7987,7 +7987,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:39:51Z",
+    "updated": "2026-11-12T06:41:24Z",
     "items": [
       {
         "slot": 1,
@@ -8057,7 +8057,7 @@
         "slice": "X-test-vm",
         "role": "owner-started",
         "agent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
-        "doing": "owner-started testing-env session (Linode claude-dev-* + AWS Windows VMs); counts toward \u00a72.59 cap; 0 helpers until runner slots free; PR on claude/dreamy-edison-xlmtoy; decisions file must quote owner verbatim (cloud/spend/token) - runner verifies before merge",
+        "doing": "session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy ab257738 (slices.yaml + ws-fix placement done; PR after Linux VM proves tooling). Runner call 06:42Z: the VM's own Remote Control session counts against \u00a72.59 (sessions, not slices); first freed slot goes to it, second offered too.",
         "since": "2026-11-12T06:37:34Z",
         "status": "active"
       }
@@ -8120,7 +8120,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T06:39:51Z",
+  "updated": "2026-11-12T06:41:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
