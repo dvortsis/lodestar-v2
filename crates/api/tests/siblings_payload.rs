@@ -653,3 +653,210 @@ async fn without_search_the_groups_say_search_is_disabled() {
         assert_eq!(body["same_file_capped"], false);
     }
 }
+
+// ---- similar payloads (GS-2) ----------------------------------------------
+
+const GIB: i64 = 1 << 30;
+
+/// Episode `e` of the reference season: about 1 GiB, a distinctive size.
+fn episode(e: i64) -> i64 {
+    GIB + 1_001 * e + 17
+}
+
+/// A season torrent of `episodes` (sizes) plus a small `.nfo`, which is
+/// never a major file.
+fn season(name: &str, episodes: &[i64]) -> T {
+    let mut files: Vec<(String, i64)> = episodes
+        .iter()
+        .enumerate()
+        .map(|(i, &len)| (format!("s/e{i:02}.mkv"), len))
+        .collect();
+    files.push(("s/info.nfo".to_owned(), 4_000));
+    T {
+        name: name.to_owned(),
+        files: files.into_iter().map(|(p, l)| (p, l, 0)).collect(),
+        layout: Layout::V1,
+        adult: false,
+        flags: 0,
+    }
+}
+
+fn eps(range: std::ops::Range<i64>) -> Vec<i64> {
+    range.map(episode).collect()
+}
+
+/// Whether two seasons' major sizes share a band term: what puts one in
+/// the other's candidates.
+fn share_a_band(a: &[i64], b: &[i64]) -> bool {
+    let terms = |s: &[i64]| {
+        let sizes: Vec<u64> = s.iter().map(|&x| x as u64).collect();
+        lodestar_classify::group::band_terms(&sizes)
+    };
+    let (a, b) = (terms(a), terms(b));
+    a.iter().any(|t| b.contains(t))
+}
+
+/// The reference (10 episodes), its relatives and decoys.
+fn seasons() -> Vec<T> {
+    let mut plus_one = eps(0..10);
+    plus_one.push(episode(10));
+    let mut swapped = eps(0..9);
+    swapped.push(2 * GIB + 3);
+    let mut hidden = season("Season.Hidden", &plus_one);
+    hidden.flags = flags::HIDDEN;
+    let mut adult = season("Season.Adult", &plus_one);
+    adult.adult = true;
+    let mut partial = season("Season.Partial", &plus_one);
+    partial.flags = flags::FILES_PARTIAL;
+    let mut far = eps(0..5);
+    far.extend((0..5).map(|i| 3 * GIB + i));
+    vec![
+        season("Season.Ref", &eps(0..10)),
+        // 10 of 11 major sizes shared: similar.
+        season("Season.PlusOne", &plus_one),
+        // 9 of 11: similar.
+        season("Season.Swapped", &swapped),
+        // The same sizes: an identical clone, listed there instead.
+        season("Season.Clone", &eps(0..10)),
+        // 5 of 15: not similar.
+        season("Season.Far", &far),
+        hidden,
+        adult,
+        partial,
+        // Two large files: no signature.
+        season("Film.Two", &[4 * GIB + 1, 3 * GIB + 5]),
+        season("Film.Two.Copy", &[4 * GIB + 1, 3 * GIB + 5]),
+    ]
+}
+
+#[tokio::test]
+async fn similar_payloads_are_found_confirmed_and_withheld() {
+    // The fixture relies on these sharing a band (fixed hashes: the
+    // MinHash's choice, checked here so a change to it is caught).
+    let mut swapped = eps(0..9);
+    swapped.push(2 * GIB + 3);
+    assert!(share_a_band(&eps(0..10), &swapped));
+    let f = plain(&seasons());
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(body["similar_payload"]["status"], "available");
+    assert_eq!(
+        names(&body["similar_payload"]),
+        ["Season.PlusOne", "Season.Swapped"]
+    );
+    assert_eq!(body["similar_payload_partial"], false);
+    assert_eq!(body["similar_payload"]["truncated"], false);
+    // The clone is an identical payload, not a similar one.
+    assert_eq!(names(&body["identical_payload"]), ["Season.Clone"]);
+    // Adult shown: the Adult one too; hidden and partial never.
+    let f = fixture(&seasons(), true, None);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(
+        names(&body["similar_payload"]),
+        ["Season.Adult", "Season.PlusOne", "Season.Swapped"]
+    );
+    // A hidden torrent opened in the drawer answers, and lists no
+    // hidden one.
+    let body = siblings(&f, &c, 5).await;
+    let got = names(&body["similar_payload"]);
+    assert!(got.contains(&"Season.Ref".to_owned()), "{got:?}");
+    assert!(
+        !got.iter()
+            .any(|n| n == "Season.Hidden" || n == "Season.Partial")
+    );
+}
+
+/// Fewer than 3 major files: no signature, a reason, and never a match
+/// with the other signature-less torrents.
+#[tokio::test]
+async fn too_few_major_files_say_so_and_match_nothing() {
+    let f = plain(&seasons());
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 8).await;
+    assert_eq!(
+        reason(&body["similar_payload"]),
+        ("unavailable", "few_major_files")
+    );
+    assert_eq!(body["similar_payload"]["hits"], json!([]));
+    // Its identical copy is still found there.
+    assert_eq!(names(&body["identical_payload"]), ["Film.Two.Copy"]);
+    // The other groups' torrent-level reasons apply first.
+    let torrents = vec![
+        v1("Pad.Only", &[(".pad/16384", 16_384)]),
+        v1("Small.One", &[("", 1 << 20)]),
+    ];
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(
+        reason(&body["similar_payload"]),
+        ("unavailable", "no_content_files")
+    );
+    let body = siblings(&f, &c, 1).await;
+    assert_eq!(
+        reason(&body["similar_payload"]),
+        ("unavailable", "payload_not_specific")
+    );
+}
+
+/// A candidate the bands find whose stored sizes aren't similar enough
+/// (an estimate-only match: a band shared at Jaccard 8/12) is dropped.
+#[tokio::test]
+async fn a_band_match_that_fails_the_stored_sizes_is_dropped() {
+    let reference = eps(0..10);
+    // 8 shared, 2 of its own: J = 8 / 12. Pick the two so a band is
+    // shared (deterministic: the first such pair).
+    let near = (0..10_000i64)
+        .map(|k| {
+            let mut s = eps(0..8);
+            s.extend([2 * GIB + 2 * k, 2 * GIB + 2 * k + 1]);
+            s
+        })
+        .find(|s| share_a_band(&reference, s))
+        .expect("a pair sharing a band");
+    let torrents = vec![
+        season("Season.Ref", &reference),
+        season("Season.Near", &near),
+    ];
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(body["similar_payload"]["status"], "available");
+    assert_eq!(body["similar_payload"]["hits"], json!([]));
+}
+
+#[tokio::test]
+async fn similar_payloads_are_capped_and_partial_while_backfilling() {
+    let mut torrents = vec![season("Season.Ref", &eps(0..10))];
+    for i in 0..25 {
+        let mut s = eps(0..10);
+        s.push(5 * GIB + i);
+        torrents.push(season(&format!("Season.Plus.{i}"), &s));
+    }
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    let listed = body["similar_payload"]["hits"].as_array().unwrap().len();
+    assert_eq!(listed, MAX_SIBLINGS);
+    assert_eq!(body["similar_payload"]["truncated"], true);
+    // Newest first: the last 20 added.
+    assert_eq!(body["similar_payload"]["hits"][0]["name"], "Season.Plus.24");
+    // While the index backfills the field: partial, never "none".
+    let g = Generations::current();
+    let next = g.get("group_minhash").unwrap() + 1;
+    let f = fixture(&torrents, false, Some(g.with("group_minhash", next)));
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(body["similar_payload_partial"], true);
+    assert_eq!(body["similar_payload"]["status"], "available");
+    // Search off: said.
+    let f = build(&torrents, false, None, false);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(
+        reason(&body["similar_payload"]),
+        ("unavailable", "search_disabled")
+    );
+    assert_eq!(body["similar_payload_partial"], false);
+}

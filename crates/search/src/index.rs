@@ -1835,6 +1835,66 @@ impl SearchIndex {
         )
     }
 
+    /// The torrents with any of `bands` among their `group_minhash`
+    /// terms ("similar payloads", GS-2: candidates by band term, which
+    /// the caller confirms on the stored sizes) that `visible` also
+    /// matches (the caller's visibility clauses, no relative dates): the
+    /// `limit` highest ids, sorted, and whether more matched. As
+    /// [`SearchIndex::torrents_with_pieces_roots`]: visibility is applied
+    /// before the limit, `cancel` is checked before and during
+    /// collection, and an index without the field answers no torrent.
+    /// Whether the answer is complete is
+    /// [`SearchIndex::availability`] of `group_minhash`.
+    pub fn torrents_with_minhash_bands(
+        &self,
+        bands: &[u64],
+        visible: &Node,
+        limit: usize,
+        cancel: &crate::CancelToken,
+    ) -> Result<(Vec<u64>, bool)> {
+        debug_assert!(
+            !relative(visible),
+            "visibility clauses have no relative dates"
+        );
+        cancel.check()?;
+        let field = self.fields().group_minhash;
+        if bands.is_empty() || field == compile::ABSENT {
+            return Ok((Vec::new(), false));
+        }
+        let any: Vec<(Occur, Box<dyn Query>)> = bands
+            .iter()
+            .map(|&band| {
+                let q = TermQuery::new(Term::from_field_u64(field, band), IndexRecordOption::Basic);
+                (Occur::Should, Box::new(q) as Box<dyn Query>)
+            })
+            .collect();
+        let compiled = self.query_cancelled(visible, 0, 0, cancel)?;
+        let both = BooleanQuery::new(vec![
+            (Occur::Must, compiled.query),
+            (
+                Occur::Must,
+                Box::new(BooleanQuery::new(any)) as Box<dyn Query>,
+            ),
+        ]);
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let collector = PostFilter {
+            ranges: &compiled.filters,
+            hot: compiled.hot.as_ref(),
+            inner: crate::percolate::TopIds {
+                keep: limit,
+                cancel: Some(cancel.clone()),
+                stopped: stopped.clone(),
+            },
+        };
+        let (top, more, _) = self.reader.searcher().search(&both, &collector)?;
+        newest_or_stopped(
+            top,
+            more,
+            stopped.load(std::sync::atomic::Ordering::Relaxed),
+            cancel,
+        )
+    }
+
     /// Whether the file index holds every torrent the torrent index does
     /// (its committed watermark has reached the torrent index's). It lags
     /// after it's recreated or rebuilt, until it catches up: a file-index
@@ -2829,7 +2889,7 @@ mod population_tests {
         assert!(index.prefilter("name", &partial, q()).is_some());
         assert!(
             index
-                .prefilter("group_key", &index.searcher(), q())
+                .prefilter("name_trigram", &index.searcher(), q())
                 .is_none()
         );
     }

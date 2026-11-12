@@ -25,6 +25,8 @@
 	"discover_unavailable_needs_v2_files": "查找同一文件需要 v2 或混合种子，此种子仅为 v1。",
 	"discover_unavailable_payload_not_specific": "此种子的文件太小或大小太常见，无法与其他种子可靠匹配。",
 	"discover_unavailable_partial_file_list": "Lodestar 只有此种子的部分文件列表，因此无法查找其克隆。",
+	"discover_unavailable_few_major_files": "查找相似种子需要至少 3 个大文件。此种子不足，因此只匹配完全相同的克隆。",
+	"discover_unavailable_needs_group_minhash": "搜索索引重建完成后才能查找相似种子。",
 	"discover_unavailable_label": "不可用",
 	"discover_adult_hidden": "成人内容已隐藏。在设置中开启“显示成人内容”即可查看。",
 	"discover_adult_hidden_action": "打开设置",

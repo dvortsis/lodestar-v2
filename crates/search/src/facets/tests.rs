@@ -110,6 +110,7 @@ fn doc(i: u64) -> TorrentDoc {
         file_buckets: Vec::new(),
         file_ext_buckets: Vec::new(),
         payload_sig: None,
+        group_minhash: Vec::new(),
     }
 }
 

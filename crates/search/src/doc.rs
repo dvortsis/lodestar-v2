@@ -51,6 +51,11 @@ pub struct TorrentDoc {
     /// ([`lodestar_classify::payload::payload_sig`], the one CS-8a reads),
     /// for `sig:`; `None` with no content files. Generation 1 (GS-0).
     pub payload_sig: Option<u64>,
+    /// The MinHash band terms of the major file sizes
+    /// ([`lodestar_classify::group::band_terms`]), for "similar
+    /// payloads"; empty below the major-file threshold. Generation 1
+    /// (GS-2).
+    pub group_minhash: Vec<u64>,
 }
 
 /// The provenance fields of a document (§18.6): `verified`, `network`
@@ -236,6 +241,7 @@ impl TorrentDoc {
             }
         }
         let (file_buckets, file_ext_buckets) = crate::files::covered_buckets(tree);
+        let group_minhash = lodestar_classify::group::band_terms(&sizes);
         TorrentDoc {
             id: row.id as u64,
             hashes,
@@ -254,6 +260,7 @@ impl TorrentDoc {
             file_buckets,
             file_ext_buckets,
             payload_sig: lodestar_classify::payload::payload_sig_of_sizes(sizes),
+            group_minhash,
         }
     }
 
@@ -310,6 +317,11 @@ impl TorrentDoc {
         }
         if let Some(id) = e.title_identity {
             d.add_u64(f.title_identity, id);
+            // `group_key` (GS-2, plan Q8): the same identity in the fast
+            // column, so collapse-by-group reads it per document. One
+            // identity rule, [`TitleIdentityParts::key`]; a change to it
+            // bumps both fields' generations.
+            d.add_u64(f.group_key, id);
         }
         // `years` is sorted.
         if let Some(y) = e.years.first() {
@@ -345,6 +357,9 @@ impl TorrentDoc {
         if let Some(sig) = self.payload_sig {
             d.add_u64(f.payload_sig, sig);
         }
+        for band in &self.group_minhash {
+            d.add_u64(f.group_minhash, *band);
+        }
         d
     }
 }
@@ -372,8 +387,8 @@ impl TitleIdentityParts {
     /// A collision only over-matches; the parts decide.
     ///
     /// Changing what this hashes, or how, changes every indexed term:
-    /// bump `population::GENERATIONS["title_identity"]` in the same
-    /// change, so indexes backfill and Siblings use the window meanwhile
+    /// bump `population::GENERATIONS["title_identity"]` and
+    /// `["group_key"]` (its fast-column copy, GS-2) in the same change, so indexes backfill and Siblings use the window meanwhile
     /// instead of narrowing by stale terms (B13b). The pinned values in
     /// `title_identity_follows_b13s_rule` catch such a change.
     pub fn key(&self) -> u64 {

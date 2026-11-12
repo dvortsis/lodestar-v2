@@ -53,6 +53,10 @@ const SAME_FILE_CANDIDATES: usize = 1000;
 /// countless unrelated torrents. A v2 root identifies content exactly at
 /// any size; the floor is for distinctiveness, as CS-8a's is.
 pub const SAME_FILE_MIN_BYTES: u64 = 1 << 20;
+/// Similar-payload candidates read, at most (visible ones: the index
+/// applies the request's visibility first), each then confirmed on its
+/// stored sizes.
+const SIMILAR_CANDIDATES: usize = 1000;
 /// Torrents in one comparison.
 pub const COMPARE_MIN: usize = 2;
 pub const COMPARE_MAX: usize = 5;
@@ -171,7 +175,8 @@ fn candidates_query(id: &TitleIdentity) -> Node {
 }
 
 /// Torrents related to one (§10.5): other versions of the same work,
-/// clones with an identical payload (equal file sizes) and other torrents
+/// clones with an identical payload (equal file sizes), torrents with a
+/// similar payload (most of the same major files) and other torrents
 /// with one of its files (v2 and hybrid torrents only). Each group is
 /// confirmed against the stored state and withheld as other versions
 /// are; the `*_partial` flags say when the index is still filling in
@@ -235,6 +240,29 @@ pub(crate) async fn siblings(
                 identical_payload(&s, index, row.id, p.sig, sizes, adult, &cancel)?
             }
         };
+        let sizes = content_sizes(&own);
+        let major = lodestar_classify::group::major_sizes(&sizes);
+        // The same rules as identical payload first (a payload that isn't
+        // its own, or isn't specific, matches nothing), then the major-file
+        // threshold: a torrent without a signature never lists the other
+        // signature-less ones.
+        let (similar_payload, similar_payload_partial) = match (&s.index, payload) {
+            (_, None) => (HitGroup::unavailable(Unavailable::NoContentFiles), false),
+            (_, Some(_)) if partial_list => {
+                (HitGroup::unavailable(Unavailable::PartialFileList), false)
+            }
+            (_, Some(p)) if !p.specific => (
+                HitGroup::unavailable(Unavailable::PayloadNotSpecific),
+                false,
+            ),
+            (_, Some(_)) if major.len() < lodestar_classify::group::MIN_MAJOR_FILES => {
+                (HitGroup::unavailable(Unavailable::FewMajorFiles), false)
+            }
+            (None, Some(_)) => (HitGroup::unavailable(Unavailable::SearchDisabled), false),
+            (Some(index), Some(_)) => {
+                similar_payload(&s, index, row.id, &sizes, &major, adult, &cancel)?
+            }
+        };
         let roots = file_roots(&own, row.flags & (flags::V2 | flags::HYBRID) != 0);
         let (same_file, same_file_partial, same_file_capped) = match (&s.index, &roots) {
             (_, Roots::NoContent) => (
@@ -274,6 +302,8 @@ pub(crate) async fn siblings(
             same_file,
             same_file_capped,
             same_file_partial,
+            similar_payload,
+            similar_payload_partial,
         }))
     })
     .await
@@ -433,6 +463,69 @@ fn identical_payload(
 /// equal signatures with other sizes are a collision, never a clone.
 fn same_payload(tree: &FileTree, sizes: &[u64]) -> bool {
     content_sizes(tree) == sizes
+}
+
+/// Similar payloads (§6 "Grouping/dedup", plan Q9): torrents that share
+/// a MinHash band of this one's major file sizes, found by band term in
+/// the index under the request's visibility, each then confirmed on its
+/// stored sizes ([`similar_to`]), so a band shared by chance never
+/// shows. `sizes` and `major` are this torrent's ([`content_sizes`] and
+/// its major sizes, at least the threshold's count). Identical clones
+/// are left out: the identical-payload group lists them. Newest first;
+/// `truncated` when more pass than are listed, or when the list is full
+/// and more candidates matched than were read. Partial (the flag) while
+/// the index backfills `group_minhash`.
+fn similar_payload(
+    s: &ApiState,
+    search: &lodestar_search::SearchHandle,
+    id: i64,
+    sizes: &[u64],
+    major: &[u64],
+    adult: bool,
+    cancel: &CancelToken,
+) -> ApiResult<(HitGroup, bool)> {
+    let index = search.index();
+    let availability = index.availability("group_minhash");
+    if availability == lodestar_search::Availability::Missing {
+        // An older index serving during a rebuild.
+        return Ok((HitGroup::unavailable(Unavailable::NeedsGroupMinhash), false));
+    }
+    let partial = !availability.complete();
+    let Some(signature) = lodestar_classify::group::MinHash::of_major(major) else {
+        return Ok((HitGroup::unavailable(Unavailable::FewMajorFiles), false));
+    };
+    cancel.check().map_err(search::search_error)?;
+    let visible = shown(&Node::All, adult);
+    let (ids, more) = index
+        .torrents_with_minhash_bands(&signature.bands(), &visible, SIMILAR_CANDIDATES, cancel)
+        .map_err(search::search_error)?;
+    // Newest first.
+    let ids = ids.into_iter().rev().map(|t| (t as i64, 0.0));
+    let mut group = confirmed(
+        s,
+        id,
+        ids,
+        adult,
+        cancel,
+        // A partial stored list isn't its payload.
+        |row| row.flags & flags::FILES_PARTIAL == 0,
+        |tree| similar_to(tree, sizes, major),
+    )?;
+    // Bounded only says so once the visible list is full, as for the
+    // same file.
+    group.truncated |= more && group.hits.len() == MAX_SIBLINGS;
+    Ok((group, partial))
+}
+
+/// Whether a candidate's stored files are a payload similar to this
+/// one's (`sizes`, and `major` of them): the exact Jaccard similarity of
+/// the major sizes reaches the threshold
+/// ([`lodestar_classify::group::similar`]), and it isn't an identical
+/// clone.
+fn similar_to(tree: &FileTree, sizes: &[u64], major: &[u64]) -> bool {
+    let theirs = content_sizes(tree);
+    theirs != sizes
+        && lodestar_classify::group::similar(major, &lodestar_classify::group::major_sizes(&theirs))
 }
 
 /// This torrent's files that "the same file elsewhere" looks up.
@@ -1597,5 +1690,69 @@ mod tests {
         let r = confirmed(&s, ids[0], candidates, false, &cancel, |_| true, |_| true);
         assert!(is_cancelled(&r), "{r:?}");
         assert_eq!(visits.load(Ordering::Relaxed), 1);
+    }
+
+    // ---- similar payloads (GS-2) ------------------------------------------
+
+    /// Confirmation is exact: Jaccard of the major sizes ≥ 4/5, and an
+    /// identical clone isn't "similar" (identical payload lists it).
+    #[test]
+    fn similar_is_confirmed_on_the_stored_major_sizes() {
+        const GB: u64 = 1 << 30;
+        let ours: Vec<u64> = (0..10).map(|e| GB + e).collect();
+        let major = lodestar_classify::group::major_sizes(&ours);
+        let with = |sizes: &[u64]| tree_of(sizes.iter().map(|&s| file(s, None, false)).collect());
+        let mut plus = ours.clone();
+        plus.push(2 * GB);
+        assert!(similar_to(&with(&plus), &ours, &major));
+        assert!(!similar_to(&with(&ours), &ours, &major), "a clone");
+        // 8 of 12: a band could match, the sizes don't.
+        let mut near: Vec<u64> = ours[..8].to_vec();
+        near.extend([3 * GB, 3 * GB + 1]);
+        assert!(!similar_to(&with(&near), &ours, &major));
+        // Small files and padding don't count.
+        let mut noisy = with(&plus);
+        noisy.files.push(file(4_000, None, false));
+        noisy.files.push(file(5 * GB, None, true));
+        assert!(similar_to(&noisy, &ours, &major));
+        // A candidate with too few major files is similar to nothing.
+        assert!(!similar_to(&with(&ours[..2]), &ours, &major));
+    }
+
+    /// A candidate the index offers whose stored files aren't similar (a
+    /// forged list, as if the index lagged or a band matched by chance)
+    /// is dropped; the request's token stops the group at the next
+    /// candidate.
+    #[test]
+    fn similar_candidates_are_confirmed_and_cancellable() {
+        let (s, ids, _dir) = corpus(&[entry("Ref"), entry("Other"), entry("Third")], None);
+        // Every corpus torrent is one 1 GiB file: pretend the reference
+        // has ten such episodes plus one of its own.
+        let ours: Vec<u64> = std::iter::repeat_n(1u64 << 30, 10).collect();
+        let major = lodestar_classify::group::major_sizes(&ours);
+        let forged = ids[1..].iter().map(|&i| (i, 0.0));
+        let g = confirmed(
+            &s,
+            ids[0],
+            forged,
+            false,
+            &CancelToken::new(),
+            |_| true,
+            |t| similar_to(t, &ours, &major),
+        )
+        .unwrap();
+        assert!(g.hits.is_empty(), "{g:?}");
+        // Through `similar_payload`: the index has no band terms for
+        // one-file torrents, so it's an empty, available, complete group.
+        let index = s.index.as_ref().unwrap();
+        let (g, partial) =
+            similar_payload(&s, index, ids[0], &ours, &major, false, &CancelToken::new()).unwrap();
+        assert_eq!(g.status, crate::dto::discover::GroupStatus::Available);
+        assert!(g.hits.is_empty() && !partial);
+        // A cancelled request stops before the lookup.
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let r = similar_payload(&s, index, ids[0], &ours, &major, false, &cancel).map(|(g, _)| g);
+        assert!(is_cancelled(&r), "{r:?}");
     }
 }
