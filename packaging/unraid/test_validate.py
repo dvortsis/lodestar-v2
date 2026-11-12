@@ -4,6 +4,8 @@
 The shipped templates must pass, and a template that still carries a field described as
 "not used yet" (the old Hot path and Cold path fields) must be refused.
 """
+import contextlib
+import io
 import re
 import tempfile
 import unittest
@@ -87,7 +89,24 @@ class RequiresAndOverview(unittest.TestCase):
 
     def test_lodestar_may_leave_requires_empty(self):
         text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
-        self.assertRegex(text, r"<Requires>\s*</Requires>")
+        blank = re.sub(r"<Requires>.*?</Requires>", "<Requires>  </Requires>", text, flags=re.S)
+        self.assertEqual(ValidateTemplates.check_text(self, "lodestar.xml", blank), [])
+
+    def test_every_way_to_join_another_containers_network_needs_requires(self):
+        text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
+        forms = [
+            ("<ExtraParams>--stop-timeout=60", "<ExtraParams>--net=container:vpn --stop-timeout=60"),
+            ("<ExtraParams>--stop-timeout=60", "<ExtraParams>--network container:vpn --stop-timeout=60"),
+            ("<ExtraParams>--stop-timeout=60", "<ExtraParams>--network=container:vpn --stop-timeout=60"),
+        ]
+        for old, new in forms:
+            self.assertIn(old, text)
+            errors = ValidateTemplates.check_text(self, "lodestar.xml", text.replace(old, new, 1))
+            self.assertTrue(any("'vpn'" in e for e in errors), (new, errors))
+        net = re.sub(r"<Network>.*?</Network>", "<Network>container:vpn</Network>", text, flags=re.S)
+        self.assertNotEqual(net, text)
+        errors = ValidateTemplates.check_text(self, "lodestar.xml", net)
+        self.assertTrue(any("'vpn'" in e for e in errors), errors)
 
     def test_the_worker_overview_must_still_say_v0_6(self):
         errors = self.broken("lodestar-worker.xml", "Requires Lodestar v0.6+. ", "")
@@ -107,7 +126,8 @@ class RequiresAndOverview(unittest.TestCase):
 class EveryTemplateIsChecked(unittest.TestCase):
     def test_the_real_folder_passes_as_a_whole(self):
         self.assertEqual(validate.unlisted(HERE), [])
-        self.assertEqual(validate.main(), 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(validate.main(), 0)
 
     def test_an_unlisted_template_is_refused_by_name(self):
         with tempfile.TemporaryDirectory() as d:
@@ -115,6 +135,11 @@ class EveryTemplateIsChecked(unittest.TestCase):
                 (Path(d) / name).write_text("<Container/>", encoding="utf-8")
             (Path(d) / "lodestar-new.xml").write_text("<Container/>", encoding="utf-8")
             errors = validate.unlisted(Path(d))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = validate.main(Path(d))
+        self.assertEqual(code, 1)
+        self.assertIn("lodestar-new.xml", out.getvalue())
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("lodestar-new.xml", errors[0])
 

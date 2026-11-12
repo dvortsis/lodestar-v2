@@ -17,7 +17,7 @@ TEMPLATES = {
     "lodestar-gluetun.xml": {"webui": True, "extra": "--network=container:gluetun", "paths": {"/data"}},
     "lodestar-worker.xml": {"webui": False, "vars": {"LODESTAR_JOIN", "LODESTAR_TOKEN"}, "requires": "v0.6"},
 }
-NETWORK_CONTAINER = re.compile(r"--network=container:(\S+)")
+NETWORK_CONTAINER = re.compile(r"--net(?:work)?[= ]container:(\S+)")
 
 
 def check(path: Path, rules: dict) -> list[str]:
@@ -57,9 +57,14 @@ def check(path: Path, rules: dict) -> list[str]:
         errors.append("<Requires> element missing")
     if "requires" in rules and rules["requires"] not in requires:
         errors.append(f"<Requires> must name Lodestar {rules['requires']} or newer")
-    for name in NETWORK_CONTAINER.findall(extra):
+    # The dependency can also come from the Network type ("container:NAME").
+    network = (root.findtext("Network") or "").strip()
+    names = NETWORK_CONTAINER.findall(extra)
+    if network.startswith("container:"):
+        names.append(network[len("container:"):])
+    for name in names:
         if name not in requires:
-            errors.append(f"<Requires> must name the running container {name!r} (ExtraParams has --network=container:{name})")
+            errors.append(f"<Requires> must name the running container {name!r} (it runs in that container's network)")
     # The first sentence says what the container is. A leading "Requires Lodestar v0.6+." comes first.
     overview = " ".join((root.findtext("Overview") or "").split())
     sentences = [x for x in re.split(r"(?<=[.!?])\s+", overview) if x and not x.startswith("Requires ")]
@@ -103,11 +108,10 @@ def check(path: Path, rules: dict) -> list[str]:
 def unlisted(folder: Path) -> list[str]:
     """Templates in the folder that have no rules entry, so they would skip every check."""
     return [f"{p.name}: no rules entry in TEMPLATES; add one so this template is checked"
-            for p in sorted(folder.glob("*.xml")) if p.name not in TEMPLATES]
+            for p in sorted(folder.iterdir()) if p.suffix.lower() == ".xml" and p.name not in TEMPLATES]
 
 
-def main() -> int:
-    here = Path(__file__).parent
+def main(here: Path = Path(__file__).parent) -> int:
     failed = False
     for e in unlisted(here):
         print(e)
