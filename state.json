@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T00:10:14Z",
+  "updated_at": "2026-11-12T00:33:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7504,6 +7504,11 @@
       "pr": 709,
       "sha": "4a044c3e49a748ac8e606396e10752b1ad991106",
       "at": "2026-11-12T00:08:23Z"
+    },
+    {
+      "pr": 712,
+      "sha": "46b2a5dde6a1938420b6449fe2a22a4c9c4b9bf0",
+      "at": "2026-11-12T00:33:17Z"
     }
   ],
   "active_sessions": {
@@ -7738,7 +7743,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T00:10:14Z",
+    "updated": "2026-11-12T00:33:17Z",
     "items": [
       {
         "slot": 1,
@@ -7804,11 +7809,11 @@
       },
       {
         "slot": 8,
-        "slice": "WK-20",
+        "slice": "X-wk-own-lease-lost",
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
-        "doing": "Chaos harness: coordinator + N workers in-process (Opus); v0.6 critical path",
-        "since": "2026-11-11T19:52:00Z",
+        "doing": "brief sent; #712 WK-20 merged as 46b2a5dd",
+        "since": "2026-11-12T00:33:17Z",
         "status": "active"
       },
       {
@@ -7901,7 +7906,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-12T00:10:14Z",
+  "updated": "2026-11-12T00:33:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
