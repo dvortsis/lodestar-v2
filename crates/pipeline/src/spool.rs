@@ -960,11 +960,17 @@ impl Spool {
                 }
                 SEGMENT_EXT => {
                     let mut head = [0u8; HEADER_LEN];
-                    let read = File::open(&path).and_then(|mut f| f.read_exact(&mut head));
-                    let ours = read.is_ok()
+                    let read =
+                        File::open(&path).and_then(|mut f| f.read_exact(&mut head).map(|()| f));
+                    let ours = read.as_ref().is_ok()
                         && Header::decode(&head).is_ok_and(|h| h.worker == worker && h.seq == seq);
-                    if ours {
-                        let len = entry.metadata().map_err(io_err("list"))?.len();
+                    if let (true, Ok(file)) = (ours, read) {
+                        // Sized from the handle that read the header, not
+                        // the folder listing: on Windows a listing's size
+                        // can lag the file's, after a crash too, and the
+                        // byte count would start low (X-spool-open-size).
+                        let len = file.metadata().map_err(io_err("read a segment of"))?.len();
+                        drop(file);
                         let frames = count_frames(&path).unwrap_or(0);
                         closed.insert(seq, Closed { bytes: len, frames });
                     } else if secure_remove(&path).is_ok() {
@@ -1507,6 +1513,38 @@ mod tests {
         s.close_active().unwrap();
         assert_eq!(s.segments(), vec![1, 2]);
         assert_eq!(s.bytes(), on_disk(dir.path()));
+    }
+
+    /// A spool reopened after a crash (dropped with its segment still
+    /// open) counts each segment's bytes and records as they are on disk:
+    /// sized from the file itself, not the folder listing, which on
+    /// Windows can lag a file just written (X-spool-open-size).
+    #[test]
+    fn a_reopened_spool_counts_each_segments_own_size() {
+        let now = 1_800_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Spool::open(dir.path(), 9, Caps::default(), secrets()).unwrap();
+        for batch in 1..=3 {
+            s.append(&record(batch), now).unwrap();
+        }
+        let before = s.bytes();
+        drop(s);
+        let files = |d: &Path| -> u64 {
+            fs::read_dir(d)
+                .unwrap()
+                .map(|e| {
+                    File::open(e.unwrap().path())
+                        .unwrap()
+                        .metadata()
+                        .unwrap()
+                        .len()
+                })
+                .sum()
+        };
+        let s = Spool::open(dir.path(), 9, Caps::default(), secrets()).unwrap();
+        assert_eq!(s.bytes(), files(dir.path()));
+        assert_eq!(s.bytes(), before);
+        assert_eq!(get(&s.stats().records), 3);
     }
 
     /// Appends go to the file the spool made, through the handle that made

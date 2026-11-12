@@ -26,13 +26,13 @@ The service has already reported Running to the SCM when it refuses to start (th
 - **No fixed sleeps, and no tokio `test-util`.** `supervise` polls with a deadline.
 
 ## Checks
-- `cargo clippy --workspace --all-targets -D warnings` passes on Linux.
+- `cargo clippy --workspace --all-targets -- -D warnings` passes on Linux.
 - **A Windows-target pass** (`--target x86_64-pc-windows-gnu`, with MinGW for `ring`) finds nothing in the touched files. It caught one import that only the tests use on Windows, which this PR moves into the test module.
 - **That pass also shows warnings already on `main`, outside this slice:**
   - `lodestar-companions`: an unused `File` import in `config_files.rs`, and needless `mut`s in `extract.rs`, `fetch.rs`, `layout.rs` and `manager.rs`;
   - `lodestar/src/main.rs:301`: a collapsible `if`.
 
-  Linux CI doesn't lint `cfg(windows)` code, so they don't fail it. I told the runner.
+  Linux CI doesn't lint `cfg(windows)` code, so they don't fail it. They went to the runner, which queued them as X-win-clippy.
 
 ## Self-review (fresh Opus reviewer)
 No blocking or important findings, and 2 polish items, both fixed: a comment that sat on the wrong import, and the service test now telling "killed at the bound" from an early spawn error.
