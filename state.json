@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:56Z",
+  "updated_at": "2026-11-12T22:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7667,6 +7667,11 @@
       "id": "wk-19-windows",
       "note": "WK-19 (docs/user/workers.md) must cover the Windows join (see the WK-18w decisions file).",
       "added": "2026-11-12T22:56Z"
+    },
+    {
+      "id": "gluetun-leak-cmp",
+      "note": "X-gluetun-leak-cmp (Opus, /security-review): the crates/companions generator binds post-rules.txt read-only into gluetun; Lodestar writes the file; a missing file fails closed; goldens regenerated. Launch once X-gluetun-leak has pushed the shared rules file. No gluetun release fixes this (v3.41.3 is the newest; master unchanged).",
+      "added": "2026-11-12T22:57Z"
     }
   ],
   "main_health": [
@@ -9037,7 +9042,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:56Z",
+  "updated": "2026-11-12T22:57Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
