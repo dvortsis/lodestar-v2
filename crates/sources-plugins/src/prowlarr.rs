@@ -127,7 +127,8 @@ pub const USENET_POLL_EVERY: Duration = Duration::from_secs(3600);
 /// round (the poll gate's 15 minutes). Rounds land at slightly different
 /// offsets, so without it a poll due "after an hour" would slip to the
 /// round after, every 75 minutes.
-pub const USENET_POLL_SLACK: Duration = Duration::from_secs(15 * 60 / 2);
+pub const USENET_POLL_SLACK: Duration =
+    Duration::from_secs(POLICY.caps.min_poll_interval.as_secs() / 2);
 /// API hits per Usenet indexer in any 24 hours, retries included: 24 for
 /// the hourly polls and as many again for retries after a failed,
 /// oversized or partly sent page, which come on the normal 15-minute
@@ -175,6 +176,14 @@ impl UsenetPolls {
         let p = self.0.entry(id.to_owned()).or_default();
         if p.hits.len() < USENET_DAILY_HITS {
             p.hits.push_back(at);
+        }
+    }
+
+    /// `id`'s poll granted at `at` got `page`: a hit unless the request
+    /// was never sent ([`Failure::NotSent`]).
+    fn answered(&mut self, id: &str, at: tokio::time::Instant, page: &Result<Vec<u8>, Failure>) {
+        if *page != Err(Failure::NotSent) {
+            self.hit(id, at);
         }
     }
 
@@ -713,8 +722,8 @@ impl Job {
             return Ok(());
         }
         let page = self.page(ix).await;
-        if ix.usenet && page != Err(Failure::NotSent) {
-            self.usenet_polls().hit(&ix.id, granted);
+        if ix.usenet {
+            self.usenet_polls().answered(&ix.id, granted, &page);
         }
         let body = page.map_err(Failure::sent_or_not)?;
         let now = unix_now();
@@ -1544,7 +1553,14 @@ mod usenet_poll_tests {
         let t0 = Instant::now();
         let mut polls = 0;
         for round in 0..(4 * 24) {
-            let jitter = if round % 2 == 0 { MIN } else { Duration::ZERO };
+            // Every other polled round (0, 8, 16, …) lands a minute late,
+            // so the next one comes 59 minutes after it: due only with
+            // the slack.
+            let jitter = if (round / 4) % 2 == 0 {
+                MIN
+            } else {
+                Duration::ZERO
+            };
             let at = t0 + round * 15 * MIN + jitter;
             if ask(&mut p, "7", at) {
                 polls += 1;
@@ -1563,14 +1579,30 @@ mod usenet_poll_tests {
         assert_eq!(answer(Err(HttpError::NoEgress)), Err(Failure::NotSent));
         let timeout = Err(HttpError::Transport("timeout".into()));
         assert_eq!(answer(timeout), Err(Failure::Other));
+        // Blocked for half a day: every round is due and answered
+        // `NotSent`, nothing is counted, and the day's hits are all there
+        // when the block lifts.
         let mut p = UsenetPolls::default();
         let t0 = Instant::now();
-        // Blocked for half a day: due every round and nothing counted, so
-        // the day's hits are all there when the block lifts.
-        for i in 0..48 {
-            assert!(p.due("7", t0 + i * 15 * MIN));
+        for i in 0..USENET_DAILY_HITS as u32 {
+            let at = t0 + i * 15 * MIN;
+            assert!(p.due("7", at));
+            p.answered("7", at, &Err(Failure::NotSent));
         }
-        assert!(ask(&mut p, "7", t0 + 12 * 60 * MIN));
+        assert!(p.due("7", t0 + 12 * 60 * MIN));
+        // Any answer that went out counts: a failure as much as a page.
+        let mut q = UsenetPolls::default();
+        for i in 0..USENET_DAILY_HITS as u32 {
+            let at = t0 + i * 15 * MIN;
+            assert!(q.due("7", at));
+            let page = if i % 2 == 0 {
+                Err(Failure::Other)
+            } else {
+                Ok(Vec::new())
+            };
+            q.answered("7", at, &page);
+        }
+        assert!(!q.due("7", t0 + 12 * 60 * MIN), "48 hits counted");
     }
 
     #[test]
