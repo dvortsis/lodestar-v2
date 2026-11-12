@@ -6,8 +6,8 @@
 
 use lodestar_metainfo::{InfoHash, InfoHashV2, hidden_char};
 use lodestar_sources_feeds::lemmy::{
-    Feed, LIMITS, Limits, MAX_CURSOR, MAX_ERROR, MAX_REF, MAX_TITLE, MAX_TORRENTS, Skipped, Stop,
-    parse, parse_each,
+    Feed, LIMITS, Limits, MAX_CURSOR, MAX_ERROR, MAX_NAME, MAX_REF, MAX_TITLE, MAX_TORRENTS,
+    Skipped, Stop, parse, parse_each,
 };
 use proptest::prelude::*;
 
@@ -169,6 +169,72 @@ fn repeated_flags_only_add_restrictions() {
 }
 
 #[test]
+fn repeated_objects_skip_the_post() {
+    let m = format!(r#","url":"magnet:?xt=urn:btih:{A}""#);
+    let views = [
+        view(1, &m, "").replacen(r#""counts":"#, r#""community":{"nsfw":true},"counts":"#, 1),
+        view(2, &m, "").replacen(
+            r#""counts":"#,
+            r#""post":{"id":2,"nsfw":false,"removed":true,"deleted":false},"counts":"#,
+            1,
+        ),
+        view(3, &m, "").replacen(r#""counts":"#, r#""creator":{"name":"other"},"counts":"#, 1),
+    ];
+    let f = parse(page(&views).as_bytes());
+    assert!(f.posts.is_empty());
+    assert_eq!(f.page.summary.skipped.malformed, 3);
+}
+
+#[test]
+fn removed_wins_over_other_faults() {
+    let long = format!(r#","body":"{}""#, "x".repeat(70 * 1024));
+    let v = view(4, &long, "").replacen(r#""removed":false"#, r#""removed":true"#, 1);
+    let community = view(5, r#","url":null"#, r#","removed":true"#);
+    let f = parse(page(&[v, community]).as_bytes());
+    assert_eq!(f.page.removed, 2);
+    assert_eq!(f.page.summary.skipped.total(), 0);
+    assert_eq!(f.page.newest_id, Some(5));
+}
+
+#[test]
+fn url_magnet_is_read_whole() {
+    // Characters that end a magnet in Markdown are fine in `url`.
+    let url = format!(r#","url":" magnet:?dn=It's+(Here)|é&xt=urn:btih:{A} ""#);
+    let f = parse(page(&[view(1, &url, "")]).as_bytes());
+    assert_eq!(f.posts[0].torrents[0].hashes.v1, v1(A));
+    assert_eq!(
+        f.posts[0].torrents[0].name.as_deref(),
+        Some("It's (Here)|é")
+    );
+    // A magnet inside an http(s) url isn't a key.
+    let url = format!(r#","url":"https://x.example/?m=magnet:?xt=urn:btih:{A}""#);
+    let f = parse(page(&[view(1, &url, "")]).as_bytes());
+    assert_eq!(f.page.summary.skipped.no_hash, 1);
+}
+
+#[test]
+fn dropped_fields() {
+    let m = format!(r#","url":"magnet:?xt=urn:btih:{A}""#);
+    let v = view(1, &m, "")
+        .replacen(
+            "2026-11-01T12:00:00.123456Z",
+            "2026-11-01T12:00:00.123456",
+            1,
+        )
+        .replacen(
+            r#""name":"uploader""#,
+            &format!(r#""name":"{}""#, "u".repeat(257)),
+            1,
+        );
+    let body = page(&[v]).replacen(r#""next_page":"Pa46c""#, r#""next_page":"a b""#, 1);
+    let f = parse(body.as_bytes());
+    let p = &f.posts[0];
+    assert_eq!(p.published, None);
+    assert_eq!(p.creator.name, None);
+    assert_eq!(f.page.next_page, None);
+}
+
+#[test]
 fn error_answer() {
     let f = parse(br#"{"error":"rate_limit_error"}"#);
     assert_eq!(f.page.error.as_deref(), Some("rate_limit_error"));
@@ -233,6 +299,14 @@ fn caps() {
     let f = parse(page(&[view(1, &format!(r#","body":"{many}""#), "")]).as_bytes());
     assert_eq!(f.posts[0].torrents.len(), MAX_TORRENTS);
     assert!(f.posts[0].torrents_truncated);
+
+    // Values.
+    let tight = Limits {
+        max_values: 10,
+        ..LIMITS
+    };
+    let f = with(page(&[view(1, &m, "")]).as_bytes(), &tight);
+    assert_eq!(f.page.summary.stop, Some(Stop::Elements));
 
     // Depth.
     let deep = format!(r#"{{"posts":[{}{}]}}"#, "[".repeat(40), "]".repeat(40));
@@ -303,6 +377,13 @@ fn check(f: &Feed, limits: &Limits) {
         assert!(!post.title.iter().flat_map(|t| t.chars()).any(hidden_char));
         for r in [&post.link, &post.community.actor_id, &post.creator.actor_id] {
             assert!(r.as_ref().is_none_or(|l| l.len() <= MAX_REF));
+        }
+        for n in [&post.community.name, &post.creator.name] {
+            assert!(
+                n.as_ref()
+                    .is_none_or(|n| !n.is_empty() && n.len() <= MAX_NAME)
+            );
+            assert!(!n.iter().flat_map(|n| n.chars()).any(hidden_char));
         }
     }
 }

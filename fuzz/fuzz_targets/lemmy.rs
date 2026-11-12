@@ -7,7 +7,7 @@
 use libfuzzer_sys::fuzz_target;
 use lodestar_metainfo::hidden_char;
 use lodestar_sources_feeds::lemmy::{
-    self, LIMITS, Limits, MAX_CURSOR, MAX_ERROR, MAX_REF, MAX_TITLE, MAX_TORRENTS,
+    self, LIMITS, Limits, MAX_CURSOR, MAX_ERROR, MAX_NAME, MAX_REF, MAX_TITLE, MAX_TORRENTS,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -52,6 +52,13 @@ fuzz_target!(|data: &[u8]| {
             assert!(!p.title.iter().flat_map(|t| t.chars()).any(hidden_char));
             for r in [&p.link, &p.community.actor_id, &p.creator.actor_id] {
                 assert!(r.as_ref().is_none_or(|l| l.len() <= MAX_REF));
+            }
+            for n in [&p.community.name, &p.creator.name] {
+                assert!(
+                    n.as_ref()
+                        .is_none_or(|n| !n.is_empty() && n.len() <= MAX_NAME)
+                );
+                assert!(!n.iter().flat_map(|n| n.chars()).any(hidden_char));
             }
         }
     }

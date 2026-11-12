@@ -27,12 +27,16 @@
 //! works.
 //!
 //! - **Keys** come only from magnet URIs in `post.url` and `post.body`,
-//!   read with the magnet parser in [`common`](crate::common). An
+//!   read with the magnet parser in [`common`](crate::common). A magnet
+//!   `url` is read whole; the body is Markdown and is scanned. An
 //!   `http(s)` link to a `.torrent` gives no key (plan Q-r12) and the post
 //!   counts as `no_hash`. A post can carry several magnets; each distinct
 //!   key is one [`Torrent`], the url's first.
 //! - **Removed and deleted posts** are skipped and counted in
-//!   [`Page::removed`], as are posts in a removed or deleted community.
+//!   [`Page::removed`], as are posts in a removed or deleted community. A
+//!   removal read cleanly counts there even when another field is bad.
+//! - **A repeated `post`, `community` or `creator` object** skips the post
+//!   as malformed: the second could carry a flag the first lacks.
 //! - **Adult:** [`Post::adult`] is `post.nsfw` or `community.nsfw`. Both
 //!   flags must be present as booleans, or the post is skipped as
 //!   malformed, so a reshaped answer can't drop the flag unseen. Repeated
@@ -43,9 +47,9 @@
 //!   limit) posts end the read with [`Stop::Items`].
 
 use crate::common::{
-    Bad, MAX_NAME, external_ref, is_magnet, magnet_hashes, percent_decode, prepare, rfc3339, title,
+    Bad, external_ref, is_magnet, magnet_hashes, percent_decode, prepare, rfc3339, title,
 };
-pub use crate::common::{Hashes, MAX_REF, MAX_TITLE, Skipped, Stop, Summary};
+pub use crate::common::{Hashes, MAX_NAME, MAX_REF, MAX_TITLE, Skipped, Stop, Summary};
 use crate::json::{self, R, Reader, TextError, Walk};
 
 /// Distinct torrents kept per post; the rest are left out
@@ -309,20 +313,26 @@ impl Parser<'_, '_> {
             return Ok(());
         }
         let mut d = Draft::default();
-        self.object(|p, k| match k {
-            "post" if !d.seen_post => {
-                d.seen_post = true;
-                p.part(&mut d, Draft::post_field)
+        self.object(|p, k| {
+            let (seen, field): (bool, Field<'_, '_>) = match k {
+                "post" => (std::mem::replace(&mut d.seen_post, true), Draft::post_field),
+                "community" => (
+                    std::mem::replace(&mut d.seen_community, true),
+                    Draft::community_field,
+                ),
+                "creator" => (
+                    std::mem::replace(&mut d.seen_creator, true),
+                    Draft::creator_field,
+                ),
+                _ => return p.j.skip().map(drop),
+            };
+            if seen {
+                // A second object could carry a flag the first lacks:
+                // the post can't be read truthfully.
+                d.spoil(Bad::Malformed);
+                return p.j.skip().map(drop);
             }
-            "community" if !d.seen_community => {
-                d.seen_community = true;
-                p.part(&mut d, Draft::community_field)
-            }
-            "creator" if !d.seen_creator => {
-                d.seen_creator = true;
-                p.part(&mut d, Draft::creator_field)
-            }
-            _ => p.j.skip().map(drop),
+            p.part(&mut d, field)
         })?;
         self.finish(d, emit);
         Ok(())
@@ -359,6 +369,9 @@ impl Parser<'_, '_> {
         }
     }
 }
+
+/// Reads one field of a `post`, `community` or `creator` object.
+type Field<'a, 'l> = fn(&mut Draft, &mut Parser<'a, 'l>, &str) -> R<()>;
 
 enum Skip {
     Removed,
@@ -455,6 +468,11 @@ impl Draft {
     }
 
     fn finish(self) -> Result<Post, Skip> {
+        // A removal read cleanly wins over any other fault, so LEM-1's
+        // health counts moderation as moderation.
+        if self.removed == Some(true) || self.deleted == Some(true) || self.community_gone {
+            return Err(Skip::Removed);
+        }
         if let Some(b) = self.bad {
             return Err(Skip::Bad(b));
         }
@@ -470,12 +488,14 @@ impl Draft {
         ) else {
             return Err(Skip::Bad(Bad::Malformed));
         };
-        if removed || deleted || self.community_gone {
-            return Err(Skip::Removed);
-        }
+        debug_assert!(!removed && !deleted);
         let mut m = Magnets::default();
-        for text in [&self.url, &self.body].into_iter().flatten() {
-            m.scan(text);
+        // `url` is one URL, not Markdown: a magnet there is read whole.
+        if let Some(url) = self.url.as_deref().map(str::trim).filter(|u| is_magnet(u)) {
+            m.add(url);
+        }
+        if let Some(body) = &self.body {
+            m.scan(body);
         }
         if m.torrents.is_empty() {
             return Err(if m.seen { Skip::BadHash } else { Skip::NoHash });
@@ -527,22 +547,27 @@ impl Magnets {
                 .unwrap_or_default()
                 .trim_end_matches(['.', ',', ';', ':', '!', '?']);
             i += len.max(1);
-            self.seen = true;
-            let Some(hashes) = magnet_hashes(uri) else {
-                continue;
-            };
-            if self.torrents.iter().any(|t| t.hashes.key() == hashes.key()) {
-                continue;
-            }
-            if self.torrents.len() >= MAX_TORRENTS {
-                self.truncated = true;
-                continue;
-            }
-            self.torrents.push(Torrent {
-                hashes,
-                name: dn(uri),
-            });
+            self.add(uri);
         }
+    }
+
+    /// One magnet URI, kept when it gives a new key within the cap.
+    fn add(&mut self, uri: &str) {
+        self.seen = true;
+        let Some(hashes) = magnet_hashes(uri) else {
+            return;
+        };
+        if self.torrents.iter().any(|t| t.hashes.key() == hashes.key()) {
+            return;
+        }
+        if self.torrents.len() >= MAX_TORRENTS {
+            self.truncated = true;
+            return;
+        }
+        self.torrents.push(Torrent {
+            hashes,
+            name: dn(uri),
+        });
     }
 }
 
