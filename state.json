@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:11:01Z",
+  "updated_at": "2026-11-12T07:12:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7999,7 +7999,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:11:01Z",
+    "updated": "2026-11-12T07:12:06Z",
     "items": [
       {
         "slot": 1,
@@ -8042,7 +8042,7 @@
         "slice": "RX-0",
         "role": "build",
         "agent": "claude",
-        "doing": "#717 rv-717-bfbdb9a6 CHANGES (B2: bracketed negated Perl/nested negated classes bypass codepoint budget, 691 ms) relayed; fix round, then fresh delta review",
+        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: #717 rv-717-4a37e94b CHANGES (B3 fold-table codepoints ~5x undercharged, 54 ms accepted; I3 [\\W_] refused) relayed; fix round, then fresh delta review",
         "since": "2026-11-11T21:46:53Z",
         "status": "active"
       },
@@ -8132,7 +8132,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:11:01Z",
+  "updated": "2026-11-12T07:12:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
