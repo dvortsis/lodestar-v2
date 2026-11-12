@@ -147,8 +147,22 @@ test.describe('Settings → Outputs', () => {
 		await expect(page.getByTestId('outputs-bitmagnet-count')).toHaveText(
 			'Done: 42 torrents in the file.'
 		);
-		// The example command scrolls by keyboard on a narrow screen.
-		await expect(page.getByTestId('outputs-bitmagnet-curl')).toHaveAttribute('tabindex', '0');
+		// The example command wraps instead of scrolling, between words where it can: nothing of it is hidden at any width.
+		const curl = page.getByTestId('outputs-bitmagnet-curl');
+		await expect(curl).toContainText('http://<bitmagnet-host>:3333/import');
+		for (const width of [320, 360, 768, 1366]) {
+			await page.setViewportSize({ width, height: 900 });
+			await expect.poll(() => curl.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+		}
+		// Nor does the page scroll sideways on a phone.
+		await page.setViewportSize({ width: 360, height: 900 });
+		await expect
+			.poll(() =>
+				page.evaluate(
+					() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+				)
+			)
+			.toBe(true);
 		await expectNoA11yViolations(page);
 	});
 });
