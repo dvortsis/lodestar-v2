@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:37:09Z",
+  "updated_at": "2026-11-12T07:38:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8035,7 +8035,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:37:09Z",
+    "updated": "2026-11-12T07:38:35Z",
     "items": [
       {
         "slot": 1,
@@ -8087,7 +8087,7 @@
         "slice": "ENR-10",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: building per briefs/ENR-10.md (/security-review); moved here from the lent extra slot after #745 merged",
+        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: building; owns now + pipeline unverified.rs (ingest/claims_kib ~60) and enrich.rs (~15), worker.rs dropped (no #737 overlap); no host wiring (ENR-14)",
         "since": "2026-11-12T07:37:09Z",
         "status": "active"
       },
@@ -8168,7 +8168,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:37:09Z",
+  "updated": "2026-11-12T07:38:35Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
