@@ -23,7 +23,7 @@ serde_json = "=1.0.154"
 [dev-dependencies]
 lodestar-companions = { path = ".", features = ["testing"] }
 proptest = "=1.11.0"
-tokio = { version = "=1.54.0", features = ["rt", "macros"] }
+tokio = { version = "=1.54.1", features = ["rt", "macros"] }
 
 [lints]
 workspace = true
