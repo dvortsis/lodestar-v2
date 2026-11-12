@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:52Z",
+  "updated_at": "2026-11-12T22:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7632,6 +7632,26 @@
       "id": "cmp-egress-admin-pw",
       "note": "X-cmp-egress-api: the PUT needs the admin password (as patch_source does); 409 takes_no_route; no new log event (follow-up).",
       "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "merged-769",
+      "note": "#769 UN-1 merged (f47369b8) after the mutation check (slack 0 fails the hourly test); session archived.",
+      "added": "2026-11-12T22:55Z"
+    },
+    {
+      "id": "rv-788-b1",
+      "note": "#788 CHANGES: the 4x progress-backoff cap traps the timer for R<T<2R; runner chose (b) drop the cap. Follow-up X-utp-spurious-rto: an echoed-timestamp spurious-timeout sample.",
+      "added": "2026-11-12T22:55Z"
+    },
+    {
+      "id": "slices-wk18-path",
+      "note": "runner/slices.yaml:875 lists packaging/wix/join.wxs under WK-18; fix it in the next runner PR (WK-18w owns packaging/windows).",
+      "added": "2026-11-12T22:55Z"
+    },
+    {
+      "id": "parsed-from-check",
+      "note": "Check whether a null resolved_via means \"title from the name\" (Parsed.svelte); if so, the ENR-13 nit is moot.",
+      "added": "2026-11-12T22:55Z"
     }
   ],
   "main_health": [
@@ -8654,7 +8674,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:52Z",
+    "updated": "2026-11-12T22:55Z",
     "items": [
       {
         "slot": 1,
@@ -8933,6 +8953,15 @@
         "agent": "claude",
         "doing": "session_01MMjhn9uJBPzSurs8AkipKz: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UP-1 (#765 merged); brief briefs/WK-18w.md",
         "since": "2026-11-12T22:52Z"
+      },
+      {
+        "slot": 32,
+        "slice": "X-consent-gate-lift",
+        "role": "build",
+        "status": "active",
+        "agent": "claude",
+        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UN-1 (#769 merged); briefs/X-consent-gate-lift.md; /security-review",
+        "since": "2026-11-12T22:55Z"
       }
     ]
   },
@@ -8993,7 +9022,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:52Z",
+  "updated": "2026-11-12T22:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
