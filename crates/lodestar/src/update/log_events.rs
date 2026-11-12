@@ -47,6 +47,15 @@ lodestar_log::catalogue! {
         message: "The update couldn't be installed",
         fields: { error: Label },
     }
+    /// An install was stopped by the shutdown before its switch. Not a
+    /// failure: the version stays queued for the next start.
+    UPDATE_INSTALL_STOPPED {
+        id: "update.install_stopped",
+        component: System,
+        level: Info,
+        message: "The update install stopped with the service; it stays queued",
+        fields: {},
+    }
     /// An updater state file (`updater.json`, `skipped`, `history.json`)
     /// couldn't be saved durably, so the change wasn't acknowledged
     /// (DUR-26). `file` is its name, never a path.
