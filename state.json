@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T01:12:43Z",
+  "updated_at": "2026-11-12T01:15:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6996,6 +6996,11 @@
       "slice": "v0.5.2 cut",
       "at": "2026-11-12T01:12:43Z",
       "note": "Before the v0.5.2 tag (owner 2.48): editorial PR into release/v0.5.2 so its version-4 notice (both copies) and operator-guidance.md:3 name 0.5.2 and its release candidates only, not 'the development builds that lead to it (the main branch)'. Version stays 4. Recorded in docs/decisions/2026-11-12-runner-notice-applies.md (#725). Also: README.md:50 and docs/user/01-before-you-start.md:40 send v0.5.1 readers to main's v5 notice (rv-725 nit)."
+    },
+    {
+      "slice": "X-companion-pins-polish (runner follow-up)",
+      "at": "2026-11-12T01:15:17Z",
+      "note": "From X-cmp13-installer-pins (#720): companion-pins.yml concurrency group per companion; crates/companions/README.md native.release row; companion-pins.yml artifacts input text. Signature-time upper bound declined (residual recorded)."
     }
   ],
   "main_health": [
@@ -7754,7 +7759,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T01:12:43Z",
+    "updated": "2026-11-12T01:15:17Z",
     "items": [
       {
         "slot": 1,
@@ -7917,7 +7922,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T01:12:43Z",
+  "updated": "2026-11-12T01:15:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
