@@ -460,6 +460,7 @@ pub fn percolate_live(
             count_only: true,
             stems: d.stems,
             stoppable: after_saved,
+            hold_unresolved: false,
         })
         .collect();
     let p = percolate(index, &entries, through, limits, now, cancel)?;

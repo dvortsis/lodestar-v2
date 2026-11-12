@@ -2551,7 +2551,9 @@ mod tests {
         assert!(same(&format!("sig:{hash}")));
         assert!(same(&format!("-sig:{hash}")));
         assert!(same(&format!("x (y | sig:{hash})")));
-        assert!(same(&format!("file:(x) (sig:7a9f3c12dd0e44b1 | sig:{hash})")));
+        assert!(same(&format!(
+            "file:(x) (sig:7a9f3c12dd0e44b1 | sig:{hash})"
+        )));
         assert!(!same("sig:7a9f3c12dd0e44b1"));
         assert!(!same("-sig:7a9f3c12dd0e44b1 | x"));
         assert!(!same(&format!("hash:{hash}")));

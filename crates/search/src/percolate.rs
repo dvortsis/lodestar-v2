@@ -77,6 +77,12 @@ pub struct Due<'a> {
     /// The token may stop it inside its scan even as the call's first:
     /// for entries that run on what another call left of a budget.
     pub stoppable: bool,
+    /// Hold it while `sig:<info hash>` can't resolve every reference
+    /// (see [`percolate`]): a forward run, whose watermark would move past
+    /// clones that then never alert. A one-off pass that records no
+    /// watermark (a promoted torrent's) runs at once instead, finding the
+    /// clones of references already backfilled.
+    pub hold_unresolved: bool,
 }
 
 /// One search's result: every torrent id in `(watermark, through]` it
@@ -122,7 +128,8 @@ impl Percolation {
 /// checking `cancel` before each search. `now` resolves relative dates.
 ///
 /// **Held searches** (GS-0): while `payload_sig` isn't complete in the
-/// snapshot, a saved search containing `sig:<info hash>` isn't run. It's
+/// snapshot, a saved search containing `sig:<info hash>` with
+/// [`Due::hold_unresolved`] isn't run. It's
 /// left out of [`Percolation::matched`], so its watermark stays and it
 /// runs once the backfill is done. It isn't counted as stopped, capped
 /// or failed: nothing is lost by waiting, and [`Percolation::more`]
@@ -171,7 +178,7 @@ pub fn percolate(
         // the new torrents it covers are indexed with the field.
         let guarded;
         let query = if !d.count_only && d.query.mentions_same_payload() {
-            if !sig_complete {
+            if d.hold_unresolved && !sig_complete {
                 continue;
             }
             guarded = d.query.clone().with_default_visibility();
@@ -442,6 +449,7 @@ mod tests {
             count_only: false,
             stems: false,
             stoppable: false,
+            hold_unresolved: true,
         }];
         percolate(index, &due, through, limits, 0, &CancelToken::new()).unwrap()
     }
@@ -507,6 +515,7 @@ mod tests {
                 count_only: true,
                 stems: false,
                 stoppable: false,
+                hold_unresolved: true,
             },
             Due {
                 id: 2,
@@ -516,6 +525,7 @@ mod tests {
                 count_only: false,
                 stems: false,
                 stoppable: false,
+                hold_unresolved: true,
             },
         ];
         let limits = PercolateLimits {
@@ -617,6 +627,7 @@ mod tests {
                 count_only: false,
                 stems: false,
                 stoppable: false,
+                hold_unresolved: true,
             })
             .collect();
         let token = CancelToken::new();
@@ -726,6 +737,7 @@ mod tests {
             count_only: false,
             stems: false,
             stoppable,
+            hold_unresolved: true,
         }
     }
 

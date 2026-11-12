@@ -494,6 +494,7 @@ fn alerts_never_resolve_a_withheld_reference() {
             count_only: false,
             stems: false,
             stoppable: false,
+            hold_unresolved: true,
         }];
         let limits = lodestar_search::PercolateLimits {
             keep: 1000,
@@ -543,6 +544,7 @@ fn an_alert_waits_for_the_backfill_and_loses_no_clone() {
             count_only: false,
             stems: false,
             stoppable: false,
+            hold_unresolved: true,
         }];
         let limits = lodestar_search::PercolateLimits {
             keep: 1000,
@@ -582,4 +584,68 @@ fn an_alert_waits_for_the_backfill_and_loses_no_clone() {
     assert!(ran[0].torrent_ids.contains(&28), "{:?}", ran[0].torrent_ids);
     // Ids 4, 7, …, 28 (id 1 is hidden and below the watermark anyway).
     assert_eq!(ran[0].count, 9);
+}
+
+/// One saved search over `(watermark, through]`, as the percolator runs
+/// it: `hold` is a forward run's, false a promoted torrent's one-off pass.
+fn percolate_one(
+    index: &SearchIndex,
+    q: &str,
+    watermark: i64,
+    through: i64,
+    hold: bool,
+) -> Vec<lodestar_search::Matched> {
+    let node = parse(q).unwrap();
+    let due = [lodestar_search::Due {
+        id: 1,
+        watermark,
+        query: &node,
+        utc_offset: 0,
+        count_only: false,
+        stems: false,
+        stoppable: false,
+        hold_unresolved: hold,
+    }];
+    let limits = lodestar_search::PercolateLimits {
+        keep: 1,
+        max_range: 1,
+    };
+    let cancel = lodestar_search::CancelToken::new();
+    lodestar_search::percolate(index, &due, through, limits, NOW, &cancel)
+        .unwrap()
+        .matched
+}
+
+/// Mid-walk: a forward run over a single id is still held (a one-torrent
+/// commit can't lose a clone), and a promoted torrent's pass isn't held,
+/// so a promoted clone of a reference already backfilled alerts.
+#[test]
+fn one_id_passes_hold_forward_runs_but_not_promoted_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = index_dir(tmp.path());
+    let (mut store, infos) = store(tmp.path());
+    drop(complete_index(tmp.path(), &mut store));
+    unpopulate(&dir, &mut store);
+    let index = SearchIndex::open(&dir).unwrap();
+    let mut w = index.writer(HEAP).unwrap();
+    assert_eq!(w.catch_up_counted(&mut store, 12).unwrap().backfilled, 12);
+    w.commit().unwrap();
+    assert!(matches!(
+        index.availability("payload_sig"),
+        Availability::Backfilling { .. }
+    ));
+    // Torrent 3 (id 4) is backfilled; id 7 is its clone, also backfilled.
+    let early = format!("sig:{}", hash(&infos, 3));
+    // A forward run over just id 7: held, the watermark stays at 6.
+    assert!(percolate_one(&index, &early, 6, 7, true).is_empty());
+    // The promoted pass over id 7: runs, and the clone alerts.
+    let ran = percolate_one(&index, &early, 6, 7, false);
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].torrent_ids, [7]);
+    // A reference the walk hasn't reached (id 28) resolves nothing yet:
+    // its promoted clone at id 10 doesn't alert (X-percolate-promoted-hold).
+    let late = format!("sig:{}", hash(&infos, 27));
+    let ran = percolate_one(&index, &late, 9, 10, false);
+    assert_eq!(ran.len(), 1);
+    assert!(ran[0].torrent_ids.is_empty());
 }

@@ -190,6 +190,7 @@ pub fn run_once(
             count_only: false,
             stems: false,
             stoppable: false,
+            hold_unresolved: true,
         })
         .collect();
     let cancel = CancelToken::new().with_budget(config.budget);
@@ -382,6 +383,7 @@ fn matched_promoted(
             count_only: false,
             stems: false,
             stoppable: false,
+            hold_unresolved: false,
         })
         .collect();
     if due.is_empty() || row.torrent_id <= 0 {
