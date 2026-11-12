@@ -12,7 +12,9 @@
       "mcp__github__pull_request_read",
       "mcp__github__list_pull_requests",
       "mcp__github__get_check_run",
-      "mcp__github__get_job_logs"
+      "mcp__github__get_job_logs",
+      "mcp__AWS_MCP__aws___run_script",
+      "mcp__AWS_MCP__aws___get_tasks"
     ]
   },
   "hooks": {
