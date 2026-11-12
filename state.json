@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:38:43Z",
+  "updated_at": "2026-11-12T12:39:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7289,6 +7289,11 @@
       "id": "X-scrub-job-ids",
       "at": "2026-11-12T12:26:01Z",
       "note": "main carries 12-digit CI job ids in comments and docs (crates/filter/tests/props.rs, docs/architecture.md, docs/decisions/2026-10-23-F-perf.md and others; find with git grep for 1[23] plus 10 digits, excluding goldens, lockfiles and json). Replace each with run/PR context only, in a small runner or helper PR; also consider a CI hygiene check. Runner call: only CI job ids in comments and docs (props.rs comments, architecture.md, decisions files). Leave evidence byte counts and process ids alone. Done in the next runner docs PR, not a slot."
+    },
+    {
+      "id": "X-percolate-promoted-hold",
+      "at": "2026-11-12T12:39:05Z",
+      "note": "rv-754-aa09693a I1 residual: during the payload_sig backfill, a promoted clone of a sig:<hash> search alerts only if its reference is already backfilled (GS-0 restores the pre-hold behaviour on the promoted path). Full fix: a held list in Percolation and run_promoted leaving promotion rows waiting while a held search is due (crates/lodestar/src/percolator.rs). Low priority; revisit with GS-2."
     }
   ],
   "main_health": [
@@ -8379,7 +8384,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T12:38:43Z",
+  "updated": "2026-11-12T12:39:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
