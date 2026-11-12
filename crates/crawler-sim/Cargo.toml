@@ -18,7 +18,17 @@ workspace = true
 lodestar-dht = { workspace = true, features = ["testing"] }
 lodestar-metainfo.workspace = true
 lodestar-network-policy.workspace = true
-lodestar-peer-wire.workspace = true
+lodestar-peer-wire = { workspace = true, features = ["testing"] }
 lodestar-sources = { workspace = true, features = ["testing"] }
 lodestar-store.workspace = true
-tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "test-util"] }
+# M8-NET-E2E (`e2e_search`): the real pipeline, index and `/search` route
+# downstream of the DHT, called in process. The third-party crates are
+# already in the lockfile at the versions lodestar-api uses.
+lodestar-api.workspace = true
+lodestar-bencode.workspace = true
+lodestar-pipeline.workspace = true
+lodestar-search.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "matched-path"] }
+serde_json = "1"
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1.54.1", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
