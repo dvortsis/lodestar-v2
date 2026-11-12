@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:04:27Z",
+  "updated_at": "2026-11-12T05:16:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7096,7 +7096,9 @@
       "note": "remote_intake.rs:~1482 reads stats.parked before hand_parked bumps it (remote.rs:524 vs :549); test-only fix folded into X-wk-out-set-polish (slot 8) as approved shared edit",
       "at": "2026-11-12T04:46:40Z"
     },
-    "slices.yaml entry: X-flake-portable-restart-3 (next runner PR)"
+    "slices.yaml entry: X-flake-portable-restart-3 (next runner PR)",
+    "release/v0.5.2: P-v052-cut opening release/v052-tokio-notice from runner-state patches/v052-tokio-notice.patch (runner 06383e6b); review + merge before v0.5.2 tag",
+    "slices.yaml entry: X-restart-banner-polish (next runner PR)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7685,6 +7687,16 @@
       "pr": 732,
       "sha": "b8e19931e59a324e95fe7c1bb09eea2693aadf37",
       "at": "2026-11-12T04:58:20Z"
+    },
+    {
+      "pr": 731,
+      "sha": "6fed62c0d466e972f69a26f460086160ba35af13",
+      "at": "2026-11-12T05:16:30Z"
+    },
+    {
+      "pr": 718,
+      "sha": "5decc4ad3a11cd68b67edfde17c4daac918c79bf",
+      "at": "2026-11-12T05:16:30Z"
     }
   ],
   "active_sessions": {
@@ -7919,7 +7931,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:04:27Z",
+    "updated": "2026-11-12T05:16:30Z",
     "items": [
       {
         "slot": 1,
@@ -7967,11 +7979,11 @@
       },
       {
         "slot": 6,
-        "slice": "X-flake-dht-scrape-join",
+        "slice": "X-prowlarr-no-fetch-wait",
         "role": "Opus slice (then X-prowlarr-register)",
         "agent": "session_01MMjhnCHsnr3wRoSQhHd9kN",
-        "doing": "session_01MMjhnCHsnr3wRoSQhHd9kN: root cause tokio 1.54.0 Interval UAF (yanked; tokio#8695, fix #8692 in 1.54.1); runner approved lock + Cargo.toml bump to 1.54.1; then X-prowlarr-no-fetch-wait",
-        "since": "2026-11-12T02:35:52Z",
+        "doing": "X-prowlarr-no-fetch-wait (after #731 merged)",
+        "since": "2026-11-12T05:16:30Z",
         "status": "active"
       },
       {
@@ -7993,11 +8005,11 @@
       },
       {
         "slot": 9,
-        "slice": "X-restart-banner",
+        "slice": "X-restart-banner-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8jotRy9XX9TihNaWZ: round-2 CHANGES relayed (rv-718-a8fe8f58: tray covers SaveBar, ticking live region, live-region rewrite, client clock, vitest timeouts)",
-        "since": "2026-11-11T21:46:53Z",
+        "doing": "rv-718-0e2c082f nits: begin-bump test, test yields",
+        "since": "2026-11-12T05:16:30Z",
         "status": "active"
       },
       {
@@ -8085,7 +8097,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:04:27Z",
+  "updated": "2026-11-12T05:16:30Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
