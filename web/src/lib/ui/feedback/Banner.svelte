@@ -12,10 +12,19 @@
 		children: Snippet;
 		/** One optional action (a Button). */
 		action?: Snippet;
+		/** False drops the role, for a Banner inside a live region that already announces it. */
+		live?: boolean;
 		class?: string;
 	}
 
-	let { kind = 'info', title, children, action, class: className = '' }: Props = $props();
+	let {
+		kind = 'info',
+		title,
+		children,
+		action,
+		live = true,
+		class: className = ''
+	}: Props = $props();
 
 	const kindLabel = $derived(
 		{
@@ -29,7 +38,7 @@
 </script>
 
 <div
-	role={kind === 'error' ? 'alert' : 'status'}
+	role={live ? (kind === 'error' ? 'alert' : 'status') : undefined}
 	class="flex items-start gap-3 rounded-box border bg-base-100 p-3 text-body text-base-content {border[
 		kind
 	]} {className}"
