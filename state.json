@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:04:39Z",
+  "updated_at": "2026-11-12T06:10:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7733,6 +7733,11 @@
       "pr": 742,
       "sha": "903ae0990192ba762946722a99d00987e1b3e426",
       "at": "2026-11-12T05:54:51Z"
+    },
+    {
+      "pr": 738,
+      "sha": "0a2cc83d438d4c20ba954c8801cfcf68f08a140e",
+      "at": "2026-11-12T06:10:10Z"
     }
   ],
   "active_sessions": {
@@ -7968,7 +7973,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:04:39Z",
+    "updated": "2026-11-12T06:10:10Z",
     "items": [
       {
         "slot": 1,
@@ -8004,15 +8009,6 @@
         "agent": "claude",
         "doing": "rv-729 nits: double state_unsaved log, keep newer failed answer, decisions heading/supersedes, long lines; then archive",
         "since": "2026-11-12T04:06:37Z",
-        "status": "active"
-      },
-      {
-        "slot": 6,
-        "slice": "X-prowlarr-no-fetch-wait",
-        "role": "Opus slice (then X-prowlarr-register)",
-        "agent": "session_01MMjhnCHsnr3wRoSQhHd9kN",
-        "doing": "X-prowlarr-no-fetch-wait (after #731 merged)",
-        "since": "2026-11-12T05:16:30Z",
         "status": "active"
       },
       {
@@ -8110,7 +8106,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:04:39Z",
+  "updated": "2026-11-12T06:10:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
