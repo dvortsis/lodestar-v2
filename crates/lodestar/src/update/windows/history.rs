@@ -22,9 +22,11 @@ use crate::update::layout::{Bin, Step, parse_version};
 use crate::update::log_events::UPDATE_STATE_UNSAVED;
 
 pub const FILE: &str = "history.json";
-/// The newest helper answer already recorded (its time), Windows only:
-/// the answer stays in `result.json` after it's recorded, and a cleared
-/// history mustn't get it back at the next start.
+/// The helper answer last recorded (its request id and outcome), Windows
+/// only: the answer stays in `result.json` after it's recorded and is
+/// looked at again and again, and a cleared history mustn't get it back.
+/// Keyed by id and outcome, not time, so no clock change can hide a new
+/// answer.
 pub const SEEN: &str = "history-seen.json";
 /// Entries kept, as on Unix.
 pub const KEEP: usize = 20;
@@ -85,10 +87,14 @@ pub struct History {
 /// doesn't check out. `running` is this build's version; `now` the clock.
 pub fn entry_for(answer: &Answer, running: &Version, now: u64) -> Option<Entry> {
     let version = parse_version(&answer.version)?;
-    if answer.at == 0 || answer.at > now.saturating_add(AHEAD) {
+    if !super::msi::valid_id(&answer.id) || answer.at == 0 || answer.at > now.saturating_add(AHEAD)
+    {
         return None;
     }
     let (result, reason) = match answer.outcome.as_str() {
+        // Installed, but the old program runs until Windows restarts, and
+        // the helper judges it after that: not the end yet.
+        "installed" if answer.restart => return None,
         "installed" => (Outcome::Installed, None),
         "install_failed" => (Outcome::Failed, Some("install_failed")),
         // The new version failed its health check, and the old one is back.
@@ -100,12 +106,14 @@ pub fn entry_for(answer: &Answer, running: &Version, now: u64) -> Option<Entry> 
     Some(Entry {
         // As this build prints it, not as the file spelled it.
         version: version.to_string(),
-        // Updated from: this build, unless this build is the new version
-        // (the answer doesn't say what it replaced).
-        from: if version == *running {
-            String::new()
-        } else {
+        // Updated from: this build, while it's older than the answer's
+        // (still the old one, or back to it). Otherwise unknown: the answer
+        // doesn't say what it replaced, and a later build may have been
+        // installed by hand since.
+        from: if *running < version {
             running.to_string()
+        } else {
+            String::new()
         },
         level: None,
         at: answer.at,
@@ -116,26 +124,42 @@ pub fn entry_for(answer: &Answer, running: &Version, now: u64) -> Option<Entry> 
     })
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Seen {
-    at: u64,
+    id: String,
+    outcome: String,
 }
 
-/// Records `entry` from the helper's answer unless an answer as new was
-/// recorded before (even if the history was cleared since); `Ok(true)`
-/// when it was added.
-pub fn record(bin: &Bin, entry: Entry, fault: &dyn Fn(Step) -> io::Result<()>) -> io::Result<bool> {
-    // Damaged, it's taken as none: the entry's own check below still
-    // keeps one from being added twice.
-    let seen = bin.read::<Seen>(SEEN).ok().flatten().unwrap_or_default();
-    if entry.at <= seen.at {
-        return Ok(false);
+/// Records the helper's `answer` unless it was recorded before (even if
+/// the history was cleared since); the entry when it was added.
+pub fn record(
+    bin: &Bin,
+    answer: &Answer,
+    running: &Version,
+    now: u64,
+    fault: &dyn Fn(Step) -> io::Result<()>,
+) -> io::Result<Option<Entry>> {
+    let Some(entry) = entry_for(answer, running, now) else {
+        return Ok(None);
+    };
+    // Damaged, it's taken as none: the entry's own check in `append`
+    // still keeps one from being added twice.
+    if bin
+        .read::<Seen>(SEEN)
+        .ok()
+        .flatten()
+        .is_some_and(|s| s.id == answer.id && s.outcome == answer.outcome)
+    {
+        return Ok(None);
     }
-    let at = entry.at;
-    let added = append(bin, entry, fault)?;
-    bin.write_acknowledged(SEEN, &Seen { at }, fault)?;
-    Ok(added)
+    let added = append(bin, entry.clone(), fault)?;
+    let seen = Seen {
+        id: answer.id.clone(),
+        outcome: answer.outcome.clone(),
+    };
+    bin.write_acknowledged(SEEN, &seen, fault)?;
+    Ok(added.then_some(entry))
 }
 
 /// The portable build's own install or rollback (`portable.rs`), which
@@ -304,21 +328,54 @@ mod tests {
         assert_eq!(read(&bin).unwrap().entries.len(), 1);
     }
 
+    fn answer_id(outcome: &str, version: &str, at: u64, id: &str) -> Answer {
+        let mut a = answer(outcome, version, at);
+        a.id = id.into();
+        a
+    }
+
     #[test]
     fn an_answer_recorded_once_isnt_again_after_a_clear() {
         let (_dir, bin) = bin();
         let running = Version::new(0, 5, 3);
-        let e = entry_for(&answer("installed", "0.5.4", NOW), &running, NOW).unwrap();
-        assert!(record(&bin, e.clone(), &ok).unwrap());
+        let a = answer("installed", "0.5.4", NOW);
+        assert!(record(&bin, &a, &running, NOW, &ok).unwrap().is_some());
+        // Looked at again (every status), and again after a clear: once.
+        assert!(record(&bin, &a, &running, NOW, &ok).unwrap().is_none());
         std::fs::remove_file(bin.path(FILE)).unwrap();
-        assert!(!record(&bin, e, &ok).unwrap());
+        assert!(record(&bin, &a, &running, NOW, &ok).unwrap().is_none());
         assert!(!bin.path(FILE).exists());
-        // An older answer neither; a newer one is recorded.
-        let old = entry_for(&answer("installed", "0.5.4", NOW - 1), &running, NOW).unwrap();
-        assert!(!record(&bin, old, &ok).unwrap());
-        let new = entry_for(&answer("rolled_back", "0.5.4", NOW + 1), &running, NOW).unwrap();
-        assert!(record(&bin, new, &ok).unwrap());
-        assert_eq!(read(&bin).unwrap().entries.len(), 1);
+        // The same request's next outcome is new; so is another request's,
+        // even with an earlier time (a clock set back).
+        let rb = answer("rolled_back", "0.5.4", NOW + 60);
+        assert!(record(&bin, &rb, &running, NOW, &ok).unwrap().is_some());
+        let next = answer_id("install_failed", "0.5.5", NOW - 3600, &"cd".repeat(16));
+        assert!(record(&bin, &next, &running, NOW, &ok).unwrap().is_some());
+        assert_eq!(read(&bin).unwrap().entries.len(), 2);
+    }
+
+    #[test]
+    fn a_restart_still_to_come_a_later_build_or_a_bad_id_records_nothing_wrong() {
+        let running = Version::new(0, 5, 3);
+        // 3010: the old program runs until Windows restarts.
+        let mut a = answer("installed", "0.5.4", NOW);
+        a.restart = true;
+        assert_eq!(entry_for(&a, &running, NOW), None);
+        // Recorded late, after a later build was installed by hand: what
+        // it replaced is unknown, never the later build.
+        let e = entry_for(
+            &answer("installed", "0.5.4", NOW),
+            &Version::new(0, 6, 0),
+            NOW,
+        );
+        assert_eq!(e.unwrap().from, "");
+        for id in ["", "short", &"g".repeat(32), &"a".repeat(65)] {
+            assert_eq!(
+                entry_for(&answer_id("installed", "0.5.4", NOW, id), &running, NOW),
+                None,
+                "{id}"
+            );
+        }
     }
 
     #[test]

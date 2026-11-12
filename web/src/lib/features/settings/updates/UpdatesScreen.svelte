@@ -492,7 +492,7 @@
 										version: rolledBack.version,
 										reason: historyReasonWords(rolledBack.reason) ?? ''
 									})}
-							{m.settings_updates_rolled_back_next()}
+							{#if rolledBack.reason !== 'manual'}{m.settings_updates_rolled_back_next()}{/if}
 						</span>
 					</Banner>
 				{/if}

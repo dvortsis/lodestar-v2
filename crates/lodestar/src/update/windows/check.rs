@@ -397,6 +397,9 @@ struct State {
     /// It was there but couldn't be read: only a pause or resume writes
     /// over it (a pause in it is unknown).
     unreadable: bool,
+    /// The newest rollback announced in this process (`rolled_back_seen`
+    /// may not have been saved).
+    announced: Option<u64>,
 }
 
 impl State {
@@ -451,6 +454,9 @@ struct Inner {
     /// Times the check loop has come to the check lock, for the tests.
     #[cfg(test)]
     at_lock: std::sync::atomic::AtomicU64,
+    /// Looks at the helper's answer finished, for the tests.
+    #[cfg(test)]
+    looks: std::sync::atomic::AtomicU64,
     /// The version being downloaded for the helper.
     installing: Mutex<Option<Version>>,
 }
@@ -518,6 +524,8 @@ impl Notifier {
                 handled: std::sync::atomic::AtomicU64::new(0),
                 #[cfg(test)]
                 at_lock: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
+                looks: std::sync::atomic::AtomicU64::new(0),
                 installing: Mutex::new(None),
             }),
         };
@@ -613,6 +621,12 @@ impl Notifier {
             }
             let checks = async {
                 loop {
+                    // At every wake, whatever woke it (the helper's
+                    // answer comes once the service is up).
+                    {
+                        let n = n.clone();
+                        blocking(move || n.look()).await;
+                    }
                     let wait = n.until_scheduled();
                     // The stop first, here and at the lock: a stop that
                     // comes as a check falls due never starts the check,
@@ -736,36 +750,52 @@ impl Notifier {
         )
     }
 
-    /// At start: the update helper's last answer into the history, once
-    /// (`history::record` skips one recorded before), then `rolled_back`
-    /// published once for a rollback the history records that wasn't
-    /// announced yet, as the Unix engine does.
+    /// At start: a damaged history is logged (once, here, not at every
+    /// status; it shows as empty and the next entry starts it again), then
+    /// [`Notifier::look`].
     fn announce_start(&self) {
-        let Some(bin) = self.bin() else {
-            return;
-        };
-        // Damaged: logged once here, not at every status; it shows as
-        // empty, and the next entry starts it again.
-        if let Err(e) = history::read(&bin) {
+        if let Some(bin) = self.bin()
+            && let Err(e) = history::read(&bin)
+        {
             log_event!(
                 UPDATE_HISTORY_UNREADABLE,
                 error = lodestar_log::Error::io(&e)
             );
         }
+        self.look();
+    }
+
+    /// The update helper's last answer into the history, once
+    /// (`history::record` skips one recorded before), then `rolled_back`
+    /// published once for a rollback the history records that wasn't
+    /// announced yet, as the Unix engine does. The helper answers only once
+    /// the service it installed is up, so this runs at the start, at every
+    /// status, at each wake of the check loop (15 minutes at most apart)
+    /// and before a hand-over, which removes the answer.
+    fn look(&self) {
+        self.look_once();
+        #[cfg(test)]
+        self.inner
+            .looks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn look_once(&self) {
+        let Some(bin) = self.bin() else {
+            return;
+        };
         let ctx = &self.inner.ctx;
         if let Some(answer) = super::msi::answer(&ctx.data_dir) {
             let now = u64::try_from((self.inner.clock)()).unwrap_or(0);
-            if let Some(entry) = history::entry_for(&answer, &ctx.running, now) {
-                // With `clear_history`, one writer at a time.
-                let _state = lock(&self.inner.state);
-                if let Err(e) = history::record(&bin, entry, &*self.inner.fault) {
-                    // Looked at again at the next start.
-                    log_event!(
-                        UPDATE_STATE_UNSAVED,
-                        file = history::FILE,
-                        error = lodestar_log::Error::io(&e)
-                    );
-                }
+            // With `clear_history`, one writer at a time.
+            let _state = lock(&self.inner.state);
+            if let Err(e) = history::record(&bin, &answer, &ctx.running, now, &*self.inner.fault) {
+                // Looked at again at the next look.
+                log_event!(
+                    UPDATE_STATE_UNSAVED,
+                    file = history::FILE,
+                    error = lodestar_log::Error::io(&e)
+                );
             }
         }
         let Some(last) = history::read(&bin)
@@ -781,11 +811,14 @@ impl Notifier {
             if state
                 .durable
                 .rolled_back_seen
+                .max(state.announced)
                 .is_some_and(|seen| last.at <= seen)
             {
                 return;
             }
-            // Best effort: unsaved, it's announced again at the next start.
+            // Once in this process whatever the save does (this runs at
+            // every status); unsaved, it's announced again at the next start.
+            state.announced = Some(last.at);
             if !state.unreadable {
                 let mut u = state.durable.clone();
                 u.format = 1;
@@ -1122,8 +1155,11 @@ impl Notifier {
         // version (display only: this account can write that file too).
         // A blocked install (Windows wouldn't start the service; nothing
         // changed, and the helper tries again) has its own words.
+        // Not after a rollback either: its own notice says what happened,
+        // and `install_failed`'s would ask for the build that failed.
         let missed = super::msi::answer(&ctx.data_dir).filter(|a| {
             a.outcome != "installed"
+                && a.outcome != "rolled_back"
                 && crate::update::layout::parse_version(&a.version).is_some_and(|v| v > ctx.running)
         });
         if let Some(a) = missed {
@@ -1391,6 +1427,9 @@ impl Notifier {
             })
             .await;
         }
+        // The hand-over removes the helper's last answer: recorded first.
+        let n = self.clone();
+        blocking(move || n.look()).await;
         let (data, w) = (self.inner.ctx.data_dir.clone(), v.clone());
         blocking(move || super::msi::hand_over(&data, &part, &envelope, &w, channel))
             .await
@@ -1595,7 +1634,10 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl UpdatesApi for Notifier {
     fn status(&self) -> BoxFuture<'_, UpdatesStatus> {
         let n = self.clone();
-        Box::pin(blocking(move || n.status()))
+        Box::pin(blocking(move || {
+            n.look();
+            n.status()
+        }))
     }
 
     fn check(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
@@ -2388,9 +2430,14 @@ mod tests {
 
     /// The update helper's answer, as it writes `result.json`.
     fn answered(e: &Env, outcome: &str, version: &str, at: i64) {
+        answered_to(e, &"ab".repeat(16), outcome, version, at);
+    }
+
+    /// The same, to request `id`.
+    fn answered_to(e: &Env, id: &str, outcome: &str, version: &str, at: i64) {
         let updates = e.dir.path().join(super::super::msi::UPDATES);
         std::fs::create_dir_all(&updates).unwrap();
-        let a = json!({"format": 1, "id": "ab".repeat(16), "version": version,
+        let a = json!({"format": 1, "id": id, "version": version,
             "outcome": outcome, "at": at});
         std::fs::write(updates.join(super::super::msi::RESULT), a.to_string()).unwrap();
     }
@@ -2476,12 +2523,12 @@ mod tests {
         assert_eq!(rolled_back(&e), 1);
         assert!(Env::notices(&e.status()).contains(&"rolled_back"));
         // A later rollback is new: announced too.
-        answered(&e, "rolled_back", "0.5.5", NOW - 5);
+        answered_to(&e, &"cd".repeat(16), "rolled_back", "0.5.5", NOW - 5);
         restart(&mut e);
         e.n().announce_start();
         assert_eq!(rolled_back(&e), 2);
         // Installed since: not the newest any more, so no notice.
-        answered(&e, "installed", "0.5.6", NOW - 1);
+        answered_to(&e, &"ef".repeat(16), "installed", "0.5.6", NOW - 1);
         restart(&mut e);
         e.n().announce_start();
         assert!(!Env::notices(&e.status()).contains(&"rolled_back"));
@@ -2501,6 +2548,110 @@ mod tests {
         e.n().announce_start();
         assert!(crate::test_log::text().contains("update.history_unreadable"));
         assert_eq!(history_of(&e).len(), 1);
+    }
+
+    /// The real order: the helper answers once the service it installed is
+    /// up, so after the notifier's start. The next status records it and
+    /// announces a rollback, once, and `install_failed`'s notice (which
+    /// asks for the build that failed) isn't shown after a rollback.
+    #[tokio::test]
+    async fn an_answer_after_the_start_is_recorded_at_the_next_status() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.n().announce_start();
+        answered(&e, "rolled_back", "0.5.4", NOW - 10);
+        let rolled_back = |e: &Env| {
+            e.states()
+                .iter()
+                .filter(|(s, _)| *s == UpdatesState::RolledBack)
+                .count()
+        };
+        for _ in 0..3 {
+            let s = UpdatesApi::status(e.n()).await;
+            assert_eq!(s.history.len(), 1);
+            assert!(
+                s.notices.contains(&"rolled_back".to_string()),
+                "{:?}",
+                s.notices
+            );
+            assert!(
+                !s.notices.contains(&"install_failed".to_string()),
+                "{:?}",
+                s.notices
+            );
+        }
+        assert_eq!(rolled_back(&e), 1);
+    }
+
+    /// `rolled_back_seen` can't be saved: still announced once in this
+    /// process, not at every status.
+    #[tokio::test]
+    async fn an_unsaved_announcement_is_still_made_once() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.n().bin().unwrap();
+        std::fs::write(
+            e.bin_file(history::FILE),
+            br#"{"entries":[{"version":"0.5.4","from":"0.5.3","at":5,"result":"rolled_back"}]}"#,
+        )
+        .unwrap();
+        *lock(&e.fail) = Some(Step::Rename);
+        for _ in 0..3 {
+            UpdatesApi::status(e.n()).await;
+        }
+        let n = e
+            .states()
+            .iter()
+            .filter(|(s, _)| *s == UpdatesState::RolledBack)
+            .count();
+        assert_eq!(n, 1);
+    }
+
+    /// Install now's hand-over removes the helper's last answer: it's
+    /// recorded first.
+    #[tokio::test]
+    async fn the_last_answer_is_recorded_before_a_hand_over_removes_it() {
+        let e = Env::installing();
+        answered(&e, "install_failed", "0.5.4", NOW - 10);
+        handed_over(&e).await;
+        let updates = e.dir.path().join(super::super::msi::UPDATES);
+        assert!(!updates.join(super::super::msi::RESULT).exists());
+        assert_eq!(
+            history_of(&e),
+            [(
+                "0.5.4".into(),
+                "failed".into(),
+                Some("install_failed".into())
+            )]
+        );
+    }
+
+    /// The check loop looks at each wake, with no status asked for: here a
+    /// settings change wakes it, with updates Off.
+    #[tokio::test]
+    async fn the_check_loop_records_an_answer_at_its_next_wake() {
+        let e = Env::new(Mode::Off, InstallKind::Msi);
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        // The start's look has run (it found nothing) before the answer.
+        let looks = || e.n().inner.looks.load(std::sync::atomic::Ordering::SeqCst);
+        while looks() == 0 {
+            assert!(Instant::now() < deadline, "the start never looked");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        answered(&e, "installed", "0.5.4", NOW - 10);
+        let recorded = || {
+            history::read(&Bin::open(e.dir.path()).unwrap())
+                .unwrap_or_default()
+                .entries
+                .len()
+        };
+        while recorded() == 0 {
+            e.settings.send_modify(|s| s.level = Level::All);
+            assert!(Instant::now() < deadline, "the loop never looked");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.send(true).unwrap();
+        task.await.unwrap();
     }
 
     /// The service's start records the answer through `spawn`.

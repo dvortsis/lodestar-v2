@@ -470,6 +470,29 @@ describe('the Updates screen', () => {
 		expect(text).not.toMatch(/try again|reinstall/i);
 	});
 
+	it('asks to wait for a newer version after an automatic rollback, not a manual one', async () => {
+		status.notices = ['rolled_back'];
+		const entry = {
+			at: 2,
+			from: '0.5.2',
+			level: 'fix',
+			lost_torrents: null,
+			reason: 'selftest',
+			result: 'rolled_back',
+			version: '0.6.0'
+		};
+		status.history = [entry];
+		const { unmount } = render(UpdatesScreen);
+		let text = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
+		expect(text).toContain('Wait for a newer version');
+		unmount();
+		status.history = [{ ...entry, reason: 'manual' }];
+		render(UpdatesScreen);
+		text = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
+		expect(text).toContain('You rolled Lodestar back');
+		expect(text).not.toContain('Wait for a newer version');
+	});
+
 	it('shows the saved security choice when the status can’t load', async () => {
 		fields.mode!.value = 'auto';
 		fields.security_fixes!.value = 'off';
