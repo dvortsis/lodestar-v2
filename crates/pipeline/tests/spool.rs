@@ -591,6 +591,62 @@ fn a_leftover_that_cant_be_removed_doesnt_stop_the_spool() {
     assert_eq!(s.segments(), vec![6], "numbered past the leftover");
 }
 
+/// A name planted at the next segment's number after the spool opened
+/// costs one append, not the rest of the run: the number is spent before
+/// the write, so the next append takes a fresh one (#699's last review).
+#[test]
+fn a_planted_name_at_the_next_number_doesnt_wedge_the_spool() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    fs::write(dir.path().join("0000000000000001.lsp"), b"someone else's").unwrap();
+    assert!(s.append(&record(1, NOW, 10), NOW).is_err());
+    for b in 2..=4 {
+        s.append(&record(b, NOW, 10), NOW).unwrap();
+    }
+    s.close_active().unwrap();
+    assert_eq!(s.segments(), vec![2]);
+    assert_eq!(
+        fs::read(dir.path().join("0000000000000001.lsp")).unwrap(),
+        b"someone else's"
+    );
+    assert_eq!(all_records(&mut s, NOW).len(), 3);
+}
+
+/// Damage is logged by segment once per run, whatever re-reads it: a
+/// torn tail, and damage part-way (the log line names the segment's number
+/// and the part, never a byte).
+#[test]
+fn damage_is_logged_once_per_segment() {
+    use lodestar_pipeline::spool::damage_logs;
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    for b in 1..=3 {
+        s.append(&record(b, NOW, 200), NOW).unwrap();
+    }
+    s.close_active().unwrap();
+    let path = only_segment(dir.path());
+    let mut bytes = fs::read(&path).unwrap();
+    let frame = (bytes.len() - HEADER_LEN) / 3;
+    bytes[HEADER_LEN + frame + FRAME_HEAD + 5] ^= 0x40;
+    fs::write(&path, &bytes).unwrap();
+    let before = damage_logs();
+    for _ in 0..3 {
+        let seg = s.read(1, NOW).unwrap();
+        assert_eq!(seg.records.len(), 1);
+    }
+    // At least this segment's one line (other tests in this binary log
+    // too, so the shared counter is only ever compared from below). The
+    // line is written under the same once-per-segment gate as the count,
+    // which stays at one over every re-read.
+    assert!(damage_logs() > before);
+    assert_eq!(
+        s.stats()
+            .dropped_corrupt
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
 /// The coordinator's side of a replay (WK-9's intake), with spooled
 /// payloads read back from disk: replayed twice counts once, and a worker
 /// that is quarantined, revoked or purged has its replay refused.

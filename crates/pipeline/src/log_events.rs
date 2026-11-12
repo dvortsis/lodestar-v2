@@ -42,6 +42,20 @@ lodestar_log::catalogue! {
         message: "Swarm stats snapshot unreadable; rebuilding from the database",
         fields: { error: Error },
     }
+    /// A remote worker's spool segment is damaged (WK-11's format): its
+    /// header doesn't read or names another worker, its last write was
+    /// torn, or damage stops it part-way. What can't be read is dropped
+    /// and counted; the rest is replayed. Named by the segment's number
+    /// (its file name is that number in 16 hex digits) and the part that
+    /// failed, never a byte of it. Once per segment per run, at most
+    /// `spool::MAX_DAMAGE_LOGS` a run.
+    SPOOL_DAMAGED {
+        id: "pipeline.spool_damaged",
+        component: Workers,
+        level: Warn,
+        message: "A spool segment is damaged; what can't be read is dropped",
+        fields: { segment: Size, part: Label },
+    }
     /// The scrape scheduler couldn't read its lanes from the store; it
     /// tries again at the next refill.
     SCHEDULER_STORE_FAILED {

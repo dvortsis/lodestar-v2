@@ -693,11 +693,17 @@ fn sync_dir(dir: &Path) -> Result<(), SpoolError> {
 ///   point itself on Windows) and doesn't wait on a FIFO (`O_NONBLOCK`),
 ///   and the file opened must be the one looked at (device and inode on
 ///   Unix; not a reparse point on Windows);
-/// - a file with another hard link (Unix: a link count above 1, the rule
-///   `privdrop.rs` follows) is unlinked without being overwritten, since
-///   zeroing it would zero the file it shares.
-///
-/// So nothing planted in the folder can have another file zeroed.
+/// - **Unix:** a file with another hard link (a link count above 1, the
+///   rule `privdrop.rs` follows) is unlinked without being overwritten,
+///   since zeroing it would zero the file it shares. Nothing planted in the
+///   folder can have another file zeroed.
+/// - **Windows:** a file's link count isn't on stable Rust, so a hard link
+///   is not detected: a regular file planted here as a hard link to another
+///   file has that file's contents zeroed too. Making a hard link on
+///   Windows needs write access to its target, and the data folder's ACL
+///   check refuses other owners at start. The spool's own leftover second
+///   link (a temp name beside its segment) is never zeroed: `Spool::open`
+///   unlinks it without overwriting it.
 pub fn secure_remove(path: &Path) -> Result<(), SpoolError> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -755,9 +761,8 @@ fn same_file(_: &fs::Metadata, b: &fs::Metadata) -> bool {
 }
 
 /// Whether a file has another hard link (Unix). Windows' link count isn't
-/// on stable Rust: there the spool never leaves a second link it would then
-/// remove (`Spool::open` unlinks a leftover temp file beside its segment
-/// without overwriting it).
+/// on stable Rust, so there this is always `false`: a hard-linked file is
+/// zeroed with its other names (see [`secure_remove`]).
 #[cfg(unix)]
 fn shared(m: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -917,6 +922,7 @@ impl Spool {
                         closed.insert(seq, Closed { bytes: len, frames });
                     } else if secure_remove(&path).is_ok() {
                         bump(&stats.dropped_corrupt);
+                        log_damage(seq, "header");
                         bump(&stats.removed);
                     } else {
                         bump(&stats.leftovers);
@@ -1056,20 +1062,47 @@ impl Spool {
             seq,
             created: now,
         };
-        write_atomic(&self.dir, seq, &header.encode(), Place::New)?;
+        // The number is spent before anything is written: a write that
+        // fails part-way (a folder sync refused, or a file already at that
+        // name) leaves the next append a fresh name, never the same one
+        // again until a restart.
         self.next_seq = next;
+        write_atomic(&self.dir, seq, &header.encode(), Place::New)?;
         let path = self.dir.join(segment_name(seq, SEGMENT_EXT));
-        let file = no_follow(OpenOptions::new().append(true))
+        let reopened = no_follow(OpenOptions::new().append(true))
             .open(&path)
-            .map_err(io_err("open a segment of"))?;
-        let looked = fs::symlink_metadata(&path).map_err(io_err("open a segment of"))?;
-        let opened = file.metadata().map_err(io_err("open a segment of"))?;
-        if !looked.file_type().is_file() || !same_file(&looked, &opened) {
-            return Err(SpoolError::Io(
-                "open a segment of",
-                io::ErrorKind::InvalidInput,
-            ));
-        }
+            .and_then(|file| {
+                let looked = fs::symlink_metadata(&path)?;
+                let opened = file.metadata()?;
+                // A regular file, the one placed, and no other name for it:
+                // nothing is appended through a link planted meanwhile.
+                let ours =
+                    looked.file_type().is_file() && same_file(&looked, &opened) && !shared(&opened);
+                Ok((file, ours))
+            });
+        let file = match reopened {
+            Ok((file, true)) => file,
+            failed => {
+                // The placed header-only segment stays on disk and in the
+                // counts, so they match what's there; the next open reads
+                // it (or drops it, if it isn't ours).
+                self.closed.insert(
+                    seq,
+                    Closed {
+                        bytes: HEADER_LEN as u64,
+                        frames: 0,
+                    },
+                );
+                self.stats
+                    .bytes
+                    .fetch_add(HEADER_LEN as u64, Ordering::Relaxed);
+                let kind = match failed {
+                    Err(e) => e.kind(),
+                    Ok(_) => io::ErrorKind::InvalidInput,
+                };
+                return Err(SpoolError::Io("open a segment of", kind));
+            }
+        };
         self.stats
             .bytes
             .fetch_add(HEADER_LEN as u64, Ordering::Relaxed);
@@ -1166,7 +1199,10 @@ impl Spool {
         seg.frames = decoded.frames.len();
         match decoded.tail {
             Tail::Clean => {}
-            Tail::Torn if count => bump(&self.stats.dropped_torn),
+            Tail::Torn if count => {
+                bump(&self.stats.dropped_torn);
+                log_damage(seq, "torn");
+            }
             Tail::Torn => {}
             Tail::Corrupt => self.damaged(seq, "frame", count, &mut seg.damage),
         }
@@ -1200,6 +1236,7 @@ impl Spool {
     fn damaged(&self, seq: u64, part: &'static str, count: bool, out: &mut Vec<Damage>) {
         if count {
             bump(&self.stats.dropped_corrupt);
+            log_damage(seq, part);
         }
         out.push(Damage {
             segment: segment_name(seq, SEGMENT_EXT),
@@ -1360,6 +1397,27 @@ fn count_frames(path: &Path) -> io::Result<u64> {
         n += 1;
     }
     Ok(n)
+}
+
+/// The most damage lines a run logs, all segments together: a spool damaged
+/// throughout can't flood the log. Each segment logs once per run already
+/// (its drops are counted once).
+pub const MAX_DAMAGE_LOGS: u64 = 64;
+static DAMAGE_LOGGED: AtomicU64 = AtomicU64::new(0);
+
+/// Logs one damaged segment by its number and the part that failed
+/// (`header`, `frame`, `seal`, `record` or `torn`), never a byte of it,
+/// up to [`MAX_DAMAGE_LOGS`] a run.
+fn log_damage(seq: u64, part: &'static str) {
+    if DAMAGE_LOGGED.fetch_add(1, Ordering::Relaxed) < MAX_DAMAGE_LOGS {
+        lodestar_log::log_event!(crate::log_events::SPOOL_DAMAGED, segment = seq, part = part);
+    }
+}
+
+/// How many damage lines were asked for this run (logged or past the cap).
+#[doc(hidden)]
+pub fn damage_logs() -> u64 {
+    DAMAGE_LOGGED.load(Ordering::Relaxed)
 }
 
 fn bump(n: &AtomicU64) {
