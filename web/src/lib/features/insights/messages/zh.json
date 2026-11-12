@@ -334,5 +334,6 @@
 	"insights_overview_exc_ports_lower": "没有足够大的端口范围：请在设置中降低抓取器的强度，然后重启 Lodestar。",
 	"insights_overview_exc_ports_bare": "Windows 可用于对外连接的端口太少。请在设置中降低抓取器的强度，然后重启 Lodestar。",
 	"insights_overview_exc_ports_clears": "此提示会在一小时内消失。",
-	"insights_overview_exc_fix_guide": "打开指南"
+	"insights_overview_exc_fix_guide": "打开指南",
+	"insights_overview_exc_new_tab": "（在新标签页打开）"
 }
