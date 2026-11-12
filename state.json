@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:27:33Z",
+  "updated_at": "2026-11-12T05:28:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7948,7 +7948,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:27:33Z",
+    "updated": "2026-11-12T05:28:34Z",
     "items": [
       {
         "slot": 1,
@@ -8006,7 +8006,7 @@
       {
         "slot": 7,
         "status": "idle",
-        "doing": "free: X-filters-budget-headroom closed with no change (05:28Z)",
+        "doing": "idle by choice: review backlog (~9 PRs); X-banner-live-region deferred (fix goes in shared Banner.svelte, every bundle pays; wizard at 53.58/53.6 kB; StorageStep outer region is deliberate per rv-701 N4)",
         "since": "2026-11-12T05:27:33Z"
       },
       {
@@ -8112,7 +8112,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:27:33Z",
+  "updated": "2026-11-12T05:28:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
