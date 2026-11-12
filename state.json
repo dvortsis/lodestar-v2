@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T09:44:56Z",
+  "updated_at": "2026-11-12T09:48:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7213,6 +7213,16 @@
       "id": "ENR-12-n6-n7",
       "at": "2026-11-12T09:38:52Z",
       "note": "From rv-750-9e3bbe78: N6 clamp lookup_timeout in IdentifySource::new; N7 timed-out lookup never reaches HostLimiter::record (fold into N3 backoff). For ENR-12 or first non-default Config."
+    },
+    {
+      "id": "UN-1-UN-3-notes",
+      "at": "2026-11-12T09:48:47Z",
+      "note": "From rv-748: (1) unverified.rs:1349 undecodable usenet claims read claims_private=false (moot: API writes flags 3); (2) no store-level hold for usenet keys: a held item comes back on the next Prowlarr poll and is re-judged (held again); name it in the UN-1/UN-3 briefs beside follow-up 651; (3) the tier-purge doc says \"behind the cursor\" but means \"after the last step\"."
+    },
+    {
+      "id": "owner-fyi-un0",
+      "at": "2026-11-12T09:48:47Z",
+      "note": "Sent with the #748 merge FYI: UN-0 store usenet key merged, dormant (no writer yet); \u00a72.19: snapshot tier-purge retention journals nothing for usenet rows."
     }
   ],
   "main_health": [
@@ -7903,6 +7913,11 @@
       "pr": 749,
       "sha": "3b10e3d0b1b81f294f8f283028336a6917ce8712",
       "at": "2026-11-12T09:38:52Z"
+    },
+    {
+      "pr": 748,
+      "sha": "9a6fcb485e81a472954337f314d24fd88562b469",
+      "at": "2026-11-12T09:48:47Z"
     }
   ],
   "active_sessions": {
@@ -8140,7 +8155,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T09:44:56Z",
+    "updated": "2026-11-12T09:48:47Z",
     "items": [
       {
         "slot": 1,
@@ -8273,7 +8288,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T09:44:56Z",
+  "updated": "2026-11-12T09:48:47Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8486,13 +8501,6 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhn8qXgAJy8Q8NE66YaY: building per briefs/GS-0.md",
-        "since": "2026-11-12T07:04Z"
-      },
-      {
-        "slice": "UN-0",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnAdBqiEwP5PvJACUzA: PR #748 (66b125a2) CI running; awaiting ready",
         "since": "2026-11-12T07:04Z"
       }
     ],
