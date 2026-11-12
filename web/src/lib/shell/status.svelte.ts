@@ -29,6 +29,7 @@ export function createShellStatus(
 	let crawler = $state<CrawlerSnapshot | null>(null);
 	let rebuild = $state<RebuildSnapshot | null>(null);
 	let progress = $state<ProgressOverlay>(null);
+	let restartNeeded = $state(false);
 	let everLive = $state(false);
 	// The stream is the only thing the shell opens itself, and proxies or antivirus tools can hold
 	// just that back. Any REST success, or a probe that gets an answer, says the server is there.
@@ -36,7 +37,15 @@ export function createShellStatus(
 	let probing = false;
 	onSessionOk(() => (restOk = true));
 
-	const pill = $derived(pillState({ stream: client.status, crawler, rebuild, progress }));
+	const pill = $derived(
+		pillState({
+			stream: client.status,
+			crawler,
+			rebuild,
+			progress,
+			restartNeeded
+		})
+	);
 	const connection = $derived(
 		connectionKind({ stream: client.status, error: client.error, everLive, restOk })
 	);
@@ -67,6 +76,10 @@ export function createShellStatus(
 		/** The server's progress facts (`progress.ts` polls them once the chrome is up). */
 		setProgress(p: ProgressOverlay) {
 			progress = p;
+		},
+		/** Saved settings wait for a restart (`features/restart/watch.svelte.ts` asks `/system`). */
+		setRestartNeeded(needed: boolean) {
+			restartNeeded = needed;
 		},
 		/** Subscribes to `crawler` and `rebuild` (one stream, shared with other consumers). */
 		start(): () => void {
