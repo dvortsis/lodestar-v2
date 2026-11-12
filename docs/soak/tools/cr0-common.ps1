@@ -20,7 +20,8 @@ function Test-SoakLaunchEnvironment([string]$Bind,
     [scriptblock]$Listeners = {
         $net = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
         @{ tcp=@($net.GetActiveTcpListeners()); udp=@($net.GetActiveUdpListeners()) }
-    }) {
+    },
+    [bool]$Attach = $false) {
     $uri = $null
     if (-not [Uri]::TryCreate("http://$Bind", [UriKind]::Absolute, [ref]$uri) -or
         $uri.Host -ne '127.0.0.1' -or $uri.Port -lt 1024 -or $uri.Port -gt 65535 -or
@@ -28,10 +29,12 @@ function Test-SoakLaunchEnvironment([string]$Bind,
         throw 'Use an explicit unprivileged IPv4 loopback HTTP bind.'
     }
     $names = @(& $Processes)
-    if ($names | Where-Object { $_ -like 'lodestar*' }) { throw 'Another Lodestar process is running.' }
+    # Service mode attaches to the installed service, which owns the process and ports.
+    if (-not $Attach -and ($names | Where-Object { $_ -like 'lodestar*' })) { throw 'Another Lodestar process is running.' }
     if ($names | Where-Object { $_ -in @('Docker Desktop', 'com.docker.backend', 'dockerd', 'docker-proxy') }) {
         throw 'Docker must remain stopped for the native baseline.'
     }
+    if ($Attach) { return }
     $ports = & $Listeners
     if ($ports.tcp | Where-Object Port -eq $uri.Port) { throw 'HTTP port is already owned.' }
     if ($ports.udp | Where-Object Port -eq 6881) { throw 'DHT port is already owned.' }
@@ -179,4 +182,98 @@ function Complete-SoakEvidence($Result, [string]$StatusPath, [string]$ResultPath
         try { & $Save $Result $StatusPath } catch { }
     }
     return $failures
+}
+
+# ---- Windows 1.0 soak: service identity and lifecycle records (M8-WIN-1) ----
+# Aggregate-only: versions, booleans and counts. No paths, user names or addresses.
+function Get-SoakServiceIdentity([string]$Name,
+    [scriptblock]$Query = { param($n) $svc = Get-CimInstance Win32_Service -Filter "Name='$n'"
+        if ($svc -and $svc.ProcessId) { $proc = Get-Process -Id $svc.ProcessId
+            @{ pid = [int]$svc.ProcessId; start_ticks = $proc.StartTime.ToUniversalTime().Ticks } } }) {
+    $found = & $Query $Name
+    if ($null -eq $found) { throw 'Service is not running.' }
+    return $found
+}
+
+function Get-SoakImagePath([string]$PathName) {
+    # The executable in a service's ImagePath: quoted, or up to the first ".exe".
+    if ($PathName -match '^\s*"([^"]+)"') { return $Matches[1] }
+    if ($PathName -match '^\s*(.+?\.exe)(\s|$)') { return $Matches[1] }
+    throw 'Cannot read the service image path.'
+}
+
+function Get-SoakServiceImage([string]$Name,
+    [scriptblock]$Query = { param($n) (Get-CimInstance Win32_Service -Filter "Name='$n'").PathName }) {
+    # SHA-256 of the binary the service is registered to run; the path is not recorded.
+    # lodestar.exe has no file-version resource, so the hash is the only binding.
+    $path = Get-SoakImagePath (& $Query $Name)
+    @{ sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+}
+
+function Save-SoakLifecycle([string]$Path, [string]$Step, [hashtable]$Fields) {
+    # Merge one step ('upgrade' or 'uninstall') into lifecycle.json.
+    $record = if ([IO.File]::Exists($Path)) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable } else { @{ schema_version = 1 } }
+    $record[$Step] = $Fields
+    Save-SoakJson $record $Path
+}
+
+function Get-SoakTorrentCount([string]$Bind,
+    [scriptblock]$Fetch = { param($url) (Invoke-WebRequest $url -TimeoutSec 5).Content }) {
+    $text = & $Fetch "http://$Bind/metrics"
+    $match = [regex]::Match($text, '(?m)^lodestar_torrents ([0-9.]+)\r?$')
+    if (-not $match.Success) { throw 'Missing metric: torrents' }
+    return [long][double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-SoakInstalledVersion([string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe'),
+    [scriptblock]$Version = { param($path) Get-SoakExecutableVersion $path }) {
+    # Information only: --version prints Cargo.toml's base version, so two RCs look alike.
+    (& $Version $Exe) -replace '^\S+\s+', ''
+}
+
+function Save-SoakUpgrade([Parameter(Mandatory)][string]$Path, [string]$FromVersion,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$FromImageSha256,
+    [Parameter(Mandatory)][ValidateRange(1, [long]::MaxValue)][long]$TorrentsBefore,
+    [Parameter(Mandatory)][ValidateRange(1, [long]::MaxValue)][long]$PreviousStartTicks,
+    [string]$Bind = '127.0.0.1:8090', [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
+    [string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe'), [hashtable]$Probe = @{}) {
+    # Run after the MSI upgrade finished. FromVersion, FromImageSha256 and PreviousStartTicks
+    # are measured before it. $Probe replaces the Windows calls in tests.
+    $p = @{
+        Identity = { param($n) Get-SoakServiceIdentity $n }
+        Status = { param($n) (Get-Service $n).Status }
+        ProcessImage = { param($procId) (Get-Process -Id $procId).Path }
+        Hash = { param($f) (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash }
+        Data = { param($d) [bool](Get-ChildItem -LiteralPath $d -ErrorAction SilentlyContinue | Select-Object -First 1) }
+        Torrents = { param($b) Get-SoakTorrentCount $b }
+        Version = { param($e) Get-SoakInstalledVersion $e }
+        ServiceImage = { param($n) (Get-SoakServiceImage $n).sha256 }
+    }
+    foreach ($key in $Probe.Keys) { $p[$key] = $Probe[$key] }
+    $now = & $p.Identity $Service
+    $image = & $p.ProcessImage $now.pid
+    Save-SoakLifecycle $Path 'upgrade' @{
+        from_version = $FromVersion; to_version = (& $p.Version $Exe)
+        from_image_sha256 = $FromImageSha256; to_image_sha256 = (& $p.ServiceImage $Service)
+        service_running = ((& $p.Status $Service) -eq 'Running')
+        service_restarted = ($now.start_ticks -gt $PreviousStartTicks)
+        image_matches_installed = ((& $p.Hash $image) -eq (& $p.Hash $Exe))
+        data_present = [bool](& $p.Data $DataDir)
+        torrents_before = $TorrentsBefore; torrents_after = (& $p.Torrents $Bind)
+    }
+}
+
+function Save-SoakUninstall([string]$Path, [ValidateSet('kept', 'removed')][string]$DataPolicy,
+    [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
+    [string]$ProgramDir = (Join-Path $env:ProgramFiles 'Lodestar'), [hashtable]$Probe = @{}) {
+    $p = @{
+        ServicePresent = { param($n) [bool](Get-Service $n -ErrorAction SilentlyContinue) }
+        Exists = { param($d) [bool](Test-Path -LiteralPath $d) }
+    }
+    foreach ($key in $Probe.Keys) { $p[$key] = $Probe[$key] }
+    Save-SoakLifecycle $Path 'uninstall' @{
+        service_present = (& $p.ServicePresent $Service)
+        program_files_present = (& $p.Exists $ProgramDir)
+        data_present = (& $p.Exists $DataDir); data_policy = $DataPolicy
+    }
 }
