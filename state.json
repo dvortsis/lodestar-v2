@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:36:06Z",
+  "updated_at": "2026-11-12T04:46:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7090,7 +7090,12 @@
       "at": "2026-11-12T04:21:20Z"
     },
     "Next runner PR: slice entries X-win-fs-followups (slot 1, same session as #728), X-wk-out-set-polish (slot 8), X-win-upd-history-nits (slot 5); owner FYI: #728, #729, #730 merged",
-    "Next runner PR: docs/owner-decisions.md \u00a72.58 tokio 1.54.0 release decision (owner 2026-11-12T04:35Z via dashboard: \"go with the runner's recommendation\"): no v0.5.1.x; backport 1.54.1 to release/v0.5.2 before the tag; v0.5.1.1 (bump only) only if v0.5.2 slips more than a few days, and the owner is asked before cutting it"
+    "Next runner PR: docs/owner-decisions.md \u00a72.58 tokio 1.54.0 release decision (owner 2026-11-12T04:35Z via dashboard: \"go with the runner's recommendation\"): no v0.5.1.x; backport 1.54.1 to release/v0.5.2 before the tag; v0.5.1.1 (bump only) only if v0.5.2 slips more than a few days, and the owner is asked before cutting it",
+    {
+      "id": "X-flake-remote-intake-parked",
+      "note": "remote_intake.rs:~1482 reads stats.parked before hand_parked bumps it (remote.rs:524 vs :549); test-only fix folded into X-wk-out-set-polish (slot 8) as approved shared edit",
+      "at": "2026-11-12T04:46:40Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7908,7 +7913,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:36:06Z",
+    "updated": "2026-11-12T04:46:40Z",
     "items": [
       {
         "slot": 1,
@@ -8075,7 +8080,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:36:06Z",
+  "updated": "2026-11-12T04:46:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
