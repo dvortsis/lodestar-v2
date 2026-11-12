@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:02:44Z",
+  "updated_at": "2026-11-12T04:06:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7657,6 +7657,11 @@
       "pr": 730,
       "sha": "66ca24b01f8aad948c76bb7180138990217579a8",
       "at": "2026-11-12T04:02:44Z"
+    },
+    {
+      "pr": 729,
+      "sha": "1acd0e35334af51f52f083b4a4ebbcd73a82a325",
+      "at": "2026-11-12T04:06:37Z"
     }
   ],
   "active_sessions": {
@@ -7891,7 +7896,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:02:44Z",
+    "updated": "2026-11-12T04:06:37Z",
     "items": [
       {
         "slot": 1,
@@ -7930,11 +7935,11 @@
       },
       {
         "slot": 5,
-        "slice": "X-win-upd-history-polish",
+        "slice": "X-win-upd-history-nits",
         "role": "Opus",
         "agent": "claude",
-        "doing": "follow-up from rv-722 nits (updates-Off wake, failed look, portable nonce, wording)",
-        "since": "2026-11-12T02:09:24Z",
+        "doing": "rv-729 nits: double state_unsaved log, keep newer failed answer, decisions heading/supersedes, long lines; then archive",
+        "since": "2026-11-12T04:06:37Z",
         "status": "active"
       },
       {
@@ -8053,7 +8058,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:02:44Z",
+  "updated": "2026-11-12T04:06:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
