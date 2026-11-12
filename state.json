@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T17:32:38Z",
+  "updated_at": "2026-11-12T17:37:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7394,6 +7394,10 @@
       "id": "X-adult-hidden-finder-window",
       "what": "rv-767 O2 (pre-existing): torrents.rs load() decides the adult_hidden 404 from stored type only; during the reclassification window, with Show adult off, a torrent found only by an always-adult source still serves its name and files (no sections). Content-safety: decide fix (use the always-adult finder mask in load) after #767 merges.",
       "logged": "2026-11-12T17:28:49Z"
+    },
+    {
+      "id": "owner-flag-describe-sg",
+      "note": "#770 Deploy-AwsWindows.ps1 pre-launch SG check needs ec2:DescribeSecurityGroups on the provisioner role; fails closed if missing. IAM is the owner decision; flag via dashboard FYI batch."
     }
   ],
   "main_health": [
@@ -8164,6 +8168,11 @@
       "pr": 763,
       "sha": "423a91b17c62554e5a8ea9d1867e08b0a071e5c6",
       "at": "2026-11-12T16:26:15Z"
+    },
+    {
+      "pr": 770,
+      "sha": "a22f05f6926ba61ff76a6e1956e884663ae55fae",
+      "at": "2026-11-12T17:37:15Z"
     }
   ],
   "active_sessions": {
@@ -8534,7 +8543,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T17:32:38Z",
+  "updated": "2026-11-12T17:37:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8756,10 +8765,13 @@
       "cap_per_cloud_usd": 50,
       "stop_at_usd": 45,
       "note": "owner 2026-11-12 ~16:58Z via tester; whole testing period, any number of machines"
-    }
+    },
+    "notes": [
+      "2026-11-12T17:37:15Z: #770 merged (a22f05f6). Deploy-AwsWindows.ps1 now launches with a public IPv4 via --network-interfaces and refuses if the SG has inbound rules; it needs ec2:DescribeSecurityGroups (owner decides IAM). Stage 13/15 fixes are on main."
+    ]
   },
   "extra": {
-    "updated": "2026-11-12T16:58:13Z",
+    "updated": "2026-11-12T17:37:15Z",
     "max": 2,
     "items": [
       {
@@ -8770,10 +8782,10 @@
         "since": "2026-11-12T16:09:35Z"
       },
       {
-        "slice": "X-test-infra-blockers",
+        "slice": "X-test-infra-nits",
         "role": "build",
-        "doing": "testing blockers 2+3 (owner: blockers first): pia-wireguard.sh cn/addKey; Deploy-AwsWindows public IPv4 (briefs/X-test-infra-blockers.md)",
-        "since": "2026-11-12T16:58:13Z",
+        "doing": "follow-up from rv-770 optionals (curl exit, jq anchors, test env, SG read error + runbook line)",
+        "since": "2026-11-12T17:37:15Z",
         "agent": "session_01MMjhnApj842sdoDVQHBSn3"
       }
     ],
