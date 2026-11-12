@@ -53,7 +53,7 @@ fn kit(fetch: Arc<dyn Fetch>) -> Kit {
     Kit::new(
         Arc::new(MemoryState::new()),
         fetch,
-        Wikidata.policy(),
+        Wikidata::new().policy(),
         &UserLimits::default(),
     )
 }
@@ -64,7 +64,7 @@ fn movie(title: &str, year: Option<u16>) -> Query {
 
 async fn lookup(case: &str, q: &Query) -> (Result<Lookup, String>, Arc<Replayer>) {
     let replayer = Arc::new(Replayer::load(&fixture(case)).unwrap());
-    let got = Wikidata.lookup(&kit(replayer.clone()), q).await;
+    let got = Wikidata::new().lookup(&kit(replayer.clone()), q).await;
     (got.map_err(|e| e.0), replayer)
 }
 
@@ -202,7 +202,9 @@ async fn requests_carry_the_title_and_fixed_parameters_only() {
         params(&seen[1].1),
         p(&[
             ("action", "wbgetentities"),
-            ("ids", "Q172241|Q900002"),
+            // The novella the search also found isn't named by the title,
+            // so it isn't fetched.
+            ("ids", "Q172241"),
             ("props", "labels|aliases|claims"),
             ("languages", wikidata::LANGUAGES),
             ("format", "json"),
@@ -255,17 +257,34 @@ async fn a_429_backs_off_and_the_next_lookup_waits_without_a_request() {
     let replayer = Arc::new(Replayer::load(&fixture("wikidata_rate_limited")).unwrap());
     let k = kit(replayer.clone());
     let q = movie(SHAWSHANK, Some(1994));
-    let e = Wikidata.lookup(&k, &q).await.unwrap_err().0;
+    let e = Wikidata::new().lookup(&k, &q).await.unwrap_err().0;
     assert_eq!(e, wikidata::RATE_LIMITED);
     // Held by the limiter (ENR-10's client): the retry sends nothing.
-    let again = Wikidata.lookup(&k, &q).await.unwrap_err().0;
+    let again = Wikidata::new().lookup(&k, &q).await.unwrap_err().0;
     assert_eq!(again, wikidata::HELD);
     assert_eq!(replayer.requests().len(), 1);
     replayer.finish().unwrap();
     tokio::time::advance(Duration::from_secs(6 * 3600 + 1)).await;
-    let later = Wikidata.lookup(&k, &q).await.unwrap_err().0;
+    let later = Wikidata::new().lookup(&k, &q).await.unwrap_err().0;
     assert_ne!(later, wikidata::HELD, "{later}");
     assert_eq!(replayer.requests().len(), 2, "the host was asked again");
+}
+
+/// `maxlag` comes as a 200 the host limiter doesn't see: the plugin holds
+/// itself for the answer's `Retry-After` (5 s), sending nothing before it.
+#[tokio::test(start_paused = true)]
+async fn an_api_error_holds_for_its_retry_after() {
+    let replayer = Arc::new(Replayer::load(&fixture("wikidata_maxlag_then_match")).unwrap());
+    let k = kit(replayer.clone());
+    let w = Wikidata::new();
+    let q = movie(SHAWSHANK, Some(1994));
+    assert_eq!(w.lookup(&k, &q).await.unwrap_err().0, wikidata::API_ERROR);
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert_eq!(w.lookup(&k, &q).await.unwrap_err().0, wikidata::HELD);
+    assert_eq!(replayer.requests().len(), 1, "nothing sent while held");
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(matches!(w.lookup(&k, &q).await, Ok(Lookup::Match(_))));
+    replayer.finish().unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -304,7 +323,7 @@ async fn an_oversize_answer_is_an_error() {
         parse_exchange(&head(1), search.clone(), Vec::new()).unwrap(),
         parse_exchange(&head(2), entities, Vec::new()).unwrap(),
     ]));
-    let e = Wikidata
+    let e = Wikidata::new()
         .lookup(&kit(r.clone()), &movie(SHAWSHANK, Some(1994)))
         .await
         .unwrap_err()
@@ -317,7 +336,7 @@ async fn an_oversize_answer_is_an_error() {
     let r = Arc::new(Replayer::new(vec![
         parse_exchange(&head(1), big, Vec::new()).unwrap(),
     ]));
-    let e = Wikidata
+    let e = Wikidata::new()
         .lookup(&kit(r.clone()), &movie(SHAWSHANK, Some(1994)))
         .await
         .unwrap_err()
@@ -329,23 +348,28 @@ async fn an_oversize_answer_is_an_error() {
 async fn lookups_are_paced_at_the_host_rate() {
     let replayer = Arc::new(Replayer::load(&fixture("wikidata_two_lookups")).unwrap());
     let k = kit(replayer.clone());
-    let first = Wikidata.lookup(&k, &movie(SHAWSHANK, Some(1994))).await;
+    let first = Wikidata::new()
+        .lookup(&k, &movie(SHAWSHANK, Some(1994)))
+        .await;
     assert!(matches!(first, Ok(Lookup::Match(_))));
-    let second = Wikidata.lookup(&k, &movie("Nothing Like This", None)).await;
+    let second = Wikidata::new()
+        .lookup(&k, &movie("Nothing Like This", None))
+        .await;
     assert_eq!(second.unwrap(), Lookup::NoMatch);
     replayer.finish().unwrap();
     let seen = replayer.requests();
     for w in seen.windows(2) {
         assert!(w[1].0 - w[0].0 >= Duration::from_secs(1), "one a second");
     }
-    assert!(Wikidata.min_interval() >= Duration::from_secs(2));
+    assert!(Wikidata::new().min_interval() >= Duration::from_secs(2));
 }
 
 // ---- The manifest ----
 
 #[test]
 fn manifest_and_policy() {
-    let m = Wikidata.manifest();
+    let w = Wikidata::new();
+    let m = w.manifest();
     assert_eq!(m.id, "wikidata");
     assert_eq!(m.kinds, [Kind::Enrichment]);
     assert_eq!(m.consent, Consent::External);
@@ -353,13 +377,16 @@ fn manifest_and_policy() {
     assert!(lodestar_pipeline::identify::admitted(m));
     let hosts: Vec<_> = m.endpoints.iter().map(|e| (e.protocol, e.host)).collect();
     assert_eq!(hosts, [("https", "www.wikidata.org")]);
-    assert_eq!(Wikidata.endpoints(), Endpoints::manifest(m.endpoints));
-    assert_eq!(Wikidata.kinds(), [MediaKind::Movie, MediaKind::Tv]);
+    assert_eq!(
+        Wikidata::new().endpoints(),
+        Endpoints::manifest(m.endpoints)
+    );
+    assert_eq!(Wikidata::new().kinds(), [MediaKind::Movie, MediaKind::Tv]);
     // External: nothing goes until the endpoint is acknowledged.
     assert!(need(m, None, &[]).is_some());
     assert_eq!(need(m, Some(&Ack::of(m)), &[]), None);
 
-    let policy = Wikidata.policy();
+    let policy = w.policy();
     assert_eq!(policy.distribution, Distribution::Coordinator);
     assert!(policy.credentials.is_empty());
     let limits = policy.limits(&UserLimits::default());
@@ -435,7 +462,7 @@ fn store(enabled: bool) -> (Store, SourceId, SourceId) {
     let dht = s.register_source("dht", "1", 0).unwrap();
     let src = s.register_source(wikidata::ID, "1", 0).unwrap();
     if enabled {
-        let ack = Ack::of(Wikidata.manifest()).encode();
+        let ack = Ack::of(Wikidata::new().manifest()).encode();
         s.enable_source(src, Some(&ack)).unwrap();
     }
     (s, dht, src)
@@ -462,7 +489,7 @@ async fn run(
         ..Config::default()
     };
     let (src, interest) = IdentifySource::new(
-        Arc::new(Wikidata),
+        Arc::new(Wikidata::new()),
         Arc::new(Mutex::new(store)),
         core_with(&["lexa"], &["rolea"]),
         AdultSources::default(),
@@ -479,7 +506,7 @@ async fn run(
     let kit = Kit::with_limiter(
         Arc::new(MemoryState::new()),
         fetch,
-        HostLimiter::new(Wikidata.policy().limits(&UserLimits::default())),
+        HostLimiter::new(Wikidata::new().policy().limits(&UserLimits::default())),
     );
     let ctx = SourceCtx {
         source,
@@ -525,10 +552,12 @@ async fn a_private_item_is_never_sent() {
     let (mut s, dht, src) = store(true);
     let name = "The Shawshank Redemption 1994 1080p BluRay x264";
     let mut private = Vec::new();
-    for (i, f) in [flags::PRIVATE_SOURCE, flags::PRIVATE]
-        .into_iter()
-        .enumerate()
-    {
+    let privacy = [
+        flags::PRIVATE_SOURCE,
+        flags::PRIVATE,
+        flags::REMOTE_UNVERIFIED,
+    ];
+    for (i, f) in privacy.into_iter().enumerate() {
         let (id, _) = put(
             &mut s,
             &format!("The Shawshank Redemption 1994 {i} 720p"),
@@ -540,10 +569,10 @@ async fn a_private_item_is_never_sent() {
     }
     let (public, key) = put(&mut s, name, dht, 0);
     let replayer = Arc::new(Replayer::load(&fixture("wikidata_match")).unwrap());
-    let opened = [private[0], private[1], public];
-    let ran = run(s, replayer.clone(), src, &opened, |st| n(&st.done) >= 3).await;
+    let opened = [private[0], private[1], private[2], public];
+    let ran = run(s, replayer.clone(), src, &opened, |st| n(&st.done) >= 4).await;
     replayer.finish().unwrap();
-    assert_eq!(n(&ran.stats.ineligible), 2);
+    assert_eq!(n(&ran.stats.ineligible), 3);
     assert_eq!((n(&ran.stats.looked_up), n(&ran.stats.matched)), (1, 1));
     assert_eq!(ran.found.len(), 1);
     assert_eq!(ran.found[0].found.key, key);
@@ -666,7 +695,7 @@ fn scripted(
         kinds,
         consent: Consent::None,
         enabled_by_default: true,
-        ..Wikidata.manifest().clone()
+        ..Wikidata::new().manifest().clone()
     };
     let rx = Mutex::new(Some(rx));
     (Arc::new(Scripted { manifest, rx }), tx)

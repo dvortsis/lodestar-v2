@@ -33,8 +33,11 @@ fuzz_target!(|data: &[u8]| {
     };
     if pick & 1 == 0 {
         let s = parse_search(body, &l);
-        assert!(s.ids.len() <= l.max_items);
-        assert!(s.ids.iter().all(|q| q.0 > 0));
+        assert!(s.hits.len() <= l.max_items);
+        for h in &s.hits {
+            assert!(h.id.0 > 0 && h.texts.len() <= l.max_texts);
+            assert!(h.texts.iter().all(|t| !t.is_empty() && t.len() <= MAX_TITLE));
+        }
         return;
     }
     let e = parse_entities(body, &l);

@@ -1089,7 +1089,7 @@ async fn identify_source(
     })
     .await??;
     let (source, _interest) = IdentifySource::new(
-        Arc::new(Wikidata),
+        Arc::new(Wikidata::new()),
         Arc::new(Mutex::new(store)),
         filter,
         adult,

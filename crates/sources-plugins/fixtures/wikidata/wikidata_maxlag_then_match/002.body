@@ -1,0 +1,62 @@
+{
+ "searchinfo": {
+  "search": "The Shawshank Redemption"
+ },
+ "search": [
+  {
+   "id": "Q172241",
+   "title": "Q172241",
+   "pageid": 1,
+   "display": {
+    "label": {
+     "value": "The Shawshank Redemption",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
+     "language": "en"
+    }
+   },
+   "repository": "wikidata",
+   "url": "//www.wikidata.org/wiki/Q172241",
+   "concepturi": "http://www.wikidata.org/entity/Q172241",
+   "label": "The Shawshank Redemption",
+   "description": "SENTINEL-DESCRIPTION",
+   "match": {
+    "type": "label",
+    "language": "en",
+    "text": "The Shawshank Redemption"
+   },
+   "aliases": [
+    "Shawshank"
+   ]
+  },
+  {
+   "id": "Q900002",
+   "title": "Q900002",
+   "pageid": 1,
+   "display": {
+    "label": {
+     "value": "Rita Hayworth and Shawshank Redemption",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
+     "language": "en"
+    }
+   },
+   "repository": "wikidata",
+   "url": "//www.wikidata.org/wiki/Q900002",
+   "concepturi": "http://www.wikidata.org/entity/Q900002",
+   "label": "Rita Hayworth and Shawshank Redemption",
+   "description": "SENTINEL-DESCRIPTION",
+   "match": {
+    "type": "label",
+    "language": "en",
+    "text": "Rita Hayworth and Shawshank Redemption"
+   }
+  }
+ ],
+ "search-continue": 2,
+ "success": 1
+}

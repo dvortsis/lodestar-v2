@@ -1,4 +1,4 @@
-GET https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q172241%7CQ900002&props=labels%7Caliases%7Cclaims&languages=en%7Cmul%7Cde%7Ces%7Cfr%7Cit%7Cja%7Cko%7Cpt%7Cru%7Czh&format=json&maxlag=5
+GET https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q172241&props=labels%7Caliases%7Cclaims&languages=en%7Cmul%7Cde%7Ces%7Cfr%7Cit%7Cja%7Cko%7Cpt%7Cru%7Czh&format=json&maxlag=5
 Accept: application/json
 
 HTTP 200

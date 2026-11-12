@@ -49,7 +49,18 @@ fn time(t: &str, precision: u8) -> String {
 fn the_seed_answers_read_whole() {
     let s = parse_search(seed("search.json"), &SEARCH_LIMITS);
     assert!(s.page.whole(), "{:?}", s.page);
-    assert_eq!(s.ids, [Qid(172_241), Qid(900_002)]);
+    let ids: Vec<Qid> = s.hits.iter().map(|h| h.id).collect();
+    assert_eq!(ids, [Qid(172_241), Qid(900_002)]);
+    // The label, aliases and matched text; never the description.
+    assert_eq!(
+        s.hits[0].texts,
+        [
+            "The Shawshank Redemption",
+            "The Shawshank Redemption",
+            "Shawshank"
+        ]
+    );
+    assert!(!format!("{s:?}").contains("SENTINEL"));
 
     let e = parse_entities(seed("entities.json"), &ENTITY_LIMITS);
     assert!(e.page.whole(), "{:?}", e.page);
@@ -60,6 +71,7 @@ fn the_seed_answers_read_whole() {
     assert_eq!(film.instance_of, [Qid(11_424)]);
     // The deprecated 1993 date is left out.
     assert_eq!(film.years, [1994, 1994]);
+    assert_eq!(e.entities.len(), 1);
     assert!(!film.truncated);
     let all = format!("{e:?}");
     assert!(!all.contains("SENTINEL"), "{all}");
@@ -96,7 +108,7 @@ fn only_the_asked_shape_is_whole() {
         assert!(!s.page.whole(), "{}", String::from_utf8_lossy(body));
     }
     let s = parse_search(br#"{"search":[],"success":1}"#, &SEARCH_LIMITS);
-    assert!(s.page.whole() && s.ids.is_empty());
+    assert!(s.page.whole() && s.hits.is_empty());
 }
 
 #[test]
@@ -156,7 +168,7 @@ fn no_value_deprecated_and_unknown_ids_keep_nothing_but_read_whole() {
 fn the_count_caps_hold() {
     // Entities past the cap stop the parse.
     let many: String = (1..=6)
-        .map(|i| format!(r#""Q{i}":{{"id":"Q{i}"}}"#))
+        .map(|i| format!(r#""Q{i}":{{"id":"Q{i}","type":"item"}}"#))
         .collect::<Vec<_>>()
         .join(",");
     let e = parse_entities(
@@ -174,7 +186,7 @@ fn the_count_caps_hold() {
         format!(r#"{{"search":[{results}]}}"#).as_bytes(),
         &SEARCH_LIMITS,
     );
-    assert_eq!(s.ids.len(), SEARCH_LIMITS.max_items);
+    assert_eq!(s.hits.len(), SEARCH_LIMITS.max_items);
     assert!(!s.page.whole());
 
     // Labels and aliases, and statements, past their caps are passed over.
@@ -183,7 +195,7 @@ fn the_count_caps_hold() {
         max_statements: 1,
         ..ENTITY_LIMITS
     };
-    let body = r#"{"entities":{"Q5":{"id":"Q5","labels":{"en":{"language":"en","value":"A"},"de":{"language":"de","value":"B"}},"aliases":{"en":[{"language":"en","value":"C"}]},"claims":{"P31":[{"mainsnak":{"snaktype":"value","property":"P31","datavalue":{"value":{"id":"Q11424"},"type":"wikibase-entityid"}},"rank":"normal"},{"mainsnak":{"snaktype":"value","property":"P31","datavalue":{"value":{"id":"Q24869"},"type":"wikibase-entityid"}},"rank":"normal"}]}}}}"#;
+    let body = r#"{"entities":{"Q5":{"id":"Q5","type":"item","labels":{"en":{"language":"en","value":"A"},"de":{"language":"de","value":"B"}},"aliases":{"en":[{"language":"en","value":"C"}]},"claims":{"P31":[{"mainsnak":{"snaktype":"value","property":"P31","datavalue":{"value":{"id":"Q11424"},"type":"wikibase-entityid"}},"rank":"normal"},{"mainsnak":{"snaktype":"value","property":"P31","datavalue":{"value":{"id":"Q24869"},"type":"wikibase-entityid"}},"rank":"normal"}]}}}}"#;
     let e = parse_entities(body.as_bytes(), &tight);
     assert!(e.page.whole());
     let f = &e.entities[0];
@@ -223,6 +235,83 @@ fn byte_depth_and_text_caps_stop_or_skip() {
     );
 }
 
+/// Repeat detection costs the same a key: a part with hundreds of
+/// thousands of unknown keys is read whole, and nothing in it is kept.
+#[test]
+fn many_unknown_keys_are_read_in_linear_time() {
+    let n = 300_000;
+    let keys: String = (0..n).map(|i| format!(r#""k{i}":0,"#)).collect();
+    let body = format!(r#"{{"entities":{{"Q5":{{{keys}"id":"Q5","type":"item"}}}}}}"#);
+    assert!(body.len() < ENTITY_LIMITS.max_bytes);
+    let e = parse_entities(body.as_bytes(), &ENTITY_LIMITS);
+    assert!(e.page.whole(), "{:?}", e.page);
+    assert_eq!(e.entities.len(), 1);
+    // Also in the root and in a search result.
+    let s = format!(r#"{{{keys}"search":[{{{keys}"id":"Q5"}}]}}"#);
+    let big = Limits {
+        max_bytes: ENTITY_LIMITS.max_bytes,
+        max_values: ENTITY_LIMITS.max_values,
+        ..SEARCH_LIMITS
+    };
+    let s = parse_search(s.as_bytes(), &big);
+    assert!(s.page.whole(), "{:?}", s.page);
+}
+
+#[test]
+fn repeats_of_what_is_read_spoil_it() {
+    let label = |l: &str| format!(r#""{l}":{{"language":"{l}","value":"Film"}}"#);
+    let stmt = r#"[{"mainsnak":{"snaktype":"novalue","property":"P345"},"rank":"normal"}]"#;
+    for body in [
+        // A language twice among the labels, or the aliases.
+        format!(
+            r#"{{"entities":{{"Q5":{{"id":"Q5","type":"item","labels":{{{},{}}}}}}}}}"#,
+            label("en"),
+            label("en")
+        ),
+        r#"{"entities":{"Q5":{"id":"Q5","type":"item","aliases":{"en":[],"en":[]}}}}"#.into(),
+        // A read property twice.
+        format!(
+            r#"{{"entities":{{"Q5":{{"id":"Q5","type":"item","claims":{{"P345":{stmt},"P345":{stmt}}}}}}}}}"#
+        ),
+        // An entity twice.
+        r#"{"entities":{"Q5":{"id":"Q5","type":"item"},"Q5":{"id":"Q5","type":"item"}}}"#.into(),
+        // A field twice.
+        r#"{"entities":{"Q5":{"id":"Q5","type":"item","type":"item"}}}"#.into(),
+        // No type, or a map that's a non-empty list.
+        r#"{"entities":{"Q5":{"id":"Q5"}}}"#.into(),
+        r#"{"entities":{"Q5":{"id":"Q5","type":"item","labels":[{"x":1}]}}}"#.into(),
+    ] {
+        assert!(
+            !parse_entities(body.as_bytes(), &ENTITY_LIMITS).page.whole(),
+            "{body}"
+        );
+    }
+    // Repeats of keys that aren't read are passed over; `[]` is an empty map.
+    let ok = r#"{"entities":{"Q5":{"id":"Q5","type":"item","x":1,"x":2,"labels":[],"aliases":[],"claims":{"P1":[],"P1":[]}}}}"#;
+    let e = parse_entities(ok.as_bytes(), &ENTITY_LIMITS);
+    assert!(e.page.whole(), "{:?}", e.page);
+}
+
+#[test]
+fn arrays_read_are_capped_too() {
+    let tight = Limits {
+        max_array: 2,
+        ..ENTITY_LIMITS
+    };
+    let aliases = r#"{"entities":{"Q5":{"id":"Q5","type":"item","aliases":{"en":[{"language":"en","value":"A"},{"language":"en","value":"B"},{"language":"en","value":"C"}]}}}}"#;
+    let e = parse_entities(aliases.as_bytes(), &tight);
+    assert_eq!(e.page.skipped.over_cap, 1);
+    let search = br#"{"search":[{"id":"Q1","aliases":["a","b","c"]}]}"#;
+    let s = parse_search(
+        search,
+        &Limits {
+            max_array: 2,
+            ..SEARCH_LIMITS
+        },
+    );
+    assert_eq!(s.page.skipped.over_cap, 1);
+}
+
 fn kept_ok(
     e: &lodestar_sources_feeds::wikidata::Entities,
     l: &Limits,
@@ -253,7 +342,8 @@ proptest! {
     #[test]
     fn arbitrary_bytes_never_panic(body in proptest::collection::vec(any::<u8>(), 0..512)) {
         let s = parse_search(&body, &SEARCH_LIMITS);
-        prop_assert!(s.ids.len() <= SEARCH_LIMITS.max_items);
+        prop_assert!(s.hits.len() <= SEARCH_LIMITS.max_items);
+        prop_assert!(s.hits.iter().all(|h| h.texts.len() <= SEARCH_LIMITS.max_texts));
         kept_ok(&parse_entities(&body, &ENTITY_LIMITS), &ENTITY_LIMITS)?;
     }
 
@@ -270,7 +360,8 @@ proptest! {
         }
         body.truncate(cut % (body.len() + 1));
         let s = parse_search(&body, &SEARCH_LIMITS);
-        prop_assert!(s.ids.len() <= SEARCH_LIMITS.max_items);
+        prop_assert!(s.hits.len() <= SEARCH_LIMITS.max_items);
+        prop_assert!(s.hits.iter().all(|h| h.texts.len() <= SEARCH_LIMITS.max_texts));
         kept_ok(&parse_entities(&body, &ENTITY_LIMITS), &ENTITY_LIMITS)?;
     }
 }

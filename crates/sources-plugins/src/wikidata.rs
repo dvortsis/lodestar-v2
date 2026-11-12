@@ -13,12 +13,17 @@
 //! 1. `wbsearchentities`: the query's title, and nothing else from the
 //!    item, as a URL parameter (never pasted into a query language), for
 //!    at most [`SEARCH_LIMIT`] items;
-//! 2. `wbgetentities` for those items' ids, each one checked by
+//! 2. `wbgetentities` for the results whose label, alias or matched text
+//!    is the title (a search also finds items by words in a longer
+//!    title), their ids each checked by
 //!    [`Qid::parse`]: their labels and aliases in [`LANGUAGES`] and their
 //!    statements;
 //! 3. picks the one item whose kind, title and year agree with the query
 //!    ([`choose`]). No item, or more than one, is no match: it never
 //!    guesses.
+//!
+//! An API error (such as `maxlag`) holds the plugin for the answer's
+//! `Retry-After` before it sends again.
 //!
 //! Both requests use Wikimedia's Action API with a fixed set of
 //! parameters, `maxlag` (the service's back-pressure for background
@@ -26,13 +31,18 @@
 //! install. Errors read the HTTP status and the parser's report only: the
 //! service's text is never kept or put in an error.
 
+use std::sync::Mutex;
+use std::time::Duration;
+
 use lodestar_sources::claims::{AltTitle, ExternalId};
+use lodestar_sources::http::parse_retry_after;
 use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
 };
 use lodestar_sources_feeds::wikidata::{self, ENTITY_LIMITS, Entity, Page, Qid, SEARCH_LIMITS};
+use tokio::time::Instant;
 
 /// The plugin's id in the store. Never rename.
 pub const ID: &str = "wikidata";
@@ -120,23 +130,34 @@ const POLICY: Policy = Policy {
 };
 
 /// The least time between two lookups: two requests at one a second.
-pub const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+pub const MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The service asked for slower requests (429).
 pub const RATE_LIMITED: &str = "Wikidata is limiting requests; backing off";
-/// The host is held after a rate limit or a server error.
-pub const HELD: &str = "Wikidata requests are on hold after a rate limit; backing off";
+/// The host is held after a rate limit, a server error or an API error.
+pub const HELD: &str = "Wikidata requests are on hold; backing off";
 /// The answer was an API error, such as `maxlag` when the service is busy.
 pub const API_ERROR: &str = "Wikidata answered with an error; trying later";
+/// The wait after an API error that names none (`Retry-After`).
+pub const API_ERROR_WAIT: Duration = Duration::from_secs(60);
+/// The longest wait an API error's `Retry-After` sets.
+pub const MAX_API_ERROR_WAIT: Duration = Duration::from_secs(3600);
 const BAD_ANSWER: &str = "Wikidata's answer wasn't understood";
 const FAILED: &str = "Wikidata's request failed";
 const BAD_URL: &str = "Wikidata's address didn't build";
 
-/// The Wikidata plugin. It holds nothing: no credential, no state.
+/// The Wikidata plugin. It holds no credential; its one state is the
+/// wait after an API error.
 #[derive(Debug, Default)]
-pub struct Wikidata;
+pub struct Wikidata {
+    not_before: Mutex<Option<Instant>>,
+}
 
 impl Wikidata {
+    pub fn new() -> Wikidata {
+        Wikidata::default()
+    }
+
     /// Where the plugin's egress may send requests (SRC-5): the manifest's
     /// host only, over https, public addresses only.
     pub fn endpoints(&self) -> Endpoints {
@@ -167,21 +188,41 @@ impl Identifier for Wikidata {
         query: &'a Query,
     ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
         Box::pin(async move {
-            let body = ok_body(kit.http.send(&search_request(query.title())?).await)?;
-            let found = wikidata::parse_search(&body, &SEARCH_LIMITS);
-            usable(&found.page)?;
+            self.not_held()?;
+            let res = self.answer(kit.http.send(&search_request(query.title())?).await)?;
+            let found = wikidata::parse_search(&res.body, &SEARCH_LIMITS);
+            self.usable(&found.page, &res)?;
+            // Only results that matched on the title itself are fetched,
+            // once each: a search also finds items by words in a longer
+            // title, and every entity fetched is up to megabytes.
+            let want = fold(query.title());
             let mut ids: Vec<Qid> = Vec::new();
-            for q in found.ids {
-                if !ids.contains(&q) {
-                    ids.push(q);
+            for hit in found.hits {
+                let named = hit.texts.iter().any(|t| fold(t) == want);
+                if named && !ids.contains(&hit.id) {
+                    ids.push(hit.id);
                 }
             }
-            if ids.is_empty() {
+            if ids.is_empty() || want.is_empty() {
                 return Ok(Lookup::NoMatch);
             }
-            let body = ok_body(kit.http.send(&entities_request(&ids)?).await)?;
-            let got = wikidata::parse_entities(&body, &ENTITY_LIMITS);
-            usable(&got.page)?;
+            let res = self.answer(kit.http.send(&entities_request(&ids)?).await)?;
+            // Up to 8 MiB: parsed on the blocking pool, so a large answer
+            // never holds up the runtime's other tasks.
+            let body = res.body;
+            let got = tokio::task::spawn_blocking(move || {
+                wikidata::parse_entities(&body, &ENTITY_LIMITS)
+            })
+            .await
+            .map_err(|_| fail(BAD_ANSWER))?;
+            self.usable(
+                &got.page,
+                &Response {
+                    status: res.status,
+                    headers: res.headers,
+                    body: Vec::new(),
+                },
+            )?;
             // Only the items asked about count, in the search's order.
             let entities = ids
                 .iter()
@@ -189,6 +230,55 @@ impl Identifier for Wikidata {
                 .collect::<Vec<_>>();
             Ok(choose(query, &entities))
         })
+    }
+}
+
+impl Wikidata {
+    /// Fails at once, sending nothing, while an API error's wait lasts.
+    fn not_held(&self) -> Result<(), PluginError> {
+        let until = *self.not_before.lock().unwrap_or_else(|e| e.into_inner());
+        match until {
+            Some(t) if Instant::now() < t => Err(fail(HELD)),
+            _ => Ok(()),
+        }
+    }
+
+    /// A 200, or the error its status means.
+    fn answer(&self, res: Result<Response, HttpError>) -> Result<Response, PluginError> {
+        let res = match res {
+            Ok(r) => r,
+            // The limiter holds the host after a 429 or 5xx; the retry
+            // waits.
+            Err(HttpError::Blocked { .. }) => return Err(fail(HELD)),
+            Err(_) => return Err(fail(FAILED)),
+        };
+        match res.status {
+            200 => Ok(res),
+            429 => Err(fail(RATE_LIMITED)),
+            _ => Err(fail(FAILED)),
+        }
+    }
+
+    /// Only a whole answer is used, as a match or a miss
+    /// ([`Page::whole`]), so a broken one is never cached as a miss. An
+    /// API error (such as `maxlag`, which comes as a 200 the host limiter
+    /// doesn't see) holds the plugin for its `Retry-After`, or
+    /// [`API_ERROR_WAIT`], at most [`MAX_API_ERROR_WAIT`].
+    fn usable(&self, page: &Page, res: &Response) -> Result<(), PluginError> {
+        if page.error {
+            let wait = res
+                .header("retry-after")
+                .and_then(parse_retry_after)
+                .unwrap_or(API_ERROR_WAIT)
+                .clamp(MIN_INTERVAL, MAX_API_ERROR_WAIT);
+            *self.not_before.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Instant::now() + wait);
+            return Err(fail(API_ERROR));
+        }
+        if !page.whole() {
+            return Err(fail(BAD_ANSWER));
+        }
+        Ok(())
     }
 }
 
@@ -236,33 +326,6 @@ pub fn entities_request(ids: &[Qid]) -> Result<Request, PluginError> {
         ("props", "labels|aliases|claims"),
         ("languages", LANGUAGES),
     ])
-}
-
-/// A 200's body, or the error its status means.
-fn ok_body(res: Result<Response, HttpError>) -> Result<Vec<u8>, PluginError> {
-    let res = match res {
-        Ok(r) => r,
-        // The limiter holds the host after a 429 or 5xx; the retry waits.
-        Err(HttpError::Blocked { .. }) => return Err(fail(HELD)),
-        Err(_) => return Err(fail(FAILED)),
-    };
-    match res.status {
-        200 => Ok(res.body),
-        429 => Err(fail(RATE_LIMITED)),
-        _ => Err(fail(FAILED)),
-    }
-}
-
-/// Only a whole answer is used, as a match or a miss ([`Page::whole`]), so
-/// a broken one is never cached as a miss.
-fn usable(page: &Page) -> Result<(), PluginError> {
-    if page.error {
-        return Err(fail(API_ERROR));
-    }
-    if !page.whole() {
-        return Err(fail(BAD_ANSWER));
-    }
-    Ok(())
 }
 
 /// The one item that agrees with the query: its kind (an instance of a

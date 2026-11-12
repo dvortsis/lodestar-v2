@@ -9,14 +9,18 @@
    "pageid": 1,
    "display": {
     "label": {
-     "value": "SENTINEL-LABEL",
+     "value": "Dune",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
      "language": "en"
     }
    },
    "repository": "wikidata",
    "url": "//www.wikidata.org/wiki/Q900011",
    "concepturi": "http://www.wikidata.org/entity/Q900011",
-   "label": "SENTINEL-LABEL",
+   "label": "Dune",
    "description": "SENTINEL-DESCRIPTION",
    "match": {
     "type": "label",
@@ -30,14 +34,18 @@
    "pageid": 1,
    "display": {
     "label": {
-     "value": "SENTINEL-LABEL",
+     "value": "Dune",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
      "language": "en"
     }
    },
    "repository": "wikidata",
    "url": "//www.wikidata.org/wiki/Q900012",
    "concepturi": "http://www.wikidata.org/entity/Q900012",
-   "label": "SENTINEL-LABEL",
+   "label": "Dune",
    "description": "SENTINEL-DESCRIPTION",
    "match": {
     "type": "label",
@@ -51,14 +59,18 @@
    "pageid": 1,
    "display": {
     "label": {
-     "value": "SENTINEL-LABEL",
+     "value": "Dune",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
      "language": "en"
     }
    },
    "repository": "wikidata",
    "url": "//www.wikidata.org/wiki/Q900013",
    "concepturi": "http://www.wikidata.org/entity/Q900013",
-   "label": "SENTINEL-LABEL",
+   "label": "Dune",
    "description": "SENTINEL-DESCRIPTION",
    "match": {
     "type": "label",

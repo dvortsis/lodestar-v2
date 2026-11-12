@@ -9,20 +9,27 @@
    "pageid": 1,
    "display": {
     "label": {
-     "value": "SENTINEL-LABEL",
+     "value": "The Shawshank Redemption",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
      "language": "en"
     }
    },
    "repository": "wikidata",
    "url": "//www.wikidata.org/wiki/Q172241",
    "concepturi": "http://www.wikidata.org/entity/Q172241",
-   "label": "SENTINEL-LABEL",
+   "label": "The Shawshank Redemption",
    "description": "SENTINEL-DESCRIPTION",
    "match": {
     "type": "label",
     "language": "en",
     "text": "The Shawshank Redemption"
-   }
+   },
+   "aliases": [
+    "Shawshank"
+   ]
   },
   {
    "id": "Q900002",
@@ -30,19 +37,23 @@
    "pageid": 1,
    "display": {
     "label": {
-     "value": "SENTINEL-LABEL",
+     "value": "Rita Hayworth and Shawshank Redemption",
+     "language": "en"
+    },
+    "description": {
+     "value": "SENTINEL-DESCRIPTION",
      "language": "en"
     }
    },
    "repository": "wikidata",
    "url": "//www.wikidata.org/wiki/Q900002",
    "concepturi": "http://www.wikidata.org/entity/Q900002",
-   "label": "SENTINEL-LABEL",
+   "label": "Rita Hayworth and Shawshank Redemption",
    "description": "SENTINEL-DESCRIPTION",
    "match": {
     "type": "label",
     "language": "en",
-    "text": "The Shawshank Redemption"
+    "text": "Rita Hayworth and Shawshank Redemption"
    }
   }
  ],

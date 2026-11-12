@@ -950,7 +950,7 @@ mod spec_tests {
             (tpdb::ID, *AdultEnricher::policy(&tpdb::Tpdb::new(creds()))),
             (
                 wikidata::ID,
-                *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata),
+                *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata::new()),
             ),
         ]
     }

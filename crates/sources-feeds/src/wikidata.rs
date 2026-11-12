@@ -14,9 +14,11 @@
 //!
 //! The shapes, by root key:
 //!
-//! - search: `{"search": [{"id": "Q172241", …}, …], …}`. Only each
-//!   result's `id` is read; its label, description and URLs are passed
-//!   over.
+//! - search: `{"search": [{"id": "Q172241", "label": text, "aliases":
+//!   [text, …], "match": {"text": text, …}, …}, …], …}`. Each result's id
+//!   and the texts it matched on are read ([`Hit`]), so a plugin can drop
+//!   a result whose texts don't match before asking for the entity; its
+//!   description and URLs are passed over.
 //! - entities: `{"entities": {"Q172241": {"id": "Q172241", "type":
 //!   "item", "labels": {lang: {"language": lang, "value": text}},
 //!   "aliases": {lang: [{"language": lang, "value": text}, …]}, "claims":
@@ -34,8 +36,15 @@
 //! title `tt…`, TMDB and TVDB numbers), and any other value of the
 //! property, such as an IMDb person id, is not kept.
 //!
-//! Keys are compared as written. A key with an escape in a part that's
-//! read, or a key read twice there, spoils it: a real answer has neither.
+//! Keys are compared as written. In a part that's read, a key with an
+//! escape spoils it, and so does a repeat of a key it reads: a field, a
+//! label's language, a read property or an entity's id. Repeats are found
+//! with a bitmask over the known keys and a scan of what's kept (at most
+//! the count caps), never a list of every key seen, so a body of a million
+//! unknown keys is read in linear time.
+//!
+//! An empty map may be written `[]` (PHP's empty array): `labels`,
+//! `aliases` and `claims` accept it, and only empty.
 
 use crate::common::{Bad, prepare, title};
 pub use crate::common::{MAX_TITLE, Stop};
@@ -53,15 +62,17 @@ pub struct Limits {
     pub max_depth: usize,
     /// Values in the document, containers included ([`Stop::Elements`]).
     pub max_values: usize,
-    /// Elements in one array; over it the entity or result is skipped.
+    /// Elements in one array, read or passed over; over it the entity or
+    /// result is skipped.
     pub max_array: usize,
     /// Raw bytes of a string the parser decodes; over it the entity or
     /// result is skipped.
     pub max_text: usize,
     /// Search results or entities, kept or not ([`Stop::Items`]).
     pub max_items: usize,
-    /// Labels and aliases kept per entity; the rest are passed over
-    /// ([`Entity::truncated`]).
+    /// Labels and aliases kept per entity, or texts per search result;
+    /// the rest are passed over undecoded ([`Entity::truncated`],
+    /// [`Hit::truncated`]).
     pub max_texts: usize,
     /// Statements of the [`Property`] list decoded per entity; the rest
     /// are passed over ([`Entity::truncated`]).
@@ -76,7 +87,7 @@ pub const SEARCH_LIMITS: Limits = Limits {
     max_array: 1_000,
     max_text: 4 * 1024,
     max_items: 10,
-    max_texts: 0,
+    max_texts: 16,
     max_statements: 0,
 };
 
@@ -135,6 +146,10 @@ pub enum Property {
 }
 
 impl Property {
+    /// The keys read, in a fixed order (for repeat detection).
+    const KEYS: &'static [&'static str] =
+        &["P31", "P345", "P4947", "P4983", "P4835", "P577", "P580"];
+
     fn of(key: &str) -> Option<Property> {
         Some(match key {
             "P31" => Property::InstanceOf,
@@ -228,7 +243,8 @@ pub struct Page {
     /// The root's `search` (an array) or `entities` (an object) key, as
     /// asked, was read.
     pub seen: bool,
-    /// A root key was written twice or with an escape.
+    /// A root key, or an entity's id, was written twice or with an
+    /// escape.
     pub bad_root: bool,
     /// Something other than whitespace followed the root value.
     pub trailing: bool,
@@ -248,10 +264,21 @@ impl Page {
     }
 }
 
-/// A search answer's result ids, in the service's order.
+/// One search result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    pub id: Qid,
+    /// Its `label`, `aliases` and `match.text`, as [`Text::value`] is
+    /// cleaned; no language.
+    pub texts: Vec<String>,
+    /// Texts past [`Limits::max_texts`] were passed over.
+    pub truncated: bool,
+}
+
+/// A search answer's results, in the service's order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Search {
-    pub ids: Vec<Qid>,
+    pub hits: Vec<Hit>,
     pub page: Page,
 }
 
@@ -264,22 +291,35 @@ pub struct Entities {
 
 /// Parses a `wbsearchentities` answer.
 pub fn parse_search(body: &[u8], limits: &Limits) -> Search {
-    let mut ids = Vec::new();
-    let page = run(body, limits, "search", |p| {
-        p.array(|p, _| {
-            let id = p.result()?;
-            ids.extend(id);
+    let mut hits = Vec::new();
+    let page = run(body, limits, Root::Search, |p| {
+        let ok = p.arr(|p, _| {
+            let hit = p.result()?;
+            hits.extend(hit);
             Ok(())
-        })
+        })?;
+        if ok == Shape::OverLong {
+            p.page.stop.get_or_insert(Stop::Items);
+        }
+        Ok(())
     });
-    Search { ids, page }
+    Search { hits, page }
 }
 
 /// Parses a `wbgetentities` answer.
 pub fn parse_entities(body: &[u8], limits: &Limits) -> Entities {
-    let mut entities = Vec::new();
-    let page = run(body, limits, "entities", |p| {
+    let mut entities: Vec<Entity> = Vec::new();
+    // The ids read, at most `max_items` and one more: a repeat is found
+    // among them.
+    let mut ids: Vec<String> = Vec::new();
+    let page = run(body, limits, Root::Entities, |p| {
         p.object(|p, key| {
+            if ids.iter().any(|i| i == key) || key.contains('\\') {
+                p.page.bad_root = true;
+            }
+            if ids.len() <= p.l.max_items {
+                ids.push(key.to_owned());
+            }
             let e = p.entity(key)?;
             entities.extend(e);
             Ok(())
@@ -288,11 +328,18 @@ pub fn parse_entities(body: &[u8], limits: &Limits) -> Entities {
     Entities { entities, page }
 }
 
+/// The root key a parse reads, and the type its value must have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Root {
+    Search,
+    Entities,
+}
+
 /// The root object, handing the value of `want` to `read`.
 fn run(
     body: &[u8],
     limits: &Limits,
-    want: &str,
+    want: Root,
     mut read: impl FnMut(&mut Parser<'_, '_>) -> R<()>,
 ) -> Page {
     let mut summary = crate::common::Summary::default();
@@ -316,20 +363,24 @@ fn run(
             ..Page::default()
         },
     };
-    let shape = if want == "search" { b'[' } else { b'{' };
+    let (name, shape) = match want {
+        Root::Search => ("search", b'['),
+        Root::Entities => ("entities", b'{'),
+    };
     let mut read_all = |p: &mut Parser<'_, '_>| -> R<()> {
         if p.j.peek() != Some(b'{') {
             p.j.skip()?;
         } else {
-            let mut keys: Vec<&str> = Vec::new();
+            let mut keys = Keys::default();
             p.object(|p, k| {
-                if k.contains('\\') || keys.contains(&k) {
+                // Unknown root keys are passed over; their repeats don't
+                // matter.
+                if keys.repeat(k, &[name, "error"]) {
                     p.page.bad_root = true;
                     return p.j.skip().map(drop);
                 }
-                keys.push(k);
                 match k {
-                    _ if k == want && p.j.peek() == Some(shape) => {
+                    _ if k == name && p.j.peek() == Some(shape) => {
                         p.page.seen = true;
                         read(p)
                     }
@@ -379,6 +430,47 @@ impl Spoil {
             self.set(Bad::Malformed);
         }
     }
+
+    /// Spoils the part unless the container was there, and in its caps.
+    fn shape(&mut self, shape: Shape) {
+        match shape {
+            Shape::Fine => {}
+            Shape::OverLong => self.set(Bad::OverCap),
+            Shape::Wrong => self.set(Bad::Malformed),
+        }
+    }
+}
+
+/// The keys of one object a parser reads, as a bitmask over their place
+/// in a short list. Constant work a key, whatever the object holds.
+#[derive(Debug, Default)]
+struct Keys(u32);
+
+impl Keys {
+    /// True when `k` is escaped, or is one of `known` and was seen before.
+    fn repeat(&mut self, k: &str, known: &[&str]) -> bool {
+        if k.contains('\\') {
+            return true;
+        }
+        let Some(i) = known.iter().position(|w| *w == k) else {
+            return false;
+        };
+        let bit = 1u32 << i;
+        let again = self.0 & bit != 0;
+        self.0 |= bit;
+        again
+    }
+}
+
+/// How a container that must be next turned out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Fine,
+    /// An array with more than [`Limits::max_array`] elements; those past
+    /// it were passed over.
+    OverLong,
+    /// Not the container asked for; read past.
+    Wrong,
 }
 
 /// One decoded statement value.
@@ -408,12 +500,12 @@ impl<'a> Parser<'a, '_> {
         Ok(())
     }
 
-    /// A key of a part being read: an escaped or repeated one spoils it.
-    fn key(&self, s: &mut Spoil, seen: &mut Vec<&'a str>, k: &'a str) {
-        if k.contains('\\') || seen.contains(&k) {
+    /// A key of a part being read: an escaped key, or a repeat of one of
+    /// `known`, spoils it.
+    fn key(s: &mut Spoil, keys: &mut Keys, k: &str, known: &[&str]) {
+        if keys.repeat(k, known) {
             s.set(Bad::Malformed);
         }
-        seen.push(k);
     }
 
     /// A string; anything else spoils `s` and is skipped.
@@ -435,21 +527,43 @@ impl<'a> Parser<'a, '_> {
         })
     }
 
-    /// An object that must be next. False when it isn't: it's then read
-    /// past, and the caller spoils its part.
-    fn obj(&mut self, f: impl FnMut(&mut Self, &'a str) -> R<()>) -> R<bool> {
+    /// An object that must be next. [`Shape::Wrong`] when it isn't: it's
+    /// then read past, and the caller spoils its part.
+    fn obj(&mut self, f: impl FnMut(&mut Self, &'a str) -> R<()>) -> R<Shape> {
         if self.j.peek() != Some(b'{') {
-            return self.j.skip().map(|_| false);
+            return self.j.skip().map(|_| Shape::Wrong);
         }
-        self.object(f).map(|()| true)
+        self.object(f).map(|()| Shape::Fine)
     }
 
-    /// An array that must be next, as [`obj`](Self::obj).
-    fn arr(&mut self, f: impl FnMut(&mut Self, usize) -> R<()>) -> R<bool> {
+    /// An array that must be next, handing `f` its first
+    /// [`Limits::max_array`] elements and passing over the rest.
+    fn arr(&mut self, mut f: impl FnMut(&mut Self, usize) -> R<()>) -> R<Shape> {
         if self.j.peek() != Some(b'[') {
-            return self.j.skip().map(|_| false);
+            return self.j.skip().map(|_| Shape::Wrong);
         }
-        self.array(f).map(|()| true)
+        let (max, mut over) = (self.l.max_array, false);
+        self.array(|p, n| {
+            if n >= max {
+                over = true;
+                return p.j.skip().map(drop);
+            }
+            f(p, n)
+        })?;
+        Ok(if over { Shape::OverLong } else { Shape::Fine })
+    }
+
+    /// A map (`labels`, `aliases`, `claims`): an object, or `[]`.
+    fn map(&mut self, f: impl FnMut(&mut Self, &'a str) -> R<()>) -> R<Shape> {
+        if self.j.peek() != Some(b'[') {
+            return self.obj(f);
+        }
+        let mut empty = true;
+        self.array(|p, _| {
+            empty = false;
+            p.j.skip().map(drop)
+        })?;
+        Ok(if empty { Shape::Fine } else { Shape::Wrong })
     }
 
     fn tally(&mut self, s: &Spoil) -> bool {
@@ -466,35 +580,72 @@ impl<'a> Parser<'a, '_> {
         self.page.skipped.bad_id = self.page.skipped.bad_id.saturating_add(1);
     }
 
+    /// A text kept within `max_texts`; past it, the value is passed over
+    /// undecoded and `truncated` set.
+    fn capped_text(
+        &mut self,
+        s: &mut Spoil,
+        texts: &mut Vec<String>,
+        truncated: &mut bool,
+    ) -> R<()> {
+        if texts.len() >= self.l.max_texts {
+            *truncated = true;
+            return self.skip_in(s);
+        }
+        if let Some(t) = self.string(s)?.as_deref().and_then(title) {
+            texts.push(t);
+        }
+        Ok(())
+    }
+
     // --- Search ----------------------------------------------------------
 
-    /// One search result: its `id` only.
-    fn result(&mut self) -> R<Option<Qid>> {
+    /// One search result: its `id`, and the `label`, `aliases` and
+    /// `match.text` it was found by.
+    fn result(&mut self) -> R<Option<Hit>> {
         if !self.counted() {
             return self.j.skip().map(|_| None);
         }
-        let (mut s, mut seen, mut id) = (Spoil::default(), Vec::new(), None);
-        let ok = self.obj(|p, k| {
-            p.key(&mut s, &mut seen, k);
+        let (mut s, mut keys, mut id) = (Spoil::default(), Keys::default(), None);
+        let (mut texts, mut truncated) = (Vec::new(), false);
+        let shape = self.obj(|p, k| {
+            Self::key(&mut s, &mut keys, k, &["id", "label", "aliases", "match"]);
             match k {
                 "id" => id = p.string(&mut s)?,
+                "label" => p.capped_text(&mut s, &mut texts, &mut truncated)?,
+                "aliases" => {
+                    let shape = p.arr(|p, _| p.capped_text(&mut s, &mut texts, &mut truncated))?;
+                    s.shape(shape);
+                }
+                "match" => {
+                    let mut own = Keys::default();
+                    let shape = p.obj(|p, k| {
+                        Self::key(&mut s, &mut own, k, &["text"]);
+                        match k {
+                            "text" => p.capped_text(&mut s, &mut texts, &mut truncated),
+                            _ => p.skip_in(&mut s),
+                        }
+                    })?;
+                    s.shape(shape);
+                }
                 _ => p.skip_in(&mut s)?,
             }
             Ok(())
         })?;
-        if !ok {
-            s.set(Bad::Malformed);
-        }
+        s.shape(shape);
         if !self.tally(&s) {
             return Ok(None);
         }
-        let q = id.as_deref().and_then(Qid::parse);
-        if q.is_none() {
+        let Some(id) = id.as_deref().and_then(Qid::parse) else {
             self.bad_id();
-        } else {
-            self.page.kept = self.page.kept.saturating_add(1);
-        }
-        Ok(q)
+            return Ok(None);
+        };
+        self.page.kept = self.page.kept.saturating_add(1);
+        Ok(Some(Hit {
+            id,
+            texts,
+            truncated,
+        }))
     }
 
     // --- Entities --------------------------------------------------------
@@ -511,57 +662,92 @@ impl<'a> Parser<'a, '_> {
             return Ok(None);
         };
         let mut e = Entity::new(qid);
-        let (mut seen, mut id, mut missing, mut statements) = (Vec::new(), None, false, 0);
-        let ok = self.obj(|p, k| {
-            p.key(&mut s, &mut seen, k);
-            let shaped = match k {
+        let (mut keys, mut id, mut kind, mut missing) = (Keys::default(), None, None, false);
+        let mut statements = 0;
+        const KNOWN: &[&str] = &["id", "type", "missing", "labels", "aliases", "claims"];
+        let shape = self.obj(|p, k| {
+            Self::key(&mut s, &mut keys, k, KNOWN);
+            let shape = match k {
                 "id" => {
                     id = p.string(&mut s)?;
-                    true
+                    Shape::Fine
                 }
-                "type" => p.string(&mut s)?.is_some_and(|t| t == "item"),
+                "type" => {
+                    kind = p.string(&mut s)?;
+                    Shape::Fine
+                }
                 "missing" => {
                     missing = true;
-                    p.skip_in(&mut s).map(|()| true)?
+                    p.skip_in(&mut s).map(|()| Shape::Fine)?
                 }
-                "labels" => p.obj(|p, lang| {
-                    let t = p.text(&mut s, lang)?;
-                    p.keep(&mut e, t, true);
-                    Ok(())
-                })?,
-                "aliases" => p.obj(|p, lang| {
-                    let ok = p.arr(|p, _| {
-                        let t = p.text(&mut s, lang)?;
-                        p.keep(&mut e, t, false);
-                        Ok(())
-                    })?;
-                    s.check(ok);
-                    Ok(())
-                })?,
-                "claims" => p.obj(|p, prop| {
-                    let Some(which) = Property::of(prop) else {
+                "labels" => p.map(|p, lang| {
+                    // A repeated language is found among the kept labels.
+                    if e.labels.iter().any(|t| t.language == lang) {
+                        s.set(Bad::Malformed);
+                    }
+                    if e.labels.len() + e.aliases.len() >= p.l.max_texts {
+                        e.truncated = true;
                         return p.skip_in(&mut s);
-                    };
-                    let ok = p.arr(|p, _| {
-                        if statements >= p.l.max_statements {
+                    }
+                    let t = p.text(&mut s, lang)?;
+                    e.labels.extend(t);
+                    Ok(())
+                })?,
+                "aliases" => {
+                    let mut langs: Vec<&str> = Vec::new();
+                    p.map(|p, lang| {
+                        if langs.contains(&lang) {
+                            s.set(Bad::Malformed);
+                        }
+                        if e.labels.len() + e.aliases.len() >= p.l.max_texts {
                             e.truncated = true;
                             return p.skip_in(&mut s);
                         }
-                        statements += 1;
-                        if let Some(v) = p.statement(&mut s, prop, which)? {
-                            add(&mut e, which, v);
-                        }
+                        langs.push(lang);
+                        let shape = p.arr(|p, _| {
+                            if e.labels.len() + e.aliases.len() >= p.l.max_texts {
+                                e.truncated = true;
+                                return p.skip_in(&mut s);
+                            }
+                            let t = p.text(&mut s, lang)?;
+                            e.aliases.extend(t);
+                            Ok(())
+                        })?;
+                        s.shape(shape);
                         Ok(())
-                    })?;
-                    s.check(ok);
-                    Ok(())
-                })?,
-                _ => p.skip_in(&mut s).map(|()| true)?,
+                    })?
+                }
+                "claims" => {
+                    let mut props = Keys::default();
+                    p.map(|p, prop| {
+                        let Some(which) = Property::of(prop) else {
+                            return p.skip_in(&mut s);
+                        };
+                        Self::key(&mut s, &mut props, prop, Property::KEYS);
+                        let shape = p.arr(|p, _| {
+                            if statements >= p.l.max_statements {
+                                e.truncated = true;
+                                return p.skip_in(&mut s);
+                            }
+                            statements += 1;
+                            if let Some(v) = p.statement(&mut s, prop, which)? {
+                                add(&mut e, which, v);
+                            }
+                            Ok(())
+                        })?;
+                        s.shape(shape);
+                        Ok(())
+                    })?
+                }
+                _ => p.skip_in(&mut s).map(|()| Shape::Fine)?,
             };
-            s.check(shaped);
+            s.shape(shape);
             Ok(())
         })?;
-        s.check(ok && id.as_deref() == Some(key));
+        s.shape(shape);
+        // The id is its key; an item says it's one, unless it's missing.
+        s.check(id.as_deref() == Some(key));
+        s.check(kind.as_deref() == Some("item") || (missing && kind.is_none()));
         if !self.tally(&s) {
             return Ok(None);
         }
@@ -573,23 +759,11 @@ impl<'a> Parser<'a, '_> {
         Ok(Some(e))
     }
 
-    /// Keeps a label or alias within the cap.
-    fn keep(&self, e: &mut Entity, t: Option<Text>, label: bool) {
-        let Some(t) = t else { return };
-        if e.labels.len() + e.aliases.len() >= self.l.max_texts {
-            e.truncated = true;
-        } else if label {
-            e.labels.push(t);
-        } else {
-            e.aliases.push(t);
-        }
-    }
-
     /// `{"language": lang, "value": text}` under the key `lang`.
     fn text(&mut self, s: &mut Spoil, lang: &'a str) -> R<Option<Text>> {
-        let (mut seen, mut language, mut value) = (Vec::new(), None, None);
-        let ok = self.obj(|p, k| {
-            p.key(s, &mut seen, k);
+        let (mut keys, mut language, mut value) = (Keys::default(), None, None);
+        let shape = self.obj(|p, k| {
+            Self::key(s, &mut keys, k, &["language", "value"]);
             match k {
                 "language" => language = p.string(s)?,
                 "value" => value = p.string(s)?,
@@ -597,7 +771,8 @@ impl<'a> Parser<'a, '_> {
             }
             Ok(())
         })?;
-        s.check(ok && language.as_deref() == Some(lang) && language_ok(lang));
+        s.shape(shape);
+        s.check(language.as_deref() == Some(lang) && language_ok(lang));
         let (None, Some(v)) = (s.0, value) else {
             s.check(false);
             return Ok(None);
@@ -612,9 +787,9 @@ impl<'a> Parser<'a, '_> {
     /// One statement of `prop`: its value, unless it's deprecated or says
     /// there's no (or an unknown) value.
     fn statement(&mut self, s: &mut Spoil, prop: &str, which: Property) -> R<Option<Value>> {
-        let (mut seen, mut rank, mut snak) = (Vec::new(), None, None);
-        let ok = self.obj(|p, k| {
-            p.key(s, &mut seen, k);
+        let (mut keys, mut rank, mut snak) = (Keys::default(), None, None);
+        let shape = self.obj(|p, k| {
+            Self::key(s, &mut keys, k, &["rank", "mainsnak"]);
             match k {
                 "rank" => rank = p.string(s)?,
                 "mainsnak" => snak = Some(p.snak(s, prop, which)?),
@@ -622,6 +797,7 @@ impl<'a> Parser<'a, '_> {
             }
             Ok(())
         })?;
+        s.shape(shape);
         let kept = match rank.as_deref() {
             Some("preferred" | "normal") => true,
             Some("deprecated") => false,
@@ -630,16 +806,16 @@ impl<'a> Parser<'a, '_> {
                 false
             }
         };
-        s.check(ok && snak.is_some());
+        s.check(snak.is_some());
         Ok(snak.flatten().filter(|_| kept))
     }
 
     /// A main snak: `snaktype`, `property` (which must be `prop`) and, for
     /// a value, its `datavalue`.
     fn snak(&mut self, s: &mut Spoil, prop: &str, which: Property) -> R<Option<Value>> {
-        let (mut seen, mut kind, mut property, mut value) = (Vec::new(), None, None, None);
-        let ok = self.obj(|p, k| {
-            p.key(s, &mut seen, k);
+        let (mut keys, mut kind, mut property, mut value) = (Keys::default(), None, None, None);
+        let shape = self.obj(|p, k| {
+            Self::key(s, &mut keys, k, &["snaktype", "property", "datavalue"]);
             match k {
                 "snaktype" => kind = p.string(s)?,
                 "property" => property = p.string(s)?,
@@ -648,7 +824,8 @@ impl<'a> Parser<'a, '_> {
             }
             Ok(())
         })?;
-        s.check(ok && property.as_deref() == Some(prop));
+        s.shape(shape);
+        s.check(property.as_deref() == Some(prop));
         match (kind.as_deref(), value) {
             (Some("value"), Some(v)) => Ok(v),
             (Some("novalue" | "somevalue"), None) => Ok(None),
@@ -666,9 +843,9 @@ impl<'a> Parser<'a, '_> {
             Property::Published | Property::Started => "time",
             _ => "string",
         };
-        let (mut seen, mut kind, mut value) = (Vec::new(), None, None);
-        let ok = self.obj(|p, k| {
-            p.key(s, &mut seen, k);
+        let (mut keys, mut kind, mut value) = (Keys::default(), None, None);
+        let shape = self.obj(|p, k| {
+            Self::key(s, &mut keys, k, &["type", "value"]);
             match k {
                 "type" => kind = p.string(s)?,
                 "value" => {
@@ -682,23 +859,25 @@ impl<'a> Parser<'a, '_> {
             }
             Ok(())
         })?;
-        s.check(ok && kind.as_deref() == Some(want) && value.is_some());
+        s.shape(shape);
+        s.check(kind.as_deref() == Some(want) && value.is_some());
         Ok(value)
     }
 
     /// An item value: `{"id": "Q…", …}`.
     fn item(&mut self, s: &mut Spoil) -> R<Option<Qid>> {
-        let (mut seen, mut id) = (Vec::new(), None);
-        let ok = self.obj(|p, k| {
-            p.key(s, &mut seen, k);
+        let (mut keys, mut id) = (Keys::default(), None);
+        let shape = self.obj(|p, k| {
+            Self::key(s, &mut keys, k, &["id"]);
             match k {
                 "id" => id = p.string(s)?,
                 _ => p.skip_in(s)?,
             }
             Ok(())
         })?;
+        s.shape(shape);
         let q = id.as_deref().and_then(Qid::parse);
-        s.check(ok && q.is_some());
+        s.check(q.is_some());
         Ok(q)
     }
 
@@ -706,9 +885,9 @@ impl<'a> Parser<'a, '_> {
     /// …}`. `Some(None)` for a year it can't give: before year 1, after
     /// 9999, or a precision coarser than a year.
     fn time(&mut self, s: &mut Spoil) -> R<Option<Option<u16>>> {
-        let (mut seen, mut time, mut precision) = (Vec::new(), None, None);
-        let ok = self.obj(|p, k| {
-            p.key(s, &mut seen, k);
+        let (mut keys, mut time, mut precision) = (Keys::default(), None, None);
+        let shape = self.obj(|p, k| {
+            Self::key(s, &mut keys, k, &["time", "precision"]);
             match k {
                 "time" => time = p.string(s)?,
                 "precision" if matches!(p.j.peek(), Some(b'0'..=b'9')) => {
@@ -719,8 +898,8 @@ impl<'a> Parser<'a, '_> {
             Ok(())
         })?;
         let year = time.as_deref().and_then(year_of);
-        match (ok, year, precision) {
-            (true, Some(year), Some(precision)) => Ok(Some(year.filter(|_| precision >= 9))),
+        match (shape, year, precision) {
+            (Shape::Fine, Some(year), Some(precision)) => Ok(Some(year.filter(|_| precision >= 9))),
             _ => {
                 s.check(false);
                 Ok(None)

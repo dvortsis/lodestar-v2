@@ -70,6 +70,10 @@ fn each_entry_is_its_plugins_own_manifest() {
         AdultEnricher::manifest(&stashdb).clone(),
         cache.manifest().clone(),
         AdultEnricher::manifest(&tpdb).clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::wikidata::Wikidata::new(),
+        )
+        .clone(),
     ];
     let listed: Vec<&Manifest> = catalogue::manifests().collect();
     assert_eq!(plugins.len(), listed.len());
