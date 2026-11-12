@@ -33,9 +33,10 @@ pub struct SiblingsResponse {
     /// piece root: only v2 and hybrid torrents have them
     /// (`needs_v2_files` for a v1-only torrent).
     pub same_file: HitGroup,
-    /// The lookup was bounded: only this torrent's largest files were
-    /// looked up (it has more than the server checks), or more torrents
-    /// shared them than were read. Some may be missing from `same_file`.
+    /// `same_file` is full (it lists the most the server returns) and
+    /// the lookup was bounded: only this torrent's largest files were
+    /// looked up, or more torrents shared them than were read. Some may
+    /// be missing from it. A shorter list never sets this.
     pub same_file_capped: bool,
     /// The file index is still filling in piece roots, so some torrents
     /// may be missing from `same_file`.

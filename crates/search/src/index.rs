@@ -1393,13 +1393,7 @@ impl SearchIndex {
         let mut sets = compile::FileSets::new();
         // Read before the file searcher is taken, so it holds at least
         // the files these say it does ([`PopView::last_ids`]).
-        let files_caught_up = {
-            let view = self
-                .population
-                .read()
-                .unwrap_or_else(PoisonError::into_inner);
-            view.last_ids[1] >= view.last_ids[0]
-        };
+        let files_caught_up = self.files_caught_up();
         let files_searcher = self.files.reader.searcher();
         for of in &clauses {
             let key = format!("{of:?}");

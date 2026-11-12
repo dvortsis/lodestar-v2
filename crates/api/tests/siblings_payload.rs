@@ -174,6 +174,11 @@ struct Fixture {
 /// content" on. `generations`: a build shipping a new generation of a
 /// field, so the index is backfilling it.
 fn fixture(torrents: &[T], adult: bool, generations: Option<Generations>) -> Fixture {
+    build(torrents, adult, generations, true)
+}
+
+/// [`fixture`], served with search on or off (`indexed`).
+fn build(torrents: &[T], adult: bool, generations: Option<Generations>, indexed: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -230,7 +235,7 @@ fn fixture(torrents: &[T], adult: bool, generations: Option<Generations>) -> Fix
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
-            index: Some(index.into()),
+            index: indexed.then(|| index.into()),
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
@@ -625,5 +630,26 @@ async fn a_torrent_with_only_padding_files_matches_nothing() {
             "{group}"
         );
         assert_eq!(body[group]["hits"], json!([]), "{group}");
+    }
+}
+
+/// With search off, both groups say so (a v1 clone for identical
+/// payload, a v2 sharer for the same file), and claim nothing partial or
+/// capped.
+#[tokio::test]
+async fn without_search_the_groups_say_search_is_disabled() {
+    let both = clones().into_iter().chain(shared()).collect::<Vec<T>>();
+    let f = build(&both, false, None, false);
+    let c = session(&f).await;
+    for (i, group) in [(0, "identical_payload"), (6, "same_file")] {
+        let body = siblings(&f, &c, i).await;
+        assert_eq!(
+            reason(&body[group]),
+            ("unavailable", "search_disabled"),
+            "{group}"
+        );
+        assert_eq!(body["identical_payload_partial"], false);
+        assert_eq!(body["same_file_partial"], false);
+        assert_eq!(body["same_file_capped"], false);
     }
 }

@@ -1538,6 +1538,47 @@ mod tests {
         assert!(run(&collided).hits.is_empty());
     }
 
+    /// The stored state withholds a candidate whatever the index says:
+    /// the candidate list is forged (as if the index lagged the store),
+    /// and a hidden torrent is always dropped, an Adult one unless Adult
+    /// is shown.
+    #[test]
+    fn a_withheld_candidate_is_dropped_whatever_the_index_says() {
+        let entries = [
+            entry("Ref"),
+            entry("Shown"),
+            Entry {
+                name: "Hidden".to_owned(),
+                flags: lodestar_store::flags::HIDDEN,
+                adult: false,
+            },
+            Entry {
+                name: "Adult".to_owned(),
+                flags: 0,
+                adult: true,
+            },
+        ];
+        let (s, ids, _dir) = corpus(&entries, None);
+        let run = |adult: bool| {
+            let forged = ids[1..].iter().map(|&i| (i, 1.0));
+            let g = confirmed(
+                &s,
+                ids[0],
+                forged,
+                adult,
+                &CancelToken::new(),
+                |_| true,
+                |_| true,
+            )
+            .unwrap();
+            let mut names = found(&g);
+            names.sort();
+            names
+        };
+        assert_eq!(run(false), ["Shown"]);
+        assert_eq!(run(true), ["Adult", "Shown"]);
+    }
+
     /// The candidate loop both new groups share ([`confirmed`]) stops at
     /// the next candidate when the request is cancelled.
     #[test]

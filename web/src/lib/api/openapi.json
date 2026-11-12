@@ -23415,7 +23415,7 @@
           },
           "same_file_capped": {
             "type": "boolean",
-            "description": "The lookup was bounded: only this torrent's largest files were\nlooked up (it has more than the server checks), or more torrents\nshared them than were read. Some may be missing from `same_file`."
+            "description": "`same_file` is full (it lists the most the server returns) and\nthe lookup was bounded: only this torrent's largest files were\nlooked up, or more torrents shared them than were read. Some may\nbe missing from it. A shorter list never sets this."
           },
           "same_file_partial": {
             "type": "boolean",

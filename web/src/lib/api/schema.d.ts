@@ -9327,9 +9327,10 @@ export interface components {
              */
             same_file: components["schemas"]["HitGroup"];
             /**
-             * @description The lookup was bounded: only this torrent's largest files were
-             *     looked up (it has more than the server checks), or more torrents
-             *     shared them than were read. Some may be missing from `same_file`.
+             * @description `same_file` is full (it lists the most the server returns) and
+             *     the lookup was bounded: only this torrent's largest files were
+             *     looked up, or more torrents shared them than were read. Some may
+             *     be missing from it. A shorter list never sets this.
              */
             same_file_capped: boolean;
             /**
