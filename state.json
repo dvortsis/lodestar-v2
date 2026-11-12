@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T17:37:15Z",
+  "updated_at": "2026-11-12T17:44:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8410,7 +8410,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T17:32:38Z",
+    "updated": "2026-11-12T17:44:28Z",
     "items": [
       {
         "slot": 1,
@@ -8444,7 +8444,7 @@
         "slice": "X-dht-bep42-rejoin",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCe1kcR2oZ6RFAyyjw: one self-lookup for the new ids[0] after a BEP 42 id change (rv-756 N-3; briefs/X-dht-bep42-rejoin.md)",
+        "doing": "#768 ready 2a1f4392; fresh Opus review running",
         "since": "2026-11-12T15:41:01Z",
         "status": "active"
       },
@@ -8543,7 +8543,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T17:37:15Z",
+  "updated": "2026-11-12T17:44:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
