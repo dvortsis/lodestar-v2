@@ -214,6 +214,9 @@ impl<'a> Doc<'a> {
             }
             // As the matcher: the judge doesn't see provenance (SRC-3).
             Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => false,
+            // A payload signature is the search index's (GS-0); rules block
+            // payloads through CS-8's keys instead.
+            Node::Sig { .. } => false,
         }
     }
 

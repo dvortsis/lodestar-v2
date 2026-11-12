@@ -3275,6 +3275,10 @@ export interface components {
             op: "time_of_day";
             /** Format: int32 */
             to: number;
+        } | {
+            /** @enum {string} */
+            op: "sig";
+            sig: string;
         };
         /** @enum {string} */
         AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk" | "seeders" | "leechers" | "trackers" | "dht";

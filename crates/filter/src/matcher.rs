@@ -492,7 +492,8 @@ pub(crate) fn compile(node: &Node) -> Compiled {
         | Node::TimeOfDay { .. }
         | Node::Verified { .. }
         | Node::Source { .. }
-        | Node::Network { .. } => Compiled::Leaf(Box::new(node.clone())),
+        | Node::Network { .. }
+        | Node::Sig { .. } => Compiled::Leaf(Box::new(node.clone())),
     }
 }
 
@@ -1438,6 +1439,9 @@ impl<'a> Doc<'a> {
             // Provenance is the search index's (SRC-3, §18.6): the judge
             // doesn't see it, so, like `seen:`, it matches nothing here.
             Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => false,
+            // A payload signature is the search index's (GS-0); rules block
+            // payloads through CS-8's keys instead.
+            Node::Sig { .. } => false,
             // Rules have no time zone: UTC.
             Node::TimeOfDay { from, to } => self.facts.is_some_and(|f| {
                 self.read_time.set(true);

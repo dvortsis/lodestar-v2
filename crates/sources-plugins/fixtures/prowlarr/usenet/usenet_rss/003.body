@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <atom:link rel="self" type="application/rss+xml" />
+    <title>Example Usenet</title>
+    <item>
+      <title>Tears.of.Steel.2012.1080p.BluRay.x264-USENET</title>
+      <guid isPermaLink="true">https://indexer.example/details/9f8e7d6c5b4a</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3D9f8e7d6c5b4a%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <category>2040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3D9f8e7d6c5b4a%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+      <newznab:attr name="imdb" value="2285752" />
+      <newznab:attr name="guid" value="9f8e7d6c5b4a" />
+    </item>
+    <item>
+      <title>Caminandes.Llamigos.2016.720p.WEB-USENET</title>
+      <guid isPermaLink="true">https://geek.example/geekseek.php?guid=abc123def456</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Dabc123def456%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>5000</category>
+      <category>5040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Dabc123def456%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="5040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+    <item>
+      <title>Spring.2019.2160p.WEB-USENET</title>
+      <guid isPermaLink="true">a1b2c3d4e5f6</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Mon, 01 Jan 1979 00:00:00 +0000</pubDate>
+      <size>0</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Da1b2c3d4e5f6%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Da1b2c3d4e5f6%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="0" type="application/x-nzb" />
+      <newznab:attr name="category" value="2000" />
+      <newznab:attr name="size" value="0" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Mon, 01 Jan 1979 00:00:00 +0000" />
+    </item>
+    <item>
+      <title>Agent.327.2017.1080p.WEB-USENET</title>
+      <guid isPermaLink="true">http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Ddddd%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Ddddd%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <category>2040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Ddddd%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+    <item>
+      <title>Hero.2018.1080p.WEB-USENET</title>
+      <guid isPermaLink="true">https://indexer.example/getnzb/eeee.nzb&amp;i=1&amp;r=indexerkey00000000000000000000002</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Deeee%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <category>2040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Deeee%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+    <item>
+      <guid isPermaLink="true">https://indexer.example/details/ffff</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Dffff%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <category>2040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3Dffff%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+    <item>
+      <title>Coffee.Run.2020.1080p.WEB-USENET</title>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3D1111%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <category>2040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3D1111%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+    <item>
+      <title>Sprite.Fright.2021.1080p.WEB-USENET</title>
+      <guid isPermaLink="true">https://indexer.example/passkey/2222</guid>
+      <prowlarrindexer id="7" type="private">Example Usenet</prowlarrindexer>
+      <comments>https://indexer.example/details/x#comments</comments>
+      <pubDate>Wed, 11 Nov 2026 20:15:00 +0000</pubDate>
+      <size>4000000000</size>
+      <link>http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3D2222%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release</link>
+      <description>Posted by someone@example.invalid</description>
+      <category>2000</category>
+      <category>2040</category>
+      <enclosure url="http://prowlarr.example:9696/7/download?apikey=prowlarrkey0000000000000000000001&amp;link=https%3A%2F%2Findexer.example%2Fapi%3Ft%3Dget%26id%3D2222%26apikey%3Dindexerkey00000000000000000000002&amp;file=Release" length="4000000000" type="application/x-nzb" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="4000000000" />
+      <newznab:attr name="poster" value="someone@example.invalid (Some One)" />
+      <newznab:attr name="group" value="alt.binaries.example" />
+      <newznab:attr name="usenetdate" value="Wed, 11 Nov 2026 20:15:00 +0000" />
+    </item>
+    <item>
+      <title>Torrent.On.A.Usenet.Indexer</title>
+      <guid>https://indexer.example/details/3333</guid>
+      <torznab:attr name="infohash" value="0123456789abcdef0123456789abcdef01234567" />
+    </item>
+  </channel>
+</rss>
