@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T01:30:56Z",
+  "updated_at": "2026-11-12T02:06:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7021,6 +7021,11 @@
       "slice": "X-pk-ui-polish",
       "at": "2026-11-12T01:30:56Z",
       "note": "Launched in slot 7. Brief owns beyond slices.yaml entry: wizard/StorageStep.svelte, insights messages, windows/ports.rs (tests only). Update the owns in the next runner PR. WK-11b held: needs worker/runtime.rs (X-wk-own-lease-lost) and cluster client; launch after X-wk-own-lease-lost merges."
+    },
+    {
+      "id": "flake-logging-refs-0707",
+      "at": "2026-11-12T02:06:22Z",
+      "note": "crates/lodestar/src/logging/refs.rs:55 bans substring '0707' in a random HMAC ref (~1/13k). Fixed as approved shared edit in RX-0 #717's next push (assert_ne!(r, \"ref:07070707\")). Seen on #717 Windows re-run job 130910086928."
     }
   ],
   "main_health": [
@@ -7784,7 +7789,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T01:30:56Z",
+    "updated": "2026-11-12T02:06:22Z",
     "items": [
       {
         "slot": 1,
@@ -7946,7 +7951,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T01:30:56Z",
+  "updated": "2026-11-12T02:06:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
