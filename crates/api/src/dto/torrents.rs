@@ -43,8 +43,9 @@ pub struct TorrentDetail {
     /// What general enrichment identified the torrent as (ENR-10, §6):
     /// each plugin's answer, surest first. **Absent**, never null or
     /// empty, when there's none to show: no answer is stored, the torrent
-    /// is hidden, held, private or Adult, or every answer came from a
-    /// source this caller may not see.
+    /// is hidden, held, private or Adult, the host hasn't said which
+    /// sources are always adult, or every answer came from a source this
+    /// caller may not see.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub identified_as: Option<IdentifiedAs>,
@@ -160,9 +161,11 @@ pub struct Identification {
     /// The work's own title in the plugin's database.
     #[schema(required = true)]
     pub canonical_title: Option<String>,
-    /// This answer names the title a resolved record shows (the surest
-    /// with a canonical title). At most one answer is chosen; none when
-    /// the chosen one's source isn't shown to this caller.
+    /// The torrent's effective title is this answer's: its name said
+    /// nothing, and the record was resolved via a plugin with the surest
+    /// answer that has a canonical title. At most one answer is chosen;
+    /// none when the title isn't a plugin's, or the chosen answer's source
+    /// isn't shown to this caller.
     pub chosen: bool,
     /// How sure the plugin is of the match, 0–100 percent.
     pub confidence: u8,

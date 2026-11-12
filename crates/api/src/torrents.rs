@@ -637,6 +637,10 @@ pub(crate) async fn detail(
     let adult_shown = s.adult.shown();
     let names = plugin_names(&s).await;
     let always_adult = interest.as_ref().map_or(0, |i| i.0.0.always_adult);
+    // `None` while the host hasn't said which sources are always adult:
+    // the "Identified as" section can't confirm a torrent isn't one's
+    // find, so it fails closed (runner, 2026-11-12).
+    let always_adult_known = interest.as_ref().map(|i| i.0.0.always_adult);
     let (detail, wanted) = tokio::task::spawn_blocking(move || {
         let (row, tree) = load(&s, &hash, adult_shown)?;
         // Opening a torrent is interest: scrape it soon (§15).
@@ -676,9 +680,15 @@ pub(crate) async fn detail(
         } else {
             (None, false)
         };
-        let identified =
-            identified_section(&store, &row, &claims, &catalogue, viewer, always_adult)
-                .map_err(internal)?;
+        let identified = identified_section(
+            &store,
+            &row,
+            &claims,
+            &catalogue,
+            viewer,
+            always_adult_known,
+        )
+        .map_err(internal)?;
         drop(store);
         let id = row.id;
         let detail = detail_of(&row, &tree, summary, more, provenance, section, identified);
@@ -740,6 +750,10 @@ pub(crate) async fn files(
 /// enrichment plugin's stored answer (ENR-10), for `viewer`. `None` when
 /// there's nothing to show.
 ///
+/// - **Fails closed while the always-adult sources are unknown**
+///   (`always_adult` is `None`: the host hasn't installed
+///   [`DrawerInterest`]): no section at all, since no torrent can be
+///   confirmed not to be an always-adult source's find.
 /// - **Never wider than the detail view, and stricter where unsure.**
 ///   None for a torrent that's hidden, held (a tombstone or quarantine on
 ///   a swarm hash), private in any way (`PRIVACY`: a private source, BEP
@@ -762,19 +776,16 @@ fn identified_section(
     claims: &[StoredClaims],
     catalogue: &Catalogue,
     viewer: Viewer,
-    always_adult: u64,
+    always_adult: Option<u64>,
 ) -> lodestar_store::Result<Option<IdentifiedAs>> {
+    // Unknown always-adult sources: nothing can be confirmed, so nothing
+    // shows.
+    let Some(always_adult) = always_adult else {
+        return Ok(None);
+    };
     if row.flags & (store_flags::HIDDEN | store_flags::PRIVACY) != 0
         || always_adult & row.sources != 0
     {
-        return Ok(None);
-    }
-    let enrichment = store.enrichment(row.id)?;
-    if enrichment.as_ref().is_some_and(crate::search::is_adult) {
-        return Ok(None);
-    }
-    let hashes = store.torrent_swarm_hashes(row.id)?.unwrap_or_default();
-    if store.held_among(&hashes)?.into_iter().any(|h| h) {
         return Ok(None);
     }
     // Every stored answer, surest first, ties by source id: the order
@@ -799,11 +810,31 @@ fn identified_section(
         };
         answers.push((id, stored, d, confidence));
     }
+    // Most torrents have none: the store reads below are only for those
+    // that do.
+    if answers.is_empty() {
+        return Ok(None);
+    }
+    let enrichment = store.enrichment(row.id)?;
+    if enrichment.as_ref().is_some_and(crate::search::is_adult) {
+        return Ok(None);
+    }
+    let hashes = store.torrent_swarm_hashes(row.id)?.unwrap_or_default();
+    if store.held_among(&hashes)?.into_iter().any(|h| h) {
+        return Ok(None);
+    }
+    let resolved = enrichment
+        .and_then(|e| lodestar_classify::Record::decode(&e.data).ok())
+        .and_then(|r| r.resolved);
     answers.sort_by_key(|&(id, _, _, conf)| (std::cmp::Reverse(conf), id));
+    // Only when the record really shows a plugin's title: then it's this
+    // answer's. Otherwise none is chosen, so no answer claims a title the
+    // record doesn't show (today, always: ENR-10's lookups never resolve).
     let chosen = answers
         .iter()
         .find(|(_, _, d, _)| d.canonical_title.is_some())
-        .map(|&(id, ..)| id);
+        .map(|&(id, ..)| id)
+        .filter(|_| resolved == Some(lodestar_classify::ResolvedVia::Plugin));
     let alternatives: Vec<Identification> = answers
         .into_iter()
         .filter_map(|(id, stored, d, confidence)| {
@@ -819,9 +850,7 @@ fn identified_section(
     if alternatives.is_empty() {
         return Ok(None);
     }
-    let resolved_via = enrichment
-        .and_then(|e| lodestar_classify::Record::decode(&e.data).ok())
-        .and_then(|r| r.resolved)
+    let resolved_via = resolved
         // Only the listed methods; `plugin` isn't one yet (ENR-10).
         .filter(|v| lodestar_classify::ResolvedVia::ALL.contains(v))
         .map(|v| v.as_str().to_owned());
@@ -1498,8 +1527,7 @@ pub(crate) mod tests {
     }
 
     /// A caller other than the admin sees only answers from a known public
-    /// source; the chosen one, from a private source, is left out with its
-    /// mark, so no answer is chosen.
+    /// source.
     #[test]
     fn only_public_enrichers_reach_the_public() {
         let (store, row) = identified_store();
@@ -1515,7 +1543,7 @@ pub(crate) mod tests {
             entry(2, "acctenr", Some(false)),
         ]);
         let claims = store.torrent_claims(row.id).unwrap();
-        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, 0)
+        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(0))
             .unwrap()
             .unwrap();
         let plugins: Vec<&str> = admin
@@ -1524,13 +1552,13 @@ pub(crate) mod tests {
             .map(|a| a.source.plugin.as_str())
             .collect();
         assert_eq!(plugins, ["acctenr", "wikidata"]);
-        assert!(admin.alternatives[0].chosen && !admin.alternatives[1].chosen);
-        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, 0)
+        // The record isn't resolved via a plugin: nothing is chosen.
+        assert!(admin.alternatives.iter().all(|a| !a.chosen));
+        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, Some(0))
             .unwrap()
             .unwrap();
         assert_eq!(public.alternatives.len(), 1);
         assert_eq!(public.alternatives[0].source.plugin, "wikidata");
-        assert!(!public.alternatives[0].chosen, "the chosen one isn't shown");
         let text = format!("{public:?}");
         assert!(
             !text.contains("acctenr") && !text.contains("Account Answer"),
@@ -1539,12 +1567,17 @@ pub(crate) mod tests {
         // An unknown class is private to the public: nothing left.
         let unknown = Catalogue::of(vec![entry(1, "wikidata", None), entry(2, "acctenr", None)]);
         assert_eq!(
-            identified_section(&store, &row, &claims, &unknown, Viewer::Public, 0).unwrap(),
+            identified_section(&store, &row, &claims, &unknown, Viewer::Public, Some(0)).unwrap(),
+            None
+        );
+        // The always-adult sources unknown: none, for anyone.
+        assert_eq!(
+            identified_section(&store, &row, &claims, &c, Viewer::Admin, None).unwrap(),
             None
         );
         // Found by an always-adult source: none, for anyone.
         assert_eq!(
-            identified_section(&store, &row, &claims, &c, Viewer::Admin, 1 << 0).unwrap(),
+            identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(1 << 0)).unwrap(),
             None
         );
     }

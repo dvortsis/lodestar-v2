@@ -16368,7 +16368,7 @@
           },
           "chosen": {
             "type": "boolean",
-            "description": "This answer names the title a resolved record shows (the surest\nwith a canonical title). At most one answer is chosen; none when\nthe chosen one's source isn't shown to this caller."
+            "description": "The torrent's effective title is this answer's: its name said\nnothing, and the record was resolved via a plugin with the surest\nanswer that has a canonical title. At most one answer is chosen;\nnone when the title isn't a plugin's, or the chosen answer's source\nisn't shown to this caller."
           },
           "confidence": {
             "type": "integer",
@@ -25301,7 +25301,7 @@
           },
           "identified_as": {
             "$ref": "#/components/schemas/IdentifiedAs",
-            "description": "What general enrichment identified the torrent as (ENR-10, §6):\neach plugin's answer, surest first. **Absent**, never null or\nempty, when there's none to show: no answer is stored, the torrent\nis hidden, held, private or Adult, or every answer came from a\nsource this caller may not see."
+            "description": "What general enrichment identified the torrent as (ENR-10, §6):\neach plugin's answer, surest first. **Absent**, never null or\nempty, when there's none to show: no answer is stored, the torrent\nis hidden, held, private or Adult, the host hasn't said which\nsources are always adult, or every answer came from a source this\ncaller may not see."
           },
           "last_scrape_at": {
             "type": [

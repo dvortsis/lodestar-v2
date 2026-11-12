@@ -5755,9 +5755,11 @@ export interface components {
             /** @description The work's own title in the plugin's database. */
             canonical_title: string | null;
             /**
-             * @description This answer names the title a resolved record shows (the surest
-             *     with a canonical title). At most one answer is chosen; none when
-             *     the chosen one's source isn't shown to this caller.
+             * @description The torrent's effective title is this answer's: its name said
+             *     nothing, and the record was resolved via a plugin with the surest
+             *     answer that has a canonical title. At most one answer is chosen;
+             *     none when the title isn't a plugin's, or the chosen answer's source
+             *     isn't shown to this caller.
              */
             chosen: boolean;
             /**
@@ -10404,8 +10406,9 @@ export interface components {
              * @description What general enrichment identified the torrent as (ENR-10, §6):
              *     each plugin's answer, surest first. **Absent**, never null or
              *     empty, when there's none to show: no answer is stored, the torrent
-             *     is hidden, held, private or Adult, or every answer came from a
-             *     source this caller may not see.
+             *     is hidden, held, private or Adult, the host hasn't said which
+             *     sources are always adult, or every answer came from a source this
+             *     caller may not see.
              */
             identified_as?: components["schemas"]["IdentifiedAs"];
             /**

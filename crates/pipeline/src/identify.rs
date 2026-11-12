@@ -89,9 +89,10 @@ pub const IDLE: Duration = Duration::from_secs(60);
 /// How long one lookup may take by default ([`Config::lookup_timeout`]).
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The shortest [`Config::lookup_timeout`] a host can set: the client's
-/// own per-host floor (one request a second), so a lookup always has
-/// time for its first request.
+/// The shortest [`Config::lookup_timeout`] a host can set. The runtime
+/// also keeps it at least twice the plugin's own per-host interval (its
+/// `Policy`, floored as its client floors it), so a lookup always has
+/// time to wait for its first request's token and send it.
 pub const MIN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The longest [`Config::lookup_timeout`] a host can set: a lookup is a
@@ -491,6 +492,15 @@ impl IdentifySource {
             return Err(NotAdmitted);
         }
         let (tx, rx) = mpsc::channel(INTEREST_QUEUE);
+        let host_interval = plugin
+            .policy()
+            .limits(&lodestar_sources::UserLimits::default())
+            .floored()
+            .per_host
+            .interval;
+        let min_timeout = MIN_LOOKUP_TIMEOUT
+            .max(host_interval.saturating_mul(2))
+            .min(MAX_LOOKUP_TIMEOUT);
         let interval = config
             .interval
             .max(plugin.min_interval())
@@ -510,9 +520,7 @@ impl IdentifySource {
                 idle: config.idle.max(MIN_IDLE),
                 // Never so short that a lookup can't get its host's token,
                 // never so long that a hung plugin stalls the runtime.
-                lookup_timeout: config
-                    .lookup_timeout
-                    .clamp(MIN_LOOKUP_TIMEOUT, MAX_LOOKUP_TIMEOUT),
+                lookup_timeout: config.lookup_timeout.clamp(min_timeout, MAX_LOOKUP_TIMEOUT),
                 ..config
             },
             stats: Arc::default(),
@@ -764,7 +772,13 @@ impl IdentifySource {
 }
 
 /// Records a timed-out lookup as a failure on each of the plugin's hosts
-/// (its manifest's endpoints) in its client's limiter.
+/// (its manifest's endpoints) in its client's limiter, so a slow host
+/// backs off.
+///
+/// **Only a host that's ready.** A lookup that started while its host was
+/// backing off or blocked spent the time waiting in the client's gate and
+/// sent nothing; charging that host again would push its back-off out
+/// with every lookup, and no request would ever reach it to clear it.
 fn timed_out(kit: &Kit, manifest: &Manifest) {
     let now = Instant::now();
     let failed = Err(lodestar_sources::HttpError::Transport(
@@ -773,7 +787,10 @@ fn timed_out(kit: &Kit, manifest: &Manifest) {
     for e in manifest.endpoints {
         let url = format!("{}://{}", e.protocol, e.host);
         if let Some(host) = lodestar_sources::http::host_key(&url) {
-            kit.http.limiter().record(&host, &failed, now);
+            let limiter = kit.http.limiter();
+            if limiter.state(&host, now) == lodestar_sources::HostState::Ready {
+                limiter.record(&host, &failed, now);
+            }
         }
     }
 }
@@ -1324,8 +1341,11 @@ mod tests {
     #[test]
     fn the_lookup_timeout_is_clamped() {
         let t = |d| source_with(d).config().lookup_timeout;
-        assert_eq!(t(Duration::ZERO), MIN_LOOKUP_TIMEOUT);
-        assert_eq!(t(Duration::from_millis(1)), MIN_LOOKUP_TIMEOUT);
+        // `Never`'s policy is STRICT: one request per 10 s per host, so
+        // the floor is two intervals.
+        let floor = Duration::from_secs(20);
+        assert_eq!(t(Duration::ZERO), floor);
+        assert_eq!(t(Duration::from_millis(1)), floor);
         assert_eq!(t(Duration::from_secs(30)), Duration::from_secs(30));
         assert_eq!(t(Duration::from_secs(86_400)), MAX_LOOKUP_TIMEOUT);
         assert_eq!(t(LOOKUP_TIMEOUT), LOOKUP_TIMEOUT);
@@ -1352,10 +1372,13 @@ mod tests {
             limiter.state("api.example.test", Instant::now()),
             lodestar_sources::HostState::BackingOff { failures: 1, .. }
         ));
+        // Backing off: the lookup waited in the gate and sent nothing, so
+        // the host isn't charged again.
+        timed_out(&kit, &MANIFEST);
         timed_out(&kit, &MANIFEST);
         assert!(matches!(
             limiter.state("api.example.test", Instant::now()),
-            lodestar_sources::HostState::BackingOff { failures: 2, .. }
+            lodestar_sources::HostState::BackingOff { failures: 1, .. }
         ));
     }
 

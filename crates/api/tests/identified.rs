@@ -199,6 +199,36 @@ fn raw(name: &str) -> Vec<u8> {
     ]))
 }
 
+/// A multi-file info dict named `name` with one large video `file` in
+/// it and a small text file.
+fn with_files(name: &str, file: &str) -> Vec<u8> {
+    let d = |e: Vec<(&str, OwnedValue)>| {
+        OwnedValue::Dict(
+            e.into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+        )
+    };
+    let f = |p: &str, len: i64| {
+        d(vec![
+            ("length", OwnedValue::Int(len)),
+            (
+                "path",
+                OwnedValue::List(vec![OwnedValue::Bytes(p.as_bytes().to_vec())]),
+            ),
+        ])
+    };
+    to_vec(&d(vec![
+        (
+            "files",
+            OwnedValue::List(vec![f(file, 1 << 30), f("info.txt", 100)]),
+        ),
+        ("name", OwnedValue::Bytes(name.as_bytes().to_vec())),
+        ("piece length", OwnedValue::Int(1 << 16)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+    ]))
+}
+
 /// The torrents, by index into `Fixture::hashes`.
 mod item {
     /// A film two plugins answered for: TMDB surer than Wikidata.
@@ -223,9 +253,11 @@ mod item {
     pub const BEP27: usize = 9;
     /// Answered by an account-class enricher only.
     pub const ACCOUNT: usize = 10;
+    /// An ambiguous name over a show's episode, resolved via the plugin.
+    pub const PLUGIN: usize = 11;
 }
 
-const NAMES: [&str; 11] = [
+const NAMES: [&str; 12] = [
     "Some.Film.1994.1080p.BluRay.x264",
     "Other.Film.2001.1080p.BluRay.x264",
     "Private.Film.2002.1080p.BluRay.x264",
@@ -237,6 +269,7 @@ const NAMES: [&str; 11] = [
     "New Folder",
     "Bep27.Film.2008.1080p.BluRay.x264",
     "Account.Film.2009.1080p.BluRay.x264",
+    "New Folder (2)",
 ];
 
 struct Fixture {
@@ -291,7 +324,9 @@ fn full() -> Claims {
     c
 }
 
-fn fixture() -> Fixture {
+/// `interest`: whether the host says which sources are always adult
+/// (through `DrawerInterest`; none are, here).
+fn fixture_with(interest: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -306,7 +341,14 @@ fn fixture() -> Fixture {
         [dht, wikidata, tmdb, nyaa, acct].map(SourceId::get),
         [0, 1, 2, 3, 4]
     );
-    let raws: Vec<Vec<u8>> = NAMES.iter().map(|n| raw(n)).collect();
+    let raws: Vec<Vec<u8>> = NAMES
+        .iter()
+        .enumerate()
+        .map(|(i, n)| match i {
+            item::RESOLVED | item::PLUGIN => with_files(n, "Some.Show.S01E02.1080p.WEB-DL.mkv"),
+            _ => raw(n),
+        })
+        .collect();
     let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
     for (i, (info, raw)) in infos.iter().zip(&raws).enumerate() {
         let (source, extra_flags) = match i {
@@ -352,8 +394,25 @@ fn fixture() -> Fixture {
         (item::RESOLVED, tmdb, answer("Resolved Answer", 60)),
         (item::BEP27, wikidata, answer("Bep27 Answer", 90)),
         (item::ACCOUNT, acct, answer("Account Answer", 90)),
+        (item::PLUGIN, wikidata, answer("Plugin Answer", 90)),
+        (item::PLUGIN, tmdb, answer("Weaker Answer", 50)),
     ] {
         assert!(store.put_claims(ids[i], src, &claims, false).unwrap());
+    }
+    // The backfill resolves the ambiguous name with the surest answer, as
+    // ENR-10 does.
+    {
+        let id = ids[item::PLUGIN];
+        let row = store.torrent(id).unwrap().unwrap();
+        let tree = store.files(id).unwrap().unwrap();
+        let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+        let class = lodestar_classify::classify(&row.name, &files);
+        let before = store.enrichment(id).unwrap().unwrap();
+        let after =
+            lodestar_pipeline::identify::with_identified(&store, &row, &class, before).unwrap();
+        let rec = lodestar_classify::Record::decode(&after.data).unwrap();
+        assert_eq!(rec.resolved, Some(lodestar_classify::ResolvedVia::Plugin));
+        store.set_enrichments(&[(id, after)]).unwrap();
     }
     let conn = store.connection();
     for (i, flag) in [(item::HIDDEN, flags::HIDDEN), (item::BEP27, flags::PRIVATE)] {
@@ -371,7 +430,7 @@ fn fixture() -> Fixture {
     drop(store);
     let (show, rx) = watch::channel(false);
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
-    let app = Router::new().nest(
+    let mut app = Router::new().nest(
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
@@ -391,6 +450,12 @@ fn fixture() -> Fixture {
             insights: None,
         }),
     );
+    if interest {
+        app = app.layer(axum::Extension(lodestar_api::DrawerInterest::new(
+            0,
+            |_| true,
+        )));
+    }
     Fixture {
         app,
         auth,
@@ -398,6 +463,10 @@ fn fixture() -> Fixture {
         hashes: infos.iter().map(|i| hex(&i.primary_hash().0)).collect(),
         _dir: dir,
     }
+}
+
+fn fixture() -> Fixture {
+    fixture_with(true)
 }
 
 struct Reply {
@@ -483,7 +552,8 @@ async fn each_plugins_answer_is_an_alternative_surest_first() {
     assert_eq!(alts.len(), 2);
     assert_eq!(alts[0]["source"]["plugin"], "tmdb");
     assert_eq!(alts[0]["confidence"], 92);
-    assert_eq!(alts[0]["chosen"], true);
+    // An informative name keeps its own title: no answer is chosen.
+    assert_eq!(alts[0]["chosen"], false);
     assert_eq!(alts[0]["canonical_title"], "The Film (TMDB)");
     assert_eq!(alts[1]["source"]["plugin"], "wikidata");
     assert_eq!(alts[1]["chosen"], false);
@@ -569,13 +639,37 @@ async fn lists_stay_within_their_caps() {
 async fn resolved_via_lists_only_the_listed_methods() {
     let f = fixture();
     let c = session(&f).await;
+    // Resolved from its files: listed.
     let body = ok(&f, &c, item::RESOLVED).await;
-    let via = &body["identified_as"]["resolved_via"];
+    assert_eq!(body["identified_as"]["resolved_via"], "files");
     assert!(
-        via.is_null() || ["files", "folder", "structure"].contains(&via.as_str().unwrap()),
-        "{via}"
+        body["identified_as"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["chosen"] == false)
     );
-    assert_ne!(via, "plugin", "plugin isn't listed yet");
+    // Resolved via the plugin: `plugin` isn't listed, so null, and the
+    // answer that named the title is the chosen one.
+    let body = ok(&f, &c, item::PLUGIN).await;
+    let s = &body["identified_as"];
+    assert_eq!(s["resolved_via"], Value::Null);
+    let alts = s["alternatives"].as_array().unwrap();
+    assert_eq!(alts[0]["canonical_title"], "Plugin Answer");
+    assert_eq!(alts[0]["chosen"], true);
+    assert_eq!(alts[1]["chosen"], false);
+}
+
+/// While the host doesn't say which sources are always adult, no torrent
+/// can be confirmed not to be one's find: the section fails closed.
+#[tokio::test]
+async fn unknown_always_adult_sources_show_nothing() {
+    let f = fixture_with(false);
+    let c = session(&f).await;
+    for i in [item::TWO, item::PLUGIN, item::ACCOUNT] {
+        let body = ok(&f, &c, i).await;
+        assert!(absent(&body), "{i}: {body}");
+    }
 }
 
 /// The document says what the route serves: the key optional, never
