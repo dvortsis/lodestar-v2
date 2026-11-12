@@ -226,7 +226,9 @@ const bodyMaps = {
 	// Sources (SRC-15a) reads none either.
 	SourcesScreen: [],
 	// Companions (CMP-9a) reads none either.
-	CompanionsScreen: []
+	CompanionsScreen: [],
+	// Outputs (OUT-2) reads `content` with a plain GET, not through the engine.
+	OutputsScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -347,7 +349,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates|companions)|filters|jobs|blocklists|sources)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates|companions|outputs)|filters|jobs|blocklists|sources)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -375,6 +377,10 @@ const settingsCompanionsModules = [/features\/settings\/companions\/icon\.ts$/];
 const settingsCompanionsParts = [
 	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates)\.svelte$/
 ];
+// Outputs (OUT-2): the icon and purpose line load after the first view, like Companions'; its
+// 18+ dialog and Security's key flows (through `key-flows.ts`) load on the first press that needs them.
+const settingsOutputsModules = [/features\/settings\/outputs\/icon\.ts$/];
+const settingsOutputsParts = [/features\/settings\/outputs\/(AdultDialog\.svelte|key-flows\.ts)$/];
 const settingsUpdatesAdvanced = [/features\/settings\/updates\/Advanced\.svelte$/];
 const settingsUpdatesParts = [
 	/features\/settings\/updates\/Releases\.svelte$/,
@@ -421,6 +427,8 @@ const settingsFirstView = [
 	...settingsUpdatesParts,
 	...settingsCompanionsModules,
 	...settingsCompanionsParts,
+	...settingsOutputsModules,
+	...settingsOutputsParts,
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
@@ -567,6 +575,14 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 					/settings\/companions\/CompanionsScreen\.svelte$/.test(key)
 				)
 		)
+		// And Outputs': its parts load from its body.
+		.filter(
+			(key) =>
+				!(
+					settingsOutputsParts.some((re) => re.test(from)) &&
+					/settings\/outputs\/OutputsScreen\.svelte$/.test(key)
+				)
+		)
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.filter((key) => !(sourcesAllLater.some((re) => re.test(from)) && sourcesBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
@@ -631,6 +647,8 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsUpdatesParts,
 					...settingsCompanionsModules,
 					...settingsCompanionsParts,
+					...settingsOutputsModules,
+					...settingsOutputsParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
 					...settingsLoggingNames,
@@ -778,6 +796,32 @@ const settingsCompanionsPartsLazy = requireMeasuredJs('Settings companions parts
 				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
 					...settingsShellView,
 					...companionsFirstView
+				])
+			)
+	)
+]);
+const settingsOutputsModulesLazy = requireMeasuredJs(
+	'Settings outputs icon and purpose (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsOutputsModules.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
+				)
+		)
+	]
+);
+const outputsFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'OutputsScreen')?.files ?? [];
+const settingsOutputsPartsLazy = requireMeasuredJs('Settings outputs parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsOutputsParts.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...outputsFirstView
 				])
 			)
 	)
@@ -1332,6 +1376,8 @@ export default [
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
 	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
+	entry('Settings outputs parts (on demand)', settingsOutputsPartsLazy, '45 KB'),
+	entry('Settings outputs icon and purpose (on demand)', settingsOutputsModulesLazy, '1.5 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).

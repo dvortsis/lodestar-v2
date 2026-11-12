@@ -35,7 +35,7 @@ export const SCREEN_ORDER: Record<ScreenGroup, readonly string[]> = {
 	preferences: ['appearance', 'keyboard', 'language'],
 	crawling: ['crawler', 'network', 'sources', 'workers', 'jobs', 'companions'],
 	library: ['storage', 'search', 'trackers', 'filters'],
-	connections: ['integrations', 'notifications', 'insights'],
+	connections: ['integrations', 'outputs', 'notifications', 'insights'],
 	system: ['general', 'updates', 'logging', 'security', 'about']
 };
 
