@@ -39,6 +39,14 @@ pub const MAX_SIBLINGS: usize = 20;
 /// Index candidates read for other versions, best first: the title
 /// phrase also matches longer titles, which the identity check drops.
 const SIBLING_CANDIDATES: usize = 1000;
+/// Identical-payload candidates read from the index: torrents with the
+/// signature, each then confirmed by its stored file sizes.
+const PAYLOAD_CANDIDATES: usize = 200;
+/// A torrent's files whose piece roots "the same file elsewhere" looks
+/// up, largest first: a torrent with very many files doesn't fan out.
+pub const SAME_FILE_ROOTS: usize = 64;
+/// Same-file candidates read, at most.
+const SAME_FILE_CANDIDATES: usize = 1000;
 /// Torrents in one comparison.
 pub const COMPARE_MIN: usize = 2;
 pub const COMPARE_MAX: usize = 5;
@@ -157,8 +165,11 @@ fn candidates_query(id: &TitleIdentity) -> Node {
 }
 
 /// Torrents related to one (§10.5): other versions of the same work,
-/// identical-payload clones and the same file elsewhere. The last two
-/// need data M7 adds, so they're `unavailable` until then.
+/// identical-payload clones (GS-0's `payload_sig`) and the same file
+/// elsewhere (v2 piece roots, v2 and hybrid torrents only). Each group
+/// is confirmed against the stored state and withheld as other versions
+/// are; the `*_partial` flags say when a backfill means some may be
+/// missing.
 #[utoipa::path(
     operation_id = "getTorrentSiblings",
     get,
@@ -194,14 +205,44 @@ pub(crate) async fn siblings(
             (Some(_), None) => HitGroup::unavailable(Unavailable::SearchDisabled),
             (Some(id), Some(index)) => other_versions(&s, index, row.id, id, adult, &cancel)?,
         };
+        let own = tree(&s.reader, row.id)?;
+        let sizes = content_sizes(&own);
+        let (identical_payload, identical_payload_partial) = match (&s.index, sizes.is_empty()) {
+            (_, true) => (HitGroup::unavailable(Unavailable::NoContentFiles), false),
+            (None, false) => (HitGroup::unavailable(Unavailable::SearchDisabled), false),
+            (Some(index), false) => identical_payload(&s, index, row.id, sizes, adult, &cancel)?,
+        };
+        let roots = file_roots(&own);
+        let (same_file, same_file_partial, same_file_capped) = match (&s.index, &roots) {
+            (_, Roots::NoContent) => (
+                HitGroup::unavailable(Unavailable::NoContentFiles),
+                false,
+                false,
+            ),
+            (_, Roots::V1Only) => (
+                HitGroup::unavailable(Unavailable::NeedsV2Files),
+                false,
+                false,
+            ),
+            (None, Roots::Some { .. }) => (
+                HitGroup::unavailable(Unavailable::SearchDisabled),
+                false,
+                false,
+            ),
+            (Some(index), Roots::Some { roots, capped }) => {
+                let (group, partial, more) = same_file(&s, index, row.id, roots, adult, &cancel)?;
+                (group, partial, *capped || more)
+            }
+        };
         Ok(Json(SiblingsResponse {
             hash: torrents::hex(&row.info_hash.0),
-            // TODO(M7): `payload_sig` and per-file `pieces_root` arrive
-            // with schema bump #2 (§8); then these are found in the index.
-            identical_payload: HitGroup::unavailable(Unavailable::NeedsPayloadSignature),
+            identical_payload,
+            identical_payload_partial,
             identity,
             other_versions,
-            same_file: HitGroup::unavailable(Unavailable::NeedsPieceRoots),
+            same_file,
+            same_file_capped,
+            same_file_partial,
         }))
     })
     .await
@@ -285,6 +326,205 @@ fn other_versions(
             swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?
         };
         hits.push(hit_row(&row, h.score, e, swarm));
+    }
+    Ok(HitGroup::available(hits, truncated))
+}
+
+/// A tree's content file sizes (padding left out), sorted: what the
+/// payload signature hashes, and what confirms a clone.
+fn content_sizes(tree: &FileTree) -> Vec<u64> {
+    let mut sizes: Vec<u64> = tree
+        .files
+        .iter()
+        .filter(|f| !f.is_padding())
+        .map(|f| f.size)
+        .collect();
+    sizes.sort_unstable();
+    sizes
+}
+
+/// Identical-payload clones (§6 "Grouping/dedup"): torrents whose
+/// `payload_sig` is this one's, found as `sig:` finds them, each then
+/// confirmed by its stored file sizes, so a signature collision never
+/// shows. `sizes` are this torrent's ([`content_sizes`]), not empty.
+/// Partial (the flag) while the index backfills the field: torrents it
+/// hasn't reached yet can't be found.
+fn identical_payload(
+    s: &ApiState,
+    search: &lodestar_search::SearchHandle,
+    id: i64,
+    sizes: Vec<u64>,
+    adult: bool,
+    cancel: &CancelToken,
+) -> ApiResult<(HitGroup, bool)> {
+    let index = search.index();
+    let availability = index.availability("payload_sig");
+    if availability == lodestar_search::Availability::Missing {
+        // An older index serving during a rebuild.
+        return Ok((
+            HitGroup::unavailable(Unavailable::NeedsPayloadSignature),
+            false,
+        ));
+    }
+    let partial = !availability.complete();
+    let Some(sig) = lodestar_classify::payload::payload_sig_of_sizes(sizes.clone()) else {
+        return Ok((HitGroup::unavailable(Unavailable::NoContentFiles), false));
+    };
+    let node = shown(
+        &Node::Sig {
+            sig: lodestar_search::query::sig_hex(sig),
+        },
+        adult,
+    );
+    let compiled = index
+        .query_cancelled(&node, unix_now(), 0, cancel)
+        .map_err(search::search_error)?;
+    cancel.check().map_err(search::search_error)?;
+    let results = index
+        .search_page(&compiled, Sort::Relevance, PAYLOAD_CANDIDATES, 0)
+        .map_err(internal)?;
+    let ids = results.hits.iter().map(|h| (h.id as i64, h.score));
+    let group = confirmed(s, id, ids, adult, cancel, |tree| same_payload(tree, &sizes))?;
+    Ok((group, partial))
+}
+
+/// Whether a candidate's stored files are the payload `sizes` describe:
+/// equal signatures with other sizes are a collision, never a clone.
+fn same_payload(tree: &FileTree, sizes: &[u64]) -> bool {
+    content_sizes(tree) == sizes
+}
+
+/// This torrent's v2 piece roots, for "the same file elsewhere".
+enum Roots {
+    /// No content files at all.
+    NoContent,
+    /// Content, but no file carries a piece root: a v1-only torrent.
+    V1Only,
+    /// The roots of its largest files, distinct, at most
+    /// [`SAME_FILE_ROOTS`]; `capped` when it has more.
+    Some { roots: Vec<[u8; 32]>, capped: bool },
+}
+
+fn file_roots(tree: &FileTree) -> Roots {
+    let mut files: Vec<(u64, [u8; 32])> = tree
+        .files
+        .iter()
+        .filter(|f| !f.is_padding())
+        .filter_map(|f| f.pieces_root.map(|r| (f.size, r)))
+        .collect();
+    if files.is_empty() {
+        return if tree.files.iter().any(|f| !f.is_padding()) {
+            Roots::V1Only
+        } else {
+            Roots::NoContent
+        };
+    }
+    // Largest first; equal sizes by root, so the choice is stable.
+    files.sort_unstable_by(|a, b| b.cmp(a));
+    let mut roots: Vec<[u8; 32]> = Vec::new();
+    let mut capped = false;
+    for (_, r) in files {
+        if roots.contains(&r) {
+            continue;
+        }
+        if roots.len() == SAME_FILE_ROOTS {
+            capped = true;
+            break;
+        }
+        roots.push(r);
+    }
+    Roots::Some { roots, capped }
+}
+
+/// The same file elsewhere: torrents with a file whose v2 `pieces_root`
+/// is one of `roots` (an exact file identity), from the file index, each
+/// confirmed by its stored file tree. v1 files carry no root, so only v2
+/// and hybrid torrents are found. Partial (the flag) while the file
+/// index backfills the field; the last flag when more candidates
+/// matched than were read ([`SAME_FILE_CANDIDATES`]).
+fn same_file(
+    s: &ApiState,
+    search: &lodestar_search::SearchHandle,
+    id: i64,
+    roots: &[[u8; 32]],
+    adult: bool,
+    cancel: &CancelToken,
+) -> ApiResult<(HitGroup, bool, bool)> {
+    let index = search.index();
+    let availability = index.availability("file.pieces_root");
+    if availability == lodestar_search::Availability::Missing {
+        return Ok((
+            HitGroup::unavailable(Unavailable::NeedsPieceRoots),
+            false,
+            false,
+        ));
+    }
+    let partial = !availability.complete();
+    cancel.check().map_err(search::search_error)?;
+    // The newest candidates, at most `SAME_FILE_CANDIDATES` (one more
+    // than this torrent itself could take).
+    let (ids, more) = index
+        .torrents_with_pieces_roots(roots, SAME_FILE_CANDIDATES, cancel)
+        .map_err(search::search_error)?;
+    let ids = ids.into_iter().rev().map(|t| (t as i64, 0.0));
+    let group = confirmed(s, id, ids, adult, cancel, |tree| {
+        tree.files
+            .iter()
+            .filter(|f| !f.is_padding())
+            .any(|f| f.pieces_root.is_some_and(|r| roots.contains(&r)))
+    })?;
+    Ok((group, partial, more))
+}
+
+/// The candidates `ids` (with their scores) that the stored state
+/// confirms: not `id` itself, still stored, not withheld from this
+/// request (B13's rule, as other versions apply it), and passing `keep`
+/// on the stored file tree. At most [`MAX_SIBLINGS`]; `truncated` when
+/// more pass. `cancel` is checked before each candidate's lookups.
+fn confirmed(
+    s: &ApiState,
+    id: i64,
+    ids: impl Iterator<Item = (i64, f32)>,
+    adult: bool,
+    cancel: &CancelToken,
+    keep: impl Fn(&FileTree) -> bool,
+) -> ApiResult<HitGroup> {
+    let mut hits = Vec::new();
+    let mut truncated = false;
+    for (cid, score) in ids {
+        cancel.check().map_err(search::search_error)?;
+        #[cfg(test)]
+        tests::hook(s, tests::At::Candidate);
+        if cid == id {
+            continue;
+        }
+        let (row, e, tree) = {
+            let mut store = s.reader.lock().expect("reader lock");
+            let Some(row) = store.torrent(cid).map_err(internal)? else {
+                continue;
+            };
+            let e = store.enrichment(row.id).map_err(internal)?;
+            // The index may lag the store: the stored state decides.
+            if withheld(&row, e.as_ref(), false, adult) {
+                continue;
+            }
+            let Some(tree) = store.files(row.id).map_err(internal)? else {
+                continue;
+            };
+            (row, e, tree)
+        };
+        if !keep(&tree) {
+            continue;
+        }
+        if hits.len() == MAX_SIBLINGS {
+            truncated = true;
+            break;
+        }
+        let swarm = {
+            let store = s.reader.lock().expect("reader lock");
+            swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?
+        };
+        hits.push(hit_row(&row, score, e, swarm));
     }
     Ok(HitGroup::available(hits, truncated))
 }
@@ -1076,5 +1316,147 @@ mod tests {
         l.push("a".into(), 1);
         l.push("b".into(), 1);
         assert!(l.full());
+    }
+
+    // ---- identical payload and the same file (GS-1) ----------------------
+
+    fn file(size: u64, root: Option<u8>, padding: bool) -> lodestar_metainfo::File {
+        lodestar_metainfo::File {
+            path: vec![format!("f{size}").into_bytes()],
+            size,
+            attrs: if padding {
+                FileAttrs::PADDING
+            } else {
+                FileAttrs::empty()
+            },
+            symlink_target: None,
+            pieces_root: root.map(|r| [r; 32]),
+            hashes: Default::default(),
+        }
+    }
+
+    fn tree_of(files: Vec<lodestar_metainfo::File>) -> FileTree {
+        FileTree {
+            encoding: lodestar_metainfo::TextEncoding::UTF8,
+            files,
+        }
+    }
+
+    #[test]
+    fn content_sizes_leave_padding_out_and_sort() {
+        let t = tree_of(vec![
+            file(30, None, false),
+            file(5, None, true),
+            file(10, None, false),
+        ]);
+        assert_eq!(content_sizes(&t), [10, 30]);
+        assert!(content_sizes(&tree_of(vec![file(5, None, true)])).is_empty());
+    }
+
+    #[test]
+    fn file_roots_say_what_a_torrent_can_be_looked_up_by() {
+        assert!(matches!(file_roots(&tree_of(vec![])), Roots::NoContent));
+        assert!(matches!(
+            file_roots(&tree_of(vec![file(5, Some(1), true)])),
+            Roots::NoContent
+        ));
+        assert!(matches!(
+            file_roots(&tree_of(vec![file(10, None, false)])),
+            Roots::V1Only
+        ));
+        // Largest first, distinct, padding never looked up.
+        let t = tree_of(vec![
+            file(10, Some(1), false),
+            file(30, Some(2), false),
+            file(20, Some(2), false),
+            file(99, Some(9), true),
+            file(40, None, false),
+        ]);
+        let Roots::Some { roots, capped } = file_roots(&t) else {
+            panic!("roots");
+        };
+        assert_eq!(roots, [[2; 32], [1; 32]]);
+        assert!(!capped);
+        // More files than are looked up: the largest, and capped said.
+        let many: Vec<_> = (0..SAME_FILE_ROOTS as u64 + 5)
+            .map(|i| file(1000 + i, Some(i as u8), false))
+            .collect();
+        let Roots::Some { roots, capped } = file_roots(&tree_of(many)) else {
+            panic!("roots");
+        };
+        assert_eq!(roots.len(), SAME_FILE_ROOTS);
+        assert_eq!(roots[0], [(SAME_FILE_ROOTS + 4) as u8; 32]);
+        assert!(capped);
+    }
+
+    fn payload_of(s: &ApiState, id: i64, cancel: &CancelToken) -> ApiResult<(HitGroup, bool)> {
+        let tree = tree(&s.reader, id).unwrap();
+        identical_payload(
+            s,
+            s.index.as_ref().unwrap(),
+            id,
+            content_sizes(&tree),
+            false,
+            cancel,
+        )
+    }
+
+    /// The corpus's torrents are one 1 GiB file each: every one is a clone
+    /// of every other.
+    #[test]
+    fn clones_are_found_and_a_cancel_stops_at_the_next_candidate() {
+        let (s, id, _, _dir) = versions();
+        let (group, partial) = payload_of(&s, id, &CancelToken::new()).unwrap();
+        assert_eq!(group.hits.len(), 4, "{group:?}");
+        assert!(!partial);
+        let cancel = CancelToken::new();
+        let visits = Arc::new(AtomicUsize::new(0));
+        let (token, seen) = (cancel.clone(), visits.clone());
+        let _hook = set_hook(&s, move |at| {
+            if at == At::Candidate {
+                seen.fetch_add(1, Ordering::Relaxed);
+                token.cancel();
+            }
+        });
+        let r = payload_of(&s, id, &cancel).map(|(g, _)| g);
+        assert!(is_cancelled(&r), "{r:?}");
+        assert_eq!(visits.load(Ordering::Relaxed), 1);
+    }
+
+    /// While the index backfills `payload_sig`, the group says it may be
+    /// incomplete: here no document carries it yet, so it finds nothing,
+    /// and that's never "none".
+    #[test]
+    fn a_backfilling_index_marks_clones_partial() {
+        let g = lodestar_search::Generations::current();
+        let next = g.get("payload_sig").unwrap() + 1;
+        let entries = [
+            entry("The.Dark.Knight.2008.1080p"),
+            entry("Another.Name.2008"),
+        ];
+        let (s, ids, _dir) = corpus(&entries, Some(g.with("payload_sig", next)));
+        let (group, partial) = payload_of(&s, ids[0], &CancelToken::new()).unwrap();
+        assert!(partial);
+        assert_eq!(group.status, crate::dto::discover::GroupStatus::Available);
+    }
+
+    /// A candidate the index returns for a signature whose stored sizes
+    /// differ (a collision, played by forging the candidate list) is
+    /// dropped by the check `identical_payload` confirms with; the same
+    /// candidate for its real payload is kept.
+    #[test]
+    fn a_signature_collision_is_never_confirmed() {
+        let (s, ids, _dir) = corpus(&[entry("Clone.A"), entry("Clone.B")], None);
+        let real = content_sizes(&tree(&s.reader, ids[0]).unwrap());
+        let collided = vec![real[0] + 1];
+        let run = |sizes: &[u64]| {
+            let forged = std::iter::once((ids[1], 1.0));
+            confirmed(&s, ids[0], forged, false, &CancelToken::new(), |t| {
+                same_payload(t, sizes)
+            })
+            .unwrap()
+        };
+        assert_eq!(found(&run(&real)), ["Clone.B"]);
+        assert!(run(&collided).hits.is_empty());
     }
 }

@@ -380,15 +380,13 @@ async fn other_versions_match_the_title_identity() {
     let (_, body) = json_of(&f.app, get(&siblings(RISES), c)).await;
     assert_eq!(names(&body["other_versions"]), Vec::<String>::new());
 
-    // The M7 groups are typed and unavailable, never empty-as-none.
-    for (group, reason) in [
-        ("identical_payload", "needs_payload_signature"),
-        ("same_file", "needs_piece_roots"),
-    ] {
-        assert_eq!(body[group]["status"], "unavailable");
-        assert_eq!(body[group]["reason"], reason);
-        assert_eq!(body[group]["hits"], json!([]));
-    }
+    // GS-1's groups: clones are answered (none here); a v1 torrent has no
+    // piece roots, which is said, never empty-as-none
+    // (`tests/siblings_payload.rs` covers them).
+    assert_eq!(body["identical_payload"]["status"], "available");
+    assert_eq!(body["same_file"]["status"], "unavailable");
+    assert_eq!(body["same_file"]["reason"], "needs_v2_files");
+    assert_eq!(body["same_file"]["hits"], json!([]));
 }
 
 #[tokio::test]

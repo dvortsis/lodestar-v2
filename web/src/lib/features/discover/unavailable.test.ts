@@ -8,7 +8,9 @@ const ALL: Record<Unavailable, true> = {
 	needs_swarm_history: true,
 	needs_resolution_history: true,
 	needs_payload_signature: true,
-	needs_piece_roots: true
+	needs_piece_roots: true,
+	no_content_files: true,
+	needs_v2_files: true
 };
 // Keeps ALL in step with the generated union: a new reason is a type error here too.
 const _same: components['schemas']['Unavailable'][] = Object.keys(ALL) as Unavailable[];

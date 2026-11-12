@@ -8165,7 +8165,7 @@
         "tags": [
           "torrents"
         ],
-        "summary": "Torrents related to one (§10.5): other versions of the same work,\nidentical-payload clones and the same file elsewhere. The last two\nneed data M7 adds, so they're `unavailable` until then.",
+        "summary": "Torrents related to one (§10.5): other versions of the same work,\nidentical-payload clones (GS-0's `payload_sig`) and the same file\nelsewhere (v2 piece roots, v2 and hybrid torrents only). Each group\nis confirmed against the stored state and withheld as other versions\nare; the `*_partial` flags say when a backfill means some may be\nmissing.",
         "operationId": "getTorrentSiblings",
         "parameters": [
           {
@@ -23374,9 +23374,12 @@
         "required": [
           "hash",
           "identical_payload",
+          "identical_payload_partial",
           "identity",
           "other_versions",
-          "same_file"
+          "same_file",
+          "same_file_capped",
+          "same_file_partial"
         ],
         "properties": {
           "hash": {
@@ -23385,7 +23388,11 @@
           },
           "identical_payload": {
             "$ref": "#/components/schemas/HitGroup",
-            "description": "Identical-payload clones: the same content under another hash."
+            "description": "Identical-payload clones: the same content under another hash\n(equal payload signatures, confirmed by the stored file sizes)."
+          },
+          "identical_payload_partial": {
+            "type": "boolean",
+            "description": "The index is still filling in payload signatures, so some clones\nmay be missing from `identical_payload`."
           },
           "identity": {
             "oneOf": [
@@ -23404,7 +23411,15 @@
           },
           "same_file": {
             "$ref": "#/components/schemas/HitGroup",
-            "description": "Other torrents containing one of this torrent's files."
+            "description": "Other torrents containing one of this torrent's files, by v2\npiece root: only v2 and hybrid torrents have them\n(`needs_v2_files` for a v1-only torrent)."
+          },
+          "same_file_capped": {
+            "type": "boolean",
+            "description": "The lookup was bounded: only this torrent's largest files were\nlooked up (it has more than the server checks), or more torrents\nshared them than were read. Some may be missing from `same_file`."
+          },
+          "same_file_partial": {
+            "type": "boolean",
+            "description": "The file index is still filling in piece roots, so some torrents\nmay be missing from `same_file`."
           }
         }
       },
@@ -25681,7 +25696,9 @@
           "needs_swarm_history",
           "needs_resolution_history",
           "needs_payload_signature",
-          "needs_piece_roots"
+          "needs_piece_roots",
+          "no_content_files",
+          "needs_v2_files"
         ]
       },
       "UnderstandKpi": {

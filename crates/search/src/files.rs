@@ -1223,6 +1223,48 @@ impl IdSet {
         self.parts.iter().any(|p| p.contains(id))
     }
 
+    /// The `limit` highest ids, sorted and distinct, and whether there
+    /// were more. Memory stays bounded by `limit` however many ids the
+    /// set holds; `cancel` is checked every [`crate::cancel::CHECK_EVERY`]
+    /// ids.
+    pub(crate) fn newest(
+        &self,
+        limit: usize,
+        cancel: &crate::CancelToken,
+    ) -> crate::index::Result<(Vec<u64>, bool)> {
+        let mut kept = std::collections::BTreeSet::new();
+        let mut more = false;
+        let mut seen = 0u32;
+        let mut stopped = false;
+        for p in &self.parts {
+            cancel.check()?;
+            p.for_each(|id| {
+                if stopped {
+                    return;
+                }
+                seen = seen.wrapping_add(1);
+                if seen % crate::cancel::CHECK_EVERY == 0 && cancel.is_stopped() {
+                    stopped = true;
+                    return;
+                }
+                if kept.len() == limit && kept.first().is_some_and(|&low| id <= low) {
+                    if !kept.contains(&id) {
+                        more = true;
+                    }
+                    return;
+                }
+                if kept.insert(id) && kept.len() > limit {
+                    kept.pop_first();
+                    more = true;
+                }
+            });
+            if stopped {
+                cancel.check()?;
+            }
+        }
+        Ok((kept.into_iter().collect(), more))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.parts.iter().all(|p| p.is_empty())
     }

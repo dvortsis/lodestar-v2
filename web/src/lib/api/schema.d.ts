@@ -2408,8 +2408,11 @@ export interface paths {
         };
         /**
          * Torrents related to one (§10.5): other versions of the same work,
-         *     identical-payload clones and the same file elsewhere. The last two
-         *     need data M7 adds, so they're `unavailable` until then.
+         *     identical-payload clones (GS-0's `payload_sig`) and the same file
+         *     elsewhere (v2 piece roots, v2 and hybrid torrents only). Each group
+         *     is confirmed against the stored state and withheld as other versions
+         *     are; the `*_partial` flags say when a backfill means some may be
+         *     missing.
          */
         get: operations["getTorrentSiblings"];
         put?: never;
@@ -9301,16 +9304,39 @@ export interface components {
         SiblingsResponse: {
             /** @description 40 hex digits: the torrent asked about. */
             hash: string;
-            /** @description Identical-payload clones: the same content under another hash. */
+            /**
+             * @description Identical-payload clones: the same content under another hash
+             *     (equal payload signatures, confirmed by the stored file sizes).
+             */
             identical_payload: components["schemas"]["HitGroup"];
+            /**
+             * @description The index is still filling in payload signatures, so some clones
+             *     may be missing from `identical_payload`.
+             */
+            identical_payload_partial: boolean;
             identity: null | components["schemas"]["TitleIdentity"];
             /**
              * @description Other versions of the same work (other releases, qualities,
              *     groups), best first.
              */
             other_versions: components["schemas"]["HitGroup"];
-            /** @description Other torrents containing one of this torrent's files. */
+            /**
+             * @description Other torrents containing one of this torrent's files, by v2
+             *     piece root: only v2 and hybrid torrents have them
+             *     (`needs_v2_files` for a v1-only torrent).
+             */
             same_file: components["schemas"]["HitGroup"];
+            /**
+             * @description The lookup was bounded: only this torrent's largest files were
+             *     looked up (it has more than the server checks), or more torrents
+             *     shared them than were read. Some may be missing from `same_file`.
+             */
+            same_file_capped: boolean;
+            /**
+             * @description The file index is still filling in piece roots, so some torrents
+             *     may be missing from `same_file`.
+             */
+            same_file_partial: boolean;
         };
         /** @description `POST /updates/skip`. */
         SkipRequest: {
@@ -10573,7 +10599,7 @@ export interface components {
          * @description Why a section isn't available. Stable keys; the UI words them.
          * @enum {string}
          */
-        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
+        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files";
         UnderstandKpi: {
             /**
              * Format: int64

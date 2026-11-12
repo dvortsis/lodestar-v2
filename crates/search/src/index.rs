@@ -1742,6 +1742,40 @@ impl SearchIndex {
         Ok(out)
     }
 
+    /// The torrents with a file whose v2 `pieces_root` is one of `roots`
+    /// ("the same file elsewhere", GS-1), from the file index's current
+    /// snapshot under `cancel`: the `limit` highest ids, sorted and
+    /// distinct, and whether there were more (a popular file can be in
+    /// very many torrents). Whether the answer is complete is
+    /// [`SearchIndex::availability`] of `file.pieces_root`; the caller
+    /// decides what an incomplete one means. A file index without the
+    /// field answers no torrent.
+    pub fn torrents_with_pieces_roots(
+        &self,
+        roots: &[[u8; 32]],
+        limit: usize,
+        cancel: &crate::CancelToken,
+    ) -> Result<(Vec<u64>, bool)> {
+        cancel.check()?;
+        if roots.is_empty() || self.files.fields.pieces_root == compile::ABSENT {
+            return Ok((Vec::new(), false));
+        }
+        let terms = roots
+            .iter()
+            .map(|r| Term::from_field_bytes(self.files.fields.pieces_root, r));
+        let query = tantivy::query::TermSetQuery::new(terms);
+        let mut key = String::from("pieces_root:");
+        for r in roots {
+            for b in r {
+                key.push_str(&format!("{b:02x}"));
+            }
+            key.push(',');
+        }
+        let searcher = self.files.reader.searcher();
+        let ids = files::torrent_ids(&searcher, &query, &key, &self.files.cache, cancel)?;
+        ids.newest(limit, cancel)
+    }
+
     /// The stored names of some hits (for tests and tools; the API reads
     /// names from SQLite).
     pub fn names(&self, hits: &[Hit]) -> Result<Vec<String>> {
@@ -2373,6 +2407,76 @@ mod population_tests {
                 .unwrap();
         }
         store
+    }
+
+    /// GS-1: torrents by a file's v2 piece root, the newest `limit`, with
+    /// whether there were more, and stopped by the token.
+    #[test]
+    fn torrents_with_pieces_roots_is_bounded_and_cancellable() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        // Torrent i (id i + 1): one v2 file, root [1] for even i, [2] odd.
+        for i in 0..6u8 {
+            let d = |e: Vec<(&str, OwnedValue)>| {
+                OwnedValue::Dict(
+                    e.into_iter()
+                        .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                        .collect(),
+                )
+            };
+            let b = |v: &[u8]| OwnedValue::Bytes(v.to_vec());
+            let name = format!("Same.{i}.bin");
+            let leaf = d(vec![(
+                "",
+                d(vec![
+                    ("length", OwnedValue::Int(100)),
+                    ("pieces root", b(&[1 + i % 2; 32])),
+                ]),
+            )]);
+            let raw = to_vec(&d(vec![
+                ("file tree", d(vec![(name.as_str(), leaf)])),
+                ("meta version", OwnedValue::Int(2)),
+                ("name", b(name.as_bytes())),
+                ("piece length", OwnedValue::Int(16_384)),
+            ]));
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1_700_000_000,
+                    metadata_at: 1_700_000_001,
+                    extra_flags: 0,
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        let cancel = crate::CancelToken::new();
+        let find = |roots: &[[u8; 32]], limit| {
+            index
+                .torrents_with_pieces_roots(roots, limit, &cancel)
+                .unwrap()
+        };
+        assert_eq!(find(&[[1; 32]], 10), (vec![1, 3, 5], false));
+        assert_eq!(
+            find(&[[1; 32], [2; 32]], 10),
+            (vec![1, 2, 3, 4, 5, 6], false)
+        );
+        // The newest within the limit, and more said.
+        assert_eq!(find(&[[1; 32], [2; 32]], 2), (vec![5, 6], true));
+        assert_eq!(find(&[[1; 32]], 3), (vec![1, 3, 5], false));
+        assert_eq!(find(&[[9; 32]], 10), (vec![], false));
+        assert_eq!(find(&[], 10), (vec![], false));
+        let stopped = crate::CancelToken::new();
+        stopped.cancel();
+        assert!(matches!(
+            index.torrents_with_pieces_roots(&[[1; 32]], 10, &stopped),
+            Err(Error::Cancelled)
+        ));
     }
 
     /// A file index catching up behind the torrent index (recreated):

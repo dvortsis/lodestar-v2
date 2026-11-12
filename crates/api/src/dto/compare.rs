@@ -16,8 +16,12 @@ use super::search::CompositionShare;
 pub struct SiblingsResponse {
     /// 40 hex digits: the torrent asked about.
     pub hash: String,
-    /// Identical-payload clones: the same content under another hash.
+    /// Identical-payload clones: the same content under another hash
+    /// (equal payload signatures, confirmed by the stored file sizes).
     pub identical_payload: HitGroup,
+    /// The index is still filling in payload signatures, so some clones
+    /// may be missing from `identical_payload`.
+    pub identical_payload_partial: bool,
     /// What other versions were matched on; null when the torrent has no
     /// parsed title.
     #[schema(required = true)]
@@ -25,8 +29,17 @@ pub struct SiblingsResponse {
     /// Other versions of the same work (other releases, qualities,
     /// groups), best first.
     pub other_versions: HitGroup,
-    /// Other torrents containing one of this torrent's files.
+    /// Other torrents containing one of this torrent's files, by v2
+    /// piece root: only v2 and hybrid torrents have them
+    /// (`needs_v2_files` for a v1-only torrent).
     pub same_file: HitGroup,
+    /// The lookup was bounded: only this torrent's largest files were
+    /// looked up (it has more than the server checks), or more torrents
+    /// shared them than were read. Some may be missing from `same_file`.
+    pub same_file_capped: bool,
+    /// The file index is still filling in piece roots, so some torrents
+    /// may be missing from `same_file`.
+    pub same_file_partial: bool,
 }
 
 /// A work's title identity (`docs/decisions/2026-10-22-B13.md`): its normalized title plus the
