@@ -73,6 +73,24 @@ function New-Sandbox {
     return $root
 }
 
+# Sets a process environment variable for the children this test starts, or
+# removes it when $Value is $null. Not [Environment]::SetEnvironmentVariable($k,
+# $null): PowerShell passes $null to a .NET string parameter as "", and on .NET 9
+# and later (pwsh 7.5+) on Linux that sets an empty variable instead of removing it.
+function Set-ChildEnv([string]$Name, $Value) {
+    if ($null -eq $Value) { Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue }
+    else { Set-Item -LiteralPath "Env:$Name" -Value ([string]$Value) }
+}
+
+# The child's output as one line of plain text: no ANSI codes, and the error
+# view's wrapping (its line breaks and "| " margins) undone, so a check doesn't
+# depend on the console's width or colours.
+function ConvertTo-FlatText([string]$Text) {
+    $t = $Text -replace "\e\[[0-9;?]*[A-Za-z]", ''
+    $t = $t -replace '\s*\r?\n\s*(\|\s*)?', ' '
+    return ($t -replace '\s{2,}', ' ')
+}
+
 function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
     $saved = @{}
     $vars = @{
@@ -89,7 +107,7 @@ function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
     $names = @([Environment]::GetEnvironmentVariables().Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -clike 'AWS_*' }) +
         @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_DEFAULT_PROFILE')
     foreach ($n in $names) { if (-not $vars.ContainsKey($n)) { $vars[$n] = $null } }
-    foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
+    foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); Set-ChildEnv $k $vars[$k] }
     $deploy = Join-Path (Join-Path $Root 'scripts') 'Deploy-AwsWindows.ps1'
     $argv = @('-NoProfile', '-File', $deploy, '-Hours', '4', '-AmiId', 'ami-0123456789abcdef0', '-SubnetId', $SUBNET,
         '-SecurityGroupId', $SG, '-InstanceProfileName', 'LodestarTestProfile')
@@ -100,15 +118,16 @@ function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $eap
-        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        foreach ($k in $saved.Keys) { Set-ChildEnv $k $saved[$k] }
     }
     $log = Join-Path $Root 'stub/calls.log'
-    $calls = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() }
-    [PSCustomObject]@{ Code = $code; Out = $out; Calls = $calls }
+    $calls = @(if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log })  # stays an array with one line
+    [PSCustomObject]@{ Code = $code; Out = $out; Flat = (ConvertTo-FlatText $out); Calls = $calls }
 }
 
-# Before any case: under the test's PATH, the deploy script's own resolver
-# (AwsCli.ps1's Resolve-AwsCli) must find the stub and nothing else.
+# Before the deploy script is run (the table cases above never call aws): under
+# the test's PATH, the deploy script's own resolver (AwsCli.ps1's Resolve-AwsCli)
+# must find the stub and nothing else.
 function Assert-StubResolves([string]$Root) {
     $savedPath = $env:PATH
     $env:PATH = Get-TestPath $Root
@@ -160,6 +179,7 @@ foreach ($t in @(
         @{ Name = 'non-ASCII letters'; In = "caf$([char]0xE9) $([char]0x202E)x"; Out = 'caf x' },
         @{ Name = 'skips a control-only line'; In = "${e}`a`nsecond"; Out = 'second' },
         @{ Name = 'first line only'; In = "one`ntwo 999988887777"; Out = 'one' },
+        @{ Name = 'a lone CR mid-line is stripped, not a line break'; In = "one`rtwo"; Out = 'onetwo' },
         @{ Name = 'nothing left'; In = "${e}`a"; Out = '(no reason given)' },
         @{ Name = 'empty'; In = ''; Out = '(no reason given)' },
         @{ Name = 'cut at 200'; In = ('x' * 250); Out = ('x' * 200) })) {
@@ -210,7 +230,7 @@ try {
         }
         else { Set-Content -LiteralPath (Join-Path $root 'stub/sg.txt') -Value $case.Sg }
         $r = Invoke-Deploy $root -DryRun
-        Check "refused: $($case.Name)" ($r.Code -ne 0 -and $r.Out -match $case.Expect -and $r.Out -match 'No deployment performed') "exit $($r.Code): $($r.Out)"
+        Check "refused: $($case.Name)" ($r.Code -ne 0 -and $r.Flat -match $case.Expect -and $r.Flat -match 'No deployment performed') "exit $($r.Code): $($r.Out)"
         if ($case.ContainsKey('Exit')) {
             Check 'the refusal gives AWS''s reason' ($r.Out -match 'AWS said: An error occurred \(UnauthorizedOperation\) when calling the DescribeSecurityGroups operation') $r.Out
             $said = @(($r.Out -split "`n") | Where-Object { $_.Contains('AWS said:') })
@@ -230,12 +250,12 @@ try {
     $root = New-Sandbox; $roots.Add($root)
     Set-Content -LiteralPath (Join-Path $root 'stub/instances.txt') -Value "i-0123456789abcdef0`trunning`t2026-11-12T00:00:00Z"
     $r = Invoke-Deploy $root -DryRun
-    Check 'an active instance still halts the run' ($r.Code -ne 0 -and $r.Out -match 'Deployment halted') $r.Out
+    Check 'an active instance still halts the run' ($r.Code -ne 0 -and $r.Flat -match 'Deployment halted') $r.Out
     Check 'nothing launched beside an active instance' (@(Calls-Of $r 'run-instances').Count -eq 0) ($r.Calls -join ' | ')
 
     $root = New-Sandbox; $roots.Add($root)
     $r = Invoke-Deploy $root -PipeIn 'DEPLOY 1 AWS WINDOWS INSTANCE'
-    Check 'a piped confirmation phrase is refused' ($r.Code -ne 0 -and $r.Out -match 'Refusing to read the confirmation phrase') $r.Out
+    Check 'a piped confirmation phrase is refused' ($r.Code -ne 0 -and $r.Flat -match 'Refusing to read the confirmation phrase') $r.Out
     Check 'no launch without a typed phrase' (@(Calls-Of $r 'run-instances').Count -eq 0) ($r.Calls -join ' | ')
     Check 'no state written without a typed phrase' (-not (Test-Path -LiteralPath (Join-Path $root 'state/aws-fleet-state.json'))) 'state file exists'
 } finally {
@@ -244,3 +264,5 @@ try {
 
 if ($script:failures -gt 0) { Write-Host "$($script:failures) failure(s)"; exit 1 }
 Write-Host 'all passed'
+# Explicitly: the last case's child pwsh exits 1 by design, and a caller reads $LASTEXITCODE.
+exit 0
