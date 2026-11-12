@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:04:39Z",
+  "updated_at": "2026-11-12T18:05:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7410,6 +7410,14 @@
     {
       "id": "X-dht-id-change-interval",
       "note": "rv-768 O-2: each external-IP flip replans the join (~200-450 queries, bounded). Consider a minimum interval between id changes; low priority."
+    },
+    {
+      "id": "X-flake-portable-restart-saturated",
+      "note": "Tester 5a: a_portable_restart_serves_again_on_the_same_port (windows_service.rs:672) fails 1/6 on a saturated 4-vCPU host: new copy serves on console ~28 s later but lodestar.jsonl has none of its lines by the 90 s deadline (both copies run below-normal priority). Fix: accept console app.serving too, or wait on jsonl with more headroom. Not seen on CI yet; low priority."
+    },
+    {
+      "id": "test-update-helper-real-upgrade",
+      "note": "Tester 5c: real Windows update-helper upgrade/rollback and its event ID 900 need a signed release higher than 0.5.0 plus manifest; test after the next signed release (owner tags)."
     }
   ],
   "main_health": [
@@ -8560,7 +8568,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T18:04:39Z",
+  "updated": "2026-11-12T18:05:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8784,7 +8792,8 @@
       "note": "owner 2026-11-12 ~16:58Z via tester; whole testing period, any number of machines"
     },
     "notes": [
-      "2026-11-12T17:37:15Z: #770 merged (a22f05f6). Deploy-AwsWindows.ps1 now launches with a public IPv4 via --network-interfaces and refuses if the SG has inbound rules; it needs ec2:DescribeSecurityGroups (owner decides IAM). Stage 13/15 fixes are on main."
+      "2026-11-12T17:37:15Z: #770 merged (a22f05f6). Deploy-AwsWindows.ps1 now launches with a public IPv4 via --network-interfaces and refuses if the SG has inbound rules; it needs ec2:DescribeSecurityGroups (owner decides IAM). Stage 13/15 fixes are on main.",
+      "2026-11-12T18:05:18Z: Windows lane phase 2 done, VM torn down, est. $0.50, nothing tagged left. 5a portable restart 30/30 idle and 30/30 at 2 burners, 5/6 saturated (jsonl wait starves). 5b MSI smoke PASS on nightly 9a6fcb48. 5c update helper unit/integration pass; real upgrade/rollback + ID 900 blocked on a signed release > 0.5.0 (owner releases). 5d Stop-Service 0.26-0.53 s, clean. Runbook gaps (bootstrap order, admin not SYSTEM, pwsh 7) routed to #771."
     ]
   },
   "extra": {
