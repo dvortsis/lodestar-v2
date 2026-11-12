@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T16:50:48Z",
+  "updated_at": "2026-11-12T16:54:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7374,6 +7374,11 @@
       "id": "X-flake-search-toolbar-skip",
       "what": "keyboard-only e2e/search-toolbar.keyboard.test.ts:9 (Skip to results lands on active row): after j, row 2 not focused within 10 s. Seen on #765 at 2c48bc72 (code it does not touch); passed 15/15 locally. One re-run spent. Compare with #477 X-flake-search-keyboard.",
       "logged": "2026-11-12T16:32:37Z"
+    },
+    {
+      "id": "owner-flag-gs1-specific",
+      "what": "\u00a72.19 flag for owner FYI batch: GS-1 identical payload applies CS-8a specific rule to the reference (non-specific -> Unavailable::payload_not_specific), refining plan \u00a76 (runner, \u00a72.26/\u00a72.33). Also GS-1 adds no_content_files, needs_v2_files reasons and partial/capped flags.",
+      "logged": "2026-11-12T16:54:48Z"
     }
   ],
   "main_health": [
@@ -8514,7 +8519,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T16:50:48Z",
+  "updated": "2026-11-12T16:54:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
