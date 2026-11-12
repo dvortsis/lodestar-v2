@@ -2304,6 +2304,12 @@ impl Actor {
             self.seed_answered = false;
         }
         (self.seed_refused, self.seed_throttled) = (0, 0);
+        // Each family gets a self-lookup for the current `ids[0]` below:
+        // the one a pending rejoin waits to start, so it isn't started twice
+        // (a re-bootstrap in the tick a stale self-lookup expired, rv-768
+        // O-1). Both callers start it with no maintenance lookup out, so
+        // `MAX_LOOKUPS` can't refuse it.
+        self.rejoin.fill(false);
         self.bootstrap_starting = true;
         for f in 0..self.families.len() {
             let ipv6 = self.families[f].ipv6;
@@ -3794,6 +3800,34 @@ mod tests {
         assert!(a.rejoin.iter().all(|r| !r) && a.join_planned[0]);
         a.maintain(&sockets);
         assert!(a.lookups.values().all(|l| !l.bootstrap));
+    }
+
+    #[test]
+    fn a_re_bootstrap_stands_in_for_a_pending_rejoin() {
+        let (mut a, sockets) = fixture();
+        let old = a.ids[0];
+        rejoin_bootstrap(&mut a, &sockets);
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        let new = a.ids[0];
+        assert!(a.rejoin[0], "waiting on the old self-lookup");
+        // The old self-lookup ends at its deadline, and in the same tick the
+        // thin-table re-bootstrap looks up the new id (rv-768 O-1).
+        let stale: Vec<u32> = a
+            .lookups
+            .iter()
+            .filter(|(_, l)| l.bootstrap && l.target == old)
+            .map(|(lid, _)| *lid)
+            .collect();
+        assert_eq!(stale.len(), 1);
+        a.finish_lookup(stale[0]);
+        a.start_bootstrap(&sockets, vec![rejoin_neighbour()]);
+        assert_eq!(self_lookups_for(&a, new), 1);
+        assert!(
+            a.rejoin.iter().all(|r| !r),
+            "the re-bootstrap is the rejoin"
+        );
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1, "no duplicate self-lookup");
     }
 
     #[test]
