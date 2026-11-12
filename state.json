@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T19:06:13Z",
+  "updated_at": "2026-11-12T19:27:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7432,6 +7432,10 @@
       "id": "owner-cloud-testing-priority",
       "at": "2026-11-12T18:57:19Z",
       "note": "OWNER (direct, runner chat 2026-11-12 ~18:56Z): 'Have Agent Runner prioritize anything needed for cloud testing.' Runner rule: cloud-testing PRs get reviewed and merged first; cloud-testing fix slices take the cloud-testing slots (13-16) at once, and the next free build slot ahead of features. Record as owner-decisions \u00a72.62 in the next runner PR (with \u00a72.61)."
+    },
+    {
+      "id": "X-clippy-1-100",
+      "note": "2026-11-12T19:27:34Z: #776 head 7e6bb38f adds a frozen 1.99 cased table in crates/search/src/regex.rs (Rust 1.100 Unicode raised regex fold cost; regex_plan boundary row failed). Fresh Opus delta review running. #765 delta security review MERGE (rv-765-61492c7e); #765 and #773 hold until #776 merges."
     }
   ],
   "main_health": [
@@ -8641,7 +8645,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T19:06:13Z",
+  "updated": "2026-11-12T19:27:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
