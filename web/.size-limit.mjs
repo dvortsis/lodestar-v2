@@ -482,7 +482,8 @@ const eventNamesLimits = {
 	dht: '1120 B',
 	filters: '1740 B',
 	search: '2250 B',
-	sources: '490 B',
+	// runner §2.26, UP-1: measured 704 B, the watch labels.
+	sources: '768 B',
 	workers: '3780 B',
 	api: '650 B',
 	companions: '1160 B',
@@ -1362,7 +1363,8 @@ export default [
 	entry('Insights print layout (on demand)', insightsPrintLazy, '1.62 KB'),
 	// S-privacy-banner: measured + 10%.
 	entry('Privacy banner (on demand)', privacyBannerLazy, '3.71 KB'),
-	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
+	// runner §2.26, UP-1: measured 4220 B, the watch labels.
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4.25 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
@@ -1646,7 +1648,8 @@ export default [
 	// them. Limits: measured + 10%. Part 2 (S-wizard-2) adds the download client's cards and the
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
-	entry('Wizard steps (on demand)', wizardLazy, '53.6 KB'),
+	// runner §2.26, UP-1: measured 53603 B, the watch labels.
+	entry('Wizard steps (on demand)', wizardLazy, '53.7 KB'),
 	// S-blocklists: the wizard's blocklist step, measured separately so the limit above stays.
 	entry('Blocklist wizard step (on demand)', blocklistStepLazy, '8.3 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
