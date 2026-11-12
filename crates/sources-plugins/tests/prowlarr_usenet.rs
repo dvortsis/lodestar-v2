@@ -173,10 +173,8 @@ async fn newznab_results_become_usenet_finds_keyed_by_indexer_and_guid() {
         ("imdb", "tt2285752")
     );
     let p = tears.found.provenance.as_deref().unwrap();
-    assert_eq!(
-        p.external_ref.as_deref(),
-        Some(&*format!("usenet:7:{guid}"))
-    );
+    // No reference: a private find stores none (L3).
+    assert_eq!(p.external_ref, None);
     assert_eq!(p.published_at, Some(1_794_428_100));
 
     // NZBGeek's details page keeps its `guid=` query.
@@ -397,7 +395,7 @@ fn the_poster_and_the_link_are_never_kept() {
     assert!(page.items.iter().any(|i| i.kind == Kind::Usenet));
     for item in page.items {
         if let Some(u) = to_usenet(item, &usenet_ix("7", true), HOST, PK, NOW) {
-            let all = format!("{:?} {:?} {}", u, u.claims, u.reference());
+            let all = format!("{:?} {:?}", u, u.claims);
             assert_clean("a usenet item", &all);
             // Debug shows lengths, never the title or the GUID.
             let dbg = format!("{u:?}");
@@ -485,9 +483,7 @@ fn the_largest_item_stays_inside_the_judged_bytes_budget() {
     };
     let c = lodestar_pipeline::unverified::store_claims(&d).unwrap();
     assert_eq!(c.ids.len(), 3);
-    assert!(lodestar_pipeline::unverified::usenet_ref_ok(
-        c.provenance.external_ref.as_deref().unwrap()
-    ));
+    assert_eq!(c.provenance.external_ref, None);
     let judged = lodestar_pipeline::unverified::judged_len(&c, None);
     assert!(judged <= USENET_MAX_JUDGED, "{judged}");
 }
@@ -743,9 +739,7 @@ async fn usenet_items_are_stored_private_rejudged_by_claims_and_never_hold_a_lin
         };
         let c = lodestar_pipeline::unverified::store_claims(&d).unwrap();
         assert!(lodestar_pipeline::unverified::judged_len(&c, None) <= USENET_MAX_JUDGED);
-        // The pipeline's own check keeps the plugin's reference.
-        let r = c.provenance.external_ref.as_deref().unwrap();
-        assert!(lodestar_pipeline::unverified::usenet_ref_ok(r), "{r}");
+        assert_eq!(c.provenance.external_ref, None);
     }
 
     let filter = core_with(&["lexa"], &["rolea"]);
@@ -761,11 +755,17 @@ async fn usenet_items_are_stored_private_rejudged_by_claims_and_never_hold_a_lin
     tx.send(round).await.unwrap();
     until("the finds stored and the held one dropped", || {
         let u = &pipeline.writer_stats().unverified;
-        n(&u.stored) >= 6 && n(&u.dropped) >= 1
+        n(&u.stored) >= 6 && n(&u.held) >= 1
     })
     .await;
-    // No usenet find went to the fetch pool.
-    assert_eq!(n(&pipeline.intake_stats().to_pool), 0);
+    // Every find went to the writer's claims path: none to the
+    // coordinator and the fetch pool, none to touches, none refused by
+    // the held set or a hash check.
+    let i = pipeline.intake_stats();
+    assert_eq!(n(&i.claims), 7);
+    assert_eq!(n(&i.to_pool), 0);
+    assert_eq!(n(&i.known), 0);
+    assert_eq!(n(&i.refused), 0);
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     assert_eq!(reader.unverified_count(Network::Usenet).unwrap(), 4);
     assert_eq!(reader.unverified_count(Network::Bt).unwrap(), 2);
@@ -786,10 +786,7 @@ async fn usenet_items_are_stored_private_rejudged_by_claims_and_never_hold_a_lin
         c.name.as_deref(),
         Some("Tears.of.Steel.2012.1080p.BluRay.x264-USENET")
     );
-    assert_eq!(
-        c.provenance.external_ref.as_deref(),
-        Some(&*format!("usenet:7:{tears_guid}"))
-    );
+    assert_eq!(c.provenance.external_ref, None, "L3: no reference");
     let d = c.details.as_deref().unwrap();
     assert_eq!(d.source_category.as_deref(), Some("2040"));
     // The public indexer's item is private too (§18.7, UN-0).
@@ -816,7 +813,18 @@ async fn usenet_items_are_stored_private_rejudged_by_claims_and_never_hold_a_lin
             && reader.unverified_count(Network::Usenet).unwrap() == 3
     })
     .await;
+    // Only the two torrent finds count as harvested keys: a usenet
+    // result has no swarm hash.
+    let harvested = |r: &Store| -> i64 {
+        r.rollup(lodestar_pipeline::metric::HARVESTED, 0, i64::MAX)
+            .unwrap()
+            .iter()
+            .map(|c| c.value)
+            .sum()
+    };
+    until("the harvested rollup", || harvested(&reader) >= 2).await;
     let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(harvested(&store), 2);
 
     // No stored text, no stored byte and no log line holds a key, the
     // link or the poster.

@@ -262,9 +262,10 @@ pub struct Found {
     /// A usenet item's key (UN-0's `UsenetKey`), built only by
     /// [`Found::usenet`]. Such a find is stored as a usenet item and goes
     /// nowhere else: never to the fetch pool, peer finding or a hash
-    /// check, since it has no swarm hash. Its [`key`](Found::key) is then
-    /// the usenet key's first 20 bytes, so maps keyed by `key` keep finds
-    /// apart; it's never used as an info hash.
+    /// check, since it has no swarm hash. Its [`key`](Found::key) then
+    /// holds only a writer-map key (the usenet key's first 20 bytes, so
+    /// maps keyed by `key` keep finds apart), never a swarm hash: nothing
+    /// may look it up, fetch it or compare it with an info hash.
     pub usenet: Option<[u8; 32]>,
 }
 
@@ -437,4 +438,25 @@ pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod usenet_tests {
+    use super::*;
+
+    #[test]
+    fn a_usenet_find_is_private_and_keyed_by_its_usenet_key() {
+        let f = Found::usenet("7", "a1b2c3", 1).unwrap();
+        assert!(f.is_usenet() && f.private_source);
+        let key = *lodestar_store::unverified::UsenetKey::new("7", "a1b2c3")
+            .unwrap()
+            .as_bytes();
+        assert_eq!(f.usenet, Some(key));
+        assert_eq!(f.key.0[..], key[..20]);
+        assert!(f.claims.is_none() && f.peers.is_empty() && !f.interest);
+        assert!(!Found::key(InfoHash([1; 20]), 0).is_usenet());
+        // An empty or over-long part makes no find.
+        assert!(Found::usenet("", "g", 1).is_err());
+        assert!(Found::usenet("7", &"g".repeat(1025), 1).is_err());
+    }
 }

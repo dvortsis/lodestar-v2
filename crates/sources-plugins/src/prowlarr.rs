@@ -34,10 +34,10 @@
 //! and each Newznab result becomes a usenet item (UN-0): keyed by the
 //! indexer id and the result's GUID, always `private_source`, never
 //! fetched or verified. **The NZB link is never kept:** Prowlarr's
-//! download links carry its API key, and the indexer's. What send needs
-//! to ask Prowlarr again (UN-3) is the indexer id, the GUID and the
-//! title, and only a GUID that can't fetch anything is kept
-//! ([`usenet_guid`]). The poster is never read. See
+//! download links carry its API key, and the indexer's. The item is keyed by
+//! the indexer id and the GUID, and only a GUID that can't fetch anything
+//! is used ([`usenet_guid`]); no reference is stored (L3), so send's
+//! (UN-3) is still to be designed. The poster is never read. See
 //! `docs/decisions/2026-11-12-UN-1.md`.
 
 use std::collections::VecDeque;
@@ -131,10 +131,6 @@ pub const USENET_MIN_POSTED: i64 = 315_532_800;
 /// that's judged, so a poll judges at most [`USENET_POLL_ITEMS`] × this
 /// (16 MiB), well inside the ingest budget.
 pub const USENET_MAX_JUDGED: usize = 4 * 1024;
-/// The prefix of a usenet item's stored reference: `usenet:<indexer
-/// id>:<guid>`. The id is decimal digits, so the first `:` after it ends
-/// it.
-pub const USENET_REF: &str = "usenet:";
 
 /// The caps for one Usenet page: SRC-6's, with [`USENET_PAGE_BYTES`] and
 /// ten times [`PAGE_SIZE`] items read.
@@ -893,8 +889,8 @@ impl std::fmt::Debug for UsenetFind {
 ///   often an email address. Nor is a description or a publisher set,
 ///   which the details section forbids beside it (ENR-9).
 ///
-/// The reference, `usenet:<indexer>:<guid>`, is what send (UN-3) reads
-/// to ask Prowlarr for the result again.
+/// No external reference is set: every usenet find is private, and a
+/// private find stores none (L3). Send's reference is UN-3's design.
 pub fn to_usenet(
     item: Item,
     ix: &Indexer,
@@ -948,21 +944,17 @@ pub fn to_usenet(
 }
 
 impl UsenetFind {
-    /// The reference send (UN-3) reads: `usenet:<indexer>:<guid>`.
-    pub fn reference(&self) -> String {
-        format!("{USENET_REF}{}:{}", self.indexer, self.guid)
-    }
-
     /// The find the pipeline stores as a usenet item, or `None` when the
     /// key can't be made (a part out of range, already refused above).
     pub fn into_found(self) -> Option<Found> {
-        let reference = self.reference();
         let posted = self.claims.details.as_ref().and_then(|d| d.posted_at);
         let mut found = Found::usenet(&self.indexer, &self.guid, STRATEGY_RSS)
             .ok()?
             .with_claims(self.claims)
             .with_provenance(Provenance {
-                external_ref: Some(reference),
+                // None: a private find stores no reference (L3), and
+                // every usenet find is private.
+                external_ref: None,
                 published_at: posted,
                 confidence: Confidence::Low,
             });
