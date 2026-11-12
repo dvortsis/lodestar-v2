@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:52:41Z",
+  "updated_at": "2026-11-12T08:56:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7198,6 +7198,11 @@
       "id": "v052-rc3",
       "at": "2026-11-12T08:52:41Z",
       "note": "release/v0.5.2 at 833a0d25 green (CI, E2E, Release dry run; soak screen only the known memstats test). Runner call: tag v0.5.2-rc.3 (pre-release), scope frozen (no #597/#595/966fbc99b). P-v052-cut opens notes front-matter PR + drafts the rc.3 soak brief (manifest section 6). After merge: owner tag steps + soak brief via dashboard session."
+    },
+    {
+      "id": "X-dht-lookup-converge",
+      "at": "2026-11-12T08:56:58Z",
+      "note": "M8-NET-E2E found ~10% of production get_peers lookups end early (fresh ~25-node table, concurrent lookups) without reaching the 8 true-closest; same session fixes as own slice, then reruns 20x. Replaces X-dht-passive-lookup-race. retry_backoff 120 s after an empty lookup: runner \u00a72.26 call pending the report."
     }
   ],
   "main_health": [
@@ -8110,7 +8115,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:43:44Z",
+    "updated": "2026-11-12T08:56:58Z",
     "items": [
       {
         "slot": 1,
@@ -8132,11 +8137,11 @@
       },
       {
         "slot": 4,
-        "slice": "M8-NET-E2E",
+        "slice": "X-dht-lookup-converge",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: runner decision C: original topology, per-hash harvest->search <= 5 s, harvest by 30 s deadline; then CI on 3 OSes",
-        "since": "2026-11-12T07:59:10Z",
+        "doing": "DHT get_peers lookup convergence fix (M8-NET-E2E parked on WIP until it merges)",
+        "since": "2026-11-12T08:56:58Z",
         "status": "active"
       },
       {
@@ -8243,7 +8248,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:52:41Z",
+  "updated": "2026-11-12T08:56:58Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
