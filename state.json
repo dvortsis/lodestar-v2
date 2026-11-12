@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:46Z",
+  "updated_at": "2026-11-12T22:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8594,7 +8594,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:46Z",
+    "updated": "2026-11-12T22:47Z",
     "items": [
       {
         "slot": 1,
@@ -8846,6 +8846,15 @@
         "agent": "claude",
         "doing": "session_01MMjhn8ht4VBbYS74uVp94c: owner window (\u00a72.64) until 00:00Z 2026-11-13; Sonnet; brief briefs/WK-18.md; /security-review (token)",
         "since": "2026-11-12T22:46Z"
+      },
+      {
+        "slot": 29,
+        "slice": "X-percolate-promoted-hold",
+        "status": "active",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnA6QRL7ZBHsGodHmKo: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/X-percolate-promoted-hold.md",
+        "since": "2026-11-12T22:47Z"
       }
     ]
   },
@@ -8906,7 +8915,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:46Z",
+  "updated": "2026-11-12T22:47Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
