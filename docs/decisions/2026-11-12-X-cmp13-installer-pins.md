@@ -1,4 +1,4 @@
-# X-cmp13-installer-pins decisions
+# X-cmp13-installer-pins decisions (#720)
 
 Installer pins in the companion catalogue: qBittorrent's official Windows installer gets a pin, so CMP-11's guided install can show a checked version and SHA-256 (owner cq4; `docs/decisions/2026-11-11-CMP-11.md`, "The format can't hold this pin yet"). It also carries CMP-13's two optional follow-ups (runner, 2026-11-11). These are the slice's decisions under §2.33. The pin-time source is a runner call (§2.26, §2.33), flagged to the owner. Nothing here loosens a run-time rule: Lodestar still never downloads or runs the installer.
 
@@ -78,7 +78,13 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - an unsigned installer policy (`installer`).
 
 ## CMP-13's follow-ups
-- **The deadline holds during a read** (self-review B1, I1). Each read is one `recv` (`read1`), and before each the socket's timeout is cut to what's left of the 30 minutes, at most 60 s. A body that stalls or drips can't outlast the deadline (`timeout`); a socket already closed at the end of the body is ignored. Tested through `fetch()` against a real local server: complete length-delimited and chunked bodies, a stall and a drip. **Not covered:** a server that drips its response headers. That's bounded only by the 60 s socket timeout per recv and the workflow's 30-minute job limit.
+- **The deadline holds during the body** (self-review B1, I1; runner review I1).
+  - **A hard wall-clock watchdog:** when the 30 minutes are up, a timer shuts the socket down, so no read can outlast them. That covers a chunk-size line, which `read1` reads with many recvs. A body cut short that way is refused (`timeout`), never taken as complete.
+  - **Within that,** reads are `read1`, and the socket's timeout is cut to what's left (at most 60 s) before each one. A socket already closed at the end of the body is ignored.
+  - **Tested through `fetch()`** against a real local server:
+    - complete length-delimited and chunked bodies;
+    - a stall, a drip, and a drip inside the chunk-size line, each refused about 1 s after a 1 s deadline.
+  - **Not covered:** a server that drips its response headers before the body starts. That's bounded only by the 60 s socket timeout per recv and the workflow's 30-minute job limit.
 - **A single-platform manifest's platform is checked.** Its config blob is fetched by digest and checked against that digest. Its `os/architecture` must be `linux/amd64`, as an index's list must contain it. The blob may be redirected to the registry's blob host:
   - `pkg-containers.githubusercontent.com` for ghcr.io and lscr.io;
   - `production.cloudflare.docker.com` for Docker Hub.
@@ -112,9 +118,9 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - no `.asc`, a tampered installer, a signature by another key, a non-signature;
   - an unsigned policy;
   - redirects to an unknown host, two labels, a look-alike suffix, `http`, GitHub or FossHub, and a signature redirected away;
-  - the bytes tied to the version: the report's values; another signed file; a wrong size; a wrong MD5 at the same size; a same-size signed file; a tag date without a zone; the 2-day slack's boundary (a day inside passes, three days refuses); another project's path; no item, two items, or only another path's; an older signature; a lightweight tag; an unreadable date; a download ending at another file's path; a feed redirected to a mirror or elsewhere; a feed with a document type and a matching item, in UTF-8 and UTF-16;
+  - the bytes tied to the version: the report's values; another signed file; a wrong size; a wrong MD5 at the same size; a same-size signed file; a tag date without a zone; the 2-day slack's boundary (exactly two days passes, a second more refuses; a day inside passes, three days refuses); another project's path; no item, two items, or only another path's; an older signature; a lightweight tag; an unreadable date; a download ending at another file's path; a feed redirected to a mirror or elsewhere; a feed with a document type and a matching item, in UTF-8 and UTF-16;
   - the key fetched by fingerprint (one copy holding an extra key), a place that doesn't serve it, and nowhere to fetch it from;
   - the mirror-host rule;
-  - complete bodies, a stall and a drip, through `fetch()` on a real socket;
+  - complete bodies, a stall, a drip and a chunk-size-line drip, through `fetch()` on a real socket;
   - the loader's invariants and property tests, run over a catalogue with a pinned installer too;
   - a single-platform manifest's platform, another platform, and a config that isn't the one named.

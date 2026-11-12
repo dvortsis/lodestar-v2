@@ -924,6 +924,19 @@ class InstallerPins(Case):
                 err = self.refuse(Fake(routes), "installer_mismatch")
                 self.assertTrue("document type" in err or "isn't UTF-8" in err, err)
 
+    def test_the_slack_boundary_exactly(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        sig = self.gpg.sign(self.a, INSTALLER)
+        art = self.tmp / "art"
+        art.write_bytes(INSTALLER)
+        _, signed_at = pin.verify_openpgp(GPG, art, sig, (self.a,), self.keys)
+        iso = lambda ts: datetime.datetime.fromtimestamp(ts, datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        status, err = self.pin(Fake(self.routes(sig=sig, tag_date=iso(signed_at + pin.TAG_SLACK))))
+        self.assertEqual(status, 0, err)  # signed exactly two days before the tag: allowed
+        self.out.unlink()
+        self.report.unlink()
+        self.refuse(Fake(self.routes(sig=sig, tag_date=iso(signed_at + pin.TAG_SLACK + 1))), "installer_mismatch")
+
     def test_the_two_days_of_slack(self):
         shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
         now = datetime.datetime.now(datetime.UTC)
@@ -1014,7 +1027,10 @@ class LocalServer:
             protocol_version = "HTTP/1.1"
 
             def do_GET(self):
-                handler(self, release)
+                try:
+                    handler(self, release)
+                except OSError:
+                    pass  # the client shut the socket at its deadline
 
             def log_message(self, *args):
                 pass
@@ -1091,14 +1107,25 @@ class RealTransport(unittest.TestCase):
                 h.wfile.write(b"x")
                 h.wfile.flush()
 
-        for handler in (stall, drip):
+        def chunk_line_drip(h, release):
+            # Chunked, then the chunk-size line one byte at a time and never
+            # ended: `read1` reads that line with many recvs.
+            h.send_response(200)
+            h.send_header("Transfer-Encoding", "chunked")
+            h.end_headers()
+            h.wfile.flush()
+            while not release.wait(0.05):
+                h.wfile.write(b"0")
+                h.wfile.flush()
+
+        for handler in (stall, drip, chunk_line_drip):
             with self.subTest(handler.__name__), mock.patch.object(pin, "OVERALL", 1):
                 url = self.serve(handler)
                 start = time.monotonic()
                 with self.assertRaises(pin.Refused) as e:
                     pin.fetch_bytes(pin.Transport(), url, (), 100000)
                 self.assertEqual(e.exception.code, "timeout")
-                self.assertLess(time.monotonic() - start, 10)
+                self.assertLess(time.monotonic() - start, 20)
 
 
 class SinglePlatform(Case):

@@ -17,14 +17,17 @@ Standard library only. Usage:
 import argparse
 import datetime
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -120,8 +123,21 @@ class Response:
                 return
             yield chunk
 
+    def _sock(self):
+        return getattr(getattr(getattr(self._body, "fp", None), "raw", None), "_sock", None)
+
+    def abort(self, fired) -> None:
+        """The deadline's watchdog: shuts the socket down so a blocked read returns."""
+        fired.set()
+        sock = self._sock()
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # already closed: the body was complete
+
     def _cut_timeout(self, deadline: float) -> None:
-        sock = getattr(getattr(getattr(self._body, "fp", None), "raw", None), "_sock", None)
+        sock = self._sock()
         if sock is None:
             return
         try:
@@ -234,16 +250,30 @@ def fetch(t: Transport, url: str, hosts, cap: int, sink, headers=None, missing_o
             if length is not None and (not length.isdigit() or int(length) > cap):
                 raise Refused("too_large", f"{host_of(url)} sent a body over {cap} bytes")
             total = 0
+            # A hard wall-clock stop: at the deadline the socket is shut down,
+            # so no read (a chunk-size line included, which `read1` reads with
+            # many recvs) can outlast it. A body cut short that way is refused,
+            # never taken as complete.
+            fired = threading.Event()
+            watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), r.abort, args=(fired,))
+            watchdog.daemon = True
+            watchdog.start()
             try:
                 for chunk in r.chunks(deadline=deadline):
                     total += len(chunk)
                     if total > cap:
                         raise Refused("too_large", f"{host_of(url)} sent a body over {cap} bytes")
-                    if time.monotonic() > deadline:
+                    if time.monotonic() > deadline or fired.is_set():
                         raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s")
                     sink(chunk)
-            except TimeoutError:
-                raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s, or stalled") from None
+            except (TimeoutError, OSError, http.client.HTTPException, ValueError):
+                if fired.is_set() or time.monotonic() > deadline:
+                    raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s, or stalled") from None
+                raise
+            finally:
+                watchdog.cancel()
+            if fired.is_set():
+                raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s")
             if final is not None:
                 final.append(url)
             return True
@@ -338,10 +368,10 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
         out = gpg_run(gpg, home, ["--armor", "--export-options", "export-minimal", "--export", fpr])
         if out.returncode != 0 or "BEGIN PGP PUBLIC KEY BLOCK" not in out.stdout:
             raise Refused("unknown_key", "the pinned key didn't export")
-        exported = [out.stdout]
+        exported = out.stdout
     fetched = work / "fetched-keys"
     fetched.mkdir(exist_ok=True)
-    (fetched / f"{fpr}.asc").write_text(exported[0], encoding="ascii")
+    (fetched / f"{fpr}.asc").write_text(exported, encoding="ascii")
     lines = [
         "",
         f"Key `{fpr}` wasn't in `keys/`: fetched from "
@@ -351,7 +381,7 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
         + ".asc` in the pin PR:",
         "",
         "```",
-        *exported[0].strip().splitlines(),
+        *exported.strip().splitlines(),
         "```",
     ]
     return fetched, lines
