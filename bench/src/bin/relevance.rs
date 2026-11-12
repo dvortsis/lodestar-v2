@@ -28,6 +28,21 @@
 //!
 //! MRR and recall average over the queries that have something to find.
 //! Unjudged results count as grade 0.
+//!
+//! **An existing store and index** (`--data-dir PATH`, with `--dir` naming
+//! the folder of `judgments.txt` and `baseline.txt`): the judgments key
+//! torrents by info hash ([`judgments`] has the format), and the queries
+//! run over that data directory, opened read-only ([`data_dir`]). A judged
+//! torrent the store doesn't hold is counted and left out of the scores;
+//! a query left with nothing to find is skipped and counted. Results past
+//! the first page aren't read, so only the top 50 are checked for
+//! forbidden torrents. The baseline also records the store's torrent
+//! count and the index version, and the gate fails when either changed.
+//!
+//! **`--held-out`** is for judged sets that mustn't leave the machine
+//! (the owner's pilot data): it prints only the overall figures and
+//! counts, never a torrent name, a hash, a query or a per-query line,
+//! errors name only a line number, and it writes nothing.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -43,6 +58,15 @@ use lodestar_search::{
 };
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, SwarmUpdate, WriteBatch};
 
+// A bin's root resolves modules beside it, so they're pointed at the
+// bin's own folder.
+#[path = "relevance/data_dir.rs"]
+mod data_dir;
+#[path = "relevance/judgments.rs"]
+mod judgments;
+
+use judgments::{Grade, Judged, Keys};
+
 /// Results read per query: recall's depth, and where forbidden torrents
 /// are looked for.
 const DEPTH: usize = 50;
@@ -57,9 +81,15 @@ const TOLERANCE: f64 = 0.001;
 const EPOCH: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
 
 const USAGE: &str = "\
-Usage: relevance [--dir PATH] [--gate] [--tolerance T] [--worst N] [--all] [--write-baseline]
+Usage: relevance [--dir PATH] [--data-dir PATH [--held-out]] [--gate] [--tolerance T]
+                 [--worst N] [--all] [--write-baseline]
 
   --dir PATH         the corpus, judgments and baseline (default bench/relevance)
+  --data-dir PATH    score this existing Lodestar data directory, read-only,
+                     with --dir's judgments keyed by info hash (no corpus)
+  --held-out         with --data-dir: print only the overall figures, never a
+                     name, hash or query; no --gate, --worst, --all or
+                     --write-baseline
   --gate             exit 1 on a regression past the tolerance, a forbidden
                      result, or inputs changed since the baseline
   --tolerance T      allowed NDCG@10 drop below the baseline (default 0.001)
@@ -69,6 +99,8 @@ Usage: relevance [--dir PATH] [--gate] [--tolerance T] [--worst N] [--all] [--wr
 
 struct Args {
     dir: PathBuf,
+    data_dir: Option<PathBuf>,
+    held_out: bool,
     gate: bool,
     tolerance: f64,
     worst: usize,
@@ -79,29 +111,66 @@ struct Args {
 fn args() -> Result<Args, String> {
     let mut a = Args {
         dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("relevance"),
+        data_dir: None,
+        held_out: false,
         gate: false,
         tolerance: TOLERANCE,
         worst: 10,
         all: false,
         write_baseline: false,
     };
+    let (mut dir_given, mut worst_given) = (false, false);
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
         match arg.as_str() {
-            "--dir" => a.dir = PathBuf::from(value("--dir")?),
+            "--dir" => {
+                a.dir = PathBuf::from(value("--dir")?);
+                dir_given = true;
+            }
+            "--data-dir" => a.data_dir = Some(PathBuf::from(value("--data-dir")?)),
+            "--held-out" => a.held_out = true,
             "--gate" => a.gate = true,
             "--tolerance" => {
                 a.tolerance = value("--tolerance")?
                     .parse()
                     .map_err(|_| "bad --tolerance")?
             }
-            "--worst" => a.worst = value("--worst")?.parse().map_err(|_| "bad --worst")?,
+            "--worst" => {
+                a.worst = value("--worst")?.parse().map_err(|_| "bad --worst")?;
+                worst_given = true;
+            }
             "--all" => a.all = true,
             "--write-baseline" => a.write_baseline = true,
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
+    }
+    if a.data_dir.is_some() && !dir_given {
+        return Err(
+            "--data-dir needs --dir: the folder of hash-keyed judgments.txt and its baseline"
+                .into(),
+        );
+    }
+    if a.held_out {
+        if a.data_dir.is_none() {
+            return Err("--held-out needs --data-dir".into());
+        }
+        // It prints nothing per query and writes nothing (owner, OQ2): the
+        // held-out score is reported, not gated (plan RQ2).
+        for (given, flag) in [
+            (worst_given, "--worst"),
+            (a.all, "--all"),
+            (a.write_baseline, "--write-baseline"),
+            (a.gate, "--gate"),
+        ] {
+            if given {
+                return Err(format!(
+                    "--held-out prints aggregates only and writes nothing: drop {flag}"
+                ));
+            }
+        }
+        a.worst = 0;
     }
     Ok(a)
 }
@@ -272,92 +341,6 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-// ---- the judgments --------------------------------------------------------
-
-/// What a judgment says about one torrent for one query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Grade {
-    /// 0–3: not relevant, related, a right answer, exactly what's asked.
-    Graded(u8),
-    /// Must never be in the results (Adult while it's hidden, a negated
-    /// word).
-    Forbidden,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Judged {
-    query: String,
-    why: String,
-    grades: HashMap<String, Grade>,
-}
-
-/// Parses `judgments.txt`:
-///
-/// ```text
-/// # a comment
-/// ? the query, as typed
-/// = one line on what the ideal results are, and why
-/// 3 key key …      exactly what's asked
-/// 2 key …          a right answer
-/// 1 key …          related, acceptable further down
-/// 0 key …          judged not relevant (the same as unjudged)
-/// x key …          must never be shown
-/// ```
-fn parse_judgments(text: &str, known: &HashSet<&str>) -> Result<Vec<Judged>, String> {
-    let mut out: Vec<Judged> = Vec::new();
-    let mut seen = HashSet::new();
-    for (n, line) in text.lines().enumerate() {
-        let at = |msg: &str| format!("judgments.txt:{}: {msg}", n + 1);
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let (tag, rest) = line.split_at(1);
-        let rest = rest.trim();
-        if tag == "?" {
-            if rest.is_empty() {
-                return Err(at("empty query"));
-            }
-            if !seen.insert(rest.to_string()) {
-                return Err(at(&format!("query {rest:?} is judged twice")));
-            }
-            out.push(Judged {
-                query: rest.to_string(),
-                why: String::new(),
-                grades: HashMap::new(),
-            });
-            continue;
-        }
-        let last = out
-            .last_mut()
-            .ok_or_else(|| at("a judgment before any query"))?;
-        let grade = match tag {
-            "=" => {
-                if !last.why.is_empty() {
-                    return Err(at("a second rationale line"));
-                }
-                last.why = rest.to_string();
-                continue;
-            }
-            "0" | "1" | "2" | "3" => Grade::Graded(tag.as_bytes()[0] - b'0'),
-            "x" => Grade::Forbidden,
-            _ => return Err(at("expected `?`, `=`, a grade 0–3 or `x`")),
-        };
-        for key in rest.split_whitespace() {
-            if !known.contains(key) {
-                return Err(at(&format!("unknown torrent {key}")));
-            }
-            if last.grades.insert(key.to_string(), grade).is_some() {
-                return Err(at(&format!("{key} is judged twice for this query")));
-            }
-        }
-    }
-    if let Some(j) = out.iter().find(|j| j.why.is_empty()) {
-        return Err(format!("judgments.txt: {:?} has no rationale", j.query));
-    }
-    Ok(out)
-}
-
 // ---- the measures ---------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -447,8 +430,13 @@ struct Baseline {
     mrr: f64,
     recall: f64,
     queries: usize,
-    /// FNV-1a of the corpus and judgments, line endings normalised.
+    /// FNV-1a of the corpus and judgments, line endings normalised (of
+    /// the judgments alone with `--data-dir`).
     inputs: String,
+    /// With `--data-dir`: the store's torrent count and the index version.
+    /// A 10M store's contents aren't fingerprinted; these say whether it's
+    /// the same store, as far as a gate needs.
+    store: Option<(u64, String)>,
 }
 
 fn parse_baseline(text: &str) -> Result<Baseline, String> {
@@ -481,17 +469,29 @@ fn parse_baseline(text: &str) -> Result<Baseline, String> {
             .parse()
             .map_err(|_| "baseline.txt: bad queries")?,
         inputs: get("inputs")?.to_string(),
+        store: match (fields.get("store_torrents"), fields.get("index")) {
+            (None, None) => None,
+            (Some(n), Some(v)) => Some((
+                n.parse().map_err(|_| "baseline.txt: bad store_torrents")?,
+                v.to_string(),
+            )),
+            _ => return Err("baseline.txt: store_torrents and index go together".into()),
+        },
     })
 }
 
 fn format_baseline(b: &Baseline) -> String {
-    format!(
+    let mut out = format!(
         "# The relevance gate's baseline (bench/README.md, \"Relevance\").\n\
          # Written by `relevance --write-baseline`; update it only as\n\
          # docs/decisions/2026-10-22-R-relevance.md describes.\n\
          ndcg@10 {:.4}\nmrr {:.4}\nrecall@50 {:.4}\nqueries {}\ninputs {}\n",
         b.ndcg, b.mrr, b.recall, b.queries, b.inputs
-    )
+    );
+    if let Some((torrents, index)) = &b.store {
+        let _ = write!(out, "store_torrents {torrents}\nindex {index}\n");
+    }
+    out
 }
 
 fn inputs_hash(corpus: &str, judgments: &str) -> String {
@@ -601,32 +601,155 @@ struct Outcome<'j> {
     scores: Scores,
 }
 
-fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
+/// What a run scores: the judged queries and the index they run over.
+struct Set {
+    judged: Vec<Judged>,
+    index: Arc<SearchIndex>,
+    /// The clock searches run at.
+    now: i64,
+    /// The key (corpus key or info hash) of each judged torrent's id.
+    keys: HashMap<u64, String>,
+    inputs: String,
+    /// `--data-dir` only: what the baseline records of the store.
+    store: Option<(u64, String)>,
+    /// `--data-dir` only: judged torrents it doesn't hold, and queries
+    /// left with nothing to find.
+    not_in_store: usize,
+    skipped: usize,
+    /// The corpus's size; `None` with `--data-dir`.
+    corpus: Option<usize>,
+    /// What the index lives in: the corpus's temporary directory, or the
+    /// data directory and its locks.
+    _hold: Box<dyn std::any::Any>,
+}
+
+type Fail = Box<dyn std::error::Error>;
+
+/// A file of `dir`, capped at the judgments' limit.
+fn read_capped(path: &Path) -> Result<String, String> {
+    use std::io::Read as _;
+    let shown = || path.display().to_string();
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", shown()))?;
+    let mut text = String::new();
+    file.take(judgments::MAX_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|e| format!("{}: {e}", shown()))?;
+    if text.len() as u64 > judgments::MAX_BYTES {
+        return Err(format!(
+            "{}: larger than {} MiB",
+            shown(),
+            judgments::MAX_BYTES >> 20
+        ));
+    }
+    Ok(text)
+}
+
+/// The committed kind of set: a corpus built into a temporary store.
+fn corpus_set(a: &Args) -> Result<Set, Fail> {
     let read = |f: &str| {
         std::fs::read_to_string(a.dir.join(f))
             .map_err(|e| format!("{}: {e}", a.dir.join(f).display()))
     };
     let corpus_text = read("corpus.txt")?;
-    let judgments_text = read("judgments.txt")?;
+    let judgments_text = read_capped(&a.dir.join("judgments.txt"))?;
     let corpus = parse_corpus(&corpus_text)?;
     let known: HashSet<&str> = corpus.iter().map(|e| e.key.as_str()).collect();
-    let judged = parse_judgments(&judgments_text, &known)?;
+    let judged = judgments::parse(&judgments_text, &Keys::Corpus(&known))?;
     let inputs = inputs_hash(&corpus_text, &judgments_text);
-
     let tmp = tempfile::tempdir()?;
     let (index, keys) = build(tmp.path(), &corpus)?;
-    let index = Arc::new(index);
-    let cancel = CancelToken::new();
-    let now = now(corpus.len());
+    Ok(Set {
+        judged,
+        index: Arc::new(index),
+        now: now(corpus.len()),
+        keys,
+        inputs,
+        store: None,
+        not_in_store: 0,
+        skipped: 0,
+        corpus: Some(corpus.len()),
+        _hold: Box::new(tmp),
+    })
+}
 
-    let mut outcomes = Vec::with_capacity(judged.len());
-    for j in &judged {
-        let node = parse(&j.query).map_err(|e| format!("{:?}: {e}", j.query))?;
-        let lease = Lease::new(index.clone(), &shown(node), now, Sort::Relevance, &cancel)?;
-        let page = lease.page(Start::Offset(0), DEPTH, &cancel)?;
+/// Hash-keyed judgments over an existing data directory.
+fn data_set(a: &Args, dir: &Path) -> Result<Set, Fail> {
+    let text = read_capped(&a.dir.join("judgments.txt"))?;
+    let judged = judgments::parse(&text, &Keys::Hash).map_err(|e| e.show(a.held_out))?;
+    let data = data_dir::DataDir::open(dir)?;
+    let mut hashes: Vec<(String, [u8; 20])> = judged
+        .iter()
+        .flat_map(|j| j.grades.keys())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter_map(|k| judgments::hash_bytes(k).map(|b| (k.clone(), b)))
+        .collect();
+    hashes.sort_unstable();
+    let ids = data.ids(&hashes)?;
+    let positive = |j: &Judged| {
+        j.grades
+            .values()
+            .any(|g| matches!(g, Grade::Graded(g) if *g > 0))
+    };
+    let mut kept = Vec::with_capacity(judged.len());
+    let mut skipped = 0;
+    for mut j in judged {
+        let had = positive(&j);
+        j.grades.retain(|k, _| ids.contains_key(k));
+        if had && !positive(&j) {
+            skipped += 1;
+        } else {
+            kept.push(j);
+        }
+    }
+    Ok(Set {
+        judged: kept,
+        index: data.index.clone(),
+        now: data.now,
+        keys: ids.iter().map(|(k, id)| (*id, k.clone())).collect(),
+        inputs: format!("{:016x}", fnv1a(text.replace("\r\n", "\n").as_bytes())),
+        store: Some((data.torrents, data.index_version.clone())),
+        not_in_store: hashes.len() - ids.len(),
+        skipped,
+        corpus: None,
+        _hold: Box::new(data),
+    })
+}
+
+/// An error about one query: with `--held-out`, only its line.
+fn query_error(a: &Args, j: &Judged, e: impl std::fmt::Display) -> String {
+    if a.held_out {
+        format!("judgments.txt:{}: the query failed", j.line)
+    } else {
+        format!("{:?}: {e}", j.query)
+    }
+}
+
+fn run(a: &Args) -> Result<bool, Fail> {
+    let set = match &a.data_dir {
+        Some(dir) => data_set(a, dir)?,
+        None => corpus_set(a)?,
+    };
+    let cancel = CancelToken::new();
+
+    let mut outcomes = Vec::with_capacity(set.judged.len());
+    for j in &set.judged {
+        let node = parse(&j.query).map_err(|e| query_error(a, j, e))?;
+        let lease = Lease::new(
+            set.index.clone(),
+            &shown(node),
+            set.now,
+            Sort::Relevance,
+            &cancel,
+        )
+        .map_err(|e| query_error(a, j, e))?;
+        let page = lease
+            .page(Start::Offset(0), DEPTH, &cancel)
+            .map_err(|e| query_error(a, j, e))?;
         // Every match must fit in one page, or a forbidden torrent past
-        // it would go unseen.
-        if page.next.is_some() || page.hits.len() >= DEPTH {
+        // it would go unseen. A real store's queries match far more: only
+        // the first page is checked there.
+        if set.corpus.is_some() && (page.next.is_some() || page.hits.len() >= DEPTH) {
             return Err(format!(
                 "{:?} matches {DEPTH} or more torrents: narrow it so the forbidden check sees every result",
                 j.query
@@ -637,7 +760,8 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
             .hits
             .iter()
             .map(|h| {
-                keys.get(&h.id)
+                set.keys
+                    .get(&h.id)
                     .cloned()
                     .unwrap_or_else(|| format!("#{}", h.id))
             })
@@ -660,19 +784,42 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         mrr,
         recall,
         queries: outcomes.len(),
-        inputs,
+        inputs: set.inputs.clone(),
+        store: set.store.clone(),
     };
 
-    println!("Lodestar relevance suite");
-    println!(
-        "  corpus      {} torrents, {} queries judged",
-        corpus.len(),
-        outcomes.len()
-    );
+    if a.held_out {
+        // Aggregates only: nothing that names a torrent or a query.
+        println!("Lodestar relevance suite, held out (aggregates only)");
+        println!("  queries     {} scored", outcomes.len());
+    } else {
+        println!("Lodestar relevance suite");
+        match (set.corpus, &set.store) {
+            (Some(n), _) => println!(
+                "  corpus      {n} torrents, {} queries judged",
+                outcomes.len()
+            ),
+            (None, Some((n, v))) => println!(
+                "  store       {n} torrents (index {v}), {} queries judged",
+                outcomes.len()
+            ),
+            (None, None) => unreachable!("a set is a corpus or a store"),
+        }
+    }
     println!("  NDCG@10     {ndcg:.4}");
     println!("  MRR         {mrr:.4}");
     println!("  recall@50   {recall:.4}");
     println!("  forbidden   {} queries", forbidden.len());
+    if set.corpus.is_none() {
+        println!("  not in store {} judged torrents", set.not_in_store);
+        println!(
+            "  skipped     {} queries (nothing they grade is in this store)",
+            set.skipped
+        );
+    }
+    if a.held_out {
+        return Ok(forbidden.is_empty());
+    }
 
     let mut order: Vec<&Outcome<'_>> = outcomes.iter().collect();
     order.sort_by(|x, y| {
@@ -706,12 +853,15 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     for o in &forbidden {
         println!("  FAIL forbidden result for {:?}", o.judged.query);
     }
+    let baseline = a.dir.join("baseline.txt");
     if a.write_baseline {
-        std::fs::write(a.dir.join("baseline.txt"), format_baseline(&current))?;
+        std::fs::write(&baseline, format_baseline(&current))?;
         println!("\n  baseline written: NDCG@10 {ndcg:.4}");
         return Ok(ok);
     }
-    match read("baseline.txt").map(|t| parse_baseline(&t)) {
+    let read =
+        std::fs::read_to_string(&baseline).map_err(|e| format!("{}: {e}", baseline.display()));
+    match read.map(|t| parse_baseline(&t)) {
         Ok(Ok(base)) => {
             let floor = base.ndcg - a.tolerance;
             let pass = ndcg >= floor;
@@ -732,6 +882,19 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
             if base.inputs != current.inputs || base.queries != current.queries {
                 println!(
                     "  FAIL the corpus or judgments changed since the baseline: run with --write-baseline and commit it"
+                );
+                ok = false;
+            }
+            if base.store != current.store {
+                let what = |s: &Option<(u64, String)>| {
+                    s.as_ref().map_or("no store".to_string(), |(n, v)| {
+                        format!("{n} torrents, index {v}")
+                    })
+                };
+                println!(
+                    "  FAIL the store changed since the baseline ({} then, {} now): score the same store, or write a new baseline",
+                    what(&base.store),
+                    what(&current.store)
                 );
                 ok = false;
             }
@@ -796,6 +959,12 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if a.held_out {
+        // A panic's message could quote what it was handling.
+        std::panic::set_hook(Box::new(|_| {
+            eprintln!("error: internal failure (details withheld under --held-out)");
+        }));
+    }
     match run(&a) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) if a.gate => ExitCode::FAILURE,
@@ -847,25 +1016,6 @@ b | dir | Some Pack
             "a | dir | x\n  1G | a//b\n",
         ] {
             assert!(parse_corpus(bad).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn judgments_parse_and_validate() {
-        let known: HashSet<&str> = ["a", "b", "c"].into();
-        let j = parse_judgments("? q\n= why\n3 a\n1 b\nx c\n", &known).unwrap();
-        assert_eq!(j[0].grades["a"], Grade::Graded(3));
-        assert_eq!(j[0].grades["c"], Grade::Forbidden);
-        for bad in [
-            "? q\n3 a\n",
-            "? q\n= why\n3 zz\n",
-            "? q\n= why\n3 a\n2 a\n",
-            "? q\n= why\n? q\n= again\n",
-            "3 a\n",
-            "? q\n= why\n= twice\n",
-            "? q\n= why\n4 a\n",
-        ] {
-            assert!(parse_judgments(bad, &known).is_err(), "{bad:?}");
         }
     }
 
@@ -936,8 +1086,17 @@ b | dir | Some Pack
             recall: 0.95,
             queries: 150,
             inputs: "00ff".into(),
+            store: None,
         };
         assert_eq!(parse_baseline(&format_baseline(&b)).unwrap(), b);
+        assert!(!format_baseline(&b).contains("store"));
+        let with_store = Baseline {
+            store: Some((10_000_000, "v7-t1".into())),
+            ..b
+        };
+        let text = format_baseline(&with_store);
+        assert_eq!(parse_baseline(&text).unwrap(), with_store);
+        assert!(parse_baseline(&text.replace("index v7-t1\n", "")).is_err());
         assert!(parse_baseline("ndcg@10 x\n").is_err());
     }
 
@@ -972,9 +1131,9 @@ b | dir | Some Pack
         let corpus =
             parse_corpus(&std::fs::read_to_string(dir.join("corpus.txt")).unwrap()).unwrap();
         let known: HashSet<&str> = corpus.iter().map(|e| e.key.as_str()).collect();
-        let judged = parse_judgments(
+        let judged = judgments::parse(
             &std::fs::read_to_string(dir.join("judgments.txt")).unwrap(),
-            &known,
+            &Keys::Corpus(&known),
         )
         .unwrap();
         assert!(judged.len() >= 140, "{} queries", judged.len());
