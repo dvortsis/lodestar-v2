@@ -227,18 +227,25 @@ fn scores_match_a_hand_computation() {
     assert!(out.contains(&format!("{}:3", f.hashes["kestrel"])), "{out}");
 }
 
-/// Every file under `dir`: its length and modification time.
-fn snapshot(dir: &Path) -> BTreeMap<PathBuf, (u64, SystemTime)> {
+/// Every path under `dir`, and each file's length and modification time.
+/// A directory is recorded by its presence only: a file created, removed
+/// or renamed in it shows in the paths. Its own mtime is left out because
+/// Windows can report a stale one from the parent's listing for a moment
+/// after its contents change. Files are read with `fs::metadata`, not the
+/// listing, for the same reason.
+fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Option<(u64, SystemTime)>> {
     let mut out = BTreeMap::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
         for e in std::fs::read_dir(&d).unwrap() {
-            let e = e.unwrap();
-            let m = e.metadata().unwrap();
+            let path = e.unwrap().path();
+            let m = std::fs::metadata(&path).unwrap();
             if m.is_dir() {
-                stack.push(e.path());
+                stack.push(path.clone());
+                out.insert(path, None);
+            } else {
+                out.insert(path, Some((m.len(), m.modified().unwrap())));
             }
-            out.insert(e.path(), (m.len(), m.modified().unwrap()));
         }
     }
     out
