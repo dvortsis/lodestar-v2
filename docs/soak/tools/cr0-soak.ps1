@@ -29,7 +29,8 @@ if ($WarmupMinutes -lt 30 -or $BaselineHours -lt 24) { throw 'Baseline requires 
 if ($StopFreeBytes -le 0 -or $WarnFreeBytes -le $StopFreeBytes -or $MinFreeBytes -lt $WarnFreeBytes -or $MaxLogBytes -le 0) { throw 'Invalid storage guardrails.' }
 $originalExeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
 # Service mode: the running process, the service's file and -Exe must all be one binary.
-if ($serviceMode) { Assert-SoakAttachBinding $ServiceName $Exe }
+$attach = $null
+if ($serviceMode) { $attach = Assert-SoakAttachBinding $ServiceName $Exe }
 # The MSI's executable has no CR-0 build record: service mode records the installed
 # version and hash only, and skips the embedded-UI hash check (CI's MSI smoke covers it).
 if ($BuildRecord -eq '' -and -not $serviceMode) { throw 'A build record is required outside service mode.' }
@@ -145,6 +146,8 @@ try {
         $svcId = Get-SoakServiceIdentity $ServiceName; $p = Get-Process -Id $svcId.pid
         # Bind the evidence to the binary the service runs; every sample repeats the hash.
         $img = Get-SoakServiceImage $ServiceName
+        # The service must still be the process and file the attach check passed on.
+        Assert-SoakAttachUnchanged $attach $svcId $img.sha256 $originalExeHash
         $run.service_image_sha256 = $img.sha256
         $run.service_reported_version = Get-SoakInstalledVersion $Exe  # information only, never compared
     }

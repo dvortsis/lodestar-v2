@@ -223,7 +223,8 @@ function Assert-SoakAttachBinding([string]$Name, [string]$Exe, [hashtable]$Probe
     }
     foreach ($key in $Probe.Keys) { $p[$key] = $Probe[$key] }
     $registered = & $p.ServiceImage $Name
-    $running = & $p.ProcessImage (& $p.Identity $Name).pid
+    $id = & $p.Identity $Name
+    $running = & $p.ProcessImage $id.pid
     if ([string]::IsNullOrEmpty($running)) { throw 'Cannot read the running service program file. Run this from an elevated PowerShell.' }
     if ((& $p.Hash $running) -ne $registered) {
         throw 'The running service is not the installed program file (an upgrade may be waiting on a restart). Restart the service, or reboot if Windows says a restart is pending, then start the soak again.'
@@ -231,6 +232,14 @@ function Assert-SoakAttachBinding([string]$Name, [string]$Exe, [hashtable]$Probe
     if ((& $p.Hash $Exe) -ne $registered) {
         throw '-Exe is not the file the service is installed from. Point -Exe at the installed lodestar.exe.'
     }
+    # The identity and hash the check passed on; the collector must see the same ones when it binds.
+    return @{ pid = $id.pid; start_ticks = $id.start_ticks; sha256 = $registered }
+}
+
+function Assert-SoakAttachUnchanged($Attach, $Identity, [string]$ImageSha256, [string]$ExeSha256) {
+    # The service the collector binds must be the process and file Assert-SoakAttachBinding passed on.
+    if ($Identity.pid -ne $Attach.pid -or $Identity.start_ticks -ne $Attach.start_ticks) { throw 'The service restarted while the soak was starting. Start the soak again.' }
+    if ($ImageSha256 -ne $Attach.sha256 -or $ImageSha256 -ne $ExeSha256) { throw 'The service program file changed while the soak was starting. Start the soak again.' }
 }
 
 function Save-SoakLifecycle([string]$Path, [string]$Step, [hashtable]$Fields) {

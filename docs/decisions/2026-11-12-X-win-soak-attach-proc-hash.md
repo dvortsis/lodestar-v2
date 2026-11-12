@@ -20,4 +20,8 @@ Unchanged: hashes only, no paths. A refusal writes nothing, because it runs befo
 
 ## Limit
 
-The check hashes the file at the running process's reported program path. If Windows keeps the original path for a process whose file was renamed and replaced, or an in-use file is replaced only at the next reboot, the hashes can still match. The runbook therefore also tells the owner to restart the service after an upgrade; the upgrade record's `image_matches_installed` stays the second line of defence. A start-time or pending-rename check would need a Windows machine to verify and is left for a follow-up.
+If Windows reports the original path for a process whose file was renamed and replaced, the hashes match although the process runs the old binary. The upgrade record's `service_restarted` (the service must have started after the upgrade) is what catches that. If the new file waits for a reboot, the file and process are both the old binary, so the evidence stays consistent and the upgrade check fails because the hash didn't change. The runbook also tells the owner to restart after every upgrade. A start-time or pending-rename check would need a Windows machine to verify and is a runner follow-up.
+
+## Binding window
+
+The helper returns the process id, start ticks and hash it passed on. At attach the collector throws unless the service it then binds has the same pid and start ticks, and the same hash as the check and `-Exe`, so a restart between the check and the binding can't slip through. Test: the helper returns that identity for the collector to compare.
