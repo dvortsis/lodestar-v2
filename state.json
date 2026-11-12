@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:59:10Z",
+  "updated_at": "2026-11-12T08:04:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7148,6 +7148,11 @@
       "id": "index-size-headroom",
       "note": "GS-0: torrent index 476.6 B/torrent (+29.9), 35.4 B headroom under 512 left for GS-2, RX-1, ENR-11; each must run size-report. Owner \u00a72.19 flags due: GS-0 sig: needs all 16 hex (arch \u00a78 shows 8); sig:<hash> resolves from the query snapshot, partial notice while backfilling.",
       "at": "2026-11-12T07:55:55Z"
+    },
+    {
+      "id": "X-readme-torznab-planned",
+      "at": "2026-11-12T08:04:08Z",
+      "note": "README.md:64 still says \"Torznab is planned\"; Torznab shipped (OUT-*). Found in rv-747. Small docs fix via user-docs skill."
     }
   ],
   "main_health": [
@@ -8060,7 +8065,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:59:10Z",
+    "updated": "2026-11-12T08:04:08Z",
     "items": [
       {
         "slot": 1,
@@ -8121,7 +8126,7 @@
         "slice": "D-outputs-guide",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: #747 ready (2ac5eaff), fresh review running; X-out2-curl-wrap PR next",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: #747 rv CHANGES (2ac5eaff) relayed 2026-11-12T08:04:08Z; fix round, then X-out2-curl-wrap",
         "since": "2026-11-12T07:13:28Z",
         "status": "active"
       },
@@ -8193,7 +8198,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:59:10Z",
+  "updated": "2026-11-12T08:04:08Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
