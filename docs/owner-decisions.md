@@ -656,6 +656,12 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **At most eight slices at a time in total,** Opus, helper and docs slices alike, replacing §2.56's twelve. `runner/slices.yaml` `limits.phase_total` is 8.
     - **Nothing is stopped.** Each session that was running at the time finishes its slice, including its review rounds. While more than eight are running, nothing new launches, and a session that finishes isn't given a follow-on slice.
     - Unchanged: filling every slot isn't required, `owns` never overlap, the ladder decides, and the runner runs at most three reviewers at once.
+60. **Four more sessions, shared by the cloud tester and the runner** (owner, in the runner session, 2026-11-12T07:00Z): "You can reserve 4 additional sessions exclusively for Cloud Tester". Then, to the cloud tester's session (X-test-vm) at 2026-11-12T07:01:20Z: "I told runner that it can run 4 additional sessions for Cloud Tester. You and Agent Runner can share those 4 slots between yourselves. Make sure you coordinate if you want to run your own sessions."
+    - **Four sessions on top of §2.59's eight,** shared by the cloud tester and the runner. `runner/slices.yaml` `limits.extra_shared` is 4.
+    - **The split, agreed by the two (runner's call, 2026-11-12):** the cloud tester holds at most two, for its test lanes (the Windows-lane cloud session, then the Linux test VM's own Remote Control session). The runner may use the other two for build slices.
+    - **Coordinating:** whichever side wants a third asks the other first. Whoever frees a slot tells the other.
+    - **The cloud tester's own session is still one of the eight,** as it was under §2.59.
+    - The runner tracks the cloud tester's sessions in runner-state `cloud_tester`. Its own two go in runner-state `extra`, not in `slots`, so the slots view keeps its eight rows. Each of the cloud tester's sessions keeps X-test-vm's limits: the least-privilege cloud users, the per-cloud spending cap, teardown reported, and never the owner's soak or Windows hosts.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
