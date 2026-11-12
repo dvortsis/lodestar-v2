@@ -72,6 +72,9 @@ pub struct Nzbget {
     endpoint: Url,
     username: Secret,
     password: Secret,
+    /// `base64(user:password)`, the form the `Authorization` header carries,
+    /// so an answer that echoes the header is guarded too.
+    basic: Secret,
     http: GuardedClient,
     next_id: AtomicU64,
     timeout: Duration,
@@ -119,10 +122,12 @@ impl Nzbget {
                 "the user name and password are over 191 bytes together, or have a colon or control characters",
             ));
         }
+        let basic = Secret::new(base64(format!("{user}:{pass}").as_bytes()));
         Ok(Nzbget {
             endpoint: rpc_url(url, http.policy())?,
             username,
             password,
+            basic,
             http,
             next_id: AtomicU64::new(1),
             timeout: CLIENT_TIMEOUT,
@@ -180,7 +185,11 @@ impl Nzbget {
     ) -> Result<T, ClientError> {
         parse_guarded(
             body,
-            &[self.password.expose(), self.username.expose()],
+            &[
+                self.basic.expose(),
+                self.password.expose(),
+                self.username.expose(),
+            ],
             parse,
         )
     }

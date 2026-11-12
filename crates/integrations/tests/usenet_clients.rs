@@ -766,26 +766,58 @@ async fn an_answer_that_echoes_a_credential_keeps_it_out_of_the_error() {
     }
     server.finish();
 
-    let mut fixtures = nzbget_script(&["append_bad_param", "append_ok"]);
+    let mut fixtures = nzbget_script(&["append_bad_param", "append_ok", "append_ok"]);
     let mut rpc: Value = serde_json::from_str(&fixtures[0].response.body).unwrap();
     rpc["error"]["message"] = json!(format!("bad login {USER}:{PASSWORD}"));
     fixtures[0].response.body = rpc.to_string();
     fixtures[1].response.status = 502;
     fixtures[1].response.body = format!("upstream refused password={PASSWORD}");
+    // A proxy's page that echoes the request headers: NZBGet's credentials
+    // travel only as the Basic header's base64.
+    let basic = base64_encode(format!("{USER}:{PASSWORD}").as_bytes());
+    fixtures[2].response.status = 502;
+    fixtures[2].response.body = format!("Bad gateway. Request had Authorization: Basic {basic}");
     let server = ReplayServer::start(fixtures).await;
     let n = nzbget(&server);
-    for _ in 0..2 {
+    for _ in 0..3 {
         errors.push(n.add_nzb(&nzb(), &NzbOptions::default()).await.unwrap_err());
     }
     server.finish();
 
-    assert_eq!(errors.len(), 4);
+    assert_eq!(errors.len(), 5);
     for e in &errors {
+        assert!(matches!(e, ClientError::Rejected(_)), "{e:?}");
+        let text = format!("{e} {e:?}");
+        for secret in [API_KEY, USER, PASSWORD, basic.as_str()] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert!(text.contains("***"), "the reason is kept, scrubbed: {text}");
+    }
+}
+
+#[tokio::test]
+async fn category_errors_keep_credentials_out_too() {
+    let mut sab_500 = sab_f("get_cats");
+    sab_500.response.status = 500;
+    sab_500.response.body = format!("Bad gateway for mode=get_cats&apikey={API_KEY}");
+    let server = ReplayServer::start(vec![sab_500]).await;
+    let sab_err = sab(&server).categories().await.unwrap_err();
+    server.finish();
+
+    let mut fixtures = nzbget_script(&["access_denied"]);
+    let mut rpc: Value = serde_json::from_str(&fixtures[0].response.body).unwrap();
+    rpc["error"]["message"] = json!(format!("Access denied for {USER} / {PASSWORD}"));
+    fixtures[0].response.body = rpc.to_string();
+    let server = ReplayServer::start(fixtures).await;
+    let nzbget_err = nzbget(&server).categories().await.unwrap_err();
+    server.finish();
+
+    for e in [sab_err, nzbget_err] {
         assert!(matches!(e, ClientError::Rejected(_)), "{e:?}");
         let text = format!("{e} {e:?}");
         for secret in [API_KEY, USER, PASSWORD] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
-        assert!(text.contains("***"), "the reason is kept, scrubbed: {text}");
+        assert!(text.contains("***"), "{text}");
     }
 }

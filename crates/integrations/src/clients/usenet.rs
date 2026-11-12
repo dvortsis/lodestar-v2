@@ -326,8 +326,16 @@ pub(crate) fn parse_guarded<T>(
             .iter()
             .any(|s| text.windows(s.len()).any(|w| w == *s))
     };
+    // A reason the 200-character cut ends inside a credential (one the
+    // answer escaped, so the scrub can't find it) ends with its prefix.
+    let cut = |why: &str| {
+        let why = why.as_bytes();
+        secrets
+            .iter()
+            .any(|s| (MIN_GUARDED..s.len()).any(|k| why.ends_with(&s[..k])))
+    };
     let leaked = match &result {
-        Err(ClientError::Rejected(why)) => leaks(body) || leaks(why.as_bytes()),
+        Err(ClientError::Rejected(why)) => leaks(body) || leaks(why.as_bytes()) || cut(why),
         _ => false,
     };
     if !leaked {
@@ -335,7 +343,7 @@ pub(crate) fn parse_guarded<T>(
     }
     let clean = Zeroizing::new(replace_all(body, &secrets));
     match parse(&clean) {
-        Err(ClientError::Rejected(why)) if !leaks(why.as_bytes()) => {
+        Err(ClientError::Rejected(why)) if !leaks(why.as_bytes()) && !cut(&why) => {
             Err(ClientError::Rejected(why))
         }
         _ => Err(ClientError::Rejected(WITHHELD.to_owned())),
@@ -452,6 +460,19 @@ mod tests {
         // Whitespace the reason collapses can't smuggle a spaced password.
         assert_eq!(
             parse_guarded(b"pass\tword here", &["pass word"], reason),
+            Err(ClientError::Rejected(WITHHELD.into()))
+        );
+        // A JSON-escaped credential the cut splits leaves only its prefix.
+        let escaped = format!("{}SECR\\\"ETKEY", "z".repeat(196));
+        assert_eq!(
+            parse_guarded(escaped.as_bytes(), &["SECR\"ETKEY"], |b| {
+                Err::<u32, _>(ClientError::Rejected(super::super::client_reason(
+                    &b.iter()
+                        .copied()
+                        .filter(|&c| c != b'\\')
+                        .collect::<Vec<_>>(),
+                )))
+            }),
             Err(ClientError::Rejected(WITHHELD.into()))
         );
         // A short credential would match ordinary text, so it isn't looked for.
