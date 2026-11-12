@@ -849,9 +849,10 @@ impl Services {
         // The updates engine hears the stop the moment the signal fires,
         // not after the serving drain below (up to SHUTDOWN_GRACE): an
         // install that reached its switch during the drain would otherwise
-        // still switch (X-upd-stop-early). `Handles::shutdown` still waits
-        // for, then aborts, its task in the same place as before.
-        let updates_stop = early_updates_stop(&handles);
+        // still switch (X-upd-stop-early). `Handles::shutdown` still stops
+        // its task in the same place as before: on Unix with no wait, an
+        // abort at once; on Windows after `UPDATES_STOP_WAIT`.
+        let updates_stop = early_updates_stop(handles.updates.as_ref().map(|(s, _)| s));
         let signal = on_shutdown(signal, updates_stop, move || {
             if let Some(t) = &requeue_stop {
                 t.cancel();
@@ -891,11 +892,11 @@ impl Services {
 /// `Notifier` has no switch to race, and its last look at the settings must
 /// stay after the drain, so a switch to Off saved by a request still being
 /// served withdraws a waiting install (X-win-upd-stop-wait, owner §2.13).
-fn early_updates_stop(handles: &Handles) -> Option<watch::Sender<bool>> {
+fn early_updates_stop(updates: Option<&watch::Sender<bool>>) -> Option<watch::Sender<bool>> {
     if cfg!(windows) {
         return None;
     }
-    handles.updates.as_ref().map(|(stop, _)| stop.clone())
+    updates.cloned()
 }
 
 /// The shutdown signal as the server sees it: waits for `signal`, sends the
@@ -1387,6 +1388,21 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The early stop is Unix only: on Windows the Notifier's last look at
+    /// the settings stays after the drain (X-win-upd-stop-wait, owner
+    /// §2.13), and Windows CI runs this to keep it so.
+    #[test]
+    fn the_early_updates_stop_is_unix_only() {
+        let (stop, _engine) = watch::channel(false);
+        let early = early_updates_stop(Some(&stop));
+        if cfg!(windows) {
+            assert!(early.is_none(), "Windows must keep the old stop order");
+        } else {
+            assert!(early.is_some(), "Unix sends the updates stop early");
+        }
+        assert!(early_updates_stop(None).is_none());
+    }
 
     /// The shutdown signal reaches the updates engine while serving is
     /// still draining (X-upd-stop-early): a request held open keeps the

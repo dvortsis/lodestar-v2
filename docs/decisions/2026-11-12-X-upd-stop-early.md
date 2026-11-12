@@ -1,15 +1,15 @@
-# X-upd-stop-early decisions
+# X-upd-stop-early decisions (#734)
 
 The updates engine hears the shutdown when it starts, not after the serving drain. From #714's review (rv-714, the residual in `2026-11-11-X-upd-stop-races.md`) and rv-709's nit. These are the slice's decisions under §2.33. None loosens an owner decision or a security decision.
 
 ## The stop, when the signal fires
 - **Before:** `Services::run` drained serving for up to `SHUTDOWN_GRACE` (10 s) and only then called `Handles::shutdown`, which sent the updates stop. An install that reached its switch during the drain still switched. Under the supervisor the forwarded stop won, but the version was dequeued and the staged overlay was left behind.
 - **Now (Unix):** the shutdown signal passed to axum is `on_shutdown(signal, updates_stop, rest)`. It sends the updates stop the moment the signal resolves, before it closes the event hub, the jobs and the log streams and starts the drain's clock (`rest`). The engine's look before its switch then sees it during the drain.
-- **Unix only** (`early_updates_stop`; self-review I1). On Windows the updates handle is the `Notifier`, which has no in-process switch to race.
+- **Unix only** (`early_updates_stop`; self-review I1; tested by `the_early_updates_stop_is_unix_only`, which Windows CI runs). On Windows the updates handle is the `Notifier`, which has no in-process switch to race.
   - Its settings watcher takes one last look at the stop, then ends for good.
   - That look must stay after the drain. Then a switch to Off saved by a request still being served withdraws a waiting Install now request before the helper could replay it at boot (X-win-upd-stop-wait, owner §2.13).
   - So Windows keeps the old order exactly.
-- **Nothing else moved.** `Handles::shutdown` still calls `stop_updates` in the same place, with the same `UPDATES_STOP_WAIT`. On Unix it sends the stop again, which is harmless, and aborts a task that has usually already ended. Every other handle's order is unchanged.
+- **Nothing else moved.** `Handles::shutdown` still calls `stop_updates` in the same place, with the same `UPDATES_STOP_WAIT`. On Unix the wait is zero: it sends the stop again, which is harmless, and aborts at once a task that has usually already ended. Every other handle's order is unchanged.
 - **On Unix, an install request served during the drain is now refused as `busy`** (self-review P3). That covers both Install now and "install in the window", because `install_request` looks at the stop first. Before, a Window queue made in the drain was saved for the next start. A request that arrives while the service is going away can be made again after the start.
 - **The sender is a clone** of the one `Handles` keeps (`watch::Sender` is `Clone`), because axum's shutdown future must be `'static`.
 
@@ -38,3 +38,6 @@ The updates engine hears the shutdown when it starts, not after the serving drai
 
   The two stop tests take turns (a test-only `tokio::sync::Mutex`), since the log capture is shared by every test. The event is logged before `installing` clears, so a test that waits on that has seen its line.
 - **Waits:** condition waits have deadlines of 10 s (`Env::until`) and 20 s; there are no fixed sleeps and no tokio `test-util`.
+
+## Follow-up (not done here; runner, 2026-11-12)
+- A request refused as `busy` while the service is stopping shows the existing "Another update is already running" wording. A "Lodestar is stopping" message would be more accurate.
