@@ -1582,6 +1582,51 @@ pub(crate) mod tests {
         );
     }
 
+    /// When the chosen answer's source is withheld from this caller, no
+    /// other answer is marked in its place (rv-760).
+    #[test]
+    fn a_withheld_chosen_answer_marks_nothing() {
+        let (mut store, row) = identified_store();
+        // Resolve the record via a plugin, so the account enricher's
+        // surer answer is the chosen one.
+        let mut e = lodestar_filter::reclassify::enrich_corrected(
+            &row.name,
+            &[],
+            lodestar_classify::Correction::default(),
+        )
+        .0;
+        let mut rec = lodestar_classify::Record::decode(&e.data).unwrap();
+        rec.resolved = Some(lodestar_classify::ResolvedVia::Plugin);
+        e.data = rec.encode();
+        store.set_enrichments(&[(row.id, e)]).unwrap();
+        let entry = |id: u8, plugin: &str, public: Option<bool>| SourceEntry {
+            id,
+            plugin: plugin.into(),
+            name: plugin.into(),
+            public,
+        };
+        let c = Catalogue::of(vec![
+            entry(0, "dht", Some(true)),
+            entry(1, "wikidata", Some(true)),
+            entry(2, "acctenr", Some(false)),
+        ]);
+        let claims = store.torrent_claims(row.id).unwrap();
+        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(admin.alternatives[0].source.plugin, "acctenr");
+        assert!(admin.alternatives[0].chosen && !admin.alternatives[1].chosen);
+        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, Some(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(public.alternatives.len(), 1);
+        assert_eq!(public.alternatives[0].source.plugin, "wikidata");
+        assert!(
+            !public.alternatives[0].chosen,
+            "nothing promoted in its place"
+        );
+    }
+
     /// Every text is cut to its limit on a character boundary, however
     /// the row was written.
     #[test]

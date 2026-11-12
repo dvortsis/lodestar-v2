@@ -16374,6 +16374,7 @@
             "type": "integer",
             "format": "int32",
             "description": "How sure the plugin is of the match, 0–100 percent.",
+            "maximum": 100,
             "minimum": 0
           },
           "genres": {
@@ -16400,8 +16401,9 @@
               "null"
             ],
             "format": "int32",
-            "description": "The work's year.",
-            "minimum": 0
+            "description": "The work's year, 1–9999.",
+            "maximum": 9999,
+            "minimum": 1
           }
         }
       },
@@ -16425,7 +16427,7 @@
               "string",
               "null"
             ],
-            "description": "How the effective title was resolved: `files`, `folder` or\n`structure`; null when the name said it itself."
+            "description": "How an ambiguous name's effective title was resolved, when it was\nfrom the file tree: `files`, `folder` or `structure`. Null in every\nother case: the name said it itself, the title came from a plugin\n(see `chosen`), or the record can't be read. **Null never means\n\"from the name\"**: don't present it as that."
           }
         },
         "example": {

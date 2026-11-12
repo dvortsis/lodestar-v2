@@ -147,8 +147,11 @@ pub struct IdentifiedAs {
     /// Each plugin's answer, the surest first (ties by source id). Two
     /// plugins that disagree are both kept.
     pub alternatives: Vec<Identification>,
-    /// How the effective title was resolved: `files`, `folder` or
-    /// `structure`; null when the name said it itself.
+    /// How an ambiguous name's effective title was resolved, when it was
+    /// from the file tree: `files`, `folder` or `structure`. Null in every
+    /// other case: the name said it itself, the title came from a plugin
+    /// (see `chosen`), or the record can't be read. **Null never means
+    /// "from the name"**: don't present it as that.
     #[schema(required = true)]
     pub resolved_via: Option<String>,
 }
@@ -168,6 +171,7 @@ pub struct Identification {
     /// isn't shown to this caller.
     pub chosen: bool,
     /// How sure the plugin is of the match, 0–100 percent.
+    #[schema(maximum = 100)]
     pub confidence: u8,
     /// Normalised genres, at most 16.
     pub genres: Vec<String>,
@@ -177,8 +181,8 @@ pub struct Identification {
     pub ids: Vec<IdentifiedId>,
     /// The plugin that answered: "Identified by Wikidata".
     pub source: EnrichmentSource,
-    /// The work's year.
-    #[schema(required = true)]
+    /// The work's year, 1–9999.
+    #[schema(required = true, minimum = 1, maximum = 9999)]
     pub year: Option<u16>,
 }
 

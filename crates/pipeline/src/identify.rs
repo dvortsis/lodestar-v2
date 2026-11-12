@@ -1351,6 +1351,149 @@ mod tests {
         assert_eq!(t(LOOKUP_TIMEOUT), LOOKUP_TIMEOUT);
     }
 
+    /// A plugin with an endpoint that never answers, on a fast policy.
+    struct Slow;
+
+    static FAST: Policy = Policy {
+        caps: lodestar_sources::Caps {
+            per_host: lodestar_sources::HostRate::per_second(1000),
+            ..lodestar_sources::Caps::STRICT
+        },
+        ..Policy::STRICT
+    };
+
+    impl Identifier for Slow {
+        fn manifest(&self) -> &Manifest {
+            &MANIFEST
+        }
+        fn policy(&self) -> &Policy {
+            &FAST
+        }
+        fn kinds(&self) -> &[MediaKind] {
+            &MediaKind::ALL
+        }
+        fn min_interval(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn lookup<'a>(
+            &'a self,
+            _: &'a Kit,
+            _: &'a Query,
+        ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// N7 through the runtime (rv-760 I1): an opened item whose lookup
+    /// never answers times out, and the plugin's endpoint host backs off.
+    #[tokio::test]
+    async fn a_timed_out_lookup_backs_the_host_off() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let src = store.register_source(MANIFEST.id, "1", 0).unwrap();
+        let ack = format!(
+            "external|{}|1",
+            lodestar_sources::consent::version(&MANIFEST)
+        );
+        store.enable_source(src, Some(&ack)).unwrap();
+        let name = "Some.Film.2010.1080p.BluRay.x264.mkv";
+        let d = |e: Vec<(&str, OwnedValue)>| {
+            OwnedValue::Dict(
+                e.into_iter()
+                    .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                    .collect(),
+            )
+        };
+        let raw = to_vec(&d(vec![
+            ("length", OwnedValue::Int(900 << 20)),
+            ("name", OwnedValue::Bytes(name.as_bytes().to_vec())),
+            ("piece length", OwnedValue::Int(1 << 18)),
+            ("pieces", OwnedValue::Bytes(vec![0; 20 * 3600])),
+        ]));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let id = store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap()[0]
+            .id();
+        let files = crate::enrich::file_infos(&info.files, info.path_encoding);
+        let e = crate::enrich::enrich_with_rule(name, &files, None);
+        store.set_enrichments(&[(id, e)]).unwrap();
+        struct Off;
+        impl Switches for Off {
+            fn kill_switch_tripped(&self) -> bool {
+                false
+            }
+        }
+        let filter = Handle::new(Engine::new(lodestar_filter::Core::new(
+            lodestar_filter::Lists {
+                sexual: lodestar_filter::TermSet::of(&["lexa"]),
+                child_roles: lodestar_filter::TermSet::of(&["rolea"]),
+                codes: lodestar_filter::TermSet::of(&["codex"]),
+            },
+            lodestar_filter::CsList::default(),
+            lodestar_filter::Switches::default(),
+        )));
+        let (runtime, interest) = IdentifySource::new(
+            Arc::new(Slow),
+            Arc::new(Mutex::new(store)),
+            Arc::new(filter),
+            AdultSources::default(),
+            Arc::new(Off),
+            Config {
+                background: false,
+                idle: Duration::from_millis(10),
+                lookup_timeout: Duration::from_secs(2),
+                ..Config::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(runtime.config().lookup_timeout, Duration::from_secs(2));
+        assert!(interest.opened(id));
+        let limiter = lodestar_sources::HostLimiter::new(FAST.limits(&Default::default()));
+        let kit = Kit::with_limiter(
+            Arc::new(MemoryState::new()),
+            Arc::new(lodestar_sources::NoEgress),
+            limiter.clone(),
+        );
+        let (tx, _rx) = mpsc::channel(8);
+        let (stop, shutdown) = lodestar_sources::Shutdown::new();
+        let ctx = SourceCtx {
+            source: src,
+            emitter: lodestar_sources::Emitter::new(src, tx),
+            peer_requests: None,
+            peer_replies: None,
+            shutdown,
+            kit,
+        };
+        let stats = runtime.stats();
+        let task = tokio::spawn(async move { runtime.run(ctx).await });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = limiter.state("api.example.test", Instant::now());
+            if matches!(state, lodestar_sources::HostState::BackingOff { .. }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "still {state:?}; looked up {}, failed {}",
+                stats.looked_up.load(Ordering::SeqCst),
+                stats.failed.load(Ordering::SeqCst)
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(stats.failed.load(Ordering::SeqCst), 1);
+        let _ = stop.send(true);
+        let _ = task.await;
+    }
+
     /// N7 (rv-750): a timed-out lookup counts as a failure on the
     /// plugin's hosts, so the limiter backs them off.
     #[tokio::test]

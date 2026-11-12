@@ -5779,7 +5779,7 @@ export interface components {
             source: components["schemas"]["EnrichmentSource"];
             /**
              * Format: int32
-             * @description The work's year.
+             * @description The work's year, 1–9999.
              */
             year: number | null;
         };
@@ -5831,8 +5831,11 @@ export interface components {
              */
             alternatives: components["schemas"]["Identification"][];
             /**
-             * @description How the effective title was resolved: `files`, `folder` or
-             *     `structure`; null when the name said it itself.
+             * @description How an ambiguous name's effective title was resolved, when it was
+             *     from the file tree: `files`, `folder` or `structure`. Null in every
+             *     other case: the name said it itself, the title came from a plugin
+             *     (see `chosen`), or the record can't be read. **Null never means
+             *     "from the name"**: don't present it as that.
              */
             resolved_via: string | null;
         };
