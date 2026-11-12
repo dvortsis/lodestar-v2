@@ -247,3 +247,36 @@ describe('DetailModel', () => {
 		m.destroy();
 	});
 });
+
+describe('DetailView identified-as', () => {
+	const ready = (extra = {}) =>
+		render(DetailView, {
+			model: model({ detail: torrentDetail(extra), status: 'ready' }),
+			mode: 'page'
+		});
+	it('mounts the section only when the API sent identified_as', async () => {
+		ready({
+			identified_as: {
+				alternatives: [
+					{
+						alt_titles: [],
+						canonical_title: 'Show',
+						chosen: false,
+						confidence: 80,
+						genres: [],
+						ids: [],
+						source: { id: 7, name: 'Wikidata', plugin: 'wikidata' },
+						year: null
+					}
+				],
+				resolved_via: null
+			}
+		});
+		expect(await screen.findByTestId('detail-identified')).toBeTruthy();
+	});
+	it('shows no section without it', async () => {
+		ready();
+		await flush();
+		expect(screen.queryByTestId('detail-identified')).toBeNull();
+	});
+});

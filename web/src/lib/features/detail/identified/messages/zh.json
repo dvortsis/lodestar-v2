@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_identified_title": "识别为",
+	"detail_identified_by": "由 {source} 识别",
+	"detail_identified_confidence": "把握 {percent}%",
+	"detail_identified_chosen": "已用作标题",
+	"detail_identified_title_row": "标题",
+	"detail_identified_year": "年份",
+	"detail_identified_genres": "类型",
+	"detail_identified_ids": "标识",
+	"detail_identified_alt_titles": "又名"
+}
