@@ -176,9 +176,10 @@ pub struct UnverifiedStats {
     /// holds is counted here too, though no hold is written for its key
     /// (UN-0); any other rule's hit on either network is `dropped`.
     pub held: AtomicU64,
-    /// Claims a rule matched on a stored torrent, dropped without holding
-    /// it (not a floor or core hit: claims never override verified
-    /// metadata).
+    /// Claims a rule other than the floor or the core matched, dropped
+    /// without holding anything: on a stored torrent (claims never
+    /// override verified metadata), on a key nothing stores, or on a
+    /// usenet item.
     pub dropped: AtomicU64,
     /// Discoveries the store refused: the key is held, or the source is
     /// disabled or purged.

@@ -553,19 +553,17 @@ fn a_page_is_capped_in_bytes_and_items_and_garbage_gives_nothing() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_poll_emits_at_most_its_cap() {
-    // 42 Usenet indexers with 100 results each: 4,200 results, 4,096 sent.
+async fn a_poll_emits_at_most_its_cap_and_the_rest_come_on_the_next() {
+    // 42 Usenet indexers with 100 results each, one agent so the order is
+    // the list's. Poll 1 sends 4,096: indexers 1-40 whole and 96 of 41's.
+    // 42 isn't asked, since the budget is spent (no API hit wasted). Poll
+    // 2, 15 minutes on, asks only 41 (cut short) and 42.
     let ixs = 42usize;
     assert!(ixs * USENET_PAGE_ITEMS > USENET_POLL_ITEMS);
     let list: Vec<String> = (1..=ixs)
         .map(|i| format!(r#"{{"id":{i},"enable":true,"protocol":"usenet","privacy":"private"}}"#))
         .collect();
-    let head = |path: &str| {
-        format!(
-            "GET http://prowlarr.example:9696{path}\nX-Api-Key: {PK}\n\nHTTP 200\nContent-Type: application/rss+xml\n"
-        )
-    };
-    let mut ex = vec![
+    let list_exchange = || {
         parse_exchange(
             &format!(
                 "GET http://prowlarr.example:9696/api/v1/indexer\nAccept: application/json\nX-Api-Key: {PK}\n\nHTTP 200\nContent-Type: application/json\n"
@@ -573,21 +571,51 @@ async fn a_poll_emits_at_most_its_cap() {
             format!("[{}]", list.join(",")).into_bytes(),
             Vec::new(),
         )
-        .unwrap(),
-    ];
-    for i in 1..=ixs {
-        ex.push(
-            parse_exchange(
-                &head(&format!("/{i}/api?t=search&extended=1&limit=100")),
-                page_of(USENET_PAGE_ITEMS),
-                Vec::new(),
-            )
-            .unwrap(),
-        );
-    }
+        .unwrap()
+    };
+    let page = |i: usize| {
+        parse_exchange(
+            &format!(
+                "GET http://prowlarr.example:9696/{i}/api?t=search&extended=1&limit=100\nX-Api-Key: {PK}\n\nHTTP 200\nContent-Type: application/rss+xml\n"
+            ),
+            page_of(USENET_PAGE_ITEMS),
+            Vec::new(),
+        )
+        .unwrap()
+    };
+    let mut ex = vec![list_exchange()];
+    ex.extend((1..=41).map(page));
+    ex.push(list_exchange());
+    ex.extend([41, 42].map(page));
     let replayer = Arc::new(Replayer::unordered(ex));
-    let got = replay_with(&plugin(true), replayer, 1 + ixs, USENET_POLL_ITEMS).await;
+    let one_agent = Config::new("http://prowlarr.example:9696", Manager::Prowlarr, Some(1))
+        .unwrap()
+        .with_usenet(true)
+        .unwrap();
+    let p = Arc::new(Prowlarr::new(one_agent, creds()));
+    let got = replay_with(&p, replayer.clone(), 45, USENET_POLL_ITEMS + 200).await;
     assert!(got.iter().all(|d| d.found.is_usenet()));
+    let asked = |i: usize| {
+        let path = format!("/{i}/api?");
+        replayer
+            .requests()
+            .iter()
+            .filter(|(_, r)| r.url.contains(&path))
+            .count()
+    };
+    assert_eq!(asked(41), 2, "cut short: asked again");
+    assert_eq!(asked(42), 1, "not asked while the budget was spent");
+    assert!((1..=40).all(|i| asked(i) == 1), "whole pages wait an hour");
+    // 41's whole page and 42's arrive on the second poll.
+    let from = |i: &str| {
+        got.iter()
+            .filter(|d| {
+                (0..USENET_PAGE_ITEMS).any(|n| d.found.usenet == Some(key(i, &format!("g{n}"))))
+            })
+            .count()
+    };
+    assert_eq!(from("41"), 96 + USENET_PAGE_ITEMS);
+    assert_eq!(from("42"), USENET_PAGE_ITEMS);
 }
 
 proptest! {

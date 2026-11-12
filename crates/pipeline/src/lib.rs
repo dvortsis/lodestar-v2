@@ -1550,18 +1550,18 @@ struct Intake {
     enrichers: adult_enrich::EnrichSources,
 }
 
-/// The worker's intake: known keys go to the writer as rediscoveries; new
-/// ones are claimed from the coordinator (§19.3) and go to the pool.
-///
-/// The built-in worker claims key by key: the lease table is a function
-/// call away, so batching (≤ 512 or 250 ms) is a concern of the wire
-/// protocol, not of this boundary.
 /// Whether the intake may claim `d`'s key for the pool: never for a
 /// usenet find, whose key is only a writer-map key (UN-1).
 fn claimable(d: &Discovery) -> bool {
     !d.found.is_usenet()
 }
 
+/// The worker's intake: known keys go to the writer as rediscoveries; new
+/// ones are claimed from the coordinator (§19.3) and go to the pool.
+///
+/// The built-in worker claims key by key: the lease table is a function
+/// call away, so batching (≤ 512 or 250 ms) is a concern of the wire
+/// protocol, not of this boundary.
 async fn intake(mut io: Intake, mut shutdown: Shutdown) {
     loop {
         let (mut d, retried) = tokio::select! {
