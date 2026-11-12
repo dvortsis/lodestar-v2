@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:17:34Z",
+  "updated_at": "2026-11-12T13:19:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7319,6 +7319,11 @@
       "id": "UP-2-brief-notes",
       "at": "2026-11-12T13:17:34Z",
       "note": "UP-2 must show the watch status reason next to the folder field (e.g. \"disabled: inside the data directory\"; Section::check cannot see the data dir, so a save can pass and be disabled at apply). Settings section \"watch\" is registered but hidden until UP-2 adds the screen."
+    },
+    {
+      "id": "X-unverified-cap-index",
+      "at": "2026-11-12T13:19:13Z",
+      "note": "From UN-1 measurement: at the 1M usenet cap each adding write costs ~95-110 ms more (2.3 s writer time per 4,096-result poll on fast disk; seconds more on NAS). Fix in SRC-3b migration or a store slice: index unverified_items(network, id) for eviction; per-network count so counting runs only past the cap. Must land before usenet writes can default on. Runner perf call (\u00a72.26)."
     }
   ],
   "main_health": [
@@ -8419,7 +8424,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:17:34Z",
+  "updated": "2026-11-12T13:19:13Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
