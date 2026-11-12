@@ -217,6 +217,15 @@ async fn newznab_results_become_usenet_finds_keyed_by_indexer_and_guid() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn usenet_indexers_are_polled_hourly_and_torrent_ones_as_before() {
+    // Two polls 15 minutes apart: the second asks the torrent indexer
+    // again and skips both Usenet indexers, which aren't due for an hour.
+    let got = replay(&plugin(true), "usenet_hourly", 6, 8).await;
+    assert_eq!(got.iter().filter(|d| d.found.is_usenet()).count(), 4);
+    assert!(prowlarr::USENET_POLL_EVERY >= std::time::Duration::from_secs(3600));
+}
+
+#[tokio::test(start_paused = true)]
 async fn torrent_results_from_the_same_source_are_unchanged() {
     let got = replay(&plugin(true), "usenet_rss", 4, 6).await;
     let mut torrents: Vec<Found> = got
@@ -345,7 +354,7 @@ fn only_a_guid_that_cant_fetch_anything_is_kept() {
     };
     for keep in [
         "a1b2c3d4e5f6",
-        "urn:uuid:0f8fad5b-d9cb-469f-a165-70867728950e",
+        "0f8fad5bd9cb469fa16570867728950e",
         "https://indexer.example/details/9f8e7d6c5b4a",
         "https://geek.example/geekseek.php?guid=abc123",
     ] {
@@ -369,6 +378,9 @@ fn only_a_guid_that_cant_fetch_anything_is_kept() {
         "https://indexer.example/details/1#x",
         "ftp://indexer.example/details/1",
         "has space",
+        // Made up by the *arr parser for an item with no GUID.
+        "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "urn:uuid:0F8FAD5B-D9CB-469F-A165-70867728950E",
         &format!("https://indexer.example/details/{}", PK.to_uppercase()),
         &format!("guid-{PK}"),
         &"a".repeat(USENET_MAX_GUID + 1),
@@ -434,6 +446,50 @@ fn a_result_on_a_torrent_indexer_or_with_an_odd_indexer_id_is_skipped() {
         assert_eq!(u.private, private);
         assert!(u.into_found().unwrap().private_source);
     }
+}
+
+#[test]
+fn the_largest_item_stays_inside_the_judged_bytes_budget() {
+    // A 1,024-byte title, a 1,024-byte GUID, the widest category and
+    // three ids: what one usenet item can give the filter to judge.
+    let item = Item {
+        kind: Kind::Usenet,
+        title: Some("t".repeat(1024)),
+        size: Some(1),
+        categories: vec![u32::MAX],
+        published: Some(NOW),
+        seeders: None,
+        leechers: None,
+        peers: None,
+        files: None,
+        download_factor: None,
+        upload_factor: None,
+        tags: Vec::new(),
+        ids: vec![
+            ("imdb", "tt0111161".into()),
+            ("tmdb", "278".into()),
+            ("tvdb", "81189".into()),
+        ],
+        guid: Some("g".repeat(USENET_MAX_GUID)),
+        link: None,
+    };
+    let f = to_usenet(item, &usenet_ix("4294967295", true), HOST, PK, NOW)
+        .unwrap()
+        .into_found()
+        .unwrap();
+    let d = Discovery {
+        source: SourceId::new(5).unwrap(),
+        found: f,
+        at: NOW,
+        reply: false,
+    };
+    let c = lodestar_pipeline::unverified::store_claims(&d).unwrap();
+    assert_eq!(c.ids.len(), 3);
+    assert!(lodestar_pipeline::unverified::usenet_ref_ok(
+        c.provenance.external_ref.as_deref().unwrap()
+    ));
+    let judged = lodestar_pipeline::unverified::judged_len(&c, None);
+    assert!(judged <= USENET_MAX_JUDGED, "{judged}");
 }
 
 #[test]
@@ -687,6 +743,9 @@ async fn usenet_items_are_stored_private_rejudged_by_claims_and_never_hold_a_lin
         };
         let c = lodestar_pipeline::unverified::store_claims(&d).unwrap();
         assert!(lodestar_pipeline::unverified::judged_len(&c, None) <= USENET_MAX_JUDGED);
+        // The pipeline's own check keeps the plugin's reference.
+        let r = c.provenance.external_ref.as_deref().unwrap();
+        assert!(lodestar_pipeline::unverified::usenet_ref_ok(r), "{r}");
     }
 
     let filter = core_with(&["lexa"], &["rolea"]);
@@ -766,6 +825,8 @@ async fn usenet_items_are_stored_private_rejudged_by_claims_and_never_hold_a_lin
     }
     drop(store);
     drop(reader);
+    // Claim blobs are compressed, so this raw scan backs up the decoded
+    // check above; it catches anything stored outside a claims blob.
     for f in std::fs::read_dir(dir.path()).unwrap() {
         let bytes = std::fs::read(f.unwrap().path()).unwrap();
         for s in NEVER {

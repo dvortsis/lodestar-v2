@@ -1,0 +1,57 @@
+[
+  {
+    "id": 1,
+    "enable": true,
+    "protocol": "torrent",
+    "privacy": "public",
+    "supportsRss": true,
+    "name": "Example Public",
+    "definitionName": "examplepublic"
+  },
+  {
+    "id": 7,
+    "enable": true,
+    "protocol": "usenet",
+    "privacy": "private",
+    "supportsRss": true,
+    "name": "Example Usenet",
+    "definitionName": "newznab",
+    "fields": [
+      {
+        "name": "baseUrl",
+        "value": "https://indexer.example"
+      },
+      {
+        "name": "apiKey",
+        "value": "indexerkey00000000000000000000002",
+        "privacy": "apiKey"
+      }
+    ]
+  },
+  {
+    "id": 8,
+    "enable": true,
+    "protocol": "usenet",
+    "privacy": "public",
+    "supportsRss": true,
+    "name": "Example Open Usenet",
+    "definitionName": "newznab"
+  },
+  {
+    "id": 9,
+    "enable": false,
+    "protocol": "usenet",
+    "privacy": "private",
+    "name": "Example Disabled Usenet",
+    "definitionName": "newznab"
+  },
+  {
+    "id": 10,
+    "enable": true,
+    "protocol": "usenet",
+    "privacy": "private",
+    "supportsRss": false,
+    "name": "Example Search Only Usenet",
+    "definitionName": "newznab"
+  }
+]

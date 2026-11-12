@@ -1534,7 +1534,9 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             io.stats.received.fetch_add(1, Ordering::Relaxed);
             // An enrichment match (ENR-1b) is an answer about a stored
             // torrent, not a key the source harvested.
-            if !adult_enrich::is_match(&d, io.enrichers) {
+            // Nor is a usenet result (UN-1): it has no swarm hash, and it's
+            // sent again on every poll.
+            if !adult_enrich::is_match(&d, io.enrichers) && !d.found.is_usenet() {
                 io.rollups.add(
                     d.at,
                     metric::HARVESTED,

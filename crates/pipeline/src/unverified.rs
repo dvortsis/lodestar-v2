@@ -303,7 +303,8 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
             // fetch anything (UN-1), and send needs it.
             external_ref: p
                 .filter(|_| !d.found.private_source || d.found.is_usenet())
-                .and_then(|p| p.external_ref.clone()),
+                .and_then(|p| p.external_ref.clone())
+                .filter(|r| !d.found.is_usenet() || usenet_ref_ok(r)),
             published_at: p.and_then(|p| p.published_at),
             confidence: match p.map(|p| p.confidence) {
                 Some(lodestar_sources::Confidence::High) => claims::Confidence::High,
@@ -326,6 +327,48 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         out.trackers = stored_trackers(&c.trackers, room);
     }
     Some(out)
+}
+
+/// Whether a usenet find's reference has the plugin's shape (UN-1),
+/// checked here too so no usenet find stores a fetching URL whatever
+/// built it: `usenet:<decimal id, no leading zero>:<guid>`, the GUID
+/// 1–1,024 bytes of printable ASCII with no credential word, no download
+/// shape, and no query but a single `guid=`.
+pub fn usenet_ref_ok(r: &str) -> bool {
+    let Some((id, guid)) = r.strip_prefix("usenet:").and_then(|r| r.split_once(':')) else {
+        return false;
+    };
+    let id_ok = !id.is_empty()
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && !(id.len() > 1 && id.starts_with('0'));
+    let lower = guid.to_ascii_lowercase();
+    let words = [
+        "apikey", "api_key", "passkey", "token", "password", "secret", "getnzb", "@", "#",
+    ];
+    // The path's segments, after any `scheme://host`.
+    let path = match lower.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map_or("", |(_, p)| p),
+        None => "",
+    };
+    let fetches = path.split(['/', '?']).any(|s| {
+        s.ends_with(".nzb")
+            || matches!(
+                s,
+                "api" | "getnzb" | "download" | "dl" | "nzb" | "get" | "rss" | "sendnzb"
+            )
+    });
+    let query_ok = match guid.split_once('?') {
+        None => true,
+        Some((_, q)) => q
+            .strip_prefix("guid=")
+            .is_some_and(|v| !v.is_empty() && !v.contains(['&', '=', ';', '?'])),
+    };
+    id_ok
+        && (1..=1024).contains(&guid.len())
+        && guid.bytes().all(|b| b.is_ascii_graphic())
+        && !words.iter().any(|w| lower.contains(w))
+        && !fetches
+        && query_ok
 }
 
 /// Puts the details section (ENR-9) in `out`, the rest of a discovery's
@@ -1584,6 +1627,37 @@ mod tests {
         let s = format!("{h:?}");
         assert!(!s.contains("sealed-secret") && !s.contains("115"), "{s}");
     }
+    #[test]
+    fn only_the_plugins_usenet_reference_shape_is_stored() {
+        for ok in [
+            "usenet:7:a1b2c3",
+            "usenet:12:https://indexer.example/details/9f8e",
+            "usenet:7:https://geek.example/geekseek.php?guid=abc",
+            "usenet:7:https://api.nzb.example/details/abc",
+        ] {
+            assert!(usenet_ref_ok(ok), "{ok}");
+        }
+        for bad in [
+            "https://indexer.example/api?t=get&id=1&apikey=k",
+            "usenet::g",
+            "usenet:07:g",
+            "usenet:x:g",
+            "usenet:7:",
+            "usenet:7:https://indexer.example/api?t=get&id=1",
+            "usenet:7:https://indexer.example/getnzb/1.nzb",
+            "usenet:7:https://indexer.example/Download/1",
+            "usenet:7:https://indexer.example/x/api",
+            "usenet:7:https://indexer.example/details/1?guid=a&r=k",
+            "usenet:7:https://indexer.example/details/1?id=2",
+            "usenet:7:https://u:p@indexer.example/details/1",
+            "usenet:7:has space",
+            "usenet:7:x?APIKEY=1",
+        ] {
+            assert!(!usenet_ref_ok(bad), "{bad}");
+        }
+        assert!(!usenet_ref_ok(&format!("usenet:7:{}", "a".repeat(1025))));
+    }
+
     /// UN-1: the re-judge sweep keeps a usenet item, whose key isn't a
     /// 20-byte swarm hash, and removes one only when its claims match.
     #[test]

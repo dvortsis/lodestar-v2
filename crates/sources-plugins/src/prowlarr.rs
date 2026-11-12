@@ -114,6 +114,11 @@ pub const USENET_PAGE_ITEMS: usize = PAGE_SIZE;
 /// in one write (`MAX_USENET_BATCH`), and 4,096 is about 40 busy indexers'
 /// newest page.
 pub const USENET_POLL_ITEMS: usize = 4096;
+/// How often each Usenet indexer is polled: hourly, 24 API hits a day.
+/// Newznab indexers count API hits per day (free accounts often get 100
+/// or fewer), and Sonarr and Radarr share them, so the torrent indexers'
+/// 15 minutes (96 a day) could use up a user's quota.
+pub const USENET_POLL_EVERY: Duration = Duration::from_secs(3600);
 /// Bytes in a Usenet result's GUID, the store's limit on a key part
 /// (`USENET_MAX_PART`).
 pub const USENET_MAX_GUID: usize = 1024;
@@ -495,6 +500,7 @@ impl Prowlarr {
             http: kit.http,
             emitter,
             usenet_left: AtomicUsize::new(0),
+            usenet_polled: Mutex::default(),
         });
         loop {
             job.usenet_left.store(USENET_POLL_ITEMS, Ordering::Relaxed);
@@ -566,6 +572,8 @@ struct Job {
     emitter: Emitter,
     /// Usenet results this poll may still emit ([`USENET_POLL_ITEMS`]).
     usenet_left: AtomicUsize,
+    /// When each Usenet indexer was last polled ([`USENET_POLL_EVERY`]).
+    usenet_polled: Mutex<std::collections::HashMap<String, tokio::time::Instant>>,
 }
 
 impl Job {
@@ -613,6 +621,9 @@ impl Job {
     }
 
     async fn poll(&self, ix: &Indexer) -> Result<(), Failure> {
+        if ix.usenet && !self.usenet_due(&ix.id) {
+            return Ok(());
+        }
         let unit = format!("indexer/{}", ix.id);
         let body = answer(self.http.poll(&unit, &self.page_request(ix)).await)?;
         let now = unix_now();
@@ -638,6 +649,20 @@ impl Job {
     /// [`USENET_PAGE_ITEMS`] of it, and only while the poll's
     /// [`USENET_POLL_ITEMS`] last. A page over [`USENET_PAGE_BYTES`] is
     /// refused whole. Nothing about a result is logged.
+    /// Whether a Usenet indexer is due ([`USENET_POLL_EVERY`]), marking
+    /// it polled now when it is. Entries older than the interval are
+    /// dropped, so the map holds at most the indexers polled within it.
+    fn usenet_due(&self, id: &str) -> bool {
+        let now = tokio::time::Instant::now();
+        let mut polled = self.usenet_polled.lock().unwrap_or_else(|e| e.into_inner());
+        polled.retain(|_, at| now.duration_since(*at) < USENET_POLL_EVERY);
+        if polled.contains_key(id) {
+            return false;
+        }
+        polled.insert(id.to_owned(), now);
+        true
+    }
+
     async fn emit_usenet(&self, ix: &Indexer, body: &[u8], now: i64) -> Result<(), Failure> {
         let found = match usenet_page(body, ix, &self.config.host, self.key.expose(), now) {
             Ok(found) => found,
@@ -645,10 +670,10 @@ impl Job {
             Err(UsenetPage::TooBig) => return Err(Failure::Other),
         };
         for u in found {
+            let Some(f) = u.into_found() else { continue };
             if !take_one(&self.usenet_left) {
                 break;
             }
-            let Some(f) = u.into_found() else { continue };
             self.emitter.emit(f).await.map_err(|_| Failure::Closed)?;
         }
         Ok(())
@@ -995,7 +1020,7 @@ pub fn usenet_guid(
         return None;
     }
     let lower = g.to_ascii_lowercase();
-    if CREDENTIAL_WORDS.iter().any(|w| lower.contains(w)) {
+    if CREDENTIAL_WORDS.iter().any(|w| lower.contains(w)) || made_up(&lower) {
         return None;
     }
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
@@ -1029,6 +1054,20 @@ pub fn usenet_guid(
         return None;
     }
     Some(g.to_owned())
+}
+
+/// A dashed UUID, bare or as `urn:uuid:…`. The *arr parsers make one up
+/// (`Guid.NewGuid()`) for an item with no `<guid>`, a new one on every
+/// poll, so it can't key an item or find it again. Newznab's own GUIDs
+/// are undashed hex or a details page.
+fn made_up(lower: &str) -> bool {
+    let u = lower.strip_prefix("urn:uuid:").unwrap_or(lower);
+    let groups: Vec<&str> = u.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// The most specific Newznab category the result names: the first
