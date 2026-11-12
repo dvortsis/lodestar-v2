@@ -612,38 +612,96 @@ fn a_planted_name_at_the_next_number_doesnt_wedge_the_spool() {
     assert_eq!(all_records(&mut s, NOW).len(), 3);
 }
 
-/// Damage is logged by segment once per run, whatever re-reads it: a
-/// torn tail, and damage part-way (the log line names the segment's number
-/// and the part, never a byte).
+fn damage_logged(s: &Spool) -> u64 {
+    s.stats()
+        .damage_logged
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Damage is logged by segment, one line per segment the first time it's
+/// read, however many of its frames are bad and however often it's read
+/// again; a torn tail and a bad header at open log one each.
 #[test]
 fn damage_is_logged_once_per_segment() {
-    use lodestar_pipeline::spool::damage_logs;
     let dir = tempfile::tempdir().unwrap();
     let mut s = spool(dir.path(), Caps::default());
-    for b in 1..=3 {
+    for b in 1..=4 {
         s.append(&record(b, NOW, 200), NOW).unwrap();
     }
     s.close_active().unwrap();
     let path = only_segment(dir.path());
     let mut bytes = fs::read(&path).unwrap();
-    let frame = (bytes.len() - HEADER_LEN) / 3;
+    let frame = (bytes.len() - HEADER_LEN) / 4;
+    // Two bad frames part-way: still one line.
     bytes[HEADER_LEN + frame + FRAME_HEAD + 5] ^= 0x40;
+    bytes[HEADER_LEN + 2 * frame + FRAME_HEAD + 5] ^= 0x40;
     fs::write(&path, &bytes).unwrap();
-    let before = damage_logs();
     for _ in 0..3 {
-        let seg = s.read(1, NOW).unwrap();
-        assert_eq!(seg.records.len(), 1);
+        assert_eq!(s.read(1, NOW).unwrap().records.len(), 1);
     }
-    // At least this segment's one line (other tests in this binary log
-    // too, so the shared counter is only ever compared from below). The
-    // line is written under the same once-per-segment gate as the count,
-    // which stays at one over every re-read.
-    assert!(damage_logs() > before);
+    assert_eq!(damage_logged(&s), 1);
+
+    // A torn tail: one line.
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    s.append(&record(1, NOW, 200), NOW).unwrap();
+    s.close_active().unwrap();
+    let path = only_segment(dir.path());
+    let len = fs::metadata(&path).unwrap().len();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(len - 3)
+        .unwrap();
+    s.read(1, NOW).unwrap();
+    s.read(1, NOW).unwrap();
+    assert_eq!(damage_logged(&s), 1);
+
+    // A segment of another worker, dropped at open: one line.
+    let dir = tempfile::tempdir().unwrap();
+    let mut other = Spool::open(dir.path(), W + 1, Caps::default(), secrets()).unwrap();
+    other.append(&record(1, NOW, 10), NOW).unwrap();
+    other.close_active().unwrap();
+    drop(other);
+    let s = spool(dir.path(), Caps::default());
+    assert_eq!(damage_logged(&s), 1);
+}
+
+/// However much of the spool is damaged, it logs at most
+/// `MAX_DAMAGE_LOGS` lines; the counts still count every segment.
+#[test]
+fn damage_logging_is_capped() {
+    use lodestar_pipeline::spool::MAX_DAMAGE_LOGS;
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    let n = MAX_DAMAGE_LOGS + 3;
+    for b in 0..n {
+        let at = NOW + b as i64 * SEGMENT_SPAN_SECS;
+        s.append(&record(b + 1, at, 10), at).unwrap();
+    }
+    s.close_active().unwrap();
+    assert_eq!(s.segments().len() as u64, n);
+    for seq in s.segments() {
+        let path = dir.path().join(format!("{seq:016x}.lsp"));
+        let len = fs::metadata(&path).unwrap().len();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(len - 3)
+            .unwrap();
+    }
+    let last = NOW + n as i64 * SEGMENT_SPAN_SECS;
+    for seq in s.segments() {
+        s.read(seq, last).unwrap();
+    }
+    assert_eq!(damage_logged(&s), MAX_DAMAGE_LOGS);
     assert_eq!(
         s.stats()
-            .dropped_corrupt
+            .dropped_torn
             .load(std::sync::atomic::Ordering::Relaxed),
-        1
+        n
     );
 }
 
