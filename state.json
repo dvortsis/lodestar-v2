@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:42:39Z",
+  "updated_at": "2026-11-12T08:43:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7188,6 +7188,11 @@
       "id": "owner-fyi-up0-feeds",
       "at": "2026-11-12T08:42:39Z",
       "note": "FYI (stricter, section 2.37): RSS feeds now leave out crawled BEP 27 private torrents as well as private uploads (UP-0). Send with UP-0 merge FYI."
+    },
+    {
+      "id": "ENR-14-harvest-count",
+      "at": "2026-11-12T08:43:44Z",
+      "note": "ENR-10: intake harvest count in crates/pipeline/src/lib.rs still counts an identification as harvested. Metric only. Fix in ENR-14."
     }
   ],
   "main_health": [
@@ -8100,7 +8105,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:42:39Z",
+    "updated": "2026-11-12T08:43:44Z",
     "items": [
       {
         "slot": 1,
@@ -8152,7 +8157,7 @@
         "slice": "ENR-10",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: building; owns now + pipeline unverified.rs (ingest/claims_kib ~60) and enrich.rs (~15), worker.rs dropped (no #737 overlap); no host wiring (ENR-14)",
+        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: PR #750 (27640fbb) fresh Opus review running; CI running",
         "since": "2026-11-12T07:37:09Z",
         "status": "active"
       },
@@ -8233,7 +8238,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:42:39Z",
+  "updated": "2026-11-12T08:43:44Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
