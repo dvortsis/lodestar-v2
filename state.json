@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:08:33Z",
+  "updated_at": "2026-11-12T22:11:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7502,6 +7502,11 @@
       "id": "X-ci-concurrency-test-filter",
       "note": "#784: test_workflow_concurrency.py runs in the lint job (rust filter); a PR touching only web.yml/e2e.yml/the test would not run it. Low priority: add those paths to RUST_ALSO in ci_changes.py later.",
       "added": "2026-11-12T22:04:01Z"
+    },
+    {
+      "id": "runner-arch-sage-seafoam-delta",
+      "note": "From M8-DOC-2 (#785): architecture.md \u00a710.18 (two places) still says sage-seafoam \u0394E_ok \u2248 1.9; themes_check.py measures 4.4. Fix in the next runner PR after checking the script.",
+      "added": "2026-11-12T22:11:11Z"
     }
   ],
   "main_health": [
@@ -8818,7 +8823,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:08:33Z",
+  "updated": "2026-11-12T22:11:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
