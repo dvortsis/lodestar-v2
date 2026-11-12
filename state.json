@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T01:28:55Z",
+  "updated_at": "2026-11-12T01:30:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7016,6 +7016,11 @@
       "slice": "docs follow-up (from PK-guide-3)",
       "at": "2026-11-12T01:28:55Z",
       "note": "docs/user/04 \u00a74.8 step 3 duplicates 'notes' ('shows its notes and asks you to read its notes first'); and code follow-up: the in-app 'The last update didn't install' notice advises running the installer, which clashes with the guide's 'don't install the failed build by hand' (route to X-win-upd-history or a small UI slice)."
+    },
+    {
+      "slice": "X-pk-ui-polish",
+      "at": "2026-11-12T01:30:56Z",
+      "note": "Launched in slot 7. Brief owns beyond slices.yaml entry: wizard/StorageStep.svelte, insights messages, windows/ports.rs (tests only). Update the owns in the next runner PR. WK-11b held: needs worker/runtime.rs (X-wk-own-lease-lost) and cluster client; launch after X-wk-own-lease-lost merges."
     }
   ],
   "main_health": [
@@ -7779,7 +7784,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T01:28:55Z",
+    "updated": "2026-11-12T01:30:56Z",
     "items": [
       {
         "slot": 1,
@@ -7836,12 +7841,11 @@
       },
       {
         "slot": 7,
-        "slice": null,
-        "role": "slice",
-        "agent": "session_01MMjhn9VBMRav8kboByPimR",
-        "doing": "free (PK-guide-3 merged #708)",
-        "since": "2026-11-12T01:28:55Z",
-        "status": "idle"
+        "slice": "X-pk-ui-polish",
+        "role": "helper",
+        "agent": "session_01MMjhn8WrGpnM1jiYP9RY1X",
+        "doing": "PK-ui/PK-exc polish (Sonnet)",
+        "since": "2026-11-12T01:30:56Z"
       },
       {
         "slot": 8,
@@ -7942,7 +7946,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T01:28:55Z",
+  "updated": "2026-11-12T01:30:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
