@@ -12,6 +12,10 @@
 //! - `GET /companions/{id}/remove`: exactly what removal deletes. `POST`
 //!   deletes it only with `confirm` naming the companion.
 //! - `POST /companions/{id}/restart`, `GET /companions/{id}/logs`.
+//! - `PUT /companions/{id}/egress`: its route (Q18), checked as a source's
+//!   route is and confirmed with the admin password, as a source's route
+//!   change is. Saved, then the companion is restarted on it; the answer
+//!   says whether that restart began, never that it did when it didn't.
 //! - `POST /companions/{id}/template`: CMP-7's compose service or Unraid
 //!   template, from checked inputs. Nothing is stored.
 //! - `POST /companions/{id}/credentials/{field}/reveal`: one stored
@@ -35,17 +39,18 @@ use std::sync::Arc;
 
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use lodestar_log::{Client, log_event};
 use utoipa::OpenApi;
 
 use crate::dto::companions::{
-    Companion, CompanionAccepted, CompanionInstallRequest, CompanionList, CompanionLogs,
-    CompanionTemplate, InstallOffer, RemovalPlan, RemoveRequest, RevealRequest, RevealedCredential,
-    TemplateRequest,
+    Companion, CompanionAccepted, CompanionEgressChanged, CompanionEgressRequest,
+    CompanionInstallRequest, CompanionList, CompanionLogs, CompanionTemplate, InstallOffer,
+    RemovalPlan, RemoveRequest, RevealRequest, RevealedCredential, TemplateRequest,
 };
 use crate::dto::error::ErrorEnvelope;
+use crate::dto::ops::EgressSetting;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{self, ClientIp, Path, same_origin_json};
 use crate::log_events::COMPANIONS_CREDENTIAL_REVEALED;
@@ -63,6 +68,7 @@ use crate::{ApiState, auth};
         removal_plan,
         remove_companion,
         restart_companion,
+        set_companion_egress,
         companion_logs,
         companion_template,
         reveal_credential,
@@ -123,6 +129,21 @@ pub trait CompanionsApi: Send + Sync + std::fmt::Debug {
     /// Replaces one credential with a new random one, written into the
     /// companion's own config and stored sealed. Never reads the old one.
     fn regenerate(&self, id: String, field: String) -> BoxFuture<'_, Result<(), CompanionsError>>;
+    /// Saves `egress` as its route, already checked as a source's route
+    /// is, then restarts it on it. Refused, with nothing saved, for an
+    /// unknown id (`Unknown`), one that takes no route (`takes_no_route`),
+    /// one Lodestar didn't install (`not_installed`) and one another
+    /// operation holds (`busy`). Once saved it's `Ok`: `applied` says
+    /// whether the restart began. Off by default: a binary that doesn't
+    /// implement it refuses `not_wired`, and nothing is saved.
+    fn set_egress(
+        &self,
+        id: String,
+        egress: EgressSetting,
+    ) -> BoxFuture<'_, Result<CompanionEgressChanged, CompanionsError>> {
+        let _ = (id, egress);
+        Box::pin(async { Err(CompanionsError::Refused("not_wired")) })
+    }
 }
 
 /// Why a companions route refused. Every variant is a stable code; none
@@ -179,6 +200,9 @@ fn refusal_message(code: &str) -> &'static str {
         "sink_refused" => {
             "Lodestar couldn't update its download client in Integrations. Check Integrations, then try again."
         }
+        "takes_no_route" => {
+            "This companion takes no route of its own: its traffic is the network for the others."
+        }
         "timed_out" => {
             "This took too long, so Lodestar stopped waiting. Check the companion, then try again."
         }
@@ -233,6 +257,7 @@ pub fn routes() -> Router<ApiState> {
                 get(removal_plan).post(remove_companion),
             )
             .route("/companions/{id}/restart", post(restart_companion))
+            .route("/companions/{id}/egress", put(set_companion_egress))
             .route("/companions/{id}/logs", get(companion_logs))
             .route("/companions/{id}/template", post(companion_template))
             .route(
@@ -467,6 +492,54 @@ pub(crate) async fn restart_companion(
     Ok((StatusCode::ACCEPTED, Json(CompanionAccepted { id })))
 }
 
+/// Sets its route, then restarts it on the new route. The route is checked
+/// as a source's is (`direct`, or `socks5` with a usable `host:port`; the
+/// `interface` and `bind_address` routes, whose lookups would leave outside
+/// them, are `409 route_unavailable`), and a SOCKS5 route's kill switch is
+/// always on. Like a source's route change it needs the admin `password`
+/// (`428 confirm_required`). `200` once saved: `applied` says whether the
+/// restart began; when it didn't, `not_applied` says why, and the route is
+/// used at its next start.
+#[utoipa::path(
+    operation_id = "setCompanionEgress",
+    put,
+    path = "/companions/{id}/egress",
+    tag = "companions",
+    params(("id" = String, Path, description = "The catalogue id.")),
+    request_body = CompanionEgressRequest,
+    responses(
+        (status = 200, body = CompanionEgressChanged),
+        (status = 400, description = "`invalid_egress`, with `field`.", body = ErrorEnvelope),
+        (status = 401, description = "`bad_password`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
+        (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
+        (status = 409, description = "`route_unavailable`, `takes_no_route`, `not_installed`, `busy`, `not_wired`. Nothing was saved.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
+        (status = 428, description = "`confirm_required`: no password.", body = ErrorEnvelope),
+        (status = 429, description = "`rate_limited`: too many password attempts.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn set_companion_egress(
+    State(s): State<ApiState>,
+    ClientIp(ip): ClientIp,
+    handle: Handle,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    extract::Json(body): extract::Json<CompanionEgressRequest>,
+) -> ApiResult<Json<CompanionEgressChanged>> {
+    same_origin_json(&headers)?;
+    let api = api(handle)?;
+    let CompanionEgressRequest { egress, password } = body;
+    // The password first, as for a source's route and the reveal, so the
+    // shape of a guess learns nothing.
+    auth::confirm_fresh_password(&s.auth, ip, password).await?;
+    check_id(&id)?;
+    crate::ops::check_egress(&egress)?;
+    Ok(Json(api.set_egress(id, egress).await?))
+}
+
 /// Its recent output, with its credentials redacted.
 #[utoipa::path(
     operation_id = "getCompanionLogs",
@@ -628,6 +701,11 @@ mod tests {
             (CompanionsError::Mismatch, 409, "confirmation_mismatch"),
             (CompanionsError::Refused("not_wired"), 409, "not_wired"),
             (CompanionsError::Refused("busy"), 409, "busy"),
+            (
+                CompanionsError::Refused("takes_no_route"),
+                409,
+                "takes_no_route",
+            ),
             (
                 CompanionsError::Refused("managed_client_in_use"),
                 409,

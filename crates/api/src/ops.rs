@@ -621,38 +621,39 @@ fn invalid(code: &'static str, field: &'static str, message: &'static str) -> Ap
     ApiError::bad_request(code, message).field(field)
 }
 
+/// Checks a route as a source's settings do, for `/sources/{id}` and
+/// `/companions/{id}/egress` alike: the interface and bind-address routes
+/// are refused (`409 route_unavailable`); a direct route takes no proxy or
+/// DNS choice; a SOCKS5 route needs a usable `host:port`. Errors name the
+/// field, never the value.
+pub(crate) fn check_egress(e: &EgressSetting) -> ApiResult<()> {
+    match e.route {
+        EgressRoute::Interface | EgressRoute::BindAddress => Err(route_unavailable()),
+        EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => Err(invalid(
+            "invalid_egress",
+            if e.proxy.is_some() {
+                "egress.proxy"
+            } else {
+                "egress.dns"
+            },
+            "A direct route takes no proxy or DNS choice.",
+        )),
+        EgressRoute::Direct => Ok(()),
+        EgressRoute::Socks5 if e.proxy.as_deref().and_then(parse_proxy).is_none() => Err(invalid(
+            "invalid_egress",
+            "egress.proxy",
+            "Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or gluetun:1080.",
+        )),
+        EgressRoute::Socks5 => Ok(()),
+    }
+}
+
 /// Checks the settings part of `body` and puts its schedule in canonical
 /// form, so the implementation stores what it was given only once it's
 /// valid.
 fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
     if let Some(e) = &body.egress {
-        match e.route {
-            EgressRoute::Interface | EgressRoute::BindAddress => {
-                return Err(route_unavailable());
-            }
-            EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => {
-                return Err(invalid(
-                    "invalid_egress",
-                    if e.proxy.is_some() {
-                        "egress.proxy"
-                    } else {
-                        "egress.dns"
-                    },
-                    "A direct route takes no proxy or DNS choice.",
-                ));
-            }
-            EgressRoute::Direct => {}
-            EgressRoute::Socks5 => {
-                if e.proxy.as_deref().and_then(parse_proxy).is_none() {
-                    return Err(invalid(
-                        "invalid_egress",
-                        "egress.proxy",
-                        "Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or \
-                         gluetun:1080.",
-                    ));
-                }
-            }
-        }
+        check_egress(e)?;
     }
     if let Some(windows) = &mut body.schedule {
         if windows.len() > MAX_WINDOWS {

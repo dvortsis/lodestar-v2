@@ -267,7 +267,7 @@ fn windows(w: &[Window]) -> Vec<String> {
     w.iter().map(|w| window_text(w.start, w.end)).collect()
 }
 
-fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
+pub(crate) fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
     match e {
         control::EgressSetting::Direct => EgressSetting {
             route: EgressRoute::Direct,
@@ -290,7 +290,7 @@ fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
 
 /// The route's checked setting back as the pipeline's (the API refused
 /// the interface and bind-address routes, and checked the proxy).
-fn egress_back(e: EgressSetting) -> Result<control::EgressSetting, OpsError> {
+pub(crate) fn egress_back(e: EgressSetting) -> Result<control::EgressSetting, OpsError> {
     let invalid = |m: &str| OpsError::Invalid {
         code: "invalid_egress",
         field: "egress",

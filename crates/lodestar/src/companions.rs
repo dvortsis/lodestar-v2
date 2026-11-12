@@ -24,8 +24,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use lodestar_api::companions::{CompanionsApi, CompanionsError, Revealed};
 use lodestar_api::dto::companions::{
-    Companion, CompanionHealth, CompanionTemplate, InstallOffer, RemovalItem, RemovalItemKind,
-    RemovalPlan, TemplateKind, TemplateRequest, TemplateRoute, UnraidField, UnraidFile,
+    Companion, CompanionEgress, CompanionEgressChanged, CompanionHealth, CompanionRuns,
+    CompanionTemplate, EgressFrom, InstallOffer, RemovalItem, RemovalItemKind, RemovalPlan,
+    TemplateKind, TemplateRequest, TemplateRoute, UnraidField, UnraidFile,
 };
 use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
 use lodestar_companions::catalogue::{Sha256, TemplateId};
@@ -388,6 +389,7 @@ async fn start_with(
         rows,
         live,
         changing: Arc::default(),
+        routing: Arc::default(),
         #[cfg(test)]
         park: None,
     });
@@ -592,6 +594,34 @@ fn plugin_for(id: &CompanionId) -> Option<&'static str> {
     }
 }
 
+/// Where `id`'s route comes from, as its next start would read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RouteRow {
+    /// Its own `companions.<id>.egress` row.
+    Own(SavedEgress),
+    /// No row yet: the route of the plugin it serves, copied at its start.
+    Source(SavedEgress),
+    /// No row, and it serves no plugin: it takes no route.
+    None,
+}
+
+/// `id`'s route as [`egress_setting`] reads it, writing nothing. `Err` when
+/// the store can't be read. Blocking (the caller holds the store).
+fn egress_row(s: &Store, id: &CompanionId) -> Result<RouteRow, ()> {
+    if let Some(text) = s.setting_text(&egress_key(id)).map_err(drop)? {
+        return Ok(RouteRow::Own(
+            EgressSetting::decode(&text).ok_or(Unreadable),
+        ));
+    }
+    let Some(plugin) = plugin_for(id) else {
+        return Ok(RouteRow::None);
+    };
+    let saved = lodestar_pipeline::control::saved_settings(s, plugin, false)
+        .map_err(drop)?
+        .egress;
+    Ok(RouteRow::Source(saved))
+}
+
 /// `id`'s saved route. With no row yet, the route of the plugin it serves
 /// is saved as its own and used (Q18: "set at install to the egress of
 /// the plugin that needs it"); an unreadable one of the plugin's is used
@@ -600,19 +630,24 @@ fn plugin_for(id: &CompanionId) -> Option<&'static str> {
 /// store can't be read or written, or it serves no plugin: it isn't
 /// started. Blocking.
 fn egress_setting(store: &Mutex<Store>, id: &CompanionId) -> Option<SavedEgress> {
-    let key = egress_key(id);
     let mut s = store.lock().ok()?;
-    if let Some(text) = s.setting_text(&key).ok()? {
-        return Some(EgressSetting::decode(&text).ok_or(Unreadable));
+    match egress_row(&s, id).ok()? {
+        RouteRow::Own(saved) => Some(saved),
+        RouteRow::None => None,
+        RouteRow::Source(saved) => {
+            if let Ok(e) = &saved {
+                s.update_settings_text(&[(&egress_key(id), &e.encode())], &[])
+                    .ok()?;
+            }
+            Some(saved)
+        }
     }
-    let plugin = plugin_for(id)?;
-    let saved = lodestar_pipeline::control::saved_settings(&s, plugin, false)
-        .ok()?
-        .egress;
-    if let Ok(e) = &saved {
-        s.update_settings_text(&[(&key, &e.encode())], &[]).ok()?;
-    }
-    Some(saved)
+}
+
+/// A saved route as the API shows it: a setting that doesn't decode is
+/// null, never direct.
+fn shown(saved: &SavedEgress) -> Option<lodestar_api::dto::ops::EgressSetting> {
+    saved.as_ref().ok().map(crate::ops::egress_setting)
 }
 
 /// Each companion's route (Q18), built for every start from its saved
@@ -733,6 +768,9 @@ impl Live for Supervision {
     ) -> BoxFuture<'a, Result<(), CompanionsError>> {
         Box::pin(async move { self.manager.regenerate(id).await.map(drop).map_err(refused) })
     }
+    fn busy(&self, id: &CompanionId) -> bool {
+        self.manager.busy(id)
+    }
 }
 
 /// What only a running supervisor can do ([`Supervision`] at serve):
@@ -753,6 +791,13 @@ pub trait Live: Send + Sync {
         id: &'a CompanionId,
         field: Field,
     ) -> BoxFuture<'a, Result<(), CompanionsError>>;
+    /// Whether another operation holds it now, so a restart would be
+    /// refused `busy` ([`Manager::busy`]). Nothing runs without a
+    /// supervisor, so `false` by default.
+    fn busy(&self, id: &CompanionId) -> bool {
+        let _ = id;
+        false
+    }
 }
 
 impl Live for Unwired {
@@ -787,6 +832,11 @@ pub struct Service {
     /// neither writes the managed entry while the other is deciding
     /// (#679's review, Important 1).
     changing: Arc<tokio::sync::Mutex<()>>,
+    /// One route change at a time, held from its `busy` check until its
+    /// restart has claimed the companion: a second change then sees that
+    /// restart and is refused `busy` before it saves, so the route a
+    /// started restart reads is the one its answer reports.
+    routing: Arc<tokio::sync::Mutex<()>>,
     /// A test's pause inside a native install, once it holds the lock:
     /// says so on the first, waits for the second.
     #[cfg(test)]
@@ -934,6 +984,7 @@ impl Service {
             rows: self.rows.clone(),
             live: self.live.clone(),
             changing: self.changing.clone(),
+            routing: self.routing.clone(),
             #[cfg(test)]
             park: self.park.clone(),
         }
@@ -989,6 +1040,17 @@ impl Service {
             Err(err) => return Err(CompanionsError::Internal(err.code())),
         };
         let installed = present.as_ref().and_then(|p| p.version.clone());
+        let runs = if self.installed(&e.id)? {
+            CompanionRuns::Lodestar
+        } else if self.added(&e.id)? {
+            CompanionRuns::Yours
+        } else if self.host.in_container {
+            CompanionRuns::OwnContainer
+        } else if refusal.as_deref() == Some(Refusal::GuidedOnly.code()) {
+            CompanionRuns::Yours
+        } else {
+            CompanionRuns::Lodestar
+        };
         Ok(Companion {
             available,
             credentials: self
@@ -1000,12 +1062,14 @@ impl Service {
                 .as_ref()
                 .and(present.as_ref())
                 .map(|p| health(p.health)),
+            egress: self.egress(&e.id)?,
             id: e.id.as_str().to_owned(),
             installed: installed.map(|v| v.as_str().to_owned()),
             licence: e.licence.spdx.clone(),
             name: e.name.clone(),
             opt_in: e.opt_in,
             refusal,
+            runs,
             templates: e
                 .templates
                 .iter()
@@ -1016,6 +1080,44 @@ impl Service {
                 })
                 .collect(),
         })
+    }
+
+    /// Its route as its next start reads it, without saving the copy that
+    /// start would ([`egress_row`]); `None` when it takes no route.
+    /// Blocking.
+    fn egress(&self, id: &CompanionId) -> Result<Option<CompanionEgress>, CompanionsError> {
+        let s = self
+            .rows
+            .0
+            .lock()
+            .map_err(|_| CompanionsError::Internal("store"))?;
+        Ok(
+            match egress_row(&s, id).map_err(|_| CompanionsError::Internal("store"))? {
+                RouteRow::Own(saved) => Some(CompanionEgress {
+                    from: EgressFrom::Saved,
+                    setting: shown(&saved),
+                }),
+                RouteRow::Source(saved) => Some(CompanionEgress {
+                    from: EgressFrom::Source,
+                    setting: shown(&saved),
+                }),
+                RouteRow::None => None,
+            },
+        )
+    }
+
+    /// Saves `setting` as its own route, one committed write. Blocking.
+    fn save_egress(
+        &self,
+        id: &CompanionId,
+        setting: &EgressSetting,
+    ) -> Result<(), CompanionsError> {
+        self.rows
+            .0
+            .lock()
+            .map_err(|_| CompanionsError::Internal("store"))?
+            .update_settings_text(&[(&egress_key(id), &setting.encode())], &[])
+            .map_err(|_| CompanionsError::Internal("store"))
     }
 
     /// The secrets file credentials are sealed with (CMP-5g-2's paste).
@@ -1323,6 +1425,56 @@ impl CompanionsApi for Service {
         })
     }
 
+    fn set_egress(
+        &self,
+        id: String,
+        egress: lodestar_api::dto::ops::EgressSetting,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<CompanionEgressChanged, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            if plugin_for(&e.id).is_none() {
+                return Err(CompanionsError::Refused("takes_no_route"));
+            }
+            // The API checked it as a source's route; the pipeline's form
+            // is what's saved, and it must read back as itself, so a start
+            // never finds it unreadable.
+            let bad = || CompanionsError::BadInput {
+                field: Some("egress.proxy"),
+                code: "invalid_egress",
+            };
+            let setting = crate::ops::egress_back(egress).map_err(|_| bad())?;
+            if EgressSetting::decode(&setting.encode()).as_ref() != Some(&setting) {
+                return Err(bad());
+            }
+            self.ours(e).await?;
+            // Held until the restart has claimed it (or was refused), so a
+            // second change sees that restart as `busy` and saves nothing.
+            let _one = self.routing.lock().await;
+            if self.live.busy(&e.id) {
+                return Err(CompanionsError::Refused("busy"));
+            }
+            let saved = setting.clone();
+            self.off(move |s| s.save_egress(&e.id, &saved)).await?;
+            // Saved: from here the answer is `Ok`, and says whether the
+            // restart that applies it began. It's never reported applied
+            // when it wasn't; otherwise it's used at the next start.
+            let not_applied = match self.live.restart(&e.id).await {
+                Ok(()) => None,
+                Err(CompanionsError::Refused(code)) => Some(code),
+                Err(_) => Some("restart_failed"),
+            };
+            Ok(CompanionEgressChanged {
+                applied: not_applied.is_none(),
+                egress: CompanionEgress {
+                    from: EgressFrom::Saved,
+                    setting: Some(crate::ops::egress_setting(&setting)),
+                },
+                id: e.id.as_str().to_owned(),
+                not_applied: not_applied.map(str::to_owned),
+            })
+        })
+    }
+
     fn logs(
         &self,
         id: String,
@@ -1499,6 +1651,7 @@ pub(crate) fn test_service(
         rows: StoreRows(store),
         live: Arc::new(Unwired),
         changing: Arc::default(),
+        routing: Arc::default(),
         park: None,
     })
 }
@@ -1744,6 +1897,7 @@ mod tests {
             rows: StoreRows(store),
             live,
             changing: Arc::default(),
+            routing: Arc::default(),
             park: None,
         }
     }
@@ -2624,5 +2778,287 @@ mod tests {
             let body = lodestar_api::error::ApiError::from(e).body().to_string();
             assert!(!body.contains(&password), "{body}");
         }
+    }
+
+    /// The supervisor as a route change sees it: whether another operation
+    /// holds the companion, what its restart answers, and its route row at
+    /// each restart (saved before the restart, or not).
+    struct Restarts {
+        store: Arc<Mutex<Store>>,
+        answer: Result<(), CompanionsError>,
+        busy: std::sync::atomic::AtomicBool,
+        seen: Mutex<Vec<Option<String>>>,
+    }
+
+    impl Restarts {
+        fn new(s: &Service, answer: Result<(), CompanionsError>) -> Arc<Restarts> {
+            Arc::new(Restarts {
+                store: s.rows.0.clone(),
+                answer,
+                busy: Default::default(),
+                seen: Mutex::default(),
+            })
+        }
+        fn seen(&self) -> Vec<Option<String>> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl Live for Restarts {
+        fn restart<'a>(
+            &'a self,
+            id: &'a CompanionId,
+        ) -> BoxFuture<'a, Result<(), CompanionsError>> {
+            let row = egress_row(&self.store, &egress_key(id));
+            self.seen.lock().unwrap().push(row);
+            Box::pin(async { self.answer.clone() })
+        }
+        fn logs(&self, _: &CompanionId) -> Result<Vec<String>, CompanionsError> {
+            Ok(Vec::new())
+        }
+        fn regenerate<'a>(
+            &'a self,
+            _: &'a CompanionId,
+            _: Field,
+        ) -> BoxFuture<'a, Result<(), CompanionsError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn busy(&self, _: &CompanionId) -> bool {
+            self.busy.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn api_route(v: serde_json::Value) -> lodestar_api::dto::ops::EgressSetting {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A service whose supervisor is `answer`, with qBittorrent installed
+    /// and Prowlarr not.
+    async fn routed(
+        dir: &std::path::Path,
+        answer: Result<(), CompanionsError>,
+    ) -> (Service, Arc<Restarts>) {
+        let s = service(dir, pinned(), NATIVE, Arc::new(Unwired));
+        let live = Restarts::new(&s, answer);
+        let s = Service {
+            live: live.clone(),
+            ..s.clone_parts()
+        };
+        installed(&s, dir, "qbittorrent").await;
+        (s, live)
+    }
+
+    /// X-cmp-egress-api: the route is saved in the pipeline's form, then
+    /// the companion is restarted, so its next start reads the new route.
+    /// The answer and GET both show what's saved.
+    #[tokio::test]
+    async fn a_route_change_is_saved_then_restarted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, live) = routed(dir.path(), Ok(())).await;
+        let key = "companions.qbittorrent.egress";
+        for (sent, row, shown) in [
+            (
+                serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080", "dns": "proxy" }),
+                "socks5 10.8.0.1 1080 proxy",
+                serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080", "dns": "proxy" }),
+            ),
+            (
+                serde_json::json!({ "route": "socks5", "proxy": "GlueTun.:1080" }),
+                "socks5 gluetun 1080 auto",
+                serde_json::json!({ "route": "socks5", "proxy": "gluetun:1080" }),
+            ),
+            (
+                serde_json::json!({ "route": "socks5", "proxy": "[FD00::1]:1080", "dns": "local" }),
+                "socks5 fd00::1 1080 local",
+                serde_json::json!({ "route": "socks5", "proxy": "[fd00::1]:1080", "dns": "local" }),
+            ),
+            (
+                serde_json::json!({ "route": "direct" }),
+                "direct",
+                serde_json::json!({ "route": "direct" }),
+            ),
+        ] {
+            let got = s
+                .set_egress("qbittorrent".into(), api_route(sent.clone()))
+                .await
+                .unwrap();
+            assert!(got.applied && got.not_applied.is_none(), "{sent}");
+            assert_eq!(got.egress.from, EgressFrom::Saved);
+            assert_eq!(
+                serde_json::to_value(&got.egress.setting).unwrap(),
+                shown,
+                "{sent}"
+            );
+            assert_eq!(egress_row(&s.rows.0, key).as_deref(), Some(row), "{sent}");
+            // Saved before the restart that applies it.
+            assert_eq!(live.seen().last().cloned().flatten().as_deref(), Some(row));
+            // What GET shows is what the next start reads.
+            let c = s.get("qbittorrent".into()).await.unwrap();
+            assert_eq!(c.egress, Some(got.egress.clone()));
+            let qbt = CompanionId::parse("qbittorrent").unwrap();
+            assert_eq!(
+                egress_setting(&s.rows.0, &qbt),
+                Some(Ok(EgressSetting::decode(row).unwrap()))
+            );
+        }
+        assert_eq!(live.seen().len(), 4);
+    }
+
+    /// Refused with its stable code, and nothing saved or restarted: an
+    /// unknown id, one that takes no route, one Lodestar didn't install
+    /// (or any inside a container), and one another operation holds.
+    #[tokio::test]
+    async fn a_refused_route_change_saves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, live) = routed(dir.path(), Ok(())).await;
+        let direct = || api_route(serde_json::json!({ "route": "direct" }));
+        let set = |id: &str| s.set_egress(id.into(), direct());
+        assert_eq!(set("nope").await, Err(CompanionsError::Unknown));
+        assert_eq!(set("Qbittorrent").await, Err(CompanionsError::Unknown));
+        assert_eq!(
+            set("gluetun").await,
+            Err(CompanionsError::Refused("takes_no_route"))
+        );
+        assert_eq!(
+            set("prowlarr").await,
+            Err(CompanionsError::Refused("not_installed"))
+        );
+        live.busy.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            set("qbittorrent").await,
+            Err(CompanionsError::Refused("busy"))
+        );
+        live.busy.store(false, std::sync::atomic::Ordering::SeqCst);
+        let docker = Service {
+            host: Host {
+                in_container: true,
+                ..NATIVE
+            },
+            ..s.clone_parts()
+        };
+        assert_eq!(
+            docker.set_egress("qbittorrent".into(), direct()).await,
+            Err(CompanionsError::Refused("not_installed"))
+        );
+        // A route the API would have refused never reaches the store.
+        for bad in [
+            serde_json::json!({ "route": "interface" }),
+            serde_json::json!({ "route": "socks5" }),
+            serde_json::json!({ "route": "socks5", "proxy": "0.0.0.0:1080" }),
+        ] {
+            assert!(
+                matches!(
+                    s.set_egress("qbittorrent".into(), api_route(bad.clone()))
+                        .await,
+                    Err(CompanionsError::BadInput { .. })
+                ),
+                "{bad}"
+            );
+        }
+        assert!(live.seen().is_empty());
+        for id in ["qbittorrent", "prowlarr", "gluetun"] {
+            let key = format!("companions.{id}.egress");
+            assert_eq!(egress_row(&s.rows.0, &key), None, "{id}");
+        }
+    }
+
+    /// A restart that doesn't begin leaves the route saved, and the answer
+    /// says it isn't applied yet, with why; never that it is.
+    #[tokio::test]
+    async fn a_failed_restart_keeps_the_route_and_says_so() {
+        for (answer, code) in [
+            (Err(CompanionsError::Refused("not_wired")), "not_wired"),
+            (Err(CompanionsError::Refused("busy")), "busy"),
+            (Err(CompanionsError::Internal("spawn")), "restart_failed"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (s, live) = routed(dir.path(), answer).await;
+            let got = s
+                .set_egress(
+                    "qbittorrent".into(),
+                    api_route(serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080" })),
+                )
+                .await
+                .unwrap();
+            assert!(!got.applied, "{code}");
+            assert_eq!(got.not_applied.as_deref(), Some(code));
+            assert_eq!(live.seen().len(), 1);
+            assert_eq!(
+                egress_row(&s.rows.0, "companions.qbittorrent.egress").as_deref(),
+                Some("socks5 10.8.0.1 1080 auto")
+            );
+            let c = s.get("qbittorrent".into()).await.unwrap();
+            assert_eq!(c.egress, Some(got.egress));
+        }
+    }
+
+    /// GET shows the route a start would use, and saves nothing: the
+    /// source's while the companion has none of its own, then its own;
+    /// null for an unreadable row (never direct) and for gluetun.
+    #[tokio::test]
+    async fn get_shows_the_route_its_start_would_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let st = s.rows.0.clone();
+        set_row(&st, "sources.egress.prowlarr", "socks5 10.8.0.1 1080 auto");
+        let route = |id: &str| s.get(id.into());
+        let prowlarr = route("prowlarr").await.unwrap().egress.unwrap();
+        assert_eq!(prowlarr.from, EgressFrom::Source);
+        assert_eq!(
+            serde_json::to_value(&prowlarr.setting).unwrap(),
+            serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080" })
+        );
+        assert_eq!(egress_row(&st, "companions.prowlarr.egress"), None);
+        // The start copies it: now it's its own, with the same value.
+        let id = CompanionId::parse("prowlarr").unwrap();
+        assert!(egress_setting(&st, &id).is_some());
+        let own = route("prowlarr").await.unwrap().egress.unwrap();
+        assert_eq!(own.from, EgressFrom::Saved);
+        assert_eq!(own.setting, prowlarr.setting);
+        // Nothing saved for the download-client source: direct.
+        let qbt = route("qbittorrent").await.unwrap().egress.unwrap();
+        assert_eq!(
+            serde_json::to_value(&qbt.setting).unwrap(),
+            serde_json::json!({ "route": "direct" })
+        );
+        set_row(&st, "companions.qbittorrent.egress", "interface tun0");
+        let qbt = route("qbittorrent").await.unwrap().egress.unwrap();
+        assert_eq!((qbt.from, qbt.setting), (EgressFrom::Saved, None));
+        assert_eq!(route("gluetun").await.unwrap().egress, None);
+        // The list says the same.
+        let list = s.list().await.unwrap();
+        let row = list.iter().find(|c| c.id == "qbittorrent").unwrap();
+        assert_eq!(row.egress.as_ref().unwrap().setting, None);
+    }
+
+    /// CMP-9a's "where it runs": Lodestar's own on this computer, yours
+    /// once you added it, or its own container when Lodestar runs in one.
+    #[tokio::test]
+    async fn get_says_where_it_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let runs = |s: &Service, id: &'static str| {
+            let s = s.clone_parts();
+            async move { s.get(id.into()).await.unwrap().runs }
+        };
+        assert_eq!(runs(&s, "qbittorrent").await, CompanionRuns::Lodestar);
+        installed(&s, dir.path(), "qbittorrent").await;
+        assert_eq!(runs(&s, "qbittorrent").await, CompanionRuns::Lodestar);
+        let docker = Service {
+            host: Host {
+                in_container: true,
+                ..NATIVE
+            },
+            ..s.clone_parts()
+        };
+        assert_eq!(runs(&docker, "prowlarr").await, CompanionRuns::OwnContainer);
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        set_row(
+            &s.rows.0,
+            &lodestar_companions::guided::origin_key(&prowlarr),
+            "added",
+        );
+        assert_eq!(runs(&s, "prowlarr").await, CompanionRuns::Yours);
+        assert_eq!(runs(&docker, "prowlarr").await, CompanionRuns::Yours);
     }
 }

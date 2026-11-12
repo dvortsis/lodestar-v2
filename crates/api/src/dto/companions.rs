@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::REDACTED;
+use super::ops::EgressSetting;
 
 /// The last health check the manager saw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -45,6 +46,11 @@ pub struct Companion {
     /// The stored credentials, by field (`webui_password`, `api_key`):
     /// names only, never values. What `…/reveal` can show.
     pub credentials: Vec<String>,
+    /// Its route (Q18), read from its saved row as its start reads it;
+    /// null for a companion that takes no route (gluetun). Read-only
+    /// here: `PUT /companions/{id}/egress` changes it.
+    #[schema(required = true)]
+    pub egress: Option<CompanionEgress>,
     /// Null when Lodestar didn't install it.
     #[schema(required = true, inline)]
     pub health: Option<CompanionHealth>,
@@ -64,9 +70,89 @@ pub struct Companion {
     /// `guided_only`, …); null when it can, or when it's up to date.
     #[schema(required = true)]
     pub refusal: Option<String>,
+    /// Where it runs, or would run if it were installed here.
+    #[schema(inline)]
+    pub runs: CompanionRuns,
     /// The templates it offers.
     #[schema(inline)]
     pub templates: Vec<TemplateKind>,
+}
+
+/// Where a companion runs (CMP-9a's "where it runs").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionRuns {
+    /// On this computer, started and stopped by Lodestar: where Lodestar
+    /// installed it, or where an install here would put it.
+    Lodestar,
+    /// In a container of its own, set up from its compose service or
+    /// Unraid template: Lodestar runs in a container, so it doesn't
+    /// install, start or stop companions.
+    OwnContainer,
+    /// Wherever you run it: you added it yourself, or its own installer is
+    /// offered for you to run (`guided_only`). Lodestar only connects to
+    /// it, and doesn't start or stop it.
+    Yours,
+}
+
+/// Where a companion's route comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressFrom {
+    /// Its own saved route, used at every start.
+    Saved,
+    /// Nothing is saved for it yet, so this is the route of the source it
+    /// serves, which it copies as its own at its next start (Q18). A later
+    /// change to that source's route doesn't reach it once it's copied.
+    Source,
+}
+
+/// A companion's route (Q18): the same setting, with the same names, as a
+/// source's route. A SOCKS5 route carries no credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CompanionEgress {
+    #[schema(inline)]
+    pub from: EgressFrom,
+    /// The route. Null when the saved setting can't be read: the
+    /// companion's route then stays down, never direct, until it's set
+    /// again.
+    #[schema(required = true)]
+    pub setting: Option<EgressSetting>,
+}
+
+/// `PUT /companions/{id}/egress`: the new route, and the admin password
+/// entered again (a route change always needs it, as a source's does).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionEgressRequest {
+    pub egress: EgressSetting,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl fmt::Debug for CompanionEgressRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompanionEgressRequest")
+            .field("egress", &self.egress)
+            .field("password", &self.password.as_ref().map(|_| REDACTED))
+            .finish()
+    }
+}
+
+/// The route was saved. `applied` says whether the companion's restart on
+/// it has begun; when it hasn't, it's used at the companion's next start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CompanionEgressChanged {
+    /// True once its restart on the new route has begun (its row shows
+    /// when it's back). False: saved, but not applied yet.
+    pub applied: bool,
+    /// The route as saved now.
+    pub egress: CompanionEgress,
+    pub id: String,
+    /// Why it wasn't applied, as a stable code (`not_wired`, `busy`,
+    /// `restart_failed`, …); null when it was.
+    #[schema(required = true)]
+    pub not_applied: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
