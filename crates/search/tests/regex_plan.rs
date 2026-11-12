@@ -287,3 +287,61 @@ fn worst_cases_stay_within_the_caps() {
         }
     }
 }
+
+/// Each documented worst case is accepted and parses well within a
+/// bound, and one step past it is refused (I1). Release builds measured
+/// about 8 ms for the slowest; the bound is generous enough for an
+/// unoptimized build on a slow CI runner, so it catches a lost limit
+/// (hundreds of times slower) without flaking.
+#[test]
+fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
+    use lodestar_search::regex::Reason;
+    let bound = std::time::Duration::from_secs(10);
+    let cases: Vec<(String, String, Reason)> = vec![
+        // Case folding walks each class's codepoints: about two \p{Any}.
+        (
+            r"\p{Any}".repeat(2),
+            r"\p{Any}".repeat(3),
+            Reason::ClassTooLarge,
+        ),
+        // A negated class folds its complement (B1).
+        (
+            r"\P{Any}".repeat(2),
+            r"\P{Any}".repeat(3),
+            Reason::ClassTooLarge,
+        ),
+        (
+            r"[\P{Any}]".repeat(2),
+            r"[\P{Any}]".repeat(3),
+            Reason::ClassTooLarge,
+        ),
+        (
+            r"[^\p{Any}]".repeat(2),
+            r"[^\p{Any}]".repeat(3),
+            Reason::ClassTooLarge,
+        ),
+        (
+            r"[\x{0}-\x{10FFFF}]".repeat(2),
+            r"[\x{0}-\x{10FFFF}]".repeat(3),
+            Reason::ClassTooLarge,
+        ),
+        (r"\w".repeat(17), r"\w".repeat(18), Reason::ClassTooLarge),
+        (r"\W".repeat(17), r"\W".repeat(18), Reason::ClassTooLarge),
+        // The compiled-size estimate: \w's ranges times the count.
+        (r"\w{62}".to_owned(), r"\w{63}".to_owned(), Reason::TooLarge),
+        // Length and node count.
+        ("a".repeat(254), "a".repeat(256), Reason::TooManyNodes),
+        ("a{100}".repeat(73), "a".repeat(513), Reason::TooLong),
+    ];
+    for (ok, past, reason) in &cases {
+        let started = std::time::Instant::now();
+        parse(ok).unwrap_or_else(|e| panic!("{ok:?}: {e}"));
+        let took = started.elapsed();
+        assert!(took < bound, "{ok:?} took {took:?}");
+        assert_eq!(
+            parse(past).map(|_| ()).map_err(|e| e.reason),
+            Err(*reason),
+            "{past:?}"
+        );
+    }
+}

@@ -52,6 +52,8 @@ pub const MAX_CLASS_CODEPOINTS: u64 = 2_500_000;
 /// estimate made before translation; RX-1's verifier keeps `regex`'s own
 /// size limit too.
 pub const MAX_COMPILED_WEIGHT: u64 = 50_000;
+/// Unicode scalar values: every codepoint but the 2,048 surrogates.
+const UNICODE_SCALARS: u64 = 0x11_0000 - 0x800;
 /// A backstop on one translated class's ranges. The codepoint budget
 /// keeps real classes well under it (the largest is about 1,600).
 pub const MAX_CLASS_RANGES: usize = 4_096;
@@ -343,7 +345,11 @@ impl Bounds<'_> {
     /// A Unicode or Perl class (`\pL`, `\W`, …), measured by translating
     /// its own text case-sensitively, which costs little even for
     /// `\p{Any}`: it's case folding that walks every codepoint.
-    fn named_class(&mut self, span: &ast::Span) -> Result<(), RegexError> {
+    ///
+    /// The translator folds a negated class *before* negating it, so
+    /// `\P{Any}` (empty) folds all of `\p{Any}`: a negated class is charged
+    /// its complement, which is what gets folded (`\W` costs `\w`).
+    fn named_class(&mut self, span: &ast::Span, negated: bool) -> Result<(), RegexError> {
         let text = self
             .pattern
             .get(span.start.offset..span.end.offset)
@@ -351,19 +357,33 @@ impl Bounds<'_> {
         let hir = regex_syntax::ParserBuilder::new()
             .build()
             .parse(text)
-            .map_err(|e| RegexError::new(Reason::Syntax, e.to_string()))?;
-        match hir.kind() {
-            HirKind::Class(Class::Unicode(c)) => {
-                let width = c
-                    .ranges()
+            .map_err(|e| match e {
+                regex_syntax::Error::Parse(e) => {
+                    RegexError::new(Reason::Syntax, e.kind().to_string())
+                }
+                regex_syntax::Error::Translate(e) => {
+                    RegexError::new(Reason::Syntax, e.kind().to_string())
+                }
+                _ => RegexError::new(Reason::Syntax, "invalid class"),
+            })?;
+        // An empty class (`\P{Any}`) translates to the byte class "fail".
+        let (width, ranges) = match hir.kind() {
+            HirKind::Class(Class::Unicode(c)) => (
+                c.ranges()
                     .iter()
                     .map(|r| u64::from(r.end()) - u64::from(r.start()) + 1)
-                    .sum();
-                self.leaf(width, c.ranges().len() as u64)
-            }
-            // Not expected for a class's own text; count it like a range.
-            _ => self.leaf(1, 1),
-        }
+                    .sum(),
+                c.ranges().len() as u64,
+            ),
+            _ => (0, 1),
+        };
+        // What gets folded is the class before negation: the complement.
+        let width = if negated {
+            UNICODE_SCALARS.saturating_sub(width)
+        } else {
+            width
+        };
+        self.leaf(width, ranges.max(1))
     }
 
     fn node(&mut self) -> Result<(), RegexError> {
@@ -430,8 +450,8 @@ impl ast::Visitor for Bounds<'_> {
             Ast::Literal(_) => self.leaf(0, 1)?,
             // Any character: a handful of UTF-8 ranges, never case-folded.
             Ast::Dot(_) => self.leaf(0, 4)?,
-            Ast::ClassUnicode(c) => self.named_class(&c.span)?,
-            Ast::ClassPerl(c) => self.named_class(&c.span)?,
+            Ast::ClassUnicode(c) => self.named_class(&c.span, c.is_negated())?,
+            Ast::ClassPerl(c) => self.named_class(&c.span, c.negated)?,
             Ast::Repetition(r) => {
                 use ast::{RepetitionKind as K, RepetitionRange as R};
                 let factor = match r.op.kind {
@@ -471,8 +491,8 @@ impl ast::Visitor for Bounds<'_> {
             }
             // `[[:alpha:]]`: ASCII only, a few ranges.
             ast::ClassSetItem::Ascii(_) => self.leaf(128, 4),
-            ast::ClassSetItem::Unicode(c) => self.named_class(&c.span),
-            ast::ClassSetItem::Perl(c) => self.named_class(&c.span),
+            ast::ClassSetItem::Unicode(c) => self.named_class(&c.span, c.is_negated()),
+            ast::ClassSetItem::Perl(c) => self.named_class(&c.span, c.negated),
             // Their items are visited on their own.
             ast::ClassSetItem::Empty(_)
             | ast::ClassSetItem::Bracketed(_)
@@ -968,7 +988,13 @@ mod tests {
         // Wide classes are refused before they're case-folded, wherever
         // they are: bare, negated, in brackets, as a range.
         assert_eq!(refused(r"\p{Any}\p{Any}\p{Any}"), Reason::ClassTooLarge);
-        assert_eq!(refused(r"\PL\PL\PL"), Reason::ClassTooLarge);
+        // Negated classes fold their complement before negating (B1).
+        assert_eq!(refused(&r"\P{Any}".repeat(3)), Reason::ClassTooLarge);
+        assert_eq!(refused(&r"[\P{Any}]".repeat(3)), Reason::ClassTooLarge);
+        assert_eq!(
+            refused(&format!("abc|{}", r"\P{Any}".repeat(72))),
+            Reason::ClassTooLarge
+        );
         assert_eq!(
             refused(r"[\p{Any}][\W\pL][^a\p{Any}]"),
             Reason::ClassTooLarge
