@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:44:56Z",
+  "updated_at": "2026-11-12T12:47:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7304,6 +7304,11 @@
       "id": "owner-flag-enr14-tos",
       "at": "2026-11-12T12:44:56Z",
       "note": "Send with the ENR-14 merge FYI: Wikimedia robot policy (one request at a time, under 5 req/s, maxlag, bulk use goes to the dumps). Runner call: stricter reading, Q12 100k/day as a ceiling, interest-first, polite-rate backfill (about 43k lookups a day max). Owner question: is a whole-index backfill through the API acceptable, or should bulk come from the Wikidata dumps? Also: host wiring of IdentifySource is in ENR-14 (runner call; ENR-10 assigned it)."
+    },
+    {
+      "id": "UN-3-send-ref",
+      "at": "2026-11-12T12:47:06Z",
+      "note": "UN-1 (runner call): usenet items stored with no send reference; L3 kept (external_ref never stored for private finds; some guids are apikey download links). UN-3 designs where the send reference lives (allowlisted store field via SRC-3b or a migration); owner question if it needs L3 loosened. UN-1 shared edits approved: sources/src/plugin.rs Found.usenet, pipeline lib.rs intake route, unverified.rs usenet ingest, writer.rs note_claims skip."
     }
   ],
   "main_health": [
@@ -8399,7 +8404,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T12:44:56Z",
+  "updated": "2026-11-12T12:47:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
