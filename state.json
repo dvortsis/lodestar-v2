@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:22Z",
+  "updated_at": "2026-11-12T23:23Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7717,6 +7717,16 @@
       "id": "merged-782",
       "note": "#782 CMP-D merged 74dec644; owner screenshots pending in SHOTLIST (Unraid flash share, qBittorrent Web UI 127.0.0.1).",
       "added": "2026-11-12T23:22Z"
+    },
+    {
+      "id": "review-798-restart",
+      "note": "#798 review stopped at 23:2xZ to free a slot for #800 (gluetun, testing blocker); relaunch fresh on 9a3f1fb4 when a reviewer slot frees.",
+      "added": "2026-11-12T23:23Z"
+    },
+    {
+      "id": "pr800",
+      "note": "#800 X-gluetun-leak d60760d5: security review running; runbook \u00a73.2 edit accepted; configs 0444 provisional; owner relay needed for VM re-run (testing session refuses runner + slice messages); slices.yaml entries for X-gluetun-leak(-cmp) in runner PR.",
+      "added": "2026-11-12T23:23Z"
     }
   ],
   "main_health": [
@@ -8739,7 +8749,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:22Z",
+    "updated": "2026-11-12T23:23Z",
     "items": [
       {
         "slot": 1,
@@ -9087,7 +9097,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:22Z",
+  "updated": "2026-11-12T23:23Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
