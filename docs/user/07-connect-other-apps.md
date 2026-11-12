@@ -142,18 +142,18 @@ These are category numbers, not ports. Lodestar serves Torznab on its web UI por
 Radarr's defaults already include `2000` and its subcategories, so it misses nothing. Through Prowlarr, Sonarr also gets `5000` and `5045` by itself.
 
 ## 7.5 Read the apps' error messages
-<!-- index: invalid credentials; HTTP 401; HTTP 429; server is unavailable; no results -->
+<!-- index: invalid credentials; HTTP 401; HTTP 429; HTTP 503; server is unavailable; timed out; no results -->
 
 Prowlarr, Sonarr and Radarr show Lodestar's errors in their own long messages, with the HTTP status in them. Look for the words in the first column.
 
 | The message contains | What it means | What to do |
 |---|---|---|
-| **invalid credentials**, **Invalid API key**, `401` or `403` | The key is wrong, revoked or regenerated, or it lacks Torznab access | Create a new key on **Settings → Outputs** and paste it into the app |
+| **invalid credentials**, **Invalid API key**, `401` or `403` | The key is wrong, expired, revoked or regenerated, or it lacks Torznab access | Create a new key on **Settings → Outputs** and paste it into the app |
 | `429` or **TooManyRequests** | The app asked too often, or this address tried too many wrong keys | Wait a few minutes. The app pauses Lodestar for a while, then tries again by itself |
-| **server is unavailable** or `503` | Search is turned off in Lodestar | Turn on **Enable search** in **Settings → Search & ranking**, then restart Lodestar |
+| `503` or **ServiceUnavailable** | Search is turned off in Lodestar | Turn on **Enable search** in **Settings → Search & ranking**, then restart Lodestar |
+| **timed out**, **Connection refused**, **connection failure** or **DNS** | The app can't reach Lodestar at that address | Check the address and port from the app's computer or container. Inside a container, don't use `localhost` (section 7.3) |
 | `404` or **NotFound** | The URL or the API Path is wrong | Set **URL** to the **Torznab address** and **API Path** to `/api` |
-| **no results in the configured categories** | Lodestar has nothing in those categories yet | Wait until Lodestar has indexed some shows or movies, then test again |
-| **timeout** or **connection failure** | The app can't reach Lodestar | Check the address and port from the app's computer or container (section 7.3) |
+| **no results** | Lodestar has nothing in those categories yet | Wait until Lodestar has indexed some shows or movies, then test again |
 
 Keys made on **Settings → Outputs** always have Torznab access. A key from **Settings → Security** without the Torznab scope gets the credentials error.
 
@@ -178,7 +178,7 @@ To stop an app for good, select **Revoke** instead, then **Revoke key**. This ca
 For keys with other access, or any other app's key, open **Settings → Security**.
 
 ## 7.7 Export your torrents to bitmagnet
-<!-- index: bitmagnet export; export_adult; Jobs; incomplete export -->
+<!-- index: bitmagnet export; Include adult torrents; Jobs; incomplete export -->
 
 bitmagnet is another torrent indexer. The export gives it Lodestar's torrents as a file in bitmagnet's import format. bitmagnet then looks up each torrent on the DHT itself.
 
@@ -231,7 +231,13 @@ curl --data-binary @<file> http://<bitmagnet-host>:3333/import
 
 Replace `<file>` with the file's name, such as `lodestar-export-20261112-093015.bitmagnet.ndjson`. Replace `<bitmagnet-host>` with the address of the computer running bitmagnet, and `3333` if you changed bitmagnet's port.
 
-On Windows, type `curl.exe` instead of `curl`. In PowerShell, plain `curl` runs a different command that doesn't understand `--data-binary`.
+On Windows, in PowerShell, type `curl.exe` instead of `curl`, and put the file part in quotes, because PowerShell reads `@` itself:
+
+```powershell
+curl.exe --data-binary "@<file>" http://<bitmagnet-host>:3333/import
+```
+
+Plain `curl` in PowerShell runs a different command that doesn't understand `--data-binary`.
 
 **Result:** bitmagnet prints how many items it imported, then `import complete`.
 

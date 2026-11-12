@@ -197,7 +197,12 @@ for (const mode of ['light', 'dark'] as const) {
 			await expect(page.getByTestId('outputs-adult')).toBeVisible();
 			await ready(page);
 			await capture(page, `outputs-${mode}`, page.getByTestId('outputs-torznab'));
-			// The same page for chapter 7.7, outlined on the bitmagnet export.
+			// The same page for chapter 7.7, outlined on the bitmagnet export only: clear the first outline.
+			await page.evaluate(() =>
+				document
+					.querySelectorAll('[data-docs-outline]')
+					.forEach((el) => el.removeAttribute('data-docs-outline'))
+			);
 			await capture(page, `outputs-export-${mode}`, page.getByTestId('outputs-bitmagnet'));
 		});
 	});
