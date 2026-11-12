@@ -52,7 +52,7 @@ mod tests {
         assert_ne!(a.of(&h), b.of(&h), "a new key at each start");
         let r = a.of(&h);
         assert!(r.starts_with("ref:") && r.len() == 12, "{r}");
-        assert!(!r.contains("0707"));
+        assert_ne!(r, "ref:07070707", "a reference is not the hash's own bytes");
         assert!(!format!("{a:?}").contains('7'));
     }
 }

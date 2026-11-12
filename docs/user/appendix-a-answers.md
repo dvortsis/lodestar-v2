@@ -27,8 +27,15 @@ Answers to the questions at the end of each chapter, in the same order.
 3. To a pool path such as `/mnt/cache/appdata/lodestar`. `/mnt/user` goes through Unraid's FUSE layer, which is slow for the index and risky for the database.
 4. Open **Settings → Crawler**, set **Crawl intensity** one step lower, then restart Lodestar with `Restart-Service Lodestar`, `sudo systemctl restart lodestar`, or by starting the portable ZIP again. The change applies at the next start.
 
+## Chapter 7: Connect other apps
+
+1. So you can revoke or regenerate one app's key without breaking the others, and a leaked key reaches only one app.
+2. In Sonarr, open the Lodestar indexer and add category `5045` to **Categories**, and `5000` too. Through Prowlarr, Sonarr gets both by itself.
+3. Regenerating stops the old key at once, and Prowlarr still has it. Paste the new key into **API Key** in Prowlarr and test again.
+4. Delete it and select **Download export** again. A failed export ends partway, and nothing inside the file says so.
+
 <!-- nav:start -->
 ---
 
-[← Chapter 6: Troubleshooting](06-troubleshooting.md) · [Contents](README.md#contents) · [Appendix B: Settings reference →](appendix-b-settings-reference.md)
+[← Chapter 7: Connect other apps](07-connect-other-apps.md) · [Contents](README.md#contents) · [Appendix B: Settings reference →](appendix-b-settings-reference.md)
 <!-- nav:end -->

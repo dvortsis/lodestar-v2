@@ -194,7 +194,7 @@ impl Record {
                 // Only written when set.
                 "ambiguous" if v == "yes" => r.ambiguous = true,
                 "resolved" => {
-                    r.resolved = Some(ResolvedVia::from_name(v).ok_or_else(|| bad("resolved"))?)
+                    r.resolved = Some(ResolvedVia::from_stored(v).ok_or_else(|| bad("resolved"))?)
                 }
                 "title_conf" => {
                     r.title_confidence =
