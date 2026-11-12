@@ -58,3 +58,11 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
   - the cap (finished first, then the earliest to expire);
   - the shrink, with entries still live.
 - **The two TTLs pinned:** `the_protocols_lease_ttl_is_the_one_enforced` asserts that the protocol's default lease TTL, which the runtime's horizon reads, equals the pipeline's `LEASE_TTL_SECS`. The coordinator's lease authority enforces the latter: `ClusterServer::with_hooks` takes the TTL from the authority, not from `ServerConfig`.
+
+## A flake fixed on the way (the runner, shared edit)
+- **The flake:** `remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_worker` (`crates/pipeline/tests/remote_intake.rs`) failed 1 run in 3 in a reviewer's local runs.
+  - `hand_parked` makes the built-in worker the holder before it counts the key in `stats.parked`.
+  - The test waited for the holder only, then read `parked`, so it could read it in between.
+- **The fix, in the test only:** one wait, with the test's 15 s deadline, for both conditions: the built-in worker holds the key and `parked == 1`.
+- **The production order stays:** `parked` counts a key only once the pool has taken it. A key the pool has no room for goes back to wait and isn't counted, so counting it earlier would be wrong.
+- **Checked:** 30 of 30 runs pass.
