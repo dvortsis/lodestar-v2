@@ -1,4 +1,4 @@
-# X-wk-fetched-lease decisions: the holder's own claim on a fetched lease
+# X-wk-fetched-lease decisions (#752): the holder's own claim on a fetched lease
 
 Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer lagging past the worker's 180 s grace could still end the holder's own lease as lost. Brief: runner, 2026-11-12, option a′ from rv-737.
 
