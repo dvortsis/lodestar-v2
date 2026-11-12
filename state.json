@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T09:03:52Z",
+  "updated_at": "2026-11-12T09:38:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7208,6 +7208,11 @@
       "id": "owner-flag-dht-join-refresh",
       "at": "2026-11-12T09:03:52Z",
       "note": "At X-dht-lookup-converge merge, FYI the owner: no join refresh (far buckets empty for 15 min after start, so our far-half answers were poor), and cold-start lookups ran on an empty table and got a 120 s backoff. Fix: park thin-table lookups until bootstrap finishes (no router seeding, a politeness call under \u00a72.33), plus a one-time paced join refresh. Name both under \u00a72.19."
+    },
+    {
+      "id": "ENR-12-n6-n7",
+      "at": "2026-11-12T09:38:52Z",
+      "note": "From rv-750-9e3bbe78: N6 clamp lookup_timeout in IdentifySource::new; N7 timed-out lookup never reaches HostLimiter::record (fold into N3 backoff). For ENR-12 or first non-default Config."
     }
   ],
   "main_health": [
@@ -7888,6 +7893,16 @@
       "pr": 717,
       "sha": "80f009cdd7aa60b7124e2274fc1c47a1b6804164",
       "at": "2026-11-12T09:00:35Z"
+    },
+    {
+      "pr": 751,
+      "sha": "114bb625a43af24602d8c9e7148c198f068245c3",
+      "at": "2026-11-12T09:38:52Z"
+    },
+    {
+      "pr": 749,
+      "sha": "3b10e3d0b1b81f294f8f283028336a6917ce8712",
+      "at": "2026-11-12T09:38:52Z"
     }
   ],
   "active_sessions": {
@@ -8125,7 +8140,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T09:00:35Z",
+    "updated": "2026-11-12T09:38:52Z",
     "items": [
       {
         "slot": 1,
@@ -8186,8 +8201,8 @@
         "slice": "D-outputs-guide",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: #747 rv CHANGES (2ac5eaff) relayed 2026-11-12T08:04:08Z; fix round, then X-out2-curl-wrap",
-        "since": "2026-11-12T07:13:28Z",
+        "doing": "#747: main in, Figure 7.2 regen after #749 merged",
+        "since": "2026-11-12T09:38:52Z",
         "status": "active"
       },
       {
@@ -8258,7 +8273,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T09:03:52Z",
+  "updated": "2026-11-12T09:38:52Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
