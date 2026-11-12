@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:01:24Z",
+  "updated_at": "2026-11-12T12:14:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7274,6 +7274,11 @@
       "id": "X-dht-bep42-rejoin",
       "at": "2026-11-12T12:01:24Z",
       "note": "rv-756 N-3 (pre-existing): if the BEP 42 node id changes mid-bootstrap, the new id neighbourhood is never looked up; add one self-lookup on id change. Add to slices.yaml in the next runner PR."
+    },
+    {
+      "id": "X-756-decisions-wording",
+      "at": "2026-11-12T12:14:43Z",
+      "note": "rv-756-ad83d61d N-a/N-b: fix lines 31 and 33 of docs/decisions/2026-11-12-X-dht-lookup-converge.md with the review replacement wording, in the next runner docs PR (avoids a CI round on #756)."
     }
   ],
   "main_health": [
@@ -8359,7 +8364,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T12:01:24Z",
+  "updated": "2026-11-12T12:14:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
