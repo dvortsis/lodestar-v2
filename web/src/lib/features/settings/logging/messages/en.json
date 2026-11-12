@@ -485,6 +485,8 @@
 	"settings_logging_ev_pipeline_tracker_skipped_h": "A tracker was skipped.",
 	"settings_logging_ev_pipeline_hot_snapshot_unreadable_n": "Saved queue unreadable",
 	"settings_logging_ev_pipeline_hot_snapshot_unreadable_h": "A saved snapshot of the work queue couldn't be read.",
+	"settings_logging_ev_pipeline_spool_damaged_n": "Worker spool damaged",
+	"settings_logging_ev_pipeline_spool_damaged_h": "A segment of a worker's offline spool was damaged. What couldn't be read was dropped; the rest is sent once the worker reconnects.",
 	"settings_logging_ev_pipeline_scheduler_store_failed_n": "Scheduler state not saved",
 	"settings_logging_ev_pipeline_scheduler_store_failed_h": "The scheduler's state couldn't be saved.",
 	"settings_logging_ev_pipeline_priority_unreadable_n": "Priorities unreadable",

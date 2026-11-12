@@ -553,6 +553,9 @@ pub struct SpoolStats {
     /// Syncs that failed: the segment is closed at once, so nothing more is
     /// appended to a file whose writes may not have landed.
     pub sync_failures: AtomicU64,
+    /// Damage lines logged (`pipeline.spool_damaged`), at most
+    /// [`MAX_DAMAGE_LOGS`].
+    pub damage_logged: AtomicU64,
 }
 
 fn get(n: &AtomicU64) -> u64 {
@@ -693,11 +696,17 @@ fn sync_dir(dir: &Path) -> Result<(), SpoolError> {
 ///   point itself on Windows) and doesn't wait on a FIFO (`O_NONBLOCK`),
 ///   and the file opened must be the one looked at (device and inode on
 ///   Unix; not a reparse point on Windows);
-/// - a file with another hard link (Unix: a link count above 1, the rule
-///   `privdrop.rs` follows) is unlinked without being overwritten, since
-///   zeroing it would zero the file it shares.
-///
-/// So nothing planted in the folder can have another file zeroed.
+/// - **Unix:** a file with another hard link (a link count above 1, the
+///   rule `privdrop.rs` follows) is unlinked without being overwritten,
+///   since zeroing it would zero the file it shares. Nothing planted in the
+///   folder can have another file zeroed.
+/// - **Windows:** a file's link count isn't on stable Rust, so a hard link
+///   is not detected: a regular file planted here as a hard link to another
+///   file has that file's contents zeroed too. Planting one needs the right
+///   to create files in the spool folder, which takes its permissions from
+///   the worker's data folder; the spool doesn't check them itself. The
+///   spool's own leftover second link (a temp name beside its segment) is
+///   never zeroed: `Spool::open` unlinks it without overwriting it.
 pub fn secure_remove(path: &Path) -> Result<(), SpoolError> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -755,9 +764,8 @@ fn same_file(_: &fs::Metadata, b: &fs::Metadata) -> bool {
 }
 
 /// Whether a file has another hard link (Unix). Windows' link count isn't
-/// on stable Rust: there the spool never leaves a second link it would then
-/// remove (`Spool::open` unlinks a leftover temp file beside its segment
-/// without overwriting it).
+/// on stable Rust, so there this is always `false`: a hard-linked file is
+/// zeroed with its other names (see [`secure_remove`]).
 #[cfg(unix)]
 fn shared(m: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -817,21 +825,74 @@ pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// How [`write_atomic`] puts the file in place.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Place {
-    /// A new segment: refused if one of that name exists.
-    New,
-    /// A reseal: replaces the segment of that name.
-    Replace,
+/// A new segment that couldn't be made: whether its file was placed (so it
+/// is on disk and must stay in the counts) when it failed.
+struct NotMade {
+    error: SpoolError,
+    placed: bool,
 }
 
-/// Writes `bytes` as `<dir>/<seq>.lsp` atomically: any stale temp file is
-/// removed, a new temp file is written (never opened through a link),
-/// synced, put in place, and the folder synced. Never renames over an open
-/// file. A new segment is linked into place, which fails if the name is
-/// taken, so a live segment is never overwritten.
-fn write_atomic(dir: &Path, seq: u64, bytes: &[u8], place: Place) -> Result<(), SpoolError> {
+#[cfg(test)]
+thread_local! {
+    /// Tests: the next new segment's folder sync fails, after placement.
+    static FAIL_NEXT_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Tests: run on the next new segment's name right after it is placed
+    /// (something swapping the name before the first append).
+    static AFTER_PLACING: std::cell::Cell<Option<fn(&Path)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Makes a new segment `<dir>/<seq>.lsp` holding `bytes` (its header), and
+/// returns the handle that wrote it, for the appends: they go to the very
+/// file the spool created, never to whatever a name points to by then. A
+/// stale temp file is removed first; the new one is created private, never
+/// through a link (`create_new`), written, synced, then linked into place,
+/// which fails if the name is taken, so no file is ever replaced. Its temp
+/// name is unlinked (one that can't be, because another program holds it,
+/// is cleaned up at the next open), and the folder synced.
+fn place_new(dir: &Path, seq: u64, bytes: &[u8]) -> Result<File, NotMade> {
+    let not = |placed| {
+        move |e: io::Error| NotMade {
+            error: SpoolError::Io("make a segment in", e.kind()),
+            placed,
+        }
+    };
+    let tmp = dir.join(segment_name(seq, TEMP_EXT));
+    let target = dir.join(segment_name(seq, SEGMENT_EXT));
+    secure_remove(&tmp).map_err(|error| NotMade {
+        error,
+        placed: false,
+    })?;
+    let mut file = create_private(&tmp).map_err(not(false))?;
+    if let Err(e) = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| fs::hard_link(&tmp, &target))
+    {
+        drop(file);
+        let _ = fs::remove_file(&tmp);
+        return Err(not(false)(e));
+    }
+    let _ = fs::remove_file(&tmp);
+    #[cfg(test)]
+    if let Some(swap) = AFTER_PLACING.with(std::cell::Cell::take) {
+        swap(&target);
+    }
+    #[cfg(test)]
+    if FAIL_NEXT_DIR_SYNC.with(|f| f.replace(false)) {
+        return Err(not(true)(io::Error::other("forced by a test")));
+    }
+    sync_dir(dir).map_err(|error| NotMade {
+        error,
+        placed: true,
+    })?;
+    Ok(file)
+}
+
+/// Rewrites segment `<dir>/<seq>.lsp` with `bytes` atomically (a reseal; a
+/// new segment is made by [`place_new`]): any stale temp file is removed, a
+/// new temp file is written (never opened through a link), synced, renamed
+/// over the segment, which is closed, and the folder synced.
+fn write_atomic(dir: &Path, seq: u64, bytes: &[u8]) -> Result<(), SpoolError> {
     let tmp = dir.join(segment_name(seq, TEMP_EXT));
     let target = dir.join(segment_name(seq, SEGMENT_EXT));
     secure_remove(&tmp)?;
@@ -842,16 +903,7 @@ fn write_atomic(dir: &Path, seq: u64, bytes: &[u8], place: Place) -> Result<(), 
         let _ = fs::remove_file(&tmp);
         return Err(SpoolError::Io("write a segment in", e.kind()));
     }
-    let placed = match place {
-        Place::Replace => fs::rename(&tmp, &target),
-        // Linked is placed: a temp name that can't be removed now (another
-        // program holds it) is cleaned up at the next open, and must not
-        // stop the segment counting as made.
-        Place::New => fs::hard_link(&tmp, &target).map(|()| {
-            let _ = fs::remove_file(&tmp);
-        }),
-    };
-    if let Err(e) = placed {
+    if let Err(e) = fs::rename(&tmp, &target) {
         let _ = fs::remove_file(&tmp);
         return Err(SpoolError::Io("place a segment in", e.kind()));
     }
@@ -917,6 +969,7 @@ impl Spool {
                         closed.insert(seq, Closed { bytes: len, frames });
                     } else if secure_remove(&path).is_ok() {
                         bump(&stats.dropped_corrupt);
+                        log_damage(&stats, seq, "header");
                         bump(&stats.removed);
                     } else {
                         bump(&stats.leftovers);
@@ -1056,20 +1109,32 @@ impl Spool {
             seq,
             created: now,
         };
-        write_atomic(&self.dir, seq, &header.encode(), Place::New)?;
+        // The number is spent before anything is written: a write that
+        // fails part-way (a folder sync refused, or a file already at that
+        // name) leaves the next append a fresh name, never the same one
+        // again until a restart.
         self.next_seq = next;
-        let path = self.dir.join(segment_name(seq, SEGMENT_EXT));
-        let file = no_follow(OpenOptions::new().append(true))
-            .open(&path)
-            .map_err(io_err("open a segment of"))?;
-        let looked = fs::symlink_metadata(&path).map_err(io_err("open a segment of"))?;
-        let opened = file.metadata().map_err(io_err("open a segment of"))?;
-        if !looked.file_type().is_file() || !same_file(&looked, &opened) {
-            return Err(SpoolError::Io(
-                "open a segment of",
-                io::ErrorKind::InvalidInput,
-            ));
-        }
+        let file = match place_new(&self.dir, seq, &header.encode()) {
+            Ok(file) => file,
+            Err(NotMade { error, placed }) => {
+                // Placed, then the folder sync failed: the header-only
+                // segment is on disk, so it stays in the counts (the next
+                // open reads it).
+                if placed {
+                    self.closed.insert(
+                        seq,
+                        Closed {
+                            bytes: HEADER_LEN as u64,
+                            frames: 0,
+                        },
+                    );
+                    self.stats
+                        .bytes
+                        .fetch_add(HEADER_LEN as u64, Ordering::Relaxed);
+                }
+                return Err(error);
+            }
+        };
         self.stats
             .bytes
             .fetch_add(HEADER_LEN as u64, Ordering::Relaxed);
@@ -1149,6 +1214,7 @@ impl Spool {
         let path = self.dir.join(segment_name(seq, SEGMENT_EXT));
         let bytes = read_capped(&path, SEGMENT_BYTES + MAX_FRAME as u64 + FRAME_HEAD as u64)?;
         let count = self.counted.insert(seq);
+        let mut torn = false;
         let mut seg = Segment {
             seq,
             records: Vec::new(),
@@ -1160,13 +1226,19 @@ impl Spool {
             Ok(d) if d.header.worker == self.worker && d.header.seq == seq => d,
             _ => {
                 self.damaged(seq, "header", count, &mut seg.damage);
+                if count {
+                    log_damage(&self.stats, seq, "header");
+                }
                 return Ok(seg);
             }
         };
         seg.frames = decoded.frames.len();
         match decoded.tail {
             Tail::Clean => {}
-            Tail::Torn if count => bump(&self.stats.dropped_torn),
+            Tail::Torn if count => {
+                bump(&self.stats.dropped_torn);
+                torn = true;
+            }
             Tail::Torn => {}
             Tail::Corrupt => self.damaged(seq, "frame", count, &mut seg.damage),
         }
@@ -1192,6 +1264,14 @@ impl Spool {
                     seg.index.push(i);
                 }
                 Err(_) => self.damaged(seq, "record", count, &mut seg.damage),
+            }
+        }
+        // One line for the segment, naming the first damaged part found,
+        // the first time it's read; however many of its frames are bad.
+        if count {
+            let first = seg.damage.first().map(|d| d.part);
+            if let Some(part) = first.or(torn.then_some("torn")) {
+                log_damage(&self.stats, seq, part);
             }
         }
         Ok(seg)
@@ -1307,7 +1387,7 @@ impl Spool {
             }
             // Renamed over the old file, whose blocks aren't zeroed: what
             // they hold is sealed under the key about to be retired.
-            write_atomic(&self.dir, seq, &out, Place::Replace)?;
+            write_atomic(&self.dir, seq, &out)?;
             self.forget(seq);
             self.closed.insert(
                 seq,
@@ -1362,6 +1442,25 @@ fn count_frames(path: &Path) -> io::Result<u64> {
     Ok(n)
 }
 
+/// The most damage lines one spool logs (a worker runs one spool), all
+/// segments together: a spool damaged throughout can't flood the log. Each
+/// segment logs one line, the first time it's read.
+pub const MAX_DAMAGE_LOGS: u64 = 64;
+
+/// Logs one damaged segment by its number and the first damaged part found
+/// (`header`, `frame`, `seal`, `record` or `torn`), never a byte of it, up
+/// to [`MAX_DAMAGE_LOGS`] for this spool.
+fn log_damage(stats: &SpoolStats, seq: u64, part: &'static str) {
+    if stats.damage_logged.load(Ordering::Relaxed) < MAX_DAMAGE_LOGS {
+        bump(&stats.damage_logged);
+        lodestar_log::log_event!(
+            crate::log_events::SPOOL_DAMAGED,
+            segment = lodestar_log::Count(seq),
+            part = part
+        );
+    }
+}
+
 fn bump(n: &AtomicU64) {
     n.fetch_add(1, Ordering::Relaxed);
 }
@@ -1369,6 +1468,89 @@ fn bump(n: &AtomicU64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn secrets() -> Arc<dyn Sealer> {
+        Arc::new(lodestar_integrations::SecretStore::from_key(&[3; 32]))
+    }
+
+    fn record(batch: u64) -> Record {
+        Record {
+            kind: Kind::Results,
+            batch,
+            at: 1_800_000_000,
+            leases: vec![([1; 20], batch)],
+            payload: vec![7; 40],
+        }
+    }
+
+    /// A segment placed whose folder sync then fails stays in the counts,
+    /// matching the disk, and the next append makes a fresh one.
+    #[test]
+    fn a_failed_folder_sync_keeps_the_counts_matching_the_disk() {
+        let now = 1_800_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Spool::open(dir.path(), 9, Caps::default(), secrets()).unwrap();
+        FAIL_NEXT_DIR_SYNC.with(|f| f.set(true));
+        assert!(s.append(&record(1), now).is_err());
+        assert_eq!(s.segments(), vec![1]);
+        // Each file's own size: on Windows a folder listing's sizes can
+        // lag a file still being written.
+        let on_disk = |d: &Path| -> u64 {
+            fs::read_dir(d)
+                .unwrap()
+                .map(|e| fs::metadata(e.unwrap().path()).unwrap().len())
+                .sum()
+        };
+        assert_eq!(s.bytes(), HEADER_LEN as u64);
+        assert_eq!(s.bytes(), on_disk(dir.path()));
+        s.append(&record(2), now).unwrap();
+        s.close_active().unwrap();
+        assert_eq!(s.segments(), vec![1, 2]);
+        assert_eq!(s.bytes(), on_disk(dir.path()));
+    }
+
+    /// Appends go to the file the spool made, through the handle that made
+    /// it: a file swapped in at the segment's name afterwards (a planted
+    /// link or anything else) gets nothing.
+    #[cfg(unix)]
+    #[test]
+    fn appends_never_follow_the_segments_name() {
+        let now = 1_800_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim");
+        fs::write(&victim, b"precious").unwrap();
+        let mut s = Spool::open(dir.path(), 9, Caps::default(), secrets()).unwrap();
+        s.append(&record(1), now).unwrap();
+        let name = dir.path().join(segment_name(1, SEGMENT_EXT));
+        fs::remove_file(&name).unwrap();
+        std::os::unix::fs::symlink(&victim, &name).unwrap();
+        s.append(&record(2), now).unwrap();
+        s.close_active().unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"precious");
+    }
+
+    /// Between a new segment's placement and its first append, its name is
+    /// swapped for another file: the append still goes to the spool's own
+    /// file, through the handle that made it, never to the one at the name.
+    #[test]
+    fn a_segment_swapped_out_after_placing_gets_the_appends() {
+        fn swap(target: &Path) {
+            fs::rename(target, target.with_extension("moved")).unwrap();
+            fs::write(target, b"planted").unwrap();
+        }
+        let now = 1_800_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Spool::open(dir.path(), 9, Caps::default(), secrets()).unwrap();
+        AFTER_PLACING.with(|f| f.set(Some(swap)));
+        s.append(&record(1), now).unwrap();
+        s.append(&record(2), now).unwrap();
+        let name = dir.path().join(segment_name(1, SEGMENT_EXT));
+        assert_eq!(fs::read(&name).unwrap(), b"planted");
+        let moved = fs::read(name.with_extension("moved")).unwrap();
+        assert_eq!(moved.len() as u64, s.bytes(), "header and both frames");
+        assert!(moved.len() > HEADER_LEN + 2 * FRAME_HEAD);
+    }
 
     #[test]
     fn a_header_round_trips_and_its_sum_is_checked() {
