@@ -1522,3 +1522,275 @@ async fn a_retried_claim_hands_the_key_over_once() {
     })
     .await;
 }
+
+// Lease reconciliation after a reconnect (WK-11b).
+
+fn held(k: u8, token: u64) -> HeldLease {
+    HeldLease { key: key(k), token }
+}
+
+fn done(returned: u32, unknown: u32, leases: u32) -> Option<ReconcileAnswer> {
+    Some(ReconcileAnswer::Done {
+        returned,
+        unknown,
+        leases,
+    })
+}
+
+/// A worker that reconnected lists what it still holds. The coordinator
+/// gives back the leases from earlier sessions the list leaves out, as an
+/// expiry would (granted again under new tokens, harvested once), keeps
+/// the ones handed to it on this session, and counts listed leases it
+/// doesn't have without creating them. The counts then agree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reconnected_worker_gets_back_only_the_leases_its_list_leaves_out() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let first = c.session(&nas).await;
+        let grants = first.claim(found(&*c.clock, &[1, 2, 3])).await.unwrap();
+        let t: Vec<u64> = grants.iter().map(token_of).collect();
+        // The connection drops; the worker comes back knowing only key 1.
+        drop(first);
+        let mut a = c.session(&nas).await;
+        // Its own claim on key 3, answered with the lease on this session,
+        // and a new key: both on their way, or here, when it lists.
+        let again = a.claim(found(&*c.clock, &[3, 4])).await.unwrap();
+        assert_eq!(token_of(&again[0]), t[2]);
+        assert_eq!(a.heartbeat().await.unwrap().leases, 4);
+        let answer = a
+            .holding(vec![held(1, t[0]), held(9, 12_345)])
+            .await
+            .unwrap();
+        assert_eq!(answer, done(1, 1, 3));
+        let WorkerEvent::Regranted(items) = event(&mut a).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].key(), key(2));
+        assert_ne!(token_of(&items[0]), t[1]);
+        assert_eq!(c.server.lease(&InfoHash(key(9))), None, "never created");
+        let s = c.server.snapshot();
+        assert_eq!((s.reconcile_returned, s.reconcile_unknown), (1, 1));
+        assert_eq!((s.harvested, s.regrants, s.outcomes), (4, 1, 0));
+        assert_eq!(a.heartbeat().await.unwrap().leases, 4);
+        // A list of everything it holds now returns nothing.
+        let all = vec![
+            held(1, t[0]),
+            held(2, token_of(&items[0])),
+            held(3, t[2]),
+            held(4, token_of(&again[1])),
+        ];
+        assert_eq!(a.holding(all).await.unwrap(), done(0, 0, 4));
+    })
+    .await;
+}
+
+/// A list can only give back its sender's own leases: another worker's
+/// lease, listed or not, is never touched, and a lease whose result is in
+/// the coordinator's hands (`Fetched`) stays for its commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_list_never_touches_another_workers_lease_or_a_fetched_one() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let pc = c.join("pc").await;
+        let a = c.session(&nas).await;
+        let b = c.session(&pc).await;
+        let ta: Vec<u64> = a
+            .claim(found(&*c.clock, &[1, 2]))
+            .await
+            .unwrap()
+            .iter()
+            .map(token_of)
+            .collect();
+        let tb = token_of(&b.claim(found(&*c.clock, &[3])).await.unwrap()[0]);
+        a.report(vec![OutcomeItem {
+            key: key(2),
+            token: ta[1],
+            outcome: Outcome::Fetched,
+        }])
+        .await
+        .unwrap();
+        a.heartbeat().await.unwrap();
+        drop(a);
+        let a = c.session(&nas).await;
+        // b's lease, claimed under a's name.
+        assert_eq!(a.holding(vec![held(3, tb)]).await.unwrap(), done(1, 1, 1));
+        let lease = |k| c.server.lease(&InfoHash(key(k))).map(|l| l.token.0);
+        assert_eq!(lease(3), Some(tb));
+        assert_eq!(lease(2), Some(ta[1]), "fetched: kept for its commit");
+        assert_ne!(lease(1), Some(ta[0]), "returned, granted again");
+        let lease = c.server.lease(&InfoHash(key(3))).unwrap();
+        assert_eq!(lease.holder, pc.worker());
+    })
+    .await;
+}
+
+/// A paused (quarantined) worker's list is refused and changes nothing;
+/// once it's resumed, its list counts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_paused_workers_list_is_refused() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let first = c.session(&nas).await;
+        let t = token_of(&first.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+        drop(first);
+        let a = c.session(&nas).await;
+        assert!(c.server.pause(nas.worker()));
+        assert_eq!(
+            a.holding(vec![]).await.unwrap(),
+            Some(ReconcileAnswer::Refused)
+        );
+        assert_eq!(
+            c.server.lease(&InfoHash(key(1))).map(|l| l.token.0),
+            Some(t)
+        );
+        assert_eq!(c.server.snapshot().reconcile_refused, 1);
+        assert!(c.server.resume(nas.worker()));
+        assert_eq!(a.holding(vec![]).await.unwrap(), done(1, 0, 0));
+    })
+    .await;
+}
+
+/// The list is a snapshot. A lease committed before it lands stays
+/// committed (listed, it's counted unknown, never created again); a
+/// listed lease committed after it commits as usual; and a lease returned
+/// and then reported is a stale report, never a second loss.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_list_racing_commits_and_reports_loses_and_double_counts_nothing() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let w = nas.worker();
+        let first = c.session(&nas).await;
+        let t: Vec<u64> = first
+            .claim(found(&*c.clock, &[1, 2, 3]))
+            .await
+            .unwrap()
+            .iter()
+            .map(token_of)
+            .collect();
+        drop(first);
+        let a = c.session(&nas).await;
+        let authority = c.server.authority();
+        let k = |n| InfoHash(key(n));
+        // Key 1's batch commits while the list is on its way.
+        assert!(authority.commit(w, &k(1), Token(t[0])).is_some());
+        let answer = a.holding(vec![held(1, t[0]), held(3, t[2])]).await.unwrap();
+        assert_eq!(answer, done(1, 1, 1));
+        assert_eq!(c.server.lease(&k(1)), None, "committed, not created");
+        // Key 3's result was out when the list was built: it commits.
+        assert!(authority.commit(w, &k(3), Token(t[2])).is_some());
+        // Key 2 went back; the worker's late loss report is stale.
+        let before = c.server.snapshot();
+        a.report(vec![fetched(key(2), t[1])]).await.unwrap();
+        a.heartbeat().await.unwrap();
+        let s = c.server.snapshot();
+        assert_eq!(s.stale_reports, before.stale_reports + 1);
+        assert_eq!(s.outcomes, before.outcomes);
+        assert_eq!(s.harvested, 3);
+    })
+    .await;
+}
+
+/// A long list goes in parts. Parts out of order, or of a round the
+/// session never started, are refused once, at the round's last part.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_list_goes_in_parts_and_parts_out_of_order_are_refused() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let a = c.session(&nas).await;
+        let many: Vec<HeldLease> = (0..MAX_HOLDING_BATCH as u64 + 5)
+            .map(|i| HeldLease {
+                key: key(7),
+                token: i,
+            })
+            .collect();
+        let n = u32::try_from(many.len()).unwrap();
+        assert_eq!(a.holding(many).await.unwrap(), done(0, n, 0));
+        drop(a);
+
+        let mut link = c.link(&nas).await;
+        link.send(ToCoordinator::Hello(Hello::new(
+            nas.worker().0,
+            Capabilities::default(),
+        )))
+        .await
+        .unwrap();
+        let part = |round, part, last| {
+            ToCoordinator::Holding(Holding {
+                round,
+                part,
+                last,
+                leases: HeldList::default(),
+            })
+        };
+        link.send(part(5, 1, true)).await.unwrap();
+        link.send(part(6, 0, false)).await.unwrap();
+        link.send(part(6, 2, true)).await.unwrap();
+        link.send(part(7, 0, false)).await.unwrap();
+        link.send(part(7, 1, true)).await.unwrap();
+        let mut answers = Vec::new();
+        while answers.len() < 3 {
+            match tokio::time::timeout(WAIT, link.recv()).await.unwrap() {
+                Ok(Some(ToWorker::Reconciled(r))) => answers.push(r),
+                Ok(Some(_)) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        let refused = |round| Reconciled {
+            round,
+            answer: ReconcileAnswer::Refused,
+        };
+        assert_eq!(answers[..2], [refused(5), refused(6)]);
+        assert_eq!(answers[2].round, 7);
+        assert!(matches!(answers[2].answer, ReconcileAnswer::Done { .. }));
+        assert_eq!(c.server.snapshot().reconcile_refused, 2);
+    })
+    .await;
+}
+
+/// A coordinator older than minor 1 is never sent a list: the call says
+/// so and sends nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_older_coordinator_is_never_sent_a_list() {
+    guard(async {
+        let (mut coord, worker) = local_pair(16);
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::starting_now());
+        let (session, ()) = tokio::join!(start(worker, 1, clock), async {
+            assert!(matches!(
+                coord.recv().await,
+                Ok(Some(ToCoordinator::Hello(_)))
+            ));
+            coord
+                .send(ToWorker::Welcome(Welcome {
+                    major: PROTOCOL_MAJOR,
+                    minor: 0,
+                    worker: 1,
+                    heartbeat_ms: 5_000,
+                    lease_ttl_secs: 600,
+                    renew_now: false,
+                }))
+                .await
+                .unwrap();
+        });
+        let session = session.unwrap();
+        assert_eq!(session.holding(vec![held(1, 1)]).await.unwrap(), None);
+        // The next thing on the wire is what came after: no list.
+        let stats = Stats::default();
+        session.set_stats(stats).await.unwrap();
+        let beat = tokio::spawn(async move {
+            let _ = session.heartbeat().await;
+            session
+        });
+        assert!(matches!(
+            tokio::time::timeout(WAIT, coord.recv()).await.unwrap(),
+            Ok(Some(ToCoordinator::Heartbeat(_)))
+        ));
+        beat.abort();
+    })
+    .await;
+}

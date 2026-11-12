@@ -18,6 +18,7 @@
 //! | W → C | [`ToCoordinator::Renew`] / C → W [`ToWorker::Renewed`] | certificate renewal, rate-limited |
 //! | C → W | [`ToWorker::Drain`] / [`ToWorker::Stop`] | graceful drain; a stop with its reason |
 //! | W → C | [`ToCoordinator::Drained`] | the drain finished |
+//! | W → C | [`ToCoordinator::Holding`] / C → W [`ToWorker::Reconciled`] | the leases a worker still holds, in parts, after a replay with drift (minor 1, WK-11b) |
 //!
 //! Every v1 message exists (WK-0). The payloads other slices define stay
 //! opaque bytes here: `Assign`'s (WK-5), `Results` and `Counters` (WK-6),
@@ -37,7 +38,13 @@ use crate::JoinGrant;
 /// A worker refuses a coordinator, and the coordinator a worker, with
 /// another major version.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 0;
+/// Minor 1 (WK-11b): the coordinator takes [`ToCoordinator::Holding`].
+/// A minor version only adds messages a peer sends when the other side's
+/// minor says it knows them, so peers of any minor work together.
+pub const PROTOCOL_MINOR: u16 = 1;
+/// The first minor whose coordinator takes [`ToCoordinator::Holding`]: a
+/// worker sends it only when `Welcome.minor` is at least this.
+pub const MINOR_HOLDING: u16 = 1;
 
 /// Keys per claim (§19.2: "≤ 512 or every 250 ms").
 pub const MAX_CLAIM_BATCH: usize = 512;
@@ -59,6 +66,13 @@ pub const MAX_REVERIFY: usize = 256;
 /// CA certificates in a renewal grant (current and previous).
 pub const MAX_CAS: usize = 4;
 pub const MAX_CERT: usize = 4096;
+/// Leases in one [`Holding`] part: about 240 KiB, well under a frame.
+pub const MAX_HOLDING_BATCH: usize = 8192;
+/// Parts in one [`Holding`] list: 2,097,152 leases, twice the largest pool
+/// an assignment allows (`assign::MAX_POOL_CAP`, keys held plus results
+/// out). A worker holding more doesn't send a list.
+pub const MAX_HOLDING_PARTS: u32 = 256;
+pub const MAX_HOLDING: usize = MAX_HOLDING_BATCH * MAX_HOLDING_PARTS as usize;
 
 /// A worker's first message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,6 +331,89 @@ pub enum Outcome {
     },
 }
 
+/// One lease a worker still holds: its key and fencing token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct HeldLease {
+    pub key: [u8; 20],
+    pub token: u64,
+}
+
+/// One part of the list of leases a worker still holds (WK-11b), sent
+/// after a spool replay when its lease count and the coordinator's differ.
+/// Parts `0..` of one `round` go in order on one session; the last has
+/// `last` set. On the last, the coordinator returns for re-grant the
+/// leases it has on record for the worker that no part listed, delivered
+/// on an earlier session, and answers with [`ToWorker::Reconciled`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holding {
+    /// Chosen by the worker, never 0; the reply carries it back.
+    pub round: u64,
+    pub part: u32,
+    pub last: bool,
+    pub leases: HeldList,
+}
+
+/// At most [`MAX_HOLDING_BATCH`] leases. The count is checked against the
+/// cap when decoding starts, before anything is allocated.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct HeldList(pub Vec<HeldLease>);
+
+impl<'de> Deserialize<'de> for HeldList {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<HeldList, D::Error> {
+        struct Bounded;
+        impl<'de> serde::de::Visitor<'de> for Bounded {
+            type Value = HeldList;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "at most {MAX_HOLDING_BATCH} leases")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<HeldList, A::Error> {
+                // postcard states the length up front: refused before any
+                // allocation if it's over the cap.
+                let hint = seq.size_hint().unwrap_or(0);
+                if hint > MAX_HOLDING_BATCH {
+                    return Err(serde::de::Error::invalid_length(hint, &self));
+                }
+                let mut out = Vec::with_capacity(hint);
+                while let Some(l) = seq.next_element::<HeldLease>()? {
+                    if out.len() == MAX_HOLDING_BATCH {
+                        return Err(serde::de::Error::invalid_length(out.len() + 1, &self));
+                    }
+                    out.push(l);
+                }
+                Ok(HeldList(out))
+            }
+        }
+        d.deserialize_seq(Bounded)
+    }
+}
+
+/// The coordinator's answer to the last part of a [`Holding`] round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reconciled {
+    pub round: u64,
+    pub answer: ReconcileAnswer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReconcileAnswer {
+    /// `returned`: leases on record for the worker, not listed, given back
+    /// for re-grant. `unknown`: listed leases the coordinator doesn't have
+    /// on record for the worker (counted, never created).
+    /// `leases`: what it has on record for the worker now.
+    Done {
+        returned: u32,
+        unknown: u32,
+        leases: u32,
+    },
+    /// Nothing changed: the worker is paused (quarantined) or no longer
+    /// current, or the parts came out of order.
+    Refused,
+}
+
 /// A renewed certificate, as [`JoinGrant`] on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireGrant {
@@ -405,6 +502,9 @@ pub enum ToCoordinator {
     Counters(Payload),
     SnapshotAck(SnapshotAck),
     Reverified(ReverifyReply),
+    /// Minor 1: sent only to a coordinator whose `Welcome.minor` is at
+    /// least [`MINOR_HOLDING`]. Last, so older variants keep their tags.
+    Holding(Holding),
 }
 
 /// `Debug` is written out below: the opaque payloads show only their
@@ -434,6 +534,9 @@ pub enum ToWorker {
     },
     Snapshot(SnapshotChunk),
     Reverify(ReverifyRequest),
+    /// Minor 1: only ever an answer to [`ToCoordinator::Holding`], so an
+    /// older worker never gets one.
+    Reconciled(Reconciled),
 }
 
 impl std::fmt::Debug for ToWorker {
@@ -472,6 +575,7 @@ impl std::fmt::Debug for ToWorker {
                 .field("bytes", &c.bytes.len())
                 .finish(),
             ToWorker::Reverify(r) => f.debug_tuple("Reverify").field(r).finish(),
+            ToWorker::Reconciled(r) => f.debug_tuple("Reconciled").field(r).finish(),
         }
     }
 }
@@ -513,6 +617,9 @@ impl ToCoordinator {
             ToCoordinator::Results(p) | ToCoordinator::Counters(p) => p.valid(),
             ToCoordinator::SnapshotAck(a) => a.seq < MAX_CHUNKS,
             ToCoordinator::Reverified(r) => r.id != 0 && r.payload.len() <= MAX_OPAQUE,
+            ToCoordinator::Holding(h) => {
+                h.round != 0 && h.part < MAX_HOLDING_PARTS && h.leases.0.len() <= MAX_HOLDING_BATCH
+            }
         }
     }
 
@@ -532,6 +639,7 @@ impl ToCoordinator {
             ToCoordinator::Results(p) | ToCoordinator::Counters(p) => p.bytes.len(),
             ToCoordinator::SnapshotAck(_) => 0,
             ToCoordinator::Reverified(r) => r.payload.len(),
+            ToCoordinator::Holding(h) => h.leases.0.len() * 32,
         }
     }
 }
@@ -560,7 +668,8 @@ impl ToWorker {
             | ToWorker::HeartbeatAck(_)
             | ToWorker::RenewRefused(_)
             | ToWorker::Drain
-            | ToWorker::Stop(_) => true,
+            | ToWorker::Stop(_)
+            | ToWorker::Reconciled(_) => true,
         }
     }
 
@@ -583,7 +692,8 @@ impl ToWorker {
             | ToWorker::RenewRefused(_)
             | ToWorker::Drain
             | ToWorker::Stop(_)
-            | ToWorker::Accepted { .. } => 0,
+            | ToWorker::Accepted { .. }
+            | ToWorker::Reconciled(_) => 0,
         }
     }
 }
@@ -611,5 +721,107 @@ impl JoinReply {
             JoinReply::Granted(g) => g.valid(),
             JoinReply::Refused => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::{self, FrameError, MAX_FRAME, decode_to_coordinator};
+
+    fn holding(n: usize, last: bool) -> ToCoordinator {
+        ToCoordinator::Holding(Holding {
+            round: 3,
+            part: 0,
+            last,
+            leases: HeldList(
+                (0..n)
+                    .map(|i| HeldLease {
+                        key: [(i % 251) as u8; 20],
+                        token: u64::MAX - i as u64,
+                    })
+                    .collect(),
+            ),
+        })
+    }
+
+    /// A full part fits a frame however it compresses, and its size
+    /// budget holds against postcard.
+    #[test]
+    fn a_full_holding_part_fits_a_frame() {
+        let msg = holding(MAX_HOLDING_BATCH, true);
+        let plain = postcard::to_allocvec(&msg).unwrap();
+        assert!(plain.len() < MAX_FRAME, "{}", plain.len());
+        assert!(plain.len() <= msg.approx_size(), "{}", plain.len());
+        let frame = frame::encode(&msg).unwrap();
+        assert_eq!(decode_to_coordinator(&frame).unwrap(), msg);
+    }
+
+    /// Over the cap is refused when decoding starts, from the stated
+    /// length, before anything is allocated; round 0 and a part number
+    /// past the cap fail validation.
+    #[test]
+    fn a_holding_part_over_its_caps_is_refused() {
+        let over = postcard::to_allocvec(&holding(MAX_HOLDING_BATCH + 1, true)).unwrap();
+        assert!(postcard::from_bytes::<ToCoordinator>(&over).is_err());
+        // Only the length prefix of a huge list: refused without its body.
+        let mut lie = postcard::to_allocvec(&holding(0, true)).unwrap();
+        lie.pop();
+        lie.extend_from_slice(&[0xff, 0xff, 0xff, 0x7f]);
+        assert!(postcard::from_bytes::<ToCoordinator>(&lie).is_err());
+        let encode = |m: &ToCoordinator| frame::encode(m).unwrap();
+        let mut msg = holding(1, false);
+        if let ToCoordinator::Holding(h) = &mut msg {
+            h.round = 0;
+        }
+        assert_eq!(
+            decode_to_coordinator(&encode(&msg)),
+            Err(FrameError::Invalid)
+        );
+        if let ToCoordinator::Holding(h) = &mut msg {
+            h.round = 1;
+            h.part = MAX_HOLDING_PARTS;
+        }
+        assert_eq!(
+            decode_to_coordinator(&encode(&msg)),
+            Err(FrameError::Invalid)
+        );
+        // An empty list is a real answer: the worker holds nothing.
+        assert!(decode_to_coordinator(&encode(&holding(0, true))).is_ok());
+    }
+
+    /// The new messages are last, so every older message keeps its tag
+    /// and an older peer decodes what it knows unchanged.
+    #[test]
+    fn older_messages_keep_their_tags() {
+        let tag = |m: &ToCoordinator| postcard::to_allocvec(m).unwrap()[0];
+        assert_eq!(
+            tag(&ToCoordinator::Hello(Hello::new(
+                1,
+                Capabilities::default()
+            ))),
+            0
+        );
+        assert_eq!(
+            tag(&ToCoordinator::Reverified(ReverifyReply {
+                id: 1,
+                payload: vec![]
+            })),
+            9
+        );
+        assert_eq!(tag(&holding(0, true)), 10);
+        let reply = ToWorker::Reconciled(Reconciled {
+            round: 1,
+            answer: ReconcileAnswer::Refused,
+        });
+        assert_eq!(postcard::to_allocvec(&reply).unwrap()[0], 15);
+        assert_eq!(
+            postcard::to_allocvec(&ToWorker::Reverify(ReverifyRequest {
+                id: 1,
+                keys: vec![[0; 20]]
+            }))
+            .unwrap()[0],
+            14
+        );
     }
 }
