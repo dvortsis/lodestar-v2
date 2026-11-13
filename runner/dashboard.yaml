@@ -411,6 +411,7 @@ placement:
   - X-flake-email-bcc
   - X-flake-ops-pause
   - X-flake-query-token-style
+  - X-flake-relevance-lock
   - X-flake-utp-lossy
   - X-flake-export-wal
   - X-flake-filter-trails
@@ -632,6 +633,8 @@ placement:
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
+  - X-ci-filter-fleet
+  - X-companions-mount-check
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish
