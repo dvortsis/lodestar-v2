@@ -1,4 +1,4 @@
-# X-offline-retry-nits decisions (#843)
+# X-offline-retry-nits decisions (#844)
 
 Date: 2026-11-13Z. Slice: X-offline-retry-nits. Follows `2026-11-13-X-offline-retry.md`; no owner number changes.
 
