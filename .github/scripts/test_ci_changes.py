@@ -54,6 +54,13 @@ class Infra(unittest.TestCase):
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 
+class FleetEmergencyDown(unittest.TestCase):
+    def test_the_workflow_turns_infra_on_and_near_misses_dont(self):
+        self.assertTrue(ci_changes.INFRA.match(".github/workflows/fleet-emergency-down.yml"))
+        for f in [".github/workflows/fleet-emergency-down.yml.bak", ".github/workflows/fleet-emergency-down-x.yml"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
 class CompanionFiles(unittest.TestCase):
     def test_the_rules_and_the_docs_quoting_them_turn_infra_on(self):
         for f in ["packaging/companions/gluetun-post-rules.txt", "docs/user/03-keep-lodestar-safe.md", "docs/operations.md"]:
@@ -62,9 +69,11 @@ class CompanionFiles(unittest.TestCase):
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
     def test_the_packaging_copy_turns_the_rust_jobs_on(self):
-        for f in ["packaging/companions/gluetun-post-rules.txt", "packaging/companions/other.yml"]:
+        for f in ["packaging/companions/gluetun-post-rules.txt", "packaging/companions/compose/gluetun.yml",
+                  "packaging/companions/unraid/gluetun/my-gluetun.xml"]:
             self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
-        for f in ["packaging/docker/Dockerfile", "packaging/companions-x/a"]:
+        for f in ["packaging/docker/Dockerfile", "packaging/companions-x/a", "packaging/companions/README.md",
+                  "packaging/companions/gluetun-post-rules.txt.bak"]:
             self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
 
 
