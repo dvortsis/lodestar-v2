@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T18:43Z",
+  "updated_at": "2026-11-13T18:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8126,7 +8126,12 @@
     "docs-host-icmp-note-user-setup (gluetun guide: host ICMP in a user own setup)",
     "gluetun-guard-reboot-mid-block (re-hold on resume or outage-watcher check)",
     "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
-    "X-flake-companions-loopback: detect.rs bind-then-drop port race on Windows; next slice in slot 7 after #839 (owns crates/companions/tests/detect.rs); slices.yaml entry in next runner PR"
+    "X-flake-companions-loopback: detect.rs bind-then-drop port race on Windows; next slice in slot 7 after #839 (owns crates/companions/tests/detect.rs); slices.yaml entry in next runner PR",
+    {
+      "id": "X-filter01-rejudge",
+      "what": "one-time core re-judge of stored torrents judged under the old limits, behind a core-version marker; next slice in the X-filter01-fix session after #843",
+      "added": "2026-11-13T18:55Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8540,7 +8545,8 @@
       "slice": "X-filter01-fix",
       "head": "0a6837fe",
       "state": "Opus review + /security-review and an unanchored second read running; CI running",
-      "at": "2026-11-13T18:43Z"
+      "at": "2026-11-13T18:55Z",
+      "status": "changes relayed (two Opus reads); awaiting fix push"
     }
   },
   "merged_log": [
@@ -9187,7 +9193,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T18:43Z",
+    "updated": "2026-11-13T18:55Z",
     "items": [
       {
         "slot": 1,
@@ -9425,7 +9431,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T18:43Z",
+  "updated": "2026-11-13T18:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
