@@ -3,7 +3,7 @@
 // must be there without JS, match what the app renders box for box (no shift when it is swapped),
 // and stay out of the way where it would be wrong (sign-in screens, other languages).
 // Name ends in `routes.test.ts` so the `core` project runs it.
-import type { Locator, Page } from '@playwright/test';
+import type { Locator, Page, Route } from '@playwright/test';
 import { liveEvents } from './support/events-server';
 import { interact } from './support/interact';
 import { expect, test } from './support/test';
