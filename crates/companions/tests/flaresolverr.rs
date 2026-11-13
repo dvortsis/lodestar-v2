@@ -905,13 +905,17 @@ fn the_catalogue_entry_loads_and_waits_for_its_pin() {
     ));
     assert!(matches!(e.renderable(), Err(NotAvailable::AwaitingPin)));
     // The loader refuses it as anything but opt-in.
-    let raw = include_str!("../data/catalogue.json").replace(
-        r#""needed_for": ["challenge_solver"],
-      "opt_in": true"#,
-        r#""needed_for": ["challenge_solver"],
-      "opt_in": false"#,
-    );
-    assert_ne!(raw, include_str!("../data/catalogue.json"));
+    // Edited as JSON, so the checkout's line endings don't matter.
+    let mut v: Value = serde_json::from_str(include_str!("../data/catalogue.json")).unwrap();
+    let fs = v["entries"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"] == flaresolverr::ID)
+        .unwrap();
+    assert_eq!(fs["opt_in"], true);
+    fs["opt_in"] = json!(false);
+    let raw = v.to_string();
     assert!(Catalogue::from_json(&raw).is_err());
 }
 
