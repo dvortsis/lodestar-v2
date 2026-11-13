@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -357,6 +357,22 @@ async fn recorded_answers() {
     }
 }
 
+/// Whether `e` means the runner has no IPv6 loopback: no such address,
+/// or no IPv6 sockets at all (EAFNOSUPPORT).
+fn no_ipv6(e: &io::Error) -> bool {
+    const EAFNOSUPPORT: i32 = if cfg!(windows) {
+        10047
+    } else if cfg!(target_os = "linux") {
+        97
+    } else {
+        47 // macOS and the BSDs
+    };
+    matches!(
+        e.kind(),
+        io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
+    ) || e.raw_os_error() == Some(EAFNOSUPPORT)
+}
+
 /// A loopback port that nothing listens on, held closed for as long as
 /// this lives: bound on 127.0.0.1, and on ::1 where the runner has it,
 /// but never listening. A connection to it is refused, and no other
@@ -379,7 +395,7 @@ impl ClosedPort {
             v4.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
             let port = v4.local_addr().unwrap().port();
             let v6 = TcpSocket::new_v6().and_then(|s| {
-                s.bind((std::net::Ipv6Addr::LOCALHOST, port).into())?;
+                s.bind((Ipv6Addr::LOCALHOST, port).into())?;
                 Ok(s)
             });
             match v6 {
@@ -392,13 +408,15 @@ impl ClosedPort {
                 }
                 Err(e) if e.kind() == io::ErrorKind::AddrInUse => continue,
                 // No IPv6 loopback here: the probe can't fall back to it.
-                Err(_) => {
+                Err(e) if no_ipv6(&e) => {
                     return ClosedPort {
                         port,
                         _v4: v4,
                         _v6: None,
                     };
                 }
+                // Anything else would leave ::1 unheld: say so.
+                Err(e) => panic!("holding [::1]:{port}: {e}"),
             }
         }
         panic!("no loopback port free on both 127.0.0.1 and ::1");
