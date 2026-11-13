@@ -1599,7 +1599,7 @@ owner_queue:
   when: Any time; the fix is held until you choose
 - n: 14
   type: decision
-  action: 'APIFEAT-01 (blocking, rules): a choice between held fixes; the runner gives you the detail directly'
+  action: 'APIFEAT-01 (blocking, rules): a choice between two held options; the runner gives you the detail directly'
   unblocks: APIFEAT-01's fix slice (ext:owner-apifeat01-choice)
   when: Any time; the fix is held until you choose
 - n: 15

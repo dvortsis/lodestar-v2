@@ -1,4 +1,4 @@
-# Runner records: Tracks Q and U, the WK-18 split, owner questions (2026-11-13)
+# Runner records: Tracks Q and U, the WK-18 split, owner questions (2026-11-13, #813)
 
 The runner's records PR for build-plan §0.2 r4.1 and §0.9 item 10. It turns the parts of the two reviews that hold no held detail into slices in `runner/slices.yaml`, and adds the owner questions in §0.3 (rows 13 to 21, plus one) to `runner/dashboard.yaml`. It follows `2026-11-13-master-plan-r4-reviews.md` ("For the runner", items 2 to 4).
 
@@ -14,10 +14,10 @@ Nothing here reverses or loosens an owner decision, weakens a security or conten
   - X-insights-scroll-a11y is added to X-ui-guards' deps. X-ui-guards' fixture-backed axe run covers `/insights` and would otherwise be red, and widening X-ui-guards beyond icon imports and dead classes would break its launch rule.
   - X-session-draft-keep waits for X-wizard-labels-signout, since both own `settings/form/**` and `auth/**`.
 - **Follow-ups the runner had named:**
-  - **ENR-13b**: the detail view offers the opened item to the identification runtime, and IdentifySource is wired in serve. It carries `ext:owner-v07-q5`, as ENR-10 does.
+  - **ENR-13b**: the detail view offers the opened item to the identification runtime, API side only. IdentifySource's wiring in serve, the Legal Notice's Wikidata line and X-identify-route-switch land with X-consent-gate-lift-external, as ENR-14's decision (`docs/decisions/2026-11-12-ENR-14.md`) recorded. It carries `ext:owner-v07-q5`, as ENR-10 does.
   - **X-gluetun-templates-hostfile**: replaces X-gluetun-templates' plan A, a post-rules file the user saves, with Lodestar writing the file from its embedded copy.
   - **X-consent-gate-lift-r2**: Account's conditions, from r1's "For r2" list. The gate stays closed for Account.
-  - **X-consent-gate-lift-account** and **X-consent-gate-lift-external**: the gate flips, each behind the owner's Legal Notice sentence. SRC-02 (important, sources) is settled before the External flip.
+  - **X-consent-gate-lift-account** and **X-consent-gate-lift-external**: the gate flips, each behind the owner's Legal Notice sentence. SRC-02 (important, sources) is settled before either flip, as build-plan §0.3's veto list says.
   - **X-worker-service-log**: worker progress lines get log events under the SCM.
 - **Roadmap:** two new steps, Track U (row 4, column 5) and Track Q (row 4, column 6). Track Q feeds the M8 step and the 1.0 step; Track U feeds the M8 step. The v0.5.2 step now says INFRA-01 is checked before the tag.
 
@@ -43,7 +43,7 @@ Nothing here reverses or loosens an owner decision, weakens a security or conten
 - Its `deps` don't change yet: the fix slices join them as they're sliced.
 
 ## Not sliced yet
-- **The held findings' fix slices** (the content-safety and hostile-input groups, CMP-01 and the rest of Track Q's blocking and important ids) aren't in `runner/slices.yaml` yet. The runner adds them later, named by id only, as each owner choice or placement settles.
+- **The held findings' fix slices** (the content-safety and hostile-input groups, CMP-01 and Track Q's other blocking and important security or content-safety ids) aren't in `runner/slices.yaml` yet. The runner adds them later, named by id only, as each owner choice or placement settles.
 - **The rest of Track Q and Track U steps 5 to 8** are triaged by the runner later: blocking and important before 1.0, the rest as Track B.
 
 ## Flags for the owner (§2.19)
