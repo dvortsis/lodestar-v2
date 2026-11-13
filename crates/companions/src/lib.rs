@@ -19,6 +19,9 @@
 //! - [`detect`]: finding qBittorrent, Prowlarr and gluetun on fixed
 //!   targets or a URL you enter, and their health, through the SSRF guard
 //!   (CMP-8a).
+//! - [`flaresolverr`]: FlareSolverr, opt-in only: its detection and
+//!   health, and Prowlarr's indexer proxy once you switch it on (CMP-12,
+//!   owner §2.47, Q21).
 //! - [`fetch`] and [`verify`]: a pinned artifact's download through the
 //!   entry's host allowlist, and its size, SHA-256 and upstream signature
 //!   checks (CMP-1).
@@ -47,6 +50,7 @@ pub mod credentials;
 pub mod detect;
 pub mod extract;
 pub mod fetch;
+pub mod flaresolverr;
 pub mod guided;
 pub mod inputs;
 pub mod layout;

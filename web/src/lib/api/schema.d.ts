@@ -394,6 +394,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/companions/{id}/egress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Sets its route, then restarts it on the new route. The route is checked
+         *     as a source's is (`direct`, or `socks5` with a usable `host:port`; the
+         *     `interface` and `bind_address` routes, whose lookups would leave outside
+         *     them, are `409 route_unavailable`), and a SOCKS5 route's kill switch is
+         *     always on. Like a source's route change it needs the admin `password`
+         *     (`428 confirm_required`). `200` once saved: `restarting` says whether
+         *     its restart on the new route began (its row's `health` shows when it's
+         *     back); when it didn't, `not_restarted` says why, and the route is used
+         *     at its next start.
+         */
+        put: operations["setCompanionEgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/companions/{id}/guided/forget": {
         parameters: {
             query?: never;
@@ -3987,6 +4014,7 @@ export interface components {
              *     names only, never values. What `…/reveal` can show.
              */
             credentials: string[];
+            egress: null | components["schemas"]["CompanionEgress"];
             /** @description Null when Lodestar didn't install it. */
             health: null | ("unknown" | "healthy" | "unhealthy");
             /** @description The catalogue id, e.g. `qbittorrent`. */
@@ -4005,6 +4033,8 @@ export interface components {
              *     `guided_only`, …); null when it can, or when it's up to date.
              */
             refusal: string | null;
+            /** @description Where it runs, or would run if it were installed here. */
+            runs: "lodestar" | "own_container" | "yours" | "not_here";
             /** @description The templates it offers. */
             templates: ("compose" | "unraid")[];
         };
@@ -4018,6 +4048,47 @@ export interface components {
         /** @description `POST /companions/{id}/confirm`: the plan's settings, echoed exactly. */
         CompanionConfirmRequest: {
             settings: string[];
+        };
+        /**
+         * @description A companion's route (Q18): the same setting, with the same names, as a
+         *     source's route. A SOCKS5 route carries no credentials.
+         */
+        CompanionEgress: {
+            /**
+             * @description Where a companion's route comes from.
+             * @enum {string}
+             */
+            from: "saved" | "source";
+            setting: null | components["schemas"]["EgressSetting"];
+        };
+        /**
+         * @description The route was saved. `restarting` says whether the companion's restart
+         *     on it has begun; when it hasn't, the route is saved but not applied yet,
+         *     and it's used at the companion's next start.
+         */
+        CompanionEgressChanged: {
+            /** @description The route as saved now. */
+            egress: components["schemas"]["CompanionEgress"];
+            id: string;
+            /**
+             * @description Why it isn't restarting on the new route, as a stable code
+             *     (`not_wired`, `busy`, `restart_failed`, …); null when it is.
+             */
+            not_restarted: string | null;
+            /**
+             * @description True once its restart on the new route has begun. That isn't yet
+             *     running on it: the companion's row (its `health`) shows when it's
+             *     back, as after `POST …/restart`. False: saved, not applied yet.
+             */
+            restarting: boolean;
+        };
+        /**
+         * @description `PUT /companions/{id}/egress`: the new route, and the admin password
+         *     entered again (a route change always needs it, as a source's does).
+         */
+        CompanionEgressRequest: {
+            egress: components["schemas"]["EgressSetting"];
+            password?: string | null;
         };
         /** @description `POST /companions/{id}/guided/forget`: `confirm` is the companion's id. */
         CompanionForgetRequest: {
@@ -4868,6 +4939,33 @@ export interface components {
          * @enum {string}
          */
         DownloadClientKind: "qbittorrent" | "transmission" | "deluge" | "rtorrent" | "aria2";
+        /**
+         * @description A source's egress setting.
+         * @example {
+         *       "proxy": "10.8.0.1:1080",
+         *       "route": "socks5"
+         *     }
+         */
+        EgressSetting: {
+            /**
+             * @description For `socks5`: who resolves names. Left out, it's `proxy` for a
+             *     source that only reaches its built-in sites, so lookups stay inside
+             *     the tunnel, and `local` for a source whose sites you enter, so a
+             *     public name can't reach devices on the proxy's network.
+             */
+            dns?: "proxy" | "local";
+            /**
+             * @description For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+             *     a bracketed IPv6 address). A name is resolved when the source
+             *     starts.
+             */
+            proxy?: string;
+            /**
+             * @description How a source's traffic leaves (§18.4, §18.7).
+             * @enum {string}
+             */
+            route: "direct" | "socks5" | "interface" | "bind_address";
+        };
         /** @description An email channel as the form has it. */
         EmailDraft: {
             allow_private?: boolean;
@@ -12099,6 +12197,123 @@ export interface operations {
             };
             /** @description `unknown_companion`, `no_credential`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirm_required`: no password. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many password attempts. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setCompanionEgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanionEgressRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionEgressChanged"];
+                };
+            };
+            /** @description `invalid_egress`, with `field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_password`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `route_unavailable`, `takes_no_route`, `cant_follow_route` (it can't follow that route kind: qBittorrent takes no SOCKS5 proxy), `not_installed`, `busy`, `not_wired`. Nothing was saved. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

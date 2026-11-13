@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "name": "FlareSolverr",
+    "fields": [
+      {"order": 0, "name": "host", "label": "Host", "value": "http://localhost:8191/", "type": "textbox", "advanced": false, "privacy": "normal", "isFloat": false},
+      {"order": 1, "name": "requestTimeout", "label": "Request Timeout", "unit": "seconds", "helpText": "FlareSolverr maxTimeout Request Parameter", "value": 60, "type": "number", "advanced": true, "privacy": "normal", "isFloat": false}
+    ],
+    "implementationName": "FlareSolverr",
+    "implementation": "FlareSolverr",
+    "configContract": "FlareSolverrSettings",
+    "infoLink": "https://wiki.servarr.com/prowlarr/supported#flaresolverr",
+    "tags": [1],
+    "onHealthIssue": false,
+    "supportsOnHealthIssue": false,
+    "includeHealthWarnings": false,
+    "testCommand": null
+  },
+  {
+    "id": 2,
+    "name": "Office proxy",
+    "fields": [
+      {"order": 0, "name": "host", "label": "Host", "value": "10.0.0.5", "type": "textbox", "advanced": false, "privacy": "normal", "isFloat": false},
+      {"order": 1, "name": "port", "label": "Port", "value": 8080, "type": "number", "advanced": false, "privacy": "normal", "isFloat": false},
+      {"order": 2, "name": "username", "label": "Username", "value": "", "type": "textbox", "advanced": false, "privacy": "userName", "isFloat": false},
+      {"order": 3, "name": "password", "label": "Password", "value": "", "type": "password", "advanced": false, "privacy": "password", "isFloat": false}
+    ],
+    "implementationName": "Http",
+    "implementation": "Http",
+    "configContract": "HttpSettings",
+    "infoLink": "https://wiki.servarr.com/prowlarr/supported#http",
+    "tags": [],
+    "onHealthIssue": false,
+    "supportsOnHealthIssue": false,
+    "includeHealthWarnings": false,
+    "testCommand": null
+  }
+]

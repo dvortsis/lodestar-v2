@@ -163,6 +163,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/companions/{id}/remove"),
     ("POST", "/companions/{id}/remove"),
     ("POST", "/companions/{id}/restart"),
+    ("PUT", "/companions/{id}/egress"),
     ("GET", "/companions/{id}/logs"),
     ("POST", "/companions/{id}/template"),
     ("POST", "/companions/{id}/credentials/{field}/reveal"),

@@ -41,6 +41,7 @@ use crate::adapter::{
     cookie_value_ok,
 };
 use crate::catalogue::{Catalogue, Entry, Exposure, Proto};
+use crate::flaresolverr;
 use crate::inputs::CompanionId;
 
 pub mod gluetun;
@@ -51,7 +52,9 @@ pub mod qbittorrent;
 /// Lodestar's companion manager and nothing about this install.
 const PROBE_USER_AGENT: &str = "Lodestar-Companions";
 
-/// The companions this module has adapters for.
+/// The companions [`auto_detect`] probes for. FlareSolverr has adapters
+/// too, but is opt-in (owner §2.47, Q21): only
+/// [`crate::flaresolverr::find`] probes it, once you switch it on.
 const ADAPTERS: [&str; 3] = [qbittorrent::ID, prowlarr::ID, gluetun::ID];
 
 /// The detection adapter for a catalogue entry, if there is one.
@@ -60,6 +63,7 @@ pub fn detector(id: &CompanionId) -> Option<Box<dyn Detect>> {
         qbittorrent::ID => Some(Box::new(qbittorrent::QBittorrent::new(id.clone()))),
         prowlarr::ID => Some(Box::new(prowlarr::Prowlarr::new(id.clone()))),
         gluetun::ID => Some(Box::new(gluetun::Gluetun::new(id.clone()))),
+        flaresolverr::ID => Some(Box::new(flaresolverr::FlareSolverr::new(id.clone()))),
         _ => None,
     }
 }
@@ -70,6 +74,7 @@ pub fn health(id: &CompanionId) -> Option<Box<dyn Health>> {
         qbittorrent::ID => Some(Box::new(qbittorrent::QBittorrent::new(id.clone()))),
         prowlarr::ID => Some(Box::new(prowlarr::Prowlarr::new(id.clone()))),
         gluetun::ID => Some(Box::new(gluetun::Gluetun::new(id.clone()))),
+        flaresolverr::ID => Some(Box::new(flaresolverr::FlareSolverr::new(id.clone()))),
         _ => None,
     }
 }
@@ -310,6 +315,7 @@ impl CompanionHttp {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,
             Method::Put => reqwest::Method::PUT,
+            Method::Delete => reqwest::Method::DELETE,
         };
         let mut req = reqwest::Request::new(method, url);
         *req.timeout_mut() = Some(request.limits.timeout());
@@ -595,7 +601,18 @@ mod tests {
         assert_eq!(path(qbittorrent::ID), Some(qbittorrent::VERSION_PATH));
         assert_eq!(path(prowlarr::ID), Some(prowlarr::PING_PATH));
         assert_eq!(path(gluetun::ID), None);
-        let other = CompanionId::parse("flaresolverr").unwrap();
+        assert_eq!(path(flaresolverr::ID), Some(flaresolverr::HEALTH_PATH));
+        // FlareSolverr has adapters, but no default probe (Q21).
+        let fs = &c.get(flaresolverr::ID).unwrap().id;
+        assert_eq!(detector(fs).unwrap().companion(), fs);
+        assert_eq!(health(fs).unwrap().companion(), fs);
+        assert!(!ADAPTERS.contains(&flaresolverr::ID));
+        assert!(
+            auto_probes(c, Runtime::Container)
+                .iter()
+                .all(|(id, _)| id.as_str() != flaresolverr::ID)
+        );
+        let other = CompanionId::parse("jackett").unwrap();
         assert!(detector(&other).is_none() && health(&other).is_none());
     }
 }

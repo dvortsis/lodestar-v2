@@ -239,8 +239,8 @@ Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
   lets packets of connections opened earlier leave through the normal
   network, with your own address. Download the file, pinned to the commit it
   was checked at, and check it (gluetun runs its lines as root):
-  `https://raw.githubusercontent.com/dvortsis/lodestar-v2/dbad7937994c786675a65ee3b69e5058fd99e56e/packaging/companions/gluetun-post-rules.txt`,
-  SHA-256 `ca05435e6f16ee2f44e35e79613a6a35d18f4019da1989cf11119deb348d746a`.
+  `https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt`,
+  SHA-256 `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`.
   Mount it read-only at `/iptables/post-rules.txt` in gluetun and set
   `VPN_INTERFACE=wg0` (gluetun's default is `tun0`, which the rules don't
   name; checked with WireGuard). Confirm with

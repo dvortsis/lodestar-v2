@@ -73,6 +73,31 @@
       ],
       "health": null,
       "templates": ["compose_service", "unraid_template"]
+    },
+    {
+      "id": "flaresolverr",
+      "name": "FlareSolverr",
+      "licence": {
+        "spdx": "MIT",
+        "url": "https://github.com/FlareSolverr/FlareSolverr/blob/master/LICENSE"
+      },
+      "homepage": "https://github.com/FlareSolverr/FlareSolverr",
+      "needed_for": ["challenge_solver"],
+      "opt_in": true,
+      "hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "native": {
+        "release": "https://github.com/FlareSolverr/FlareSolverr/releases/download/",
+        "artifacts": [
+          {"platform": "linux", "arch": "x86_64", "archive": "tar_gz", "executable": "flaresolverr/flaresolverr", "pin": null},
+          {"platform": "windows", "arch": "x86_64", "archive": "zip", "executable": "flaresolverr/flaresolverr.exe", "pin": null}
+        ]
+      },
+      "container": {"image": "ghcr.io/flaresolverr/flaresolverr", "digest": null, "name": "flaresolverr"},
+      "ports": [
+        {"name": "api", "port": 8191, "proto": "tcp", "exposure": "internal"}
+      ],
+      "health": {"port": "api", "path": "/health"},
+      "templates": ["compose_service", "unraid_template"]
     }
   ]
 }
