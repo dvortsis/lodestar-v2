@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T06:41Z",
+  "updated_at": "2026-11-13T06:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7914,7 +7914,8 @@
     },
     {
       "id": "gluetun-pin-ci-filter",
-      "text": "rv-815 O6: the gluetun post-rules SHA-256 pin test runs only when infra/ changes (.github/scripts/ci_changes.py path filter); widen to the rules file (crates/companions/src/gluetun-post-rules.txt, packaging/companions/gluetun-post-rules.txt) and docs/user/03-keep-lodestar-safe.md. Fold into X-ci-advisories or a small CI slice."
+      "text": "rv-815 O6: the gluetun post-rules SHA-256 pin test runs only when infra/ changes (.github/scripts/ci_changes.py path filter); widen to the rules file (crates/companions/src/gluetun-post-rules.txt, packaging/companions/gluetun-post-rules.txt) and docs/user/03-keep-lodestar-safe.md. Fold into X-ci-advisories or a small CI slice.",
+      "status": "in PR #822"
     },
     {
       "id": "account-setupneed",
@@ -7945,19 +7946,19 @@
       "at": "2026-11-13T06:14Z",
       "what": "operator-apply needs RUNNER_USER_ID, OPERATOR_BOT_USER_ID, CHANNEL_PR, OPERATOR_MODEL_ROUTINE + env secrets/AWS; checklist sent to owner via dashboard; waiting on owner OK to open the operator-channel draft PR. Do not dispatch until owner confirms all set.",
       "status": "open",
-      "note": " 2026-11-13T06:40Z: owner confirms (via dashboard) repo variables set: OWNER_USER_ID, OPERATOR_STOP=false, RUNNER_USER_ID, CHANNEL_PR=821, OPERATOR_MODEL_ROUTINE, OPERATOR_MODEL_TRIAGE. Still missing: the App and OPERATOR_BOT_USER_ID, the env secrets except ANTHROPIC_API_KEY, the OIDC customisation, the OP-2a stack (owner deploys it in the console; runner sends the package)."
+      "note": " 2026-11-13T06:40Z: owner confirms (via dashboard) repo variables set: OWNER_USER_ID, OPERATOR_STOP=false, RUNNER_USER_ID, CHANNEL_PR=821, OPERATOR_MODEL_ROUTINE, OPERATOR_MODEL_TRIAGE. Still missing: the App and OPERATOR_BOT_USER_ID, the env secrets except ANTHROPIC_API_KEY, the OIDC customisation, the OP-2a stack (owner deploys it in the console; runner sends the package). 2026-11-13T06:45Z: runner-reviewed owner setup package sent to the owner (runner chat) and the dashboard: App, environment, OIDC, OP-2a stack (owner deploys in the console). Runner calls flagged (\u00a72.19): cleanup stack before FLEET_LIVE, not before operator-apply; each wake needs owner approval (owner's call to change); all-zero Akamai counts clear bootstrap blocker 2. Dispatch operator-apply only after the owner says done."
     },
     {
       "id": "gluetun-pin-ci-filter",
       "at": "2026-11-13T06:28Z",
       "what": "rv-815 O6: widen .github/scripts/ci_changes.py COMPANION_PINS to the gluetun rules files and docs/user chapter 3. Own small slice X-gluetun-pin-ci-filter (helper, sonnet) after X-ci-advisories merges; add to slices.yaml in the next runner PR and remove the O6 line from X-ci-advisories notes.",
-      "status": "open"
+      "status": "in PR #822"
     },
     {
       "id": "next-runner-pr-owns",
       "at": "2026-11-13T06:31Z",
       "what": "Next runner PR: X-gluetun-templates-hostfile owns += crates/lodestar/src/privdrop.rs (+tests; /companions + gluetun only, no-follow fchown, never create /companions, /security-review) and crates/companions/tests/flaresolverr.rs; add X-gluetun-pin-ci-filter; add FILTER-01 / FILTER-03 / APIFEAT-01 fix slices by id only (choices sent to sessions directly).",
-      "status": "open",
+      "status": "in PR #822",
       "note": " 2026-11-13T06:39Z: X-gluetun-templates-hostfile also owns crates/lodestar/src/logging/events.rs, web/src/lib/features/settings/logging/messages/en.json and zh.json (and logs_catalog.txt / event-names.ts if regenerated): runner-approved for the companions_dir log events."
     },
     {
@@ -8997,7 +8998,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T06:41Z",
+    "updated": "2026-11-13T06:45Z",
     "items": [
       {
         "slot": 1,
@@ -9246,7 +9247,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T06:41Z",
+  "updated": "2026-11-13T06:45Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
