@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:26Z",
+  "updated_at": "2026-11-13T17:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8121,7 +8121,9 @@
       "id": "regrant-pool-room",
       "note": "#839 session: re-grants never check the worker pool room; a full pool evicts and reports lost, then re-harvests. Now bounded by the 2x pool-cap lease cap (was unbounded); consider room-aware regrant",
       "at": "2026-11-13T17:22Z"
-    }
+    },
+    "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
+    "docs-host-icmp-note-user-setup (gluetun guide: host ICMP in a user own setup)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8534,6 +8536,12 @@
       "head": "08b4677f",
       "review": "fresh Opus + security review running",
       "at": "2026-11-13T17:12Z"
+    },
+    "841": {
+      "slice": "X-gluetun-host-guard",
+      "head": "8e67ef04",
+      "state": "Opus + security review running; CI running",
+      "at": "2026-11-13T17:27Z"
     }
   },
   "merged_log": [
@@ -9180,7 +9188,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T17:26Z",
+    "updated": "2026-11-13T17:27Z",
     "items": [
       {
         "slot": 1,
@@ -9422,7 +9430,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:26Z",
+  "updated": "2026-11-13T17:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
