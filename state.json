@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:59Z",
+  "updated_at": "2026-11-13T01:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8870,7 +8870,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:59Z",
+    "updated": "2026-11-13T01:04Z",
     "items": [
       {
         "slot": 1,
@@ -8904,7 +8904,7 @@
         "slice": "X-cmp-egress-api",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8PqqssoVTSpsA9adU: #805 rv-805 CHANGES (B1 cant_follow_route 409, O1) relayed; kept build slot",
+        "doing": "#805 fix round pushed (7fa5a8e2): B1 cant_follow_route refused before save, with test and 409 in OpenAPI; runner delta-checked OK; merge on green",
         "since": "2026-11-12T22:33Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -9240,7 +9240,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T00:59Z",
+  "updated": "2026-11-13T01:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
