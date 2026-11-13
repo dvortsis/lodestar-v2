@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T07:02Z",
+  "updated_at": "2026-11-13T07:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7965,6 +7965,10 @@
       "id": "pr817-landlock-rerun",
       "note": "2026-11-13T06:39Z: #817 ubuntu test red on companions limits.rs landlock_keeps_the_companion_out_of_lodestars_data (not the PR's). Runner uses #817's one re-run once the run completes; if red again, open a fix slice for the test.",
       "status": "one re-run of the failed jobs started 2026-11-13T07:02Z; pass = review + merge, red again = fix slice for the landlock test"
+    },
+    {
+      "id": "gluetun-hostfile-privdrop-notes",
+      "status": "2026-11-13T07:05Z: runner approved X-gluetun-templates-hostfile switching privdrop from the chown handover to root writing a fixed root-owned post-rules file (stricter: the dropped user cannot alter rules gluetun runs as root). Next runner PR: update its slices.yaml notes. Owner \u00a72.19 flag via dashboard."
     }
   ],
   "main_health": [
@@ -8999,7 +9003,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T07:02Z",
+    "updated": "2026-11-13T07:05Z",
     "items": [
       {
         "slot": 1,
@@ -9248,7 +9252,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T07:02Z",
+  "updated": "2026-11-13T07:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
