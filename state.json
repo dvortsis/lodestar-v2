@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T21:38Z",
+  "updated_at": "2026-11-13T21:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8564,12 +8564,6 @@
       "head": "ad992dd5",
       "state": "delta+security review MERGE; asked to merge main + regenerate schema (generated openapi overlap, 124 behind); then merge",
       "at": "2026-11-13T21:03Z"
-    },
-    "847": {
-      "slice": "X-flake-companions-loopback",
-      "head": "f20cb6d9",
-      "state": "open, CI running; awaiting ready",
-      "at": "2026-11-13T20:53Z"
     }
   },
   "merged_log": [
@@ -9216,7 +9210,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T21:38Z",
+    "updated": "2026-11-13T21:53Z",
     "items": [
       {
         "slot": 1,
@@ -9250,11 +9244,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-flake-companions-loopback",
+        "slice": "X-companions-loopback-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "detect.rs bind-then-drop port race",
-        "since": "2026-11-13T20:43Z",
+        "doing": "building (follow-up to #847)",
+        "since": "2026-11-13T21:53Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
@@ -9477,7 +9471,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T21:38Z",
+  "updated": "2026-11-13T21:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9950,6 +9944,12 @@
       "slice": "X-damaged-mark-links",
       "merged": "b46665b9",
       "at": "2026-11-13T21:36Z"
+    },
+    {
+      "pr": 847,
+      "slice": "X-flake-companions-loopback",
+      "merged": "1b4fd47a",
+      "at": "2026-11-13T21:53Z"
     }
   ]
 }
