@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:17Z",
+  "updated_at": "2026-11-13T01:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7852,6 +7852,11 @@
       "id": "uiux-moderate-user-1113",
       "added": "2026-11-13T01:17Z",
       "note": "Codebase-review session part 4 (owner-requested): docs/review/2026-11-13-ui-ux/04-plan-and-flow-review-moderate-user.md on claude/codebase-review-bugs-x9ff7p 5138adbe (re-commit into main with the other evidence folders; 34cbbafb has a bad trailer). Flow findings U1-U33, plan concerns D1-D11. Triage with code-review-1113-triage in the next runner PR. Act-first: U8 near-miss syntax silent zero results; U9 natural chips unasked; U1/U6/U7 setup length + empty index; U2 setup-token help; U4 SAFETY (wizard leads with router port forwarding, VPN second; route with content-safety/security eye); U10/U11 rail/rows expert-first; U13 Open in torrent client; U17-U20 alert naming/flow; U22/U23 download-client card; U25/U26 Insights plain summary + undo; U28 UTC vs Automatic TZ; U29-U31 Settings/Learn more; U33 single-key shortcuts default. Small copy/order: U16 U17 U19 U24 U27. OWNER QUESTION SET (proposals, one set to owner_queue): 1 name UI reader in s10.0; 2 reorder Search around words/clicks + default facets/row facts; 3 plain health summary ahead of Insights story; 4 three setup steps + checklist; 5 network step leads with safety; 6 accept GB as typed or units pref; 7 'Alert' single noun; 8 first-use prompt or default-off for single-key actions launching programs."
+    },
+    {
+      "id": "owner-b1-b2-first",
+      "added": "2026-11-13T01:22Z",
+      "note": "OWNER (2026-11-13, via codebase-review -> Remaining work plan session, second-hand): fix B1 and B2 first, ahead of the larger queue. Runner: next free BUILD slot (first of #805/#803/#807/#804 to merge) launches slice X-wizard-labels-signout (Sonnet ok: Svelte, pattern-following; Opus review). B1: web/src/lib/features/wizard/FieldsStep.svelte passes bare config keys (intensity, archive_raw, mmap_mib) to SettingField; use Settings screens' label/help keys; test that no rendered label equals its key. B2: no sign-out; web/src/lib/features/auth/LogoutButton.svelte imported nowhere; add Sign out to overflow menu and Settings > Security > Sessions. Then guards slice X-ui-guards: (a) lint ban ~icons/ph/* without -bold/-fill (124/141 Regular; fix imports); (b) lint ban sm:/md:/lg:/xl:/2xl: (4 uses, P2); (c) axe run on fixture data in CI for key screens (fixture project nightly/opt-in today). Evidence: claude/codebase-review-bugs-x9ff7p 5138adbe docs/review/2026-11-13-ui-ux/ incl. NEW 03-not-done.md; re-commit, never merge 34cbbafb (bad trailer). Record owner priority in next runner PR plan; keep part-4 eight proposals on owner_queue until answered."
     }
   ],
   "main_health": [
@@ -8881,7 +8886,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:17Z",
+    "updated": "2026-11-13T01:22Z",
     "items": [
       {
         "slot": 1,
@@ -9246,7 +9251,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:17Z",
+  "updated": "2026-11-13T01:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
