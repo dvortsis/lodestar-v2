@@ -433,7 +433,6 @@ fn funnel_events_agree_with_the_cohort_rows() {
     // (event time); the funnel reads cohort_hour. Each flush writes both
     // from the same counts (UI review 2026-11-13, B4), so every
     // (hour, stage, reason) agrees, summed over sources.
-    const FUNNEL_EVENTS: i64 = 14;
     let b = built();
     let conn = db(b.dir.path());
     let rows = |sql: &str| -> BTreeMap<(i64, i64, i64), i64> {
@@ -444,7 +443,8 @@ fn funnel_events_agree_with_the_cohort_rows() {
             .collect()
     };
     let events = rows(&format!(
-        "SELECT hour, dim, key, value FROM rollup_hour WHERE metric = {FUNNEL_EVENTS}"
+        "SELECT hour, dim, key, value FROM rollup_hour WHERE metric = {}",
+        lodestar_pipeline::metric::FUNNEL_EVENTS
     ));
     // Searchable is counted at index commits (`record_searchable`), not by
     // the pipeline's flush.

@@ -337,5 +337,6 @@
 	"insights_overview_exc_fix_guide": "Open the guide",
 	"insights_overview_exc_new_tab": "(opens in a new tab)",
 	"insights_overview_strip_time": "In the selected time range, by when each step happened. Discover counts keys by when they were first harvested; Index is the count now.",
-	"insights_stage_fetch_none": "No keys were fetched or lost in this range."
+	"insights_stage_fetch_none": "No keys were fetched or lost in this range.",
+	"insights_stage_lost_none": "No keys were lost in this range."
 }

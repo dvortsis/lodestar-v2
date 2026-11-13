@@ -675,7 +675,7 @@ export function fetchBars(
 	locale?: string
 ): BarsSpec[] {
 	const losses = r.losses ?? [];
-	// Nothing fetched or lost: say so, not ten rows of 0 (UI review 2026-11-13, B4).
+	// No losses: say so, not ten rows of 0 (UI review 2026-11-13, B4).
 	const shown = losses.some((l) => l.count > 0) ? losses : [];
 	return [
 		{
@@ -683,7 +683,8 @@ export function fetchBars(
 			title: m.insights_stage_fetch_losses(),
 			csv: 'fetch.losses',
 			unavailable: r.losses === null,
-			empty: m.insights_stage_fetch_none(),
+			// Only a Fetched count of 0 says nothing was fetched; otherwise just nothing was lost.
+			empty: r.kpi.fetched === 0 ? m.insights_stage_fetch_none() : m.insights_stage_lost_none(),
 			items: shown.map((l) => ({
 				key: l.key,
 				label: reasonLabel(l.key),
