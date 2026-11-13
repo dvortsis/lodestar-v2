@@ -4,6 +4,8 @@
 //
 // - Asks `GET /system` on start, on each route change, when the tab is focused again, every 15 s
 //   on a Settings screen and once a minute elsewhere; the banner shares the same store.
+// - Asks again as soon as a Settings save answers (`saved.ts`), dropping any read that left
+//   before it, so the banner and the pill don't wait for the next poll.
 // - The banner floats (a fixed tray at the bottom), so it never moves content; it is mounted on the
 //   body and checks the route itself.
 // - The polite live region is created here, empty, as soon as the watch starts, and its text is
@@ -12,6 +14,7 @@
 import { mount, unmount, type Component } from 'svelte';
 import { page } from '$app/state';
 import { restart } from './restart.svelte';
+import { SETTINGS_SAVED } from './saved';
 import { announceText } from './text';
 
 const SETTINGS_MS = 15_000;
@@ -34,7 +37,12 @@ export function watchRestart(set: (needed: boolean) => void): () => void {
 	live.setAttribute('data-testid', 'restart-announce');
 	document.body.append(live);
 
+	const saved = () => {
+		asked = Date.now();
+		void restart.saved();
+	};
 	window.addEventListener('focus', ask);
+	window.addEventListener(SETTINGS_SAVED, saved);
 	const tick = setInterval(() => {
 		const every = location.pathname.startsWith('/settings') ? SETTINGS_MS : ELSEWHERE_MS;
 		if (!document.hidden && Date.now() - asked >= every) ask();
@@ -68,6 +76,7 @@ export function watchRestart(set: (needed: boolean) => void): () => void {
 		stopped = true;
 		clearInterval(tick);
 		window.removeEventListener('focus', ask);
+		window.removeEventListener(SETTINGS_SAVED, saved);
 		stopEffect();
 		if (shown) void unmount(shown);
 		live.remove();
