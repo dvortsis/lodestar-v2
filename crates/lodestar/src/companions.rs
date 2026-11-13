@@ -1288,15 +1288,15 @@ impl Service {
             .map_err(|_| CompanionsError::Internal("sealed"))
     }
 
-    /// Where gluetun's post-rules file goes: its companion-files folder on
-    /// the host, checked, and where Lodestar sees that folder. `None` when
-    /// Lodestar can't write it, so you save the file yourself:
-    /// - in a container, without `companions_dir` or without the
-    ///   `/companions` mount;
+    /// Where gluetun's post-rules file is: its companion-files folder on
+    /// the host, checked, and where Lodestar sees that folder. `None`, so
+    /// you save the file yourself:
+    /// - without `companions_dir` (there's no default anywhere);
+    /// - in a container, unless privdrop saved the file at `/companions`
+    ///   (exact and root-owned);
     /// - on Windows, which can't name a folder on gluetun's Linux host.
     ///
-    /// Natively the host folder is the folder itself: `companions_dir`, or
-    /// `lodestar-companions` beside the data folder.
+    /// Natively the host folder is the named folder itself.
     fn companion_files(
         &self,
         r: &TemplateRequest,
@@ -1988,15 +1988,22 @@ pub(crate) mod post_rules {
         if root.starts_with(&data) || data.starts_with(root) || parent.starts_with(&data) {
             return Err(NativeError::Data);
         }
-        match std::fs::create_dir(root) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        let created = match rustix::fs::mkdir(root, Mode::from_raw_mode(0o755)) {
+            Ok(()) => true,
+            // Yours already, or someone else's: checked below, never changed.
+            Err(Errno::EXIST) => false,
             Err(_) => return Err(NativeError::Unwritable),
-        }
+        };
         let r = open_dir(root).map_err(|e| match e {
             Errno::LOOP | Errno::NOTDIR => NativeError::Link,
             _ => NativeError::Unwritable,
         })?;
+        if created {
+            // Exactly 0755, whatever the umask (002 on many desktops would
+            // leave it group-writable, and then refused below).
+            rustix::fs::fchmod(&r, Mode::from_raw_mode(0o755))
+                .map_err(|_| NativeError::Unwritable)?;
+        }
         // Both folders yours (or root's) and writable by no one else:
         // another user who could write them could swap the file gluetun
         // runs as root. The outer one first, so nothing is made in it.
@@ -3685,13 +3692,34 @@ mod tests {
         assert_eq!(live.seen().len(), 2);
     }
 
+    /// Test setup that doesn't depend on the umask: folders 0755 (and their
+    /// parent), files 0644, as Docker and a default umask would leave them.
+    #[cfg(unix)]
+    fn md(p: impl AsRef<Path>) -> std::io::Result<()> {
+        let p = p.as_ref();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(p)?;
+        for q in [Some(p), p.parent()].into_iter().flatten() {
+            std::fs::set_permissions(q, std::fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn wf(p: impl AsRef<Path>, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+        let p = p.as_ref();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(p, text)?;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644))
+    }
+
     // ─── companion files (X-gluetun-templates-hostfile) ─────────────────
 
     /// A native service whose data folder is `<dir>/data`.
     #[cfg(unix)]
     fn native_in(dir: &Path) -> Service {
         let data = dir.join("data");
-        std::fs::create_dir(&data).unwrap();
+        md(&data).unwrap();
         Service {
             data,
             ..service(dir, pinned(), NATIVE, Arc::new(Unwired)).clone_parts()
@@ -3728,7 +3756,7 @@ mod tests {
         let input = s.input(&r).unwrap();
         assert_eq!(s.companion_files(&r, &input).unwrap(), None);
         // Named: saved there.
-        let root = dir.join("companions");
+        let root = dir.join("cfiles");
         let r = unraid_gluetun(serde_json::json!({"companions_dir": root.to_str().unwrap()}));
         let input = s.input(&r).unwrap();
         let (paths, local) = s.companion_files(&r, &input).unwrap().unwrap();
@@ -3751,9 +3779,9 @@ mod tests {
     fn natively_a_file_holding_something_else_is_left_alone() {
         let (_t, dir) = plain_tmp();
         let root = dir.join("companions");
-        std::fs::create_dir_all(root.join("gluetun")).unwrap();
-        std::fs::write(root.join("gluetun/post-rules.txt"), "mine\n").unwrap();
-        std::fs::create_dir(dir.join("data")).unwrap();
+        md(root.join("gluetun")).unwrap();
+        wf(root.join("gluetun/post-rules.txt"), "mine\n").unwrap();
+        md(dir.join("data")).unwrap();
         assert_eq!(post_rules::save_native(&root, &dir.join("data")), Ok(false));
         assert_eq!(
             std::fs::read_to_string(root.join("gluetun/post-rules.txt")).unwrap(),
@@ -3761,14 +3789,55 @@ mod tests {
         );
     }
 
+    /// Whatever the umask: a folder it creates is 0755, so a group-writable
+    /// umask (002, common on desktops) doesn't make it refuse its own. The
+    /// umask is process-wide, so the check runs in a child test process.
+    #[cfg(unix)]
+    #[test]
+    fn natively_new_folders_are_0755_whatever_the_umask() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-c", "umask 002 && exec \"$0\" \"$@\""])
+            .arg(exe)
+            .args([
+                "companions::tests::under_umask_002",
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+    }
+
+    /// Run by the test above, in a process whose umask is 002.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "run by natively_new_folders_are_0755_whatever_the_umask"]
+    fn under_umask_002() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        md(dir.join("data")).unwrap();
+        let probe = dir.join("probe");
+        std::fs::create_dir(&probe).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&probe), 0o775, "the umask is 002 here");
+        let root = dir.join("c");
+        assert_eq!(post_rules::save_native(&root, &dir.join("data")), Ok(true));
+        assert_eq!(mode(&root), 0o755);
+        assert_eq!(mode(&root.join("gluetun")), 0o755);
+        assert_eq!(mode(&root.join("gluetun/post-rules.txt")), 0o644);
+    }
+
     #[cfg(unix)]
     #[test]
     fn natively_a_folder_others_can_write_is_refused() {
         use std::os::unix::fs::PermissionsExt;
         let (_t, dir) = plain_tmp();
-        std::fs::create_dir(dir.join("data")).unwrap();
+        md(dir.join("data")).unwrap();
         let root = dir.join("open");
-        std::fs::create_dir(&root).unwrap();
+        md(&root).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert_eq!(
             post_rules::save_native(&root, &dir.join("data")),
@@ -3782,7 +3851,7 @@ mod tests {
     fn natively_the_data_folder_is_never_written_however_its_reached() {
         let (_t, dir) = plain_tmp();
         let data = dir.join("real-data");
-        std::fs::create_dir(&data).unwrap();
+        md(&data).unwrap();
         // Lodestar reaches its data folder through a link.
         std::os::unix::fs::symlink(&data, dir.join("data-link")).unwrap();
         let via = dir.join("data-link");
@@ -3802,10 +3871,10 @@ mod tests {
     fn natively_a_folder_reached_through_a_link_is_refused_before_anything_is_made() {
         let (_t, dir) = plain_tmp();
         let real = dir.join("real");
-        std::fs::create_dir(&real).unwrap();
+        md(&real).unwrap();
         std::os::unix::fs::symlink(&real, dir.join("link")).unwrap();
         let data = dir.join("data");
-        std::fs::create_dir(&data).unwrap();
+        md(&data).unwrap();
         assert_eq!(
             post_rules::save_native(&dir.join("link/companions"), &data),
             Err(post_rules::NativeError::Link)
@@ -3817,7 +3886,7 @@ mod tests {
             Err(post_rules::NativeError::Link)
         );
         let root = dir.join("c");
-        std::fs::create_dir(&root).unwrap();
+        md(&root).unwrap();
         std::os::unix::fs::symlink(&real, root.join("gluetun")).unwrap();
         assert_eq!(
             post_rules::save_native(&root, &data),
@@ -3937,7 +4006,7 @@ mod tests {
         use std::os::fd::AsFd;
         let (_t, dir) = plain_tmp();
         let root = dir.join("c");
-        std::fs::create_dir(&root).unwrap();
+        md(&root).unwrap();
         assert!(!post_rules::saved_by(&root, me()), "missing");
         let r = post_rules::open_dir(&root).unwrap();
         let (g, created) = post_rules::gluetun_dir(r.as_fd()).unwrap();
@@ -3965,25 +4034,25 @@ mod tests {
         }
         let file = root.join("gluetun/post-rules.txt");
         // Different bytes, too large, or a link: not trusted.
-        std::fs::write(&file, "other\n").unwrap();
+        wf(&file, "other\n").unwrap();
         assert!(!post_rules::saved_by(&root, me()));
-        std::fs::write(&file, RULES.repeat(2)).unwrap();
+        wf(&file, RULES.repeat(2)).unwrap();
         assert!(!post_rules::saved_by(&root, me()));
         let elsewhere = dir.join("rules");
-        std::fs::write(&elsewhere, RULES).unwrap();
+        wf(&elsewhere, RULES).unwrap();
         std::fs::remove_file(&file).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
         assert!(!post_rules::saved_by(&root, me()));
         // A linked gluetun folder or companion-files folder: not trusted.
         let other = dir.join("other");
-        std::fs::create_dir_all(other.join("gluetun")).unwrap();
-        std::fs::write(other.join("gluetun/post-rules.txt"), RULES).unwrap();
+        md(other.join("gluetun")).unwrap();
+        wf(other.join("gluetun/post-rules.txt"), RULES).unwrap();
         let linked = dir.join("linked");
         std::os::unix::fs::symlink(&other, &linked).unwrap();
         assert!(post_rules::saved_by(&other, me()));
         assert!(!post_rules::saved_by(&linked, me()));
         let c2 = dir.join("c2");
-        std::fs::create_dir(&c2).unwrap();
+        md(&c2).unwrap();
         std::os::unix::fs::symlink(other.join("gluetun"), c2.join("gluetun")).unwrap();
         assert!(!post_rules::saved_by(&c2, me()));
     }
@@ -3997,14 +4066,14 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let (_t, dir) = plain_tmp();
         let root = dir.join("c");
-        std::fs::create_dir(&root).unwrap();
+        md(&root).unwrap();
         let r = post_rules::open_dir(&root).unwrap();
         let (g, _) = post_rules::gluetun_dir(r.as_fd()).unwrap();
         let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
         assert_eq!(mode(&root.join("gluetun")), 0o755);
         let file = root.join("gluetun/post-rules.txt");
         let victim = dir.join("victim");
-        std::fs::write(&victim, "keep\n").unwrap();
+        wf(&victim, "keep\n").unwrap();
         std::os::unix::fs::symlink(&victim, &file).unwrap();
         post_rules::write(g.as_fd()).unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
@@ -4012,7 +4081,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), RULES);
         assert_eq!(mode(&file), 0o644);
         // A stale file is replaced.
-        std::fs::write(&file, "stale\n").unwrap();
+        wf(&file, "stale\n").unwrap();
         post_rules::write(g.as_fd()).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), RULES);
         let names: Vec<_> = std::fs::read_dir(root.join("gluetun"))
@@ -4022,7 +4091,7 @@ mod tests {
         assert_eq!(names, ["post-rules.txt"]);
         // A folder where the file goes (what Docker leaves) isn't replaced.
         std::fs::remove_file(&file).unwrap();
-        std::fs::create_dir(&file).unwrap();
+        md(&file).unwrap();
         assert_eq!(post_rules::found(g.as_fd()), Ok(post_rules::Found::Other));
         assert!(post_rules::write(g.as_fd()).is_err());
         assert!(file.is_dir());

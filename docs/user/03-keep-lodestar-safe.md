@@ -105,7 +105,9 @@ Lodestar's own Unraid template has a **Companion files** path, `/mnt/user/appdat
 The file and its folders belong to root. Lodestar can read them but not change them, so nothing it runs can change the rules gluetun runs as root. Settings → Companions will fill in gluetun's **Post-rules** path for you **(planned)**.
 
 > [!IMPORTANT]
-> Let Docker create the **Companion files** folder when you apply Lodestar's template. Don't make it over a network share, and don't run Unraid's **New Permissions** tool on it: Lodestar doesn't use a folder another user can write.
+> Let Docker create the **Companion files** folder when you apply Lodestar's template. Keep it outside Lodestar's **Data** folder and outside any other container's folder. Don't make it over a network share, and don't run Unraid's **New Permissions** tool on it: Lodestar doesn't use a folder another user can write.
+
+If gluetun started before the file existed, Docker made a folder named `post-rules.txt` in its place. Delete it with `rm -r /mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt`, then restart Lodestar and gluetun.
 
 To set the start order on Unraid:
 

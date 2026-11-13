@@ -58,7 +58,19 @@ Lodestar only reads. It points the template at the file only when every one of t
 - the file is a regular root-owned file within a size cap of the rules plus 1 KiB;
 - the file is byte-equal to the embedded rules.
 
-Anything else falls back to plan A. This also covers a `/companions` mapped onto `/data` or a companion's folder (fresh review I3): privdrop leaves such a folder alone, so no root-owned file is ever there.
+Anything else falls back to plan A.
+
+### What the container side can and can't tell (fresh review I3; runner review I1)
+privdrop judges `/companions` from inside the container only.
+- **It detects:**
+  - `/companions` being the same folder as `/data`, by inode;
+  - an overlap of their container paths;
+  - a folder holding anything but `gluetun`;
+  - a folder that isn't root's, or that others can write.
+- **It can't detect:** a host folder mounted at `/companions` that sits *inside* the host data folder, or inside another container's folder, on its own. From inside, the two mounts look unrelated.
+  - In such a folder, a root-owned `gluetun` folder and file would still be written. Whoever owns the enclosing folder, such as the data folder's PUID or another container's user, could rename `gluetun` away. The template-time check would then stop trusting it, but gluetun mounts by host path.
+- **Defences today:** the template-side check (`GluetunPaths::check`) refuses such host paths when the user types them. The guide says to keep the folder outside Lodestar's data folder and outside any other container's folder.
+- **The real check,** comparing the mounts' sources in `/proc/self/mountinfo`, is a follow-up slice the runner is opening. It isn't in this PR.
 
 ### Natively (no privdrop; Lodestar runs as its user)
 - **Only a folder you name.** There's no default beside the data folder (fresh review I1, I4). A default would name a folder on this machine in an Unraid template that may run on another, and could refuse a template for a field the user never filled in. This narrows the runner's "defaulting to a sibling" to an explicit folder; the runner gets it as a flag.

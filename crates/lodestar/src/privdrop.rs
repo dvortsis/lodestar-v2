@@ -794,9 +794,10 @@ mod imp {
             if !matches!(name, b"." | b".." | b"gluetun") {
                 return left(
                     "foreign",
+                    // Escaped: a name can hold control characters.
                     format!(
                         "it holds {}, not only gluetun's post-rules",
-                        String::from_utf8_lossy(name)
+                        name.escape_ascii()
                     ),
                 );
             }
@@ -1173,6 +1174,27 @@ mod tests {
             );
         }
 
+        /// Test setup that doesn't depend on the umask: folders 0755 (and their
+        /// parent), files 0644, as Docker and a default umask would leave them.
+        #[cfg(unix)]
+        fn md(p: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+            let p = p.as_ref();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::create_dir_all(p)?;
+            for q in [Some(p), p.parent()].into_iter().flatten() {
+                std::fs::set_permissions(q, std::fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
+        }
+
+        #[cfg(unix)]
+        fn wf(p: impl AsRef<std::path::Path>, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+            let p = p.as_ref();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(p, text)?;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644))
+        }
+
         fn me() -> u32 {
             rustix::process::geteuid().as_raw()
         }
@@ -1193,27 +1215,27 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let t = tmp.path();
             let data = t.join("data");
-            std::fs::create_dir(&data).unwrap();
+            md(&data).unwrap();
             let real = t.join("real");
-            std::fs::create_dir(&real).unwrap();
+            md(&real).unwrap();
             let link = t.join("link");
             symlink(&real, &link).unwrap();
             let linked_gluetun = t.join("linked-gluetun");
-            std::fs::create_dir(&linked_gluetun).unwrap();
+            md(&linked_gluetun).unwrap();
             symlink(&real, linked_gluetun.join("gluetun")).unwrap();
             let file_gluetun = t.join("file-gluetun");
-            std::fs::create_dir(&file_gluetun).unwrap();
-            std::fs::write(file_gluetun.join("gluetun"), b"").unwrap();
+            md(&file_gluetun).unwrap();
+            wf(file_gluetun.join("gluetun"), b"").unwrap();
             let holding = t.join("holding");
-            std::fs::create_dir(&holding).unwrap();
+            md(&holding).unwrap();
             symlink(&data, holding.join("data")).unwrap();
             let share = t.join("share");
-            std::fs::create_dir_all(share.join("gluetun")).unwrap();
-            std::fs::create_dir(share.join("qbittorrent")).unwrap();
+            md(share.join("gluetun")).unwrap();
+            md(share.join("qbittorrent")).unwrap();
             let file = t.join("file");
-            std::fs::write(&file, b"").unwrap();
+            wf(&file, b"").unwrap();
             let inner = data.join("inner");
-            std::fs::create_dir(&inner).unwrap();
+            md(&inner).unwrap();
             for (dir, want, why) in [
                 (t.join("missing"), "missing", "isn't mounted"),
                 (link, "link", "symlink"),
@@ -1240,18 +1262,18 @@ mod tests {
             // swapped after start-up, so nothing is written.
             use std::os::unix::fs::PermissionsExt;
             let open = t.join("open");
-            std::fs::create_dir(&open).unwrap();
+            md(&open).unwrap();
             std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
             let line = save_companions_rules(&open, &data, me());
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert!(!open.join("gluetun").exists());
             let mine = t.join("mine");
-            std::fs::create_dir(&mine).unwrap();
+            md(&mine).unwrap();
             let line = save_companions_rules(&mine, &data, me().wrapping_add(1));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert!(!mine.join("gluetun").exists());
             let loose = t.join("loose");
-            std::fs::create_dir_all(loose.join("gluetun")).unwrap();
+            md(loose.join("gluetun")).unwrap();
             std::fs::set_permissions(
                 loose.join("gluetun"),
                 std::fs::Permissions::from_mode(0o775),
@@ -1262,7 +1284,7 @@ mod tests {
             assert_eq!(std::fs::read_dir(loose.join("gluetun")).unwrap().count(), 0);
             // A gluetun folder someone else owns is left, untouched.
             let theirs = t.join("theirs");
-            std::fs::create_dir_all(theirs.join("gluetun")).unwrap();
+            md(theirs.join("gluetun")).unwrap();
             let line = save_companions_rules(&theirs, &data, me().wrapping_add(1));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert_eq!(
@@ -1280,9 +1302,9 @@ mod tests {
             let rules = lodestar_companions::compose::GLUETUN_POST_RULES;
             let tmp = tempfile::tempdir().unwrap();
             let data = tmp.path().join("data");
-            std::fs::create_dir(&data).unwrap();
+            md(&data).unwrap();
             let dir = tmp.path().join("companions");
-            std::fs::create_dir(&dir).unwrap();
+            md(&dir).unwrap();
             let file = dir.join("gluetun/post-rules.txt");
             let mode =
                 |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
@@ -1297,7 +1319,7 @@ mod tests {
             let again = save_companions_rules(&dir, &data, me()).to_string();
             assert!(again.contains("already in place"), "{again}");
             // An upgrade that changes the rules: the old file is replaced.
-            std::fs::write(&file, "old rules\n").unwrap();
+            wf(&file, "old rules\n").unwrap();
             let line = save_companions_rules(&dir, &data, me()).to_string();
             assert!(line.contains("post-rules saved"), "{line}");
             assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
