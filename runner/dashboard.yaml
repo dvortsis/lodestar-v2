@@ -438,6 +438,7 @@ placement:
   - X-svc-eventcreate-bounded
   - X-win-fs-followups
   - X-flake-portable-restart-3
+  - X-flake-scrape-udp-port
   - X-restart-banner-polish
   - X-restart-save-lag
   - X-win-upd-history-polish
