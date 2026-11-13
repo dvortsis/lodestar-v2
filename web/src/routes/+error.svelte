@@ -30,6 +30,7 @@
 	let watch: Watch | undefined;
 	// The tab title while offline; the page's own title comes back when this error is replaced.
 	let savedTitle: string | undefined;
+	let offlineTitle: string | undefined;
 
 	const seconds = (ms: number) =>
 		new Intl.NumberFormat(currentLocale(), {
@@ -54,7 +55,8 @@
 			}
 			phase = 'offline';
 			savedTitle = document.title;
-			document.title = m.shell_fallback_offline_title();
+			offlineTitle = m.shell_fallback_offline_title();
+			document.title = offlineTitle;
 			void import('$lib/shell/ConnectionView.svelte').then(
 				(mod) => (Connection = mod.default),
 				() => {} // the plain markup below stands in
@@ -79,9 +81,9 @@
 			watch?.stop();
 			watch = undefined;
 			// Only if nothing has set a title since (the next page sets its own).
-			if (savedTitle !== undefined && document.title === m.shell_fallback_offline_title())
-				document.title = savedTitle;
+			if (savedTitle !== undefined && document.title === offlineTitle) document.title = savedTitle;
 			savedTitle = undefined;
+			offlineTitle = undefined;
 			removeEventListener('online', online);
 		};
 	});

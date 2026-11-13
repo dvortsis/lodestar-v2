@@ -54,6 +54,7 @@ describe('+error.svelte', () => {
 		await tick();
 		await tick();
 		expect(screen.queryByRole('heading')).toBeNull();
+		expect(screen.queryByTestId('state-screen')).toBeNull();
 	});
 
 	it('keeps the error view when the server answers', async () => {
@@ -100,15 +101,23 @@ describe('+error.svelte', () => {
 		await waitFor(() => expect(reload).toHaveBeenCalledOnce(), WAIT);
 	});
 
-	it('sets the tab title while offline, and puts the page title back', async () => {
+	it('sets the tab title while offline, and puts the page title back when it goes', async () => {
 		document.title = 'Alerts';
 		const { unmount } = render(ErrorPage);
 		await unreachable();
 		expect(document.title).toBe('Can’t reach Lodestar');
+		unmount();
+		expect(document.title).toBe('Alerts');
+	});
+
+	it('leaves no offline title behind when a 404 replaces the outage', async () => {
+		document.title = 'Alerts';
+		render(ErrorPage);
+		await unreachable();
 		setPage(404, '/nope');
 		await tick();
-		await waitFor(() => expect(document.title).toBe('Alerts'), WAIT);
-		unmount();
+		await screen.findByRole('heading', { name: 'Page not found' }, WAIT);
+		await waitFor(() => expect(document.title).toBe('Page not found'), WAIT);
 	});
 
 	it('leaves a title the next page set alone', async () => {
