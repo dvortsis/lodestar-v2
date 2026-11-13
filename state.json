@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T09:50Z",
+  "updated_at": "2026-11-13T10:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8006,6 +8006,16 @@
       "id": "x-filter01-fix-owns-tests",
       "note": "Next runner plan PR: add crates/pipeline/tests/** to X-filter01-fix owns (runner approved one test-helper change in the PR, by id only).",
       "at": "2026-11-13T09:48Z"
+    },
+    {
+      "id": "relevance-sets-pristine-field",
+      "note": "rv-826 optional: rename relevance_sets.rs fixture field data to pristine (or keep it private behind copy_of) so no test runs the tool on the shared copy; fix the line-42 doc wording. Ride the next PR that touches the file.",
+      "at": "2026-11-13T10:07Z"
+    },
+    {
+      "id": "reviewer-disk-worktree",
+      "note": "A reviewer running cargo from a scratch worktree rebuilds all deps and filled the disk at 2.6 GB free. Reviewers build only with at least 6 GB free; otherwise read and rely on CI.",
+      "at": "2026-11-13T10:07Z"
     }
   ],
   "main_health": [
@@ -9040,7 +9050,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T09:50Z",
+    "updated": "2026-11-13T10:07Z",
     "items": [
       {
         "slot": 1,
@@ -9077,9 +9087,9 @@
         "slice": "X-flake-relevance-lock",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9NYyxgoQ8Bj2zXNHQ: PR #826 open (94c474f7), CI running; cause was copy_of racing tool runs on the shared fixture (Windows CopyFileExW), test-only fix",
-        "since": "2026-11-13T08:46Z",
-        "status": "active",
+        "doing": "merged #826; slot free",
+        "since": "2026-11-13T10:07Z",
+        "status": "idle",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9294,7 +9304,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T09:50Z",
+  "updated": "2026-11-13T10:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9617,6 +9627,12 @@
       "slice": "runner-plan",
       "merged": "1ff2c053",
       "at": "2026-11-13T09:50Z"
+    },
+    {
+      "pr": 826,
+      "slice": "X-flake-relevance-lock",
+      "merged": "49f58ba1",
+      "at": "2026-11-13T10:07Z"
     }
   ]
 }
