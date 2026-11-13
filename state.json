@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T21:12Z",
+  "updated_at": "2026-11-13T21:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9221,7 +9221,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T21:12Z",
+    "updated": "2026-11-13T21:15Z",
     "items": [
       {
         "slot": 1,
@@ -9461,10 +9461,28 @@
       "at": "2026-11-13T19:44Z",
       "answer": "owner terminated the stopped Windows test instance by hand; reports no volumes left (owner report, unverified; Elastic IPs and other regions not checked). Cost item closed on owner report; tester to confirm with its own connector. Update: owner console screenshots show the instance Terminated, no public IPv4 or Elastic IP; Global view storage 0 and the only instance count is the terminated one. Closed on owner evidence.",
       "updated": "2026-11-13T19:55Z"
+    },
+    {
+      "id": "legal-5-worker-stop-reason",
+      "at": "2026-11-13T21:15Z",
+      "answer": "Runner's recommendation: widen Legal Notice section 5 to cover the worker stop error; record it in a decisions file, name it in the PR; no loosening without asking.",
+      "via": "dashboard session"
+    },
+    {
+      "id": "operator-apply-dispatch",
+      "at": "2026-11-13T21:15Z",
+      "answer": "Runner may dispatch operator-apply. Not workable: the gate needs the owner as actor; owner steps sent via the dashboard session.",
+      "via": "dashboard session"
+    },
+    {
+      "id": "token-usage-sweep",
+      "at": "2026-11-13T21:15Z",
+      "answer": "Asked for method and cost; runner recommended exports first, then a 20-session sample in a separate session.",
+      "via": "dashboard session"
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T21:12Z",
+  "updated": "2026-11-13T21:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
