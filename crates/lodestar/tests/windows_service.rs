@@ -13,6 +13,17 @@ use std::time::{Duration, Instant};
 mod common;
 mod ports;
 
+/// `%SystemRoot%\Temp\lodestar-service.log`, which every service test that
+/// is refused or stops on an error appends to. Whoever creates it owns it,
+/// and a service under another account can't append to it then: these
+/// tests take this lock while they use it, and remove a file they created.
+static TEMP_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn temp_log_path() -> std::path::PathBuf {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    Path::new(&root).join("Temp").join("lodestar-service.log")
+}
+
 fn healthz(port: u16) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
@@ -363,6 +374,7 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     );
 
     // Users get read access: refused before anything is read or written.
+    let _temp_log = TEMP_LOG.lock().unwrap_or_else(|e| e.into_inner());
     icacls(&["/grant", "*S-1-5-32-545:(OI)(CI)R"]);
     let before = std::fs::read_to_string(&log_path).unwrap();
     sc(&["start", &service.name]);
@@ -374,13 +386,7 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     );
     assert_eq!(std::fs::read_to_string(&log_path).unwrap(), before);
     // The reason goes outside the folder, beside the installer's log.
-    let root_dir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    let reasons = std::fs::read_to_string(
-        Path::new(&root_dir)
-            .join("Temp")
-            .join("lodestar-service.log"),
-    )
-    .unwrap_or_default();
+    let reasons = std::fs::read_to_string(temp_log_path()).unwrap_or_default();
     assert!(
         reasons.contains(&format!("{} isn't private", data.display())),
         "{reasons}"
@@ -1069,6 +1075,11 @@ fn runs_a_worker_as_a_service() {
     );
     let data = root.path().join("Lodestar");
 
+    // This service runs as LocalSystem: a temp log it creates is SYSTEM's,
+    // so it's removed again once read.
+    let temp_log_lock = TEMP_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let temp_log = temp_log_path();
+    let created = !temp_log.exists();
     sc(&["start", &name]);
     let stopped = wait_until_stopped(&service);
     assert_eq!(
@@ -1076,13 +1087,14 @@ fn runs_a_worker_as_a_service() {
         Some("536870913"),
         "{stopped}"
     );
-    let temp_log = Path::new(&std::env::var("SystemRoot").unwrap())
-        .join("Temp")
-        .join("lodestar-service.log");
     let why = wait_for(Duration::from_secs(30), || {
         let text = std::fs::read_to_string(&temp_log).unwrap_or_default();
         text.contains("hasn't joined a coordinator").then_some(text)
     });
+    if created {
+        let _ = std::fs::remove_file(&temp_log);
+    }
+    drop(temp_log_lock);
     assert!(why.is_some(), "no reason in {}", temp_log.display());
     let sd = sddl(&data);
     assert!(sd.contains(&service_sid(&name)), "{sd}");
