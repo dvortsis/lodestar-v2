@@ -983,7 +983,10 @@ fn purge_one(
         }
         drop(stmt);
         expiring = conn.query_row(
-            "SELECT count(*) FROM quarantine WHERE expires_at <= ?1",
+            &format!(
+                "SELECT count(*) FROM quarantine WHERE expires_at <= ?1 AND NOT {}",
+                crate::filter::kept_hold_sql("rule")
+            ),
             [now],
             |r| r.get(0),
         )?;
@@ -1125,14 +1128,21 @@ fn purge_one(
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
                      SELECT hash, rule, at FROM quarantine
-                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2 AND NOT {}
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
+                    crate::filter::kept_hold_sql("rule"),
                     crate::filter::floor_hold_sql("tombstones.rule")
                 ),
                 params![now, ADULT_HOLD],
             )?;
-            quarantine += tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
+            quarantine += tx.execute(
+                &format!(
+                    "DELETE FROM quarantine WHERE expires_at <= ?1 AND NOT {}",
+                    crate::filter::kept_hold_sql("rule")
+                ),
+                [now],
+            )?;
             tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         }
         let mut query_log = 0;

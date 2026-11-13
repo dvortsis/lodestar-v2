@@ -66,14 +66,20 @@ fn plain(words: usize, seed: usize) -> String {
         .join(" ")
 }
 
+/// Every word of a name or a path, and every file, is read: a pair at
+/// the end of each, after any number of other words or files, is caught,
+/// over a sweep of sizes from one up through every power of two the
+/// budget allows. The evidence says where.
 #[test]
-fn a_long_name_is_judged_to_its_end() {
+fn the_last_word_and_the_last_file_are_always_read() {
     let c = core();
-    for words in [150, 400, 600] {
-        let name = format!("{} rolea lexa", plain(words, words));
-        assert!(name.len() <= 4096, "a name a torrent can have");
-        let hit = c.verdict(&item(&name, &[file("a.mkv")])).unwrap();
-        assert_eq!(hit.rule, CoreRule::Cs4a, "{words} words before");
+    let sizes = || (0..).map(|k| 1usize << k);
+    for words in sizes().take_while(|&w| w <= 1 << 10) {
+        let text = format!("{} rolea lexa", plain(words, words));
+        // In the name.
+        let files = [file("a.mkv")];
+        let hit = c.verdict(&item(&text, &files)).expect("the name's pair");
+        assert_eq!(hit.rule, CoreRule::Cs4a, "{words} words");
         assert!(matches!(
             hit.evidence[0],
             Evidence::ChildRole {
@@ -81,60 +87,67 @@ fn a_long_name_is_judged_to_its_end() {
                 ..
             }
         ));
-        // A code term at the end of the name too.
-        let name = format!("{} codex", plain(words, 1));
+        // In a file name, and in a folder.
+        for path in [format!("Folder/{text}.mkv"), format!("{text}/a.mkv")] {
+            let files = [file("a.mkv"), file(&path)];
+            let hit = c.verdict(&item("Title", &files)).expect("the path's pair");
+            assert_eq!(hit.rule, CoreRule::Cs4a, "{words} words");
+            assert!(matches!(
+                hit.evidence[0],
+                Evidence::ChildRole {
+                    field: Field::File(1),
+                    ..
+                }
+            ));
+        }
+        // A code term at the end of the name, and of a path.
+        let code = format!("{} codex", plain(words, 1));
         assert_eq!(
-            c.verdict(&item(&name, &[file("a.mkv")])).map(|h| h.rule),
+            c.verdict(&item(&code, &[file("a.mkv")])).map(|h| h.rule),
             Some(CoreRule::Cs3a)
         );
-    }
-}
-
-#[test]
-fn a_long_path_is_judged_to_its_end() {
-    let c = core();
-    for words in [150, 400, 600] {
-        let path = format!("Folder/{} rolea lexa.mkv", plain(words, 3));
-        let files = [file("a.mkv"), file(&path)];
-        let hit = c.verdict(&item("Title", &files)).unwrap();
-        assert_eq!(hit.rule, CoreRule::Cs4a, "{words} words before");
-        assert!(matches!(
-            hit.evidence[0],
-            Evidence::ChildRole {
-                field: Field::File(1),
-                ..
-            }
-        ));
-        let path = format!("{}/codex.mkv", plain(words, 5));
-        let files = [file(&path)];
+        let files = [file(&format!("{code}/a.mkv"))];
         assert_eq!(
             c.verdict(&item("Title", &files)).map(|h| h.rule),
             Some(CoreRule::Cs3b)
         );
     }
-}
-
-#[test]
-fn every_file_is_judged() {
-    let c = core();
-    for (n, at) in [(1_500, 1_499), (4_000, 3_210)] {
+    for n in sizes().take_while(|&n| n <= 1 << 13) {
         let mut files: Vec<FileInfo> = (0..n).map(|i| file(&format!("e{i}.mkv"))).collect();
-        files[at] = file("rolea lexa.mkv");
+        files[n - 1] = file("rolea lexa.mkv");
         let it = item("Title", &files);
-        assert!(
-            !too_large(&it),
-            "{n} files of short paths are within the budget"
-        );
-        let hit = c.verdict(&it).unwrap();
+        assert!(!too_large(&it), "{n} short files are within the budget");
+        let hit = c.verdict(&it).expect("the last file's pair");
         assert_eq!(hit.rule, CoreRule::Cs4a, "{n} files");
         assert!(matches!(
             hit.evidence[0],
-            Evidence::ChildRole {
-                field: Field::File(i),
-                ..
-            } if i as usize == at
+            Evidence::ChildRole { field: Field::File(i), .. } if i as usize == n - 1
         ));
     }
+}
+
+/// A file the torrent marks as padding is read like any other: its path
+/// is shown, so it's judged.
+#[test]
+fn a_padding_files_path_is_judged() {
+    let c = core();
+    let mut padding = file("Folder/rolea lexa.pad");
+    padding.padding = true;
+    let files = [file("Folder/a.mkv"), padding];
+    let hit = c.verdict(&item("Title", &files)).expect("caught");
+    assert_eq!(hit.rule, CoreRule::Cs4a);
+    assert!(matches!(
+        hit.evidence[0],
+        Evidence::ChildRole {
+            field: Field::File(1),
+            ..
+        }
+    ));
+    let e = Engine::new(core());
+    assert_eq!(
+        judge(&e, "Title", &files),
+        Some(RuleRef::Core(CoreRule::Cs4a))
+    );
 }
 
 /// Words that each cost a new plan: the costliest ASCII to read.
@@ -374,6 +387,84 @@ fn too_large_to_judge_is_final() {
     assert_eq!(judge(&e, "Title", &files[..10]), None);
 }
 
+/// A torrent the check before reading lets through but whose read
+/// passes the budget is held as too large to judge by every way the
+/// engine judges, before any override, Always allow or exception, read as
+/// found or as Adult too.
+#[test]
+fn every_judgment_holds_what_its_read_finds_too_large() {
+    use lodestar_filter::Trail;
+    use lodestar_filter::packs::sp4::AtCommit;
+    let mut e = Engine::new(core());
+    e.overrides = vec![Override {
+        id: 1,
+        what: Match::Keyword("title".into()),
+        strength: Strength::Override,
+        scope: None,
+        expires_at: None,
+        shadow_until: None,
+    }]
+    .into();
+    e.allow.push(Allow {
+        id: 1,
+        query: parse("title").unwrap(),
+    });
+    // Costlier to read than the budget, though not past it unread.
+    let costly: Vec<FileInfo> = (0..400)
+        .map(|i| file(&distinct_words(4_000, i + 1)))
+        .collect();
+    let it = item("Title", &costly);
+    assert!(c_floor(&e, &it).is_none(), "not past the budget unread");
+    assert!(too_large(&it));
+    let class = classify("Title", &costly);
+    let facts = Facts {
+        class: &class,
+        size: 1 << 30,
+        piece_len: 1 << 20,
+        flags: 0,
+        discovered_at: 1000,
+        now: 1000,
+    };
+    let cs0a = Some(RuleRef::Core(CoreRule::Cs0a));
+    let rule = |v: lodestar_filter::Verdict| v.decision.map(|d| d.rule);
+    assert_eq!(rule(e.judge(&it, Some(&facts), 1000)), cs0a);
+    assert_eq!(rule(e.judge(&it, None, 1000)), cs0a);
+    assert_eq!(rule(e.judge_shadowed(&it, Some(&facts), 1000).0), cs0a);
+    assert_eq!(rule(e.judge_classified(&it, Some(&facts), 1000).0), cs0a);
+    assert_eq!(
+        rule(e.judge_classified_unshared(&it, Some(&facts), 1000).0),
+        cs0a
+    );
+    for adult in [false, true] {
+        let mut trail = Trail::default();
+        let (v, _) = e.judge_classified_with(&it, Some(&facts), 1000, adult, Some(&mut trail));
+        assert_eq!(rule(v), cs0a, "adult {adult}");
+        let at = AtCommit::default();
+        assert_eq!(rule(e.judge_at_commit(&it, &facts, 1000, at, adult)), cs0a);
+        assert_eq!(
+            rule(e.judge_at_commit_unshared(&it, &facts, 1000, at, adult)),
+            cs0a
+        );
+        assert_eq!(
+            rule(e.judge_at_commit_reusing(&trail, &it, &facts, 1000, at, adult)),
+            cs0a,
+            "adult {adult}"
+        );
+        let level = lodestar_filter::flood::Level::Demote;
+        assert_eq!(rule(e.judge_flooded(&it, &facts, 1000, level, adult)), cs0a);
+    }
+    // Read as Adult from the start.
+    let adult_item = Item {
+        content_type: ContentType::Adult,
+        ..it
+    };
+    assert_eq!(rule(e.judge(&adult_item, None, 1000)), cs0a);
+}
+
+fn c_floor(e: &Engine, it: &Item) -> Option<lodestar_filter::Hit> {
+    e.core.floor_hit(it)
+}
+
 #[test]
 fn a_locked_rule_takes_no_exception() {
     let e = Exception {
@@ -386,32 +477,31 @@ fn a_locked_rule_takes_no_exception() {
 
 /// Both readings of a torrent (with the characters once read as word
 /// breaks read so, and not) reach the end of every text, or it's held:
-/// a pair at the end of a long path is caught or held, over a range of
-/// text sizes and of such characters, by the core and the engine alike.
-/// Either reading can take more tokens than the other, so neither
-/// reading's bound covers both.
+/// a pair at the end of a long path is caught or held, over a sweep of
+/// path sizes and of such characters, by the core and the engine alike,
+/// and held exactly where a reading stops short. Either reading can take
+/// more tokens than the other, so neither one's bound covers both.
 #[test]
 fn every_reading_reaches_the_end_or_holds() {
     let c = core();
     let e = Engine::new(core());
-    for segments in [1usize, 60, 500] {
-        for breaks in [0usize, 500, 5_000] {
-            let mut path: Vec<String> = (0..segments).map(|_| "a1b2c3d4 ".repeat(110)).collect();
+    let both = |rule: Option<CoreRule>| matches!(rule, Some(CoreRule::Cs4a | CoreRule::Cs0a));
+    for segments in [1usize, 16, 256] {
+        for breaks in [0usize, 300, 30_000] {
+            let mut path: Vec<String> = (0..segments)
+                .map(|i| plain(100, i) + " a1b2c3d4 x9y8")
+                .collect();
             path.push("a1b2c3d4\u{2028}".repeat(breaks));
             path.push("rolea\u{2028}lexa".into());
             let files = [FileInfo::new(path, 1)];
             let it = item("Title", &files);
-            let both =
-                |rule: Option<CoreRule>| matches!(rule, Some(CoreRule::Cs4a | CoreRule::Cs0a));
             let by_core = c.verdict(&it).map(|h| h.rule);
             assert!(both(by_core), "{segments}/{breaks}: {by_core:?}");
-            let by_engine = judge(&e, "Title", &files);
-            let rule = match by_engine {
+            let by_engine = match judge(&e, "Title", &files) {
                 Some(RuleRef::Core(r)) => Some(r),
                 _ => None,
             };
-            assert!(both(rule), "{segments}/{breaks}: {by_engine:?}");
-            // Held exactly where a reading stops short.
+            assert!(both(by_engine), "{segments}/{breaks}: {by_engine:?}");
             assert_eq!(by_core == Some(CoreRule::Cs0a), too_large(&it));
         }
     }

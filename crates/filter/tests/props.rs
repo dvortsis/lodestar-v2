@@ -2642,19 +2642,50 @@ fn budget_worst_case() {
             }),
         ),
     ];
+    // Texts dense in the core's terms, read as Adult so every pairing rule
+    // runs, none close enough to pair: the judging after the read does
+    // the most it can. Stand-in terms, as the core's tests use.
+    let stand_ins = || Lists {
+        sexual: lodestar_filter::TermSet::of(&["lexa"]),
+        child_roles: lodestar_filter::TermSet::of(&["rolea"]),
+        codes: lodestar_filter::TermSet::of(&["codex"]),
+    };
+    let apart = |a: &str, b: &str| format!("{a} {} {b} {} ", "w ".repeat(14), "w ".repeat(14));
+    let terms: Vec<(&str, Shape)> = vec![
+        ("terms in every file", {
+            let t = apart("rolea", "lexa").repeat(40);
+            Box::new(move |n| each(n, |i| vec![format!("{t}{i}")]))
+        }),
+        ("ages in every file", {
+            let t = apart("15 yo", "lexa").repeat(40);
+            Box::new(move |n| each(n, |i| vec![format!("{t}{i}")]))
+        }),
+        ("terms in a shared folder", {
+            let t = apart("rolea", "lexa").repeat(40);
+            Box::new(move |n| each(n, |i| vec![t.clone(), format!("{i}")]))
+        }),
+    ];
     let speed = runner_speed();
     println!("calibration: {speed:.2}× the reference's time");
-    let core = Core::new(
+    let shipped = Core::new(
         Lists::shipped().unwrap(),
         CsList::default(),
         Switches::default(),
     );
-    let mut engine = Engine::new(core.clone());
-    engine.packs = PackSwitches::all();
-    let item = |files: &[FileInfo]| -> (String, Vec<FileInfo>) { ("Title".into(), files.to_vec()) };
+    let stand_in = Core::new(stand_ins(), CsList::default(), Switches::default());
     let mut over = Vec::new();
     let mut worst = 0f64;
-    for (label, shape) in &shapes {
+    let all = shapes
+        .iter()
+        .map(|(l, s)| (*l, s, &shipped, ContentType::Video))
+        .chain(
+            terms
+                .iter()
+                .map(|(l, s)| (*l, s, &stand_in, ContentType::Adult)),
+        );
+    for (label, shape, core, content_type) in all {
+        let mut engine = Engine::new(core.clone());
+        engine.packs = PackSwitches::all();
         // The largest torrent of this shape the core still reads whole.
         let fits = |n: usize| {
             let files = shape(n);
@@ -2662,7 +2693,7 @@ fn budget_worst_case() {
                 hashes: &[],
                 name: "Title",
                 files: &files,
-                content_type: ContentType::Video,
+                content_type,
             })
             .is_some()
         };
@@ -2675,12 +2706,12 @@ fn budget_worst_case() {
             let mid = (lo + hi) / 2;
             if fits(mid) { lo = mid } else { hi = mid }
         }
-        let (name, files) = item(&shape(lo));
+        let files = shape(lo);
         let it = Item {
             hashes: &[],
-            name: &name,
+            name: "Title",
             files: &files,
-            content_type: ContentType::Video,
+            content_type,
         };
         let units = read_cost(&it).expect("within the budget");
         let time = |f: &dyn Fn()| {

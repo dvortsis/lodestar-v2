@@ -377,6 +377,32 @@ async fn too_large_to_judge_is_locked() {
     let (status, body) = apply(&f, &c, release(two), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
     assert!(held(two));
+    // An API key never reaches it, even with the password: only the
+    // admin's session does.
+    let body = json!({ "change": release(two), "password": PASSWORD }).to_string();
+    for (header, value) in [
+        (
+            header::AUTHORIZATION.as_str(),
+            "Bearer lsk_abcdefgh_0123456789",
+        ),
+        ("x-api-key", "lsk_abcdefgh_0123456789"),
+    ] {
+        let req = Request::post("/api/v1/filters/apply")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header, value)
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let (status, _, _) = call(&f.app, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{header}");
+    }
+    assert!(held(two));
+    // A false positive is an exception, which a locked rule doesn't take.
+    let fp = json!({ "op": "false_positive", "hash": hex(&two) });
+    let (status, body) = apply(&f, &c, fp, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let why = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(why.contains("locked"), "{body}");
+    assert!(held(two));
 }
 
 fn hex(hash: &[u8; 20]) -> String {

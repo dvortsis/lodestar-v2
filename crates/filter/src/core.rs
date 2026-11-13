@@ -710,10 +710,10 @@ fn lexicon(lists: &Lists) -> IdMap<u16> {
 }
 
 /// The first `x` of `first`, in order, with a `y` of `second` within `w`
-/// positions, and the first such `y`, in order. Linear in the two lists
-/// and the window, so a text with many of both costs no more than its
-/// length.
-fn nearest_pair(first: &[u32], second: &[u32], w: u32) -> Option<(u32, u32)> {
+/// positions, and the first such `y`, in order. `near` is `second` as
+/// [`near_index`] sorts it, made once per text for every rule that reads
+/// it. No hashing: a binary search per `x`, and the window's positions.
+fn nearest_pair(first: &[u32], second: &[u32], near: &[(u32, u32)], w: u32) -> Option<(u32, u32)> {
     if first.is_empty() || second.is_empty() {
         return None;
     }
@@ -723,17 +723,28 @@ fn nearest_pair(first: &[u32], second: &[u32], w: u32) -> Option<(u32, u32)> {
             Some((x, *y))
         });
     }
-    // Each position's earliest index in `second`.
-    let mut at: HashMap<u32, usize> = HashMap::with_capacity(second.len());
-    for (i, &y) in second.iter().enumerate() {
-        at.entry(y).or_insert(i);
-    }
     first.iter().find_map(|&x| {
-        let i = (x.saturating_sub(w)..=x.saturating_add(w))
-            .filter_map(|y| at.get(&y).copied())
+        let (lo, hi) = (x.saturating_sub(w), x.saturating_add(w));
+        let from = near.partition_point(|&(y, _)| y < lo);
+        let i = near[from..]
+            .iter()
+            .take_while(|&&(y, _)| y <= hi)
+            .map(|&(_, i)| i)
             .min()?;
-        Some((x, second[i]))
+        Some((x, second[i as usize]))
     })
+}
+
+/// `second`'s positions with their index in it, sorted, for
+/// [`nearest_pair`].
+fn near_index(second: &[u32]) -> Vec<(u32, u32)> {
+    let mut near: Vec<(u32, u32)> = second
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| (y, i as u32))
+        .collect();
+    near.sort_unstable();
+    near
 }
 
 /// The signals of a torrent's name (first) and files, as the pattern
@@ -1231,12 +1242,11 @@ impl Core {
         let mut known = 0;
         let mut next = 0;
         for (i, f) in item.files.iter().enumerate() {
+            // Every path, a padding file's too: the torrent marks a file
+            // padding, and its path is shown like any other.
             let Some((name, dirs)) = f.path.split_last() else {
                 continue;
             };
-            if f.padding {
-                continue;
-            }
             // Read already, and the same as read here: the tokens of the
             // path's segments read apart.
             if let Some(path) = read.and_then(|r| r.path(i)) {
@@ -1319,24 +1329,41 @@ impl Core {
         let roles: fn(&Signals) -> &[u32] = |s| &s.roles;
         let age = |field, pos| Evidence::MinorAge { field, pos };
         let role = |field, pos| Evidence::ChildRole { field, pos };
+        // Each text's sexual terms sorted once, for every rule that pairs
+        // them; only where a pair is possible and too many to scan.
+        let near: Vec<Vec<(u32, u32)>> = texts
+            .iter()
+            .map(|(_, s)| {
+                let firsts = s.ages.len().max(s.roles.len());
+                if firsts.saturating_mul(s.sexual.len()) > 64 {
+                    near_index(&s.sexual)
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        let p = |rule, w, first, evidence| {
+            self.pair(texts, &near, educational, rule, w, first, evidence)
+        };
         let mut hits = Vec::new();
-        hits.extend(self.pair(texts, educational, CoreRule::Cs2a, WINDOW, ages, age));
+        hits.extend(p(CoreRule::Cs2a, WINDOW, ages, age));
         hits.extend(self.code(texts, CoreRule::Cs3a));
         hits.extend(self.code(texts, CoreRule::Cs3b));
-        hits.extend(self.pair(texts, educational, CoreRule::Cs4a, WINDOW, roles, role));
+        hits.extend(p(CoreRule::Cs4a, WINDOW, roles, role));
         if adult {
-            let w = ADULT_WINDOW;
-            hits.extend(self.pair(texts, educational, CoreRule::Cs5a, w, roles, role));
-            hits.extend(self.pair(texts, educational, CoreRule::Cs5b, w, ages, age));
+            hits.extend(p(CoreRule::Cs5a, ADULT_WINDOW, roles, role));
+            hits.extend(p(CoreRule::Cs5b, ADULT_WINDOW, ages, age));
         }
         hits
     }
 
     /// The first text with a `first` signal within `w` words of a sexual
     /// term. CSX-2 skips the name of an educational torrent.
+    #[allow(clippy::too_many_arguments)]
     fn pair(
         &self,
         texts: &[(Field, Signals)],
+        near: &[Vec<(u32, u32)>],
         educational: bool,
         rule: CoreRule,
         w: u32,
@@ -1345,9 +1372,10 @@ impl Core {
     ) -> Option<Hit> {
         texts
             .iter()
-            .filter(|(field, _)| !(educational && *field == Field::Name))
-            .find_map(|(field, s)| {
-                let (x, y) = nearest_pair(first(s), &s.sexual, w)?;
+            .zip(near)
+            .filter(|((field, _), _)| !(educational && *field == Field::Name))
+            .find_map(|((field, s), near)| {
+                let (x, y) = nearest_pair(first(s), &s.sexual, near, w)?;
                 let sexual = Evidence::Sexual {
                     field: *field,
                     pos: y,
@@ -1373,6 +1401,12 @@ impl Core {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// The store never expires the hold of a torrent too large to judge.
+    #[test]
+    fn the_stores_kept_rules_are_cs0a() {
+        assert_eq!(lodestar_store::KEPT_RULES, [CoreRule::Cs0a.id()]);
+    }
 
     /// The store keeps the floor's rule ids for the purge (§20.9).
     #[test]
@@ -1538,6 +1572,25 @@ mod tests {
     }
 
     proptest! {
+        /// The sorted pairing finds what scanning every pair finds: the
+        /// first of `first`, in order, with one of `second` close enough,
+        /// and the first of those, in order.
+        #[test]
+        fn pairing_finds_what_the_scan_finds(
+            first in prop::collection::vec(0u32..400, 0..120),
+            second in prop::collection::vec(0u32..400, 0..120),
+            w in 0u32..16,
+        ) {
+            let scan = first.iter().find_map(|&x| {
+                let y = second.iter().find(|&&y| x.abs_diff(y) <= w)?;
+                Some((x, *y))
+            });
+            let near = near_index(&second);
+            prop_assert_eq!(nearest_pair(&first, &second, &near, w), scan);
+        }
+    }
+
+    proptest! {
         /// The flag table finds what scanning every token finds: positions
         /// pushed past the table's reach take the scan, and give the same
         /// signals once shifted back.
@@ -1613,7 +1666,7 @@ mod tests {
         /// Reusing keyword entries' read of the name and paths finds what
         /// the core's own read finds: paths whose spelled-out letters
         /// run on over a `/` (`y/o`), which read differently whole, are
-        /// read again, and padding files are skipped either way.
+        /// read again, and padding files are read like any other.
         #[test]
         fn reusing_the_whole_read_finds_the_same(
             segs in prop::collection::vec(

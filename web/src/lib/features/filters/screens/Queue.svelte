@@ -65,8 +65,8 @@
 	});
 	onDestroy(() => ctl?.abort());
 
-	// CS-0a is never adult-only, so its row never carries an adult hold's suffix.
-	const tooLarge = (rule: string) => rule === 'CS-0a';
+	// The rule's own id, before any suffix a stored hold carries, as the server reads it.
+	const tooLarge = (rule: string) => rule.split('+')[0] === 'CS-0a';
 	const rows = $derived(
 		queue ? [...queue.quarantine, ...more].filter((r) => model.adult || !r.adult_hold) : []
 	);

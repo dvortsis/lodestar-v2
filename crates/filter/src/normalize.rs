@@ -1067,6 +1067,13 @@ fn paths_apart_with<'p>(
                         }
                     };
                     tok.resume(&paused[slot], name, out);
+                    if !paused[slot].apart {
+                        // The core reads this path again with its segments
+                        // apart (`Read::path`), so the meter counts that
+                        // read too: its least, and its tokens looked at.
+                        let again = out.len() - ends.last().copied().unwrap_or(0);
+                        tok.work += least_path_cost(path) + again as u64 * cost::TOKEN;
+                    }
                     apart.push(paused[slot].apart);
                 }
                 // One segment is its own text; none is an empty one.

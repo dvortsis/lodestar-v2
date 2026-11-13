@@ -3379,7 +3379,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
 ### 20.1 Layers and precedence
 | Layer | Edited by | Can be disabled? | Purpose |
 |---|---|---|---|
-| **Child-safety core** | Ships as signed, versioned base rules, **all on by default**. **You can edit every rule**, add your own, and **switch off any non-floor rule** (§20.5.3) | **The core as a whole: no.** It runs on every source, network, importer and worker. Its **locked floor** (CS-1a/1b, CS-8a) is always on. Non-floor rules can be switched off individually, and **CSX-5** (your override list, keywords included) overrides any non-floor rule | Keep CSAM out of the index |
+| **Child-safety core** | Ships as signed, versioned base rules, **all on by default**. **You can edit every rule**, add your own, and **switch off any rule that isn't locked** (§20.5.3) | **The core as a whole: no.** It runs on every source, network, importer and worker. Its **locked floor** (CS-1a/1b, CS-8a) and CS-0a are always on. Other rules can be switched off individually, and **CSX-5** (your override list, keywords included) overrides any rule that isn't locked | Keep CSAM out of the index |
 | **Rule packs** | Curated, signed packs, on by default and reviewed in the wizard (§20.6, owner §2.39) | Yes, per pack and per rule | Malware, lures, fakes, spam, scams, unauthorised-copy patterns |
 | **Your rules and exceptions** | You | Yes | Anything else you want blocked, hidden, demoted or flagged, and exceptions to packs and to your own rules |
 
@@ -3435,7 +3435,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
   - Rules run in **prepare** (worker side, §19.4), and **commit** re-checks authoritatively. Results carry the rule-set version, and a version mismatch is re-evaluated at commit.
 
 ### 20.5 The child-safety core: always on, editable, with a locked floor
-The core is **on by default**. Its **locked floor** (CS-1a/1b, CS-8a) is always on and can't be removed. **Every other core rule is editable and can be switched off** (owner's decision), and the owner's **CSX-5 override list** (including keywords) overrides any non-floor core rule. Every change is impact-previewed (§20.10); every change that weakens protection shows an effect warning and needs your password (§20.11).
+The core is **on by default**. Its **locked floor** (CS-1a/1b, CS-8a) is always on and can't be removed. **Every other core rule is editable and can be switched off** (owner's decision), but CS-0a, which is locked too (§20.5.1), and the owner's **CSX-5 override list** (including keywords) overrides any core rule that isn't locked. Every change is impact-previewed (§20.10); every change that weakens protection shows an effect warning and needs your password (§20.11).
 
 #### 20.5.1 Core sub-rules
 Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicative text exists in the repo or binary. They're sourced from published child-protection and safeguarding guidance. The well-known keyword lists (e.g. the IWF's) are member-only, so the first lists are small and deliberately conservative.
@@ -3460,7 +3460,7 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 | **CS-7a** | Sequential image/video sets + any CS-2/CS-4 signal at half threshold | quarantine | medium | |
 | **CS-8a** | Same payload signature as an item in your CS-1 list (catches renamed reposts). It applies only when the payload is specific: ≥ 50 MB, or ≥ 2 files of distinctive sizes | drop | ~none | 🔒 |
 | **CS-9a** | New items from a publisher or source behind a CS-1 item → quarantined for review | quarantine | low | |
-| **CS-0a** | The torrent is too large to judge within the core's work budget (§20.8) | quarantine | ~none | |
+| **CS-0a** | The torrent is too large to judge within the core's work budget (§20.8) | quarantine | ~none | 🔒 |
 
 **As built (first slice, `crates/filter`):**
 - **Implemented:** CS-1a/1b, CS-8a, CS-2a, CS-3a/3b, CS-4a and CS-5a/5b, plus CSX-2 (name evidence only, outside Adult), CSX-3 and CSX-4.
@@ -3469,6 +3469,11 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 - **Shipped lists:** `@cs/sexual` and `@cs/child_roles` ship as hash lists. `@cs/codes` ships **empty**: code terms come only from lists you import.
 - **Fixtures:** the core's must-match fixtures are hashed token streams built from the shipped sets, so no indicative text exists anywhere.
 - **Payload signatures:** CS-8a counts a payload as specific at ≥ 50 MB, or with ≥ 2 files whose sizes are ≥ 64 KiB and not multiples of 64 KiB.
+
+**As built (X-filter01-fix, CS-0a):**
+- **Read whole:** the core reads a torrent's name and every file path, padding files' included, in both readings (§20.4), within a work budget the tokenizer meters as it reads: 9,000,000 units of about a nanosecond each on the reference runner, so judging one at the budget takes about 10 ms at most on the build VM, whatever its text (`budget_worst_case` in `crates/filter/tests/props.rs`). Ten thousand files with paths of up to 120 bytes, or a 4 KB name, are judged in any script.
+- **Held, not judged in part:** a torrent past the budget is quarantined under CS-0a before any other layer reads it. CS-0a is locked (`docs/owner-decisions.md` §2.70): it can't be switched off, takes no exception, no CSX-5 entry or *Always allow* passes it, and its hold never expires. Releasing one from the review queue needs the effect warning and the admin password every time; the torrent is judged again when it's next seen.
+- **Your rules and the packs** still read up to 1,000 files (`MATCH_FILES`).
 
 **Floor (owner's decision): the minimal floor**, i.e. CS-1a, CS-1b and CS-8a. These contain only torrents **you** confirmed or deliberately imported, plus their exact reposts, so locking them costs nothing in false positives. Every pattern sub-rule (CS-2 to CS-7, CS-9) is **on by default and can be switched off** (§20.5.3), because heuristic pattern matches carry false-positive risks such as ambiguous wording and legal adult role-play marketing.
 
@@ -3512,7 +3517,7 @@ Plain-text must-not-match fixtures ship with them: *Sex Education S02E03 – The
 
 | Strength | Effect on matching items | Use for |
 |---|---|---|
-| **Override** (default) | bypasses **every non-floor core rule**, plus packs and your rules | items you've decided are always fine, whatever else they contain |
+| **Override** (default) | bypasses **every core rule that isn't locked** (the floor and CS-0a are), plus packs and your rules | items you've decided are always fine, whatever else they contain |
 | **Neutralize term** (keyword entries only) | the keyword **stops counting as evidence** in every non-floor core rule and pack rule; all **other** evidence in the torrent still counts | a word that's legitimate in a known context but shouldn't decide anything on its own |
 
 - **Example: "jailbait"** (also the title of a legal adult film series).
