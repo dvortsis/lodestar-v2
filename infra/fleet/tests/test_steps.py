@@ -494,6 +494,8 @@ case "$1" in
       "exec gluetun sh -c "*" rules iptables ${VPN_IFACE-wg0}"|"exec gluetun sh -c "*" rules ip6tables ${VPN_IFACE-wg0}")
         case "$*" in *'-C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP'*) ;; *) bad "$*" ;; esac
         [ -n "$NO_POST_RULES" ] && exit 1
+        # RULES_GONE_IFDOWN: the rules were in place, then gone after gluetun's VPN restart in phase B.
+        [ -e "$STUB/ifdown" ] && [ -n "$RULES_GONE_IFDOWN" ] && exit 1
         case "$*" in *" rules ip6tables "*) [ -n "$NO_POST_RULES6" ] && exit 1 ;; esac
         exit 0 ;;
       *) bad "$*" ;;
@@ -587,7 +589,10 @@ case "$*" in
     [ -n "$COUNTER_FAILS" ] && exit 1; : > "$STUB/counter" ;;
   "-D DOCKER-USER $counter") rm -f "$STUB/counter" ;;
   # The two guards keep a copy count, so leftovers and failed deletes are real.
-  "-I DOCKER-USER 1 $guard") [ -n "$GUARD_FAILS" ] && exit 1; up guard ;;
+  "-I DOCKER-USER 1 $guard")
+    [ -n "$GUARD_FAILS" ] && exit 1; up guard
+    # BLOCK_GUARD_INSERT: hang inside the recreate guard's insert, after the rule is in.
+    if [ -n "$BLOCK_GUARD_INSERT" ]; then : > "$STUB/guard_inserting"; while :; do /bin/sleep 0.05; done; fi ;;
   "-C DOCKER-USER $guard")
     # C_FLAKY: one transient error (exit 4) with the guard in place, never read as gone.
     if [ -n "$C_FLAKY" ] && have guard && [ ! -e "$STUB/flaked" ]; then : > "$STUB/flaked"; exit 4; fi
@@ -923,6 +928,7 @@ class VMScripts(unittest.TestCase):
             "no compose bridge on the veth": ({"NO_BRIDGE": 1}, "egress_found"),
             # gluetun's tunnel isn't the interface its config (and the rules) name.
             "the named interface isn't gluetun's": ({"IFACE_MISSING": 1}, "vpn_interface_live"),
+            "the post-rules gone after gluetun's VPN restart": ({"RULES_GONE_IFDOWN": 1}, "post_rules_after_restart_ipv4"),
             "no ICMP through the tunnel": ({"NO_PING": 1}, "ping_up"),
             "the flow can't start": ({"FLOW_FAILS": 1}, "flow_started"),
             "the flow died": ({"FLOW_DIES": 1}, "flow_alive_down"),
@@ -1159,6 +1165,8 @@ class VMScripts(unittest.TestCase):
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
+        bad = self.stub / "badargs"  # cleanup's calls on the signal path had the right arguments too
+        self.assertFalse(bad.exists(), bad.read_text() if bad.exists() else "")
         return proc.returncode, out
 
     def test_a_signal_mid_recreate_leaves_no_guard(self):
@@ -1174,6 +1182,20 @@ class VMScripts(unittest.TestCase):
         rc, out = self.signal_at("inserting", BLOCK_INSERT=1)
         self.assertEqual(rc, 143)
         self.assertEqual(self.copies("host"), 0)
+
+    def test_a_signal_inside_the_recreate_guard_insert_leaves_no_guard(self):
+        """O1, for the DOCKER-USER guard: guard_set is set before its insert."""
+        rc, out = self.signal_at("guard_inserting", BLOCK_GUARD_INSERT=1)
+        self.assertEqual(rc, 143)
+        self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
+
+    def test_rules_gone_after_the_restart_are_caught(self):
+        rc, lines, _ = self.run_script("leak-test.sh", RULES_GONE_IFDOWN=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("ok post_rules_ipv4", lines)  # in place before phase B
+        self.assertIn("ok post_rules_ipv6", lines)
+        self.assertIn("fail post_rules_after_restart_ipv4", lines)
+        self.assertIn("fail post_rules_after_restart_ipv6", lines)
 
     def test_a_signal_with_a_stuck_guard_says_so(self):
         rc, out = self.signal_at("composing", BLOCK_COMPOSE=1, HOST_STUCK=1)

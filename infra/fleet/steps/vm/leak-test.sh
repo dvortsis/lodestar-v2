@@ -92,7 +92,8 @@ release_guards() {  # remove both guards, every copy; fails when one won't come 
   return "$rc"
 }
 # drop_all chain rule...: remove every copy of a rule (a failed delete can
-# leave more than one). Only `-C` exit 1 means absent; any other exit is an
+# leave more than one). Only `-C` exit 1 means absent (iptables also uses 1
+# for some generic errors, such as a missing chain); any other exit is an
 # error, never read as "gone". Fails when a copy may still be there.
 drop_all() {
   local chain=$1 i rc
