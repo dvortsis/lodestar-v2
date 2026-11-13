@@ -22,12 +22,15 @@ class FakeApi:
         self.linodes = [dict(x) for x in linodes]
         self.firewalls = [dict(x) for x in firewalls]
         self.calls = []
+        self.bodies = {}
 
     def all_pages(self, path):
         return {"/linode/instances": self.linodes, "/networking/firewalls": self.firewalls}[path]
 
     def call(self, method, path, body=None, ok404=False):
         self.calls.append((method, path))
+        if body is not None:
+            self.bodies[(method, path)] = body
         if method == "DELETE":
             kind, ident = path.rsplit("/", 1)
             pool = self.linodes if kind == "/linode/instances" else self.firewalls
@@ -150,6 +153,10 @@ class CreateTests(unittest.TestCase):
             self.assertFalse((work / "host_ed25519").exists())
             self.assertEqual(len(list(work.glob("claude-dev-*.json"))), 1)
         self.assertEqual(api.mutations(), [("POST", "/networking/firewalls"), ("POST", "/linode/instances")])
+        body = api.bodies[("POST", "/linode/instances")]
+        self.assertEqual(body["swap_size"], 0)
+        self.assertEqual(body["disk_encryption"], "enabled")
+        self.assertFalse(body["backups_enabled"])
 
 
 class DeleteTests(unittest.TestCase):

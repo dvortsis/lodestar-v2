@@ -194,6 +194,9 @@ def cmd_create(a) -> None:
         "tags": TAGS,
         "backups_enabled": False,
         "booted": True,
+        # No Linode swap disk (the API adds 512 MB by default); cloud-init makes
+        # the only swap, so the worker has exactly the plan's 256 MB.
+        "swap_size": 0,
         "disk_encryption": "enabled",
         "metadata": {"user_data": base64.b64encode(user_data.encode()).decode()},
     }
