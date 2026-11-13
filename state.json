@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:41Z",
+  "updated_at": "2026-11-13T20:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8125,7 +8125,6 @@
     "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
     "docs-host-icmp-note-user-setup (gluetun guide: host ICMP in a user own setup)",
     "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
-    "X-flake-companions-loopback: detect.rs bind-then-drop port race on Windows; next slice in slot 7 after #839 (owns crates/companions/tests/detect.rs); slices.yaml entry in next runner PR",
     {
       "id": "X-filter01-rejudge",
       "what": "one-time core re-judge of stored torrents judged under the old limits, behind a core-version marker; next slice in the X-filter01-fix session after #843",
@@ -8161,7 +8160,13 @@
       "note": "scrub.py owner adds host_guard_drops and damaged fields (from #845 review N7)",
       "at": "2026-11-13T20:29Z"
     },
-    "slices-yaml-x-gluetun-guard-reboot-nits"
+    "slices-yaml-x-gluetun-guard-reboot-nits",
+    {
+      "id": "X-worker-flush-nits",
+      "note": "from #839 delta review: runtime.rs flush on Changed answers done without sending on the new session (comment says otherwise; fix comment or loop to Done within deadline); optional connect+flush same-wake test; leases.rs:2558 panic text \"granted\"",
+      "at": "2026-11-13T20:43Z"
+    },
+    "slices-yaml-x-flake-companions-loopback"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8549,12 +8554,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "839": {
-      "slice": "X-lease-reconcile-every-session",
-      "head": "1ac1f9f0",
-      "state": "ready; fresh Opus delta review running",
-      "at": "2026-11-13T20:41Z"
     },
     "843": {
       "slice": "X-filter01-fix",
@@ -9214,7 +9213,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:41Z",
+    "updated": "2026-11-13T20:43Z",
     "items": [
       {
         "slot": 1,
@@ -9248,11 +9247,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-lease-reconcile-every-session",
+        "slice": "X-flake-companions-loopback",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVaVQgTXvM11UK7nv: #839 open; runner review running; chaos scenario for cap/stop next, one push with fixes",
-        "since": "2026-11-13T10:09Z",
+        "doing": "detect.rs bind-then-drop port race",
+        "since": "2026-11-13T20:43Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
@@ -9457,7 +9456,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:41Z",
+  "updated": "2026-11-13T20:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9894,6 +9893,12 @@
       "slice": "X-gluetun-guard-reboot",
       "merged": "73d9b636",
       "at": "2026-11-13T20:41Z"
+    },
+    {
+      "pr": 839,
+      "slice": "X-lease-reconcile-every-session",
+      "merged": "f6749252",
+      "at": "2026-11-13T20:43Z"
     }
   ]
 }
