@@ -940,6 +940,7 @@ fn service(publish: Vec<Publish>) -> ServiceInput {
         publish,
         data: DataFolders::none(),
         taken: Vec::new(),
+        gluetun_paths: None,
     }
 }
 

@@ -89,6 +89,15 @@ pub enum Line {
         /// Why it was left: a kind for the log, and the reason.
         skipped: Option<(&'static str, String)>,
     },
+    /// The companion-files folder (`/companions`, X-gluetun-templates-
+    /// hostfile): `changed` folders handed over, or why it was left. Never
+    /// fatal: without it you save gluetun's post-rules yourself.
+    Companions {
+        dir: PathBuf,
+        ids: Ids,
+        changed: u64,
+        skipped: Option<(&'static str, String)>,
+    },
 }
 
 impl std::fmt::Display for Line {
@@ -167,6 +176,24 @@ impl std::fmt::Display for Line {
                 ids.uid,
                 ids.gid
             ),
+            Line::Companions {
+                dir,
+                skipped: Some((_, why)),
+                ..
+            } => write!(
+                f,
+                "companion-files folder {} left as it is: {why}",
+                dir.display()
+            ),
+            Line::Companions {
+                dir, ids, changed, ..
+            } => write!(
+                f,
+                "companion-files folder {}: {changed} folders changed to {}:{}",
+                dir.display(),
+                ids.uid,
+                ids.gid
+            ),
         }
     }
 }
@@ -232,6 +259,28 @@ impl Line {
                 ..
             } => log_event!(
                 events::SYSTEM_WITNESS_DIR_LEFT,
+                path = LogPath::new(dir),
+                error = lodestar_log::Error::kind(kind)
+            ),
+            Line::Companions {
+                dir,
+                ids,
+                changed,
+                skipped: None,
+            } => log_event!(
+                events::SYSTEM_COMPANIONS_DIR,
+                path = LogPath::new(dir),
+                uid = id(ids.uid),
+                gid = id(ids.gid),
+                changed = *changed
+            ),
+            // The reason can name a path: its kind only.
+            Line::Companions {
+                dir,
+                skipped: Some((kind, _)),
+                ..
+            } => log_event!(
+                events::SYSTEM_COMPANIONS_DIR_LEFT,
                 path = LogPath::new(dir),
                 error = lodestar_log::Error::kind(kind)
             ),
@@ -363,12 +412,19 @@ mod imp {
         if scope == Scope::DataDir {
             let dir = env_data_dir(env);
             report.lines.push(chown_data_dir(&dir, ids)?);
-            report.data_dir = Some(dir);
             // The restart proof's witness, which the image keeps outside
             // the data directory (CR-0d §1.5). Never fatal.
             if let Some(w) = env("LODESTAR_DHT_WITNESS_DIR").filter(|w| !w.is_empty()) {
                 report.lines.push(chown_witness_dir(Path::new(&w), ids));
             }
+            // The companion-files mount, where Lodestar saves gluetun's
+            // post-rules. Never fatal.
+            report.lines.push(chown_companions_dir(
+                Path::new(crate::companions::CONTAINER_COMPANIONS),
+                &dir,
+                ids,
+            ));
+            report.data_dir = Some(dir);
         }
         if ids.uid == 0 {
             report.lines.push(Line::Root { gid: Some(ids.gid) });
@@ -663,6 +719,115 @@ mod imp {
         }
     }
 
+    /// Hands the companion-files folder to `ids`: the folder and its
+    /// `gluetun` folder, nothing else and nothing deeper, so Lodestar,
+    /// dropped, can save gluetun's post-rules there. It never creates
+    /// either: the dropped user creates `gluetun` when it writes.
+    ///
+    /// It's left as it is, and says why, unless it is a real folder (not a
+    /// link) that is apart from the data folder `data` (not it, not inside
+    /// it, not holding it) and holds nothing but `gluetun`, which holds
+    /// nothing but the post-rules file and its temporary files. So a mount
+    /// of a whole share or of the data folder is never handed over.
+    /// Every folder is opened without following links and changed through
+    /// that descriptor.
+    ///
+    /// From inside a container, a host folder inside the data folder
+    /// mounted here on its own can't be told apart; the dropped user owns
+    /// the data folder's tree already, so handing it over gives nothing new.
+    pub(super) fn chown_companions_dir(dir: &Path, data: &Path, ids: Ids) -> Line {
+        let left = |kind: &'static str, why: String| Line::Companions {
+            dir: dir.to_path_buf(),
+            ids,
+            changed: 0,
+            skipped: Some((kind, why)),
+        };
+        match std::fs::symlink_metadata(dir) {
+            Ok(m) if m.file_type().is_symlink() => return left("link", "it is a symlink".into()),
+            Ok(m) if !m.is_dir() => return left("not_dir", "it is not a directory".into()),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return left("missing", "it isn't mounted".into());
+            }
+            Err(e) => return left("open", e.to_string()),
+        }
+        const DIR_FLAGS: OFlags = OFlags::RDONLY
+            .union(OFlags::DIRECTORY)
+            .union(OFlags::NOFOLLOW)
+            .union(OFlags::CLOEXEC);
+        let Ok(fd) = rustix::fs::open(dir, DIR_FLAGS, Mode::empty()) else {
+            return left("open", "it can't be opened".into());
+        };
+        let (Ok(st), Ok(root)) = (rustix::fs::fstat(&fd), rustix::fs::stat("/")) else {
+            return left("open", "it can't be examined".into());
+        };
+        if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
+            return left("root", "it is the filesystem root".into());
+        }
+        // Apart from the data folder, by identity and by path.
+        if let Ok(d) = rustix::fs::stat(data)
+            && (d.st_dev, d.st_ino) == (st.st_dev, st.st_ino)
+        {
+            return left("data", "it is the data directory".into());
+        }
+        if let (Ok(c), Ok(d)) = (std::fs::canonicalize(dir), std::fs::canonicalize(data))
+            && (c.starts_with(&d) || d.starts_with(&c))
+        {
+            return left("data", "it overlaps the data directory".into());
+        }
+        // Every name first: nothing changes unless all are ours.
+        let names = |fd: &OwnedFd, ok: &dyn Fn(&[u8]) -> bool| -> Result<(), String> {
+            let mut entries = Dir::read_from(fd).map_err(|_| "it can't be read".to_owned())?;
+            while let Some(entry) = entries.read() {
+                let entry = entry.map_err(|_| "it can't be read".to_owned())?;
+                let name = entry.file_name().to_bytes();
+                if !matches!(name, b"." | b"..") && !ok(name) {
+                    return Err(format!(
+                        "it holds {}, not only gluetun's post-rules",
+                        String::from_utf8_lossy(name)
+                    ));
+                }
+            }
+            Ok(())
+        };
+        if let Err(why) = names(&fd, &|n| n == b"gluetun") {
+            return left("foreign", why);
+        }
+        let gluetun = match rustix::fs::openat(&fd, c"gluetun", DIR_FLAGS, Mode::empty()) {
+            Ok(g) => Some(g),
+            Err(rustix::io::Errno::NOENT) => None,
+            Err(_) => return left("foreign", "its gluetun entry isn't a folder".into()),
+        };
+        if let Some(g) = &gluetun {
+            let ours = |n: &[u8]| {
+                n == b"post-rules.txt"
+                    || (n.starts_with(b".post-rules.txt.") && n.ends_with(b".tmp"))
+            };
+            if let Err(why) = names(g, &ours) {
+                return left("foreign", why);
+            }
+        }
+        let (uid, gid) = (Uid::from_raw(ids.uid), Gid::from_raw(ids.gid));
+        let mut changed = 0;
+        for f in gluetun.iter().chain(std::iter::once(&fd)) {
+            let Ok(fst) = rustix::fs::fstat(f) else {
+                return left("open", "it can't be examined".into());
+            };
+            if (fst.st_uid, fst.st_gid) != (ids.uid, ids.gid) {
+                if let Err(e) = rustix::fs::fchown(f, Some(uid), Some(gid)) {
+                    return left("chown", format!("chown: {e}"));
+                }
+                changed += 1;
+            }
+        }
+        Line::Companions {
+            dir: dir.to_path_buf(),
+            ids,
+            changed,
+            skipped: None,
+        }
+    }
+
     /// What Lodestar leaves in a data directory; one is enough.
     const MARKERS: [&CStr; 3] = [c"lodestar.db", c"config.toml", c"index"];
 
@@ -918,7 +1083,9 @@ mod tests {
     mod linux {
         use std::os::unix::fs::{MetadataExt, symlink};
 
-        use super::super::imp::{can_drop, check_no_caps, chown_data_dir, chown_witness_dir};
+        use super::super::imp::{
+            can_drop, check_no_caps, chown_companions_dir, chown_data_dir, chown_witness_dir,
+        };
         use super::super::*;
 
         #[test]
@@ -993,6 +1160,107 @@ mod tests {
                 line.contains("left as it is") && line.contains("filesystem root"),
                 "{line}"
             );
+        }
+
+        /// The companion-files folder is left as it is, and says why, when
+        /// it isn't mounted, is a link (or its `gluetun` is), is the data
+        /// folder or overlaps it, or holds anything but gluetun's files.
+        #[test]
+        fn a_companions_dir_that_doesnt_qualify_is_left_alone() {
+            let tmp = tempfile::tempdir().unwrap();
+            let data = tmp.path().join("data");
+            std::fs::create_dir(&data).unwrap();
+            let real = tmp.path().join("real");
+            std::fs::create_dir(&real).unwrap();
+            let link = tmp.path().join("link");
+            symlink(&real, &link).unwrap();
+            let linked_gluetun = tmp.path().join("linked-gluetun");
+            std::fs::create_dir(&linked_gluetun).unwrap();
+            symlink(&real, linked_gluetun.join("gluetun")).unwrap();
+            let holding = tmp.path().join("holding");
+            std::fs::create_dir(&holding).unwrap();
+            symlink(&data, holding.join("data")).unwrap();
+            let share = tmp.path().join("share");
+            std::fs::create_dir_all(share.join("gluetun")).unwrap();
+            std::fs::create_dir(share.join("qbittorrent")).unwrap();
+            let deep = tmp.path().join("deep");
+            std::fs::create_dir_all(deep.join("gluetun")).unwrap();
+            std::fs::write(deep.join("gluetun/passwd"), b"").unwrap();
+            let file = tmp.path().join("file");
+            std::fs::write(&file, b"").unwrap();
+            let ids = Ids { uid: 1, gid: 1 };
+            for (dir, kind, why) in [
+                (tmp.path().join("missing"), "missing", "isn't mounted"),
+                (link, "link", "symlink"),
+                (file, "not_dir", "not a directory"),
+                (data.clone(), "data", "is the data directory"),
+                (data.join("inner"), "data", "overlaps the data directory"),
+                (
+                    tmp.path().to_path_buf(),
+                    "data",
+                    "overlaps the data directory",
+                ),
+                (linked_gluetun, "foreign", "isn't a folder"),
+                (holding, "foreign", "holds data"),
+                (share, "foreign", "holds qbittorrent"),
+                (deep, "foreign", "holds passwd"),
+            ] {
+                if kind == "data" {
+                    std::fs::create_dir_all(&dir).unwrap();
+                }
+                let line = chown_companions_dir(&dir, &data, ids);
+                let Line::Companions {
+                    skipped: Some((k, _)),
+                    ..
+                } = &line
+                else {
+                    panic!("{}: {line}", dir.display());
+                };
+                assert_eq!(*k, kind, "{}", dir.display());
+                let text = line.to_string();
+                assert!(
+                    text.contains("left as it is") && text.contains(why),
+                    "{text}"
+                );
+            }
+        }
+
+        /// Root-only. The folder and its `gluetun` folder change owner;
+        /// the file and anything outside don't, and `gluetun` isn't made.
+        #[test]
+        fn the_companions_dir_hands_over_only_its_two_folders() {
+            if !is_root() {
+                return;
+            }
+            let tmp = tempfile::tempdir().unwrap();
+            let data = tmp.path().join("data");
+            std::fs::create_dir(&data).unwrap();
+            let ids = Ids {
+                uid: 4242,
+                gid: 4343,
+            };
+            // A fresh mount: empty, root's. `gluetun` is left to the
+            // dropped user to create.
+            let fresh = tmp.path().join("fresh");
+            std::fs::create_dir(&fresh).unwrap();
+            let line = chown_companions_dir(&fresh, &data, ids).to_string();
+            assert!(line.contains("1 folders changed to 4242:4343"), "{line}");
+            assert_eq!(owner(&fresh), (4242, 4343));
+            assert!(!fresh.join("gluetun").exists());
+            // One Lodestar wrote before, as another user.
+            let used = tmp.path().join("used");
+            std::fs::create_dir_all(used.join("gluetun")).unwrap();
+            std::fs::write(used.join("gluetun/post-rules.txt"), b"x").unwrap();
+            std::fs::write(used.join("gluetun/.post-rules.txt.00ff.tmp"), b"").unwrap();
+            let line = chown_companions_dir(&used, &data, ids).to_string();
+            assert!(line.contains("2 folders changed"), "{line}");
+            assert_eq!(owner(&used), (4242, 4343));
+            assert_eq!(owner(&used.join("gluetun")), (4242, 4343));
+            assert_eq!(owner(&used.join("gluetun/post-rules.txt")), (0, 0));
+            assert_eq!(owner(&data), (0, 0));
+            // Already theirs: nothing changes.
+            let again = chown_companions_dir(&used, &data, ids).to_string();
+            assert!(again.contains("0 folders changed"), "{again}");
         }
 
         fn is_root() -> bool {

@@ -353,6 +353,57 @@ pub struct ServiceInput {
     /// Other companions' host folders, where known (CMP-5 and CMP-6 know
     /// what they generated). A folder that overlaps one is refused.
     pub taken: Vec<HostPath>,
+    /// Where Lodestar saved gluetun's post-rules on the host, when it
+    /// could. Unraid's gluetun template then mounts that file; without it,
+    /// you save the file yourself. Compose carries the rules inline either
+    /// way, so it doesn't read this.
+    pub gluetun_paths: Option<GluetunPaths>,
+}
+
+/// The host folders gluetun's files come from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GluetunPaths {
+    /// Lodestar's companion-files folder on the host. Lodestar writes
+    /// `gluetun/post-rules.txt` inside it. It must not overlap Lodestar's
+    /// data folder, which holds its secrets.
+    pub companions: HostPath,
+}
+
+/// The folder inside the companion-files folder that holds gluetun's files.
+pub const GLUETUN_FILES_DIR: &str = "gluetun";
+/// The post-rules file's name in [`GLUETUN_FILES_DIR`].
+pub const POST_RULES_NAME: &str = "post-rules.txt";
+
+impl GluetunPaths {
+    /// The post-rules file on the host.
+    pub fn post_rules(&self) -> String {
+        format!(
+            "{}/{GLUETUN_FILES_DIR}/{POST_RULES_NAME}",
+            self.companions.as_str()
+        )
+    }
+
+    /// Refuses a companion-files folder that overlaps Lodestar's data folder
+    /// (the running one where known, and Unraid's `appdata/lodestar`, which a
+    /// container can't see), or another companion's folder, or has a dot
+    /// component. gluetun mounts a file from it, so it must hold nothing of
+    /// Lodestar's.
+    pub fn check(&self, input: &ServiceInput) -> Result<(), TemplateError> {
+        let c = components(&self.companions);
+        if c.iter().any(|x| x.starts_with('.')) {
+            return Err(TemplateError::DotFolder);
+        }
+        let lodestar_appdata = c
+            .windows(2)
+            .any(|w| w[0] == "appdata" && crate::inputs::LODESTAR_APPDATA.contains(&w[1].as_str()));
+        if lodestar_appdata || input.data.0.iter().any(|d| overlaps(&c, &d.0)) {
+            return Err(TemplateError::DataFolder);
+        }
+        if input.taken.iter().any(|t| overlaps(&c, &components(t))) {
+            return Err(TemplateError::OtherCompanion);
+        }
+        Ok(())
+    }
 }
 
 // ─── Per-companion profiles ────────────────────────────────────────────

@@ -90,6 +90,8 @@ If Lodestar generated your gluetun from its [companion](glossary.md#companion) t
 | Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Use Docker Compose 2.23.1 or later: run `docker compose version` to see yours. Older versions refuse the file. Then check the rules: run step 4's commands with `docker compose exec` in place of `docker exec`. Don't skip it: a Compose tool that ignores the built-in rules starts gluetun without them, and without an error. |
 | Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. If you changed the **Post-rules** path in the form, use your path in step 1's commands. Then set the start order (below). |
 
+Lodestar's own Unraid template has a **Companion files** path, `/mnt/user/appdata/lodestar-companions` by default. Keep it outside Lodestar's **Data** folder: gluetun reads from it, and the **Data** folder holds Lodestar's secrets. Lodestar will save the post-rules file there itself and fill in gluetun's **Post-rules** path, so you won't do step 1 **(planned)**. Until then, save the file yourself.
+
 To set the start order on Unraid:
 
 1. Open the **Docker** tab and switch it to **Advanced View** (top right).
