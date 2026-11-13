@@ -243,9 +243,9 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 
 | # | Question | From |
 |---|---|---|
-| 13 | FILTER-01 (content safety): the review offers two fixes; which one? The detail is held (`docs/security/v1/README.md` §5) and the runner gives it to you directly | Code review |
+| 13 | FILTER-01 (content safety): **chosen by the owner (§2.70)**; held, the runner gives the fix session the choice directly | Code review |
 | 14 | APIFEAT-01 (blocking, rules): **delegated to the runner (§2.69)**; the runner gives the fix session the choice directly | Code review |
-| 15 | FILTER-03 (content safety): which of the review's two fixes? Detail held as above | Code review |
+| 15 | FILTER-03 (content safety): **chosen by the owner (§2.70)**; held as above | Code review |
 | 16 | **Delegated (§2.69): yes.** INFRA-01: should the image publish wait for the same `release` environment approval as the binaries? For the v0.5.2 tag it needs a release PR to `release/v0.5.2` before the tag | Code review |
 | 17 | **Delegated (§2.69): seven accepted, the setup checklist not** (it conflicts with §2.9, §2.13 and §2.39). Eight proposals that change §10 or the glossary (UI review part 4, section 8): name the app's intended reader in §10.0; reorder Search around words and clicks, with new default facets and row facts; a plain health summary ahead of the Insights story; three required setup steps and a checklist in place of nine inline steps; lead the network step with safety, not port forwarding; accept GB as typed, or a units preference; "alert" as the single noun; a first-use prompt, or default off, for single-key actions that launch another program | UI review part 4 |
 | 18 | **Delegated (§2.69): the crawler gate only.** Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer | Plan r4 |

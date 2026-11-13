@@ -1006,18 +1006,20 @@ conditions:
     label: You tag and publish v1.0.0
     auto: tag:v1.0.0
   owner-filter01-choice:
-    met: false
+    met: true
     who: you
     label: You choose between the two held fixes for FILTER-01 (the runner gives you the detail directly)
+    note: 'Chosen by you on 2026-11-13 (§2.70); held by id only'
   owner-apifeat01-choice:
     met: true
     who: you
     label: You choose between the two held options for APIFEAT-01 (the runner gives you the detail directly)
     note: 'Decided by the runner on your delegation, §2.69 (docs/decisions/2026-11-13-runner-owner-queue.md)'
   owner-filter03-choice:
-    met: false
+    met: true
     who: you
     label: You choose between the two held fixes for FILTER-03 (the runner gives you the detail directly)
+    note: 'Chosen by you on 2026-11-13 (§2.70); held by id only'
   owner-infra01-image-gate:
     met: true
     who: you
@@ -1587,16 +1589,6 @@ owner_queue:
   action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
-- n: 13
-  type: decision
-  action: 'FILTER-01 (blocking, content safety): a choice between held fixes; the runner gives you the detail directly'
-  unblocks: FILTER-01's fix slice (ext:owner-filter01-choice)
-  when: Any time; the fix is held until you choose
-- n: 15
-  type: decision
-  action: 'FILTER-03 (blocking, content safety): a choice between held fixes; the runner gives you the detail directly'
-  unblocks: FILTER-03's fix slice (ext:owner-filter03-choice)
-  when: Any time; the fix is held until you choose
 - n: 20
   type: action
   action: 'Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly)'
@@ -1840,6 +1832,6 @@ notes:
     text: 'By your instruction, from 2026-11-13T00:00Z at most four build sessions and four cloud-testing sessions run at once (owner-decisions §2.64, replacing §2.59 to §2.61), filled only when ready work fits the plan. Cloud testing comes first (§2.62). Sessions over the cap finish their open pull request and are then archived (§2.65). The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: New decisions from the reviews
-    text: Owner queue items 13, 15 and 20 (FILTER-01, FILTER-03 and the draft security advisories). The runner gives you their detail directly. The others are the runner's now (§2.69).
+    text: Owner queue item 20 (the draft security advisories); the runner gives you its detail directly. FILTER-01 and FILTER-03 are chosen (§2.70); the others are the runner's now (§2.69).
   - label: Also for you
     text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Paste the new v0.5.1 release text. The nightly signing key is deferred (§2.52); the Unraid Backups share minimum free space is optional.

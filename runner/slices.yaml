@@ -142,11 +142,11 @@ external:
   v1-tagged:  # M8 plan §4.1; nothing in the M8 plan depends on it; post-1.0 items (the Unraid CA submission, §2.37) will
     check: "The owner has tagged v1.0.0 and the GitHub release is published"
   # ── Added by the runner's Tracks Q and U records (2026-11-13; build-plan §0.3 rows 13 to 22; decisions/2026-11-13-runner-tracks-q-u.md) ──
-  owner-filter01-choice:  # build-plan §0.3 row 13; gates FILTER-01's fix slice (held, sliced by id later)
+  owner-filter01-choice:  # build-plan §0.3 row 13; gates FILTER-01's fix slice (held, sliced by id later); chosen by the owner, owner-decisions §2.70 (2026-11-13): holds
     check: "The owner has chosen between the review's two fixes for FILTER-01, recorded by id only (the detail stays held under docs/security/v1/README.md §5)"
   owner-apifeat01-choice:  # build-plan §0.3 row 14; gates APIFEAT-01's fix slice (held, sliced by id later); decided by the runner on the owner's delegation, owner-decisions §2.69 (2026-11-13, decisions/2026-11-13-runner-owner-queue.md): holds
     check: "The owner has chosen between the review's two options for APIFEAT-01, recorded by id only (the detail stays held under docs/security/v1/README.md §5)"
-  owner-filter03-choice:  # build-plan §0.3 row 15; gates FILTER-03's fix slice (held, sliced by id later)
+  owner-filter03-choice:  # build-plan §0.3 row 15; gates FILTER-03's fix slice (held, sliced by id later); chosen by the owner, owner-decisions §2.70 (2026-11-13): holds
     check: "The owner has chosen between the review's two fixes for FILTER-03, recorded by id only (the detail stays held under docs/security/v1/README.md §5)"
   owner-infra01-image-gate:  # build-plan §0.3 row 16; before the v0.5.2 tag; decided by the runner on the owner's delegation, owner-decisions §2.69 (2026-11-13, decisions/2026-11-13-runner-owner-queue.md): holds
     check: "The owner has decided whether the image publish waits for the same release environment approval as the binaries (INFRA-01), recorded in docs/owner-decisions.md or a decisions file"

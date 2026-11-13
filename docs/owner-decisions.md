@@ -707,6 +707,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **To the runner, within CLAUDE.md's limits:** owner-queue items 4, 10, 14, 16, 17, 18, 19, 21 and 22. The runner's answers are in `docs/decisions/2026-11-13-runner-owner-queue.md`.
     - **Still the owner's:** items 13 (FILTER-01) and 15 (FILTER-03). The runner gives the owner the detail directly.
 
+70. **FILTER-01 and FILTER-03 are chosen** (owner, 2026-11-13, directly in the runner session, after the runner's write-up).
+    - FILTER-01 (blocking, content safety) and FILTER-03 (blocking, content safety): the owner picked one of the options the runner put to them for each.
+    - The choices are held like the findings (`docs/security/v1/README.md` §5). No file records them; the runner gives each fix session its choice directly.
+    - `ext:owner-filter01-choice` and `ext:owner-filter03-choice` now hold.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
