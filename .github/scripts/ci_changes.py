@@ -9,8 +9,8 @@ request gets:
   toolchain file, this workflow, web/src/lib/api/openapi.json (the drift
   job checks it), or one of the files listed in RUST_ALSO below (the
   companion templates, the Windows launcher, main.wxs, the packaging
-  PowerShell scripts, the public keys, the licence notices and the
-  scripts the Rust jobs run);
+  PowerShell scripts, the public keys, the docs that Rust tests read, the
+  licence notices and the scripts the Rust jobs run);
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
@@ -67,6 +67,14 @@ RUST_ALSO = re.compile(
     r"|^packaging/windows/(main\.wxs$|portable/Start Lodestar\.cmd$)"
     r"|^packaging/.*\.ps1$"
     r"|^packaging/keys/[^/]+\.pub$"
+    # Docs that Rust tests and includes read: the metrics table (metrics.rs, serve.rs),
+    # the query-language examples (doc_examples.rs), the legal notice (api/src/legal.rs,
+    # legal_facts.rs), the user guide (sources-plugins safety.rs) and the bitmagnet
+    # reader-role SQL (bitmagnet_check.rs).
+    r"|^docs/(metrics|query-language)\.md$"
+    r"|^docs/legal/legal-notice\.md$"
+    r"|^docs/user/"
+    r"|^docs/operations/imports/bitmagnet-restore/reader-role\.sql$"
 )
 
 # Web and E2E applicability. Both workflows run on every pull request; these
@@ -185,6 +193,11 @@ def fuzz_roots(target: str) -> set[str]:
     return {m.replace("_", "-") for m in re.findall(r"\blodestar_[a-z_]+", source)}
 
 
+def parse_changed(raw: str) -> list[str]:
+    """The changed paths from `git diff --name-only -z`: split on NUL, never on spaces."""
+    return [f for f in raw.split("\0") if f]
+
+
 def main() -> None:
     event, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
     try:
@@ -215,14 +228,17 @@ def main() -> None:
         emit(out)
         return
 
-    changed = subprocess.run(
-        # --no-renames: a file moved out of a crate must list its old path too.
-        ["git", "diff", "--no-renames", "--name-only", f"{base}...{head}"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
+    changed = parse_changed(
+        subprocess.run(
+            # --no-renames: a file moved out of a crate must list its old path too.
+            # -z: NUL-separated and unquoted, so a path with a space stays one path.
+            ["git", "diff", "--no-renames", "--name-only", "-z", f"{base}...{head}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
 
     out["web"] = str(any(WEB.match(f) for f in changed)).lower()
     out["e2e"] = str(any(E2E.match(f) for f in changed)).lower()
