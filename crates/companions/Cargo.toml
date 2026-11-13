@@ -42,7 +42,7 @@ zip = { version = "=9.4.2", default-features = false, features = ["deflate-flate
 [target.'cfg(unix)'.dependencies]
 # O_NOFOLLOW for the download's .part file (CMP-1); signals, pidfds and
 # the effective uid for the supervisor (CMP-4a).
-rustix = { version = "=1.1.5", features = ["fs", "process"] }
+rustix = { version = "=1.1.6", features = ["fs", "process"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The Q3 (b) sandbox (CMP-4b, plan Q13): safe Landlock bindings.
