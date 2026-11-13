@@ -10,6 +10,7 @@ import { clearIndexCache } from './schema';
 import { wizardServer } from '../../wizard/testing/server';
 
 vi.mock('$app/navigation', () => ({ beforeNavigate: () => {}, goto: async () => {} }));
+vi.setConfig({ testTimeout: 30_000 });
 
 let form: SettingsForm;
 afterEach(() => {

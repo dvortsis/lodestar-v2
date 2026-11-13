@@ -1,8 +1,13 @@
 <script lang="ts">
-	// One source (§18.8): name, status, risk and consent class, enable toggle, priority and the 24 h
-	// yield. Turning on a source that needs consent, a password or (Account) credentials opens its
+	// One source (§18.8), as one line that expands (X-sources-restructure, owner §2.66): the line
+	// has the name (the expand button), status, risk and consent class and the enable toggle, with
+	// the setup note and the companion chip under it when they apply (they say why the switch opens
+	// a dialog, or what the source waits for); the detail has priority, addresses, last error, the
+	// 24 h yield, Settings and Purge. The detail
+	// stays in the page while closed (`hidden`). Turning on a source that needs consent, a password or (Account) credentials opens its
 	// dialog, which sends the enable; the server's gate (§18.7) stays the only judge. While a change is in flight the controls stay focusable (a
 	// disabled control would drop the keyboard user's place) and simply ignore input.
+	import IconCaret from '~icons/ph/caret-right-bold';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -10,6 +15,7 @@
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import StatusPill from './StatusPill.svelte';
 	import YieldBar from './YieldBar.svelte';
 	import {
@@ -49,6 +55,7 @@
 		onrefresh
 	}: Props = $props();
 	let heading = $state<HTMLElement>();
+	let open = $state(false);
 
 	const id = $derived(`source-${s.id}`);
 	const status = $derived(statusOf(s));
@@ -91,9 +98,24 @@
 	}
 </script>
 
-<li class="flex flex-col gap-2 rounded-box border border-field-border p-4" data-testid={id}>
-	<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-		<h3 class="text-body font-semibold" tabindex="-1" bind:this={heading}>{s.name}</h3>
+<li class="flex flex-col rounded-box border border-field-border" data-testid={id}>
+	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 p-3">
+		<h3 class="text-body font-semibold" tabindex="-1" bind:this={heading}>
+			<button
+				type="button"
+				class="flex items-center gap-2 rounded-field text-start {FOCUS_RING} {TARGET_MIN}"
+				aria-expanded={open}
+				aria-controls="{id}-detail"
+				onclick={() => (open = !open)}
+				data-testid="{id}-expand"
+			>
+				<IconCaret
+					class="size-(--icon-size-row) shrink-0 {open ? 'rotate-90' : ''}"
+					aria-hidden="true"
+				/>
+				{s.name}
+			</button>
+		</h3>
 		<StatusPill {status} testid="{id}-status" />
 		{#if s.restart_required}
 			<Badge variant="info"><span data-testid="{id}-restart">{m.sources_restart()}</span></Badge>
@@ -102,7 +124,7 @@
 			><span data-testid="{id}-risk">{riskText(s.risk)}</span></Badge
 		>
 		{#if consent}<Badge><span data-testid="{id}-consent">{consent}</span></Badge>{/if}
-		<div class="ms-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+		<div class="ms-auto">
 			<Toggle
 				label={m.sources_enable()}
 				aria-label={m.sources_toggle_name({ name: s.name })}
@@ -113,73 +135,85 @@
 				onchange={toggled}
 				data-testid="{id}-toggle"
 			/>
-			<label class="flex items-center gap-2 text-small">
-				<span aria-hidden="true">{m.sources_priority()}</span>
-				<Select
-					dense
-					class="w-auto"
-					{options}
-					value={s.priority}
-					disabled={!canPrioritise}
-					aria-label={m.sources_priority_name({ name: s.name })}
-					aria-busy={busy}
-					onchange={prioritised}
-					data-testid="{id}-priority"
-				/>
-			</label>
 		</div>
+		{#if need !== null}
+			<!-- With the line, not in the detail: it says why the switch opens a dialog. -->
+			<p class="w-full text-small" id="{id}-need" data-testid="{id}-need">
+				{setupText(need)}
+			</p>
+		{/if}
+		{#if s.companion_need}
+			<div class="w-full">
+				{#await import('../companions/NeedChip.svelte') then { default: NeedChip }}
+					<NeedChip need={s.companion_need} oninstalled={onrefresh} focusAfter={() => heading} />
+				{:catch}
+					<!-- The chip's code didn't load (a stale tab after an upgrade): a plain note, no button. -->
+					<p class="text-small" data-testid="{id}-need-fallback">
+						{m.sources_status_needs_setup()}
+					</p>
+				{/await}
+			</div>
+		{/if}
 	</div>
-	{#if need !== null}
-		<p class="text-small" id="{id}-need" data-testid="{id}-need">
-			{setupText(need)}
-		</p>
-	{/if}
-	{#if s.companion_need}
-		{#await import('../companions/NeedChip.svelte') then { default: NeedChip }}
-			<NeedChip need={s.companion_need} oninstalled={onrefresh} focusAfter={() => heading} />
-		{:catch}
-			<!-- The chip's code didn't load (a stale tab after an upgrade): a plain note, no button. -->
-			<p class="text-small" data-testid="{id}-need-fallback">{m.sources_status_needs_setup()}</p>
-		{/await}
-	{/if}
-	{#if showAddresses}
-		<div class="flex flex-col gap-1 text-small" data-testid="{id}-addresses">
-			<p>{m.sources_addresses_heading()}</p>
-			{#if s.endpoints.length > 0}
-				<ul class="flex flex-col gap-1">
-					{#each s.endpoints as address (address)}
-						<li><code class="font-mono break-all">{address}</code></li>
-					{/each}
-				</ul>
-			{:else}
-				<p class="text-muted-text">{m.sources_addresses_none()}</p>
+	<div
+		id="{id}-detail"
+		class="flex flex-col gap-2 border-t border-field-border p-3"
+		hidden={!open}
+		data-testid="{id}-detail"
+	>
+		<label class="flex items-center gap-2 text-small">
+			<span aria-hidden="true">{m.sources_priority()}</span>
+			<Select
+				dense
+				class="w-auto"
+				{options}
+				value={s.priority}
+				disabled={!canPrioritise}
+				aria-label={m.sources_priority_name({ name: s.name })}
+				aria-busy={busy}
+				onchange={prioritised}
+				data-testid="{id}-priority"
+			/>
+		</label>
+		{#if showAddresses}
+			<div class="flex flex-col gap-1 text-small" data-testid="{id}-addresses">
+				<p>{m.sources_addresses_heading()}</p>
+				{#if s.endpoints.length > 0}
+					<ul class="flex flex-col gap-1">
+						{#each s.endpoints as address (address)}
+							<li><code class="font-mono break-all">{address}</code></li>
+						{/each}
+					</ul>
+				{:else}
+					<p class="text-muted-text">{m.sources_addresses_none()}</p>
+				{/if}
+			</div>
+		{/if}
+		{#if s.health.last_error}
+			<p class="text-small text-error" data-testid="{id}-last-error">
+				{m.sources_last_error({ error: s.health.last_error })}
+			</p>
+		{/if}
+		<div class="flex flex-wrap items-center gap-2 text-small text-muted-text">
+			<YieldBar found={s.health.harvested_24h} stored={s.health.stored_24h} testid="{id}-yield" />
+			<span data-testid="{id}-found">{m.sources_found({ count: found })}</span>
+			<span aria-hidden="true">·</span>
+			<span data-testid="{id}-stored">{m.sources_stored({ count: stored })}</span>
+			{#if s.editable.includes('config') && s.state !== 'purged'}
+				<Button dense class="ms-auto" onclick={onsettings} data-testid="{id}-settings">
+					{m.sources_settings()}<span class="sr-only"> {s.name}</span>
+				</Button>
+			{/if}
+			{#if s.state !== 'purged'}
+				<Button
+					dense
+					class={s.editable.includes('config') ? '' : 'ms-auto'}
+					onclick={onpurge}
+					data-testid="{id}-purge"
+				>
+					{m.sources_purge_action()}<span class="sr-only"> {s.name}</span>
+				</Button>
 			{/if}
 		</div>
-	{/if}
-	{#if s.health.last_error}
-		<p class="text-small text-error" data-testid="{id}-last-error">
-			{m.sources_last_error({ error: s.health.last_error })}
-		</p>
-	{/if}
-	<div class="flex flex-wrap items-center gap-2 text-small text-muted-text">
-		<YieldBar found={s.health.harvested_24h} stored={s.health.stored_24h} testid="{id}-yield" />
-		<span data-testid="{id}-found">{m.sources_found({ count: found })}</span>
-		<span aria-hidden="true">·</span>
-		<span data-testid="{id}-stored">{m.sources_stored({ count: stored })}</span>
-		{#if s.editable.includes('config') && s.state !== 'purged'}
-			<Button dense class="ms-auto" onclick={onsettings} data-testid="{id}-settings">
-				{m.sources_settings()}<span class="sr-only"> {s.name}</span>
-			</Button>
-		{/if}
-		{#if s.state !== 'purged'}
-			<Button
-				dense
-				class={s.editable.includes('config') ? '' : 'ms-auto'}
-				onclick={onpurge}
-				data-testid="{id}-purge"
-			>
-				{m.sources_purge_action()}<span class="sr-only"> {s.name}</span>
-			</Button>
-		{/if}
 	</div>
 </li>

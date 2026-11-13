@@ -1441,6 +1441,9 @@ export default [
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
 	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
+	// X-sources-restructure: the Sources first view measured 33.59 KB (was ~30.7 KB): the filter box,
+	// collapsible groups with their summary, rows that expand (~2 KB) and the consent legend, whose
+	// text is in en and zh (~0.9 KB). Limit = measured + ~1.2%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
@@ -1454,7 +1457,7 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '31.1 KB'
+								? '34 KB'
 								: name === 'NotificationsScreen'
 									? '45.2 KB'
 									: '45 KB'
@@ -1473,7 +1476,9 @@ export default [
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
 	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
-	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '40 KB'),
+	// X-sources-restructure: 41.3 KB; this walk includes the screen's own chunk, so it grows with the
+	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.
+	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '41.8 KB'),
 	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
 	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
