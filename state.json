@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:18Z",
+  "updated_at": "2026-11-13T00:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8825,7 +8825,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:18Z",
+    "updated": "2026-11-13T00:19Z",
     "items": [
       {
         "slot": 1,
@@ -8966,9 +8966,9 @@
         "slice": "X-unraid-validate-all",
         "role": "build",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn8oFWgqJZRqVkfGYoW: launched; validator checks every template + Requires (gluetun template Requires empty today), CI job inside ci-ok",
-        "since": "2026-11-12T21:02:06Z",
-        "status": "active",
+        "doing": "#781 merged (7e826fe4); session archived; cloud-testing slot free for the next ready cloud-testing slice",
+        "since": "2026-11-13T00:19Z",
+        "status": "idle",
         "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
       {
@@ -9195,7 +9195,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:18Z",
+  "updated": "2026-11-13T00:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
