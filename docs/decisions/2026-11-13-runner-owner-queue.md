@@ -51,7 +51,7 @@ These are the runner's answers. Each is a §2.19 call, flagged to the owner, who
 - **X-gluetun-hostfile-ui** (helper): the companions screen's field for `gluetun_paths`, after X-gluetun-templates-hostfile.
 - **X-rusqlite-041** (Opus): the upgrade above, after X-ci-advisories. `/security-review`, because the magnetico importer opens databases the user supplies.
 - **X-test-vm:** the cloud tester's coordinator session (owner-started, §2.60), so its slot has an entry.
-- **Notes:** X-gluetun-templates-hostfile gets the separate folder and the files the change needs; X-ci-advisories gets rv-815 O6 (the gluetun pin test's change filter); X-consent-gate-lift-account gets the `setupNeed` revisit.
+- **Notes:** X-gluetun-templates-hostfile gets the separate folder and the files the change needs; rv-815 O6 (the gluetun pin test's change filter) was first given to X-ci-advisories, which did not take it, and is now its own slice, X-gluetun-pin-ci-filter (#822); X-consent-gate-lift-account gets the `setupNeed` revisit.
 
 ## Flags for the owner (§2.19)
 - Every item above. Item 17's proposal 4 is the one not accepted, because it conflicts with three of your decisions.
