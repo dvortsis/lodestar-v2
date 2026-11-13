@@ -657,9 +657,20 @@ pub struct Doc<'a> {
 }
 
 /// The core's read of a torrent: tokens, where each text ends, whether
-/// each path reads alike with its segments apart, and whether the read
-/// passed the core's budget.
-type NormalizedRead = (Vec<crate::normalize::Token>, Vec<usize>, Vec<bool>, bool);
+/// each path reads alike with its segments apart, and what the meter
+/// found (whether it passed the core's budget, whether a text holds a
+/// character the earlier reading reads as a word break).
+type NormalizedRead = (
+    Vec<crate::normalize::Token>,
+    Vec<usize>,
+    Vec<bool>,
+    crate::normalize::Metered,
+);
+
+/// The earlier reading of a torrent ([`Doc::split_read`]): tokens, where
+/// each text ends, and whether a text of it stops short (past the budget
+/// or at the token cap), so the torrent is too large to judge.
+type SplitRead = (Vec<crate::normalize::Token>, Vec<usize>, bool);
 
 /// File paths your rules and the packs read per torrent. The core reads
 /// every file of a torrent within its budget ([`crate::MAX_FILES`]).
@@ -682,8 +693,9 @@ struct TextCaches {
     normalized: OnceCell<NormalizedRead>,
     /// The same in the earlier reading, where characters once read as
     /// word breaks are ([`crate::normalize::Tokenizer::splitting`]), if
-    /// it differs.
-    normalized_split: OnceCell<Option<(Vec<crate::normalize::Token>, Vec<usize>)>>,
+    /// it differs, with whether that read passed the budget or a text
+    /// may reach the token cap read either way ([`Doc::too_large`]).
+    normalized_split: OnceCell<Option<SplitRead>>,
     keys: OnceCell<DocKeys>,
     exts: OnceCell<Vec<lodestar_classify::ext::Ext>>,
     content: OnceCell<Content>,
@@ -990,21 +1002,23 @@ impl<'a> Doc<'a> {
     fn read_whole(&self) -> &NormalizedRead {
         self.texts().normalized.get_or_init(|| {
             let (mut tokens, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
-            let within = crate::normalize::read_whole(
+            let metered = crate::normalize::read_whole(
                 self.item.name,
                 self.item.files.iter().map(|f| &f.path[..]),
                 &mut tokens,
                 &mut ends,
                 &mut apart,
             );
-            (tokens, ends, apart, within.is_none())
+            (tokens, ends, apart, metered)
         })
     }
 
     /// Whether the core can't read the torrent within its budget: it's
     /// too large to judge (CS-0a). Reads it to find out, once.
     pub(crate) fn too_large(&self) -> bool {
-        crate::core::past_budget_unread(self.item) || self.read_whole().3
+        crate::core::past_budget_unread(self.item)
+            || self.read_whole().3.work.is_none()
+            || self.split_over()
     }
 
     /// The name, then each path, in the core's tokens.
@@ -1027,26 +1041,7 @@ impl<'a> Doc<'a> {
     pub(crate) fn normalized_split(
         &self,
     ) -> Option<impl Iterator<Item = &[crate::normalize::Token]>> {
-        let (tokens, ends) = self
-            .texts()
-            .normalized_split
-            .get_or_init(|| {
-                let files = || self.item.files.iter();
-                let segments = files().flat_map(|f| f.path.iter().map(String::as_str));
-                if !crate::normalize::splits(std::iter::once(self.item.name).chain(segments)) {
-                    return None;
-                }
-                let mut tok = crate::normalize::Tokenizer::splitting();
-                let mut tokens = Vec::new();
-                tok.text(self.item.name, &mut tokens);
-                let mut ends = vec![tokens.len()];
-                for f in files() {
-                    tok.text(&f.path.join("/"), &mut tokens);
-                    ends.push(tokens.len());
-                }
-                Some((tokens, ends))
-            })
-            .as_ref()?;
+        let (tokens, ends, _) = self.split_read()?;
         Some(
             std::iter::once(0)
                 .chain(ends.iter().copied())
@@ -1055,17 +1050,53 @@ impl<'a> Doc<'a> {
         )
     }
 
+    /// Whether the earlier reading passes the budget, or a text of it
+    /// reaches the token cap here or as the core reads it (segments
+    /// apart, which can end a spelled-out run at each `/`, a token more
+    /// per segment).
+    fn split_over(&self) -> bool {
+        self.split_read().is_some_and(|r| r.2)
+    }
+
+    fn split_read(&self) -> Option<&SplitRead> {
+        self.texts()
+            .normalized_split
+            .get_or_init(|| {
+                // The joined read noted whether a text holds such a
+                // character, so nothing is scanned again.
+                let joined = &self.read_whole().3;
+                if !joined.marks || joined.work.is_none() {
+                    return None;
+                }
+                let (mut tokens, mut ends) = (Vec::new(), Vec::new());
+                let metered = crate::normalize::read_split(
+                    self.item.name,
+                    self.item.files.iter().map(|f| &f.path[..]),
+                    &mut tokens,
+                    &mut ends,
+                );
+                let cap = crate::normalize::MAX_TOKENS;
+                let mut over = metered.work.is_none() || ends[0] >= cap;
+                for (w, f) in ends.windows(2).zip(self.item.files) {
+                    over |= w[1] - w[0] + f.path.len() >= cap;
+                }
+                Some((tokens, ends, over))
+            })
+            .as_ref()
+    }
+
     /// The name and paths in the core's tokens, if keyword entries have
     /// read them already, for the core to reuse.
     pub(crate) fn read(&self) -> Option<crate::normalize::Read<'_>> {
         self.texts()
             .normalized
             .get()
-            .map(|(tokens, ends, apart, over)| crate::normalize::Read {
+            .map(|(tokens, ends, apart, metered)| crate::normalize::Read {
                 tokens,
                 ends,
                 apart,
-                over: *over,
+                over: metered.work.is_none(),
+                marks: metered.marks,
             })
     }
 

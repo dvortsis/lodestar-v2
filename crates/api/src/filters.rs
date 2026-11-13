@@ -949,13 +949,13 @@ const ADULT_HOLD_NOTE: &str = "It was held because your correction or an Is adul
     adult rule matches it when it's next seen, it's judged as detection classifies it, and if \
     that isn't adult, the Adult-only child-safety checks won't look at it.";
 
-/// The effect warning (§20.11): what it does, what else it lets
-/// through, the numbers, and a safer alternative.
 /// The warning for releasing a torrent held as too large to judge (CS-0a).
 const TOO_LARGE_RELEASE: &str = "This torrent is too large for the child-safety core to judge, \
      so it was held. Releasing it removes the hold, and the next time it's seen it's held again \
      unless it has become small enough to judge. Safer: keep it held.";
 
+/// The effect warning (§20.11): what it does, what else it lets
+/// through, the numbers, and a safer alternative.
 fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: bool) -> String {
     let n = count_line(p);
     match change {

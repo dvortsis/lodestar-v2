@@ -384,6 +384,39 @@ fn a_locked_rule_takes_no_exception() {
     assert!(e.validate().is_err());
 }
 
+/// Both readings of a torrent (with the characters once read as word
+/// breaks read so, and not) reach the end of every text, or it's held:
+/// a pair at the end of a long path is caught or held, over a range of
+/// text sizes and of such characters, by the core and the engine alike.
+/// Either reading can take more tokens than the other, so neither
+/// reading's bound covers both.
+#[test]
+fn every_reading_reaches_the_end_or_holds() {
+    let c = core();
+    let e = Engine::new(core());
+    for segments in [1usize, 60, 500] {
+        for breaks in [0usize, 500, 5_000] {
+            let mut path: Vec<String> = (0..segments).map(|_| "a1b2c3d4 ".repeat(110)).collect();
+            path.push("a1b2c3d4\u{2028}".repeat(breaks));
+            path.push("rolea\u{2028}lexa".into());
+            let files = [FileInfo::new(path, 1)];
+            let it = item("Title", &files);
+            let both =
+                |rule: Option<CoreRule>| matches!(rule, Some(CoreRule::Cs4a | CoreRule::Cs0a));
+            let by_core = c.verdict(&it).map(|h| h.rule);
+            assert!(both(by_core), "{segments}/{breaks}: {by_core:?}");
+            let by_engine = judge(&e, "Title", &files);
+            let rule = match by_engine {
+                Some(RuleRef::Core(r)) => Some(r),
+                _ => None,
+            };
+            assert!(both(rule), "{segments}/{breaks}: {by_engine:?}");
+            // Held exactly where a reading stops short.
+            assert_eq!(by_core == Some(CoreRule::Cs0a), too_large(&it));
+        }
+    }
+}
+
 /// Where a term pair sits in a torrent.
 #[derive(Debug, Clone, Copy)]
 enum Place {

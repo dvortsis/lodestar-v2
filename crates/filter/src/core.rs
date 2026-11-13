@@ -470,7 +470,16 @@ struct ReadBufs {
     tokens: Vec<Token>,
     ends: Vec<usize>,
     apart: Vec<bool>,
-    over: bool,
+    read: normalize::Metered,
+}
+
+impl Default for normalize::Metered {
+    fn default() -> normalize::Metered {
+        normalize::Metered {
+            work: Some(0),
+            marks: false,
+        }
+    }
 }
 
 impl ReadBufs {
@@ -478,19 +487,19 @@ impl ReadBufs {
         self.tokens.clear();
         self.ends.clear();
         self.apart.clear();
-        self.over = normalize::read_whole(
+        self.read = normalize::read_whole(
             item.name,
             item.files.iter().map(|f| &f.path[..]),
             &mut self.tokens,
             &mut self.ends,
             &mut self.apart,
-        )
-        .is_none();
+        );
         normalize::Read {
             tokens: &self.tokens,
             ends: &self.ends,
             apart: &self.apart,
-            over: self.over,
+            over: self.read.work.is_none(),
+            marks: self.read.marks,
         }
     }
 
@@ -562,7 +571,7 @@ pub(crate) fn past_budget_unread(item: &Item) -> bool {
 /// Whether the core holds `item` as too large to judge (CS-0a): past
 /// the budget before it's read, or while it's read. Reads it to find out.
 pub fn too_large(item: &Item) -> bool {
-    read_cost(item).is_none()
+    read_cost(item).is_none() || crate::matcher::Doc::new(item, None).too_large()
 }
 
 /// What reading `item` whole costs, in units of [`BUDGET`], or `None`
@@ -580,6 +589,7 @@ pub fn read_cost(item: &Item) -> Option<u64> {
         &mut ends,
         &mut apart,
     )
+    .work
 }
 
 const MINOR_AGES: std::ops::RangeInclusive<u16> = 1..=17;
@@ -734,6 +744,9 @@ pub(crate) struct PatternSignals {
     /// The read passed the budget: the torrent is too large to judge
     /// (CS-0a), and `texts` are empty.
     over: bool,
+    /// A text reads differently in the earlier reading
+    /// ([`Core::pattern_hits_split`]).
+    marks: bool,
 }
 
 /// What one text (the name or a file path) contains.
@@ -896,14 +909,14 @@ impl Core {
         }
         let none = TermSet::default();
         let first = |hits: Vec<Hit>| hits.into_iter().find(|h| h.on);
-        let joined = self.patterns(item, &none, None);
+        let (joined, marks) = self.patterns(item, &none, None);
         if too_large_read(&joined) {
             return first(joined);
         }
         let hit = first(joined);
         // The earlier reading's hit wins a tie, so its rule and evidence
         // stay as they were.
-        match self.pattern_hits_split(item, &none) {
+        match self.pattern_hits_split(item, &none, marks) {
             Some(split) => stronger(first(split), hit),
             None => hit,
         }
@@ -923,11 +936,11 @@ impl Core {
     /// hits of both, the earlier reading's first: a rule hits if it hits
     /// in either reading.
     pub fn pattern_hits(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        let joined = self.patterns(item, neutral, None);
+        let (joined, marks) = self.patterns(item, neutral, None);
         if too_large_read(&joined) {
             return joined;
         }
-        match self.pattern_hits_split(item, neutral) {
+        match self.pattern_hits_split(item, neutral, marks) {
             Some(mut hits) => {
                 hits.extend(joined);
                 hits
@@ -937,20 +950,28 @@ impl Core {
     }
 
     /// The hits of the earlier reading, with the characters
-    /// [`Tokenizer::splitting`] names as word breaks, if the item's name
-    /// or a path holds one; `None` otherwise, when both readings are the
-    /// same. Rare, so it pays for a tokenizer of its own.
-    pub(crate) fn pattern_hits_split(&self, item: &Item, neutral: &TermSet) -> Option<Vec<Hit>> {
-        let paths = item
-            .files
-            .iter()
-            .flat_map(|f| f.path.iter().map(String::as_str));
-        if !normalize::splits(std::iter::once(item.name).chain(paths)) {
+    /// [`Tokenizer::splitting`] names as word breaks, where `marks` (the
+    /// joined reading found one in the name or a path); `None` otherwise,
+    /// when both readings are the same. Rare, so it pays for a tokenizer
+    /// of its own.
+    pub(crate) fn pattern_hits_split(
+        &self,
+        item: &Item,
+        neutral: &TermSet,
+        marks: bool,
+    ) -> Option<Vec<Hit>> {
+        if !marks {
             return None;
         }
         let mut tok = Tokenizer::splitting();
+        tok.meter(normalize::CUT_ONLY);
         let mut scratch = Scratch::default();
         let s = self.patterns_with(&mut tok, &mut scratch, item, neutral, None);
+        if tok.over() {
+            // A text of this reading reached the token cap: it isn't read
+            // whole, so the torrent is too large to judge.
+            return Some(vec![self.too_large_hit()]);
+        }
         Some(self.judge_signals(&s, item.content_type))
     }
 
@@ -979,12 +1000,12 @@ impl Core {
             return hits;
         }
         let none = TermSet::default();
-        let joined = self.patterns(item, &none, None);
+        let (joined, marks) = self.patterns(item, &none, None);
         if too_large_read(&joined) {
             hits.extend(joined);
             return hits;
         }
-        match self.pattern_hits_split(item, &none) {
+        match self.pattern_hits_split(item, &none, marks) {
             Some(split) => hits.extend(both_readings(split, joined)),
             None => hits.extend(joined),
         }
@@ -1094,11 +1115,16 @@ impl Core {
         s
     }
 
-    fn patterns(&self, item: &Item, neutral: &TermSet, read: Option<normalize::Read>) -> Vec<Hit> {
-        self.judge_signals(
-            &self.pattern_signals(item, neutral, read),
-            item.content_type,
-        )
+    /// The joined reading's hits, and whether a text reads differently
+    /// in the earlier one.
+    fn patterns(
+        &self,
+        item: &Item,
+        neutral: &TermSet,
+        read: Option<normalize::Read>,
+    ) -> (Vec<Hit>, bool) {
+        let s = self.pattern_signals(item, neutral, read);
+        (self.judge_signals(&s, item.content_type), s.marks)
     }
 
     /// The pattern rules' hits on signals [`Core::pattern_signals`] read,
@@ -1140,9 +1166,10 @@ impl Core {
                 return PatternSignals {
                     texts: Vec::new(),
                     over: true,
+                    marks: read.marks,
                 };
             }
-            normalize::with_tokenizer(|tok| {
+            let mut s = normalize::with_tokenizer(|tok| {
                 SCRATCH.with(|s| match s.try_borrow_mut() {
                     Ok(mut scratch) => {
                         self.patterns_with(tok, &mut scratch, item, neutral, Some(read))
@@ -1151,7 +1178,9 @@ impl Core {
                         self.patterns_with(tok, &mut Scratch::default(), item, neutral, Some(read))
                     }
                 })
-            })
+            });
+            s.marks = read.marks;
+            s
         };
         if let Some(read) = read {
             return judge(read);
@@ -1257,7 +1286,11 @@ impl Core {
                 texts.push((Field::File(i as u32), s));
             }
         }
-        PatternSignals { texts, over: false }
+        PatternSignals {
+            texts,
+            over: false,
+            marks: false,
+        }
     }
 
     /// Every pattern rule's hit on a hashed fixture (§20.4): the fixture
@@ -1456,6 +1489,7 @@ mod tests {
             ends: &ends,
             apart: &apart,
             over: false,
+            marks: false,
         };
         let none = TermSet::default();
         for (files, hits) in [
@@ -1469,7 +1503,7 @@ mod tests {
                 files,
                 content_type: ContentType::Video,
             };
-            let own = c.patterns(&item, &none, None);
+            let own = c.patterns(&item, &none, None).0;
             assert_eq!(!own.is_empty(), hits, "{files:?}");
             // Only the files given: the read's paths past them aren't read.
             let (mut t, mut a) = (Vec::new(), Vec::new());
@@ -1481,8 +1515,9 @@ mod tests {
                 ends: &e,
                 apart: &a,
                 over: false,
+                marks: false,
             };
-            assert_eq!(c.patterns(&item, &none, Some(read_of)), own, "{files:?}");
+            assert_eq!(c.patterns(&item, &none, Some(read_of)).0, own, "{files:?}");
         }
         // Reusing the whole read's tokens for the first path would differ.
         let item = Item {
@@ -1497,8 +1532,8 @@ mod tests {
             ..read
         };
         assert_ne!(
-            c.patterns(&item, &none, Some(forced)),
-            c.patterns(&item, &none, None)
+            c.patterns(&item, &none, Some(forced)).0,
+            c.patterns(&item, &none, None).0
         );
     }
 
@@ -1571,7 +1606,7 @@ mod tests {
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };
                 let item = Item { content_type: ct, ..item };
-                prop_assert_eq!(c.patterns(&item, &none, None), c.judge(&texts, ct));
+                prop_assert_eq!(c.patterns(&item, &none, None).0, c.judge(&texts, ct));
             }
         }
 
@@ -1609,14 +1644,14 @@ mod tests {
             normalize::tokens(name, &mut tokens);
             let mut ends = vec![tokens.len()];
             normalize::paths_apart(files.iter().map(|f| &f.path[..]), &mut tokens, &mut ends, &mut apart);
-            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false };
+            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false, marks: false };
             let neutral = TermSet::of(&neutral);
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };
                 let item = Item { hashes: &[], name, files: &files, content_type: ct };
                 prop_assert_eq!(
-                    c.patterns(&item, &neutral, Some(read)),
-                    c.patterns(&item, &neutral, None)
+                    c.patterns(&item, &neutral, Some(read)).0,
+                    c.patterns(&item, &neutral, None).0
                 );
             }
         }

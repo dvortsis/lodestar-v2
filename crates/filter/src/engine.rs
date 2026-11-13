@@ -1215,7 +1215,9 @@ impl Engine {
         };
         let mut paired = rec.as_deref_mut().and_then(|r| r.paired.as_mut());
         let hits = match reading {
-            Reading::Before => self.core.pattern_hits_split(item, neutral),
+            Reading::Before => self
+                .core
+                .pattern_hits_split(item, neutral, doc.reads_twice()),
             Reading::Joined => None,
         };
         let hits = hits.unwrap_or_else(|| match seen.and_then(|s| s.signals.as_ref()) {

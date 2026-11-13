@@ -65,8 +65,8 @@
 	});
 	onDestroy(() => ctl?.abort());
 
-	// An adult hold's rule id carries a suffix after the rule's own.
-	const tooLarge = (rule: string) => rule === 'CS-0a' || rule.startsWith('CS-0a+');
+	// CS-0a is never adult-only, so its row never carries an adult hold's suffix.
+	const tooLarge = (rule: string) => rule === 'CS-0a';
 	const rows = $derived(
 		queue ? [...queue.quarantine, ...more].filter((r) => model.adult || !r.adult_hold) : []
 	);

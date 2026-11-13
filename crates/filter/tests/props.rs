@@ -2576,6 +2576,33 @@ fn budget_worst_case() {
             Box::new(|n| each(n, |i| vec!["folder word ".repeat(330), format!("{i}")])),
         ),
         (
+            "long CJK folder",
+            Box::new(|n| {
+                each(n, |i| {
+                    vec!["東京物語日本語映画".repeat(150), format!("{i}")]
+                })
+            }),
+        ),
+        (
+            "long combining folder",
+            Box::new(|n| {
+                each(n, |i| {
+                    vec![format!("a{}", "\u{0301}".repeat(1_999)), format!("{i}")]
+                })
+            }),
+        ),
+        (
+            "long folder with a mark",
+            Box::new(|n| {
+                each(n, |i| {
+                    vec![
+                        format!("{}\u{2028}", "folder word ".repeat(330)),
+                        format!("{i}"),
+                    ]
+                })
+            }),
+        ),
+        (
             "alternating folders",
             Box::new(|n| each(n, |i| vec![format!("dir {} word", i % 5), format!("{i}")])),
         ),
@@ -2689,7 +2716,12 @@ fn budget_worst_case() {
     );
 }
 
-/// [`budget_worst_case`]'s bound, generous of what was measured (about
-/// 9 ms on the build VM at worst) so that a noisy runner passes, and a
-/// cost the meter stops counting fails.
+/// [`budget_worst_case`]'s bound: the core's time at its budget,
+/// whatever the input. The target is about 10 ms; the shapes measured
+/// 0.5-6.2 ms scaled in a quiet run on the build VM and up to 11.3 ms in
+/// a noisy one, the same shape reading twice another run's. So this is a
+/// bound on work the meter doesn't count (which costs orders more: a
+/// shape past it takes seconds), not a regression gate on a factor of
+/// two, which this host can't measure. A bench against a stored
+/// baseline could, as §20.8 says of the budget gate.
 const WORST_CASE_MS: f64 = 15.0;

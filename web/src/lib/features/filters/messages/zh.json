@@ -170,7 +170,7 @@
 	"filters_flows_query_help": "任何搜索查询，例如标题、上传者或发布组。",
 	"filters_flows_payload_label": "内容签名",
 	"filters_flows_payload_help": "16 位十六进制数字。",
-	"filters_flows_strength_override_help": "跳过规则包、你的规则，以及除锁定底线外的所有核心规则。",
+	"filters_flows_strength_override_help": "跳过规则包、你的规则，以及所有可覆盖的核心规则。锁定的规则仍然适用。",
 	"filters_flows_strength_neutralize_help": "该词不再计为证据；种子中的其他内容仍会计入。",
 	"filters_flows_scope_label": "仅限于（可选）",
 	"filters_flows_scope_help": "限制此条目的查询，例如 type:adult。",

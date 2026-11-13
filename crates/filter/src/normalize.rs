@@ -297,6 +297,9 @@ pub struct Tokenizer {
     round: u32,
     seen_plans: Vec<(u32, String)>,
     seen_chars: Vec<(u32, u32)>,
+    /// A [`mark`] was read since [`Tokenizer::meter`]: the text reads
+    /// differently in the earlier reading ([`splits`]).
+    saw_mark: bool,
 }
 
 /// Characters [`Tokenizer`] caches the reading of: a script's block fits
@@ -338,6 +341,8 @@ struct CharPlan {
     ops: Vec<Op>,
     /// Characters in its decomposition.
     decomposed: u64,
+    /// A [`mark`]: the earlier reading reads it as a word break.
+    mark: bool,
 }
 
 impl Default for CharPlan {
@@ -346,6 +351,7 @@ impl Default for CharPlan {
             key: u32::MAX,
             ops: Vec::new(),
             decomposed: 0,
+            mark: false,
         }
     }
 }
@@ -416,6 +422,12 @@ mod cost {
     pub const SEGMENT: u64 = 8;
     pub const COMPARED: u64 = 16;
 }
+
+/// A [`Tokenizer::meter`] limit no read reaches by its work: the read is
+/// over only where a text reaches [`MAX_TOKENS`]. For the earlier reading
+/// ([`Tokenizer::splitting`]), whose work the joined reading's meter
+/// bounds but whose tokens it doesn't.
+pub(crate) const CUT_ONLY: u64 = u64::MAX / 2;
 
 /// Units of the core's work budget a file costs, however short its path.
 pub(crate) const FILE_UNITS: u64 = cost::FILE;
@@ -518,8 +530,10 @@ impl Tokenizer {
                     // plan is made.
                     plan.key = u32::MAX;
                     plan.decomposed = plan_char(c, &mut plan.ops) as u64;
+                    plan.mark = mark(c);
                     plan.key = c as u32;
                 }
+                self.saw_mark |= self.chars[slot].mark;
                 if self.limit != 0 && self.seen_chars[slot] != (self.round, c as u32) {
                     self.seen_chars[slot] = (self.round, c as u32);
                     self.work += cost::CHAR_PLAN + self.chars[slot].decomposed * cost::DECOMPOSED;
@@ -552,6 +566,7 @@ impl Tokenizer {
     pub(crate) fn meter(&mut self, limit: u64) {
         self.work = 0;
         self.limit = limit;
+        self.saw_mark = false;
         if limit != 0 {
             // A new round: every slot of the meter's view reads as empty
             // (round 0 is never one).
@@ -900,6 +915,8 @@ pub(crate) struct Read<'a> {
     /// The read passed the core's work budget ([`read_whole`]): its
     /// tokens stop short.
     pub(crate) over: bool,
+    /// A text holds a [`mark`] ([`Metered::marks`]).
+    pub(crate) marks: bool,
 }
 
 impl<'a> Read<'a> {
@@ -928,28 +945,71 @@ pub(crate) fn paths_apart<'p>(
     with_tokenizer(|tok| paths_apart_with(tok, paths, out, ends, apart));
 }
 
+/// What a metered read of a torrent found ([`read_whole`], [`read_split`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Metered {
+    /// The work it took, or `None` once that passed the core's budget.
+    pub(crate) work: Option<u64>,
+    /// A text held a [`mark`], so it reads differently in the earlier
+    /// reading ([`splits`], without reading the text again).
+    pub(crate) marks: bool,
+}
+
+/// Stops metering `tok` when dropped, so a panic mid-read never leaves
+/// the thread's tokenizer metered (and every later read of it empty).
+struct Unmeter<'t>(&'t mut Tokenizer);
+
+impl Drop for Unmeter<'_> {
+    fn drop(&mut self) {
+        self.0.meter(0);
+    }
+}
+
 /// A torrent's name and every path read as [`paths_apart`] reads them,
-/// metered against the core's work budget ([`crate::core::BUDGET`]):
-/// the work it took, or `None` once that passes the budget, the rest then
-/// read as nothing (an empty text for each path left, so the ends still
-/// line up with the files).
+/// metered against the core's work budget ([`crate::core::BUDGET`]),
+/// the rest read as nothing once past it (an empty text for each path
+/// left, so the ends still line up with the files).
 pub(crate) fn read_whole<'p>(
     name: &str,
     paths: impl IntoIterator<Item = &'p [String]>,
     out: &mut Vec<Token>,
     ends: &mut Vec<usize>,
     apart: &mut Vec<bool>,
-) -> Option<u64> {
-    with_tokenizer(|tok| {
-        tok.meter(crate::core::BUDGET);
-        // Paths are read in turn, so the whole read is cut at the cap too.
-        tok.text(name, out);
-        ends.push(out.len());
-        paths_apart_with(tok, paths, out, ends, apart);
-        let work = (!tok.over()).then_some(tok.work);
-        tok.meter(0);
-        work
-    })
+) -> Metered {
+    with_tokenizer(|tok| read_with(tok, name, paths, out, ends, apart))
+}
+
+/// [`read_whole`] in the earlier reading ([`Tokenizer::splitting`]), its
+/// own tokenizer, metered against the same budget. Paths read alike
+/// either way here: in one folder they share its part.
+pub(crate) fn read_split<'p>(
+    name: &str,
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+) -> Metered {
+    let mut tok = Tokenizer::splitting();
+    read_with(&mut tok, name, paths, out, ends, &mut Vec::new())
+}
+
+fn read_with<'p>(
+    tok: &mut Tokenizer,
+    name: &str,
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+    apart: &mut Vec<bool>,
+) -> Metered {
+    tok.meter(crate::core::BUDGET);
+    let tok = Unmeter(tok);
+    // Paths are read in turn, so the whole read is cut at the cap too.
+    tok.0.text(name, out);
+    ends.push(out.len());
+    paths_apart_with(tok.0, paths, out, ends, apart);
+    Metered {
+        work: (!tok.0.over()).then_some(tok.0.work),
+        marks: tok.0.saw_mark,
+    }
 }
 
 fn paths_apart_with<'p>(
@@ -1297,6 +1357,47 @@ mod tests {
         Tokenizer::default().path(&path("l/e/x/a.mkv"), &mut apart_read);
         let (whole, ends, _) = read_apart(&[path("l/e/x/a.mkv")]);
         assert_ne!(&whole[ends[0]..ends[1]], &apart_read[..]);
+    }
+
+    /// A segment for the reads below: words, characters each reading
+    /// reads differently, single letters and other characters.
+    const SEGMENT: &str =
+        "([a-z0-9]{1,6}|[a-z]|\u{2028}|\u{0605}|\u{FFF9}|\u{200B}|\\PC|[ .]){0,12}";
+
+    proptest::proptest! {
+        /// The read notes a character the earlier reading reads as a word
+        /// break exactly where [`splits`] finds one, and the earlier
+        /// reading of every path, folders shared, is each path's own.
+        #[test]
+        fn the_reads_note_marks_and_read_each_path_whole(
+            name in SEGMENT,
+            folders in proptest::collection::vec(proptest::collection::vec(SEGMENT, 0..3), 1..6),
+            files in proptest::collection::vec((proptest::prelude::any::<proptest::sample::Index>(), SEGMENT), 0..12),
+        ) {
+            let paths: Vec<Vec<String>> = files
+                .into_iter()
+                .map(|(at, own)| {
+                    let mut p = folders[at.index(folders.len())].clone();
+                    p.push(own);
+                    p
+                })
+                .collect();
+            let (mut out, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+            let read = read_whole(&name, paths.iter().map(|p| &p[..]), &mut out, &mut ends, &mut apart);
+            let texts = std::iter::once(&name[..]).chain(paths.iter().flatten().map(|s| &s[..]));
+            proptest::prop_assert_eq!(read.marks, splits(texts));
+            proptest::prop_assert!(read.work.is_some());
+            let (mut split, mut split_ends) = (Vec::new(), Vec::new());
+            proptest::prop_assert!(read_split(&name, paths.iter().map(|p| &p[..]), &mut split, &mut split_ends).work.is_some());
+            let mut each = Vec::new();
+            Tokenizer::splitting().text(&name, &mut each);
+            proptest::prop_assert_eq!(&split[..split_ends[0]], &each[..]);
+            for (i, p) in paths.iter().enumerate() {
+                let mut each = Vec::new();
+                Tokenizer::splitting().text(&p.join("/"), &mut each);
+                proptest::prop_assert_eq!(&split[split_ends[i]..split_ends[i + 1]], &each[..], "{:?}", p);
+            }
+        }
     }
 
     proptest::proptest! {
