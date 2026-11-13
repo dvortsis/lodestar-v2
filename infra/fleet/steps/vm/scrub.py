@@ -169,7 +169,7 @@ def count_lines(path: Path) -> int:
 def count_kind(path: Path, kind: str) -> int:
     line = re.compile(r"[0-9]{1,20} " + re.escape(kind) + r"\Z")
     try:
-        return sum(1 for ln in path.read_text(encoding="ascii", errors="replace").splitlines() if line.match(ln))
+        return sum(1 for ln in path.read_text(encoding="ascii", errors="replace").split("\n") if line.match(ln))
     except OSError:
         return 0
 
