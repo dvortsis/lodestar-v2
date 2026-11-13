@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T11:37Z",
+  "updated_at": "2026-11-13T11:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8031,6 +8031,11 @@
       "id": "slices-yaml-x-wk18w-rollback-owns",
       "at": "2026-11-13T11:08Z",
       "note": "next runner PR: add packaging/windows/join-finish.ps1 and packaging/windows/README.md to X-wk18w-rollback owns (runner accepted, #832)"
+    },
+    {
+      "id": "insights-cohorts-name-polish",
+      "at": "2026-11-13T11:39Z",
+      "note": "rv-833 optional: Cohorts announced 3x (h3, region, LinkedBars list); give region a name that adds info or drop inner list label; e2e could reach scroller by Tab"
     }
   ],
   "main_health": [
@@ -8422,13 +8427,8 @@
     },
     "832": {
       "slice": "X-wk18w-rollback",
-      "head": "8d0e8bbd",
-      "note": "CI running; await ready; Opus + /security-review"
-    },
-    "833": {
-      "slice": "X-insights-scroll-a11y",
-      "head": "c7851a99",
-      "note": "ready; fresh Opus review running"
+      "head": "1f96f889",
+      "note": "ready; fresh Opus + security review running"
     }
   },
   "merged_log": [
@@ -9075,7 +9075,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T11:37Z",
+    "updated": "2026-11-13T11:39Z",
     "items": [
       {
         "slot": 1,
@@ -9234,16 +9234,6 @@
         "doing": "WK-18 #797 merged (1256467d) 2026-11-13T01:08Z; session archived (\u00a72.65 drain)"
       },
       {
-        "slot": 29,
-        "slice": "X-insights-scroll-a11y",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #823 merged (ffe49bbb); now X-insights-scroll-a11y in same session",
-        "since": "2026-11-13T10:57Z",
-        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
-        "status": "active"
-      },
-      {
         "slot": 30,
         "slice": "X-companions-mount-check",
         "status": "active",
@@ -9331,7 +9321,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T11:37Z",
+  "updated": "2026-11-13T11:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9690,6 +9680,12 @@
       "slice": "runner",
       "merged": "8396f16c",
       "at": "2026-11-13T11:37Z"
+    },
+    {
+      "pr": 833,
+      "slice": "X-insights-scroll-a11y",
+      "merged": "cfeac0f7",
+      "at": "2026-11-13T11:39Z"
     }
   ]
 }
