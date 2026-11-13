@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:11Z",
+  "updated_at": "2026-11-13T04:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7897,6 +7897,11 @@
     {
       "id": "805-812-merged",
       "note": "#805 X-cmp-egress-api merged c6b7511a; #812 P-master-plan-r4 merged 0a56245c (2026-11-13T04:11Z). Slot 32 told to bring main in, regenerate openapi/schema and push r2. #789 new head ac35b355 (fuzz/README row only, delta OK) awaiting CI."
+    },
+    {
+      "id": "runner-pr-tracks-qu",
+      "added": "2026-11-13T04:16Z",
+      "text": "Runner records PR (Tracks Q and U, WK-18 split, owner rows 13-22, new externals, G-v1-security scope) being prepared by a runner helper in scratchpad rq-wt; runner reviews and pushes on claude/busy-allen-aptli2."
     }
   ],
   "main_health": [
@@ -8931,7 +8936,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T04:11Z",
+    "updated": "2026-11-13T04:16Z",
     "items": [
       {
         "slot": 1,
@@ -8962,13 +8967,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-cmp-egress-api",
-        "role": "build",
-        "agent": "claude",
-        "doing": "#805 fix round pushed (7fa5a8e2): B1 cant_follow_route refused before save, with test and 409 in OpenAPI; runner delta-checked OK; merge on green",
-        "since": "2026-11-12T22:33Z",
-        "status": "active",
-        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "X-cmp-egress-api #805 merged (c6b7511a) 2026-11-13T04:16Z; session archived",
+        "status": "idle"
       },
       {
         "slot": 5,
@@ -8988,7 +8991,7 @@
         "slice": "GS-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: GS-2 #804 (draft ac758308) self-review then ready; kept build",
+        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: GS-2 #804 (70d549b5) ready; runner fresh review running",
         "since": "2026-11-12T22:33Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -9174,9 +9177,10 @@
         "slice": "X-wizard-labels-signout",
         "role": "build",
         "agent": "session_01MMjhnCEzeKKeEySq9nj8Be",
-        "doing": "B1 wizard labels + B2 Sign out (owner priority); brief briefs/X-wizard-labels-signout.md",
+        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #811 (f19548bd) ready; runner fresh review running (owner priority B1/B2)",
         "since": "2026-11-13T03:15Z",
-        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
+        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
+        "status": "active"
       },
       {
         "slot": 30,
@@ -9266,7 +9270,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:11Z",
+  "updated": "2026-11-13T04:16Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
