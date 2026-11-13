@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:14Z",
+  "updated_at": "2026-11-13T00:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7792,6 +7792,16 @@
       "id": "ci-main-signal-nits",
       "note": "After #784: wording 'complete in order'/'per group', exact group-value asserts in test_workflow_concurrency.py, '(#784)' in decisions heading; lint job only runs on rust output so web.yml/e2e.yml-only PRs skip the test; e2e.yml has no push trigger.",
       "added": "2026-11-13T00:14Z"
+    },
+    {
+      "id": "parsed-from-name-null",
+      "note": "rv-793 I2: web parsed/Parsed.svelte:78-80 shows 'from the name' when resolved_via is null; contradicts ENR-13's Identified-as section when a plugin title is chosen. Small web slice.",
+      "added": "2026-11-13T00:18Z"
+    },
+    {
+      "id": "metrics-match-confidence",
+      "note": "rv-793 O4: add docs/metrics.md row for match confidence (0-100, formatPercent, no decimals) beside parser confidence.",
+      "added": "2026-11-13T00:18Z"
     }
   ],
   "main_health": [
@@ -8815,7 +8825,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:14Z",
+    "updated": "2026-11-13T00:18Z",
     "items": [
       {
         "slot": 1,
@@ -9185,7 +9195,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:14Z",
+  "updated": "2026-11-13T00:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
