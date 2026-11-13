@@ -71,7 +71,10 @@ impl Server {
     }
 
     async fn on(ip: IpAddr, handler: Handler) -> io::Result<Server> {
-        let listener = TcpListener::bind((ip, 0)).await?;
+        Server::serve(TcpListener::bind((ip, 0)).await?, handler)
+    }
+
+    fn serve(listener: TcpListener, handler: Handler) -> io::Result<Server> {
         let addr = listener.local_addr()?;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&seen);
@@ -449,8 +452,8 @@ async fn a_closed_port_refuses_and_cant_be_taken() {
         io::ErrorKind::ConnectionRefused,
         "{refused}"
     );
-    // Taken: `AddrInUse`, or `PermissionDenied` where Windows refuses a
-    // bind to a port another socket holds exclusively.
+    // Taken: `AddrInUse`. `PermissionDenied` is accepted too, as Windows'
+    // answer for an exclusive or excluded port.
     let taken = TcpListener::bind(closed.v4()).await.unwrap_err();
     assert!(in_use(&taken), "{taken}");
 }
@@ -516,7 +519,12 @@ async fn loopback_falls_back_to_ipv6() {
         let got = http()
             .send(ProbeRequest::new(&target, version_path(), limits(15)))
             .await;
-        assert!(got.is_err(), "{:?}", got.map(|r| r.status()));
+        assert!(
+            matches!(got, Err(AdapterError::Unreachable)),
+            "{:?}",
+            got.map(|r| r.status())
+        );
+        eprintln!("::1 unavailable here: the IPv6 fallback wasn't exercised");
         return;
     };
     // The IPv4 attempt is refused first (about 2 s on Windows), so this
@@ -535,20 +543,28 @@ async fn loopback_falls_back_to_ipv6() {
 
 /// A server on ::1, with 127.0.0.1 held closed on its port, so the probe's
 /// IPv4 attempt is always refused and never answered by another program.
-/// `None` where ::1 can't be bound.
+/// The port is picked on IPv4 first, as `ClosedPort` does. `None` where
+/// ::1 can't be bound.
 async fn ipv6_with_ipv4_closed(handler: Handler) -> Option<(Server, TcpSocket)> {
     for _ in 0..64 {
-        let server = Server::on(Ipv6Addr::LOCALHOST.into(), Arc::clone(&handler))
-            .await
-            .ok()?;
         let v4 = TcpSocket::new_v4().unwrap();
-        match v4.bind((Ipv4Addr::LOCALHOST, server.addr.port()).into()) {
-            Ok(()) => return Some((server, v4)),
+        v4.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let port = v4.local_addr().unwrap().port();
+        let v6 = TcpSocket::new_v6().and_then(|s| {
+            s.bind((Ipv6Addr::LOCALHOST, port).into())?;
+            s.listen(16)
+        });
+        match v6 {
+            Ok(listener) => {
+                let server = Server::serve(listener, Arc::clone(&handler)).unwrap();
+                return Some((server, v4));
+            }
             Err(e) if in_use(&e) => continue,
-            Err(e) => panic!("holding 127.0.0.1:{}: {e}", server.addr.port()),
+            Err(e) if no_ipv6(&e) => return None,
+            Err(e) => panic!("listening on [::1]:{port}: {e}"),
         }
     }
-    panic!("no ::1 port free on 127.0.0.1 too");
+    panic!("no port free on both 127.0.0.1 and ::1");
 }
 
 #[tokio::test]
