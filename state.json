@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:52Z",
+  "updated_at": "2026-11-13T03:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9254,7 +9254,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T03:52Z",
+  "updated": "2026-11-13T03:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9292,6 +9292,17 @@
       "asked": "2026-11-13T03:41Z",
       "via": "dashboard session",
       "text": "Legal Notice \u00a72: replace the two Prowlarr/Jackett sentences with \"Prowlarr or Jackett stays off until you turn it on in Settings \u2192 Sources, accept what an Account source does, and enter its API key; you confirm with your admin password.\" Unblocks X-consent-gate-lift-account (the gate flip)."
+    },
+    {
+      "id": "infra-01-image-before-approval",
+      "asked": "2026-11-13T03:53Z",
+      "when": "before the v0.5.2 tag",
+      "text": "Confirmed by a runner review (rv-810-fb0dca25): release.yml publish job on release/v0.5.2 has no environment and is not behind package-release, so a v*.*.* tag pushes :X.Y.Z, :X.Y and :latest to GHCR before or without the release approval. The workflow at the tagged commit runs, so a fix needs a release PR to release/v0.5.2 as well as main. Workflow change is the owner's call."
+    },
+    {
+      "id": "review-branches-held-detail",
+      "asked": "2026-11-13T03:53Z",
+      "text": "Held security/content-safety detail of the codebase review is on public branches claude/happy-hypatia-i314gf and claude/codebase-review-bugs-x9ff7p (and #810 head claude/loving-fermat-jago95). Move it to draft advisories (\u00a72.47 OQ6, docs/security/v1/README.md \u00a75), then delete those branches? Runner holds the review folders off main."
     }
   ],
   "review_queue": [
