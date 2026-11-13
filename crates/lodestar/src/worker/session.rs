@@ -574,7 +574,8 @@ impl<C: Connect> Worker<C> {
     /// own drain already handed everything back: the same hand-back the
     /// coordinator can ask for. Fetched results go out, unreported
     /// outcomes are reported, and `Drained` hands back every lease left,
-    /// for re-grant at once. The session's events are read meanwhile, so
+    /// for re-grant at once; the coordinator's `Stop(Drained)` confirms
+    /// it. The session's events are read meanwhile, so
     /// grants and hints queued to it can't stall the connection; they're
     /// dropped, and `Drained` gives their leases back too.
     ///
@@ -608,11 +609,22 @@ impl<C: Connect> Worker<C> {
             r = tokio::time::timeout_at(until, handover) => matches!(r, Ok(Ok(()))),
             () = read => false,
         };
-        let handed = handed
-            && matches!(
-                tokio::time::timeout_at(until, session.drained()).await,
-                Ok(Ok(()))
-            );
+        // `drained` returns once it's written: wait for the coordinator's
+        // `Stop(Drained)`, sent once it has evicted the leases, so nothing
+        // queued ahead of it is lost to a reset as the connection drops.
+        let confirmed = async {
+            if session.drained().await.is_err() {
+                return false;
+            }
+            loop {
+                match session.next_event().await {
+                    Some(WorkerEvent::Ended(Some(StopReason::Drained))) => return true,
+                    None | Some(WorkerEvent::Ended(_)) => return false,
+                    Some(_) => {}
+                }
+            }
+        };
+        let handed = handed && matches!(tokio::time::timeout_at(until, confirmed).await, Ok(true));
         if handed {
             return Ended::Exit(Exit::Shutdown);
         }
@@ -1211,12 +1223,11 @@ pub(crate) mod tests {
         assert_eq!(running.shutdown().await, Exit::Shutdown);
         assert!(*work.drained.lock().unwrap());
         assert!(!*work.stopped.lock().unwrap());
-        until("the leases handed back", || {
-            let held = authority.held_by(s.worker);
-            (held == 0, held)
-        })
-        .await;
+        // No wait: the stop ended on the coordinator's confirmation, sent
+        // once it had taken every lease back.
+        assert_eq!(authority.held_by(s.worker), 0);
         assert_eq!(authority.pending(), 4);
+        assert!(!s.lines.all().contains("keeping it for the next start"));
         assert!(
             s.lines
                 .all()

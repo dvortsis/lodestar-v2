@@ -522,7 +522,7 @@ mod tests {
     use super::*;
     use crate::worker::runtime::tests::{
         DEADLINE, MapFetch, W, assign_dht, assignment, config, filter_chunks, info, key_of,
-        next_results, sealed, session_pair, until,
+        next_results, sealed, session_pair, session_pair_with, until,
     };
     use crate::worker::runtime::{Config, Runtime};
     use crate::worker::session::Work;
@@ -669,6 +669,41 @@ mod tests {
         // Its lease stays listed after the commit, for the grace.
         assert_eq!(list.map(|l| l.len()), Some(1));
         rt.shutdown().await;
+    }
+
+    /// CLUSTER-05: against a coordinator that stops reading, a batch's
+    /// send waits out the reply timeout (15 s). The local stop's fallback
+    /// runs as the session does it: the hand-back first (its flush can't
+    /// finish within the drain deadline), then the disconnect and the
+    /// offline stop. That stop can't wait behind the stalled send: it's
+    /// given up, and the batch is on disk when the stop returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stop_against_a_stalled_coordinator_still_spools() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
+        let sp = rt.spool().unwrap();
+        // A link of one frame, never read: the first send after the
+        // handshake stalls.
+        let (_coord, session) = session_pair_with(1).await;
+        rt.connected(session.handle());
+        let out = rt.test_outbound();
+        out.send(sealed(5)).await.unwrap();
+        // The hand-back: once it gives up, the session task is inside the
+        // stalled send, whichever way the batch reached it.
+        let _ = rt.drain().await;
+        assert_eq!(
+            rt.counts().sent.load(Ordering::Relaxed),
+            0,
+            "nothing got out"
+        );
+        assert_eq!(records(&sp), 0);
+        let started = std::time::Instant::now();
+        rt.disconnected();
+        rt.stop().await;
+        assert_eq!(records(&sp), 1, "spooled when the stop returns");
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+        drop((rt, out, session));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

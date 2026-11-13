@@ -2115,6 +2115,22 @@ async fn send_due(
     }
 }
 
+/// [`send_due`], given up as soon as the session changes (a disconnect, or
+/// a new session): `false` if it was. A batch whose send was cut short
+/// isn't marked sent, so it goes again or to the spool.
+async fn send_due_or_changed(
+    s: &Shared,
+    session: Option<SessionHandle>,
+    flight: &mut BTreeMap<u64, InFlight>,
+    refused_too: bool,
+    sessions: &mut watch::Receiver<Option<SessionHandle>>,
+) -> bool {
+    tokio::select! {
+        () = send_due(s, session, flight, refused_too) => true,
+        _ = sessions.changed() => false,
+    }
+}
+
 /// The session task: sealed results into `Results` batches, kept until
 /// accepted, sent again on a new session and after a refusal.
 async fn send_results(
@@ -2178,7 +2194,12 @@ async fn send_results(
                 s.refresh_spool_pause();
             }
         }
-        send_due(&s, session, &mut flight, false).await;
+        // Given up if the session changes meanwhile: a stalled coordinator
+        // can hold a send for the whole reply timeout, and a stop's spool
+        // fallback (CLUSTER-05) must not wait behind it.
+        if !send_due_or_changed(&s, session, &mut flight, false, &mut sessions).await {
+            continue;
+        }
         tokio::select! {
             record = outbound.recv() => {
                 let Some(first) = record else { return };
@@ -2206,12 +2227,20 @@ async fn send_results(
                 // With no session they go to the spool, durably, before
                 // the flush is answered: a local stop exits right after
                 // (CLUSTER-05).
+                let offline = |h: &Option<SessionHandle>| h.as_ref().is_none_or(|h| h.is_closed());
                 if let Some(sp) = &s.spool
-                    && session.as_ref().is_none_or(|h| h.is_closed())
+                    && offline(&session)
                 {
                     spool_live(&s, sp, &mut flight).await;
                 }
-                send_due(&s, session, &mut flight, true).await;
+                // The session gone while sending: what's left goes to
+                // the spool now, not at the next round.
+                if !send_due_or_changed(&s, session, &mut flight, true, &mut sessions).await
+                    && let Some(sp) = &s.spool
+                    && offline(&s.session.borrow().clone())
+                {
+                    spool_live(&s, sp, &mut flight).await;
+                }
                 let _ = done.send(());
             }
             Some((batch, ok)) = accepted.recv() => {
@@ -4402,7 +4431,7 @@ pub(crate) mod tests {
 
     /// A session over a link of `capacity` frames: at 1, a coordinator
     /// that never reads stalls it after the handshake.
-    async fn session_pair_with(
+    pub(crate) async fn session_pair_with(
         capacity: usize,
     ) -> (
         lodestar_cluster::CoordinatorLink,

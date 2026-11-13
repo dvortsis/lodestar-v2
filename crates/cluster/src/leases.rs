@@ -779,7 +779,8 @@ impl LeaseAuthority {
                     return BatchAnswer::Committed;
                 }
                 if s.would_lease(&c.key) {
-                    if room == 0 {
+                    // Forgotten commits deny everything as busy, cap or not.
+                    if room == 0 && !forgotten {
                         return BatchAnswer::Capped;
                     }
                     if allowed == 0 {

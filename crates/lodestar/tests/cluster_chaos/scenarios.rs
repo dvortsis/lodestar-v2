@@ -136,7 +136,9 @@ async fn a_worker_restarted_inside_the_ttl_gets_its_lost_leases_regranted() {
     })
     .await;
     // Given back, then granted again under new tokens: none is left on
-    // record under an old one.
+    // record under an old one. The killed process can't use those tokens
+    // any more, so any later fetch is under a lease given back
+    // (`handed_back(0)` above).
     h.wait_leased(3).await;
     for &k in &keys {
         let now = authority.get(&k).map(|l| l.token.0);
