@@ -9,7 +9,7 @@
 ### 0.1 Where things stand
 Status as of `main` at `f47369b8` (committed 2026-11-12T22:53Z). This table is a snapshot and goes stale within hours: `main` takes 40 to 60 merges a day. **The live view is the roadmap dashboard** (`tools/status-connector`, reading `runner/slices.yaml`, `runner/dashboard.yaml` and GitHub) and the `runner-state` branch (`state.json`); reconcile both against `main`'s merges before acting ([handoff §2](handoff.md#2-where-the-truth-lives)).
 
-**Slices:** 588 in `runner/slices.yaml`. The dashboard counts 436 merged, 19 in progress, 123 not started, 3 closed and 7 epics (all expanded). Three of the 123 are in fact finished and only need marking (CR-AB-COMP, X-tokio-1541-v052, WK-10d-store; `docs/decisions/2026-11-12-master-plan-r4.md`), so about 120 slices are left to start. 21 slice PRs are open (#764 and #778 to #797), plus #632, the owner's own branch, which the runner leaves alone.
+**Slices:** 588 in `runner/slices.yaml`. The dashboard counts 436 merged, 19 in progress, 123 not started, 3 closed and 7 epics (all expanded). Four of the 123 are in fact finished and only need marking (CR-AB-COMP, X-tokio-1541-v052, WK-10d-store, WK-10; `docs/decisions/2026-11-12-master-plan-r4.md`), so about 120 slices are left to start. Slice PRs are open all the time (the live list is GitHub's open pull requests; at the snapshot there were 21), plus #632, the owner's own branch, which the runner leaves alone.
 
 | Area | State | What's left |
 |---|---|---|
@@ -40,7 +40,9 @@ Status as of `main` at `f47369b8` (committed 2026-11-12T22:53Z). This table is a
 The runner checks each of these against `runner/slices.yaml` and adds a slice where none covers it (`docs/decisions/2026-11-12-master-plan-r4.md`).
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **eight slices at a time in total** from 2026-11-12T06:03Z (owner, §2.59, replacing §2.56's twelve, which replaced §2.54's eight): Opus, helper and docs slices alike. Sessions already running finish their slices. Nothing new launches while eight or more are running. On top of the eight, four more sessions are shared by the cloud tester (X-test-vm) and the runner, at most two each unless the other agrees (owner, §2.60). On 2026-11-12 `runner-state` shows more sessions than that, under owner windows it cites as §2.61 to §2.64; `docs/owner-decisions.md` ends at §2.60, so the runner still has those to record. The live list is `slots` in `runner-state`. Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** from 2026-11-13T00:00Z the cap is **four build slices and four cloud-testing slices** (owner, 2026-11-12T22:30Z, §2.64, not yet recorded in `docs/owner-decisions.md`). Before that it was eight in total plus four shared by the cloud tester and the runner (§2.59, §2.60), with owner windows of more sessions on 2026-11-12 (§2.61, §2.63). Opus, helper and docs slices all count. Sessions already running finish their slices; nothing new launches while the cap is reached. The live list is `slots` in `runner-state`, and the runner records the §2.61 to §2.64 decisions it cites. Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder, with one exception, the next rule.
+
+**Above the ladder: cloud testing first** (owner, 2026-11-12 about 18:56Z, §2.62, not yet recorded: "Have Agent Runner prioritize anything needed for cloud testing"). Cloud-testing PRs are reviewed and merged first, and cloud-testing fix slices take the next free build slot ahead of features. The cloud-testing lanes use the four cloud-testing slots (§2.64).
 
 **What decides the date of 1.0.** Building isn't the constraint: about 140 slices remain, and the build lands 40 to 60 PRs a day. Three things are:
 1. **The crawler gate.** 12.3/min measured against 100/min. The comparator shows the target is reachable on this host. The experiment calendar is 8 to 9 measured days, about three weeks with start-up and retries (§0.7). The comparator's day is done; no A/B run has started.
@@ -51,17 +53,17 @@ So: **the host is never idle, and build slots never wait for it.**
 
 **The ladder** (r4; the owner approved it on 2026-11-12 by approving this plan, recorded in `docs/decisions/2026-11-12-master-plan-r4.md` until the runner adds it to `docs/owner-decisions.md`; fill free slots in this order; the owner can reorder it in one line). Rungs 2 to 8 run in parallel wherever their slices are ready; the order decides only between ready slices competing for a slot.
 1. **Land what's open.** The open PRs go through review and the landing lane before new launches. #632 (`feat/lodestar-secure-pia-bridge`) is the owner's branch: the runner leaves it alone, and the owner decides whether it lands, goes to a slice or is closed. A cloud review the owner ran on it raised 11 findings, not yet verified, four of which could stop live fleet runs; they are with the owner.
-2. **Ship v0.5.2** (§0.4): the gate on the current candidate, then the owner's tag. v0.5.1 carries tokio 1.54.0, which was yanked; §2.58 puts the fix in v0.5.2, so this rung doesn't wait behind the crawler runs for the host.
+2. **Ship v0.5.2** (§0.4): the gate on the current candidate, then the owner's tag. v0.5.1 carries tokio 1.54.0, which was yanked; §2.58 puts the fix in v0.5.2, so this rung doesn't wait behind the crawler runs for the host. §2.58 also has the runner prepare a v0.5.1.1 if v0.5.2 slips by more than a few days.
 3. **The v0.6 build side, to its three gates:**
    - workers: WK-11b and WK-18 (in review); WK-12 (the next migration) → WK-13 → WK-16 → **WK-G**; WK-19, the guide chapter, after WK-16 and WK-18;
    - companions: X-cmp-egress-api → X-cmp-egress-ui; CMP-12; CMP-D, D-companions-guide → **CMP-G**;
    - M6: **G-m6** waits only on the owner's manual installs; the two Windows rollback slices follow up and don't hold it;
    - small: ENR-G (ready), X-consent-gate-lift (building).
-4. **The crawler's live evidence** (Track C, on the owner's host): CR-AB-ADM → CR-AB-4 → CR-CP1 (Checkpoint 1) → CR-AB-1 → CR-5 → CR-COMB → **G-v06-crawler**. CR-1c is a build slice that needs only CR-AB-ADM's result, so it is built alongside CR-AB-4 and Checkpoint 1. **The v0.6 tag waits only on the crawler gate** (owner §2.25; P4 in §3). Each feature's own gate (SRC-G, passed; WK-G; CMP-G) decides whether that feature ships in v0.6.
+4. **The crawler's live evidence** (Track C, on the owner's host): CR-AB-ADM → CR-AB-4 → CR-CP1 (Checkpoint 1) → CR-AB-1 → CR-5 → CR-COMB → **G-v06-crawler**. CR-1c is a build slice that needs only CR-AB-ADM's result, so it is built alongside CR-AB-4 and Checkpoint 1. **The v0.6 tag follows P4 in §3 until the owner answers:** the crawler gate passes (or the owner re-decides at Checkpoint 1) and the cluster chaos and transport tests stay green; each feature's own gate (SRC-G, passed; WK-G; CMP-G) decides whether that feature ships in v0.6. **Question for the owner:** does the tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? §2.25 and §2.27 say only that the crawler gate "gates the v0.6 tag".
 5. **v0.7 / M7.** It doesn't wait for the v0.6 tag:
    - grouping and regex: GS-2 → GS-3, GS-4, RX-1; GS-3 → GS-5; RX-1 → ENR-11 → OUT-1 → OUT-3;
    - enrichment: ENR-14 → the twelve plug-ins (ENR-tmdb, -tvdb, -anilist, -anidb, -mb, -ol, -igdb, -discogs, -steam, -srrdb, -predb, -debrid), which run side by side; ENR-13;
-   - upload: X-watch-stall-retry first (a stalled copy into the watch folder is failed for good on Unix; from the 2026-11-12 codebase review), then UP-2 and X-watch-env, which touch the same file;
+   - upload: UP-2, X-watch-env, and X-watch-stall-retry (a stalled copy into the watch folder is failed for good on Unix; from the 2026-11-12 codebase review). The three own different files and can run side by side;
    - uTP: X-utp-spurious-rto after X-utp-backoff (#788); it also makes a connection time out when the peer's packets acknowledge nothing (same review);
    - unverified items and usenet: SRC-3b (after GS-3 and ENR-11; a migration) → UN-3 → UN-4;
    - IRC: NOS-2a → IRC-0 → IRC-1 → IRC-2, IRC-3;
@@ -71,7 +73,7 @@ So: **the host is never idle, and build slots never wait for it.**
 7. **v0.8:** the parsers and transports first, since they wait on no gate (NOS-0, NOS-2a, LEM-0, ADH-0, then NOS-1, NOS-2b, NOS-3, LEM-1); plug-ins and companions on workers (PL-0 to PL-8, CW-0 to CW-3) after WK-G and CMP-G; PL-7b after the owner approves the per-worker consent wording; then DOC-v08 and **G-v08**.
 8. **M8 hardening:** what waits on no gate starts now (M8-SEC-0, then the security reviews as each surface settles; M8-REL-1, M8-REL-2; M8-PERF-1, M8-PERF-3; M8-DOC-2); after WK-G: M8-CHAOS-1 to M8-CHAOS-4, then M8-PERF-2 and M8-CI, which need M8-CHAOS-1; after G-m6, G-v07 and G-v08: M8-POL, M8-PURGE, M8-DR, the other M8-DOC slices and the last security reviews. Each slice's exact `deps` are in `runner/slices.yaml`.
 9. **The 1.0 release candidate:** R-v1-cut, the owner tags the rc, the eleven G-v1-* gates run on it, then **G-v1** and the owner tags v1.0.0.
-10. **Backlog and polish** (Track B) in whatever slots remain. The cloud operator slices and their gate OP-G run beside the ladder in the shared tester and runner sessions (§2.60), once the owner finishes the operator setup.
+10. **Backlog and polish** (Track B) in whatever slots remain. The cloud operator slices and their gate OP-G run in the cloud-testing slots (§2.64) and, where cloud testing needs them, ahead of the ladder (§2.62), once the owner finishes the operator setup.
 
 After 1.0: the Unraid Community Apps submission and package installers (owner), then v1.1 I2P, v1.2 eD2k and v1.3 IPFS (§3 below, architecture §14).
 
@@ -385,10 +387,10 @@ flowchart LR
 
 ### 0.9 Next actions
 In ladder order, as slots allow (§0.2; no two with overlapping `owns`):
-1. **Land the open PRs** (#764 and #778 to #797). #632 waits for the owner (§0.2 rung 1).
+1. **Land the open PRs** (the live list is GitHub's open pull requests). #632 waits for the owner (§0.2 rung 1).
 2. **Bring the records up to date** (runner): the slices missing from `runner/slices.yaml`, the gates and notes in `runner/dashboard.yaml` that still describe 2026-11-08, the owner decisions made after §2.60, and `state.json`'s slice statuses. The list is in `docs/decisions/2026-11-12-master-plan-r4.md`.
 3. **v0.5.2:** state which candidate the gate runs on (rc.3 = `833a0d25` is the newest) and what evidence exists, finish the gate in §0.4, give the owner the go for the tag.
-4. **Launch what's ready** (at 2026-11-12T22:55Z, not yet in a slot): ENR-G, X-unverified-cap-index, X-win-upd-first-rollback, ADH-0, UP-2, X-watch-env.
+4. **Launch what's ready** (at 2026-11-12T22:55Z, not yet in a slot): ENR-G, X-unverified-cap-index, X-win-upd-first-rollback, ADH-0, UP-2, X-watch-env, X-watch-stall-retry (once the runner adds it).
 5. **Assign the next migration numbers** (§0.7): WK-12 first, since WK-13, WK-16, WK-19 and WK-G all wait behind it; then SRC-3b, PL-8 and CR-3.
 6. **As each merges:** GS-2 → GS-3, GS-4, RX-1; ENR-14 → the twelve enrichment plug-ins; NOS-2a → IRC-0; WK-12 → WK-13; X-cmp-egress-api → X-cmp-egress-ui.
 7. **The host calendar:** the v0.5.2 soak if it's still owed, then the owner books CR-AB-ADM; the runner states the next booking in every daily summary and proposes an import pilot for each gap.
@@ -436,7 +438,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 ### 1.2 How a helper runs
 - **Launch:** the runner starts each slice in its own cloud session (`runner/README.md`). Inside a session, a helper is an Agent with `isolation: "worktree"`, `run_in_background: true` and the model above, branched from `main`.
 - **Brief:** every slice gets one, using the template in §7. The runner keeps them on the `runner-state` branch under `briefs/`.
-- **Cap:** at most eight slices in total at a time in the current phase, from 2026-11-11 (owner §2.54, replacing §2.42's four), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
+- **Cap:** from 2026-11-13T00:00Z, four build slices and four cloud-testing slices at a time (§0.2; owner §2.64, not yet recorded), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
 - **Review gate** (for every result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
