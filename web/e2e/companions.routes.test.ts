@@ -22,6 +22,7 @@ const rows: Companion[] = [
 	{
 		available: '5.0.1',
 		credentials: ['webui_password'],
+		egress: { from: 'saved', setting: { route: 'direct' } },
 		health: 'healthy',
 		id: 'qbittorrent',
 		installed: '5.0.0',
@@ -29,11 +30,13 @@ const rows: Companion[] = [
 		name: 'qBittorrent',
 		opt_in: false,
 		refusal: null,
+		runs: 'lodestar',
 		templates: ['compose']
 	},
 	{
 		available: null,
 		credentials: [],
+		egress: null,
 		health: null,
 		id: 'prowlarr',
 		installed: null,
@@ -41,6 +44,7 @@ const rows: Companion[] = [
 		name: 'Prowlarr',
 		opt_in: false,
 		refusal: 'native_in_container',
+		runs: 'own_container',
 		templates: []
 	}
 ];
