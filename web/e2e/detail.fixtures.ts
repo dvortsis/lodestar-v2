@@ -113,7 +113,9 @@ export const siblings = (hash = HASH) => ({
 	other_versions: group(),
 	same_file: group(),
 	same_file_capped: false,
-	same_file_partial: false
+	same_file_partial: false,
+	similar_payload: group(),
+	similar_payload_partial: false
 });
 
 /** `n` files in 5 folders, torrent order. */
