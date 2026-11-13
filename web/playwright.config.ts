@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, type Project } from '@playwright/test';
+import { defineConfig, type PlaywrightTestOptions, type Project } from '@playwright/test';
 import type { Appearance } from './e2e/support/test';
 import { BREAKPOINTS, DENSITIES, DESKTOP } from './e2e/support/matrix';
 import { patternsOf, specProblems, type SpecFile, FIXTURE_SPEC } from './scripts/e2e-spec-guard';
@@ -56,6 +56,9 @@ const reducedMotionSpecs = /reduced-motion\.test\.ts$/;
 const allThemesSpecs = /all-themes\.test\.ts$/;
 const desktop = { viewport: { width: DESKTOP.width, height: DESKTOP.height } };
 
+// The options a project's `use` may carry: Playwright's own plus this suite's `Appearance`.
+type Proj = Project<PlaywrightTestOptions & Appearance>;
+
 const matrix: Project<Appearance>[] = BREAKPOINTS.flatMap((bp) =>
 	RIVERSTONE.flatMap((theme) =>
 		DENSITIES.map((density) => ({
@@ -79,20 +82,20 @@ const sample: Project<Appearance>[] = sampleThemes(rotationSeed()).map((theme) =
 	use: { ...desktop, themeId: theme.id, colorMode: theme.mode, shots: 'themes' }
 }));
 
-const core: Project<Appearance> = {
+const core: Proj = {
 	name: 'core',
 	testMatch: coreSpecs,
 	// Keep the baselines committed before the harness existed (`tokens-dark-linux.png`).
 	snapshotPathTemplate:
 		'{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-snapshotSuffix}{ext}'
 };
-const reducedMotion: Project<Appearance> = {
+const reducedMotion: Proj = {
 	name: 'reduced-motion',
 	testMatch: [smoke, reducedMotionSpecs],
 	// Motion tokens + axe; its pixels equal riverstone-light's, so no baselines.
 	use: { ...desktop, contextOptions: { reducedMotion: 'reduce' }, motion: 'reduce' }
 };
-const keyboardOnly: Project<Appearance> = {
+const keyboardOnly: Proj = {
 	name: 'keyboard-only',
 	testMatch: keyboardSpecs,
 	use: desktop
@@ -100,12 +103,12 @@ const keyboardOnly: Project<Appearance> = {
 // Specs that need the real server: only when asked for (see e2e/README.md). The ones that change
 // server state run first; the read-only ones wait for them (`dependencies`), so CI's
 // `--project=fixture` runs both.
-const fixtureWrites: Project<Appearance> = {
+const fixtureWrites: Proj = {
 	name: 'fixture-writes',
 	testMatch: fixtureWriteSpecs,
 	use: desktop
 };
-const fixtureReads: Project<Appearance> = {
+const fixtureReads: Proj = {
 	name: 'fixture',
 	testMatch: fixtureSpec,
 	testIgnore: fixtureWriteSpecs,
@@ -113,13 +116,13 @@ const fixtureReads: Project<Appearance> = {
 	use: desktop
 };
 // Documentation screenshots: only when asked for (`npm run docs:shots`); CI never runs them.
-const docsShots: Project<Appearance> = {
+const docsShots: Proj = {
 	name: 'docs',
 	testMatch: /docs\/.*\.docs\.ts$/,
 	use: { viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 }
 };
 // 48 themes × every route: only when asked for (`--project=all-themes` or E2E_ALL_THEMES=1).
-const allThemesProject: Project<Appearance> = {
+const allThemesProject: Proj = {
 	name: 'all-themes',
 	testMatch: allThemesSpecs,
 	snapshotPathTemplate: themeSnapshots,
