@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:54Z",
+  "updated_at": "2026-11-13T00:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7837,6 +7837,16 @@
       "id": "owner-uiux-decisions-1113",
       "note": "RECORD in next runner PR (owner-decisions \u00a72.66 + decisions file): owner 2026-11-13 accepted the UI/UX review's recommendations (relayed by session_01MMjhnANbVMd2d1Hh86j1ZP 00:54Z): drawer beside results from 1366 px with 480 px floors; Group versions on by default (fallback off if G-v07-scale p95 fails); no posters/third-party images in Identified as; Sources restructure slice before IRC-2/NOS-3/LEM-1/enrichment rows. B4 re-ranked Important (fixture FUNNEL_EVENTS gap). Details: reviews/uiux-review-1113.md.",
       "added": "2026-11-13T00:54Z"
+    },
+    {
+      "id": "overlay-plugin-isolated-tier",
+      "note": "rv-807 O6: with the consent gate open for Overlay (#807), the first Overlay plug-in goes live with no further gate change; its slice must bring the \u00a718.7 isolated tier and its review must check it.",
+      "added": "2026-11-13T00:55Z"
+    },
+    {
+      "id": "consent-gate-external-notes",
+      "note": "rv-807 for X-consent-gate-lift-external: fix legal_facts.rs:176 stale comment (O3); CONSENT_GATE_REASON then covers Account only, any wording change is the owner's (O2); slice id to add to slices.yaml; Legal Notice \u00a72 torrent-cache sentence proposal in docs/decisions/2026-11-12-X-consent-gate-lift.md goes to owner.",
+      "added": "2026-11-13T00:55Z"
     }
   ],
   "main_health": [
@@ -8860,7 +8870,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:54Z",
+    "updated": "2026-11-13T00:55Z",
     "items": [
       {
         "slot": 1,
@@ -9167,7 +9177,7 @@
         "role": "build",
         "status": "active",
         "agent": "claude",
-        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UN-1 (#769 merged); briefs/X-consent-gate-lift.md; /security-review",
+        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: #807 rv-807 MERGE; doc/test nits push (I1, O4, O1) then runner self-check and merge; kept build slot",
         "since": "2026-11-12T22:55Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       }
@@ -9230,7 +9240,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T00:54Z",
+  "updated": "2026-11-13T00:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
