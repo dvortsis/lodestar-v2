@@ -8,6 +8,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -1161,8 +1162,32 @@ class CopyOff(Base):
         self.assertIn(f"{self.block}/evidence:/block/evidence:ro", args)
         self.assertIn(f"{self.block}/outages:/block/outages:ro", args)
         self.assertNotIn(":/block/notes", args)  # absent files aren't mounted (Docker would make directories)
+        self.assertNotIn(":/block/damaged", args)  # no mark: the block still copies off
         rc, lines, _ = self.run_script("copy-off.sh")  # again: the same evidence, the block already ended
         self.assertEqual((rc, lines[-2:]), (0, ["skip block_ended", "ok copy_off"]))
+
+    def test_copy_off_mounts_the_mark_and_the_scrubber_sees_it(self):
+        """The mark alone, with no host_guard_lost line (a reboot between
+        guard_lost's two writes): copy-off mounts it, read-only, and the
+        scrubber reports the block damaged from what the container sees."""
+        self.make_block(segment=2)
+        (self.block / "outages").write_text("1 host_guard_dropped\n")
+        (self.block / "damaged").write_text("host_guard_lost\n")
+        rc, lines, raw = self.run_script("copy-off.sh")
+        self.assertEqual(rc, 0, raw)
+        args = (self.stub / "scrub.args").read_text()
+        self.assertIn(f"{self.block}/damaged:/block/damaged:ro", args)
+        # The container's /block, as copy-off mounts it: only the mounted files.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        seen, out = tmp / "block", tmp / "out"
+        seen.mkdir()
+        out.mkdir()
+        for src, dst in re.findall(r"-v (\S+):/block/(\S+):ro", args):
+            subprocess.run(["cp", "-r", src, str(seen / dst)], check=True)
+        self.assertFalse((seen / "password").exists())
+        doc = scrub.collect(seen, out)
+        self.assertEqual((doc["host_guard_drops"], doc["damaged"]), (1, True))
 
     def test_a_lone_lodestar_is_stopped_first(self):
         self.make_block(segment=2)

@@ -9,8 +9,9 @@
 - **`damaged`: a boolean.**
   - **True when** the `damaged` mark exists, or the outages hold a `host_guard_lost` line.
   - **The mark is only tested for existence, never read.** Its text is not evidence and can't pass.
-  - **Why the outages line counts too:** `guard_lost` is the only writer of either, and it writes both once: the mark first, then the line. copy-off mounts the outages into the scrubber's container, but not the mark (see "Left as it is").
-  - **That leaves a false negative.** A reboot between the two writes, or a failed append to the outages (a full disk, say; both writes are silenced), leaves the mark without the line. The VM then reports `fail block_intact`, but the evidence says `damaged: false`. Mounting the mark in copy-off closes it.
+  - **copy-off mounts the mark,** read-only, beside the outages and only when it exists. A block without one copies off as before. (The runner added `copy-off.sh` to this slice's owns for this one change.)
+  - **Why the outages line counts too:** `guard_lost` is the only writer of either, and it writes both once: the mark first, then the line. Either one is enough.
+  - **No false negative is left.** A reboot between the two writes, or a failed append to the outages (a full disk, say; both writes are silenced), leaves the mark without the line. The mark is mounted, so the evidence still says `damaged: true`, as vm-status's `fail block_intact` does. A test runs copy-off with the mark and no `host_guard_lost` line, then scrubs exactly the files it mounted.
 - **A new shape, `count`, for `host_guard_drops`.** It's a whole number from 0 up, narrower than `num`, which also allows negatives and floats. `damaged` uses the existing `boolean`. Both go through `clean()`, so the control plane's `scrub(doc)` drops a value of the wrong shape, as it does for every other field.
 - **The scrubber stays an allow-list.** No free text passes, and no shape is broader than the existing ones.
 
@@ -26,6 +27,7 @@ New tests in `infra/fleet/tests/test_block.py`, class `ScrubGuardFields`:
 - **a hostile mark and hostile outage lines:** an address, a hex ID, a path and an instance ID, all fake documentation values. Only the boolean and the exact records survive, through both `collect()` and the `scrub.py collect` command line;
 - malformed values (negative, float, string, boolean, oversized, an address, a list) are dropped by `scrub(doc)`.
 
+In `CopyOff`: copy-off mounts the mark read-only when it's there, and not when it isn't. With the mark and no `host_guard_lost` line, scrubbing exactly the files copy-off mounted gives `damaged: true`.
+
 ## Left as it is (for the runner)
-- **copy-off doesn't mount the `damaged` mark (a priority for the next copy-off brief).** `copy-off.sh` mounts only `evidence`, `block.env`, `tools`, `outages` and `notes`. The scrubber therefore learns of the damage from the outages line. Adding `damaged` to copy-off's mount list (outside this slice's paths) would make the mark itself the source, as the brief intended. The code reads it already.
 - **Nothing reads the new fields yet.** No analyzer, control-plane report or runbook section reads `outages` or `outage_notes` from the scrubbed document either. A report that shows them is a follow-up.
