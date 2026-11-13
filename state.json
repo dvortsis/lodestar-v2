@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T10:41Z",
+  "updated_at": "2026-11-13T10:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9060,7 +9060,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T10:41Z",
+    "updated": "2026-11-13T10:57Z",
     "items": [
       {
         "slot": 1,
@@ -9220,11 +9220,11 @@
       },
       {
         "slot": 29,
-        "slice": "X-sources-nits",
+        "slice": "X-insights-scroll-a11y",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #823 review CHANGES at 53980b6d relayed (1 blocking layout, 1 important zh wording); fix round; next X-insights-scroll-a11y",
-        "since": "2026-11-13T06:04Z",
+        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #823 merged (ffe49bbb); now X-insights-scroll-a11y in same session",
+        "since": "2026-11-13T10:57Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
         "status": "active"
       },
@@ -9316,7 +9316,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T10:41Z",
+  "updated": "2026-11-13T10:57Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9657,6 +9657,12 @@
       "slice": "X-ci-filter-fleet",
       "merged": "3cf4fd5f",
       "at": "2026-11-13T10:41Z"
+    },
+    {
+      "pr": 823,
+      "slice": "X-insights-funnel-fixture",
+      "merged": "ffe49bbb",
+      "at": "2026-11-13T10:57Z"
     }
   ]
 }
