@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "preconditions": "The in-run screen advises only until calibrated: (1) read lodestar_mem_anon_mappings from the musl release build with override for about an hour, since the gauge's arena rule is stricter than mem-cheap's; (2) replay the analyzer over r4 and r5 to calibrate the mimalloc and segment thresholds. Until then an in-run trip is a prompt to look, not a stop on its own. The sweep isn't affected.",
+  "preconditions": "The in-run screen advises only until calibrated: (1) read lodestar_mem_anon_mappings from the musl release build with override for about an hour, since the gauge's arena rule is stricter than mem-cheap's; (2) the owner replays this analyzer over r4 and r5 and relays only the screen: lines (docs/decisions/2026-11-12-X-soak-screen-calibrate.md). Until then an in-run trip is a prompt to look, not a stop on its own. The sweep isn't affected.",
   "about": "X-soak-screen's frozen thresholds (docs/decisions/2026-11-07-X-soak-screen.md). An early warning before and during a soak: a trip means stop and investigate; ok never means pass. The CR-0 gate does not read this file. Every counter trips when its value is strictly above its threshold; at the threshold it is ok.",
   "in_run": {
     "checkpoints_hours": [3, 6, 12],
@@ -46,16 +46,22 @@
         "margin": "r4 held 1,843 to 2,085: 3.6 times the threshold"
       },
       "mimalloc_committed_mib_per_1000_stored": {
-        "value": 20, "trips": "above", "unit": "MiB per 1,000 stored",
-        "reason": "In musl builds mimalloc holds the Rust and C heaps, so a heap leak of either grows its committed bytes with the corpus.",
-        "clean": "r5: flat at 568 MiB over hours 12-24; hours 0-12 weren't published, so the fixture assumes 520 rising to 568 MiB over hours 0-6 (11.7 at hours 3 and 6, 5.9 at hour 12). r5's private memory, which isn't an input, rose about 10 per 1,000 over hours 16-24.",
-        "margin": "about 1.7 times the fixture's assumed early fill; recalibrate from the first screened run"
+        "trips": "never", "unit": "MiB per 1,000 stored (information only)",
+        "reason": "Shown, never judged (X-soak-screen-calibrate). mimalloc fills its committed heap early in a run, and a pass and a fail don't separate on it: the passing r5 read 37.79 against the old threshold of 20, and r4's growth was outside mimalloc.",
+        "clean": "r5: 37.79 in the replay (its early fill); flat at 568 MiB over hours 12-24.",
+        "margin": "none: information only. The level bound mimalloc_committed_mib still trips."
       },
       "mimalloc_committed_mib": {
         "value": 1536, "trips": "above", "unit": "MiB",
         "reason": "A committed heap past this is far beyond any passing soak.",
         "clean": "r5: 568 MiB.",
         "margin": "2.7 times r5"
+      },
+      "anon_outside_mimalloc_mib_per_1000_stored": {
+        "value": 8, "trips": "above", "unit": "MiB per 1,000 stored (RssAnon minus mimalloc committed)",
+        "reason": "Anonymous memory mimalloc doesn't account for. Soak r4's C heap (zig's musl malloc) grew there; with override, mimalloc holds the Rust and C heaps, so this stays nearly flat.",
+        "clean": "r5: RssAnon 0.86 MiB/h with mimalloc flat over hours 12-24, at about 695 stored an hour: 1.24 per 1,000. The harness with override: 0.7-0.8 MiB outside the arena from 1,000 to 10,000 torrents, about 0.",
+        "margin": "r4 read about 22.9 (47 MiB x 0.63 outside mimalloc in 1.9 h at about 680 stored an hour): 2.9 times the threshold; r5 is 6.5 times below it"
       },
       "fetch_pending": {
         "value": 200000, "trips": "above", "unit": "keys",
