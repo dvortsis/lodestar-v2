@@ -154,11 +154,11 @@ async fn batch_limits() {
 
 #[tokio::test]
 async fn silent_udp_tracker_times_out() {
-    // A bound socket nobody reads from: the datagrams are accepted and never answered, so the scrape
-    // can only time out. The socket is held for the whole test. Dropping it first (so that nothing
-    // listens) raced with the fake trackers other tests start in this binary, which can be given
-    // the freed port and answer. With no listener the answer would be an ICMP refusal (`Io`) on
-    // some systems and silence on others; holding the port makes it one outcome everywhere.
+    // A bound socket nobody reads from: datagrams are accepted and never answered, so the scrape can
+    // only time out. The socket is held for the whole test. Dropping it first (so that nothing
+    // listens) raced with the fake trackers other tests start in this binary, which can be given the
+    // freed port and answer. With nothing listening the outcome is usually an ICMP refusal (`Io`),
+    // and silence if the refusal is filtered; holding the port makes it one outcome everywhere.
     let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let addr = silent.local_addr().unwrap();
     let url = TrackerUrl::parse(&format!("udp://{addr}")).unwrap();
