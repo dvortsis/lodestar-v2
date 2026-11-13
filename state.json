@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T16:25Z",
+  "updated_at": "2026-11-13T16:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8470,10 +8470,6 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "836": {
-      "slice": "X-fixed-sleep-nits",
-      "note": "deny test uses two refused re-bootstraps (runner accepted)"
-    },
     "837": {
       "slice": "X-watch-stall-retry",
       "head": "13d5df23",
@@ -9124,7 +9120,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T16:25Z",
+    "updated": "2026-11-13T16:32Z",
     "items": [
       {
         "slot": 1,
@@ -9288,12 +9284,11 @@
       },
       {
         "slot": 30,
-        "slice": "X-fixed-sleep-nits",
-        "status": "active",
-        "role": "other",
+        "slice": "X-utp-spurious-rto",
+        "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9YivYQVrtLb8466ue (Opus, same session): #835 review nits (LineChart dynamicImportSettled, dht deny-test tick coverage, decisions heading); previous X-fixed-sleep-asserts #835 merged (ebfddfe9) 2026-11-13T15:20Z",
-        "since": "2026-11-13T15:20Z",
+        "doing": "launching (Opus): uTP spurious-timeout sample + timeouts reset on ACK progress; brief briefs/X-utp-spurious-rto.md",
+        "since": "2026-11-13T16:32Z",
         "model": "opus"
       },
       {
@@ -9365,7 +9360,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T16:25Z",
+  "updated": "2026-11-13T16:32Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9760,6 +9755,12 @@
       "slice": "X-fixed-sleep-asserts",
       "merged": "ebfddfe9",
       "at": "2026-11-13T15:20Z"
+    },
+    {
+      "pr": 836,
+      "slice": "X-fixed-sleep-nits",
+      "merged": "33994cdd",
+      "at": "2026-11-13T16:32Z"
     }
   ]
 }
