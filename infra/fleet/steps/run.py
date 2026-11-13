@@ -86,24 +86,41 @@ def _scrubber():
     return mod
 
 
+def guard_health(doc: dict) -> str:
+    """The host guard's state from the scrubbed document (X-scrub-guard-fields),
+    fixed words and a count only. `damaged` makes the block not clean. A
+    document from before those fields reads as not reported, never as clean."""
+    if "damaged" not in doc and "host_guard_drops" not in doc:
+        return "host guard not reported"
+    parts = []
+    if doc.get("damaged") is True:
+        parts.append("not clean: damaged, the host guard couldn't be held")
+    if doc.get("host_guard_drops"):
+        parts.append(f"host_guard_drops {doc['host_guard_drops']}")
+    return "; ".join(parts) or "host guard held"
+
+
 def copied_off(out: bytes, put: Callable[[bytes], None] | None) -> str:
     """copy-off's document: scrubbed again here, then put in the private evidence
-    bucket. Never printed; the report says only whether it was stored."""
+    bucket. Never printed; the report says only whether it was stored, and the
+    host guard's state (guard_health)."""
     found = EVIDENCE_LINE.findall(out)
     if len(found) != 1:
         return "no evidence came back"
     try:
         scrub = _scrubber()
-        body = scrub.dumps(scrub.scrub(json.loads(base64.b64decode(found[0], validate=True))))
+        doc = scrub.scrub(json.loads(base64.b64decode(found[0], validate=True)))
+        body = scrub.dumps(doc)
     except (binascii.Error, ValueError, UnicodeDecodeError, RecursionError):
         return "the evidence didn't pass the scrubber"
+    health = guard_health(doc)
     if put is None:
-        return "the evidence couldn't be stored"
+        return "the evidence couldn't be stored; " + health
     try:
         put(body)
     except Exception:  # noqa: BLE001 - the bucket's error isn't printed
-        return "the evidence couldn't be stored; it's still on the VM, so copy-off can run again"
-    return "evidence stored in the private bucket"
+        return "the evidence couldn't be stored; it's still on the VM, so copy-off can run again; " + health
+    return "evidence stored in the private bucket; " + health
 
 
 def bucket_writer(backend, env: dict, run_id: str, vm: str) -> Callable[[bytes], None] | None:
