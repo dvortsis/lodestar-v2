@@ -21,6 +21,10 @@ request gets:
   fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
+- the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
+  workflow or this file (ADVISORIES below). Main and the nightly always run it,
+  so an advisory published against a crate already locked turns main red the
+  next night;
 - `web` and `e2e` for web.yml / e2e.yml (see WEB_INPUTS below). Those two
   workflows always run on a pull request and use these outputs to skip their
   heavy jobs, so their `web-ok` / `e2e-ok` aggregates can be required.
@@ -87,6 +91,11 @@ COMPANION_PINS = re.compile(
     r"^(tools/companion-pins/|\.github/workflows/companion-pins\.yml$|crates/companions/data/catalogue\.json$"
     r"|crates/companions/src/catalogue\.rs$|crates/lodestar/src/update/check\.rs$)"
 )
+
+# The RustSec advisory check (X-ci-advisories): what it reads (the lockfile and
+# deny.toml), and what decides how it runs. A Cargo.toml change that moves a
+# version also changes Cargo.lock.
+ADVISORIES = re.compile(r"^(Cargo\.lock|deny\.toml|\.github/workflows/ci\.yml|\.github/scripts/ci_changes\.py)$")
 
 # The Unraid templates and their validator. The validator and its tests live beside
 # the templates, so one prefix covers all of them.
@@ -179,6 +188,7 @@ def main() -> None:
             infra="true",
             unraid="true",
             update_manifest="true",
+            advisories="true",
             web="true",
             e2e="true",
         )
@@ -230,6 +240,7 @@ def main() -> None:
     out["unraid"] = str(everything or any(UNRAID.match(f) for f in changed)).lower()
     out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     out["update_manifest"] = str(everything or any(UPDATE_MANIFEST.match(f) for f in changed)).lower()
+    out["advisories"] = str(any(ADVISORIES.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate
     # that holds it, or anything it builds (the search crate among them).
     out["mmap_retention"] = str(needs({"lodestar-bench"}, tested=True)).lower()

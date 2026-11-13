@@ -1,0 +1,28 @@
+# cargo-deny's configuration. CI runs only the advisory check
+# (`cargo deny check advisories`, the `advisories` job in ci.yml): every crate
+# in Cargo.lock against the RustSec advisory database
+# (X-ci-advisories, INFRA-09). Licences are checked by
+# .github/scripts/licenses.py, not here.
+#
+# Each ignore names the advisory, the crate, why it doesn't reach Lodestar and a
+# review date at most 90 days out. The decisions file records the triage:
+# docs/decisions/2026-11-13-X-ci-advisories.md.
+
+[graph]
+# Every target Lodestar ships on, so a crate used only on Windows or macOS
+# is checked too.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Vulnerabilities fail the check (cargo-deny always denies them). So do
+# unmaintained crates, including transitive ones, and yanked versions.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+]

@@ -56,6 +56,7 @@ jobs:
       companion_pins: ${{ steps.c.outputs.companion_pins }}
       infra: ${{ steps.c.outputs.infra }}
       update_manifest: ${{ steps.c.outputs.update_manifest }}
+      advisories: ${{ steps.c.outputs.advisories }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -485,6 +486,27 @@ jobs:
       - run: python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version' && gpg --version | head -1
       - run: python3 -m unittest discover -s tools/companion-pins -p 'test_*.py' -v
 
+  # Every crate in Cargo.lock against the RustSec advisory database
+  # (X-ci-advisories, INFRA-09): a vulnerability, an unsound or unmaintained
+  # crate or a yanked version fails it, unless deny.toml ignores that advisory
+  # with a reason and a review date. Main and the nightly always run it, so a
+  # new advisory against a locked crate shows the next night. cargo-deny is
+  # pinned by version and built with its own lockfile (--locked).
+  advisories:
+    name: RustSec advisories
+    needs: changes
+    if: needs.changes.outputs.advisories == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny --locked check advisories
+
   # The Windows collector's own fault-injection test: PID reuse, bounded
   # retries, safe binds. The rehearsal script needs a real crawler and stays
   # on the owner's PC.
@@ -670,7 +692,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, unraid-templates, companion-pins, update-manifest, infra]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, unraid-templates, companion-pins, update-manifest, infra, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
