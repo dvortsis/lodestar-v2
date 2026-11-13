@@ -7,7 +7,8 @@
 //!   - **None:** nothing; enabling is a toggle.
 //!   - **External:** the endpoint list, acknowledged ([`Need::Endpoints`]).
 //!   - **Account:** its declared required credentials, stored
-//!     ([`Need::Credentials`], [`need_with`]).
+//!     ([`Need::Credentials`], [`need_with`]), and the admin password on
+//!     every enable ([`needs_password`]).
 //!   - **Restricted** and **Overlay:** the consent screen, acknowledged
 //!     with the admin password ([`Need::Consent`], [`needs_password`]).
 //!
@@ -45,13 +46,19 @@ use crate::plugin::BoxFuture;
 /// class asks again before it's next enabled, and one already enabled is
 /// switched off at the next start until it's acknowledged again.
 ///
+/// Account is 0, and stays 0 (X-consent-gate-lift r2): its consent is
+/// its credentials and the admin password, asked on every enable, with the
+/// §2.49 Account text shown in the dialog each time. Nothing records an
+/// acknowledgement of it, so there's no version to compare, and raising
+/// this number would change nothing. If a later Account text must switch
+/// off sources already on, that's a new design: Account gets an
+/// acknowledgement ([`needs_ack`]) and a version above 0.
+///
 /// External, Restricted and Overlay are at 2: the owner-approved texts
 /// (§2.49) as SRC-15b's dialogs show them. Version 1 was SRC-4's draft,
 /// which a build before the consent gate could record through the API
 /// with no dialog showing it, so a record of it covers nothing now and
-/// the source asks again (X-consent-gate-lift). Account is 0: its consent
-/// is its credentials, never an acknowledgement, until X-consent-gate-lift
-/// r2 ships its dialog.
+/// the source asks again (X-consent-gate-lift).
 pub const fn text_version(class: Consent) -> u32 {
     match class {
         Consent::None => 0,
@@ -82,10 +89,15 @@ pub const fn needs_ack(class: Consent) -> bool {
     )
 }
 
-/// Whether accepting the class's consent screen asks for the admin
-/// password (Q13): Restricted and Overlay do.
+/// Whether enabling a source of the class asks for the admin password,
+/// every time (Q13): Restricted and Overlay, and Account, whose
+/// credentials can reach the user's own services (X-consent-gate-lift r2,
+/// from SRC-15c's note).
 pub const fn needs_password(class: Consent) -> bool {
-    matches!(class, Consent::Restricted | Consent::Overlay)
+    matches!(
+        class,
+        Consent::Account | Consent::Restricted | Consent::Overlay
+    )
 }
 
 /// Whether the class needs stored credentials.
@@ -372,6 +384,9 @@ pub enum CredentialRefusal {
     Value,
     /// More than [`MAX_CREDENTIALS`] would be stored.
     TooMany,
+    /// The plugin doesn't declare the name (`Policy::credentials`), and it
+    /// isn't one of the two SOCKS5 names (X-consent-gate-lift r2).
+    Undeclared,
 }
 
 impl std::fmt::Display for CredentialRefusal {
@@ -384,7 +399,24 @@ impl std::fmt::Display for CredentialRefusal {
                 "a credential value is 1 to 4096 bytes, and a SOCKS5 user name or password 1 to 255"
             }
             CredentialRefusal::TooMany => "a source holds at most 16 credentials",
+            CredentialRefusal::Undeclared => {
+                "this source doesn't use a credential of that name; it takes only the ones it \
+                 lists, and a SOCKS5 user name and password"
+            }
         })
+    }
+}
+
+/// Checks that `name` may be stored for a plugin declaring `spec`: a
+/// declared name or a SOCKS5 one (X-consent-gate-lift r2). A typo can't
+/// sit unused in the store or stand in for a declared credential. A
+/// plugin that declares none takes only the SOCKS5 pair. Removing a name
+/// is never checked here, so an old one can always be cleared.
+pub fn check_declared(spec: &[CredentialSpec], name: &str) -> Result<(), CredentialRefusal> {
+    if is_egress_name(name) || spec.iter().any(|c| c.name == name) {
+        Ok(())
+    } else {
+        Err(CredentialRefusal::Undeclared)
     }
 }
 
@@ -1045,6 +1077,46 @@ mod tests {
         }
         assert_eq!(text_version(Consent::None), 0);
         assert_eq!(text_version(Consent::Account), 0);
+    }
+
+    #[test]
+    fn only_declared_or_socks5_names_may_be_stored() {
+        let spec = [field("api_key", true), field("note", false)];
+        for ok in ["api_key", "note", SOCKS5_USERNAME, SOCKS5_PASSWORD] {
+            assert_eq!(check_declared(&spec, ok), Ok(()), "{ok}");
+        }
+        for bad in ["apikey", "api_key_", "other", "API_KEY", ""] {
+            assert_eq!(
+                check_declared(&spec, bad),
+                Err(CredentialRefusal::Undeclared),
+                "{bad}"
+            );
+        }
+        // A plugin that declares none takes the SOCKS5 pair only.
+        assert_eq!(
+            check_declared(&[], "api_key"),
+            Err(CredentialRefusal::Undeclared)
+        );
+        assert_eq!(check_declared(&[], SOCKS5_PASSWORD), Ok(()));
+        // The refusal names no value and no name.
+        let text = CredentialRefusal::Undeclared.to_string();
+        assert!(!text.contains("api_key") && !text.contains('{'), "{text}");
+    }
+
+    #[test]
+    fn account_restricted_and_overlay_ask_for_the_password() {
+        for (class, asks) in [
+            (Consent::None, false),
+            (Consent::External, false),
+            (Consent::Account, true),
+            (Consent::Restricted, true),
+            (Consent::Overlay, true),
+        ] {
+            assert_eq!(needs_password(class), asks, "{class:?}");
+        }
+        assert_eq!(text_version(Consent::Account), 0);
+        assert!(!needs_ack(Consent::Account));
+        assert_eq!(version(&manifest(Consent::Account)), "");
     }
 
     #[test]

@@ -7684,7 +7684,7 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Stores or removes a source's credentials: each name maps to a value\n(stored, sealed with the install's key) or `null` (removed). Values\nare never returned: the response lists the names stored. Removing what\nan enabled `account` source needs disables it. `400\ninvalid_credentials` names the rule a change broke, never a value.",
+        "summary": "Stores or removes a source's credentials: each name maps to a value\n(stored, sealed with the install's key) or `null` (removed). A value\nis stored only under a name the source's `credential_spec` lists, or\none of the two SOCKS5 names; any name can be removed. Values are never\nreturned: the response lists the names stored. Removing what an\nenabled `account` source needs disables it. `400 invalid_credentials`\nnames the rule a change broke, never a name or a value.",
         "operationId": "patchSourceCredentials",
         "parameters": [
           {
@@ -24113,7 +24113,7 @@
           },
           "password_required": {
             "type": "boolean",
-            "description": "Enabling it asks for the admin password, every time\n(`restricted`, `overlay`)."
+            "description": "Enabling it asks for the admin password, every time\n(`account`, `restricted`, `overlay`)."
           },
           "plugin": {
             "type": "string",

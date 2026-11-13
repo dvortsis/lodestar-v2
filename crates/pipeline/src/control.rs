@@ -701,7 +701,8 @@ fn off_reason(approved: bool, need: Option<Need>) -> Option<&'static str> {
 ///    External, Restricted and Overlay an accepted acknowledgement that
 ///    covers the current text version and addresses, either `stored` or
 ///    named exactly by `change`.
-/// 4. Restricted and Overlay: the admin password, every time.
+/// 4. Account, Restricted and Overlay: the admin password, every time
+///    ([`consent::needs_password`]).
 fn enable_decision(
     approved: bool,
     purge_pending: bool,
@@ -742,8 +743,9 @@ fn enable_decision(
             ack = Some(Ack::of(manifest).encode());
         }
     }
-    // Enabling Restricted or Overlay asks for the password every time, not
-    // only when the consent is first accepted (§20.11: never remembered).
+    // Enabling Account, Restricted or Overlay asks for the password every
+    // time, not only when the consent is first accepted (§20.11: never
+    // remembered).
     if consent::needs_password(manifest.consent) && !change.password_confirmed {
         return Err(SourceError::PasswordRequired);
     }
@@ -764,9 +766,9 @@ pub struct SourceChange {
     pub consent: Option<Consent>,
     /// ...and the version of what they were shown ([`consent::version`]).
     pub consent_version: Option<String>,
-    /// The caller checked the admin password for this change. Accepting
-    /// Restricted or Overlay consent needs it (Q13), and so does any
-    /// egress change.
+    /// The caller checked the admin password for this change. Enabling an
+    /// Account, Restricted or Overlay source needs it, every time (Q13,
+    /// [`consent::needs_password`]), and so does any egress change.
     pub password_confirmed: bool,
     pub egress: Option<EgressSetting>,
     /// `Some(windows)` sets them (`[]`: any time).
@@ -1487,8 +1489,10 @@ impl Control {
 
     /// Stores or removes a source's credentials, sealed by `sealer` under
     /// the source's own context. Removing what an enabled Account source
-    /// needs disables it in the same write. Values are never returned,
-    /// logged or put in an error.
+    /// needs disables it in the same write. A name is stored only when the
+    /// plugin declares it (`Policy::credentials`) or it's a SOCKS5 one
+    /// ([`consent::check_declared`]); removing any name is allowed. Values
+    /// are never returned, logged or put in an error.
     pub async fn update_credentials(
         &self,
         id: SourceId,
@@ -1500,6 +1504,9 @@ impl Control {
         for (name, value) in &changes {
             consent::check_name(name).map_err(SourceError::Credential)?;
             if let Some(v) = value {
+                // Only a name the plugin declares, or a SOCKS5 one, is
+                // stored; any name may be removed (X-consent-gate-lift r2).
+                consent::check_declared(spec, name).map_err(SourceError::Credential)?;
                 consent::check_value(name, v).map_err(SourceError::Credential)?;
             }
         }
@@ -1994,7 +2001,7 @@ mod tests {
                                                 acked && password
                                             }
                                             Consent::Account => {
-                                                names.iter().any(|n| n == "api_key")
+                                                names.iter().any(|n| n == "api_key") && password
                                             }
                                         };
                                     let case = format!(

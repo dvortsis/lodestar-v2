@@ -947,9 +947,30 @@ fn sampling_blocked_follows_the_dht_report() {
 /// A source of each class, doing nothing while it runs.
 struct Gated(Manifest, Arc<std::sync::atomic::AtomicBool>);
 
+/// What the Account plugin of [`gated`] declares: a required `api_key`.
+/// The credentials route takes only declared names (X-consent-gate-lift
+/// r2). The other classes declare none.
+const ACCOUNT_POLICY: lodestar_sources::Policy = lodestar_sources::Policy {
+    credentials: &[consent::CredentialSpec {
+        name: "api_key",
+        label: "API key",
+        kind: consent::CredentialKind::Secret,
+        required: true,
+    }],
+    ..lodestar_sources::Policy::STRICT
+};
+
 impl SourcePlugin for Gated {
     fn manifest(&self) -> &Manifest {
         &self.0
+    }
+
+    fn policy(&self) -> &lodestar_sources::Policy {
+        if self.0.consent == Consent::Account {
+            &ACCOUNT_POLICY
+        } else {
+            &lodestar_sources::Policy::STRICT
+        }
     }
 
     fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
@@ -1366,6 +1387,26 @@ async fn no_class_can_be_enabled_past_its_condition() {
         (status, e["error"]["code"].clone()),
         (400, json!("invalid_credentials"))
     );
+    // A well-formed name the plugin doesn't declare is refused the same
+    // way, naming neither the name nor the value (X-consent-gate-lift r2).
+    let (status, e) = f
+        .send(creds(json!({ "credentials": { "apikey": SECRET } })))
+        .await;
+    assert_eq!(
+        (status, e["error"]["code"].clone()),
+        (400, json!("invalid_credentials")),
+        "{e}"
+    );
+    assert!(!e.to_string().contains(SECRET), "{e}");
+    assert!(!e.to_string().contains("apikey"), "the refused name: {e}");
+    let s = f.source(&c, "account").await;
+    assert_eq!(
+        s["credentials"],
+        json!(["api_key"]),
+        "nothing more was stored"
+    );
+    // Enabling an Account source asks for the admin password, every time.
+    assert_eq!(s["password_required"], json!(true), "{s}");
     // Stored credentials don't open it either.
     assert_gated(
         f.patch(&c, "account", json!({ "enabled": true })).await,

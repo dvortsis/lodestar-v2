@@ -527,7 +527,7 @@ pub struct Source {
     #[schema(required = true, inline)]
     pub needs: Option<SourceNeed>,
     /// Enabling it asks for the admin password, every time
-    /// (`restricted`, `overlay`).
+    /// (`account`, `restricted`, `overlay`).
     pub password_required: bool,
     /// The manifest id.
     pub plugin: String,
