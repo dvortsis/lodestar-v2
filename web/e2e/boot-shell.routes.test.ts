@@ -3,7 +3,7 @@
 // must be there without JS, match what the app renders box for box (no shift when it is swapped),
 // and stay out of the way where it would be wrong (sign-in screens, other languages).
 // Name ends in `routes.test.ts` so the `core` project runs it.
-import type { Locator, Page } from '@playwright/test';
+import type { Locator, Page, Route } from '@playwright/test';
 import { liveEvents } from './support/events-server';
 import { interact } from './support/interact';
 import { expect, test } from './support/test';
@@ -448,5 +448,83 @@ test.describe('the error screen when its chunk cannot load', () => {
 		await expect(page.getByText('Error 500')).toBeVisible();
 		await expect(page.getByRole('link', { name: 'Go to Search' })).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+	});
+});
+
+test.describe('a page opened while the server is gone', () => {
+	test.afterEach(async ({ page }) => {
+		await page.unrouteAll({ behavior: 'ignoreErrors' });
+	});
+
+	// Nothing answers: not the version file the probe asks for, and not the destination's own code, so the load fails
+	// as it does when the server has gone. `up()` brings it back.
+	async function serverGone(page: Page) {
+		let alive = false;
+		const cut = (route: Route) => (alive ? route.fallback() : route.abort('connectionrefused'));
+		await page.route('**/_app/version.json', cut);
+		await page.route('**/_app/immutable/nodes/*.js', cut);
+		return {
+			up: () => {
+				alive = true;
+			}
+		};
+	}
+
+	test('says it could not reach Lodestar, then opens the same page by itself', async ({
+		page,
+		go,
+		mock
+	}) => {
+		mock.on('listSavedSearches', []);
+		await go('/search');
+		await interact(page);
+		await expect(page.getByTestId('more-button')).toBeAttached();
+		const server = await serverGone(page);
+		await page.getByRole('link', { name: 'Alerts' }).first().click();
+		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeVisible({
+			timeout: 15_000
+		});
+		await expect(page.getByText('Error 500')).toHaveCount(0);
+		await expect(page.getByTestId('offline-status')).not.toBeEmpty();
+		server.up();
+		// The next probe finds it (1 s, then 2 s), with no click (one reload at the same URL).
+		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeHidden({
+			timeout: 15_000
+		});
+		await expect(page).toHaveURL(/\/alerts/);
+		await expect(page.getByRole('heading', { level: 1, name: 'Alerts' })).toBeVisible({
+			timeout: 15_000
+		});
+		await expect(page.getByRole('heading', { name: 'Something went wrong' })).toHaveCount(0);
+	});
+
+	test('Try again recovers the page before the next automatic retry would', async ({
+		page,
+		go,
+		mock
+	}) => {
+		test.setTimeout(90_000);
+		mock.on('listSavedSearches', []);
+		await go('/search');
+		await interact(page);
+		await expect(page.getByTestId('more-button')).toBeAttached();
+		const server = await serverGone(page);
+		await page.getByRole('link', { name: 'Alerts' }).first().click();
+		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeVisible({
+			timeout: 15_000
+		});
+		// The retries back off (1, 2, 4, 8, 16 s). Once the next one is 16 s away, only the button
+		// can bring the page back within the 10 s below.
+		const status = page.getByTestId('offline-status');
+		await expect(status).toHaveText('Trying again in 16 sec.', { timeout: 30_000 });
+		server.up();
+		await page.getByTestId('state-screen').getByRole('button', { name: 'Try again' }).click();
+		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeHidden({
+			timeout: 10_000
+		});
+		await expect(page).toHaveURL(/\/alerts/);
+		await expect(page.getByRole('heading', { level: 1, name: 'Alerts' })).toBeVisible({
+			timeout: 15_000
+		});
 	});
 });
