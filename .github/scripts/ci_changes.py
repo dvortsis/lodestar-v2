@@ -18,7 +18,9 @@ request gets:
 - the companion pin tool's tests only if it touches `tools/companion-pins/`, its
   workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
-  fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
+  fmt/validate, PowerShell parse) only if it touches `infra/`, the fleet,
+  fleet-emergency-down and operator workflows, the gluetun post-rules file,
+  `docs/user/03-keep-lodestar-safe.md` or `docs/operations.md` (INFRA below);
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
 - the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
@@ -55,7 +57,7 @@ RUST_ALSO = re.compile(
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
     # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.
-    r"|^packaging/companions/"
+    r"|^packaging/companions/(gluetun-post-rules\.txt$|compose/|unraid/)"
 )
 
 # Web and E2E applicability. Both workflows run on every pull request; these
@@ -84,7 +86,7 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 INFRA = re.compile(
     r"^(infra/"
     r"|packaging/companions/gluetun-post-rules\.txt$|docs/user/03-keep-lodestar-safe\.md$|docs/operations\.md$"
-    r"|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
+    r"|\.github/workflows/(fleet|fleet-emergency-down|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
 )
 # The update manifest's builder, the workflow that signs with it, and the
 # verifier it round-trips through.
