@@ -1336,6 +1336,70 @@ class Scrubber(unittest.TestCase):
         self.assertFalse(any(p.name == "seg-1.json" for p in (block / "evidence").rglob("*")))  # reports go to out
 
 
+class ScrubGuardFields(unittest.TestCase):
+    """X-scrub-guard-fields: the evidence shows a block whose host guard dropped
+    or that was marked damaged, as a count and a boolean only."""
+
+    def block(self, outages=None, damaged=None):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        block, out = tmp / "block", tmp / "out"
+        (block / "evidence").mkdir(parents=True)
+        (block / "tools").mkdir()
+        out.mkdir()
+        (block / "block.env").write_text(f"IMAGE_DIGEST={DIGEST}\nLODESTAR_COMMIT={LC}\nSPEC_COMMIT={SC}\n"
+                                         f"RULES_COMMIT={RC}\nTREATMENT=adm\nSEGMENT_HOURS=2\nROLE=main\n")
+        if outages is not None:
+            (block / "outages").write_text(outages)
+        if damaged is not None:
+            (block / "damaged").write_text(damaged)
+        return scrub.collect(block, out), block, out
+
+    def test_drops_and_a_damaged_mark(self):
+        doc, _, _ = self.block("1 link_outage\n2 host_guard_dropped\n3 host_guard_dropped\n4 host_guard_lost\n",
+                               "host_guard_lost\n")
+        self.assertEqual((doc["outages"], doc["host_guard_drops"], doc["damaged"]), (4, 2, True))
+        self.assertEqual(scrub.scrub(doc), doc)  # the control plane's pass keeps them
+
+    def test_a_clean_block_and_an_older_one(self):
+        doc, _, _ = self.block("1 link_outage\n")
+        self.assertEqual((doc["host_guard_drops"], doc["damaged"]), (0, False))
+        doc, _, _ = self.block()  # before #845: no outages, no mark
+        self.assertEqual((doc["outages"], doc["host_guard_drops"], doc["damaged"]), (0, 0, False))
+
+    def test_the_lost_line_marks_it_damaged_without_the_mark(self):
+        """copy-off mounts the outages, not the mark: guard_lost writes both."""
+        doc, _, _ = self.block("1 host_guard_dropped\n2 host_guard_lost\n")
+        self.assertEqual((doc["host_guard_drops"], doc["damaged"]), (1, True))
+
+    def test_only_the_boolean_of_a_hostile_mark_survives(self):
+        hostile = f"{PRIVATE[0]} {PRIVATE[2]} /var/lib/lodestar-block/{PRIVATE[3]} {PRIVATE[6]}\n"
+        doc, block, out = self.block("1 host_guard_dropped " + PRIVATE[0] + "\n"  # not an exact record: not counted
+                                     "2 " + PRIVATE[2] + "\n" "x host_guard_dropped\n" "3 host_guard_dropped\n",
+                                     hostile)
+        self.assertEqual((doc["host_guard_drops"], doc["damaged"]), (1, True))
+        text = scrub.dumps(doc).decode()
+        for value in PRIVATE + ("/var/lib", "lodestar-block"):
+            with self.subTest(value=value):
+                self.assertNotIn(value, text)
+        r = subprocess.run([sys_executable(), str(VM / "scrub.py"), "collect", str(block), str(out)],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for value in PRIVATE:
+            self.assertNotIn(value, r.stdout)
+        self.assertIs(json.loads(r.stdout)["damaged"], True)
+
+    def test_malformed_values_are_dropped_by_the_control_plane(self):
+        base = {"version": 1, "segments": []}
+        for drops, mark in ((-1, "yes"), (1.5, 1), ("2", "host_guard_lost"), (True, None), (10**16, PRIVATE[0]),
+                            (PRIVATE[0], [True])):
+            with self.subTest(drops=drops, mark=mark):
+                out = scrub.scrub({**base, "host_guard_drops": drops, "damaged": mark})
+                self.assertEqual(out, base)
+        self.assertEqual(scrub.scrub({**base, "host_guard_drops": 3, "damaged": False}),
+                         {**base, "host_guard_drops": 3, "damaged": False})
+
+
 def sys_executable():
     import sys
     return sys.executable
