@@ -133,7 +133,31 @@ n=$(cat "$STUB/ls_calls" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/ls_cal
 [ "$n" -lt "${LS_FAILS:-0}" ] && exit 2
 exec /bin/ls "$@"
 """
+# iptables for the host guard (block-lib.sh): a copy count per rule, so
+# duplicates, stuck copies and an earlier endpoint's leftovers are real.
+STUB_IPTABLES = r"""#!/usr/bin/env bash
+printf 'iptables %s\n' "$*" >> "$STUB/log"
+host="-s 192.0.2.77/32 -p udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
+host_s="-s 192.0.2.77/32 -p udp -m udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
+old_host_s="-s 198.51.100.66/32 -p udp -m udp --sport 51820 -m comment --comment lodestar-leak-host -j DROP"
+n() { cat "$STUB/$1" 2>/dev/null || echo 0; }
+down() { [ "$(n "$1")" -gt 0 ] || exit 1; echo $(($(n "$1") - 1)) > "$STUB/$1"; }
+case "$*" in
+  "-I INPUT 1 $host") [ -n "$HOST_FAILS" ] && exit 1; echo $(($(n host) + 1)) > "$STUB/host" ;;
+  "-C INPUT $host") [ "$(n host)" -gt 0 ] ;;
+  "-D INPUT $host"|"-D INPUT $host_s") [ -n "$HOST_STUCK" ] && exit 1; down host ;;
+  "-D INPUT $old_host_s") [ -n "$HOST_STUCK" ] && exit 1; down oldhost ;;
+  "-S INPUT")
+    echo "-P INPUT ACCEPT"
+    for _ in $(seq "$(n host)"); do echo "-A INPUT $host_s"; done
+    for _ in $(seq "$(n oldhost)"); do echo "-A INPUT $old_host_s"; done ;;
+  *) printf 'iptables %s\n' "$*" >> "$STUB/badargs"; exit 2 ;;
+esac
+"""
+# The fake leak test records the host guard's copies when it runs, and its arguments.
 FAKE_LEAK = r"""#!/usr/bin/env bash
+cat "$STUB/host" 2>/dev/null > "$STUB/host_at_leak" || echo 0 > "$STUB/host_at_leak"
+printf '%s\n' "$*" > "$STUB/leak_args"
 case "$LEAK" in
   fail) echo "fail ipv6_blocked_up"; echo "fail leak_test"; exit 1 ;;
   noline) echo "ok tunnel_healthy"; exit 0 ;;
@@ -153,12 +177,14 @@ class Base(unittest.TestCase):
         self.block = self.tmp / "lodestar-block"
         (self.stub / "bin").mkdir(parents=True)
         for name, body in (("docker", STUB_DOCKER), ("systemd-run", STUB_SYSTEMD_RUN), ("systemctl", STUB_SYSTEMCTL),
-                           ("ls", STUB_LS),
+                           ("ls", STUB_LS), ("iptables", STUB_IPTABLES),
                            ("sleep", "#!/bin/sh\nexit 0\n")):
             (self.stub / "bin" / name).write_text(body)
             (self.stub / "bin" / name).chmod(0o755)
         (self.stack / "data").mkdir(parents=True)
         (self.stack / "data" / "old.db").write_text("a past block's database")
+        (self.stack / "secrets").mkdir()
+        (self.stack / "secrets" / "wg0.conf").write_text("[Peer]\nEndpoint = 192.0.2.77:1337\n")
         self.work.mkdir()
         for name in ("block-lib.sh", "compose.yaml", "watcher.sh", "scrub.py", "docker-proxy.cfg"):
             (self.work / name).write_text((VM / name).read_text())
@@ -507,6 +533,73 @@ class StartBlock(Base):
                     self.assertEqual(self.log().count("legal/notice"), 1)  # never retried
 
 
+    HOST = "-s 192.0.2.77/32 -p udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
+
+    def host_copies(self, name="host"):
+        p = self.stub / name
+        return int(p.read_text()) if p.exists() else 0
+
+    def test_the_host_guard_is_held_from_before_the_leak_test_to_copy_off(self):
+        """X-gluetun-host-guard: drill 3 stopped gluetun mid-block, and the host
+        answered the endpoint's leftover UDP from its own address."""
+        self.args()
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertLess(lines.index("ok host_guarded"), lines.index("ok leak_test"))
+        self.assertEqual((self.stub / "host_at_leak").read_text().strip(), "1")  # in before gluetun is recreated
+        self.assertEqual((self.stub / "leak_args").read_text().split()[-1], "held")  # the leak test leaves it
+        self.assertEqual(self.host_copies(), 1)  # held while the block runs
+        self.assertNotIn("192.0.2.77", raw)  # the endpoint is never printed
+        (self.stub / "doc.json").write_text('{"version":1,"segments":[]}')
+        self.running("gluetun")
+        rc, lines, raw = self.run_script("copy-off.sh")
+        self.assertEqual((rc, lines[-3:]), (0, ["ok host_guard_released", "ok block_ended", "ok copy_off"]))
+        self.assertEqual(self.host_copies(), 0)
+
+    def test_re_running_start_block_keeps_one_guard(self):
+        """Idempotent: a stuck copy, a duplicate and an earlier endpoint's leftover
+        all end as this endpoint's single guard, and a new copy goes in first."""
+        self.args()
+        (self.stub / "host").write_text("2")
+        (self.stub / "oldhost").write_text("1")
+        rc, lines, raw = self.run_script("start-block.sh", LEAK="fail")  # a failed start leaves the guard
+        self.assertEqual(rc, 1, raw)
+        self.assertEqual((self.host_copies(), self.host_copies("oldhost")), (1, 0))
+        log = self.log()
+        self.assertLess(log.index(f"-I INPUT 1 {self.HOST}"), log.index("-D INPUT"))
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual((self.host_copies(), self.host_copies("oldhost")), (1, 0))
+
+    def test_no_host_guard_no_leak_test(self):
+        for flags, setup, failed in (({"HOST_FAILS": 1}, None, "host_guarded"),
+                                     ({"HOST_STUCK": 1}, "oldhost", "host_guarded"),
+                                     ({}, "noconf", "wg_conf_present")):
+            with self.subTest(failed=failed, setup=setup):
+                self.setUp()
+                self.args()
+                if setup == "oldhost":
+                    (self.stub / "oldhost").write_text("1")  # an earlier endpoint's copy that won't come off
+                elif setup == "noconf":
+                    (self.stack / "secrets" / "wg0.conf").unlink()
+                rc, lines, _ = self.run_script("start-block.sh", **flags)
+                self.assertEqual((rc, lines[-2:]), (1, [f"fail {failed}", "fail start_block"]))
+                self.assertFalse((self.stub / "leak_args").exists())  # gluetun was never recreated
+                self.assertFalse(self.block.exists())
+
+    def test_a_bad_endpoint_is_refused_before_iptables(self):
+        for endpoint in ("999.0.2.77:1337", "192.0.2.77:0", "192.0.2.77:65536", "[2001:db8::1]:1337",
+                         "host.example:1337", "192.0.2.77:1337 -j ACCEPT", "192.0.2.77;reboot:1337", ""):
+            with self.subTest(endpoint=endpoint):
+                self.setUp()
+                self.args()
+                (self.stack / "secrets" / "wg0.conf").write_text(f"[Peer]\nEndpoint = {endpoint}\n")
+                rc, lines, raw = self.run_script("start-block.sh")
+                self.assertEqual((rc, lines[-2:]), (1, ["fail endpoint_valid", "fail start_block"]))
+                self.assertNotIn("iptables", self.log())
+                self.assertNotIn("192.0.2.77", raw)
+
+
 class ArmSwitch(Base):
     def test_switches_to_the_next_arm(self):
         self.make_block(segment=1)
@@ -710,8 +803,8 @@ class CopyOff(Base):
         (self.stub / "watcher_active").write_text("")
         rc, lines, raw = self.run_script("copy-off.sh")
         self.assertEqual(rc, 0, raw)
-        self.assertEqual(lines, ["ok nothing_running", "ok scrubbed", "count segments_copied 2", "ok block_ended",
-                                 "ok copy_off"])
+        self.assertEqual(lines, ["ok nothing_running", "ok scrubbed", "count segments_copied 2",
+                                 "ok host_guard_released", "ok block_ended", "ok copy_off"])
         ev = [ln for ln in raw.splitlines() if ln.startswith("evidence ")]
         self.assertEqual(len(ev), 1)
         self.assertEqual(json.loads(base64.b64decode(ev[0].split(" ", 1)[1])), self.doc)
@@ -757,6 +850,17 @@ class CopyOff(Base):
         self.block.unlink()
         rc, lines, _ = self.run_script("copy-off.sh")
         self.assertEqual(lines, ["fail evidence_present", "fail copy_off"])
+
+    def test_every_tagged_guard_comes_off_and_a_stuck_one_keeps_the_block(self):
+        self.make_block(segment=4)
+        (self.stub / "host").write_text("2")  # the block's, and a stuck duplicate
+        (self.stub / "oldhost").write_text("1")  # an earlier endpoint's
+        rc, lines, raw = self.run_script("copy-off.sh", HOST_STUCK=1)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail host_guard_released", "fail copy_off"]))
+        self.assertTrue((self.block / "marker").exists())  # still recorded: copy-off runs again
+        rc, lines, raw = self.run_script("copy-off.sh")
+        self.assertEqual((rc, lines[-3:]), (0, ["ok host_guard_released", "ok block_ended", "ok copy_off"]))
+        self.assertEqual([(self.stub / n).read_text().strip() for n in ("host", "oldhost")], ["0", "0"])
 
 
 def raw_result():

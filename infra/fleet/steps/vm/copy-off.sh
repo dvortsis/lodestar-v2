@@ -7,8 +7,10 @@
 #   read-only. Raw logs, databases, executables and the password never leave.
 # - Prints the scrubbed document as one `evidence <base64>` line, which the
 #   control side scrubs again and puts only in the private evidence bucket.
-# - Then ends the block: the marker goes (a block that stopped early ends here
-#   too) and the watcher stops. Re-running it copies the same evidence again.
+# - Then ends the block: the host guard start-block holds for the VPN
+#   endpoint comes off (every tagged copy, block-lib.sh), the marker goes (a
+#   block that stopped early ends here too) and the watcher stops. Re-running
+#   it copies the same evidence again.
 # Run as root by the step bootstrap: step.sh <workdir> [-] [-] [block].
 set -uo pipefail
 work=${1:?workdir}
@@ -18,7 +20,9 @@ BLOCK=${4:-/var/lib/lodestar-block}
 
 fail() { echo "fail $1"; echo "fail copy_off"; exit 1; }
 
-command -v docker >/dev/null 2>&1 || fail tool_missing_docker
+for tool in docker iptables; do
+  command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_$tool"
+done
 state=$(block_state)
 [[ $state == unknown ]] && fail block_check
 # A running collector is a running segment: refuse. A Lodestar left running
@@ -50,6 +54,10 @@ segs=$(printf '%s' "$doc" | grep -oE '"segment": ?[1-4]' | grep -c .)
 echo "count segments_copied ${segs:-0}"
 echo "evidence $(printf '%s' "$doc" | base64 -w0)"
 
+# The guard comes off before the marker: one that won't fails here and leaves
+# the block recorded, so re-running copy-off tries again.
+host_guard_release || fail host_guard_released
+echo "ok host_guard_released"
 if [[ $state == block ]]; then
   stop_watcher
   stop_proxy
