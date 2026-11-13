@@ -107,7 +107,7 @@ $case = 0
 # -runnerMs is the custom action's own deadline (JoinRunner), -timeout the script's.
 # -service: EventLog by default, a service every Windows has, so icacls can name its SID.
 # -Joined: the data folder already holds credentials, as after a join that was undone.
-function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address = 'https://192.168.1.10:8091', [int]$timeout = 30, [switch]$OpenData, [int]$runnerMs = 120000, [string]$service = 'EventLog', [switch]$Joined, [switch]$WithDb) {
+function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address = 'https://192.168.1.10:8091', [int]$timeout = 30, [switch]$OpenData, [int]$runnerMs = 120000, [string]$service = 'EventLog', [switch]$Joined, [switch]$WithDb, [switch]$StaleMarker) {
   $script:case++
   $data = Join-Path $root "data-$script:case"
   if ($OpenData) { New-Item -ItemType Directory -Path $data | Out-Null } else { New-PrivateFolder $data }
@@ -117,6 +117,8 @@ function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address
     New-Item -ItemType Directory -Path (Join-Path $data 'cluster') | Out-Null
     [IO.File]::WriteAllText((Join-Path $data 'cluster\credentials'), 'earlier')
   }
+  # A marker an earlier setup left, its commit never having run.
+  if ($StaleMarker) { [IO.File]::WriteAllText((Join-Path $data 'cluster\joined-by-setup'), 'earlier setup') }
   $log = New-Object 'Collections.Generic.List[string]'
   $extra = "-StubArgs $mode -TimeoutSeconds $timeout -ServiceName $service"
   $before = @(Get-ChildItem -LiteralPath $tmp -Directory | ForEach-Object FullName)
@@ -130,6 +132,13 @@ function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address
   }
   $logText = ($work | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter *.log -Recurse | Get-Content -Raw }) -join "`n"
   [pscustomobject]@{ Result = $result; Log = $log; Seen = $seen; Work = $work; LogFile = $logText; Data = $data }
+}
+
+# Runs a join-finish.ps1 step (prepare, rollback, commit) as the MSI would, and expects exit 0.
+function Invoke-Finish([string]$step, [string]$data) {
+  $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $install 'join-finish.ps1') -Step $step -DataDir $data 2>&1 | Out-String
+  Assert ($LASTEXITCODE -eq 0) "join-finish $step exited $LASTEXITCODE`: $out"
+  $out
 }
 
 # The sentinel, in any case, nowhere the user, the MSI log or join-worker.log can see.
@@ -247,7 +256,10 @@ Assert-TokenGone $r 'joined'
 $r = Invoke-Join 'ok' -service 'NoSuchLodestarTestService'
 Assert ($r.Result -like '*could not be handed to the Lodestar service*remove this worker*run setup again*') "hand-off: unexpected result: $($r.Result)"
 # Marked as this setup's join before the hand-off, so the rollback removes its files.
-Assert (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\joined-by-setup')) 'hand-off: the join was not marked for the rollback' 
+Assert (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\joined-by-setup')) 'hand-off: the join was not marked for the rollback'
+# And the rollback then removes them, also after a partial hand-off of their owner.
+[void](Invoke-Finish 'rollback' $r.Data)
+Assert (-not (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\credentials'))) 'hand-off then rollback: the credentials are still there'
 Assert-TokenGone $r 'hand-off'
 
 # ---- the token pasted into the address field: refused, and never repeated ----
@@ -302,11 +314,6 @@ Assert ($r.Seen.Count -eq 0) 'coordinator folder: lodestar ran'
 Assert-TokenGone $r 'coordinator folder'
 
 # ---- the rollback and commit steps (join-finish.ps1) ----
-function Invoke-Finish([string]$step, [string]$data) {
-  $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $install 'join-finish.ps1') -Step $step -DataDir $data 2>&1 | Out-String
-  Assert ($LASTEXITCODE -eq 0) "join-finish $step exited $LASTEXITCODE`: $out"
-  $out
-}
 # A join this setup made, then undone: its files go, the key stays, so setup can join again.
 $r = Invoke-Join 'ok'
 Assert ($null -eq $r.Result) "rollback: the join failed: $($r.Result)"
@@ -329,6 +336,49 @@ $r = Invoke-Join 'fail' -Joined
 Assert (-not (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\joined-by-setup'))) "already joined: marked as this setup's join"
 [void](Invoke-Finish 'rollback' $r.Data)
 Assert ([IO.File]::ReadAllText((Join-Path $r.Data 'cluster\credentials')) -eq 'earlier') "already joined: the earlier join's credentials were removed"
+# The guard itself: lodestar succeeds on a folder that had joined, and still nothing is marked.
+$r = Invoke-Join 'ok' -Joined
+Assert (-not (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\joined-by-setup'))) "already joined, join ok: marked as this setup's join"
+
+# A marker an earlier setup left: removed by the join before anything else, the earlier
+# credentials untouched, and a rollback then removes nothing.
+$r = Invoke-Join 'fail' -Joined -StaleMarker
+Assert (-not (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\joined-by-setup'))) 'stale marker: still there after the join'
+Assert ([IO.File]::ReadAllText((Join-Path $r.Data 'cluster\credentials')) -eq 'earlier') 'stale marker: the earlier credentials changed'
+[void](Invoke-Finish 'rollback' $r.Data)
+Assert ([IO.File]::ReadAllText((Join-Path $r.Data 'cluster\credentials')) -eq 'earlier') 'stale marker: the rollback removed the earlier credentials'
+
+# The prepare step, which runs before this install's rollback is scheduled: it removes a stale
+# marker even when the join itself never gets that far (a mistyped token, say).
+$prep = Join-Path $root 'prepare-data'
+New-PrivateFolder $prep
+New-Item -ItemType Directory -Path (Join-Path $prep 'cluster') | Out-Null
+[IO.File]::WriteAllText((Join-Path $prep 'cluster\credentials'), 'earlier')
+[IO.File]::WriteAllText((Join-Path $prep 'cluster\joined-by-setup'), 'earlier setup')
+[void](Invoke-Finish 'prepare' $prep)
+Assert (-not (Test-Path -LiteralPath (Join-Path $prep 'cluster\joined-by-setup'))) 'prepare: the stale marker is still there'
+[void](Invoke-Finish 'rollback' $prep)
+Assert ([IO.File]::ReadAllText((Join-Path $prep 'cluster\credentials')) -eq 'earlier') 'prepare then rollback: the earlier credentials were removed'
+
+# Links are never followed: a cluster folder, or a data folder, that is a junction is left alone.
+$target = Join-Path $root 'link-target'
+New-Item -ItemType Directory -Path (Join-Path $target 'cluster') | Out-Null
+foreach ($f in 'credentials', 'joined-by-setup') { [IO.File]::WriteAllText((Join-Path $target "cluster\$f"), 'kept') }
+$viaCluster = Join-Path $root 'link-cluster'
+New-Item -ItemType Directory -Path $viaCluster | Out-Null
+New-Item -ItemType Junction -Path (Join-Path $viaCluster 'cluster') -Target (Join-Path $target 'cluster') | Out-Null
+$viaData = Join-Path $root 'link-data'
+New-Item -ItemType Junction -Path $viaData -Target $target | Out-Null
+foreach ($d in $viaCluster, $viaData) {
+  foreach ($step in 'rollback', 'commit', 'prepare') {
+    $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $install 'join-finish.ps1') -Step $step -DataDir $d 2>&1 | Out-String
+    foreach ($f in 'credentials', 'joined-by-setup') {
+      Assert (Test-Path -LiteralPath (Join-Path $target "cluster\$f")) "junction ($d, $step): removed $f through a link: $out"
+    }
+  }
+}
+[IO.Directory]::Delete((Join-Path $viaCluster 'cluster'))
+[IO.Directory]::Delete($viaData)
 
 # ---- a data folder that isn't secured yet: refused before any token file or process ----
 $r = Invoke-Join 'ok' -OpenData

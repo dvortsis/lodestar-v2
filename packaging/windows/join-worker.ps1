@@ -238,6 +238,12 @@ try {
   if ($err.IsCompleted) { $text += $err.Result }
   $lines = @($text -split "`r?`n" | Where-Object { $_.Trim() -ne '' })
   foreach ($l in $lines) { Log "lodestar: $l" }
+  # Credentials this setup made, whatever lodestar's exit: marked, so a rollback of this install
+  # removes them (join-finish.ps1). Never a folder that had joined before.
+  if (-not $wasJoined -and [IO.File]::Exists($credentials)) {
+    [IO.File]::WriteAllText($marker, "This setup joined. Removed when setup finishes, or with the join's files if setup is undone.`r`n")
+    Log 'marked the join as made by this setup'
+  }
 
   if ($timedOut) {
     $message = "Joining $addr took longer than $TimeoutSeconds seconds. Check that this PC can reach the main Lodestar's cluster port (8091 unless you changed it), then make a new join token and install again."
@@ -245,7 +251,7 @@ try {
   } elseif ($p.ExitCode -ne 0 -and ($lines -match "coordinator's data folder")) {
     $message = Get-CoordinatorFolderMessage
     $exitCode = 1
-  } elseif ($p.ExitCode -ne 0 -and [IO.File]::Exists($credentials)) {
+  } elseif ($p.ExitCode -ne 0 -and $wasJoined) {
     # Already joined: most likely an earlier install joined and was then undone, which
     # leaves the worker's files in the data folder (X-wk18w-rollback). Uninstalling can't
     # help, since nothing is installed, so say how to start over. Still a failure.
@@ -261,11 +267,6 @@ try {
     $message = "lodestar finished but $DataDir holds no worker credentials. Install again with a new join token."
     $exitCode = 1
   } else {
-    # This setup made the join: a rollback of it removes the join's files (join-finish.ps1).
-    if (-not $wasJoined) {
-      [IO.File]::WriteAllText($marker, "This setup joined. Removed when setup finishes, or with the join's files if setup is undone.`r`n")
-      Log 'marked the join as made by this setup'
-    }
     # The join ran as SYSTEM, so SYSTEM owns the key and the credentials, and their lists
     # allow only OWNER RIGHTS, SYSTEM and Administrators (integrations secret.rs): the
     # service's own account gets them as their owner. /L: never through a link.
