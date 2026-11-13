@@ -894,6 +894,13 @@ fn every_gluetun_template_carries_the_rules_for_its_interface() {
                 .contains("save Lodestar&apos;s post-rules file at the Post-rules path"),
             "gluetun's Overview says to save the file first"
         );
+        assert!(
+            g.xml.contains(&format!(
+                "Keep {GLUETUN_INTERFACE}: Lodestar&apos;s post-rules name this tunnel"
+            )),
+            "VPN_INTERFACE's help names the value the rules need"
+        );
+        assert!(g.xml.contains("and check it, as the guide shows"));
         if companion != "gluetun" {
             // The routed companion is told to start after gluetun's firewall.
             assert!(xml[1].xml.contains("put gluetun above this container"));

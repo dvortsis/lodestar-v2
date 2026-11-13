@@ -87,7 +87,7 @@ If Lodestar generated your gluetun from its [companion](glossary.md#companion) t
 
 | Template | What it already has | What you do |
 |---|---|---|
-| Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Use Docker Compose 2.23.1 or later: run `docker compose version` to see yours. Older versions refuse the file. To check the rules, run step 4's commands with `docker compose exec` in place of `docker exec`. |
+| Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Use Docker Compose 2.23.1 or later: run `docker compose version` to see yours. Older versions refuse the file. Then check the rules: run step 4's commands with `docker compose exec` in place of `docker exec`. Don't skip it: a Compose tool that ignores the built-in rules starts gluetun without them, and without an error. |
 | Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. If you changed the **Post-rules** path in the form, use your path in step 1's commands. Then set the start order (below). |
 
 To set the start order on Unraid:
@@ -98,7 +98,7 @@ To set the start order on Unraid:
 
    **Result:** After each restart, Unraid starts gluetun, waits 30 seconds for its firewall, then starts the companion.
 
-The steps below are for a gluetun you set up yourself. They're for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
+The steps below are for a gluetun you set up yourself. With Lodestar's Unraid template, do only steps 1 and 4: the template already has steps 2 and 3. The steps are for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
 
 1. Open the Unraid terminal (**>_** in the top bar). Save the file, then check it:
 
@@ -123,12 +123,13 @@ The steps below are for a gluetun you set up yourself. They're for WireGuard, th
 
 With OpenVPN, gluetun names the tunnel `tun0`, and `wg0` isn't a valid OpenVPN device name. Leave `VPN_INTERFACE` unset, and run `sed -i 's/wg0/tun0/g' /mnt/cache/appdata/gluetun/post-rules.txt` after step 1. In step 4, look for `tun0` instead. This variant wasn't tested, so step 4's check is what tells you it works.
 
-If gluetun stops instead:
+If gluetun stops or keeps restarting instead:
 
 | Log line | What to do |
 |---|---|
 | `post-rules.txt: is a directory` | The file wasn't at the host path, so Docker made a folder there. Delete the folder, repeat step 1, and start gluetun again. |
 | `ip6tables is required` | Your server's kernel has no IPv6 firewall. Delete the three lines that start with `ip6tables` from the file, then start gluetun again. |
+| `restarting VPN`, again and again | gluetun's health check pings an address outside the VPN, such as one on your network set with `HEALTH_ICMP_TARGET_IP`, and the rules drop that ping. Add the variable `HEALTH_SMALL_CHECK_TYPE` with value `dns`, or remove `HEALTH_ICMP_TARGET_IP`. |
 
 To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
 

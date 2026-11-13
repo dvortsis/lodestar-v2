@@ -120,4 +120,9 @@ The generated gluetun companion templates now carry the post-rules (the runner's
 - **The Overview no longer overclaims.** It now reads: "While the VPN is down, its firewall blocks new connections, and Lodestar's post-rules stop connections that were already open from leaving outside the VPN."
 - **Both rules files are checked out with LF on every host** (`.gitattributes`, runner §2.33). On a Windows checkout with `core.autocrlf`, `include_str!` would embed CRLF, the guide's pinned SHA-256 would no longer match the bytes, and the YAML writer, which refuses `\r`, would fail. The two files were already LF in the repository, so nothing was renormalized.
 - **Chapter 8's Unraid procedure links to chapter 3** for the post-rules file and the start order (runner, §2.33), so a user who follows only chapter 8 doesn't get a gluetun that won't start.
+- **Review round (runner, §2.33):**
+  - Unraid's `VPN_INTERFACE` help says to keep `wg0`.
+  - gluetun's Overview says to check the file, because an empty or wrong one starts gluetun without the rules. unraid.rs is X-gluetun-templates-hostfile's file; the runner approved this text here.
+  - The guide makes the Compose rules check a required step, tells Unraid-template users to do steps 1 and 4 only, and puts the start order after both templates are applied in chapter 8.
+  - It adds a troubleshooting row for a health check that pings outside the VPN (`HEALTH_SMALL_CHECK_TYPE=dns`), carried over from the X-gluetun-leak-cmp brief.
 - **Out of scope:** a gluetun you already run, which Lodestar routes through by name. Lodestar can't change its settings, so the guide's manual steps stay for it.
