@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T12:56Z",
+  "updated_at": "2026-11-13T13:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8046,6 +8046,11 @@
       "id": "slices-yaml-x-e2e-orphan-specs-owns",
       "note": "Add web/e2e/support/** to X-e2e-orphan-specs owns in the next runner PR (runner approved fixture-session.ts, test-only, 2026-11-13T12:56Z).",
       "at": "2026-11-13T12:56Z"
+    },
+    {
+      "id": "gluetun-hostfile-ui-refusal-kinds",
+      "note": "When X-gluetun-hostfile-ui launches (gated on X-cmp-egress-ui): system.companions_dir_left now also has kinds nested and mounts (#831); the UI must name them.",
+      "at": "2026-11-13T13:32Z"
     }
   ],
   "main_health": [
@@ -8434,11 +8439,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "831": {
-      "slice": "X-companions-mount-check",
-      "head": "b840d27d",
-      "note": "fresh Opus+security MERGE (0 B/0 I); one round: trailing-slash normalise, catalogue-load fail-closed, Unraid guide wording; runner delta check then merge; then owner \u00a72.19 FYI + pass nested/mounts kinds to X-gluetun-hostfile-ui"
     }
   },
   "merged_log": [
@@ -9085,7 +9085,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T12:56Z",
+    "updated": "2026-11-13T13:32Z",
     "items": [
       {
         "slot": 1,
@@ -9244,11 +9244,11 @@
       },
       {
         "slot": 30,
-        "slice": "X-companions-mount-check",
-        "status": "active",
+        "slice": null,
+        "status": "idle",
         "role": "other",
-        "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #825 merged (426a4159); follow-up X-companions-mount-check in same session",
+        "agent": null,
+        "doing": "X-companions-mount-check #831 merged (380e46a6) 2026-11-13T13:32Z after runner delta check; session archived",
         "since": "2026-11-13T10:26Z",
         "model": "opus"
       },
@@ -9321,7 +9321,7 @@
     }
   ],
   "heartbeat": "2026-11-13T12:39Z",
-  "updated": "2026-11-13T12:56Z",
+  "updated": "2026-11-13T13:32Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9698,6 +9698,12 @@
       "slice": "X-ci-filter-rust-inputs",
       "merged": "a79efb5b",
       "at": "2026-11-13T12:43Z"
+    },
+    {
+      "pr": 831,
+      "slice": "X-companions-mount-check",
+      "merged": "380e46a6",
+      "at": "2026-11-13T13:32Z"
     }
   ]
 }
