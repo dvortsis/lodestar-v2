@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T08:46Z",
+  "updated_at": "2026-11-13T09:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7991,6 +7991,16 @@
       "id": "slices-yaml-x-flake-relevance-lock",
       "note": "Next runner PR: add the X-flake-relevance-lock entry to runner/slices.yaml (owns bench/tests/relevance_sets.rs, bench/src/bin/relevance/** if needed, its decisions file).",
       "at": "2026-11-13T08:46Z"
+    },
+    {
+      "id": "relevance-open-retry",
+      "note": "From X-flake-relevance-lock: optionally retry SearchIndex::open with a deadline in bench/src/bin/relevance/data_dir.rs on the Windows sharing error, for users who copy a data directory while scoring it. Runner: low priority, dev tool only; consider in a later bench slice.",
+      "at": "2026-11-13T09:05Z"
+    },
+    {
+      "id": "operator-bot-user-id",
+      "note": "Tripwire on #821 reports OPERATOR_BOT_USER_ID is not set, so nothing was checked. Repo variable is the owner's to set; asked the owner in chat.",
+      "at": "2026-11-13T09:05Z"
     }
   ],
   "main_health": [
@@ -9025,7 +9035,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T08:46Z",
+    "updated": "2026-11-13T09:05Z",
     "items": [
       {
         "slot": 1,
@@ -9062,7 +9072,7 @@
         "slice": "X-flake-relevance-lock",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9NYyxgoQ8Bj2zXNHQ: launched after #817 X-gs2-nits merged (a96bb5b7); Windows lock-file race in bench/tests/relevance_sets.rs seen on #824",
+        "doing": "session_01MMjhn9NYyxgoQ8Bj2zXNHQ: PR #826 open (94c474f7), CI running; cause was copy_of racing tool runs on the shared fixture (Windows CopyFileExW), test-only fix",
         "since": "2026-11-13T08:46Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)"
@@ -9187,7 +9197,7 @@
         "slice": "X-sources-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #823 X-insights-funnel-fixture ready at 53980b6d; fresh Opus review running; next X-insights-scroll-a11y",
+        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #823 review CHANGES at 53980b6d relayed (1 blocking layout, 1 important zh wording); fix round; next X-insights-scroll-a11y",
         "since": "2026-11-13T06:04Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
         "status": "active"
@@ -9198,7 +9208,7 @@
         "status": "active",
         "role": "other",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-templates-hostfile PR #825 open (2c9842fa), CI running; fresh Opus + /security-review on ready",
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #825 ready at 9fffec07; fresh Opus review + security review running",
         "since": "2026-11-13T06:04Z"
       },
       {
@@ -9279,7 +9289,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T08:46Z",
+  "updated": "2026-11-13T09:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
