@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T10:26Z",
+  "updated_at": "2026-11-13T10:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8021,6 +8021,11 @@
       "id": "slices-yaml-x-wk18w-rollback",
       "note": "Next runner plan PR: add X-wk18w-rollback (named in WK-18w decisions file; recovery after a join rolled back by StartServices failure or cancel). Also add crates/pipeline/tests/** to X-filter01-fix owns.",
       "at": "2026-11-13T10:32Z"
+    },
+    {
+      "id": "slices-yaml-x-ci-filter-rust-inputs",
+      "note": "Next runner plan PR: add X-ci-filter-rust-inputs (helper, sonnet, deps [X-ci-filter-fleet], owns ci_changes.py + test_ci_changes.py; place after X-ci-filter-fleet). X-ci-advisories (also owns ci_changes.py) waits until it merges.",
+      "at": "2026-11-13T10:41Z"
     }
   ],
   "main_health": [
@@ -9055,7 +9060,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T10:26Z",
+    "updated": "2026-11-13T10:41Z",
     "items": [
       {
         "slot": 1,
@@ -9140,12 +9145,12 @@
       },
       {
         "slot": 15,
-        "slice": "X-ci-filter-fleet",
+        "slice": "X-ci-filter-rust-inputs",
         "role": "other",
         "agent": "claude",
         "status": "active",
-        "since": "2026-11-13T09:21Z",
-        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: #824 merged (ff6ddab2); follow-up X-ci-filter-fleet in same session",
+        "since": "2026-11-13T10:41Z",
+        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: #827 merged (3cf4fd5f); follow-up X-ci-filter-rust-inputs in same session",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9311,7 +9316,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T10:26Z",
+  "updated": "2026-11-13T10:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9646,6 +9651,12 @@
       "slice": "X-gluetun-templates-hostfile",
       "merged": "426a4159",
       "at": "2026-11-13T10:26Z"
+    },
+    {
+      "pr": 827,
+      "slice": "X-ci-filter-fleet",
+      "merged": "3cf4fd5f",
+      "at": "2026-11-13T10:41Z"
     }
   ]
 }
