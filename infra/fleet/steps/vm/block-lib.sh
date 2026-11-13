@@ -135,9 +135,9 @@ damaged_marked() { [[ -e $BLOCK/damaged || -L $BLOCK/damaged ]]; }
 mark_create() {
   local tmp
   tmp=$(mktemp -- "$BLOCK/.damaged.XXXXXX" 2>/dev/null) || return 1
-  echo host_guard_lost >"$tmp" && ln -T -- "$tmp" "$BLOCK/damaged" 2>/dev/null
+  echo host_guard_lost 2>/dev/null >"$tmp" && ln -T -- "$tmp" "$BLOCK/damaged" 2>/dev/null
   local rc=$?
-  rm -f -- "$tmp"
+  rm -f -- "$tmp" 2>/dev/null
   return "$rc"
 }
 # guard_lost mode dropped: stop gluetun first, then record. The records and

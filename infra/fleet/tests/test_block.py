@@ -1077,7 +1077,10 @@ esac
         self.assertFalse((self.block / "damaged").is_symlink())
         self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
         before = (self.block / "damaged").stat().st_ino
+        (self.stub / "gluetun_stopped").unlink()
+        self.running("gluetun")
         self.run_script("outage-watcher.sh", HOST_FAILS=1)  # guard_lost again: the mark and its record stay single
+        self.assertTrue((self.stub / "gluetun_stopped").exists())  # it did run: gluetun was stopped again
         self.assertEqual((self.block / "damaged").stat().st_ino, before)
         self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
         self.assertEqual(self.outages().count("host_guard_lost"), 1)
@@ -1589,12 +1592,20 @@ class CopyOffControl(unittest.TestCase):
                   "not clean: damaged, the host guard couldn't be held; host_guard_drops 1"),
                  ({"host_guard_drops": 0, "damaged": True}, "not clean: damaged, the host guard couldn't be held"),
                  # Malformed values are dropped by the scrub first, so they read as not reported.
-                 ({"host_guard_drops": -3, "damaged": "yes"}, "host guard not reported")]
+                 ({"host_guard_drops": -3, "damaged": "yes"}, "host guard not reported"),
+                 # One field missing, or wrong-typed and scrubbed away: never read as held.
+                 ({"host_guard_drops": 0}, "damaged not reported"),
+                 ({"damaged": "yes", "host_guard_drops": 0}, "damaged not reported"),
+                 ({"damaged": False}, "host_guard_drops not reported"),
+                 ({"damaged": False, "host_guard_drops": "x"}, "host_guard_drops not reported"),
+                 ({"damaged": True}, "not clean: damaged, the host guard couldn't be held; host_guard_drops not reported"),
+                 ({"damaged": 1, "host_guard_drops": 2}, "damaged not reported; host_guard_drops 2")]
         for fields, want in cases:
             with self.subTest(fields=fields):
                 line = steps.copied_off(self.evidence({**base, **fields}), lambda body: None)
                 self.assertEqual(line, "evidence stored in the private bucket; " + want)
-        line = steps.copied_off(self.evidence({**base, "damaged": True}), mock.Mock(side_effect=RuntimeError("x")))
+        line = steps.copied_off(self.evidence({**base, "damaged": True, "host_guard_drops": 0}),
+                                mock.Mock(side_effect=RuntimeError("x")))
         self.assertTrue(line.endswith("copy-off can run again; not clean: damaged, the host guard couldn't be held"),
                         line)  # still said when the store fails
 

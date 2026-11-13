@@ -92,12 +92,19 @@ def guard_health(doc: dict) -> str:
     document from before those fields reads as not reported, never as clean."""
     if "damaged" not in doc and "host_guard_drops" not in doc:
         return "host guard not reported"
+    damaged, drops = doc.get("damaged"), doc.get("host_guard_drops")
+    if damaged is False and drops == 0:
+        return "host guard held"  # only when both fields are there and both say so
     parts = []
-    if doc.get("damaged") is True:
+    if damaged is True:
         parts.append("not clean: damaged, the host guard couldn't be held")
-    if doc.get("host_guard_drops"):
-        parts.append(f"host_guard_drops {doc['host_guard_drops']}")
-    return "; ".join(parts) or "host guard held"
+    elif "damaged" not in doc:  # missing, or dropped by the scrub for its shape
+        parts.append("damaged not reported")
+    if "host_guard_drops" not in doc:
+        parts.append("host_guard_drops not reported")
+    elif drops:
+        parts.append(f"host_guard_drops {drops}")
+    return "; ".join(parts)
 
 
 def copied_off(out: bytes, put: Callable[[bytes], None] | None) -> str:
