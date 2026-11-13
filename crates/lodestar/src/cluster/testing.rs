@@ -1099,6 +1099,17 @@ impl Harness {
         node.relay.cut(Cut::None);
     }
 
+    /// Stops worker `i` locally, as a SIGTERM would: its stop hands the
+    /// work back (CLUSTER-05) before the task ends.
+    pub(crate) async fn stop(&mut self, i: usize) -> Exit {
+        let run = self.nodes[i].run.take().expect("the worker runs");
+        drop(run._stop);
+        tokio::time::timeout(DEADLINE, run.task)
+            .await
+            .expect("the worker stopped in time")
+            .expect("the worker's task")
+    }
+
     /// Starts worker `i` again from its saved credentials and folder.
     pub(crate) async fn restart(&mut self, i: usize) {
         assert!(self.node(i).run.is_none(), "kill it first");

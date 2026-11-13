@@ -36,6 +36,10 @@ Track Q (the 2026-11-12 code review): CLUSTER-01, CLUSTER-02 and CLUSTER-05. Bri
 - **With no session,** the stages stop and what's fetched goes to the spool, durably, before the stop returns (`Work::stop`; the runtime's flush now spools when there's no session). The next start sends it. Unreported outcomes can't be sent offline. Their leases come back at the next start's list (CLUSTER-01), or after the TTL.
 - **Bounded by `Settings::stop_deadline`, 30 s** (`STOP_DEADLINE`), from the signal: 25 s for the hand-back, then the 5 s spool reserve. That's within the 60 s the Docker and Unraid templates give a stop (`stop_grace_period`, `--stop-timeout=60`), with room for the DHT to save its state. Past it the worker stops anyway, and the coordinator takes the rest back by the TTL, or at the next start's list.
 - **A worker stopping on its own leaves the re-grant targets before its leases go back** (`server.rs`, `Drained`). It isn't marked draining, so the re-grant that follows would otherwise hand its keys straight back to it.
+- **Chaos scenario:** `a_stopped_workers_leases_go_back_at_once_within_the_takers_cap`.
+  - A worker stopped locally while holding three leases hands them back as it stops, and they're granted again with no clock movement.
+  - The worker taking them has a pool cap of 1, set through the real placement, so its lease cap is 2. It's granted two, and the third waits until the cap is lifted.
+  - Each key is stored once, the funnel reconciles, and there are no fetch violations.
 - **Tests:** a stop with a session drains and hands back every lease (`a_local_stop_drains_and_hands_the_leases_back`). A hand-back that never finishes still ends within the deadline, disconnects the work once and spools (`a_stop_not_taken_back_in_time_keeps_the_work`). A stop with no session keeps what's fetched (`a_local_stop_without_a_session_keeps_what_is_fetched`). A stop in the middle of a batch (sent, not accepted, session lost) leaves it on disk when the stop returns, and the next start replays it and lists after the replay (`a_stop_mid_batch_spools_it_and_the_list_waits_for_the_replay`).
 
 ## Wire compatibility
@@ -52,7 +56,15 @@ Track Q (the 2026-11-12 code review): CLUSTER-01, CLUSTER-02 and CLUSTER-05. Bri
 - **A coordinator-side cap answers `Busy`,** the reason a worker already retries on, rather than a new deny reason, so no wire change is needed.
 
 ## Shared edits (runner, 2026-11-13)
-- **`crates/lodestar/src/cluster/testing.rs`: `Probe` now forwards `reconcile`, `reconciled`, `holding`, `listed` and `stop` to the runtime.** It didn't forward WK-11's or WK-11b's hooks, and their default bodies kept that silent, so **no chaos scenario ran a reconcile before this PR.** A comment on `Probe` now says every `Work` method must be forwarded. All existing scenarios still pass unchanged with reconciles and the stop drain active.
+- **`crates/lodestar/src/cluster/testing.rs`: `Harness::stop(i)`, a graceful local stop of one worker (runner, 2026-11-13, §2.33), for the scenario below.**
+- **Same file: `Probe` now forwards `reconcile`, `reconciled`, `holding`, `listed` and `stop` to the runtime.** It didn't forward WK-11's or WK-11b's hooks, and their default bodies kept that silent, so **no chaos scenario ran a reconcile before this PR.** A comment on `Probe` now says every `Work` method must be forwarded. All existing scenarios still pass unchanged with reconciles and the stop drain active.
 
-## Not in this PR
-- **A chaos scenario for the cap and the local stop.** The harness can kill one worker or stop them all, but has no graceful stop of one worker. Adding one is a further edit to `src/cluster/testing.rs`, beyond the forwarding the runner approved. Both are tested against a real coordinator over mutual TLS in `worker/session.rs` (`claims_past_the_lease_cap_are_denied_and_never_leased`, `a_local_stop_drains_and_hands_the_leases_back`), and the cap's table logic in `leases.rs`.
+## Review findings
+- **The fresh self-review's findings are all fixed in this PR:** 1 blocking and 4 important. The last important one, a chaos scenario for the cap and the local stop, was first left open because it needed a further harness edit, which the runner then approved.
+- **Left as follow-ups (polish):**
+  - per-worker caps are forgotten only on revoke (a small map);
+  - an index would make the reconcile scan O(own leases);
+  - the list could carry the spooled results' leases instead of waiting for the replay.
+
+## Observed, not changed
+- **Re-grants don't check the worker's pool room, and never did.** A key re-granted to a worker whose pool is full is evicted there and reported lost, then harvested again when it's sighted. The lease cap now bounds that at 2 × the pool cap, where before it was unbounded. Sizing re-grants to the pool's room is a follow-up for the runner to place.
