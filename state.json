@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T19:43Z",
+  "updated_at": "2026-11-13T19:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9202,7 +9202,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T19:43Z",
+    "updated": "2026-11-13T19:44Z",
     "items": [
       {
         "slot": 1,
@@ -9436,10 +9436,15 @@
       "id": "tokio-1540-release",
       "at": "2026-11-12T04:35:27Z",
       "words": "go with the runner's recommendation"
+    },
+    {
+      "id": "windows-test-instance-terminated",
+      "at": "2026-11-13T19:44Z",
+      "answer": "owner terminated the stopped Windows test instance by hand; reports no volumes left (owner report, unverified; Elastic IPs and other regions not checked). Cost item closed on owner report; tester to confirm with its own connector."
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T19:43Z",
+  "updated": "2026-11-13T19:44Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
