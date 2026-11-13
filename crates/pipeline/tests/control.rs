@@ -55,9 +55,132 @@ fn probe_with(
     (Arc::new(p), ran)
 }
 
+/// What [`Probe`] and [`Ticker`] declare: a required `api_key`, and 17
+/// optional names so the 16-credential cap can still be reached through
+/// declared names (X-consent-gate-lift r2 refuses undeclared ones).
+static PROBE_CREDENTIALS: [lodestar_sources::consent::CredentialSpec; 18] = [
+    lodestar_sources::consent::CredentialSpec {
+        name: "api_key",
+        label: "API key",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: true,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k0",
+        label: "Key 0",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k1",
+        label: "Key 1",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k2",
+        label: "Key 2",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k3",
+        label: "Key 3",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k4",
+        label: "Key 4",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k5",
+        label: "Key 5",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k6",
+        label: "Key 6",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k7",
+        label: "Key 7",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k8",
+        label: "Key 8",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k9",
+        label: "Key 9",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k10",
+        label: "Key 10",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k11",
+        label: "Key 11",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k12",
+        label: "Key 12",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k13",
+        label: "Key 13",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k14",
+        label: "Key 14",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k15",
+        label: "Key 15",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+    lodestar_sources::consent::CredentialSpec {
+        name: "k16",
+        label: "Key 16",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: false,
+    },
+];
+
+static PROBE_POLICY: lodestar_sources::Policy = lodestar_sources::Policy {
+    credentials: &PROBE_CREDENTIALS,
+    ..lodestar_sources::Policy::STRICT
+};
+
 impl SourcePlugin for Probe {
     fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    fn policy(&self) -> &lodestar_sources::Policy {
+        &PROBE_POLICY
     }
 
     fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
@@ -623,6 +746,35 @@ async fn an_account_source_needs_credentials_and_losing_them_disables_it() {
         )
         .await;
     assert!(matches!(bad, Err(SourceError::Credential(_))));
+    // A name the plugin doesn't declare is refused too, and nothing is
+    // stored: a typo can't stand in for `api_key` (X-consent-gate-lift r2).
+    for typo in ["apikey", "api_key_", "token"] {
+        let r = control
+            .update_credentials(id, &creds, vec![(typo.into(), Some(Secret::new("v")))])
+            .await;
+        assert!(
+            matches!(
+                r,
+                Err(SourceError::Credential(
+                    consent::CredentialRefusal::Undeclared
+                ))
+            ),
+            "{typo}: {r:?}"
+        );
+    }
+    assert!(
+        store
+            .lock()
+            .unwrap()
+            .source_secret_names("acct")
+            .unwrap()
+            .is_empty()
+    );
+    // Removing an undeclared name is allowed (one an older build stored).
+    control
+        .update_credentials(id, &creds, vec![("token".into(), None)])
+        .await
+        .unwrap();
     let view = control
         .update_credentials(
             id,
@@ -1396,6 +1548,10 @@ struct Ticker {
 impl SourcePlugin for Ticker {
     fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    fn policy(&self) -> &lodestar_sources::Policy {
+        &PROBE_POLICY
     }
 
     fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {

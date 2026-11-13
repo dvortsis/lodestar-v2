@@ -771,10 +771,12 @@ pub(crate) async fn patch_source(
 }
 
 /// Stores or removes a source's credentials: each name maps to a value
-/// (stored, sealed with the install's key) or `null` (removed). Values
-/// are never returned: the response lists the names stored. Removing what
-/// an enabled `account` source needs disables it. `400
-/// invalid_credentials` names the rule a change broke, never a value.
+/// (stored, sealed with the install's key) or `null` (removed). A value
+/// is stored only under a name the source's `credential_spec` lists, or
+/// one of the two SOCKS5 names; any name can be removed. Values are never
+/// returned: the response lists the names stored. Removing what an
+/// enabled `account` source needs disables it. `400 invalid_credentials`
+/// names the rule a change broke, never a name or a value.
 #[utoipa::path(
     operation_id = "patchSourceCredentials",
     patch,
