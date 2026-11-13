@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T06:31Z",
+  "updated_at": "2026-11-13T06:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7956,7 +7956,12 @@
       "id": "next-runner-pr-owns",
       "at": "2026-11-13T06:31Z",
       "what": "Next runner PR: X-gluetun-templates-hostfile owns += crates/lodestar/src/privdrop.rs (+tests; /companions + gluetun only, no-follow fchown, never create /companions, /security-review) and crates/companions/tests/flaresolverr.rs; add X-gluetun-pin-ci-filter; add FILTER-01 / FILTER-03 / APIFEAT-01 fix slices by id only (choices sent to sessions directly).",
-      "status": "open"
+      "status": "open",
+      "note": " 2026-11-13T06:39Z: X-gluetun-templates-hostfile also owns crates/lodestar/src/logging/events.rs, web/src/lib/features/settings/logging/messages/en.json and zh.json (and logs_catalog.txt / event-names.ts if regenerated): runner-approved for the companions_dir log events."
+    },
+    {
+      "id": "pr817-landlock-rerun",
+      "note": "2026-11-13T06:39Z: #817 ubuntu test red on companions limits.rs landlock_keeps_the_companion_out_of_lodestars_data (not the PR's). Runner uses #817's one re-run once the run completes; if red again, open a fix slice for the test."
     }
   ],
   "main_health": [
@@ -8991,7 +8996,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T06:31Z",
+    "updated": "2026-11-13T06:39Z",
     "items": [
       {
         "slot": 1,
@@ -9240,7 +9245,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T06:31Z",
+  "updated": "2026-11-13T06:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
