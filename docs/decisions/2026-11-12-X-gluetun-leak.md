@@ -87,3 +87,17 @@ Fixes testing blocker #1: gluetun's kill switch let packets of established flows
 
   The brief requires asking first, and the runner was asked. The user guide marks template support **(planned)** and gives the manual steps.
 - **Defence in depth in Lodestar itself**, binding its sockets to the tunnel interface so a rerouted flow fails at the socket: propose it as its own slice.
+
+## Follow-ups (X-gluetun-leak-cmp)
+From the runner's review of #800 at 87be769b, and O3 of its review of e46cb683. No decision changes.
+- **The guards in the leak test:**
+  - **IPv4 only, by design:** `endpoint_valid` accepts only an IPv4 endpoint, so the endpoint's packets never arrive over IPv6.
+  - **Set before they're inserted:** each guard's flag is set before its `iptables -I`. A signal in between still has `cleanup` look for the rule, and `drop_all` checks with `-C` first.
+  - **`drop_all`:** only an `-C` exit of 1 counts as absent. Any other exit is an error, never "gone".
+  - **The recreate guard's flag still set** reports `recreate_guard_held`, not a credentials problem.
+  - **Released before the verdict:** `finish` releases both guards first. A guard that won't come off fails `guards_released`, so a run can't end `ok` with one left. On a signal, `cleanup` releases them and reports a failure itself. A test sends TERM mid-recreate and finds no copies left.
+  - **Leftovers are removed by tag** (`--comment lodestar-leak-guard`, `lodestar-leak-host`), whatever endpoint they name. A killed run against an earlier endpoint no longer leaves its guards behind.
+- **The host-stack path outside the fleet:** when a user restarts their own gluetun, Docker flushes the container's conntrack, just as on the VM. Their host's kernel can then answer the VPN server's leftover UDP with a "port unreachable" from the home address. The recipient is the VPN server, which already knows that address, so no privacy is lost. The post-rules can't reach the host, and no user is asked to add host rules. The user guide's sentence is now "Nothing Lodestar or gluetun sends leaves outside the VPN", which holds in that case.
+- **The rules file's comment** now says what the IPv6 exemptions match: link-local destinations, multicast destinations of any scope, and hop limit 255. None of them can carry a flow off the tunnel, because rule 2 and gluetun's own policy still apply. Only the comment changed, but the file's SHA-256 changed with it, so the docs' pin moved too. The pin test now also checks, where history has the pinned commit, that the commit serves this file.
+- **Not done:** `tcpdump -Q in` (old O7). It would drop the inbound evidence (`captured_inbound_*`) that showed run 3's router solicitation and DAD frames for what they were. The MAC check and the host counter already cover what `-Q in` would add.
+

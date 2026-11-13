@@ -7,9 +7,11 @@ import io
 import json
 import os
 import re
+import signal
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -407,6 +409,13 @@ class Compose(unittest.TestCase):
             for url in urls:
                 self.assertRegex(url, r"^https://raw\.githubusercontent\.com/dvortsis/lodestar-v2/[0-9a-f]{40}/"
                                       r"packaging/companions/gluetun-post-rules\.txt$")
+                # Where history has the pinned commit (not a shallow CI clone), the file
+                # it serves is this one.
+                pin = url.split("/")[5]
+                shown = subprocess.run(["git", "-C", str(ROOT), "show", f"{pin}:packaging/companions/gluetun-post-rules.txt"],
+                                       capture_output=True)
+                if shown.returncode == 0:
+                    self.assertEqual(hashlib.sha256(shown.stdout).hexdigest(), digest, f"{doc}: {pin}")
 
     def test_only_the_ui_on_the_hosts_loopback(self):
         ports = [p for s in self.svc.values() for p in s.get("ports", [])]
@@ -453,6 +462,8 @@ case "$1" in
     # gluetun is only ever recreated behind the endpoint guard (X-gluetun-leak).
     [ "$(cat "$STUB/guard" 2>/dev/null)" -gt 0 ] 2>/dev/null || bad "recreated without the guard: $*"
     [ "$(cat "$STUB/host" 2>/dev/null)" -gt 0 ] 2>/dev/null || bad "recreated without the host guard: $*"
+    # BLOCK_COMPOSE: hang mid-recreate, so the test can signal the run there.
+    if [ -n "$BLOCK_COMPOSE" ]; then : > "$STUB/composing"; while :; do /bin/sleep 0.05; done; fi
     [ -n "$COMPOSE_FAIL" ] && exit 1; rm -f "$STUB/ifdown"; exit 0 ;;  # a recreated gluetun has its interface back
   inspect)
     case "$*" in
@@ -561,6 +572,10 @@ bad() { printf 'iptables %s\n' "$*" >> "$STUB/badargs"; exit 2; }
 counter="-i br-abc123 -o eth0 -m comment --comment lodestar-leak-egress"
 guard="-s 192.0.2.77/32 -p udp --sport 1337 -m comment --comment lodestar-leak-guard -j DROP"
 host="-s 192.0.2.77/32 -p udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
+guard_s="-s 192.0.2.77/32 -p udp -m udp --sport 1337 -m comment --comment lodestar-leak-guard -j DROP"
+host_s="-s 192.0.2.77/32 -p udp -m udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
+old_guard_s="-s 198.51.100.66/32 -p udp -m udp --sport 51820 -m comment --comment lodestar-leak-guard -j DROP"
+old_host_s="-s 198.51.100.66/32 -p udp -m udp --sport 51820 -m comment --comment lodestar-leak-host -j DROP"
 n() { cat "$STUB/$1" 2>/dev/null || echo 0; }
 up() { echo $(($(n "$1") + 1)) > "$STUB/$1"; }
 have() { [ "$(n "$1")" -gt 0 ]; }
@@ -573,11 +588,26 @@ case "$*" in
   "-D DOCKER-USER $counter") rm -f "$STUB/counter" ;;
   # The two guards keep a copy count, so leftovers and failed deletes are real.
   "-I DOCKER-USER 1 $guard") [ -n "$GUARD_FAILS" ] && exit 1; up guard ;;
-  "-C DOCKER-USER $guard") have guard ;;
-  "-D DOCKER-USER $guard") [ -n "$GUARD_STUCK" ] && exit 1; down guard ;;
+  "-C DOCKER-USER $guard")
+    # C_FLAKY: one transient error (exit 4) with the guard in place, never read as gone.
+    if [ -n "$C_FLAKY" ] && have guard && [ ! -e "$STUB/flaked" ]; then : > "$STUB/flaked"; exit 4; fi
+    have guard ;;
+  "-D DOCKER-USER $guard"|"-D DOCKER-USER $guard_s") [ -n "$GUARD_STUCK" ] && exit 1; down guard ;;
   "-I INPUT 1 $host") [ -n "$HOST_FAILS" ] && exit 1; up host ;;
   "-C INPUT $host") have host ;;
-  "-D INPUT $host") down host ;;
+  "-D INPUT $host"|"-D INPUT $host_s") [ -n "$HOST_STUCK" ] && exit 1; down host ;;
+  # -S lists each copy the way iptables prints it (with -m udp), plus leftovers
+  # for an earlier endpoint (oldguard, oldhost), which only the tag can find.
+  "-S DOCKER-USER")
+    echo "-N DOCKER-USER"
+    for _ in $(seq "$(n guard)"); do echo "-A DOCKER-USER $guard_s"; done
+    for _ in $(seq "$(n oldguard)"); do echo "-A DOCKER-USER $old_guard_s"; done ;;
+  "-S INPUT")
+    echo "-P INPUT ACCEPT"
+    for _ in $(seq "$(n host)"); do echo "-A INPUT $host_s"; done
+    for _ in $(seq "$(n oldhost)"); do echo "-A INPUT $old_host_s"; done ;;
+  "-D DOCKER-USER $old_guard_s") down oldguard ;;
+  "-D INPUT $old_host_s") down oldhost ;;
   "-D DOCKER-USER -d 192.0.2.77/32 -p udp --dport 1337 -j DROP")
       if [ -n "$FAIL_FIRST_DELETE" ] && [ ! -e "$STUB/deleted_once" ]; then : > "$STUB/deleted_once"; exit 1; fi
       rm -f "$STUB/blocked" ;;
@@ -746,6 +776,15 @@ class VMScripts(unittest.TestCase):
         (self.tmp / "v6fwd").write_text("0\n")
 
     def run_script(self, name, fixtures=None, **flags):
+        self.run_script_fixtures(fixtures, **flags)
+        env = self.env(**flags)
+        r = subprocess.run(self.argv(name), env=env, capture_output=True, text=True, timeout=120)
+        # Every docker and tcpdump call had exactly the arguments the guards need.
+        bad = self.stub / "badargs"
+        self.assertFalse(bad.exists(), bad.read_text() if bad.exists() else "")
+        return r.returncode, remote.parse(r.stdout.encode()), r.stdout
+
+    def run_script_fixtures(self, fixtures=None, **flags):
         # The captures: none by default; CAPTURED adds packets the container sent in
         # both phases; a gluetun with its firewall off or without its post-rules
         # sends the VM's leak once its interface is down.
@@ -759,15 +798,13 @@ class VMScripts(unittest.TestCase):
             frames[phase] += extra
         for phase, fs in frames.items():
             (self.stub / f"fixture-{phase}.pcap").write_bytes(pcap(fs))
-        env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub),
-               "IPV6_FORWARDING": str(self.tmp / "v6fwd"), **{k: str(v) for k, v in flags.items()}}
-        r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"),
-                            str(self.block)],
-                           env=env, capture_output=True, text=True, timeout=120)
-        # Every docker and tcpdump call had exactly the arguments the guards need.
-        bad = self.stub / "badargs"
-        self.assertFalse(bad.exists(), bad.read_text() if bad.exists() else "")
-        return r.returncode, remote.parse(r.stdout.encode()), r.stdout
+
+    def env(self, **flags):
+        return {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub),
+                "IPV6_FORWARDING": str(self.tmp / "v6fwd"), **{k: str(v) for k, v in flags.items()}}
+
+    def argv(self, name):
+        return ["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"), str(self.block)]
 
     def copies(self, name):
         p = self.stub / name
@@ -1075,6 +1112,52 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(rc, 0, raw)
         self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
         self.assertLess(self.log().index("-D INPUT"), self.log().index("-I INPUT 1"))
+
+    def test_leftovers_for_an_earlier_endpoint_are_cleared_by_tag(self):
+        (self.stub / "oldguard").write_text("1")  # a killed run against another PIA endpoint
+        (self.stub / "oldhost").write_text("2")
+        rc, lines, raw = self.run_script("leak-test.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual((self.copies("oldguard"), self.copies("oldhost")), (0, 0))
+        self.assertLess(self.log().index("iptables -S INPUT"), self.log().index("-I INPUT 1"))
+
+    def test_a_transient_check_error_is_never_read_as_gone(self):
+        """O2 of the review of 87be769b: `-C` exiting 4 with the guard in place."""
+        rc, lines, _ = self.run_script("leak-test.sh", C_FLAKY=1, UNHEALTHY=1, NO_HANDSHAKE=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail recreate_guard_lifted", lines)
+        self.assertIn("fail recreate_guard_held", lines)  # the tunnel can't come up through it
+        self.assertNotIn("fail wireguard_handshake_never_completed", lines)
+        self.assertEqual(self.copies("guard"), 0)  # released before the verdict
+        self.assertNotIn("fail guards_released", lines)
+
+    def test_a_host_guard_that_wont_come_off_fails_the_run(self):
+        """O3: reported before the verdict, so a clean run with a stuck guard isn't ok."""
+        rc, lines, _ = self.run_script("leak-test.sh", HOST_STUCK=1)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail guards_released", "fail leak_test"]))
+        self.assertNotIn("ok leak_test", lines)
+
+    def test_a_signal_mid_recreate_leaves_no_guard(self):
+        """O1/O5: TERM while gluetun is being recreated; the EXIT trap removes both guards."""
+        self.run_script_fixtures()
+        proc = subprocess.Popen(self.argv("leak-test.sh"), env=self.env(BLOCK_COMPOSE=1),
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 30
+            while not (self.stub / "composing").exists():
+                self.assertIsNone(proc.poll(), "the run ended before it reached the recreate")
+                self.assertLess(time.monotonic(), deadline, "never reached the recreate")
+                time.sleep(0.05)
+            self.assertEqual((self.copies("guard"), self.copies("host")), (1, 1))  # both up mid-recreate
+            os.killpg(proc.pid, signal.SIGTERM)
+            out, _ = proc.communicate(timeout=30)
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+        self.assertEqual(proc.returncode, 143)
+        self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
+        self.assertNotIn("fail guards_released", out)
 
     def test_host_router_solicitations_are_inbound(self):
         """Run 3 (2026-11-13): the host's RS and DAD NS on the veth in phase A, classed

@@ -114,11 +114,11 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **The host's own IPv6 too:** no IPv6 forwarding, no IPv6 on the stack's Docker network, and no global IPv6 address in gluetun's namespace.
   - It refuses while a block is recorded or running.
 - **Works:** `run leak-test main: done; <n> ok;` followed by the counts. For both phases (`_down`, `_ifdown`), `captured_packets`, `captured_tcp`, `captured_udp`, `captured_icmp`, `captured_other` and `host_egress_packets` are all 0. These count only what gluetun's container sends. `captured_inbound_<phase>` counts packets towards it, which are evidence only. Each `icmp_<phase>_<in|out>_t<type>_c<code>_<class>` line counts ICMP packets by type, code, direction and the far end's class (endpoint, linklocal, multicast or other).
-- **The guards:** while it recreates gluetun, the test holds the VPN endpoint's packets at the host, with a DOCKER-USER rule and an INPUT rule, both removed at the end. These failure names are about the guards, not a leak:
+- **The guards:** while it recreates gluetun, the test holds the VPN endpoint's packets at the host, with a DOCKER-USER rule and an INPUT rule. Both are removed before the verdict, and any left by an earlier run are removed first. These failure names are about the guards, not a leak:
   - `host_guarded` or `recreate_guarded`: a guard couldn't be set, so gluetun wasn't recreated. Check `iptables` on the VM, then ask for the run again.
-  - `post_rules_before_egress` with `recreate_guard_held`: gluetun never loaded its post-rules, so the endpoint stayed held and the tunnel couldn't come up. This is not a credentials problem. Check `docker logs gluetun` for a post-rules error. It's a stop: tell the runner.
-  - `recreate_guard_lifted`: a guard rule wouldn't come off. Tell the runner before anything else runs on that VM.
-  - `container_mac`: gluetun's MAC couldn't be read, so the capture can't be judged. Ask for the run again; if it repeats, tell the runner.
+  - `post_rules_before_egress`: gluetun didn't load its post-rules in time. It's a stop, with or without `recreate_guard_held`: tell the runner. With `recreate_guard_held`, the endpoint stayed held and the tunnel couldn't come up; that is not a credentials problem. Check `docker logs gluetun` for a post-rules error.
+  - `recreate_guard_lifted` or `guards_released`: a guard rule wouldn't come off. Tell the runner before anything else runs on that VM.
+- **`container_mac`:** gluetun's MAC couldn't be read, so the capture can't be judged. Ask for the run again; if it repeats, tell the runner.
 - **Fails:** `failed (exit 1); <n> ok; failed: <names>, leak_test`. **That's a stop condition: no crawl starts on that VM.** Tell the runner, with the failed names.
 
 ### 3.3 `/fleet run start-block <vm> <rules commit>`

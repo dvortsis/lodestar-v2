@@ -117,7 +117,7 @@ If gluetun stops instead:
 
 To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
 
-With the file, a connection that used the VPN never leaves any other way. No ping or error message leaves your server outside the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network. The [companion](glossary.md#companion) templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
+With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends leaves outside the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network. The [companion](glossary.md#companion) templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 
