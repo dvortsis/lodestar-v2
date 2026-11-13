@@ -12306,7 +12306,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `route_unavailable`, `takes_no_route`, `not_installed`, `busy`, `not_wired`. Nothing was saved. */
+            /** @description `route_unavailable`, `takes_no_route`, `cant_follow_route` (it can't follow that route kind: qBittorrent takes no SOCKS5 proxy), `not_installed`, `busy`, `not_wired`. Nothing was saved. */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -664,6 +664,10 @@ async fn credentials_never_appear_in_a_response_or_a_log() {
         assert!(!t.contains(PROXY_SECRET) && !t.contains(PASSWORD), "{t}");
     }
     assert_eq!(f.fake.calls().len(), 1, "{:?}", f.fake.calls());
+    // A guard more than a check: this route logs nothing of its own today
+    // (no route-change event yet, the runner's follow-up), and the fake
+    // logs nothing. What is captured is the router's and the password
+    // check's lines; any event added later must keep both values out.
     let log = LINES.lock().unwrap().join("\n");
     assert!(
         !log.contains(PROXY_SECRET) && !log.contains(PASSWORD),

@@ -131,7 +131,8 @@ pub trait CompanionsApi: Send + Sync + std::fmt::Debug {
     fn regenerate(&self, id: String, field: String) -> BoxFuture<'_, Result<(), CompanionsError>>;
     /// Saves `egress` as its route, already checked as a source's route
     /// is, then restarts it on it. Refused, with nothing saved, for an
-    /// unknown id (`Unknown`), one that takes no route (`takes_no_route`),
+    /// unknown id (`Unknown`), one that takes no route (`takes_no_route`)
+    /// or can't follow this one (`cant_follow_route`),
     /// one Lodestar didn't install (`not_installed`) and one another
     /// operation holds (`busy`). Once saved it's `Ok`: `restarting` says
     /// whether the restart began. Off by default: a binary that doesn't
@@ -199,6 +200,9 @@ fn refusal_message(code: &str) -> &'static str {
         }
         "sink_refused" => {
             "Lodestar couldn't update its download client in Integrations. Check Integrations, then try again."
+        }
+        "cant_follow_route" => {
+            "This companion can't follow that route, so it would never start on it. Choose another route."
         }
         "takes_no_route" => {
             "This companion takes no route of its own: its traffic is the network for the others."
@@ -514,7 +518,7 @@ pub(crate) async fn restart_companion(
         (status = 401, description = "`bad_password`.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`route_unavailable`, `takes_no_route`, `not_installed`, `busy`, `not_wired`. Nothing was saved.", body = ErrorEnvelope),
+        (status = 409, description = "`route_unavailable`, `takes_no_route`, `cant_follow_route` (it can't follow that route kind: qBittorrent takes no SOCKS5 proxy), `not_installed`, `busy`, `not_wired`. Nothing was saved.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 428, description = "`confirm_required`: no password.", body = ErrorEnvelope),
@@ -706,6 +710,11 @@ mod tests {
                 CompanionsError::Refused("takes_no_route"),
                 409,
                 "takes_no_route",
+            ),
+            (
+                CompanionsError::Refused("cant_follow_route"),
+                409,
+                "cant_follow_route",
             ),
             (
                 CompanionsError::Refused("managed_client_in_use"),

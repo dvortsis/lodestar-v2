@@ -1485,6 +1485,16 @@ impl CompanionsApi for Service {
             if EgressSetting::decode(&setting.encode()).as_ref() != Some(&setting) {
                 return Err(bad());
             }
+            // A route it can't follow would only hold it stopped
+            // (`cant_follow_route` at its start), never run it direct:
+            // refused here, before anything is saved.
+            let kind = match setting {
+                EgressSetting::Direct => RouteKind::Direct,
+                EgressSetting::Socks5(_) => RouteKind::Socks5,
+            };
+            if !lodestar_companions::supervise::egress::Follows::of(&e.id).can(kind) {
+                return Err(CompanionsError::Refused("cant_follow_route"));
+            }
             // Held until the restart has claimed it (or was refused), so a
             // second change sees that restart as `busy` and saves nothing.
             let _one = self.routing.lock().await;
@@ -2890,8 +2900,8 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
-    /// A service whose supervisor is `answer`, with qBittorrent installed
-    /// and Prowlarr not.
+    /// A service whose supervisor is `answer`, with Prowlarr installed
+    /// (it follows direct and SOCKS5) and qBittorrent not.
     async fn routed(
         dir: &std::path::Path,
         answer: Result<(), CompanionsError>,
@@ -2902,7 +2912,7 @@ mod tests {
             live: live.clone(),
             ..s.clone_parts()
         };
-        installed(&s, dir, "qbittorrent").await;
+        installed(&s, dir, "prowlarr").await;
         (s, live)
     }
 
@@ -2913,7 +2923,7 @@ mod tests {
     async fn a_route_change_is_saved_then_restarted() {
         let dir = tempfile::tempdir().unwrap();
         let (s, live) = routed(dir.path(), Ok(())).await;
-        let key = "companions.qbittorrent.egress";
+        let key = "companions.prowlarr.egress";
         for (sent, row, shown) in [
             (
                 serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080", "dns": "proxy" }),
@@ -2937,7 +2947,7 @@ mod tests {
             ),
         ] {
             let got = s
-                .set_egress("qbittorrent".into(), api_route(sent.clone()))
+                .set_egress("prowlarr".into(), api_route(sent.clone()))
                 .await
                 .unwrap();
             assert!(got.restarting && got.not_restarted.is_none(), "{sent}");
@@ -2951,9 +2961,9 @@ mod tests {
             // Saved before the restart that applies it.
             assert_eq!(live.seen().last().cloned().flatten().as_deref(), Some(row));
             // What GET shows is what the next start reads.
-            let c = s.get("qbittorrent".into()).await.unwrap();
+            let c = s.get("prowlarr".into()).await.unwrap();
             assert_eq!(c.egress, Some(got.egress.clone()));
-            let qbt = CompanionId::parse("qbittorrent").unwrap();
+            let qbt = CompanionId::parse("prowlarr").unwrap();
             assert_eq!(
                 egress_setting(&s.rows.0, &qbt),
                 Some(Ok(EgressSetting::decode(row).unwrap()))
@@ -2978,14 +2988,11 @@ mod tests {
             Err(CompanionsError::Refused("takes_no_route"))
         );
         assert_eq!(
-            set("prowlarr").await,
+            set("qbittorrent").await,
             Err(CompanionsError::Refused("not_installed"))
         );
         live.busy.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(
-            set("qbittorrent").await,
-            Err(CompanionsError::Refused("busy"))
-        );
+        assert_eq!(set("prowlarr").await, Err(CompanionsError::Refused("busy")));
         live.busy.store(false, std::sync::atomic::Ordering::SeqCst);
         let docker = Service {
             host: Host {
@@ -2995,7 +3002,7 @@ mod tests {
             ..s.clone_parts()
         };
         assert_eq!(
-            docker.set_egress("qbittorrent".into(), direct()).await,
+            docker.set_egress("prowlarr".into(), direct()).await,
             Err(CompanionsError::Refused("not_installed"))
         );
         // A route the API would have refused never reaches the store.
@@ -3005,7 +3012,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    s.set_egress("qbittorrent".into(), api_route(bad.clone()))
+                    s.set_egress("prowlarr".into(), api_route(bad.clone()))
                         .await,
                     Err(CompanionsError::BadInput { .. })
                 ),
@@ -3013,7 +3020,7 @@ mod tests {
             );
         }
         assert!(live.seen().is_empty());
-        for id in ["qbittorrent", "prowlarr", "gluetun"] {
+        for id in ["prowlarr", "qbittorrent", "gluetun"] {
             let key = format!("companions.{id}.egress");
             assert_eq!(egress_row(&s.rows.0, &key), None, "{id}");
         }
@@ -3032,7 +3039,7 @@ mod tests {
             let (s, live) = routed(dir.path(), answer).await;
             let got = s
                 .set_egress(
-                    "qbittorrent".into(),
+                    "prowlarr".into(),
                     api_route(serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080" })),
                 )
                 .await
@@ -3041,10 +3048,10 @@ mod tests {
             assert_eq!(got.not_restarted.as_deref(), Some(code));
             assert_eq!(live.seen().len(), 1);
             assert_eq!(
-                egress_row(&s.rows.0, "companions.qbittorrent.egress").as_deref(),
+                egress_row(&s.rows.0, "companions.prowlarr.egress").as_deref(),
                 Some("socks5 10.8.0.1 1080 auto")
             );
-            let c = s.get("qbittorrent".into()).await.unwrap();
+            let c = s.get("prowlarr".into()).await.unwrap();
             assert_eq!(c.egress, Some(got.egress));
         }
     }
@@ -3143,7 +3150,7 @@ mod tests {
             let s = s.clone();
             async move {
                 s.set_egress(
-                    "qbittorrent".into(),
+                    "prowlarr".into(),
                     api_route(serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080" })),
                 )
                 .await
@@ -3157,7 +3164,7 @@ mod tests {
             let s = s.clone();
             async move {
                 s.set_egress(
-                    "qbittorrent".into(),
+                    "prowlarr".into(),
                     api_route(serde_json::json!({ "route": "direct" })),
                 )
                 .await
@@ -3178,7 +3185,7 @@ mod tests {
             .unwrap();
         assert_eq!(second, Err(CompanionsError::Refused("busy")));
         assert_eq!(
-            egress_row(&s.rows.0, "companions.qbittorrent.egress").as_deref(),
+            egress_row(&s.rows.0, "companions.prowlarr.egress").as_deref(),
             Some("socks5 10.8.0.1 1080 auto")
         );
         assert_eq!(live.seen().len(), 1);
@@ -3190,16 +3197,16 @@ mod tests {
     async fn a_route_change_raced_by_a_removal_is_undone() {
         let dir = tempfile::tempdir().unwrap();
         let (s, live) = routed(dir.path(), Err(CompanionsError::Refused("not_installed"))).await;
-        let key = "companions.qbittorrent.egress";
+        let key = "companions.prowlarr.egress";
         let direct = || api_route(serde_json::json!({ "route": "direct" }));
         assert_eq!(
-            s.set_egress("qbittorrent".into(), direct()).await,
+            s.set_egress("prowlarr".into(), direct()).await,
             Err(CompanionsError::Refused("not_installed"))
         );
         assert_eq!(egress_row(&s.rows.0, key), None);
         set_row(&s.rows.0, key, "socks5 10.8.0.2 1080 local");
         assert_eq!(
-            s.set_egress("qbittorrent".into(), direct()).await,
+            s.set_egress("prowlarr".into(), direct()).await,
             Err(CompanionsError::Refused("not_installed"))
         );
         assert_eq!(
@@ -3263,7 +3270,7 @@ mod tests {
         for route in ["interface", "bind_address"] {
             assert_eq!(
                 s.set_egress(
-                    "qbittorrent".into(),
+                    "prowlarr".into(),
                     api_route(serde_json::json!({ "route": route }))
                 )
                 .await,
@@ -3271,5 +3278,39 @@ mod tests {
             );
         }
         assert!(live.seen().is_empty());
+    }
+
+    /// A route the companion can't follow is refused before it's saved:
+    /// qBittorrent binds an interface or an address, never a SOCKS5 proxy,
+    /// so of the routes offered here it follows only direct.
+    #[tokio::test]
+    async fn a_route_it_cant_follow_is_refused_before_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, live) = routed(dir.path(), Ok(())).await;
+        installed(&s, dir.path(), "qbittorrent").await;
+        let socks =
+            || api_route(serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080" }));
+        assert_eq!(
+            s.set_egress("qbittorrent".into(), socks()).await,
+            Err(CompanionsError::Refused("cant_follow_route"))
+        );
+        assert_eq!(egress_row(&s.rows.0, "companions.qbittorrent.egress"), None);
+        assert!(live.seen().is_empty());
+        let got = s
+            .set_egress(
+                "qbittorrent".into(),
+                api_route(serde_json::json!({ "route": "direct" })),
+            )
+            .await
+            .unwrap();
+        assert!(got.restarting);
+        // Prowlarr follows SOCKS5.
+        assert!(
+            s.set_egress("prowlarr".into(), socks())
+                .await
+                .unwrap()
+                .restarting
+        );
+        assert_eq!(live.seen().len(), 2);
     }
 }
