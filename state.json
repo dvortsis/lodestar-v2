@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T21:03Z",
+  "updated_at": "2026-11-13T21:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8164,16 +8164,12 @@
     "slices-yaml-x-flake-companions-loopback",
     "slices-yaml-x-scrub-guard-fields",
     {
-      "id": "X-flake-scrape-udp-port",
-      "note": "crates/tracker-scrape/tests/scrape.rs:158-160 drop-then-probe on UDP (from #847); lower risk, accepts timeout",
-      "at": "2026-11-13T20:53Z"
-    },
-    {
       "id": "X-filter01-hardening",
       "note": "next PR in X-filter01-fix session before rejudge: non-blocking review findings from #843 r3 (meter, guard tests, release paths, wording, held-count report). Component level only.",
       "at": "2026-11-13T21:03Z"
     },
-    "track-q-triage-candidate-from-843-review (held; local note only)"
+    "track-q-triage-candidate-from-843-review (held; local note only)",
+    "slices-yaml-x-flake-scrape-udp-port"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8568,17 +8564,17 @@
       "state": "delta+security review MERGE; asked to merge main + regenerate schema (generated openapi overlap, 124 behind); then merge",
       "at": "2026-11-13T21:03Z"
     },
-    "844": {
-      "slice": "X-offline-retry-nits",
-      "head": "a5beb5dc",
-      "state": "review CHANGES relayed (title test race, decisions reason, offlineTitle nit); awaiting push + ready",
-      "at": "2026-11-13T20:37Z"
-    },
     "847": {
       "slice": "X-flake-companions-loopback",
       "head": "f20cb6d9",
       "state": "open, CI running; awaiting ready",
       "at": "2026-11-13T20:53Z"
+    },
+    "848": {
+      "slice": "X-scrub-guard-fields",
+      "head": "a8e30941",
+      "state": "asked to fold copy-off damaged mount fix; then fresh review",
+      "at": "2026-11-13T21:06Z"
     }
   },
   "merged_log": [
@@ -9225,7 +9221,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T21:03Z",
+    "updated": "2026-11-13T21:06Z",
     "items": [
       {
         "slot": 1,
@@ -9384,13 +9380,13 @@
       },
       {
         "slot": 30,
-        "slice": "X-offline-retry-nits",
+        "slice": "X-flake-scrape-udp-port",
         "role": "build",
         "agent": "claude",
         "model": "sonnet",
         "status": "active",
-        "since": "2026-11-13T19:51Z",
-        "doing": "building",
+        "since": "2026-11-13T21:06Z",
+        "doing": "scrape.rs UDP drop-then-probe race",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9468,7 +9464,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T21:03Z",
+  "updated": "2026-11-13T21:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9917,6 +9913,12 @@
       "slice": "X-gluetun-guard-reboot-nits",
       "merged": "d458a6f6",
       "at": "2026-11-13T20:51Z"
+    },
+    {
+      "pr": 844,
+      "slice": "X-offline-retry-nits",
+      "merged": "f94a86c8",
+      "at": "2026-11-13T21:06Z"
     }
   ]
 }
