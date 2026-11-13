@@ -860,6 +860,9 @@ struct Paused {
     /// folder gets the same tokens with its segments read apart
     /// ([`Tokenizer::path`]), as the core reads them.
     apart: bool,
+    /// The meter's work for reading the folder, charged again for each
+    /// path that the core reads a second time with its segments apart.
+    cost: u64,
 }
 
 impl Tokenizer {
@@ -871,12 +874,15 @@ impl Tokenizer {
     /// its own, and whether a run is open at each `/` noted.
     fn pause(&mut self, dirs: &[String], into: &mut Paused) {
         into.tokens.clear();
+        let before = self.work;
         self.begin(0, 0);
         into.apart = true;
         for d in dirs {
             self.feed(d, &mut into.tokens);
             into.apart &= self.spelled.is_empty();
         }
+        let bytes: usize = dirs.iter().map(String::len).sum();
+        into.cost = (self.work - before).max(bytes as u64 * cost::BYTE);
         into.pos = self.pos;
         into.spelled.clear();
         into.spelled.push_str(&self.spelled);
@@ -1068,9 +1074,15 @@ fn paths_apart_with<'p>(
                     if !paused[slot].apart {
                         // The core reads this path again with its segments
                         // apart (`Read::path`), so the meter counts that
-                        // read too: its least, and its tokens looked at.
+                        // read too: its folder in full, its least, and its
+                        // tokens looked at. A read that can't fit the
+                        // text's cap is past the budget.
                         let again = out.len() - ends.last().copied().unwrap_or(0);
-                        tok.work += least_path_cost(path) + again as u64 * cost::TOKEN;
+                        if again + path.len() >= MAX_TOKENS {
+                            tok.cut();
+                        }
+                        tok.work +=
+                            paused[slot].cost + least_path_cost(path) + again as u64 * cost::TOKEN;
                     }
                     apart.push(paused[slot].apart);
                 }

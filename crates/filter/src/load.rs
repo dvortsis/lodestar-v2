@@ -606,6 +606,12 @@ impl Engine {
             .filter_map(|e| {
                 let rule = RuleRef::from_id(&e.rule);
                 match (rule, decode_match(e.kind, &e.value)) {
+                    // A locked rule takes no exception: a stored row for
+                    // one is never applied.
+                    (Some(RuleRef::Core(r)), _) if r.locked() => {
+                        notes.push(format!("exception {} skipped: its rule is locked", e.id));
+                        None
+                    }
                     (Some(rule), Some(what)) => Some(Exception {
                         id: e.id as u32,
                         rule,

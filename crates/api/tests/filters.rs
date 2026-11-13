@@ -9,6 +9,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use lodestar_api::filters::FiltersApi;
+use lodestar_api::keys::{self, scope};
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::ContentType;
@@ -16,7 +17,9 @@ use lodestar_filter::lists::SharedIps;
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, HeldSet, Lists, Sealer, Switches};
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::{Filtered, Held, NewTorrent, SourceId, Store, StoreConfig, WriteBatch};
+use lodestar_store::{
+    Filtered, Held, KeyKind, NewApiKey, NewTorrent, SourceId, Store, StoreConfig, WriteBatch,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -29,6 +32,7 @@ struct Fixture {
     app: Router,
     auth: Arc<Auth>,
     api: Arc<FiltersApi>,
+    user_data: Arc<Mutex<Store>>,
     _dir: tempfile::TempDir,
 }
 
@@ -41,6 +45,10 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
     let db = dir.path().join("t.db");
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    // Where API keys live, so a test can mint a real one.
+    let user_data = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
     let engine = Handle::new(Engine::new(Core::new(
         Lists::shipped().unwrap(),
         CsList::default(),
@@ -71,7 +79,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
             events: None,
             settings: None,
             ops: None,
-            user_data: None,
+            user_data: Some(user_data.clone()),
             adult: Default::default(),
             insights: None,
         }),
@@ -80,6 +88,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         app,
         auth,
         api,
+        user_data,
         _dir: dir,
     }
 }
@@ -377,15 +386,38 @@ async fn too_large_to_judge_is_locked() {
     let (status, body) = apply(&f, &c, release(two), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
     assert!(held(two));
-    // An API key never reaches it, even with the password: only the
-    // admin's session does.
+    // An API key never reaches it, even a live one with every scope and
+    // the password: only the admin's session does.
+    let m = keys::mint(KeyKind::ApiKey).unwrap();
+    f.user_data
+        .lock()
+        .unwrap()
+        .create_api_key(
+            &NewApiKey {
+                kind: KeyKind::ApiKey,
+                name: "every scope",
+                prefix: &m.prefix,
+                hash: m.hash,
+                scopes: scope::ALL,
+                saved_search_id: None,
+                expires_at: None,
+            },
+            0,
+        )
+        .unwrap();
+    let key = m.secret.expose().to_string();
+    // The key works where keys do.
+    let caps = Request::get("/api/v1/torznab/api?t=caps")
+        .header("x-api-key", &key)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = call(&f.app, caps).await;
+    assert_eq!(status, StatusCode::OK, "the key is live");
     let body = json!({ "change": release(two), "password": PASSWORD }).to_string();
+    let bearer = format!("Bearer {key}");
     for (header, value) in [
-        (
-            header::AUTHORIZATION.as_str(),
-            "Bearer lsk_abcdefgh_0123456789",
-        ),
-        ("x-api-key", "lsk_abcdefgh_0123456789"),
+        (header::AUTHORIZATION.as_str(), bearer.as_str()),
+        ("x-api-key", key.as_str()),
     ] {
         let req = Request::post("/api/v1/filters/apply")
             .header(header::CONTENT_TYPE, "application/json")

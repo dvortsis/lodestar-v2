@@ -2482,7 +2482,8 @@ fn runner_speed() -> f64 {
 /// spelled-out letters; long words; characters that miss the tokenizer's
 /// cache (a script's distinct characters, characters sharing a slot);
 /// characters that decompose into many; marks, invisible and combining
-/// characters; many tiny files, deep paths, long or alternating folders;
+/// characters; many tiny files, deep paths, long, alternating or rotating
+/// folders, some read twice;
 /// and typical Latin, CJK and Arabic seasons for scale.
 #[test]
 #[ignore]
@@ -2602,6 +2603,20 @@ fn budget_worst_case() {
                 })
             }),
         ),
+        ("rotating folders read twice", {
+            // More folders than the tokenizer remembers, each long and
+            // ending in spelled-out letters, so no path reads the same
+            // with its segments apart and each is read a second time.
+            let mix: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+            let folders: Vec<String> = (0..6)
+                .map(|k| format!("{}a b c", words(&mix, 3, 4_000, k + 11, " ")))
+                .collect();
+            Box::new(move |n| {
+                each(n, |i| {
+                    vec![folders[i % folders.len()].clone(), format!("{i}")]
+                })
+            })
+        }),
         (
             "alternating folders",
             Box::new(|n| each(n, |i| vec![format!("dir {} word", i % 5), format!("{i}")])),
@@ -2728,10 +2743,15 @@ fn budget_worst_case() {
         let engine_ms = time(&|| {
             std::hint::black_box(engine.judge(&it, None, 0));
         });
+        // With the Adult reading too, as intake judges a torrent that
+        // might be Adult.
+        let both_ms = time(&|| {
+            std::hint::black_box(engine.judge_classified_with(&it, None, 0, true, None));
+        });
         let scaled = core_ms / speed;
         worst = worst.max(scaled);
         println!(
-            "{label}: {} files, {:.2}M of {:.2}M units; core {core_ms:.2} ms ({scaled:.2} ms on the reference runner), engine {engine_ms:.2} ms",
+            "{label}: {} files, {:.2}M of {:.2}M units; core {core_ms:.2} ms ({scaled:.2} ms on the reference runner), engine {engine_ms:.2} ms, with the Adult reading {both_ms:.2} ms",
             files.len(),
             units as f64 / 1e6,
             BUDGET as f64 / 1e6,

@@ -1550,6 +1550,10 @@ impl Engine {
     }
 
     fn excepted(&self, rule: RuleRef, item: &Item, doc: &Doc, reading: Reading) -> bool {
+        // A locked rule takes no exception, whatever a stored row says.
+        if matches!(rule, RuleRef::Core(r) if r.locked()) {
+            return false;
+        }
         self.exceptions
             .iter()
             .any(|e| e.rule == rule && rules::matches(&e.what, item, doc, reading))

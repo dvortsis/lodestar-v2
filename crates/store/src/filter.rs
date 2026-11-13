@@ -708,13 +708,19 @@ impl Store {
     /// [`release`](Store::release) for many hashes in one transaction,
     /// with one WAL scrub at the end rather than one per hash. Returns,
     /// per hash, whether a row was removed (a hash a worker's floor report
-    /// holds stays held, as with `release`).
+    /// holds stays held, as with `release`, and so does one a kept rule
+    /// holds, [`KEPT_RULES`], which only `release` lifts).
     pub fn release_many(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<bool>> {
         let tx = self.conn.transaction()?;
         let mut had = Vec::with_capacity(hashes.len());
         {
             let mut tomb = tx.prepare_cached(&release_tombstone_sql())?;
-            let mut quar = tx.prepare_cached("DELETE FROM quarantine WHERE hash = ?1")?;
+            // A kept hold is lifted only by its own release (`release`),
+            // which shows its warning: never as part of a batch by hash.
+            let mut quar = tx.prepare_cached(&format!(
+                "DELETE FROM quarantine WHERE hash = ?1 AND NOT {}",
+                kept_hold_sql("rule")
+            ))?;
             for h in hashes {
                 had.push(tomb.execute([&h[..]])? + quar.execute([&h[..]])? > 0);
             }
@@ -1217,6 +1223,33 @@ mod tests {
             s.filter_state().unwrap().held,
             vec![([2; 20], Held::Tombstone)]
         );
+    }
+
+    /// A release of many hashes at once leaves a kept hold: only that
+    /// hold's own release lifts it.
+    #[test]
+    fn a_batch_release_leaves_a_kept_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        for (h, rule) in [(1u8, kept), (2, "CS-3")] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            s.release_many(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![true, false]
+        );
+        assert!(s.release(&[1; 20]).unwrap());
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
     }
 
     /// A hold under a kept rule survives the purge, however long past its

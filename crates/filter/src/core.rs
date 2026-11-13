@@ -709,6 +709,14 @@ fn lexicon(lists: &Lists) -> IdMap<u16> {
     map
 }
 
+/// Pairs worth a sorted index ([`near_index`]) rather than a scan: one
+/// threshold for where the index is made and where it's read.
+const PAIR_SCAN: usize = 64;
+
+fn indexed(first: usize, second: usize) -> bool {
+    first.saturating_mul(second) > PAIR_SCAN
+}
+
 /// The first `x` of `first`, in order, with a `y` of `second` within `w`
 /// positions, and the first such `y`, in order. `near` is `second` as
 /// [`near_index`] sorts it, made once per text for every rule that reads
@@ -717,7 +725,9 @@ fn nearest_pair(first: &[u32], second: &[u32], near: &[(u32, u32)], w: u32) -> O
     if first.is_empty() || second.is_empty() {
         return None;
     }
-    if first.len().saturating_mul(second.len()) <= 64 {
+    // Few enough to scan, or no index made: scan, so a missing index can
+    // only cost time, never a pair.
+    if !indexed(first.len(), second.len()) || near.is_empty() {
         return first.iter().find_map(|&x| {
             let y = second.iter().find(|&&y| x.abs_diff(y) <= w)?;
             Some((x, *y))
@@ -1336,18 +1346,12 @@ impl Core {
         // Each text's sexual terms sorted once, for every rule that pairs
         // them; only where a pair is possible and too many to scan, so most
         // torrents build nothing.
-        let indexed = |s: &Signals| {
-            s.ages
-                .len()
-                .max(s.roles.len())
-                .saturating_mul(s.sexual.len())
-                > 64
-        };
-        let near: Vec<Vec<(u32, u32)>> = if texts.iter().any(|(_, s)| indexed(s)) {
+        let wanted = |s: &Signals| indexed(s.ages.len().max(s.roles.len()), s.sexual.len());
+        let near: Vec<Vec<(u32, u32)>> = if texts.iter().any(|(_, s)| wanted(s)) {
             texts
                 .iter()
                 .map(|(_, s)| {
-                    if indexed(s) {
+                    if wanted(s) {
                         near_index(&s.sexual)
                     } else {
                         Vec::new()
@@ -1603,6 +1607,8 @@ mod tests {
             });
             let near = near_index(&second);
             prop_assert_eq!(nearest_pair(&first, &second, &near, w), scan);
+            // Without an index it scans: never fewer pairs.
+            prop_assert_eq!(nearest_pair(&first, &second, &[], w), scan);
         }
     }
 

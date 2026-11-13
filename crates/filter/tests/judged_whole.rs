@@ -475,36 +475,56 @@ fn a_locked_rule_takes_no_exception() {
     assert!(e.validate().is_err());
 }
 
+/// Text drawn from a generic mix of letters, digits, spaces, dots and the
+/// characters once read as word breaks, the same for the same seed.
+fn mixed(chars: usize, seed: u64) -> String {
+    const MIX: &[char] = &[
+        'a', 'e', 'k', 'q', 'z', '0', '3', '7', ' ', ' ', '.', '\u{2028}', '\u{2029}',
+    ];
+    let mut r = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..chars)
+        .map(|_| {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+            MIX[r as usize % MIX.len()]
+        })
+        .collect()
+}
+
 /// Both readings of a torrent (with the characters once read as word
 /// breaks read so, and not) reach the end of every text, or it's held:
 /// a pair at the end of a long path is caught or held, over a sweep of
-/// path sizes and of such characters, by the core and the engine alike,
-/// and held exactly where a reading stops short. Either reading can take
-/// more tokens than the other, so neither one's bound covers both.
+/// path depths and lengths of generic text before it, by the core and
+/// the engine alike, and held exactly where a reading stops short.
+/// Either reading can take more tokens than the other, so neither one's
+/// bound covers both.
 #[test]
 fn every_reading_reaches_the_end_or_holds() {
     let c = core();
     let e = Engine::new(core());
     let both = |rule: Option<CoreRule>| matches!(rule, Some(CoreRule::Cs4a | CoreRule::Cs0a));
-    for segments in [1usize, 16, 256] {
-        for breaks in [0usize, 300, 30_000] {
-            let mut path: Vec<String> = (0..segments)
-                .map(|i| plain(100, i) + " a1b2c3d4 x9y8")
-                .collect();
-            path.push("a1b2c3d4\u{2028}".repeat(breaks));
+    let mut held = [0usize; 2];
+    for segments in (0..=8).step_by(2).map(|k| 1usize << k) {
+        for chars in std::iter::once(0).chain((0..=16).step_by(2).map(|k| 1usize << k)) {
+            let mut path: Vec<String> = (0..segments).map(|i| mixed(64, i as u64 + 1)).collect();
+            path.push(mixed(chars, chars as u64 + 7));
             path.push("rolea\u{2028}lexa".into());
             let files = [FileInfo::new(path, 1)];
             let it = item("Title", &files);
             let by_core = c.verdict(&it).map(|h| h.rule);
-            assert!(both(by_core), "{segments}/{breaks}: {by_core:?}");
+            assert!(both(by_core), "{segments}/{chars}: {by_core:?}");
             let by_engine = match judge(&e, "Title", &files) {
                 Some(RuleRef::Core(r)) => Some(r),
                 _ => None,
             };
-            assert!(both(by_engine), "{segments}/{breaks}: {by_engine:?}");
+            assert!(both(by_engine), "{segments}/{chars}: {by_engine:?}");
             assert_eq!(by_core == Some(CoreRule::Cs0a), too_large(&it));
+            held[usize::from(by_core == Some(CoreRule::Cs0a))] += 1;
         }
     }
+    // The sweep reaches both: caught whole, and held.
+    assert!(held[0] > 0 && held[1] > 0, "caught, held: {held:?}");
 }
 
 /// Where a term pair sits in a torrent.
