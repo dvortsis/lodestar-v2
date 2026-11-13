@@ -2,8 +2,9 @@
 //!
 //! The installer (P-release) registers the service as [`NAME`] with the
 //! image path `"<install dir>\lodestar.exe"`, optionally followed by
-//! `--config <path>`. No subcommand marks a service start: when the
-//! arguments are a serve command line and the process has no console,
+//! `--config <path>`. No subcommand, `serve`, or plain `worker` (a worker
+//! of an existing Lodestar, WK-18s) marks a service start: when the
+//! arguments are such a command line and the process has no console,
 //! `main` asks the Service Control Manager whether it started it
 //! ([`run_if_launched`]), and an ordinary run is told no at once.
 //!
@@ -164,16 +165,7 @@ impl Refusal {
 pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
     // One line, no control or invisible characters: a folder name can't
     // forge a second message.
-    let dir: String = dir
-        .display()
-        .to_string()
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        // Unicode's format and separator characters (bidirectional
-        // controls, zero-width and soft-hyphen characters, tags), which
-        // could make a folder name read as other text: `acl`'s list.
-        .filter(|c| !super::acl::invisible(*c))
-        .collect();
+    let dir = one_line(&dir.display().to_string());
     // A configured folder can be long; `eventcreate` takes a short line.
     let dir = match dir.char_indices().nth(MAX_SHOWN) {
         Some((at, _)) => format!("{}…", &dir[..at]),
@@ -195,6 +187,17 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
              %SystemRoot%\\Temp\\{log}."
         ),
     }
+}
+
+/// `text` on one line: control characters become spaces, and Unicode's
+/// format and separator characters (bidirectional controls, zero-width and
+/// soft-hyphen characters, tags), which could make a name read as other
+/// text, are dropped (`acl`'s list).
+pub fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !super::acl::invisible(*c))
+        .collect()
 }
 
 /// The most of a folder's name the Event Log message shows, in characters.
@@ -1161,7 +1164,10 @@ mod scm {
                 // Why it stopped (revoked, expired, outdated, …), which says
                 // what to do and never holds a token, goes beside the
                 // installer's log, as a refused start's reason does.
-                let _ = crate::windows::temp_log::append("worker stopped", &e.to_string());
+                let _ = crate::windows::temp_log::append(
+                    "worker stopped",
+                    &super::one_line(&e.to_string()),
+                );
                 BoxError::from(e.to_string())
             })
     }

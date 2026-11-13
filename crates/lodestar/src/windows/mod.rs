@@ -23,11 +23,12 @@ pub mod temp_log;
 
 use std::process::ExitCode;
 
-/// `main`'s hook, before its own argument parsing. For a serve command
-/// line (none, `serve`, `--config <path>`) it runs the whole service when
-/// the Service Control Manager started this process, and returns its exit
-/// code; otherwise it starts the [`startup`] checks and returns `None` so
-/// `main` carries on. Any other command, or arguments that don't parse
+/// `main`'s hook, before its own argument parsing. For a service command
+/// line (none, `serve` or plain `worker`, with an optional `--config
+/// <path>`) it runs the whole service when the Service Control Manager
+/// started this process, and returns its exit code. Otherwise, for serve,
+/// it starts the [`startup`] checks; it returns `None` either way so
+/// `main` carries on (an ordinary `worker` run starts as it always did). Any other command, or arguments that don't parse
 /// (`main` reports those), is left alone.
 pub fn hook() -> Option<ExitCode> {
     #[cfg(windows)]

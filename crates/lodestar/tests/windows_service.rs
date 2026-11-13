@@ -15,9 +15,37 @@ mod ports;
 
 /// `%SystemRoot%\Temp\lodestar-service.log`, which every service test that
 /// is refused or stops on an error appends to. Whoever creates it owns it,
-/// and a service under another account can't append to it then: these
-/// tests take this lock while they use it, and remove a file they created.
+/// and a service under another account can't append to it then. So these
+/// tests take this lock while they use it, and the worker test, whose
+/// service runs as LocalSystem, removes the file if it created it
+/// ([`TempLogGuard`]).
 static TEMP_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds [`TEMP_LOG`], and on drop (also after a failed assert) removes the
+/// temp log if it didn't exist when taken, so a SYSTEM-owned file is never
+/// left for another account's service.
+struct TempLogGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    remove: bool,
+}
+
+impl TempLogGuard {
+    fn take() -> TempLogGuard {
+        let lock = TEMP_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        TempLogGuard {
+            _lock: lock,
+            remove: !temp_log_path().exists(),
+        }
+    }
+}
+
+impl Drop for TempLogGuard {
+    fn drop(&mut self) {
+        if self.remove {
+            let _ = std::fs::remove_file(temp_log_path());
+        }
+    }
+}
 
 fn temp_log_path() -> std::path::PathBuf {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
@@ -1076,10 +1104,9 @@ fn runs_a_worker_as_a_service() {
     let data = root.path().join("Lodestar");
 
     // This service runs as LocalSystem: a temp log it creates is SYSTEM's,
-    // so it's removed again once read.
-    let temp_log_lock = TEMP_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    // so the guard removes it again, however this part ends.
+    let temp_log_guard = TempLogGuard::take();
     let temp_log = temp_log_path();
-    let created = !temp_log.exists();
     sc(&["start", &name]);
     let stopped = wait_until_stopped(&service);
     assert_eq!(
@@ -1091,11 +1118,8 @@ fn runs_a_worker_as_a_service() {
         let text = std::fs::read_to_string(&temp_log).unwrap_or_default();
         text.contains("hasn't joined a coordinator").then_some(text)
     });
-    if created {
-        let _ = std::fs::remove_file(&temp_log);
-    }
-    drop(temp_log_lock);
     assert!(why.is_some(), "no reason in {}", temp_log.display());
+    drop(temp_log_guard);
     let sd = sddl(&data);
     assert!(sd.contains(&service_sid(&name)), "{sd}");
 
@@ -1128,11 +1152,23 @@ fn runs_a_worker_as_a_service() {
     );
 
     sc(&["start", &name]);
-    let running = wait_for(Duration::from_secs(90), || {
-        let out = sc(&["query", &name]);
-        (field(&out, "STATE").as_deref() == Some("4")).then_some(out)
+    // Running is reported at once, so that alone proves nothing: wait for
+    // the session itself, a TCP connection from the service's process to
+    // the coordinator's cluster port.
+    let session = wait_for(Duration::from_secs(60), || {
+        let pid = field(&sc(&["queryex", &name]), "PID")?;
+        let out = Command::new("netstat.exe")
+            .args(["-ano", "-p", "TCP"])
+            .output()
+            .ok()?;
+        let table = String::from_utf8_lossy(&out.stdout).into_owned();
+        connected(&table, &pid, port).then_some(())
     });
-    assert!(running.is_some(), "not running: {}", sc(&["query", &name]));
+    assert!(
+        session.is_some(),
+        "the worker service never connected to 127.0.0.1:{port}: {}",
+        sc(&["queryex", &name])
+    );
     let stopped = stop(&service);
     assert_eq!(
         field(&stopped, "WIN32_EXIT_CODE").as_deref(),
@@ -1145,4 +1181,35 @@ fn runs_a_worker_as_a_service() {
         "{stopped}"
     );
     drop(coord);
+}
+
+/// Whether `netstat -ano` output holds an established TCP connection owned
+/// by process `pid` to port `port`.
+fn connected(netstat: &str, pid: &str, port: u16) -> bool {
+    let remote = format!(":{port}");
+    netstat.lines().any(|l| {
+        let cols: Vec<&str> = l.split_whitespace().collect();
+        cols.len() == 5
+            && cols[0] == "TCP"
+            && cols[2].ends_with(&remote)
+            && cols[3] == "ESTABLISHED"
+            && cols[4] == pid
+    })
+}
+
+#[test]
+fn reads_netstat_output() {
+    let table = "\
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    127.0.0.1:50000        127.0.0.1:20001        ESTABLISHED     4242
+  TCP    127.0.0.1:20001        127.0.0.1:50000        ESTABLISHED     77
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       900
+";
+    assert!(connected(table, "4242", 20001));
+    assert!(
+        !connected(table, "77", 20001),
+        "its local port, not the remote"
+    );
+    assert!(!connected(table, "4242", 20002));
+    assert!(!connected(table, "900", 0));
 }

@@ -278,7 +278,19 @@ pub fn run_until(
     stop: impl Future<Output = ()> + Send + 'static,
     report: Report,
 ) -> Outcome {
-    run_with(config, args, &|k| std::env::var(k).ok(), stop, report)
+    let env = |k: &str| std::env::var(k).ok();
+    run_with(config, args, &|k| never_joins(&env, k), stop, report)
+}
+
+/// The environment as a service sees it: never `LODESTAR_TOKEN`,
+/// `LODESTAR_TOKEN_IGNORED` or `LODESTAR_JOIN`, so a service never joins,
+/// whatever its environment holds. It runs from saved credentials only.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn never_joins(env: &dyn Fn(&str) -> Option<String>, k: &str) -> Option<String> {
+    match k {
+        "LODESTAR_TOKEN" | "LODESTAR_TOKEN_IGNORED" | "LODESTAR_JOIN" => None,
+        _ => env(k),
+    }
 }
 
 /// Why `--join-only` refuses a folder that has already joined. It names
@@ -330,9 +342,17 @@ fn run_with(
     }
     let join_only = args.join_only;
     // Before anything else is read or created: a joined folder is refused
-    // even if its key can't be read, and the name is shown only if it can.
+    // even if its key can't be read. The name is shown only if the key
+    // already exists and opens: `load` would create a missing key.
     if join_only && layout.is_joined() {
-        let name = layout.load().ok().flatten().map(|c| c.name().to_owned());
+        let key = layout
+            .data
+            .join(lodestar_integrations::SecretStore::KEY_FILE);
+        let name = key
+            .is_file()
+            .then(|| layout.load().ok().flatten())
+            .flatten()
+            .map(|c| c.name().to_owned());
         return Err(Failure::Refused(already_joined(name.as_deref())));
     }
     let joined = layout
@@ -807,6 +827,38 @@ mod tests {
             m.contains("already joined") && !m.contains("as worker"),
             "{m}"
         );
+        // The refusal created nothing: no key where there was none.
+        assert!(!dir.path().join("secrets.key").exists());
+    }
+
+    #[test]
+    fn a_service_never_joins_from_its_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, |_| None).unwrap();
+        let token = "lsj1".to_owned() + &"a".repeat(122);
+        let env = |k: &str| match k {
+            "LODESTAR_TOKEN" => Some(token.clone()),
+            "LODESTAR_JOIN" => Some("https://127.0.0.1:1".to_owned()),
+            _ => None,
+        };
+        let args = WorkerArgs {
+            join: None,
+            token_file: None,
+            data: Some(dir.path().to_path_buf()),
+            rotate_key: false,
+            join_only: false,
+        };
+        let Err(Failure::Failed(m)) = run_with(
+            &config,
+            args,
+            &|k| never_joins(&env, k),
+            std::future::pending(),
+            quiet(),
+        ) else {
+            panic!("joined or ran");
+        };
+        assert!(m.contains("hasn't joined"), "{m}");
+        assert!(!m.contains(&token), "{m}");
     }
 
     #[test]
