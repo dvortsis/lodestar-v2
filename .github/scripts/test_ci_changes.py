@@ -177,14 +177,14 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("mmap_retention=true", out)
         self.assertIn("infra=true", out)
         self.assertIn("advisories=true", out)
+        self.assertIn("update_manifest=true", out)
+        self.assertIn("companion_pins=true", out)
+        self.assertIn("unraid=true", out)
 
     def test_the_full_ci_label_runs_the_advisory_check(self):
         out = subprocess.run([sys.executable, str(HERE / "ci_changes.py"), "pull_request", "a", "b", '["full-ci"]'],
                              check=True, capture_output=True, text=True).stdout
         self.assertIn("advisories=true", out)
-        self.assertIn("update_manifest=true", out)
-        self.assertIn("companion_pins=true", out)
-        self.assertIn("unraid=true", out)
 
 
 if __name__ == "__main__":

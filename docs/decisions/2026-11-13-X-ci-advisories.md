@@ -1,4 +1,4 @@
-# X-ci-advisories decisions
+# X-ci-advisories decisions (#820)
 
 Spec:
 - `runner/slices.yaml`, entry `X-ci-advisories` (Track Q, INFRA-09).
@@ -21,7 +21,7 @@ Spec:
 - **On a pull request,** only when it touches `Cargo.lock`, `deny.toml`, `ci.yml` or `ci_changes.py` (`ADVISORIES`). A `Cargo.toml` change that moves a version also changes `Cargo.lock`.
 - **On main, the nightly and manual runs, always.** An advisory published against a crate already in the lockfile turns the next nightly red, without any PR touching dependencies.
 - **`fuzz/Cargo.lock` isn't checked.** The fuzz harness is its own workspace, built only in CI's fuzz job and never shipped.
-- **Tests:** `test_ci_changes.py` covers the matching paths and near misses (`Advisories`). Its end-to-end tests check three things: a lockfile-only PR runs the check, a docs-only PR doesn't, and a non-PR event always does.
+- **Tests:** `test_ci_changes.py` covers the matching paths and near misses (`Advisories`). Its end-to-end tests check four things: a lockfile-only PR runs the check, a docs-only PR doesn't, a non-PR event always does, and so does a PR with the `full-ci` label.
 
 ## No permission, secret or trigger changes
 - The job inherits the workflow's `permissions: contents: read` and uses no secret.
