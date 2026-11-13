@@ -31,7 +31,7 @@ use lodestar_api::dto::companions::{
 use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
 use lodestar_companions::catalogue::{Sha256, TemplateId};
 use lodestar_companions::compose::{
-    self, DataFolder, DataFolders, MountRole, Paths, ServiceInput, TemplateError,
+    self, DataFolder, DataFolders, GluetunPaths, MountRole, Paths, ServiceInput, TemplateError,
 };
 use lodestar_companions::configure::{self, InstallReceipt, Socks5Proxy};
 use lodestar_companions::credentials::{self, CredentialKey, Field, SealedRow};
@@ -1288,6 +1288,63 @@ impl Service {
             .map_err(|_| CompanionsError::Internal("sealed"))
     }
 
+    /// Where gluetun's post-rules file is: its companion-files folder on
+    /// the host, checked, and where Lodestar sees that folder. `None`, so
+    /// you save the file yourself:
+    /// - without `companions_dir` (there's no default anywhere);
+    /// - in a container, unless privdrop saved the file at `/companions`
+    ///   (exact and root-owned);
+    /// - on Windows, which can't name a folder on gluetun's Linux host.
+    ///
+    /// Natively the host folder is the named folder itself.
+    fn companion_files(
+        &self,
+        r: &TemplateRequest,
+        input: &ServiceInput,
+    ) -> Result<Option<(GluetunPaths, PathBuf)>, CompanionsError> {
+        const FIELD: &str = "companions_dir";
+        let given = r
+            .companions_dir
+            .as_deref()
+            .map(HostPath::parse)
+            .transpose()
+            .map_err(bad(FIELD))?;
+        let (host, local) = if self.host.in_container {
+            let Some(host) = given else {
+                return Ok(None);
+            };
+            let local = PathBuf::from(CONTAINER_COMPANIONS);
+            match std::fs::symlink_metadata(&local) {
+                Ok(m) if m.file_type().is_dir() => {}
+                _ => return Ok(None),
+            }
+            (host, local)
+        } else if cfg!(windows) {
+            return Ok(None);
+        } else {
+            // Only a folder you name: a default here would name a folder on
+            // this machine in a template that may run on another.
+            let Some(host) = given else {
+                return Ok(None);
+            };
+            let local = PathBuf::from(host.as_str());
+            (host, local)
+        };
+        let paths = GluetunPaths { companions: host };
+        paths
+            .check(self.catalogue, input)
+            .map_err(|e| CompanionsError::BadInput {
+                field: Some(FIELD),
+                code: e.code(),
+            })?;
+        // In a container privdrop saved the file as root at start-up:
+        // point at it only if it holds exactly the rules.
+        if self.host.in_container && !saved_rules(&local) {
+            return Ok(None);
+        }
+        Ok(Some((paths, local)))
+    }
+
     fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
         let path = |p: &Option<String>, f: &'static str| {
             p.as_deref()
@@ -1333,6 +1390,8 @@ impl Service {
             publish: Vec::new(),
             data,
             taken: Vec::new(),
+            // Set by `template` for an Unraid template with gluetun.
+            gluetun_paths: None,
         })
     }
 }
@@ -1564,7 +1623,17 @@ impl CompanionsApi for Service {
             let e = self.entry(&id)?;
             let kind = request.kind;
             self.off(move |s| {
-                let input = s.input(&request)?;
+                let mut input = s.input(&request)?;
+                // Unraid's gluetun template mounts the post-rules file
+                // Lodestar saves; compose carries the rules inline.
+                let with_gluetun =
+                    e.id.as_str() == compose::GLUETUN || input.route == compose::Route::Gluetun;
+                let files = if kind == TemplateKind::Unraid && with_gluetun {
+                    s.companion_files(&request, &input)?
+                } else {
+                    None
+                };
+                input.gluetun_paths = files.as_ref().map(|(p, _)| p.clone());
                 let generate = |input: &ServiceInput| -> Result<(Option<String>, Vec<UnraidFile>), TemplateError> {
                     Ok(match kind {
                         TemplateKind::Compose => {
@@ -1588,10 +1657,23 @@ impl CompanionsApi for Service {
                         ),
                     })
                 };
-                let (compose, unraid) = generate(&input).map_err(|err| {
-                    let path = folder_rule(err).then(|| blame(&input, err, generate));
-                    template_error(err, path)
-                })?;
+                let run = |input: &ServiceInput| {
+                    generate(input).map_err(|err| {
+                        let path = folder_rule(err).then(|| blame(input, err, generate));
+                        template_error(err, path)
+                    })
+                };
+                let (mut compose, mut unraid) = run(&input)?;
+                // Natively, only once the template is good: nothing is
+                // written for a refused one. A file holding something else
+                // is left alone, and you save the rules yourself.
+                if let Some((_, local)) = &files
+                    && !s.host.in_container
+                    && !save_native(local, &s.data)?
+                {
+                    input.gluetun_paths = None;
+                    (compose, unraid) = run(&input)?;
+                }
                 Ok(CompanionTemplate {
                     compose,
                     id: e.id.as_str().to_owned(),
@@ -1669,6 +1751,296 @@ fn plan(e: &Entry, rows: &[String], removed: bool) -> RemovalPlan {
         deletes,
         id: e.id.as_str().to_owned(),
         removed,
+    }
+}
+
+// ─── gluetun's post-rules file (X-gluetun-templates-hostfile) ───────────
+
+/// Where a containerised Lodestar sees its companion-files folder.
+pub(crate) const CONTAINER_COMPANIONS: &str = "/companions";
+
+/// Whether privdrop saved the rules in the companion-files folder `root`.
+fn saved_rules(root: &Path) -> bool {
+    #[cfg(unix)]
+    return post_rules::saved(root);
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        false
+    }
+}
+
+/// Natively: saves the rules in the companion-files folder `local`, never
+/// in the data folder `data`. `false` when a file holding something else is
+/// there.
+fn save_native(local: &Path, data: &Path) -> Result<bool, CompanionsError> {
+    #[cfg(unix)]
+    {
+        use post_rules::NativeError;
+        post_rules::save_native(local, data).map_err(|e| CompanionsError::BadInput {
+            field: Some("companions_dir"),
+            code: match e {
+                NativeError::Link => "companions_dir_link",
+                NativeError::Data => "inside_data_folder",
+                NativeError::Shared => "companions_dir_shared",
+                NativeError::Unwritable => "companions_dir_unwritable",
+            },
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (local, data);
+        Ok(false)
+    }
+}
+
+/// gluetun's post-rules in a companion-files folder,
+/// `<folder>/gluetun/post-rules.txt`, read and written through directory
+/// descriptors: every open is `O_NOFOLLOW`, so a link anywhere below the
+/// folder is never followed, and nothing is reached by a path twice.
+///
+/// In a container, privdrop writes the file as root at start-up, in a
+/// root-owned `gluetun` folder, so Lodestar, once it has dropped root, can
+/// only read it: nothing it runs can change what gluetun runs as root.
+/// Natively, Lodestar writes it as its own user, and never over a file
+/// that holds something else.
+#[cfg(unix)]
+pub(crate) mod post_rules {
+    use std::ffi::CStr;
+    use std::io::{Read, Write};
+    use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+    use std::path::Path;
+
+    use lodestar_companions::compose::GLUETUN_POST_RULES as RULES;
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    use rustix::io::Errno;
+
+    pub(crate) const GLUETUN: &CStr = c"gluetun";
+    pub(crate) const FILE: &CStr = c"post-rules.txt";
+    const DIR: OFlags = OFlags::RDONLY
+        .union(OFlags::DIRECTORY)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC);
+    /// The most read of an existing file: a little above the rules.
+    const CAP: u64 = RULES.len() as u64 + 1024;
+
+    /// Whether a folder (or file) with this status can't be changed by
+    /// anyone but `owner`: theirs, with no write bit for group or others.
+    /// Any other user who could write a folder could swap what's in it.
+    pub(crate) fn locked(st: &rustix::fs::Stat, owner: u32) -> bool {
+        st.st_uid == owner && st.st_mode & 0o022 == 0
+    }
+
+    /// What an existing file holds.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Found {
+        /// Exactly the rules, in a regular file.
+        Rules,
+        /// Nothing there.
+        Missing,
+        /// Anything else: other bytes, too large, a link, not a file.
+        Other,
+    }
+
+    /// Opens `path` as a folder, refusing a link at its last component.
+    pub(crate) fn open_dir(path: &Path) -> Result<OwnedFd, Errno> {
+        rustix::fs::open(path, DIR, Mode::empty())
+    }
+
+    /// Opens `name` in `at` as a folder, refusing a link.
+    pub(crate) fn open_dir_at(at: BorrowedFd<'_>, name: &CStr) -> Result<OwnedFd, Errno> {
+        rustix::fs::openat(at, name, DIR, Mode::empty())
+    }
+
+    /// Opens `gluetun` in the companion-files folder `at`, creating it
+    /// (mode 0755) when it's missing. `true` when it was created.
+    pub(crate) fn gluetun_dir(at: BorrowedFd<'_>) -> Result<(OwnedFd, bool), Errno> {
+        match open_dir_at(at, GLUETUN) {
+            Ok(fd) => Ok((fd, false)),
+            Err(Errno::NOENT) => {
+                let created = match rustix::fs::mkdirat(at, GLUETUN, Mode::from_raw_mode(0o755)) {
+                    Ok(()) => true,
+                    // Made by someone else in between: never changed here.
+                    Err(Errno::EXIST) => false,
+                    Err(e) => return Err(e),
+                };
+                let fd = open_dir_at(at, GLUETUN)?;
+                if created {
+                    // Exactly 0755, whatever the umask.
+                    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o755))?;
+                }
+                Ok((fd, created))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// What `post-rules.txt` in the `gluetun` folder `dir` holds.
+    pub(crate) fn found(dir: BorrowedFd<'_>) -> Result<Found, Errno> {
+        let fd = match rustix::fs::openat(
+            dir,
+            FILE,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return Ok(Found::Missing),
+            // A link, or something that can't be opened as a file.
+            Err(Errno::LOOP | Errno::NXIO | Errno::ISDIR) => return Ok(Found::Other),
+            Err(e) => return Err(e),
+        };
+        let st = rustix::fs::fstat(&fd)?;
+        if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile || st.st_size as u64 > CAP {
+            return Ok(Found::Other);
+        }
+        let mut bytes = Vec::with_capacity(RULES.len() + 1);
+        std::fs::File::from(fd)
+            .take(CAP + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| Errno::from_io_error(&e).unwrap_or(Errno::IO))?;
+        Ok(if bytes == RULES.as_bytes() {
+            Found::Rules
+        } else {
+            Found::Other
+        })
+    }
+
+    /// Writes the rules as `post-rules.txt` in the `gluetun` folder `dir`:
+    /// a new temporary file (`O_EXCL | O_NOFOLLOW`), mode 0644 whatever the
+    /// umask, fsync, a rename over the old file (which replaces a link or a
+    /// hard-linked file rather than writing through it), then an fsync of
+    /// the folder. The temporary file is removed if anything fails.
+    pub(crate) fn write(dir: BorrowedFd<'_>) -> Result<(), Errno> {
+        let mut suffix = [0u8; 8];
+        getrandom::fill(&mut suffix).map_err(|_| Errno::IO)?;
+        let hex: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+        let tmp = std::ffi::CString::new(format!(".post-rules.txt.{hex}.tmp"))
+            .map_err(|_| Errno::INVAL)?;
+        let fd = rustix::fs::openat(
+            dir,
+            &tmp,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o644),
+        )?;
+        let result = (|| {
+            rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o644))?;
+            let mut file = std::fs::File::from(fd);
+            file.write_all(RULES.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|e| Errno::from_io_error(&e).unwrap_or(Errno::IO))?;
+            drop(file);
+            rustix::fs::renameat(dir, &tmp, dir, FILE)
+        })();
+        if result.is_err() {
+            let _ = rustix::fs::unlinkat(dir, &tmp, AtFlags::empty());
+        }
+        result?;
+        // Best effort: the file is in place, so an error here would wrongly
+        // say it isn't.
+        let _ = rustix::fs::fsync(dir.as_fd());
+        Ok(())
+    }
+
+    /// The rules are saved in the companion-files folder `root`: it and
+    /// its `gluetun` folder are real folders (no link), and the file holds
+    /// exactly the rules. What a containerised Lodestar checks before a
+    /// template points at the file.
+    pub(crate) fn saved(root: &Path) -> bool {
+        saved_by(root, 0)
+    }
+
+    /// [`saved`], with both folders and the file owned by `owner` and
+    /// writable by no one else: only then can't the process that reads it
+    /// change it, or swap the folder gluetun mounts it from.
+    pub(crate) fn saved_by(root: &Path, owner: u32) -> bool {
+        let owned = |fd: BorrowedFd<'_>| rustix::fs::fstat(fd).is_ok_and(|st| locked(&st, owner));
+        let Ok(r) = open_dir(root) else { return false };
+        let Ok(g) = open_dir_at(r.as_fd(), GLUETUN) else {
+            return false;
+        };
+        // Both folders: whoever can write the outer one can swap the inner.
+        if !owned(r.as_fd()) || !owned(g.as_fd()) {
+            return false;
+        }
+        // The file's own status, not a link's target.
+        let Ok(f) = rustix::fs::statat(g.as_fd(), FILE, AtFlags::SYMLINK_NOFOLLOW) else {
+            return false;
+        };
+        locked(&f, owner) && found(g.as_fd()) == Ok(Found::Rules)
+    }
+
+    /// Natively, as Lodestar's own user: saves the rules in the
+    /// companion-files folder `root`, creating it (one level) and its
+    /// `gluetun` folder when missing. `Ok(false)` when a file holding
+    /// something else is there: it's left as it is, and you save the file
+    /// yourself. Refuses a folder reached through a link: its parent must
+    /// resolve to itself before anything is created.
+    pub(crate) fn save_native(root: &Path, data: &Path) -> Result<bool, NativeError> {
+        let parent = root.parent().ok_or(NativeError::Link)?;
+        match std::fs::canonicalize(parent) {
+            Ok(real) if real == parent => {}
+            Ok(_) => return Err(NativeError::Link),
+            Err(_) => return Err(NativeError::Unwritable),
+        }
+        // Never in the data folder, however it's reached: compare where
+        // both really are, before anything is created.
+        let data = std::fs::canonicalize(data).map_err(|_| NativeError::Data)?;
+        if root.starts_with(&data) || data.starts_with(root) || parent.starts_with(&data) {
+            return Err(NativeError::Data);
+        }
+        let created = match rustix::fs::mkdir(root, Mode::from_raw_mode(0o755)) {
+            Ok(()) => true,
+            // Yours already, or someone else's: checked below, never changed.
+            Err(Errno::EXIST) => false,
+            Err(_) => return Err(NativeError::Unwritable),
+        };
+        let r = open_dir(root).map_err(|e| match e {
+            Errno::LOOP | Errno::NOTDIR => NativeError::Link,
+            _ => NativeError::Unwritable,
+        })?;
+        if created {
+            // Exactly 0755, whatever the umask (002 on many desktops would
+            // leave it group-writable, and then refused below).
+            rustix::fs::fchmod(&r, Mode::from_raw_mode(0o755))
+                .map_err(|_| NativeError::Unwritable)?;
+        }
+        // Both folders yours (or root's) and writable by no one else:
+        // another user who could write them could swap the file gluetun
+        // runs as root. The outer one first, so nothing is made in it.
+        let me = rustix::process::geteuid().as_raw();
+        let safe = |fd: &OwnedFd| {
+            let st = rustix::fs::fstat(fd).map_err(|_| NativeError::Unwritable)?;
+            if locked(&st, me) || locked(&st, 0) {
+                Ok(())
+            } else {
+                Err(NativeError::Shared)
+            }
+        };
+        safe(&r)?;
+        let (g, _) = gluetun_dir(r.as_fd()).map_err(|e| match e {
+            Errno::LOOP | Errno::NOTDIR => NativeError::Link,
+            _ => NativeError::Unwritable,
+        })?;
+        safe(&g)?;
+        match found(g.as_fd()).map_err(|_| NativeError::Unwritable)? {
+            Found::Rules => Ok(true),
+            Found::Other => Ok(false),
+            Found::Missing => write(g.as_fd())
+                .map(|()| true)
+                .map_err(|_| NativeError::Unwritable),
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum NativeError {
+        /// The folder, or `gluetun` in it, is reached through a link.
+        Link,
+        /// It is, holds or sits in the data folder.
+        Data,
+        /// It, or `gluetun` in it, is another user's or others can write it.
+        Shared,
+        /// It can't be created, opened or written.
+        Unwritable,
     }
 }
 
@@ -1772,6 +2144,11 @@ mod tests {
             lodestar_companions::catalogue::Arch::X86_64,
         )),
         in_container: false,
+    };
+
+    const CONTAINER: Host = Host {
+        in_container: true,
+        ..NATIVE
     };
 
     fn integrations() -> watch::Sender<crate::settings::integrations::Integrations> {
@@ -2413,6 +2790,7 @@ mod tests {
             publish: Vec::new(),
             data: DataFolders::none(),
             taken: Vec::new(),
+            gluetun_paths: None,
         };
         let bad_downloads = s_req("/srv/qbittorrent", Some("/srv/.hidden"));
         let e = generate(&bad_downloads).unwrap_err();
@@ -3312,5 +3690,411 @@ mod tests {
                 .restarting
         );
         assert_eq!(live.seen().len(), 2);
+    }
+
+    /// Test setup that doesn't depend on the umask: folders 0755 (and their
+    /// parent), files 0644, as Docker and a default umask would leave them.
+    #[cfg(unix)]
+    fn md(p: impl AsRef<Path>) -> std::io::Result<()> {
+        let p = p.as_ref();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(p)?;
+        for q in [Some(p), p.parent()].into_iter().flatten() {
+            std::fs::set_permissions(q, std::fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn wf(p: impl AsRef<Path>, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+        let p = p.as_ref();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(p, text)?;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644))
+    }
+
+    // ─── companion files (X-gluetun-templates-hostfile) ─────────────────
+
+    /// A native service whose data folder is `<dir>/data`.
+    #[cfg(unix)]
+    fn native_in(dir: &Path) -> Service {
+        let data = dir.join("data");
+        md(&data).unwrap();
+        Service {
+            data,
+            ..service(dir, pinned(), NATIVE, Arc::new(Unwired)).clone_parts()
+        }
+    }
+
+    fn unraid_gluetun(extra: serde_json::Value) -> TemplateRequest {
+        let mut v = serde_json::json!({"kind": "unraid"});
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A temporary folder without a dot in its path, which the folder
+    /// rules refuse.
+    #[cfg(unix)]
+    fn plain_tmp() -> (tempfile::TempDir, PathBuf) {
+        let t = tempfile::Builder::new().prefix("t").tempdir().unwrap();
+        let p = std::fs::canonicalize(t.path()).unwrap();
+        (t, p)
+    }
+
+    #[cfg(unix)]
+    const RULES: &str = lodestar_companions::compose::GLUETUN_POST_RULES;
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_only_a_named_folder_is_used() {
+        let (_t, dir) = plain_tmp();
+        let s = native_in(&dir);
+        // None named: you save the file yourself.
+        let r = unraid_gluetun(serde_json::json!({}));
+        let input = s.input(&r).unwrap();
+        assert_eq!(s.companion_files(&r, &input).unwrap(), None);
+        // Named: saved there.
+        let root = dir.join("cfiles");
+        let r = unraid_gluetun(serde_json::json!({"companions_dir": root.to_str().unwrap()}));
+        let input = s.input(&r).unwrap();
+        let (paths, local) = s.companion_files(&r, &input).unwrap().unwrap();
+        assert_eq!(local, root);
+        assert_eq!(
+            paths.post_rules(),
+            format!("{}/gluetun/post-rules.txt", root.display())
+        );
+        assert!(save_native(&local, &s.data).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.join("gluetun/post-rules.txt")).unwrap(),
+            RULES
+        );
+        // Again: already in place.
+        assert!(save_native(&local, &s.data).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_a_file_holding_something_else_is_left_alone() {
+        let (_t, dir) = plain_tmp();
+        let root = dir.join("companions");
+        md(root.join("gluetun")).unwrap();
+        wf(root.join("gluetun/post-rules.txt"), "mine\n").unwrap();
+        md(dir.join("data")).unwrap();
+        assert_eq!(post_rules::save_native(&root, &dir.join("data")), Ok(false));
+        assert_eq!(
+            std::fs::read_to_string(root.join("gluetun/post-rules.txt")).unwrap(),
+            "mine\n"
+        );
+    }
+
+    /// Whatever the umask: a folder it creates is 0755, so a group-writable
+    /// umask (002, common on desktops) doesn't make it refuse its own. The
+    /// umask is process-wide, so the check runs in a child test process.
+    #[cfg(unix)]
+    #[test]
+    fn natively_new_folders_are_0755_whatever_the_umask() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-c", "umask 002 && exec \"$0\" \"$@\""])
+            .arg(exe)
+            .args([
+                "companions::tests::under_umask_002",
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+    }
+
+    /// Run by the test above, in a process whose umask is 002.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "run by natively_new_folders_are_0755_whatever_the_umask"]
+    fn under_umask_002() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        md(dir.join("data")).unwrap();
+        let probe = dir.join("probe");
+        std::fs::create_dir(&probe).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&probe), 0o775, "the umask is 002 here");
+        let root = dir.join("c");
+        assert_eq!(post_rules::save_native(&root, &dir.join("data")), Ok(true));
+        assert_eq!(mode(&root), 0o755);
+        assert_eq!(mode(&root.join("gluetun")), 0o755);
+        assert_eq!(mode(&root.join("gluetun/post-rules.txt")), 0o644);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_a_folder_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        md(dir.join("data")).unwrap();
+        let root = dir.join("open");
+        md(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            post_rules::save_native(&root, &dir.join("data")),
+            Err(post_rules::NativeError::Shared)
+        );
+        assert!(!root.join("gluetun").exists(), "nothing is made in it");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_the_data_folder_is_never_written_however_its_reached() {
+        let (_t, dir) = plain_tmp();
+        let data = dir.join("real-data");
+        md(&data).unwrap();
+        // Lodestar reaches its data folder through a link.
+        std::os::unix::fs::symlink(&data, dir.join("data-link")).unwrap();
+        let via = dir.join("data-link");
+        for root in [data.join("x"), data.clone(), dir.clone()] {
+            assert_eq!(
+                post_rules::save_native(&root, &via),
+                Err(post_rules::NativeError::Data),
+                "{}",
+                root.display()
+            );
+        }
+        assert!(!data.join("x").exists(), "nothing is created first");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_a_folder_reached_through_a_link_is_refused_before_anything_is_made() {
+        let (_t, dir) = plain_tmp();
+        let real = dir.join("real");
+        md(&real).unwrap();
+        std::os::unix::fs::symlink(&real, dir.join("link")).unwrap();
+        let data = dir.join("data");
+        md(&data).unwrap();
+        assert_eq!(
+            post_rules::save_native(&dir.join("link/companions"), &data),
+            Err(post_rules::NativeError::Link)
+        );
+        assert!(!real.join("companions").exists());
+        // The folder itself a link, or its gluetun one.
+        assert_eq!(
+            post_rules::save_native(&dir.join("link"), &data),
+            Err(post_rules::NativeError::Link)
+        );
+        let root = dir.join("c");
+        md(&root).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("gluetun")).unwrap();
+        assert_eq!(
+            post_rules::save_native(&root, &data),
+            Err(post_rules::NativeError::Link)
+        );
+        assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0);
+        // A missing parent can't be created through.
+        assert_eq!(
+            post_rules::save_native(&dir.join("no/such"), &data),
+            Err(post_rules::NativeError::Unwritable)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn companion_files_never_overlap_the_data_folder_or_a_companion() {
+        let (_t, dir) = plain_tmp();
+        let s = native_in(&dir);
+        let data = s.data.to_str().unwrap().to_owned();
+        for (given, code) in [
+            (data.clone(), "inside_data_folder"),
+            (format!("{data}/companions"), "inside_data_folder"),
+            (dir.to_str().unwrap().into(), "inside_data_folder"),
+            (
+                "/mnt/user/appdata/lodestar/companions/x".into(),
+                "inside_data_folder",
+            ),
+            (
+                "/mnt/user/appdata/qbittorrent/x".into(),
+                "inside_other_companion",
+            ),
+        ] {
+            let r = unraid_gluetun(serde_json::json!({"companions_dir": given}));
+            assert_eq!(
+                s.template("gluetun".into(), r).await.err(),
+                Some(CompanionsError::BadInput {
+                    field: Some("companions_dir"),
+                    code
+                }),
+                "{given}"
+            );
+        }
+        // The routed companion's own folders: it could rewrite the rules.
+        let r = unraid_gluetun(serde_json::json!({
+            "route": "gluetun", "config_dir": "/srv/q", "downloads": "/srv/d",
+            "companions_dir": "/srv/q/companions"
+        }));
+        assert_eq!(
+            s.template("qbittorrent".into(), r).await.err(),
+            Some(CompanionsError::BadInput {
+                field: Some("companions_dir"),
+                code: "inside_other_companion"
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refused_template_saves_nothing() {
+        let (_t, dir) = plain_tmp();
+        let s = native_in(&dir);
+        let root = dir.join("cfiles");
+        let at = root.to_str().unwrap();
+        // The compiled-in catalogue isn't pinned, so generation refuses.
+        for (id, extra) in [
+            ("gluetun", serde_json::json!({"companions_dir": at})),
+            (
+                "prowlarr",
+                serde_json::json!({"route": "gluetun", "config_dir": "/srv/p", "companions_dir": at}),
+            ),
+        ] {
+            let got = s.template(id.into(), unraid_gluetun(extra)).await;
+            assert_eq!(got.err(), Some(CompanionsError::Refused("awaiting_pin")));
+        }
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn in_a_container_only_a_saved_file_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), CONTAINER, Arc::new(Unwired));
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"companions_dir": "/mnt/user/appdata/lodestar-companions"}),
+        ] {
+            let r = unraid_gluetun(extra);
+            let input = s.input(&r).unwrap();
+            let got = s.companion_files(&r, &input).unwrap();
+            if r.companions_dir.is_none() || !saved_rules(Path::new(CONTAINER_COMPANIONS)) {
+                assert!(got.is_none());
+            }
+        }
+        // A bad host path is still refused.
+        let r = unraid_gluetun(serde_json::json!({"companions_dir": "relative"}));
+        let input = s.input(&r).unwrap();
+        assert_eq!(
+            s.companion_files(&r, &input).err(),
+            Some(CompanionsError::BadInput {
+                field: Some("companions_dir"),
+                code: "bad_template_input"
+            })
+        );
+    }
+
+    // ─── post_rules ─────────────────────────────────────────────────────
+
+    #[cfg(unix)]
+    fn me() -> u32 {
+        rustix::process::geteuid().as_raw()
+    }
+
+    /// What a template reads in a container: exactly the rules, in real
+    /// folders and a regular file, owned by the expected user.
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_file_is_trusted_only_when_exact_and_owned() {
+        use std::os::fd::AsFd;
+        let (_t, dir) = plain_tmp();
+        let root = dir.join("c");
+        md(&root).unwrap();
+        assert!(!post_rules::saved_by(&root, me()), "missing");
+        let r = post_rules::open_dir(&root).unwrap();
+        let (g, created) = post_rules::gluetun_dir(r.as_fd()).unwrap();
+        assert!(created);
+        post_rules::write(g.as_fd()).unwrap();
+        assert!(post_rules::saved_by(&root, me()));
+        // Owned by someone else, or writable by others: not trusted.
+        assert!(!post_rules::saved_by(&root, me().wrapping_add(1)));
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let set = |p: &Path, m| {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+            };
+            for p in [
+                root.clone(),
+                root.join("gluetun"),
+                root.join("gluetun/post-rules.txt"),
+            ] {
+                let was = std::fs::metadata(&p).unwrap().permissions().mode() & 0o7777;
+                set(&p, was | 0o020);
+                assert!(!post_rules::saved_by(&root, me()), "{}", p.display());
+                set(&p, was);
+            }
+            assert!(post_rules::saved_by(&root, me()));
+        }
+        let file = root.join("gluetun/post-rules.txt");
+        // Different bytes, too large, or a link: not trusted.
+        wf(&file, "other\n").unwrap();
+        assert!(!post_rules::saved_by(&root, me()));
+        wf(&file, RULES.repeat(2)).unwrap();
+        assert!(!post_rules::saved_by(&root, me()));
+        let elsewhere = dir.join("rules");
+        wf(&elsewhere, RULES).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+        assert!(!post_rules::saved_by(&root, me()));
+        // A linked gluetun folder or companion-files folder: not trusted.
+        let other = dir.join("other");
+        md(other.join("gluetun")).unwrap();
+        wf(other.join("gluetun/post-rules.txt"), RULES).unwrap();
+        let linked = dir.join("linked");
+        std::os::unix::fs::symlink(&other, &linked).unwrap();
+        assert!(post_rules::saved_by(&other, me()));
+        assert!(!post_rules::saved_by(&linked, me()));
+        let c2 = dir.join("c2");
+        md(&c2).unwrap();
+        std::os::unix::fs::symlink(other.join("gluetun"), c2.join("gluetun")).unwrap();
+        assert!(!post_rules::saved_by(&c2, me()));
+    }
+
+    /// The write: 0644 whatever the umask, a link or a stale file replaced
+    /// rather than written through, no temporary file left.
+    #[cfg(unix)]
+    #[test]
+    fn post_rules_are_written_whole_without_following_a_link() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        let root = dir.join("c");
+        md(&root).unwrap();
+        let r = post_rules::open_dir(&root).unwrap();
+        let (g, _) = post_rules::gluetun_dir(r.as_fd()).unwrap();
+        let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&root.join("gluetun")), 0o755);
+        let file = root.join("gluetun/post-rules.txt");
+        let victim = dir.join("victim");
+        wf(&victim, "keep\n").unwrap();
+        std::os::unix::fs::symlink(&victim, &file).unwrap();
+        post_rules::write(g.as_fd()).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+        assert!(std::fs::symlink_metadata(&file).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), RULES);
+        assert_eq!(mode(&file), 0o644);
+        // A stale file is replaced.
+        wf(&file, "stale\n").unwrap();
+        post_rules::write(g.as_fd()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), RULES);
+        let names: Vec<_> = std::fs::read_dir(root.join("gluetun"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["post-rules.txt"]);
+        // A folder where the file goes (what Docker leaves) isn't replaced.
+        std::fs::remove_file(&file).unwrap();
+        md(&file).unwrap();
+        assert_eq!(post_rules::found(g.as_fd()), Ok(post_rules::Found::Other));
+        assert!(post_rules::write(g.as_fd()).is_err());
+        assert!(file.is_dir());
+        assert_eq!(std::fs::read_dir(root.join("gluetun")).unwrap().count(), 1);
     }
 }

@@ -277,6 +277,7 @@ fn compose_text(a: &ComposeArgs) -> Outcome<String> {
         publish: Vec::new(),
         data: DataFolders::none(),
         taken: Vec::new(),
+        gluetun_paths: None,
     };
     compose::compose(catalogue()?, &id(&a.id)?, &input).map_err(|e| Failure::Refused(e.to_string()))
 }
