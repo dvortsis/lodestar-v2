@@ -237,6 +237,10 @@ pub fn random_jitter() -> u64 {
 /// 10 s drain deadline (stages, results, outcomes), to leave the sends room.
 pub const STOP_DEADLINE: Duration = Duration::from_secs(30);
 
+/// The part of a local stop's deadline kept for spooling what's fetched
+/// when the coordinator doesn't take it back (CLUSTER-05).
+pub const SPOOL_RESERVE: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub backoff_base: Duration,
@@ -288,6 +292,8 @@ enum Ended {
     Exit(Exit),
     /// The connection is gone: wait, then connect again.
     Lost,
+    /// A local stop that already disconnected the work: stop.
+    Stopped,
     /// Renewed: connect again at once on the new certificate.
     Renewed,
     /// The work asked for a fresh session: connect again at once.
@@ -351,6 +357,9 @@ impl<C: Connect> Worker<C> {
                     let ended = self
                         .drive(session, &mut work, &mut renewing, shutdown.as_mut())
                         .await;
+                    if matches!(ended, Ended::Stopped) {
+                        return Exit::Shutdown;
+                    }
                     work.disconnected();
                     // Only a session that lasted resets the back-off: a
                     // coordinator that accepts and drops at once still gets
@@ -365,6 +374,7 @@ impl<C: Connect> Worker<C> {
                             self.say("connecting again: the worker asked for a fresh session");
                             continue;
                         }
+                        Ended::Stopped => return Exit::Shutdown,
                         Ended::Lost => self.say("the connection to the coordinator was lost"),
                     }
                 }
@@ -416,14 +426,7 @@ impl<C: Connect> Worker<C> {
         }
         loop {
             tokio::select! {
-                () = shutdown.as_mut() => {
-                    // A drain the coordinator asked for has already handed
-                    // everything back.
-                    if !draining {
-                        self.stop_drain(&session, work).await;
-                    }
-                    return Ended::Exit(Exit::Shutdown);
-                }
+                () = shutdown.as_mut() => return self.local_stop(session, work, draining).await,
                 () = changed(&mut reconnects), if !draining => return Ended::Reconnect,
                 event = session.next_event() => match event {
                     None | Some(WorkerEvent::Ended(None)) => return Ended::Lost,
@@ -451,9 +454,16 @@ impl<C: Connect> Worker<C> {
                     Some(other) => work.event(other),
                 },
                 _ = upkeep.tick() => {
-                    let end = self
-                        .upkeep(&session, work, renewing, &mut renew_now, &mut listed)
-                        .await;
+                    // A stop isn't held up by an upkeep waiting on the
+                    // coordinator (a list, a heartbeat, a renewal): it's
+                    // dropped, and the stop's deadline runs from the signal.
+                    let (end, stopping) = tokio::select! {
+                        end = self.upkeep(&session, work, renewing, &mut renew_now, &mut listed) => (end, false),
+                        () = shutdown.as_mut() => (None, true),
+                    };
+                    if stopping {
+                        return self.local_stop(session, work, draining).await;
+                    }
                     if let Some(end) = end {
                         return end;
                     }
@@ -528,9 +538,9 @@ impl<C: Connect> Worker<C> {
     /// - **After a spool replay drains** (WK-11): the counts are compared,
     ///   and a difference sends the list too.
     ///
-    /// A list the coordinator refused, or an older coordinator that takes
-    /// none, counts as sent; one that got no answer is sent again at the
-    /// next upkeep.
+    /// A list the coordinator refused, an older coordinator that takes
+    /// none, or a list too long to send counts as sent; one that got no
+    /// answer is sent again at the next upkeep.
     async fn reconcile<W: Work>(&self, session: &WorkerSession, work: &mut W, listed: &mut bool) {
         let compare = work.reconcile();
         let mut differs = !*listed;
@@ -553,31 +563,63 @@ impl<C: Connect> Worker<C> {
             }
             // An older coordinator: no list, as before WK-11b.
             Ok(None) => *listed = true,
+            // Over `MAX_HOLDING`: a worker holding that many sends no list
+            // (WK-11b), so it isn't built again at every upkeep.
+            Err(ClientError::Invalid) => *listed = true,
             Err(_) => {}
         }
     }
 
-    /// A local stop with a session (CLUSTER-05): the same drain the
+    /// A local stop with a session (CLUSTER-05), unless the coordinator's
+    /// own drain already handed everything back: the same hand-back the
     /// coordinator can ask for. Fetched results go out, unreported
     /// outcomes are reported, and `Drained` hands back every lease left,
-    /// for re-grant at once. If the session fails on the way, what's
-    /// fetched goes to the spool instead ([`Work::stop`]). Bounded by
-    /// [`Settings::stop_deadline`]: past it the worker stops anyway, and
-    /// what's left goes back by the lease TTL, or by the reconcile when it
-    /// starts again sooner (CLUSTER-01).
-    async fn stop_drain<W: Work>(&self, session: &WorkerSession, work: &mut W) {
-        self.say("stopping: handing the current work back to the coordinator");
-        let stop = async {
-            if drain(session, work).await.is_err() {
-                work.stop().await;
-            }
-        };
-        if tokio::time::timeout(self.settings.stop_deadline, stop)
-            .await
-            .is_err()
-        {
-            self.say("stopping: the hand-back took too long; the coordinator takes the rest back by itself");
+    /// for re-grant at once. The session's events are read meanwhile, so
+    /// grants and hints queued to it can't stall the connection; they're
+    /// dropped, and `Drained` gives their leases back too.
+    ///
+    /// It has [`Settings::stop_deadline`] less [`SPOOL_RESERVE`]. If the
+    /// session fails on the way or the time runs out, the work is
+    /// disconnected and what's fetched goes to the spool instead
+    /// ([`Work::stop`]), within the reserve. What's left after that goes
+    /// back by the lease TTL, or by the next start's list (CLUSTER-01).
+    async fn local_stop<W: Work>(
+        &self,
+        mut session: WorkerSession,
+        work: &mut W,
+        draining: bool,
+    ) -> Ended {
+        if draining {
+            return Ended::Exit(Exit::Shutdown);
         }
+        self.say("stopping: handing the current work back to the coordinator");
+        let until =
+            tokio::time::Instant::now() + self.settings.stop_deadline.saturating_sub(SPOOL_RESERVE);
+        let handle = session.handle();
+        let handover = async {
+            let outcomes = work.drain().await;
+            for batch in outcomes.chunks(MAX_OUTCOME_BATCH) {
+                handle.report(batch.to_vec()).await?;
+            }
+            Ok::<(), ClientError>(())
+        };
+        let read = async { while session.next_event().await.is_some() {} };
+        let handed = tokio::select! {
+            r = tokio::time::timeout_at(until, handover) => matches!(r, Ok(Ok(()))),
+            () = read => false,
+        };
+        let handed = handed
+            && matches!(
+                tokio::time::timeout_at(until, session.drained()).await,
+                Ok(Ok(()))
+            );
+        if handed {
+            return Ended::Exit(Exit::Shutdown);
+        }
+        self.say("stopping: the coordinator didn't take the work back in time; keeping it for the next start");
+        work.disconnected();
+        let _ = tokio::time::timeout(SPOOL_RESERVE, work.stop()).await;
+        Ended::Stopped
     }
 
     /// A local stop with no session (CLUSTER-05): what's fetched goes to
@@ -751,6 +793,8 @@ pub(crate) mod tests {
             backoff_cap: Duration::from_millis(200),
             connect_timeout: DEADLINE,
             upkeep_every: Duration::from_millis(20),
+            // One second to hand work back, then the spool reserve.
+            stop_deadline: SPOOL_RESERVE + Duration::from_secs(1),
             ..Settings::default()
         }
     }
@@ -1178,6 +1222,48 @@ pub(crate) mod tests {
                 .all()
                 .contains("stopping: handing the current work back")
         );
+    }
+
+    /// A drain that never finishes, a stop that records itself, and how
+    /// often the work was disconnected.
+    #[derive(Clone, Default)]
+    struct Hanging {
+        stopped: Arc<Mutex<bool>>,
+        disconnects: Arc<Mutex<u32>>,
+    }
+
+    impl Work for Hanging {
+        fn event(&mut self, _: WorkerEvent) {}
+
+        fn disconnected(&mut self) {
+            *self.disconnects.lock().unwrap() += 1;
+        }
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            std::future::pending().await
+        }
+
+        async fn stop(&mut self) {
+            *self.stopped.lock().unwrap() = true;
+        }
+    }
+
+    /// CLUSTER-05: a hand-back that doesn't finish within the stop's
+    /// deadline (a stalled coordinator, a stuck stage) still ends: the work
+    /// is disconnected once and keeps what's fetched ([`Work::stop`]),
+    /// within the spool reserve.
+    #[tokio::test]
+    async fn a_stop_not_taken_back_in_time_keeps_the_work() {
+        let s = joined().await;
+        let work = Hanging::default();
+        let running = s.run(work.clone());
+        s.until_connected(&s.coord).await;
+        let started = Instant::now();
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
+        assert!(started.elapsed() < settings().stop_deadline + Duration::from_secs(5));
+        assert!(*work.stopped.lock().unwrap());
+        assert_eq!(*work.disconnects.lock().unwrap(), 1);
+        assert!(s.lines.all().contains("keeping it for the next start"));
     }
 
     /// CLUSTER-05: a local stop with no session keeps what's fetched

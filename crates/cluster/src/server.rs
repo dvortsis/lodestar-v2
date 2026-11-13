@@ -973,17 +973,17 @@ impl ClusterServer {
         &self.leases
     }
 
-    /// Queues a message to one worker's session without waiting. Messages
-    /// the server alone may send (`Welcome`, `Grants`, `HeartbeatAck`,
-    /// `Renewed`, `RenewRefused`, `Stop`, `Accepted`) are refused, as is
-    /// anything over a protocol limit. Pace large transfers (snapshots) by
-    /// their acknowledgements: a full queue is [`SendError::Full`].
     /// A remote worker's lease cap for an assignment's pool cap
     /// (CLUSTER-02): twice the pool cap.
     pub fn lease_cap_for(pool_cap: u32) -> usize {
         lease_cap(pool_cap)
     }
 
+    /// Queues a message to one worker's session without waiting. Messages
+    /// the server alone may send (`Welcome`, `Grants`, `HeartbeatAck`,
+    /// `Renewed`, `RenewRefused`, `Stop`, `Accepted`) are refused, as is
+    /// anything over a protocol limit. Pace large transfers (snapshots) by
+    /// their acknowledgements: a full queue is [`SendError::Full`].
     pub fn send(&self, worker: WorkerId, msg: ToWorker) -> Result<(), SendError> {
         if !Self::sendable(&msg) {
             return Err(SendError::Invalid);
