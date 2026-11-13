@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:43Z",
+  "updated_at": "2026-11-13T20:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8155,18 +8155,14 @@
       "what": "add entry incl. run.py, copy-off.sh, cloud-fleet-runbook in owns (#845)",
       "added": "2026-11-13T20:14Z"
     },
-    {
-      "id": "scrub-host-guard-fields",
-      "note": "scrub.py owner adds host_guard_drops and damaged fields (from #845 review N7)",
-      "at": "2026-11-13T20:29Z"
-    },
     "slices-yaml-x-gluetun-guard-reboot-nits",
     {
       "id": "X-worker-flush-nits",
       "note": "from #839 delta review: runtime.rs flush on Changed answers done without sending on the new session (comment says otherwise; fix comment or loop to Done within deadline); optional connect+flush same-wake test; leases.rs:2558 panic text \"granted\"",
       "at": "2026-11-13T20:43Z"
     },
-    "slices-yaml-x-flake-companions-loopback"
+    "slices-yaml-x-flake-companions-loopback",
+    "slices-yaml-x-scrub-guard-fields"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9213,7 +9209,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:43Z",
+    "updated": "2026-11-13T20:51Z",
     "items": [
       {
         "slot": 1,
@@ -9298,11 +9294,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-gluetun-guard-reboot-nits",
+        "slice": "X-scrub-guard-fields",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-13T20:41Z",
-        "doing": "comment and decisions wording follow-up to #845",
+        "since": "2026-11-13T20:51Z",
+        "doing": "scrub.py carries host_guard_drops and damaged (N7 from #845)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9456,7 +9452,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:43Z",
+  "updated": "2026-11-13T20:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9899,6 +9895,12 @@
       "slice": "X-lease-reconcile-every-session",
       "merged": "f6749252",
       "at": "2026-11-13T20:43Z"
+    },
+    {
+      "pr": 846,
+      "slice": "X-gluetun-guard-reboot-nits",
+      "merged": "d458a6f6",
+      "at": "2026-11-13T20:51Z"
     }
   ]
 }
