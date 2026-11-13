@@ -61,7 +61,7 @@ test.describe('navigation', () => {
 		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
-		await expect(menu.getByRole('menuitem')).toHaveText(['Logs', 'About']);
+		await expect(menu.getByRole('menuitem')).toHaveText(['Logs', 'About', 'Sign out']);
 		await menu.getByRole('menuitem', { name: 'About' }).click();
 		await expect(page).toHaveURL(/\/settings\/about/);
 		await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible();
@@ -557,3 +557,43 @@ for (const [name, themeId, colorMode] of [
 		});
 	});
 }
+
+test.describe('sign out', () => {
+	for (const width of [1366, 390]) {
+		test(`the overflow menu signs out to sign-in at ${width} px, and a reload stays out`, async ({
+			page,
+			go,
+			mock
+		}) => {
+			let signedIn = true;
+			let logouts = 0;
+			mock.on('getAuthStatus', (() => ({
+				status: 200,
+				body: { logged_in: signedIn, notice_required: false, setup_required: false }
+			})) as never);
+			mock.on('logout', (() => {
+				logouts++;
+				signedIn = false;
+				return { status: 200, body: { ok: true } };
+			}) as never);
+			await page.setViewportSize({ width, height: 800 });
+			await go('/search');
+			await interact(page);
+			await page.getByTestId('more-button').click();
+			await page
+				.getByRole('menu', { name: 'More' })
+				.getByRole('menuitem', { name: 'Sign out' })
+				.click();
+			await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
+			await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible({
+				timeout: 10_000
+			});
+			expect(logouts).toBe(1);
+			await page.reload();
+			await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible({
+				timeout: 10_000
+			});
+			await expect(page).toHaveURL(/\/login/);
+		});
+	}
+});
