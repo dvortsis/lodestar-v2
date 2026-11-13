@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T22:02Z",
+  "updated_at": "2026-11-13T22:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8557,12 +8557,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "843": {
-      "slice": "X-filter01-fix",
-      "head": "ad992dd5",
-      "state": "delta+security review MERGE; asked to merge main + regenerate schema (generated openapi overlap, 124 behind); then merge",
-      "at": "2026-11-13T21:03Z"
     }
   },
   "merged_log": [
@@ -9209,7 +9203,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T22:02Z",
+    "updated": "2026-11-13T22:20Z",
     "items": [
       {
         "slot": 1,
@@ -9379,12 +9373,12 @@
       },
       {
         "slot": 32,
-        "slice": "X-filter01-fix",
+        "slice": "X-filter01-hardening",
         "role": "build",
         "agent": "claude",
         "status": "active",
-        "since": "2026-11-13T07:31Z",
-        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #843 open; Opus + security review and an unanchored second read running",
+        "since": "2026-11-13T22:20Z",
+        "doing": "branching from main after #843 merged",
         "cap": "kept build (\u00a72.64 4+4)"
       }
     ]
@@ -9470,7 +9464,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T22:02Z",
+  "updated": "2026-11-13T22:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9955,6 +9949,12 @@
       "slice": "X-scrub-fields-readers",
       "merged": "6b7932cf",
       "at": "2026-11-13T22:02Z"
+    },
+    {
+      "pr": 843,
+      "slice": "X-filter01-fix",
+      "merged": "18e9d615",
+      "at": "2026-11-13T22:20Z"
     }
   ]
 }
