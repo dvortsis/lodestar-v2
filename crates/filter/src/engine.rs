@@ -1725,6 +1725,28 @@ mod tests {
         }
     }
 
+    /// An exception set on the engine directly, past validation and
+    /// loading, is never taken for a locked rule, and is for a rule that
+    /// isn't (every engine entry holds an over-budget torrent first, so
+    /// only this reaches the guard).
+    #[test]
+    fn a_locked_rule_is_never_excepted() {
+        let hashes = [[4; 20]];
+        let it = item(&hashes);
+        let doc = Doc::new(&it, None);
+        for rule in CoreRule::ALL {
+            let mut e = engine();
+            e.exceptions.push(Exception {
+                id: 1,
+                rule: RuleRef::Core(rule),
+                what: Match::Hashes(hashes.to_vec()),
+            });
+            let excepted = e.excepted(RuleRef::Core(rule), &it, &doc, Reading::Joined);
+            assert_eq!(excepted, !rule.locked(), "{rule:?}");
+        }
+        assert!(CoreRule::ALL.iter().any(|r| r.locked()));
+    }
+
     #[test]
     fn lists_sit_below_the_core() {
         let h = Handle::new(engine());

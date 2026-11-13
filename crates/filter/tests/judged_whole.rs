@@ -475,6 +475,122 @@ fn a_locked_rule_takes_no_exception() {
     assert!(e.validate().is_err());
 }
 
+/// The in-repo corpora are judged whole: every torrent of the rule
+/// packs' corpora and every release name of the release parser's golden
+/// files is within the budget. These are small, made-up torrents, so it
+/// says what an ordinary torrent costs, not what share of a real crawl
+/// the budget holds. Prints the counts.
+#[test]
+fn the_repos_corpora_are_judged_whole() {
+    let corpus = lodestar_filter::corpus::Corpus::builtin().expect("the shipped corpus parses");
+    let mut examples: Vec<&lodestar_filter::corpus::Example> = corpus
+        .packs
+        .iter()
+        .flat_map(|(_, _, cases)| cases.iter().map(|c| &c.example))
+        .collect();
+    examples.extend(corpus.precision.iter().map(|p| &p.example));
+    let mut held = 0;
+    for ex in &examples {
+        let it = Item {
+            hashes: &[H],
+            name: &ex.name,
+            files: &ex.files,
+            content_type: ex.content_type.unwrap_or(ContentType::Other),
+        };
+        held += usize::from(read_cost(&it).is_none());
+    }
+    let golden =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../release-parser/tests/golden");
+    let mut names = 0;
+    for entry in std::fs::read_dir(&golden).expect("the golden files") {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "txt") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for name in text
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with([' ', '#']))
+        {
+            names += 1;
+            held += usize::from(read_cost(&item(name, &[])).is_none());
+        }
+    }
+    println!(
+        "held: {held} of {} pack-corpus torrents and {names} release names",
+        examples.len()
+    );
+    assert!(examples.len() > 100 && names > 100, "the corpora were read");
+    assert_eq!(held, 0);
+}
+
+/// One file more than the core reads, so the torrent is CS-0a's.
+fn too_many_files() -> Vec<FileInfo> {
+    (0..=MAX_FILES).map(|i| file(&format!("{i}"))).collect()
+}
+
+/// A stored exception for a locked rule, a row that never passed
+/// validation, is skipped when the rules load, with a note, and the
+/// torrent it names is still held.
+#[test]
+fn a_stored_exception_to_a_locked_rule_is_skipped() {
+    use lodestar_filter::load::KIND_HASHES;
+    use lodestar_store::{ExceptionRow, RuleSet};
+    let mut e = Engine::new(core());
+    let set = RuleSet {
+        exceptions: vec![ExceptionRow {
+            id: 7,
+            rule: "CS-0a".into(),
+            kind: KIND_HASHES,
+            value: H.to_vec(),
+        }],
+        ..RuleSet::default()
+    };
+    let notes = e.load_rules(&set);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("exception 7") && n.contains("locked")),
+        "{notes:?}"
+    );
+    assert!(e.exceptions.is_empty());
+    let files = too_many_files();
+    assert_eq!(
+        judge(&e, "Title", &files),
+        Some(RuleRef::Core(CoreRule::Cs0a))
+    );
+}
+
+/// An engine given an exception to a locked rule directly, past both
+/// validation and loading, still doesn't apply it; the same exception to
+/// a rule that isn't locked does.
+#[test]
+fn an_engine_applies_no_exception_to_a_locked_rule() {
+    let to = |rule| {
+        let mut e = Engine::new(core());
+        e.exceptions.push(Exception {
+            id: 1,
+            rule: RuleRef::Core(rule),
+            what: Match::Hashes(vec![H]),
+        });
+        e
+    };
+    let files = too_many_files();
+    assert_eq!(
+        judge(&to(CoreRule::Cs0a), "Title", &files),
+        Some(RuleRef::Core(CoreRule::Cs0a))
+    );
+    let pair = [file("rolea lexa")];
+    assert_eq!(
+        judge(&Engine::new(core()), "Title", &pair),
+        Some(RuleRef::Core(CoreRule::Cs4a))
+    );
+    assert_ne!(
+        judge(&to(CoreRule::Cs4a), "Title", &pair),
+        Some(RuleRef::Core(CoreRule::Cs4a))
+    );
+}
+
 /// Text drawn from a generic mix of letters, digits, spaces, dots and the
 /// characters once read as word breaks, the same for the same seed.
 fn mixed(chars: usize, seed: u64) -> String {

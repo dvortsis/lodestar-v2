@@ -1070,19 +1070,24 @@ fn paths_apart_with<'p>(
                             slot
                         }
                     };
+                    let before = tok.work;
                     tok.resume(&paused[slot], name, out);
                     if !paused[slot].apart {
                         // The core reads this path again with its segments
                         // apart (`Read::path`), so the meter counts that
-                        // read too: its folder in full, its least, and its
-                        // tokens looked at. A read that can't fit the
-                        // text's cap is past the budget.
+                        // read too: its folder in full, its name as this
+                        // read of it cost (the second read's caches may be
+                        // cold, so it's counted in full again), its least,
+                        // and its tokens looked at. A read that can't fit
+                        // the text's cap is past the budget.
                         let again = out.len() - ends.last().copied().unwrap_or(0);
                         if again + path.len() >= MAX_TOKENS {
                             tok.cut();
                         }
-                        tok.work +=
-                            paused[slot].cost + least_path_cost(path) + again as u64 * cost::TOKEN;
+                        tok.work += paused[slot].cost
+                            + (tok.work - before)
+                            + least_path_cost(path)
+                            + again as u64 * cost::TOKEN;
                     }
                     apart.push(paused[slot].apart);
                 }

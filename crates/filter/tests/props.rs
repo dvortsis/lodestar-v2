@@ -2483,7 +2483,7 @@ fn runner_speed() -> f64 {
 /// cache (a script's distinct characters, characters sharing a slot);
 /// characters that decompose into many; marks, invisible and combining
 /// characters; many tiny files, deep paths, long, alternating or rotating
-/// folders, some read twice;
+/// folders, some read twice, and long names read twice;
 /// and typical Latin, CJK and Arabic seasons for scale.
 #[test]
 #[ignore]
@@ -2614,6 +2614,20 @@ fn budget_worst_case() {
             Box::new(move |n| {
                 each(n, |i| {
                     vec![folders[i % folders.len()].clone(), format!("{i}")]
+                })
+            })
+        }),
+        ("long names read twice", {
+            // One folder ending in spelled-out letters, so each file's
+            // name is read a second time; long names of words each read
+            // anew, so neither read finds them cached.
+            let mix: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+            Box::new(move |n| {
+                each(n, |i| {
+                    vec![
+                        "disc a b c".into(),
+                        words(&mix, 4, 4_000, i as u64 + 101, " "),
+                    ]
                 })
             })
         }),
