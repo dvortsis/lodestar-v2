@@ -175,22 +175,22 @@ fn insights_reconcile_on_the_fixture() {
         .as_secs() as i64;
     let anchor = data::anchor(now);
     let m = data::build(&dir, anchor).unwrap();
-    // The fixture writes no fetches by event time (metric 14), so the
-    // Fetch mark would be 0 = 0: one hand-chosen hour a day for 41 days,
-    // the oldest folded below.
-    let fetched: Vec<(i64, i64)> = (0..=40)
-        .map(|d| (anchor / HOUR - 1 - 24 * d, d + 1))
-        .collect();
-    {
+    // The fixture's fetches by event time (metric 14, stage Fetched), as
+    // its build wrote them beside its cohorts, read before the fold.
+    let fetched: Vec<(i64, i64)> = {
         let c = Connection::open(dir.join(data::DB)).unwrap();
-        for &(h, n) in &fetched {
-            c.execute(
-                "INSERT INTO rollup_hour (hour, metric, dim, key, value) VALUES (?1, ?2, 3, 0, ?3)",
-                lodestar_store::rusqlite::params![h, metric::FUNNEL_EVENTS, n],
-            )
+        let mut st = c
+            .prepare("SELECT hour, value FROM rollup_hour WHERE metric = ?1 AND dim = 3")
             .unwrap();
-        }
-    }
+        st.query_map([metric::FUNNEL_EVENTS], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert!(
+        fetched.iter().any(|&(h, _)| h < anchor / HOUR - 30 * 24),
+        "some fetches are old enough to be folded"
+    );
     // Fold the days past the hourly window (§7), as the recorder's tick
     // does: the all-time range then reads compacted days (30 d starts
     // inside the hourly window).
