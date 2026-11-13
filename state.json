@@ -7862,6 +7862,11 @@
       "id": "uiux-cheap-checks-1113",
       "added": "2026-11-13T01:44Z",
       "note": "Codebase-review session finished the owner-requested cheap checks; folder head now claude/codebase-review-bugs-x9ff7p 5c3e447a (supersedes 5138adbe; 34cbbafb bad trailer, re-commit). 03-not-done.md 'Done later the same day' + scripts/check-*.mjs. Triage: L1 IMPORTANT (shell) page opened while server down shows 'Error 500' and never retries after reconnect; fix retry on reconnect + 'Couldn't reach Lodestar'. L2 IMPORTANT (settings form) session expiry with unsaved setting: 'Leave without saving?' with no sign-out notice, 'Save changes' saves nothing, draft lost (s10.10.5); fix sign-out message + keep draft across sign-in. Polish: L3 2560px Search rows 35% width vs toolbar far right; L4 200% zoom no result in first screen (evidence for I2); L5 histogram labels overlap, row facts clip. Still not done list in 03-not-done.md (screen reader, keyboard-only wizard, touch, long language, live day one, etc.)."
+    },
+    {
+      "id": "x-test-vm-lane-k-1113",
+      "at": "2026-11-13T02:15Z",
+      "note": "X-test-vm: Lane K started (owner-approved 1 GB worker). Worker leak test on #800 87be769b passed (rc 0, 0 leak-class packets). Rehearsal crawl from 02:01:26Z, window ends ~15:01Z (Main ~14:37Z). Swap set to the plan 256 MB in suppression; devvm.py swap_size 0 fix on claude/dreamy-edison-xlmtoy 505a092b (fold into a slice). Rehearsal, not evidence. Then Main numbers, 3 failure drills, Lane K memory/OOM/yield record."
     }
   ],
   "main_health": [
