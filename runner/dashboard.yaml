@@ -832,9 +832,10 @@ conditions:
     label: You tag and publish v0.5.1
     auto: tag:v0.5.1
   experiment-host:
-    met: false
+    met: true
     who: you
-    label: 'Not booked. cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h. Next booking: CR-AB-ADM, after 2026-11-09T02:01Z and rc.2 steps B-E'
+    label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check or sync, with a restore step that always runs'
+    note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h'
   owner-checkpoint-1:
     met: true
     who: you
