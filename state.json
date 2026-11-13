@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T11:01Z",
+  "updated_at": "2026-11-13T11:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8026,6 +8026,11 @@
       "id": "slices-yaml-x-ci-filter-rust-inputs",
       "note": "Next runner plan PR: add X-ci-filter-rust-inputs (helper, sonnet, deps [X-ci-filter-fleet], owns ci_changes.py + test_ci_changes.py; place after X-ci-filter-fleet). X-ci-advisories (also owns ci_changes.py) waits until it merges.",
       "at": "2026-11-13T10:41Z"
+    },
+    {
+      "id": "slices-yaml-x-wk18w-rollback-owns",
+      "at": "2026-11-13T11:08Z",
+      "note": "next runner PR: add packaging/windows/join-finish.ps1 and packaging/windows/README.md to X-wk18w-rollback owns (runner accepted, #832)"
     }
   ],
   "main_health": [
@@ -8419,6 +8424,11 @@
       "slice": "runner",
       "head": "1c32b07f",
       "note": "plan entries X-ci-filter-rust-inputs, X-wk18w-rollback; X-filter01-fix owns; fresh review running"
+    },
+    "832": {
+      "slice": "X-wk18w-rollback",
+      "head": "8d0e8bbd",
+      "note": "CI running; await ready; Opus + /security-review"
     }
   },
   "merged_log": [
@@ -9065,7 +9075,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T11:01Z",
+    "updated": "2026-11-13T11:08Z",
     "items": [
       {
         "slot": 1,
@@ -9321,7 +9331,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T11:01Z",
+  "updated": "2026-11-13T11:08Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
