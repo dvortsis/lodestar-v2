@@ -12,7 +12,7 @@ These files show what Lodestar generates for its companions on Docker and Unraid
 |---|---|
 | `compose/` | One compose file per companion, with and without gluetun (`-gluetun`). |
 | `unraid/` | The filled Unraid templates (`my-<name>.xml`). With gluetun there are two: the companion's and gluetun's. |
-| `gluetun-post-rules.txt` | Lodestar's post-rules for gluetun. Without them, gluetun lets connections opened through the tunnel leave by your normal network once the tunnel drops. The compose files carry them inline; the Unraid template reads them from a file you save (see below). |
+| `gluetun-post-rules.txt` | Lodestar's post-rules for gluetun. Without them, gluetun lets connections opened through the tunnel leave by your normal network once the tunnel drops. The compose files carry them inline; the Unraid template reads them from a file you save (see below). The build embeds `crates/companions/src/gluetun-post-rules.txt`, a copy that must change with this file; a test checks that the two are identical. |
 
 ## What every file follows
 - **Images are pinned by digest** (`image@sha256:…`), never by a tag such as `:latest`.
