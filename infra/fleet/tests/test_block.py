@@ -1076,6 +1076,39 @@ esac
         self.run_script("outage-watcher.sh", HOST_FAILS=1)
         self.assertFalse((self.block / "damaged").is_symlink())
         self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
+        before = (self.block / "damaged").stat().st_ino
+        (self.stub / "gluetun_stopped").unlink()
+        self.running("gluetun")
+        self.run_script("outage-watcher.sh", HOST_FAILS=1)  # guard_lost again: the mark and its record stay single
+        self.assertTrue((self.stub / "gluetun_stopped").exists())  # it did run: gluetun was stopped again
+        self.assertEqual((self.block / "damaged").stat().st_ino, before)
+        self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
+        self.assertEqual(self.outages().count("host_guard_lost"), 1)
+        self.assertEqual([p.name for p in self.block.iterdir() if p.name.startswith(".damaged.")], [])  # no temp left
+
+    def test_mark_create_never_follows_a_link_that_appears_late(self):
+        """The race #851 left: a link put in place after guard_lost's check.
+        mark_create's `ln -T` refuses it, whatever it points at, and leaves it."""
+        self.make_block(segment=2)
+        fifo = self.tmp / "fifo"
+        os.mkfifo(fifo)
+        (self.tmp / "kept").write_text("not the mark\n")
+        for target in ("kept", "missing", "fifo", "dir"):
+            with self.subTest(target=target):
+                if target == "dir":
+                    (self.tmp / "dir").mkdir(exist_ok=True)
+                (self.block / "damaged").unlink(missing_ok=True)
+                (self.block / "damaged").symlink_to(self.tmp / target)
+                r = subprocess.run(["bash", "-c", '. "$1/block-lib.sh"; mark_create', "_", str(VM)],
+                                   env={"PATH": "/usr/bin:/bin", "BLOCK": str(self.block)},
+                                   capture_output=True, text=True, timeout=30)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(r.stdout + r.stderr, "")
+                self.assertTrue((self.block / "damaged").is_symlink())
+                self.assertEqual((self.tmp / "kept").read_text(), "not the mark\n")
+                self.assertFalse((self.tmp / "missing").exists())
+                self.assertEqual(list((self.tmp / "dir").iterdir()) if target == "dir" else [], [])
+                self.assertEqual([p.name for p in self.block.iterdir() if p.name.startswith(".damaged.")], [])
 
     def test_an_iptables_error_is_not_read_as_gone(self):
         self.make_block(segment=2)
@@ -1510,7 +1543,7 @@ class CopyOffControl(unittest.TestCase):
         put = steps.bucket_writer(b, {"EVIDENCE_BUCKET": "evidence-b"}, "42-1", "main")
         doc = Scrubber().doc()
         line = steps.copied_off(self.evidence(doc), put)
-        self.assertEqual(line, "evidence stored in the private bucket")
+        self.assertEqual(line, "evidence stored in the private bucket; host guard not reported")  # before #848
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["ExpectedBucketOwner"], "111122223333")
         self.assertEqual((calls[0]["Bucket"], calls[0]["Key"]), ("evidence-b", "fleet/42-1/copy-off-main.json"))
@@ -1540,12 +1573,41 @@ class CopyOffControl(unittest.TestCase):
             with self.subTest(out=out[:30]):
                 self.assertEqual(steps.copied_off(out, put), want)
         put.assert_not_called()
-        self.assertEqual(steps.copied_off(self.evidence({"version": 1}), None), "the evidence couldn't be stored")
+        self.assertEqual(steps.copied_off(self.evidence({"version": 1}), None),
+                         "the evidence couldn't be stored; host guard not reported")
         boom = mock.Mock(side_effect=RuntimeError("evidence-b AccessDenied 111122223333"))
         line = steps.copied_off(self.evidence({"version": 1}), boom)
         self.assertNotIn("evidence-b", line)
         self.assertIn("copy-off can run again", line)
         self.assertIsNone(steps.bucket_writer(object(), {"EVIDENCE_BUCKET": "x"}, "1-1", "main"))
+
+    def test_the_host_guards_state_is_reported(self):
+        """X-scrub-fields-readers: damaged makes the block not clean, drops are a
+        count, and a document from before #848 is not reported, never clean."""
+        base = {"version": 1, "segments": []}
+        cases = [({}, "host guard not reported"),
+                 ({"host_guard_drops": 0, "damaged": False}, "host guard held"),
+                 ({"host_guard_drops": 2, "damaged": False}, "host_guard_drops 2"),
+                 ({"host_guard_drops": 1, "damaged": True},
+                  "not clean: damaged, the host guard couldn't be held; host_guard_drops 1"),
+                 ({"host_guard_drops": 0, "damaged": True}, "not clean: damaged, the host guard couldn't be held"),
+                 # Malformed values are dropped by the scrub first, so they read as not reported.
+                 ({"host_guard_drops": -3, "damaged": "yes"}, "host guard not reported"),
+                 # One field missing, or wrong-typed and scrubbed away: never read as held.
+                 ({"host_guard_drops": 0}, "damaged not reported"),
+                 ({"damaged": "yes", "host_guard_drops": 0}, "damaged not reported"),
+                 ({"damaged": False}, "host_guard_drops not reported"),
+                 ({"damaged": False, "host_guard_drops": "x"}, "host_guard_drops not reported"),
+                 ({"damaged": True}, "not clean: damaged, the host guard couldn't be held; host_guard_drops not reported"),
+                 ({"damaged": 1, "host_guard_drops": 2}, "damaged not reported; host_guard_drops 2")]
+        for fields, want in cases:
+            with self.subTest(fields=fields):
+                line = steps.copied_off(self.evidence({**base, **fields}), lambda body: None)
+                self.assertEqual(line, "evidence stored in the private bucket; " + want)
+        line = steps.copied_off(self.evidence({**base, "damaged": True, "host_guard_drops": 0}),
+                                mock.Mock(side_effect=RuntimeError("x")))
+        self.assertTrue(line.endswith("copy-off can run again; not clean: damaged, the host guard couldn't be held"),
+                        line)  # still said when the store fails
 
 
 def render_proxy():

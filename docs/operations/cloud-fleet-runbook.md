@@ -180,7 +180,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   2. Runs the analyzer and the allow-list scrubber over the block's evidence, in a container with no network.
   3. The control plane scrubs the result again, and stores it only in the private evidence bucket, as `fleet/<run id>/copy-off-<vm>.json`.
   4. Ends the block: the watcher stops first, then the host guard, the marker and the Docker proxy go.
-- **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket`.
+- **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket; host guard held`. If the line ends with `not clean: damaged, the host guard couldn't be held`, the block isn't clean. A `host_guard_drops <n>` means the guard went missing and was put back. `host guard not reported` means the evidence is from before the guard fields existed.
 - **Fails:**
   - **`failed: block_running, copy_off`:** a collector is still running, so the segment isn't over.
   - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again.

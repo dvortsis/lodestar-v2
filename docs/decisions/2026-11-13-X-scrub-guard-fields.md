@@ -31,7 +31,21 @@ New tests in `infra/fleet/tests/test_block.py`, class `ScrubGuardFields`:
 In `CopyOff`: copy-off mounts a stand-in for the mark, read-only, when it's there, and not when it isn't. With the mark and no `host_guard_lost` line, scrubbing exactly the files copy-off mounted gives `damaged: true`.
 
 ## Left as it is (for the runner)
-- **Nothing reads the new fields yet.** No analyzer, control-plane report or runbook section reads `outages` or `outage_notes` from the scrubbed document either. A report that shows them is a follow-up.
+- **Readers:** see "Readers and the mark's creation" below. The control plane's copy-off report reads the new fields. Nothing reads `outages` or `outage_notes` from the scrubbed document yet.
 
 ## Follow-up (X-damaged-mark-links)
-- **Every check of the mark agrees with copy-off.** vm-status's `block_intact`, the outage-watcher step and `guard_lost` all use `damaged_marked` in `block-lib.sh` (`-e || -L`), so a dangling link counts as a mark everywhere. The scrubber counts a link too. `guard_lost` never writes through a link: a link already counts as a mark and is left in place, and the mark is created with `noclobber`, so a link that appears in between makes the write fail rather than follow it.
+- **Every check of the mark agrees with copy-off.** vm-status's `block_intact`, the outage-watcher step and `guard_lost` all use `damaged_marked` in `block-lib.sh` (`-e || -L`), so a dangling link counts as a mark everywhere. The scrubber counts a link too. `guard_lost` never writes through a link: a link already counts as a mark and is left in place.
+
+## Readers and the mark's creation (X-scrub-fields-readers)
+- **The control plane reports the guard's state.** copy-off's report line (`copied_off` in `steps/run.py`), the one reader of the scrubbed document, now ends with the host guard's state, in fixed words and a count:
+  - `not clean: damaged, the host guard couldn't be held` when `damaged` is true. The block's result is not clean, and this says why.
+  - `host_guard_drops <n>` when there were drops;
+  - `host guard held` when both fields say nothing went wrong;
+  - `host guard not reported` for a document from before #848, with neither field. It's never read as clean or as damaged. When both values are malformed, the scrub drops both first, so it reads the same way.
+  - **One field missing, or dropped by the scrub for its shape,** gives its own part: `damaged not reported` or `host_guard_drops not reported`. `host guard held` needs both fields present and both saying nothing went wrong. A `damaged: true` still reads as not clean whatever the count says.
+  - **Why "not clean:" and not "failed: <name>":** copy-off itself succeeded, and "failed:" in the report line means a step's check failed. So a damaged block is said in its own words, and the step still reads `done` (the runner's call).
+
+  The state is reported even when the evidence couldn't be stored.
+- **The mark is created race-free.** #851 created it with `noclobber`, which only refuses a link to a regular file or a dangling link. A link to a FIFO, a device or a directory would have been opened or written. `mark_create` now writes a new temp file in `$BLOCK` (`mktemp`) and hard-links it into place with `ln -T`. That fails if anything is already at the mark's path, and never writes through it. The temp file is always removed. A test puts a link to a file, to nothing, to a FIFO and to a directory where the mark goes, then calls `mark_create`: each is refused and left as it was.
+- **Rollout.** Blocks already running keep the guard copy installed when they started (`$BLOCK/tools/block-lib.sh`, staged by start-block) until they're restarted, or until the outage-watcher step starts a stopped watcher, which stages the current copy again. The outage-watcher and vm-status steps themselves always run the current copy. The new mark creation and readers apply to blocks started after this merges; the control plane's report applies at once.
+- **The runbook (outside `infra/fleet/`) isn't changed here.** §3.7's example "works" line, `evidence stored in the private bucket`, now gains the guard's state. The runner decides whether to update it.

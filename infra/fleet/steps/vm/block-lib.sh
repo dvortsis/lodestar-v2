@@ -128,6 +128,18 @@ guard_resume() {
 # one (X-damaged-mark-links). Every check of the mark uses this, as copy-off
 # does, so they all agree.
 damaged_marked() { [[ -e $BLOCK/damaged || -L $BLOCK/damaged ]]; }
+# mark_create: the damaged mark, created without following any link
+# (X-scrub-fields-readers). It's written to a new temp file in $BLOCK, then
+# hard-linked into place with `ln -T`, which fails if anything (a file or a
+# link of any kind) is already there and never writes through it.
+mark_create() {
+  local tmp
+  tmp=$(mktemp -- "$BLOCK/.damaged.XXXXXX" 2>/dev/null) || return 1
+  echo host_guard_lost 2>/dev/null >"$tmp" && ln -T -- "$tmp" "$BLOCK/damaged" 2>/dev/null
+  local rc=$?
+  rm -f -- "$tmp" 2>/dev/null
+  return "$rc"
+}
 # guard_lost mode dropped: stop gluetun first, then record. The records and
 # the damaged mark are written once, by the first failed check; gluetun is
 # stopped on every one, in case it came back.
@@ -136,8 +148,7 @@ guard_lost() {
   [[ $1 == boot ]] || stop_gluetun
   if ! damaged_marked; then
     [[ -n $2 ]] && kinds+=(host_guard_dropped)
-    # noclobber: created new, never written through a link that appeared since.
-    (set -o noclobber; echo host_guard_lost >"$BLOCK/damaged") 2>/dev/null
+    mark_create
     kinds+=(host_guard_lost)
   fi
   ((${#kinds[@]})) && block_record "$1" "${kinds[@]}"

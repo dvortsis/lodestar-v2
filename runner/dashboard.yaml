@@ -427,6 +427,7 @@ placement:
   - X-scrub-guard-fields
   - X-scrub-guard-fields-nits
   - X-damaged-mark-links
+  - X-scrub-fields-readers
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
