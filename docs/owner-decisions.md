@@ -663,6 +663,19 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **The cloud tester's own session is still one of the eight,** as it was under §2.59.
     - The runner tracks the cloud tester's sessions in runner-state `cloud_tester`. Its own two go in runner-state `extra`, not in `slots`, so the slots view keeps its eight rows. Each of the cloud tester's sessions keeps X-test-vm's limits: the least-privilege cloud users, the per-cloud spending cap, teardown reported, and never the owner's soak or Windows hosts.
 
+61. **Twelve build sessions plus up to four for cloud testing** (owner, in the runner session, 2026-11-12): twelve build slots, and up to four more for cloud testing, which the cloud tester and its lanes use.
+    - This replaced §2.59's eight plus §2.60's four shared sessions for the rest of 2026-11-12. §2.64 replaced it in turn.
+62. **Cloud testing first** (owner, in the runner session, 2026-11-12 at about 18:56Z): "Have Agent Runner prioritize anything needed for cloud testing."
+    - **The runner's rule (§2.19):** cloud-testing PRs are reviewed and merged first. Cloud-testing fix slices take a cloud-testing slot at once, and the next free build slot ahead of features. Build-plan §0.2 puts this above the ladder.
+63. **A window of up to ten more sessions** (owner, in the runner session, 2026-11-12T22:05Z): up to ten sessions on top of §2.61's, until 2026-11-12T23:30Z (end time confirmed by the owner). §2.64 extended it.
+64. **The window runs to 2026-11-13T00:00Z, then four build plus four cloud-testing sessions** (owner, in the runner session, 2026-11-12T22:30Z; the owner's message gave the end in local time, recorded here in UTC):
+    - **Until 2026-11-13T00:00Z:** keep the ten window sessions building while work is available, and open a replacement session when one's PR is ready to merge. At 22:41Z: "Keep opening slices if there is work available."
+    - **From 2026-11-13T00:00Z:** at most **four build slices and four cloud-testing slices** at a time. `runner/slices.yaml` `limits.phase_total` is 4 and `limits.extra_shared` is 4, now for cloud testing only (the cloud tester and the runner's cloud-testing slices). This replaces §2.59 to §2.61.
+    - **The runner's choice of the four build sessions kept (§2.19):** GS-2, X-cmp-egress-api, X-percolate-promoted-hold and X-consent-gate-lift. Cloud testing kept X-test-vm, X-gluetun-leak, X-unraid-validate-all and X-win-soak-attach-proc-hash.
+    - Unchanged: filling every slot isn't required, `owns` never overlap, the ladder decides after §2.62, and the runner runs at most three reviewers at once.
+65. **Over-cap sessions finish their open PR, then stop** (owner, in the runner session, 2026-11-13 at about 00:05Z): "Finish up open sessions to reduce running sessions to 4 + up to 4 tester sessions."
+    - **Each session over the cap finishes only its open PR** (review rounds and CI fixes), and the runner archives it once that PR merges. It isn't given a follow-on slice. Draft or parked work (WK-18s #801, WK-18w #802, M8-PERF-1b) resumes in a kept slot as one frees.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
