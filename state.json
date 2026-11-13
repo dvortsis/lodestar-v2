@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:03Z",
+  "updated_at": "2026-11-13T04:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8927,7 +8927,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T03:55Z",
+    "updated": "2026-11-13T04:06Z",
     "items": [
       {
         "slot": 1,
@@ -9154,13 +9154,11 @@
       },
       {
         "slot": 27,
-        "slice": "CMP-12",
-        "status": "active",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnB3vNLPygvFq3LtvZp: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/CMP-12.md; /security-review",
-        "since": "2026-11-12T22:46Z",
-        "cap": "over cap: finish #799 only, then archive (\u00a72.64)"
+        "slice": "",
+        "status": "idle",
+        "role": "",
+        "agent": "",
+        "doing": "retired: CMP-12 #799 merged (6953f9b4) 2026-11-13T04:06Z, session archived; over cap (\u00a72.65 drain)"
       },
       {
         "slot": 28,
@@ -9182,7 +9180,7 @@
         "status": "active",
         "role": "tester",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-templates (brief briefs/X-gluetun-templates.md); building locally, push after #799 and #809 merge; #808 merged 400cc479",
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-templates (brief briefs/X-gluetun-templates.md); #799 and #809 merged; told to bring main in and push; #808 merged 400cc479",
         "since": "2026-11-13T03:50Z"
       },
       {
@@ -9264,7 +9262,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:03Z",
+  "updated": "2026-11-13T04:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
