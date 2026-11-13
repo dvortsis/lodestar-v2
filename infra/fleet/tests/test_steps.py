@@ -451,7 +451,8 @@ case "$1" in
   compose) [ -n "$COMPOSE_FAIL" ] && exit 1; rm -f "$STUB/ifdown"; exit 0 ;;  # a recreated gluetun has its interface back
   inspect)
     case "$*" in
-      *Health*) if [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; then echo unhealthy; else echo healthy; fi ;;
+      *Health*) if [ -n "$NO_HANDSHAKE$UNHEALTHY" ] || { [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; }; then
+                  echo unhealthy; else echo healthy; fi ;;
       *Config.Env*) printf 'PATH=/usr/bin\nVPN_INTERFACE=%s\n' "${VPN_IFACE-wg0}" ;;
       *Running*gluetun) echo true ;;
       *Running*lodestar-leak-flow) [ -e "$STUB/flow" ] && [ -z "$FLOW_DIES" ] && echo true || echo false ;;
@@ -523,6 +524,13 @@ case "$1" in
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
         "ping -c 2 -W 3 1.1.1.1") [ -n "$NO_PING" ] && exit 1; exit 0 ;;
+        # The VPN interface's received bytes: none until a handshake completes.
+        # NO_COUNTER: the interface is gone (gluetun restarting its VPN); RX_LATE:
+        # the first read lands on a freshly recreated interface, then data comes.
+        "cat /sys/class/net/${VPN_IFACE-wg0}/statistics/rx_bytes")
+          n=$(cat "$STUB/rx_reads" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/rx_reads"
+          [ -n "$NO_COUNTER" ] && exit 1
+          if [ -n "$NO_HANDSHAKE" ] || { [ -n "$RX_LATE" ] && [ "$n" -eq 0 ]; }; then echo 0; else echo 4096; fi ;;
         "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
         *) exit 99 ;;
       esac
@@ -908,6 +916,51 @@ class VMScripts(unittest.TestCase):
         for n, v in (("captured_packets", 3), ("captured_tcp", 2), ("captured_udp", 0), ("captured_icmp", 1),
                      ("captured_other", 0), ("host_egress_packets", 3)):
             self.assertIn(f"count {n}_ifdown {v}", lines)
+
+    def test_a_handshake_that_never_completed_is_its_own_failure(self):
+        """An expired PIA key: the kill switch holds, and the report says why the test failed."""
+        rc, lines, raw = self.run_script("leak-test.sh", NO_HANDSHAKE=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertEqual(remote.parse(raw.encode()), raw.splitlines())  # in the grammar
+        fails = [ln for ln in lines if ln.startswith("fail ")]
+        self.assertEqual(fails, ["fail wireguard_handshake_never_completed", "fail leak_test"])  # never read as a leak
+        for n in ("ipv4_through_tunnel", "tcp_literal_up", "dns_up", "ping_up", "tunnel_recovers"):  # can't be judged
+            self.assertIn(f"skip {n}", lines)
+            self.assertNotIn(f"ok {n}", lines)
+        for phase in ("down", "ifdown"):  # the kill-switch phases still ran, and held
+            self.assertIn(f"ok no_egress_captured_{phase}", lines)
+            self.assertIn(f"count captured_packets_{phase} 0", lines)
+        self.assertNotIn("tunnel_healthy", raw)
+        self.assertFalse((self.stub / "blocked").exists())
+
+    def test_a_leak_with_no_handshake_is_still_a_leak(self):
+        for flags, failed in (({"FIREWALL_OFF": 1}, "no_egress_captured_ifdown"),
+                              ({"CAPTURED": 2}, "no_egress_captured_down")):
+            with self.subTest(flags=flags):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", NO_HANDSHAKE=1, **flags)
+                self.assertEqual(rc, 1)
+                self.assertIn("fail wireguard_handshake_never_completed", lines)
+                self.assertIn(f"fail {failed}", lines)
+                self.assertEqual(lines[-1], "fail leak_test")
+
+    def test_an_unhealthy_tunnel_is_a_handshake_failure_only_when_nothing_was_received(self):
+        # Data came through (at once, or after a read on a recreated interface), no
+        # counter could be read: the generic failure.
+        for flags in ({}, {"RX_LATE": 1}, {"NO_COUNTER": 1}):
+            with self.subTest(flags=flags):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1, **flags)
+                self.assertEqual(rc, 1)
+                self.assertIn("fail tunnel_healthy", lines)
+                self.assertNotIn("fail wireguard_handshake_never_completed", lines)
+                self.assertEqual(lines[-1], "fail leak_test")
+                if not flags:
+                    self.assertIn("ok ipv4_through_tunnel", lines)  # judged, not skipped
+
+    def test_an_early_stop_still_reports_an_unhealthy_tunnel(self):
+        rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1, PULL_FAIL=1)
+        self.assertEqual((rc, lines[-3:]), (1, ["fail tunnel_healthy", "fail probe_image", "fail leak_test"]))
 
     def test_probes_that_never_ran_never_pass(self):
         rc, lines, _ = self.run_script("leak-test.sh", PROBE_NOT_RUN=1)

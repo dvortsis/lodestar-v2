@@ -467,6 +467,12 @@ impl Services {
         )
         .await?;
         settings::crawler::follow_control(settings.subscribe(), crawl.clone());
+        // The watch folder (UP-1): its files go the uploads' way.
+        crate::watch::follow(
+            settings.subscribe(),
+            config.data_dir.clone(),
+            pipeline.uploads(),
+        );
         let search = serving.clone().map(SearchHandle::serving);
         let filters = Arc::new(lodestar_api::filters::FiltersApi {
             store: control.clone(),

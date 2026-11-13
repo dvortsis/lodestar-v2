@@ -109,16 +109,92 @@ pub const USENET_PAGE_BYTES: usize = 2 * 1024 * 1024;
 /// Usenet results kept per indexer page: the [`PAGE_SIZE`] asked for.
 /// The rest of a longer page is read (so it's still checked) and dropped.
 pub const USENET_PAGE_ITEMS: usize = PAGE_SIZE;
-/// Usenet results emitted per poll of the whole indexer list; the rest
-/// wait for the next poll. The store takes at most this many usenet items
-/// in one write (`MAX_USENET_BATCH`), and 4,096 is about 40 busy indexers'
-/// newest page.
+/// Usenet results emitted per poll of the whole indexer list. An
+/// indexer whose page was cut short isn't marked polled, and one reached
+/// after the budget is spent isn't asked at all: both are asked on the
+/// next poll (within [`USENET_DAILY_HITS`]). The store takes at most
+/// this many usenet items in one write (`MAX_USENET_BATCH`), and 4,096
+/// is about 40 busy indexers' newest page.
 pub const USENET_POLL_ITEMS: usize = 4096;
-/// How often each Usenet indexer is polled: hourly, 24 API hits a day.
-/// Newznab indexers count API hits per day (free accounts often get 100
-/// or fewer), and Sonarr and Radarr share them, so the torrent indexers'
-/// 15 minutes (96 a day) could use up a user's quota.
+/// How often each Usenet indexer is polled when its pages arrive whole:
+/// hourly, 24 API hits a day (retries can add as many again, see
+/// [`USENET_DAILY_HITS`]). Newznab indexers count API hits per day (free
+/// accounts often get 100 or fewer), and Sonarr and Radarr share them,
+/// so the torrent indexers' 15 minutes (96 a day) could use up a user's
+/// quota.
 pub const USENET_POLL_EVERY: Duration = Duration::from_secs(3600);
+/// How far short of [`USENET_POLL_EVERY`] a poll may come: half a list
+/// round (the poll gate's 15 minutes). Rounds land at slightly different
+/// offsets, so without it a poll due "after an hour" would slip to the
+/// round after, every 75 minutes.
+pub const USENET_POLL_SLACK: Duration =
+    Duration::from_secs(POLICY.caps.min_poll_interval.as_secs() / 2);
+/// API hits per Usenet indexer in any 24 hours, retries included: 24 for
+/// the hourly polls and as many again for retries after a failed,
+/// oversized or partly sent page, which come on the normal 15-minute
+/// cadence. Past it, the indexer waits until its oldest hit is a day
+/// old. A request the limiter never sent (`HttpError::Blocked` after a
+/// `Retry-After`) isn't a hit.
+pub const USENET_DAILY_HITS: usize = 48;
+const DAY: Duration = Duration::from_secs(24 * 3600);
+
+/// When each Usenet indexer last gave a page that was all sent, and its
+/// hits in the last day ([`USENET_POLL_EVERY`], [`USENET_DAILY_HITS`]).
+/// An entry lives up to a day after its last hit, so a manager whose ids
+/// change between lists could leave more than one list's worth: the map
+/// is capped at [`MAX_INDEXERS`] entries, and a new id past the cap waits
+/// until older entries age out. Each entry holds at most
+/// [`USENET_DAILY_HITS`] instants.
+#[derive(Debug, Default)]
+pub(crate) struct UsenetPolls(std::collections::HashMap<String, UsenetPolled>);
+
+#[derive(Debug, Default)]
+struct UsenetPolled {
+    done: Option<tokio::time::Instant>,
+    hits: VecDeque<tokio::time::Instant>,
+}
+
+impl UsenetPolls {
+    /// Whether `id` may be asked at `now`: not within [`USENET_POLL_EVERY`]
+    /// (less [`USENET_POLL_SLACK`]) of a poll whose page was all sent,
+    /// and under [`USENET_DAILY_HITS`] in the last day.
+    pub(crate) fn due(&mut self, id: &str, now: tokio::time::Instant) -> bool {
+        let wait = USENET_POLL_EVERY.saturating_sub(USENET_POLL_SLACK);
+        self.0.retain(|_, p| {
+            p.hits.retain(|at| now.duration_since(*at) < DAY);
+            p.done = p.done.filter(|at| now.duration_since(*at) < wait);
+            p.done.is_some() || !p.hits.is_empty()
+        });
+        match self.0.get(id) {
+            Some(p) => p.done.is_none() && p.hits.len() < USENET_DAILY_HITS,
+            None => self.0.len() < MAX_INDEXERS,
+        }
+    }
+
+    /// A request to `id`, granted at `at`, was sent.
+    pub(crate) fn hit(&mut self, id: &str, at: tokio::time::Instant) {
+        let p = self.0.entry(id.to_owned()).or_default();
+        if p.hits.len() < USENET_DAILY_HITS {
+            p.hits.push_back(at);
+        }
+    }
+
+    /// `id`'s poll granted at `at` got `page`: a hit unless the request
+    /// was never sent ([`Failure::NotSent`]).
+    fn answered(&mut self, id: &str, at: tokio::time::Instant, page: &Result<Vec<u8>, Failure>) {
+        if *page != Err(Failure::NotSent) {
+            self.hit(id, at);
+        }
+    }
+
+    /// `id`'s poll granted at `at` was a 200 and every result was sent.
+    /// Stamped with the grant, not the answer, so the next poll is due a
+    /// round-aligned hour later.
+    pub(crate) fn done(&mut self, id: &str, at: tokio::time::Instant) {
+        self.0.entry(id.to_owned()).or_default().done = Some(at);
+    }
+}
+
 /// Bytes in a Usenet result's GUID, the store's limit on a key part
 /// (`USENET_MAX_PART`).
 pub const USENET_MAX_GUID: usize = 1024;
@@ -158,10 +234,13 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     finds_private: true,
 };
 
-/// The settings form (§10.10). The API key isn't a setting: it's the
+/// The settings form (§10.10). The `usenet` switch isn't on it until UN-3
+/// makes usenet items sendable (runner, X-un1-nits): turning it on would
+/// spend the indexers' daily API hits on items nobody can see or send.
+/// [`Config::from_json`] still reads it, off by default. The API key isn't a setting: it's the
 /// `api_key` credential the policy declares (X-sources-api-spec), stored
 /// through the credential store, and [`Config::from_json`] refuses it.
-pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"url":{"type":"string","format":"uri","title":"Address","description":"Your Prowlarr or Jackett address, such as http://prowlarr:9696"},"manager":{"type":"string","enum":["prowlarr","jackett"],"default":"prowlarr","title":"Indexer manager"},"agents":{"type":"integer","minimum":1,"maximum":8,"default":2,"title":"Indexers queried at once"},"usenet":{"type":"boolean","default":false,"title":"Usenet results","description":"Also keep results from your Usenet indexers (Prowlarr only). They stay on this machine and are never verified."}},"required":["url","manager"],"additionalProperties":false}"#;
+pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"url":{"type":"string","format":"uri","title":"Address","description":"Your Prowlarr or Jackett address, such as http://prowlarr:9696"},"manager":{"type":"string","enum":["prowlarr","jackett"],"default":"prowlarr","title":"Indexer manager"},"agents":{"type":"integer","minimum":1,"maximum":8,"default":2,"title":"Indexers queried at once"}},"required":["url","manager"],"additionalProperties":false}"#;
 
 /// Q4 (runner): each indexer's RSS at most every 15 minutes. The manager
 /// is the user's own, usually on the LAN, and paces its indexers itself;
@@ -509,7 +588,7 @@ impl Prowlarr {
                 Err(Failure::Refused) => return Err(fail(REFUSED)),
                 Err(Failure::Setup(why)) => return Err(fail(why)),
                 // The next list waits for the poll gate.
-                Err(Failure::Other) => continue,
+                Err(Failure::Other | Failure::NotSent) => continue,
                 Err(Failure::Closed) => return Ok(()),
             };
             let polled = tokio::select! {
@@ -517,7 +596,7 @@ impl Prowlarr {
                 r = poll_all(&job, indexers) => r,
             };
             match polled {
-                Ok(()) | Err(Failure::Other) => {}
+                Ok(()) | Err(Failure::Other | Failure::NotSent) => {}
                 Err(Failure::Refused) => return Err(fail(REFUSED)),
                 Err(Failure::Setup(why)) => return Err(fail(why)),
                 Err(Failure::Closed) => return Ok(()),
@@ -547,6 +626,21 @@ enum Failure {
     /// a redirect (never followed), a 404, or a 200 that isn't an indexer
     /// list. Retrying every 15 minutes would only hide it.
     Setup(&'static str),
+    /// The limiter or the egress refused the request before sending it
+    /// (a `Retry-After` block, no egress): not an API hit. Otherwise
+    /// handled as [`Failure::Other`].
+    NotSent,
+}
+
+impl Failure {
+    /// [`Failure::NotSent`] as [`Failure::Other`], for callers that don't
+    /// count hits.
+    fn sent_or_not(self) -> Failure {
+        match self {
+            Failure::NotSent => Failure::Other,
+            f => f,
+        }
+    }
 }
 
 /// One indexer, as the manager listed it.
@@ -568,8 +662,8 @@ struct Job {
     emitter: Emitter,
     /// Usenet results this poll may still emit ([`USENET_POLL_ITEMS`]).
     usenet_left: AtomicUsize,
-    /// When each Usenet indexer was last polled ([`USENET_POLL_EVERY`]).
-    usenet_polled: Mutex<std::collections::HashMap<String, tokio::time::Instant>>,
+    /// When each Usenet indexer may be asked again ([`UsenetPolls`]).
+    usenet_polled: Mutex<UsenetPolls>,
 }
 
 impl Job {
@@ -607,7 +701,7 @@ impl Job {
             Ok(r) if r.status == 404 => return Err(Failure::Setup(NOT_FOUND)),
             _ => {}
         }
-        let res = answer(res)?;
+        let res = answer(res).map_err(Failure::sent_or_not)?;
         parse_indexers_with(self.config.manager, &res, self.config.usenet).map_err(|e| match e {
             ListError::Refused => Failure::Refused,
             // Over the size cap is a real (if huge) list: not a setup error.
@@ -617,14 +711,30 @@ impl Job {
     }
 
     async fn poll(&self, ix: &Indexer) -> Result<(), Failure> {
-        if ix.usenet && !self.usenet_due(&ix.id) {
+        let granted = tokio::time::Instant::now();
+        // A Usenet indexer is asked only when it's due, and not once the
+        // poll's budget is spent: a request then would cost an API hit for
+        // nothing. It's asked on the next poll.
+        if ix.usenet
+            && (self.usenet_left.load(Ordering::Relaxed) == 0
+                || !self.usenet_polls().due(&ix.id, granted))
+        {
             return Ok(());
         }
-        let unit = format!("indexer/{}", ix.id);
-        let body = answer(self.http.poll(&unit, &self.page_request(ix)).await)?;
+        let page = self.page(ix).await;
+        if ix.usenet {
+            self.usenet_polls().answered(&ix.id, granted, &page);
+        }
+        let body = page.map_err(Failure::sent_or_not)?;
         let now = unix_now();
         if ix.usenet {
-            return self.emit_usenet(ix, &body, now).await;
+            // Marked polled only when the whole page went out: a failed,
+            // refused or oversized page, or one the budget cut short, is
+            // asked again on the next poll.
+            if self.emit_usenet(ix, &body, now).await? {
+                self.usenet_polls().done(&ix.id, granted);
+            }
+            return Ok(());
         }
         let mut found = Vec::new();
         let summary = torznab::parse_each(&body, &PAGE_LIMITS, |item| {
@@ -641,25 +751,23 @@ impl Job {
 }
 
 impl Job {
+    /// An indexer's page: the body of a 200, or why not.
+    async fn page(&self, ix: &Indexer) -> Result<Vec<u8>, Failure> {
+        let unit = format!("indexer/{}", ix.id);
+        let body = answer(self.http.poll(&unit, &self.page_request(ix)).await)?;
+        Ok(body)
+    }
+
+    fn usenet_polls(&self) -> std::sync::MutexGuard<'_, UsenetPolls> {
+        self.usenet_polled.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// One Usenet indexer's page as usenet items: at most
     /// [`USENET_PAGE_ITEMS`] of it, and only while the poll's
     /// [`USENET_POLL_ITEMS`] last. A page over [`USENET_PAGE_BYTES`] is
-    /// refused whole. Nothing about a result is logged.
-    /// Whether a Usenet indexer is due ([`USENET_POLL_EVERY`]), marking
-    /// it polled now when it is. Entries older than the interval are
-    /// dropped, so the map holds at most the indexers polled within it.
-    fn usenet_due(&self, id: &str) -> bool {
-        let now = tokio::time::Instant::now();
-        let mut polled = self.usenet_polled.lock().unwrap_or_else(|e| e.into_inner());
-        polled.retain(|_, at| now.duration_since(*at) < USENET_POLL_EVERY);
-        if polled.contains_key(id) {
-            return false;
-        }
-        polled.insert(id.to_owned(), now);
-        true
-    }
-
-    async fn emit_usenet(&self, ix: &Indexer, body: &[u8], now: i64) -> Result<(), Failure> {
+    /// refused whole. `true` when every result was sent. Nothing about a
+    /// result is logged.
+    async fn emit_usenet(&self, ix: &Indexer, body: &[u8], now: i64) -> Result<bool, Failure> {
         let found = match usenet_page(body, ix, &self.config.host, self.key.expose(), now) {
             Ok(found) => found,
             Err(UsenetPage::Refused) => return Err(Failure::Refused),
@@ -668,11 +776,11 @@ impl Job {
         for u in found {
             let Some(f) = u.into_found() else { continue };
             if !take_one(&self.usenet_left) {
-                break;
+                return Ok(false);
             }
             self.emitter.emit(f).await.map_err(|_| Failure::Closed)?;
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -689,11 +797,15 @@ fn take_one(n: &AtomicUsize) -> bool {
     false
 }
 
-/// The body of a 200, or why not.
+/// The body of a 200, or why not. A request the limiter or the egress
+/// refused before sending is [`Failure::NotSent`].
 fn answer(r: Result<lodestar_sources::Response, HttpError>) -> Result<Vec<u8>, Failure> {
     match r {
         Ok(res) if res.status == 200 => Ok(res.body),
         Ok(res) if matches!(res.status, 401 | 403) => Err(Failure::Refused),
+        Err(HttpError::Blocked { .. } | HttpError::BadUrl | HttpError::NoEgress) => {
+            Err(Failure::NotSent)
+        }
         _ => Err(Failure::Other),
     }
 }
@@ -710,7 +822,7 @@ async fn poll_all(job: &Arc<Job>, indexers: Vec<Indexer>) -> Result<(), Failure>
                 let next = queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
                 let Some(ix) = next else { return Ok(()) };
                 match job.poll(&ix).await {
-                    Ok(()) | Err(Failure::Other) => {}
+                    Ok(()) | Err(Failure::Other | Failure::NotSent) => {}
                     Err(f) => return Err(f),
                 }
             }
@@ -1384,5 +1496,126 @@ fn torznab_error(e: &BytesStart<'_>) -> ListError {
     match code.as_deref() {
         Some("100" | "101" | "102") => ListError::Refused,
         _ => ListError::Malformed,
+    }
+}
+
+#[cfg(test)]
+mod usenet_poll_tests {
+    use super::*;
+    use tokio::time::Instant;
+
+    const MIN: Duration = Duration::from_secs(60);
+
+    /// One poll of `id` at `at`: due, then a sent request.
+    fn ask(p: &mut UsenetPolls, id: &str, at: Instant) -> bool {
+        let due = p.due(id, at);
+        if due {
+            p.hit(id, at);
+        }
+        due
+    }
+
+    #[test]
+    fn a_whole_page_waits_an_hour_and_a_failure_retries_within_a_daily_bound() {
+        let mut p = UsenetPolls::default();
+        let t0 = Instant::now();
+        // Asked, all sent: not again within the hour.
+        assert!(ask(&mut p, "7", t0));
+        p.done("7", t0);
+        assert!(!ask(&mut p, "7", t0 + 15 * MIN));
+        assert!(!ask(&mut p, "7", t0 + 45 * MIN));
+        assert!(ask(&mut p, "7", t0 + 60 * MIN));
+        // Not done (a failure, or a page cut short): the next poll asks
+        // again, 15 minutes on.
+        assert!(ask(&mut p, "7", t0 + 75 * MIN));
+        // Another indexer is counted apart.
+        assert!(ask(&mut p, "8", t0 + 75 * MIN));
+
+        // Failing every 15 minutes: at most USENET_DAILY_HITS in a day.
+        let mut q = UsenetPolls::default();
+        let mut asked = 0;
+        for i in 0..(4 * 24) {
+            if ask(&mut q, "9", t0 + i * 15 * MIN) {
+                asked += 1;
+            }
+        }
+        assert_eq!(asked, USENET_DAILY_HITS);
+        assert!(!ask(&mut q, "9", t0 + 24 * 60 * MIN - MIN));
+        // A day after the first hit, one more is allowed.
+        assert!(ask(&mut q, "9", t0 + 24 * 60 * MIN));
+    }
+
+    #[test]
+    fn polls_stay_hourly_whatever_the_answers_latency() {
+        // The grant is stamped, not the answer, and rounds that land a
+        // minute early or late still find the indexer due an hour on.
+        let mut p = UsenetPolls::default();
+        let t0 = Instant::now();
+        let mut polls = 0;
+        for round in 0..(4 * 24) {
+            // Every other polled round (0, 8, 16, …) lands a minute late,
+            // so the next one comes 59 minutes after it: due only with
+            // the slack.
+            let jitter = if (round / 4) % 2 == 0 {
+                MIN
+            } else {
+                Duration::ZERO
+            };
+            let at = t0 + round * 15 * MIN + jitter;
+            if ask(&mut p, "7", at) {
+                polls += 1;
+                p.done("7", at);
+            }
+        }
+        assert_eq!(polls, 24, "hourly, not every 75 minutes");
+    }
+
+    #[test]
+    fn a_request_never_sent_isnt_a_hit() {
+        let blocked = Err(HttpError::Blocked {
+            until: Instant::now(),
+        });
+        assert_eq!(answer(blocked), Err(Failure::NotSent));
+        assert_eq!(answer(Err(HttpError::NoEgress)), Err(Failure::NotSent));
+        let timeout = Err(HttpError::Transport("timeout".into()));
+        assert_eq!(answer(timeout), Err(Failure::Other));
+        // Blocked for half a day: every round is due and answered
+        // `NotSent`, nothing is counted, and the day's hits are all there
+        // when the block lifts.
+        let mut p = UsenetPolls::default();
+        let t0 = Instant::now();
+        for i in 0..USENET_DAILY_HITS as u32 {
+            let at = t0 + i * 15 * MIN;
+            assert!(p.due("7", at));
+            p.answered("7", at, &Err(Failure::NotSent));
+        }
+        assert!(p.due("7", t0 + 12 * 60 * MIN));
+        // Any answer that went out counts: a failure as much as a page.
+        let mut q = UsenetPolls::default();
+        for i in 0..USENET_DAILY_HITS as u32 {
+            let at = t0 + i * 15 * MIN;
+            assert!(q.due("7", at));
+            let page = if i % 2 == 0 {
+                Err(Failure::Other)
+            } else {
+                Ok(Vec::new())
+            };
+            q.answered("7", at, &page);
+        }
+        assert!(!q.due("7", t0 + 12 * 60 * MIN), "48 hits counted");
+    }
+
+    #[test]
+    fn the_map_is_capped() {
+        let mut p = UsenetPolls::default();
+        let t0 = Instant::now();
+        for i in 0..MAX_INDEXERS {
+            assert!(ask(&mut p, &i.to_string(), t0));
+        }
+        // A new id past the cap waits; a known one is still asked.
+        assert!(!p.due("new", t0 + 15 * MIN));
+        assert!(p.due("1", t0 + 15 * MIN));
+        // A day on, the old entries have aged out.
+        assert!(p.due("new", t0 + 24 * 60 * MIN));
     }
 }

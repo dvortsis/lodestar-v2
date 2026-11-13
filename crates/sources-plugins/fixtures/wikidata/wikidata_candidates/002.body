@@ -1,0 +1,475 @@
+{
+ "entities": {
+  "Q900011": {
+   "type": "item",
+   "id": "Q900011",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Dune"
+    }
+   },
+   "aliases": {},
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "SENTINEL-DESCRIPTION"
+    }
+   },
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P31",
+       "hash": "0f",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 11424,
+         "id": "Q11424"
+        },
+        "type": "wikibase-entityid"
+       },
+       "datatype": "wikibase-item"
+      },
+      "type": "statement",
+      "id": "Q$0015",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P577",
+       "hash": "0f",
+       "datavalue": {
+        "value": {
+         "time": "+1984-12-14T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       },
+       "datatype": "time"
+      },
+      "type": "statement",
+      "id": "Q$0016",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ],
+    "P4947": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P4947",
+       "hash": "0f",
+       "datavalue": {
+        "value": "841",
+        "type": "string"
+       },
+       "datatype": "external-id"
+      },
+      "type": "statement",
+      "id": "Q$0017",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "SENTINEL-SITELINK",
+     "badges": []
+    }
+   },
+   "pageid": 1,
+   "ns": 0,
+   "title": "Q900011",
+   "lastrevid": 1,
+   "modified": "2026-01-01T00:00:00Z"
+  },
+  "Q900012": {
+   "type": "item",
+   "id": "Q900012",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Dune"
+    }
+   },
+   "aliases": {},
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "SENTINEL-DESCRIPTION"
+    }
+   },
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P31",
+       "hash": "0f",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 11424,
+         "id": "Q11424"
+        },
+        "type": "wikibase-entityid"
+       },
+       "datatype": "wikibase-item"
+      },
+      "type": "statement",
+      "id": "Q$0018",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P577",
+       "hash": "0f",
+       "datavalue": {
+        "value": {
+         "time": "+2021-12-14T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       },
+       "datatype": "time"
+      },
+      "type": "statement",
+      "id": "Q$0019",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ],
+    "P4947": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P4947",
+       "hash": "0f",
+       "datavalue": {
+        "value": "438631",
+        "type": "string"
+       },
+       "datatype": "external-id"
+      },
+      "type": "statement",
+      "id": "Q$0020",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "SENTINEL-SITELINK",
+     "badges": []
+    }
+   },
+   "pageid": 1,
+   "ns": 0,
+   "title": "Q900012",
+   "lastrevid": 1,
+   "modified": "2026-01-01T00:00:00Z"
+  },
+  "Q900013": {
+   "type": "item",
+   "id": "Q900013",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Dune"
+    }
+   },
+   "aliases": {},
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "SENTINEL-DESCRIPTION"
+    }
+   },
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P31",
+       "hash": "0f",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 7725634,
+         "id": "Q7725634"
+        },
+        "type": "wikibase-entityid"
+       },
+       "datatype": "wikibase-item"
+      },
+      "type": "statement",
+      "id": "Q$0021",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P577",
+       "hash": "0f",
+       "datavalue": {
+        "value": {
+         "time": "+1965-12-14T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       },
+       "datatype": "time"
+      },
+      "type": "statement",
+      "id": "Q$0022",
+      "rank": "normal",
+      "references": [
+       {
+        "hash": "ab",
+        "snaks": {
+         "P143": [
+          {
+           "snaktype": "value",
+           "property": "P143",
+           "hash": "0f",
+           "datavalue": {
+            "value": {
+             "entity-type": "item",
+             "numeric-id": 328,
+             "id": "Q328"
+            },
+            "type": "wikibase-entityid"
+           },
+           "datatype": "wikibase-item"
+          }
+         ]
+        },
+        "snaks-order": [
+         "P143"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "SENTINEL-SITELINK",
+     "badges": []
+    }
+   },
+   "pageid": 1,
+   "ns": 0,
+   "title": "Q900013",
+   "lastrevid": 1,
+   "modified": "2026-01-01T00:00:00Z"
+  }
+ },
+ "success": 1
+}

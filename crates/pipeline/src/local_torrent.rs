@@ -207,6 +207,10 @@ pub enum Outcome {
     Refused,
     /// The filter holds it (drop or quarantine): never stored.
     Held,
+    /// Judging it panicked (a bug, not the file's fault as far as anyone
+    /// can tell): nothing from it is stored, and the next file is judged
+    /// as usual (rv-753 N3).
+    Failed,
 }
 
 // The key is the user's own, but nothing here logs it.
@@ -220,6 +224,7 @@ impl std::fmt::Debug for Outcome {
             Outcome::Malformed => f.write_str("Malformed"),
             Outcome::Refused => f.write_str("Refused"),
             Outcome::Held => f.write_str("Held"),
+            Outcome::Failed => f.write_str("Failed"),
         }
     }
 }
@@ -257,6 +262,8 @@ pub struct UploadStats {
     pub refused: AtomicU64,
     /// Held by the filter at judging.
     pub held: AtomicU64,
+    /// Judging panicked: nothing stored, the next file judged as usual.
+    pub failed: AtomicU64,
 }
 
 /// Where the host hands the pipeline uploaded files
@@ -287,6 +294,7 @@ impl Uploads {
             Outcome::Malformed => &self.stats.malformed,
             Outcome::Refused => &self.stats.refused,
             Outcome::Held => &self.stats.held,
+            Outcome::Failed => &self.stats.failed,
         };
         counter.fetch_add(1, Ordering::Relaxed);
         Ok(outcome)
@@ -357,31 +365,62 @@ fn judge_one(
     (outcome, Some(commit))
 }
 
+/// How one upload is judged: [`judge_one`], or a stand-in in tests.
+pub(crate) type Judge = fn(
+    &lodestar_filter::Engine,
+    &mut Preparer,
+    Option<&Sealer>,
+    SourceId,
+    Vec<u8>,
+    i64,
+) -> (Outcome, Option<ToCommit>);
+
 /// Judges each upload ([`judge_one`], on the blocking pool, under the
 /// filter's current rules), answers it, and passes what may be stored or
 /// held to the writer's lease-free entry as source `source`. The answer
 /// is sent once the writer has taken the commit. Ends when the channel
-/// or the writer closes, or a judgment panics (every later upload is
-/// then [`Closed`], and nothing is stored from the one that panicked).
+/// or the writer closes.
+///
+/// **A judgment that panics fails that one upload** (rv-753 N3): it's
+/// answered [`Outcome::Failed`], nothing from it reaches the writer, and
+/// the next upload is judged as usual. The preparer is kept: a prepare
+/// call compresses in a fresh zstd frame each time, and nothing else in
+/// it changes while preparing, so a panic part-way leaves nothing a later
+/// call reads. The filter's engine is shared read-only.
 pub(crate) async fn task(
+    uploads: mpsc::Receiver<Upload>,
+    out: mpsc::Sender<ToCommit>,
+    preparer: Preparer,
+    filter: Arc<lodestar_filter::Handle>,
+    sealer: Option<Arc<Sealer>>,
+    source: SourceId,
+) {
+    task_with(uploads, out, preparer, filter, sealer, source, judge_one).await;
+}
+
+async fn task_with(
     mut uploads: mpsc::Receiver<Upload>,
     out: mpsc::Sender<ToCommit>,
     mut preparer: Preparer,
     filter: Arc<lodestar_filter::Handle>,
     sealer: Option<Arc<Sealer>>,
     source: SourceId,
+    judge: Judge,
 ) {
     while let Some(Upload { body, reply }) = uploads.recv().await {
         let engine = filter.current();
         let sealer = sealer.clone();
         let now = crate::unix_now();
         let Ok((p, outcome, commit)) = tokio::task::spawn_blocking(move || {
-            let (outcome, commit) =
-                judge_one(&engine, &mut preparer, sealer.as_deref(), source, body, now);
+            let judged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                judge(&engine, &mut preparer, sealer.as_deref(), source, body, now)
+            }));
+            let (outcome, commit) = judged.unwrap_or((Outcome::Failed, None));
             (preparer, outcome, commit)
         })
         .await
         else {
+            // The blocking pool is shutting down.
             return;
         };
         preparer = p;
@@ -430,6 +469,51 @@ mod tests {
         let mut pairs = vec![("info", info)];
         pairs.extend(extra);
         encode(&dict(pairs))
+    }
+
+    /// A judge that panics on one body and judges every other as usual.
+    fn panics_on_boom(
+        engine: &lodestar_filter::Engine,
+        preparer: &mut Preparer,
+        sealer: Option<&Sealer>,
+        source: SourceId,
+        body: Vec<u8>,
+        now: i64,
+    ) -> (Outcome, Option<ToCommit>) {
+        assert!(body != b"boom", "a bug in judging");
+        judge_one(engine, preparer, sealer, source, body, now)
+    }
+
+    /// rv-753 N3: one panicking judgment fails that upload alone; nothing
+    /// from it reaches the writer, and the next one is judged and stored.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_panicking_judgment_fails_one_upload_and_the_next_is_judged() {
+        let mut store =
+            lodestar_store::Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let source = store.register_source(SOURCE, "1", 0).unwrap();
+        let (uploads, rx) = channel();
+        let (out, mut commits) = mpsc::channel(4);
+        let filter = Arc::new(crate::default_filter());
+        let judge = tokio::spawn(task_with(
+            rx,
+            out,
+            store.preparer(),
+            filter,
+            None,
+            source,
+            panics_on_boom,
+        ));
+        assert_eq!(uploads.submit(b"boom".to_vec()).await, Ok(Outcome::Failed));
+        assert!(commits.try_recv().is_err(), "nothing from it is committed");
+        let good = file(info("Sintel 2010 1080p.mkv", false), vec![]);
+        let Ok(Outcome::Accepted { .. }) = uploads.submit(good).await else {
+            panic!("the next upload wasn't judged");
+        };
+        assert!(commits.recv().await.is_some());
+        assert_eq!(uploads.stats().failed.load(Ordering::Relaxed), 1);
+        assert_eq!(uploads.stats().accepted.load(Ordering::Relaxed), 1);
+        drop(uploads);
+        judge.await.unwrap();
     }
 
     #[test]

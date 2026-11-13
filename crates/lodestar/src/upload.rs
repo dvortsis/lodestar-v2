@@ -34,6 +34,9 @@ fn outcome(o: local_torrent::Outcome) -> Outcome {
         local_torrent::Outcome::Malformed => Outcome::Malformed,
         local_torrent::Outcome::Refused => Outcome::Refused,
         local_torrent::Outcome::Held => Outcome::Held,
+        // Judging it panicked (rv-753 N3): nothing stored. The route's
+        // nearest cause, without a new error code: it couldn't be read.
+        local_torrent::Outcome::Failed => Outcome::Malformed,
     }
 }
 
@@ -64,5 +67,6 @@ mod tests {
         );
         assert_eq!(outcome(local_torrent::Outcome::Refused), Outcome::Refused);
         assert_eq!(outcome(local_torrent::Outcome::Held), Outcome::Held);
+        assert_eq!(outcome(local_torrent::Outcome::Failed), Outcome::Malformed);
     }
 }

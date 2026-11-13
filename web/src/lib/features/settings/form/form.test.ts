@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onLoginRequired } from '$lib/api/client';
+import { SETTINGS_SAVED } from '$lib/features/restart/saved';
 import { DRAFT_PREFIX } from './draft';
 import { fakeServer, flush } from './testing/fake-server';
 import { createSettingsForm, preloadSettingsForm, type SettingsForm } from './form.svelte';
@@ -219,6 +220,21 @@ describe('saving', () => {
 		expect(form.restartPending).toEqual(['crawler.timeout_secs']);
 		expect(form.field('crawler.timeout_secs').savedRecently).toBe('restart');
 		expect(form.announcement?.text).toMatch(/after a restart/);
+	});
+
+	it('tells the restart watch once a save answers, and not when it fails', async () => {
+		const heard = vi.fn();
+		addEventListener(SETTINGS_SAVED, heard);
+		try {
+			server.next('PATCH /settings', { status: 500, body: { error: { code: 'x', message: 'x' } } });
+			form.set('crawler.intensity', 'low');
+			expect(await form.save()).toMatchObject({ ok: false });
+			expect(heard).not.toHaveBeenCalled();
+			expect(await form.save()).toMatchObject({ ok: true });
+			expect(heard).toHaveBeenCalledTimes(1);
+		} finally {
+			removeEventListener(SETTINGS_SAVED, heard);
+		}
 	});
 
 	it('offers no reset for a value that isn’t saved in the app, or a locked one', () => {

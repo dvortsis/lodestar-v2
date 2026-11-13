@@ -23,9 +23,10 @@
 #
 # Run as root by the step bootstrap: step.sh <workdir> [stack] [pia-run] [block]
 # (tests and start-block pass the last three); <workdir> holds the committed
-# compose.yaml and block-lib.sh. Output is fixed names only (`ok|fail <name>`,
-# `count <name> <int>`); the control side drops anything else. Exit 0 only when
-# every check passed.
+# compose.yaml and block-lib.sh. Output is fixed names only (`ok|fail|skip
+# <name>`, `count <name> <int>`); the control side drops anything else. `skip`
+# marks a check that can't be judged (the tunnel-up checks when the WireGuard
+# handshake never completed), never a pass. Exit 0 only when every check passed.
 set -uo pipefail
 work=${1:?workdir}
 STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstrap never does
@@ -220,33 +221,72 @@ if ((rc == 0)); then bad block_running; finish; fi
 # The tunnel.
 install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
 tunnel_up || { bad tunnel_started; finish; }
-check tunnel_healthy wait_healthy
-docker pull "$PROBE_IMAGE" >/dev/null 2>&1 || { bad probe_image; finish; }
+wait_healthy; up=$?
+unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so
+docker pull "$PROBE_IMAGE" >/dev/null 2>&1 || unhealthy_stop probe_image
 check probe_tools probe sh -c 'command -v curl && command -v nc && command -v dig && command -v ip'
 iface=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' gluetun 2>/dev/null \
   | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
 iface=${iface:-tun0}  # gluetun's image default; compose.yaml sets wg0, the name the post-rules use
-[[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || { bad vpn_interface; finish; }
+[[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || unhealthy_stop vpn_interface
 # The rules name the interface; a name gluetun didn't use would make them inert.
 check vpn_interface_live iface_up
 check post_rules_ipv4 post_rules_on iptables "$iface" icmp icmp
 check post_rules_ipv6 post_rules_on ip6tables "$iface" ipv6-icmp icmpv6
 
+# An unhealthy tunnel whose interface has received nothing never completed its
+# WireGuard handshake: an expired or wrong PIA key, or an endpoint that can't be
+# reached. Check the VPN credentials, then the endpoint. It's its own outcome,
+# so the report says why; it's still a failure, and the kill-switch phases
+# below still run and judge any leak on their own. The counter is read in
+# gluetun's namespace with no capabilities (`wg show` would need NET_ADMIN, and
+# gluetun may run WireGuard in userspace). gluetun's VPN restarts recreate the
+# interface (a fresh counter, or none for a moment), so it's read several
+# times: "no handshake" needs at least one read, and every read 0. A counter
+# that can't be read is never read as "no handshake".
+rx_zero() {
+  local i rx zero=""
+  for ((i = 0; i < 5; i++)); do
+    ((i > 0)) && sleep 2
+    rx=$(probe cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null | tr -d '\r\n')
+    [[ -z $rx ]] && continue
+    [[ $rx == 0 ]] || return 1
+    zero=1
+  done
+  [[ -n $zero ]]
+}
+no_handshake=""
+if ((up == 0)); then
+  pass tunnel_healthy
+elif rx_zero; then
+  no_handshake=1
+  bad wireguard_handshake_never_completed  # check the VPN credentials
+else
+  bad tunnel_healthy
+fi
+
 # Tunnel up: IPv4 leaves through PIA (not the host's address), TCP to a literal
 # address works (the positive control for the down probes), IPv6 fails, and DNS
-# answers through gluetun's own resolver.
+# answers through gluetun's own resolver. With no handshake the first three,
+# and the ping, can't be judged: they're skipped, never passed.
 host_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
-exit_ip=$(echo_ip 10)
-if [[ $exit_ip =~ $IPV4 && $host_ip =~ $IPV4 && $exit_ip != "$host_ip" ]]; then
-  pass ipv4_through_tunnel
+exit_ip=""
+if [[ -n $no_handshake ]]; then
+  echo "skip ipv4_through_tunnel"; echo "skip tcp_literal_up"; echo "skip dns_up"; echo "skip ping_up"
 else
-  bad ipv4_through_tunnel
+  exit_ip=$(echo_ip 10)
+  if [[ $exit_ip =~ $IPV4 && $host_ip =~ $IPV4 && $exit_ip != "$host_ip" ]]; then
+    pass ipv4_through_tunnel
+  else
+    bad ipv4_through_tunnel
+  fi
+  check tcp_literal_up probe nc -z -w 5 1.1.1.1 443
+  check dns_up resolves example.com 5
+  check ping_up probe ping -c 2 -W 3 1.1.1.1  # ICMP through the tunnel, no capabilities
 fi
-check tcp_literal_up probe nc -z -w 5 1.1.1.1 443
 refute ipv6_blocked_up probe curl -6 -s -m 10 "$V6_URL"
-check dns_up resolves example.com 5
 check dns_local probe grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf
-check ping_up probe ping -c 2 -W 3 1.1.1.1  # ICMP through the tunnel, no capabilities
+# The flow starts either way: with no handshake its packets still go into wg0.
 if flow_start; then flow=1; pass flow_started; else bad flow_started; fi
 
 # Down, phase A: the endpoint dropped in DOCKER-USER (gluetun keeps running).
@@ -290,7 +330,9 @@ timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1 && flow=""
 # Recovery: lift the block, recreate gluetun (its interface comes back), and the
 # tunnel must be healthy again, through the same exit.
 iptables -D DOCKER-USER $block 2>/dev/null && block=""
-if tunnel_up && wait_healthy && [[ -n $exit_ip && $(echo_ip 15) == "$exit_ip" ]]; then
+if [[ -n $no_handshake ]]; then
+  echo "skip tunnel_recovers"  # a tunnel that never came up can't recover
+elif tunnel_up && wait_healthy && [[ -n $exit_ip && $(echo_ip 15) == "$exit_ip" ]]; then
   pass tunnel_recovers
 else
   bad tunnel_recovers

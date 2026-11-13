@@ -372,5 +372,7 @@
 	"settings_logging_file_level_option_warn": "警告",
 	"settings_logging_file_level_option_info": "信息",
 	"settings_logging_file_level_option_debug": "调试",
-	"settings_logging_file_level_option_trace": "跟踪"
+	"settings_logging_file_level_option_trace": "跟踪",
+	"settings_watch_after_option_move": "移至 added/ 或 failed/",
+	"settings_watch_after_option_delete": "添加后删除"
 }
