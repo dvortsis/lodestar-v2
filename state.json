@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:51Z",
+  "updated_at": "2026-11-13T03:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8911,7 +8911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:51Z",
+    "updated": "2026-11-13T03:15Z",
     "items": [
       {
         "slot": 1,
@@ -9157,12 +9157,11 @@
       },
       {
         "slot": 29,
-        "slice": "X-percolate-promoted-hold",
-        "status": "active",
+        "slice": "X-wizard-labels-signout",
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnA6QRL7ZBHsGodHmKo: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/X-percolate-promoted-hold.md",
-        "since": "2026-11-12T22:47Z",
+        "agent": "session_01MMjhnCEzeKKeEySq9nj8Be",
+        "doing": "B1 wizard labels + B2 Sign out (owner priority); brief briefs/X-wizard-labels-signout.md",
+        "since": "2026-11-13T03:15Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       },
       {
@@ -9253,7 +9252,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:51Z",
+  "updated": "2026-11-13T03:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
