@@ -477,6 +477,7 @@ case "$1" in
   exec)
     case "$*" in
       "exec gluetun cat /sys/class/net/eth0/iflink") echo 7 ;;
+      "exec gluetun cat /sys/class/net/eth0/address") echo "${CMAC_OUT-02:42:ac:14:00:02}" ;;
       # post_rules_on: exactly the script's check, with the family and gluetun's interface.
       "exec gluetun sh -c "*" rules iptables ${VPN_IFACE-wg0}"|"exec gluetun sh -c "*" rules ip6tables ${VPN_IFACE-wg0}")
         case "$*" in *'-C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP'*) ;; *) bad "$*" ;; esac
@@ -582,31 +583,51 @@ esac
 # The capture must be on gluetun's veth, with exactly the filter that leaves out
 # only ARP and the tunnel's own UDP to the endpoint.
 STUB_TCPDUMP = r"""#!/usr/bin/env bash
-case "$*" in
-  "-r "*)
-    [ -n "$READ_FAILS" ] && exit 1
-    n=${CAPTURED:-0}
-    [ "$n" -gt 0 ] && printf 'pkt\n%.0s' $(seq "$n")
-    case "$2" in *cap-ifdown.pcap)
-      # What the VM saw (X-gluetun-leak): an open flow's teardown, and a port
-      # unreachable to the endpoint.
-      if [ -n "$FIREWALL_OFF" ] || [ -n "$NO_POST_RULES" ]; then
-        echo "00:00:01.000000 IP 10.2.0.2.40000 > 192.0.2.53.853: tcp 0"
-        echo "00:00:01.100000 IP 10.2.0.2.40000 > 192.0.2.53.853: tcp 0"
-        echo "00:00:01.200000 IP 172.20.0.2 > 192.0.2.77: ICMP 172.20.0.2 udp port 40001 unreachable, length 36"
-      fi ;;
-    esac
-    exit 0 ;;
-  *)
-    if [ "$1 $2 $3 $4 $5" != "-i vethabc123 -n -U -w" ] || [ $# -ne 7 ] \
-       || [ "$7" != "not arp and not (udp and host 192.0.2.77 and port 1337)" ]; then
-      printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
-    fi
-    printf 'PCAPHEADER' > "$6"
-    [ -n "$CAPTURE_DIES" ] && exit 1  # wrote its header, then went away
-    trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done ;;
-esac
+# Capture only: the pcap is the test's fixture for that phase (fixture-<phase>.pcap),
+# or an empty capture. READ_FAILS writes one the parser can't read.
+if [ "$1 $2 $3 $4 $5" != "-i vethabc123 -n -U -w" ] || [ $# -ne 7 ] \
+   || [ "$7" != "not arp and not (udp and host 192.0.2.77 and port 1337)" ]; then
+  printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
+fi
+phase=${6##*/cap-}; phase=${phase%.pcap}
+if [ -n "$READ_FAILS" ]; then printf 'NOTAPCAPFILE-NOTAPCAPFILE' > "$6"
+elif [ -e "$STUB/fixture-$phase.pcap" ]; then cat "$STUB/fixture-$phase.pcap" > "$6"
+else cat "$STUB/empty.pcap" > "$6"; fi
+[ -n "$CAPTURE_DIES" ] && exit 1  # wrote its header, then went away
+trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done
 """
+CMAC = bytes.fromhex("0242ac140002")  # the container's MAC (the stub's docker exec)
+HOST_MAC = bytes.fromhex("0242c0a80001")
+
+
+def ip4(proto, src, dst, l4):
+    """A minimal IPv4 packet (no checksum: the parser doesn't need one)."""
+    hdr = bytes([0x45, 0, 0, 20 + len(l4), 0, 0, 0, 0, 64, proto, 0, 0])
+    return hdr + bytes(int(x) for x in src.split(".")) + bytes(int(x) for x in dst.split(".")) + l4
+
+
+def frame(src_mac, payload, ethertype=0x0800):
+    return HOST_MAC + src_mac + ethertype.to_bytes(2, "big") + payload
+
+
+def pcap(frames):
+    out = bytearray(b"\xd4\xc3\xb2\xa1" + (2).to_bytes(2, "little") + (4).to_bytes(2, "little")
+                    + bytes(8) + (65535).to_bytes(4, "little") + (1).to_bytes(4, "little"))
+    for f in frames:
+        out += bytes(8) + len(f).to_bytes(4, "little") + len(f).to_bytes(4, "little") + f
+    return bytes(out)
+
+
+def sent(proto, dst, l4=b"\0" * 8):
+    return frame(CMAC, ip4(proto, "172.20.0.2", dst, l4))
+
+
+def received(proto, src, l4=b"\0" * 8):
+    return frame(HOST_MAC, ip4(proto, src, "172.20.0.2", l4))
+
+
+# What the VM saw (X-gluetun-leak): an open flow's teardown, and a port unreachable to the endpoint.
+LEAK_FRAMES = [sent(6, "192.0.2.53"), sent(6, "192.0.2.53"), sent(1, "192.0.2.77", bytes([3, 3]) + bytes(6))]
 STUB_IP = r"""#!/usr/bin/env bash
 case "$*" in
   "-o link show dev vethabc123")
@@ -711,7 +732,20 @@ class VMScripts(unittest.TestCase):
         self.block = self.tmp / "lodestar-block"
         (self.tmp / "v6fwd").write_text("0\n")
 
-    def run_script(self, name, **flags):
+    def run_script(self, name, fixtures=None, **flags):
+        # The captures: none by default; CAPTURED adds packets the container sent in
+        # both phases; a gluetun with its firewall off or without its post-rules
+        # sends the VM's leak once its interface is down.
+        (self.stub / "empty.pcap").write_bytes(pcap([]))
+        frames = {"down": [], "ifdown": []}
+        for phase in frames:
+            frames[phase] += [sent(47, "198.51.100.9")] * int(flags.get("CAPTURED", 0))
+        if flags.get("FIREWALL_OFF") or flags.get("NO_POST_RULES"):
+            frames["ifdown"] += LEAK_FRAMES
+        for phase, extra in (fixtures or {}).items():
+            frames[phase] += extra
+        for phase, fs in frames.items():
+            (self.stub / f"fixture-{phase}.pcap").write_bytes(pcap(fs))
         env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub),
                "IPV6_FORWARDING": str(self.tmp / "v6fwd"), **{k: str(v) for k, v in flags.items()}}
         r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"),
@@ -938,6 +972,45 @@ class VMScripts(unittest.TestCase):
         rc, lines, _ = self.run_script("leak-test.sh", GUARD_FAILS=1)
         self.assertEqual((rc, lines[-3:]), (1, ["fail recreate_guarded", "fail tunnel_started", "fail leak_test"]))
         self.assertNotIn(" up -d --force-recreate gluetun", self.log())  # never recreated unguarded
+
+    def test_the_capture_judges_only_what_the_container_sends(self):
+        """Packets towards the container (the endpoint's errors, a reply) are counted
+        apart and never fail the phase; what it sends does, with each ICMP packet's
+        type, code, direction and destination class (never its address)."""
+        inbound = [received(1, "192.0.2.77", bytes([3, 3]) + bytes(6)), received(6, "198.51.100.9")]
+        rc, lines, raw = self.run_script("leak-test.sh", fixtures={"down": inbound})
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok no_egress_captured_down", lines)
+        self.assertIn("count captured_packets_down 0", lines)
+        self.assertIn("count captured_inbound_down 2", lines)
+        self.assertIn("count icmp_down_in_t3_c3_endpoint 1", lines)
+        self.assertEqual(remote.parse(raw.encode()), raw.splitlines())  # in the grammar
+        self.assertNotIn("192.0.2.77", raw)
+
+        self.setUp()
+        outbound = [sent(1, "1.1.1.1", bytes([8, 0]) + bytes(6)), sent(1, "169.254.169.254", bytes([3, 1]) + bytes(6)),
+                    sent(1, "224.0.0.1", bytes([0, 0]) + bytes(6)), *inbound]
+        rc, lines, raw = self.run_script("leak-test.sh", fixtures={"down": outbound})
+        self.assertEqual(rc, 1)
+        self.assertIn("fail no_egress_captured_down", lines)
+        for line in ("count captured_packets_down 3", "count captured_inbound_down 2", "count captured_icmp_down 3",
+                     "count icmp_down_out_t8_c0_other 1", "count icmp_down_out_t3_c1_linklocal 1",
+                     "count icmp_down_out_t0_c0_multicast 1", "count icmp_down_in_t3_c3_endpoint 1"):
+            self.assertIn(line, lines)
+        self.assertEqual(remote.parse(raw.encode()), raw.splitlines())
+
+    def test_icmpv6_is_classified_too(self):
+        def ip6(src_mac, dst16, l4):
+            hdr = bytes([0x60, 0, 0, 0]) + len(l4).to_bytes(2, "big") + bytes([58, 255]) + bytes(16) + dst16
+            return frame(src_mac, hdr + l4, 0x86DD)
+        link_local = bytes.fromhex("fe800000000000000000000000000001")
+        rc, lines, raw = self.run_script("leak-test.sh", fixtures={"down": [ip6(CMAC, link_local, bytes([135, 0, 0, 0]))]})
+        self.assertIn("count icmp_down_out_t135_c0_linklocal 1", lines)
+        self.assertIn("fail no_egress_captured_down", lines)  # sent is sent: the rules, not the test, exempt it
+
+    def test_a_bad_container_mac_stops_the_test(self):
+        rc, lines, _ = self.run_script("leak-test.sh", CMAC_OUT="nope")
+        self.assertEqual((rc, lines[-2:]), (1, ["fail container_mac", "fail leak_test"]))
 
     def test_an_unreadable_counter_prints_no_count(self):
         rc, lines, _ = self.run_script("leak-test.sh", COUNTER_UNREADABLE=1)

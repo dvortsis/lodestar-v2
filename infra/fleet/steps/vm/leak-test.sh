@@ -195,26 +195,82 @@ start_capture() {  # $1: phase
   cap_pid=$!
   for ((i = 0; i < 20; i++)); do [[ -s $work/cap-$1.pcap ]] && break; sleep 0.5; done
 }
-judge_capture() {  # $1: phase. The capture must have run through every probe, then be readable and empty.
-  local alive="" captured=""
+# CAPTURE_PARSE (python3 -I, from stdin): reads a phase's pcap and prints
+# grammar lines only. A packet counts as sent by the container when its
+# Ethernet source is the container's own MAC; packets towards the container
+# are counted apart (captured_inbound) and never judged. For every ICMP or
+# ICMPv6 packet it prints its type, code, direction and the far end's class
+# (endpoint, linklocal, multicast, other: the destination of what the
+# container sends, the source of what it receives): a class, never the address.
+# Exit 2 when the file isn't a readable Ethernet pcap.
+CAPTURE_PARSE='
+import struct, sys
+path, mac, ep, phase = sys.argv[1:5]
+mac = bytes.fromhex(mac.replace(":", ""))
+ep = bytes(int(x) for x in ep.split("."))
+data = open(path, "rb").read()
+magics = {b"\xd4\xc3\xb2\xa1": "<", b"\xa1\xb2\xc3\xd4": ">", b"\x4d\x3c\xb2\xa1": "<", b"\xa1\xb2\x3c\x4d": ">"}
+if len(data) < 24 or data[:4] not in magics:
+    sys.exit(2)
+e = magics[data[:4]]
+if struct.unpack(e + "I", data[20:24])[0] != 1:
+    sys.exit(2)
+def dclass(fam, d):
+    if fam == 4 and d == ep:
+        return "endpoint"
+    if (fam == 4 and d[:2] == bytes([169, 254])) or (fam == 6 and d[0] == 0xFE and d[1] & 0xC0 == 0x80):
+        return "linklocal"
+    if (fam == 4 and (d[0] & 0xF0 == 0xE0 or d == bytes([255] * 4))) or (fam == 6 and d[0] == 0xFF):
+        return "multicast"
+    return "other"
+out = inb = 0
+cls = {"tcp": 0, "udp": 0, "icmp": 0, "other": 0}
+icmp = {}
+off = 24
+while off < len(data):
+    if off + 16 > len(data):
+        sys.exit(2)
+    n = struct.unpack(e + "I", data[off + 8:off + 12])[0]
+    pkt = data[off + 16:off + 16 + n]
+    off += 16 + n
+    if len(pkt) != n or n < 14:
+        sys.exit(2)
+    sent = pkt[6:12] == mac
+    et, p = struct.unpack(">H", pkt[12:14])[0], pkt[14:]
+    if et == 0x8100 and len(p) >= 4:
+        et, p = struct.unpack(">H", p[2:4])[0], p[4:]
+    proto = fam = d = l4 = None
+    if et == 0x0800 and len(p) >= 20:  # the far end: the destination of what it sends, the source of the rest
+        fam, proto, d, l4 = 4, p[9], p[16:20] if sent else p[12:16], p[(p[0] & 15) * 4:]
+    elif et == 0x86DD and len(p) >= 40:
+        fam, proto, d, l4 = 6, p[6], p[24:40] if sent else p[8:24], p[40:]
+    kind = {6: "tcp", 17: "udp", 1: "icmp", 58: "icmp"}.get(proto, "other")
+    if sent:
+        out += 1
+        cls[kind] += 1
+    else:
+        inb += 1
+    if kind == "icmp" and len(l4) >= 2:
+        key = "icmp_%s_%s_t%d_c%d_%s" % (phase, "out" if sent else "in", l4[0], l4[1], dclass(fam, d))
+        icmp[key] = icmp.get(key, 0) + 1
+print("count captured_packets_%s %d" % (phase, out))
+print("count captured_inbound_%s %d" % (phase, inb))
+for k in ("tcp", "udp", "icmp", "other"):
+    print("count captured_%s_%s %d" % (k, phase, cls[k]))
+for k in sorted(icmp)[:40]:
+    print("count %s %d" % (k, icmp[k]))
+'
+judge_capture() {  # $1: phase. The capture must have run through every probe, then be readable, and the container sent nothing.
+  local alive="" captured="" parsed
   if kill -0 "$cap_pid" 2>/dev/null; then alive=1; pass "capture_alive_$1"; else bad "capture_alive_$1"; fi
   kill "$cap_pid" 2>/dev/null; wait "$cap_pid" 2>/dev/null; cap_pid=""
-  if timeout 30 tcpdump -r "$work/cap-$1.pcap" -n -q >"$work/cap-$1.txt" 2>/dev/null; then
-    captured=$(grep -c . "$work/cap-$1.txt")
+  if parsed=$(timeout 30 python3 -I -c "$CAPTURE_PARSE" "$work/cap-$1.pcap" "$cmac" "$ep_ip" "$1" 2>/dev/null); then
+    captured=$(printf '%s\n' "$parsed" | sed -n "s/^count captured_packets_$1 \([0-9]*\)$/\1/p")
     pass "capture_read_$1"
+    printf '%s\n' "$parsed"
   else
     bad "capture_read_$1"
-  fi
-  echo "count captured_packets_$1 ${captured:-0}"
-  if [[ -n $captured ]]; then  # by class, for the evidence: TCP, UDP, ICMP (v4 and v6), the rest
-    local tcp udp icmp
-    tcp=$(grep -c ': tcp ' "$work/cap-$1.txt")  # tcpdump -q: ": tcp <len>", ": UDP, length", ": ICMP ...", ": ICMP6, ..."
-    udp=$(grep -c ': UDP,' "$work/cap-$1.txt")
-    icmp=$(grep -Ec ': ICMP6?[ ,]' "$work/cap-$1.txt")
-    echo "count captured_tcp_$1 $tcp"
-    echo "count captured_udp_$1 $udp"
-    echo "count captured_icmp_$1 $icmp"
-    echo "count captured_other_$1 $((captured - tcp - udp - icmp))"
+    echo "count captured_packets_$1 0"
   fi
   if [[ -n $alive && -s $work/cap-$1.pcap && $captured == 0 ]]; then pass "no_egress_captured_$1"; else bad "no_egress_captured_$1"; fi
 }
@@ -230,7 +286,7 @@ iface_up() { probe sh -c 'ip -o link show up dev "$1" | grep -q .' iface "$iface
 
 # Inputs. The endpoint is read from the root-only wg0.conf and validated; it
 # never leaves this VM.
-for tool in docker iptables tcpdump ip; do
+for tool in docker iptables tcpdump ip python3; do
   command -v "$tool" >/dev/null 2>&1 || { bad "tool_missing_$tool"; finish; }
 done
 [[ -s $CONF ]] || { bad wg_conf_present; finish; }
@@ -328,6 +384,9 @@ idx=$(docker exec gluetun cat /sys/class/net/eth0/iflink 2>/dev/null | tr -dc '0
 veth=$(ip -o link 2>/dev/null | awk -F': ' -v i="$idx" '$1 == i {print $2}' | cut -d@ -f1 | head -n 1)
 if [[ -z $idx || ! $veth =~ ^veth[0-9a-f]{1,12}$ ]]; then bad veth_found; finish; fi
 pass veth_found
+# The container's own MAC: what it sends carries it as the Ethernet source.
+cmac=$(docker exec gluetun cat /sys/class/net/eth0/address 2>/dev/null | tr -d '\r\n')
+[[ $cmac =~ ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ ]] || { bad container_mac; finish; }
 # The compose bridge (the veth's master) and the host's egress interface.
 bridge=$(ip -o link show dev "$veth" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p' | head -n 1)
 egress=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p' | head -n 1)

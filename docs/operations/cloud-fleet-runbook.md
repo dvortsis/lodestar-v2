@@ -113,7 +113,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **Then the tunnel recovers** through the same exit.
   - **The host's own IPv6 too:** no IPv6 forwarding, no IPv6 on the stack's Docker network, and no global IPv6 address in gluetun's namespace.
   - It refuses while a block is recorded or running.
-- **Works:** `run leak-test main: done; <n> ok;` followed by the counts. For both phases (`_down`, `_ifdown`), `captured_packets`, `captured_tcp`, `captured_udp`, `captured_icmp`, `captured_other` and `host_egress_packets` are all 0.
+- **Works:** `run leak-test main: done; <n> ok;` followed by the counts. For both phases (`_down`, `_ifdown`), `captured_packets`, `captured_tcp`, `captured_udp`, `captured_icmp`, `captured_other` and `host_egress_packets` are all 0. These count only what gluetun's container sends. `captured_inbound_<phase>` counts packets towards it, which are evidence only. Each `icmp_<phase>_<in|out>_t<type>_c<code>_<class>` line counts ICMP packets by type, code, direction and the far end's class (endpoint, linklocal, multicast or other).
 - **Fails:** `failed (exit 1); <n> ok; failed: <names>, leak_test`. **That's a stop condition: no crawl starts on that VM.** Tell the runner, with the failed names.
 
 ### 3.3 `/fleet run start-block <vm> <rules commit>`

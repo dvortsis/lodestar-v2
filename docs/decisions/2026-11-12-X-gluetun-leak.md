@@ -43,6 +43,16 @@ Fixes testing blocker #1: gluetun's kill switch let packets of established flows
   - `ping_up`, `flow_started` and `flow_alive_<phase>`: an unprivileged ping (`--cap-drop ALL`; Docker sets `ping_group_range` for the namespace, checked here) is opened through the tunnel before phase A and kept running through both down phases. The leak no longer depends on gluetun happening to hold a connection open (the self-review's finding). The flow is removed before gluetun is recreated.
   - Phase B's counter and capture start before the interface goes down, so a flow's first packets after the drop are seen too.
   - `no_host_egress_<phase>`: a packet counter in the host's DOCKER-USER chain, just below the endpoint block, matching the compose bridge in and the egress interface out. It must read 0. This is the brief's "nothing from the compose bridge leaves the host's eth0 apart from the endpoint's own UDP", measured where the packets leave rather than on gluetun's veth. An unreadable or unset counter fails.
+  - **The veth capture judges only what the container sends** (the runner, after X-test-vm's diagnostic run 2 on 2026-11-13). That run saw 0 ICMP on the bridge and 0 on the host's eth0, yet counted 2 ICMP in phase A of the veth capture, which records both directions.
+    - A plain pcap holds no direction, so an embedded parser (`python3 -I` on the host) reads it and counts a packet as sent when its Ethernet source is the container's MAC.
+    - Packets towards the container are counted apart (`captured_inbound_<phase>`) and never judged.
+    - Every ICMP and ICMPv6 packet is reported by type, code, direction and the far end's class (`icmp_<phase>_<in|out>_t<type>_c<code>_<endpoint|linklocal|multicast|other>`), never by address.
+    - Unit tests build pcap fixtures:
+      - inbound packets pass and are classed;
+      - outbound ICMP to any class fails;
+      - ICMPv6 is classified;
+      - an unreadable pcap fails `capture_read_<phase>`;
+      - a bad MAC stops the test.
   - Per-class counts of the veth capture (`captured_tcp/udp/icmp/other_<phase>`, read with `tcpdump -q`, so DNS counts as UDP), as evidence. A counter that can't be read prints no count line rather than a misleading 0, and still fails.
 - **The earlier criterion.** The veth capture would also have seen these packets. The new checks make the cause explicit (the post-rules) and add the host-side view the brief asks for.
 - **(b) DOCKER-USER.** The test's counter rule only counts and is always removed. A host DROP rule for the fleet VMs would be defence in depth for the operator only, never something an Unraid user is asked to do. It isn't added here, because it would hide a gluetun regression from the leak test. Propose it with the crawl phase if wanted, below the counter.
