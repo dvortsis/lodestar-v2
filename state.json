@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T05:01Z",
+  "updated_at": "2026-11-13T05:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8957,7 +8957,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T05:01Z",
+    "updated": "2026-11-13T05:22Z",
     "items": [
       {
         "slot": 1,
@@ -9056,13 +9056,8 @@
       },
       {
         "slot": 18,
-        "slice": "NOS-0",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: #789 main merged at be910a3e (delta = lib.rs lemmy+nostr only, checked 2026-11-13T02:19Z); merge on green, then archive",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #789 only, then archive (\u00a72.64)"
+        "status": "idle",
+        "doing": "NOS-0 #789 merged (4ca4eccf) 2026-11-13T05:22Z; session archived"
       },
       {
         "slot": 19,
@@ -9139,8 +9134,8 @@
         "status": "active",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: parked under the \u00a72.64 cap; #801 WK-18s open; resumes its Windows e2e tests when a build slot frees",
-        "since": "2026-11-12T22:52Z"
+        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: resumed 2026-11-13T05:22Z into the build slot NOS-0 freed: #801 WK-18s Windows e2e tests",
+        "since": "2026-11-13T05:22Z"
       },
       {
         "slot": 32,
@@ -9211,7 +9206,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T05:01Z",
+  "updated": "2026-11-13T05:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
