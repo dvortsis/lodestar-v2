@@ -79,7 +79,7 @@ function Fail([string]$msg, [int]$code = 1) {
 
 # For a data folder that holds a coordinator's database.
 function Get-CoordinatorFolderMessage {
-  "$DataDir holds the database of a Lodestar that ran on this PC before (uninstalling keeps it). A worker needs that folder for itself. If you want to keep that Lodestar's library, back up $DataDir first. Then, as an administrator, delete $DataDir and run setup again."
+  "$DataDir holds the library of a Lodestar that ran on this PC before (uninstalling keeps it), and a worker can't use a folder that holds a library. If you want to keep that library, back up $DataDir first. Then, as an administrator, delete $DataDir and run setup again."
 }
 
 # Why $dir isn't the data folder secure-datadir.ps1 made, or $null: it exists, it's a real
@@ -252,10 +252,10 @@ try {
     $message = Get-CoordinatorFolderMessage
     $exitCode = 1
   } elseif ($p.ExitCode -ne 0 -and $wasJoined) {
-    # Already joined: most likely an earlier install joined and was then undone, which
-    # leaves the worker's files in the data folder (X-wk18w-rollback). Uninstalling can't
-    # help, since nothing is installed, so say how to start over. Still a failure.
-    $message = "This PC has already joined a Lodestar: an earlier setup joined and was then undone, and left its files in $DataDir. On the main Lodestar, remove this worker in Settings, Workers. Then, as an administrator, delete $DataDir and run setup again with a new join token."
+    # Already joined: a worker uninstalled with its data kept (the default), or a setup that
+    # joined and was undone without its rollback. Uninstalling can't help, since nothing is
+    # installed, so say how to start over. Still a failure.
+    $message = "This PC's data folder already belongs to a worker: an earlier install or setup left it in $DataDir. On the main Lodestar, remove this worker in Settings, Workers. Then, as an administrator, delete $DataDir and run setup again with a new join token."
     $exitCode = 1
   } elseif ($p.ExitCode -ne 0) {
     # lodestar's own last line says why (refused, expired, unreachable, wrong CA); it never

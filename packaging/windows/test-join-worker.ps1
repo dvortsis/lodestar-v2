@@ -86,6 +86,9 @@ public static class Stub {
       case "hang":
         Thread.Sleep(Timeout.Infinite);
         return 0;
+      case "coordinator":  // lodestar's own refusal of a coordinator's folder, word for word
+        Console.Error.WriteLine("lodestar worker: refused: " + data + " is a coordinator's data folder. Give the worker a folder of its own with --data.");
+        return 3;
       default:  // "nocreds": says it worked, saves nothing
         return 0;
     }
@@ -249,7 +252,7 @@ Assert-NoToken $r 'runner deadline'
 
 # ---- already joined (an earlier setup joined and was undone): how to start over ----
 $r = Invoke-Join 'fail' -Joined
-Assert ($r.Result -like '*already joined a Lodestar*remove this worker*') "joined: unexpected result: $($r.Result)"
+Assert ($r.Result -like '*already belongs to a worker*remove this worker*') "joined: unexpected result: $($r.Result)"
 Assert-TokenGone $r 'joined'
 
 # ---- the files can't be handed to the service: the install fails ----
@@ -308,10 +311,17 @@ Assert (-not (Test-Path -LiteralPath (Join-Path $s.Data 'stub-seen.txt'))) "scri
 
 # ---- a coordinator's folder left by an uninstall: back it up or delete it ----
 $r = Invoke-Join 'ok' -WithDb
-Assert ($r.Result -like '*holds the database of a Lodestar*back up*delete*run setup again*') "coordinator folder: unexpected result: $($r.Result)"
+Assert ($r.Result -like '*holds the library of a Lodestar*back up*delete*run setup again*') "coordinator folder: unexpected result: $($r.Result)"
 Assert ($r.Result -notlike '*--data*' -and $r.Result -notlike '*REMOVE_DATA*') "coordinator folder: advice an installer user can't follow: $($r.Result)"
 Assert ($r.Seen.Count -eq 0) 'coordinator folder: lodestar ran'
 Assert-TokenGone $r 'coordinator folder'
+# lodestar's own refusal, if one gets past that check (no lodestar.db for the script to find):
+# mapped to the same message, never lodestar's --data advice.
+$r = Invoke-Join 'coordinator'
+Assert ($r.Result -like '*holds the library of a Lodestar*back up*delete*run setup again*') "coordinator refusal: unexpected result: $($r.Result)"
+Assert ($r.Result -notlike '*--data*') "coordinator refusal: passed on lodestar's --data advice: $($r.Result)"
+Assert ($r.Seen.Count -gt 0) 'coordinator refusal: lodestar did not run'
+Assert-TokenGone $r 'coordinator refusal'
 
 # ---- the rollback and commit steps (join-finish.ps1) ----
 # A join this setup made, then undone: its files go, the key stays, so setup can join again.
@@ -359,6 +369,18 @@ New-Item -ItemType Directory -Path (Join-Path $prep 'cluster') | Out-Null
 Assert (-not (Test-Path -LiteralPath (Join-Path $prep 'cluster\joined-by-setup'))) 'prepare: the stale marker is still there'
 [void](Invoke-Finish 'rollback' $prep)
 Assert ([IO.File]::ReadAllText((Join-Path $prep 'cluster\credentials')) -eq 'earlier') 'prepare then rollback: the earlier credentials were removed'
+# A stale marker that can't be removed (held open, no delete share): prepare exits 1, which
+# stops the install before its rollback could act on that marker, and the marker stays.
+[IO.File]::WriteAllText((Join-Path $prep 'cluster\joined-by-setup'), 'earlier setup')
+$held = [IO.File]::Open((Join-Path $prep 'cluster\joined-by-setup'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+try {
+  $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $install 'join-finish.ps1') -Step prepare -DataDir $prep 2>&1 | Out-String
+  Assert ($LASTEXITCODE -eq 1) "prepare, marker held: exited $LASTEXITCODE, expected 1: $out"
+  Assert (Test-Path -LiteralPath (Join-Path $prep 'cluster\joined-by-setup')) 'prepare, marker held: the marker is gone'
+  Assert ($out -like '*could not be removed*') "prepare, marker held: no reason given: $out"
+} finally { $held.Dispose() }
+[void](Invoke-Finish 'prepare' $prep)
+Assert (-not (Test-Path -LiteralPath (Join-Path $prep 'cluster\joined-by-setup'))) 'prepare, released: the marker is still there'
 
 # Links are never followed: a cluster folder, or a data folder, that is a junction is left alone.
 $target = Join-Path $root 'link-target'
