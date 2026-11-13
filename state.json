@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T15:39Z",
+  "updated_at": "2026-11-13T16:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8066,6 +8066,11 @@
       "id": "slices-yaml-x-fixed-sleep-nits",
       "note": "Add X-fixed-sleep-nits (deps [X-fixed-sleep-asserts]; owns LineChart.test.ts, crates/dht/tests/{network,pause}.rs, crates/dht/tests/wait/mod.rs, the X-fixed-sleep-asserts decisions file) with placement in the next runner PR.",
       "at": "2026-11-13T15:20Z"
+    },
+    {
+      "id": "slices-yaml-x-lease-reconcile-testing-rs",
+      "note": "Add crates/lodestar/src/cluster/testing.rs to X-lease-reconcile-every-session owns in the next runner PR (runner approved Probe forwarding).",
+      "at": "2026-11-13T16:07Z"
     }
   ],
   "main_health": [
@@ -8454,6 +8459,15 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
+    },
+    "836": {
+      "slice": "X-fixed-sleep-nits",
+      "note": "deny test uses two refused re-bootstraps (runner accepted)"
+    },
+    "837": {
+      "slice": "X-watch-stall-retry",
+      "head": "13d5df23",
+      "note": "runner \u00a72.26: Malformed+unchanged \u226560 s wall time before failed/; flag to owner (\u00a72.19) at merge"
     }
   },
   "merged_log": [
@@ -9100,7 +9114,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T15:39Z",
+    "updated": "2026-11-13T16:07Z",
     "items": [
       {
         "slot": 1,
@@ -9137,7 +9151,7 @@
         "slice": "X-lease-reconcile-every-session",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVaVQgTXvM11UK7nv: launched; finding detail sent by message (ids only in files)",
+        "doing": "session_01MMjhnCVaVQgTXvM11UK7nv: CLUSTER-01/02/05 implemented; chaos scenario last; shared edit approved: Probe impl Work forwards reconcile/reconciled/holding/listed/stop (cluster/testing.rs)",
         "since": "2026-11-13T10:09Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
@@ -9337,7 +9351,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T15:39Z",
+  "updated": "2026-11-13T16:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
