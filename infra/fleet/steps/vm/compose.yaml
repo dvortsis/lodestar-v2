@@ -6,6 +6,9 @@
 #   docs/decisions/2026-11-09-OP-3a.md), with PIA through its custom WireGuard
 #   provider and its firewall on (the kill switch under test). The leak test
 #   starts it alone.
+# - gluetun's post-rules file (configs.gluetun-post-rules below), copied in
+#   as a 0444 file: without it, gluetun lets connections that were open before the
+#   tunnel dropped leave by eth0 (docs/decisions/2026-11-12-X-gluetun-leak.md).
 # - lodestar in gluetun's network namespace, with every capability dropped
 #   except the three it needs to drop root. Its image comes from the screen's
 #   committed rules (start-block, OP-3b), validated there; it starts only with
@@ -30,6 +33,12 @@ services:
       TZ: Etc/UTC
     volumes:
       - ./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro
+    # Compose copies a config into the container (mode 0444, so only gluetun's
+    # own root could change it). gluetun reads it once, when it turns its
+    # firewall on, before the tunnel starts.
+    configs:
+      - source: gluetun-post-rules
+        target: /iptables/post-rules.txt
     ports:
       - "127.0.0.1:8090:8090"
     oom_score_adj: -500
@@ -93,3 +102,42 @@ services:
       - ./proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       - ./proxy-sock:/sock
     restart: "no"
+# gluetun's post-rules (X-gluetun-leak). gluetun v3.41.3 accepts every
+# ESTABLISHED,RELATED packet on any interface, ahead of its `-o wg0` accept. So
+# when wg0 goes down, a connection opened through the tunnel is routed out of
+# eth0 and passes. gluetun runs each line that starts with `iptables ` or
+# `ip6tables ` and skips every other line, so these comments are inert.
+# Every rule only marks or drops: none accepts anything gluetun doesn't.
+# The same text is packaging/companions/gluetun-post-rules.txt (a test checks).
+configs:
+  gluetun-post-rules:
+    content: |
+      # Lodestar's post-rules for gluetun (checked on v3.41.3). gluetun reads this
+      # file at /iptables/post-rules.txt when it turns its firewall on, before the
+      # tunnel starts. It runs each line that starts with "iptables " or
+      # "ip6tables " and skips every other line.
+      # Why: gluetun accepts packets of an open connection on any interface. When
+      # the tunnel drops, a connection opened through it is routed out of your
+      # normal network, and those packets pass. These rules stop that.
+      # Every rule only marks or drops traffic; none lets anything new through.
+      # They name the tunnel wg0: set VPN_INTERFACE=wg0 on gluetun. Its image
+      # defaults to tun0, and with another name these rules do nothing.
+      # 1. Mark every connection that sends a packet out of the tunnel: set one
+      #    bit of its conntrack mark. CONNMARK changes no verdict.
+      iptables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+      ip6tables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+      # 2. A marked connection never leaves by any other interface. Loopback,
+      #    the Docker network, replies to the web UI and WireGuard's own UDP
+      #    to the endpoint never use the tunnel, so they keep their mark clear.
+      iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+      ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+      # 3. No ICMP leaves outside the tunnel, of any type: not errors (with the
+      #    tunnel down, the endpoint's packets draw "port unreachable" from the
+      #    host's address) and not gluetun's health-check pings to the VPN server.
+      #    gluetun needs none outside the tunnel. Exempt: this container's own
+      #    addresses (loopback keeps its errors) and, for IPv6, link-scoped
+      #    traffic that can't leave the Docker network: link-local or multicast
+      #    destinations, and neighbour discovery (always hop limit 255).
+      #    Side effect: the container no longer answers pings from your network.
+      iptables -I OUTPUT 3 ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP
+      ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp ! -d fe80::/10 -m addrtype ! --dst-type LOCAL,MULTICAST -m hl ! --hl-eq 255 -j DROP
