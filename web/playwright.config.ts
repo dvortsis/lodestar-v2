@@ -1,10 +1,10 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type PlaywrightTestOptions, type Project } from '@playwright/test';
 import type { Appearance } from './e2e/support/test';
 import { BREAKPOINTS, DENSITIES, DESKTOP } from './e2e/support/matrix';
-import { patternsOf, specProblems, type SpecFile, FIXTURE_SPEC } from './scripts/e2e-spec-guard';
+import { FIXTURE_SPEC, SPEC_FILE, specProblems, type SpecFile } from './scripts/e2e-spec-guard';
 import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 
 // Projects (filter with `--project=<name>`; see e2e/README.md):
@@ -15,8 +15,10 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 //                                 baselines come from the shared 46-theme set
 //   reduced-motion                axe + motion tokens with prefers-reduced-motion: reduce (no baselines)
 //   keyboard-only                 *.keyboard.test.ts flows (no pointer allowed)
-//   fixture                       *.fixture.test.ts against a real `lodestar serve --fixture` server
-//                                 (opt-in: --project=fixture or E2E_FIXTURE=1; nightly in e2e.yml)
+//   fixture-writes               the *.fixture.test.ts specs that change server state (`filters-flows`,
+//                                 `settings-form`); `fixture` depends on it, so it runs first
+//   fixture                       the other *.fixture.test.ts against a real `lodestar serve --fixture`
+//                                 server (opt-in: --project=fixture or E2E_FIXTURE=1; nightly in e2e.yml)
 //   docs                          documentation screenshots into docs/user/images (opt-in:
 //                                 --project=docs or E2E_DOCS=1; `npm run docs:shots`)
 //   all-themes                    axe on every route in all 48 themes + the 46-theme key-route
@@ -129,34 +131,52 @@ const allThemesProject: Proj = {
 	use: desktop
 };
 
-// Guard: every `*.test.ts` under e2e/ must match a project, the opt-in ones included, and a spec
-// that reads E2E_FIXTURE_URL must be named for `fixture` (scripts/e2e-spec-guard.ts). The matchers
-// come from the projects themselves, so narrowing a project's `testMatch` cannot leave a gap.
+// Every project, the opt-in ones included: the guard below reads this same list, so `projects`
+// (what runs) and what the guard counts as covered cannot drift apart.
+const optIn = (on: boolean, ...p: Proj[]) => (on ? p : []);
+const everyProject: Proj[] = [
+	core,
+	...matrix,
+	...sample,
+	reducedMotion,
+	keyboardOnly,
+	fixtureWrites,
+	fixtureReads,
+	docsShots,
+	allThemesProject
+];
+const projects = [
+	core,
+	...matrix,
+	...sample,
+	reducedMotion,
+	keyboardOnly,
+	...optIn(fixture, fixtureWrites, fixtureReads),
+	...optIn(docs, docsShots),
+	...optIn(allThemes, allThemesProject)
+];
+
+// Guard: every spec under e2e/ (everything Playwright's default `testMatch` would take, not just
+// `*.test.ts`) must be run by some project, the opt-in ones included: `testMatch` matches it and
+// `testIgnore` does not. A spec that reads E2E_FIXTURE_URL must run only in the fixture projects
+// (scripts/e2e-spec-guard.ts). A spec that fits no project never runs, and nothing says so.
 function checkSpecsHaveProjects() {
-	const everyProject = [
-		core,
-		...matrix,
-		...sample,
-		reducedMotion,
-		keyboardOnly,
-		fixtureWrites,
-		fixtureReads,
-		docsShots,
-		allThemesProject
-	];
-	const matchers = everyProject.flatMap((p) => patternsOf(p.testMatch));
+	const root = fileURLToPath(new URL('./e2e', import.meta.url));
 	const files: SpecFile[] = [];
 	const walk = (dir: string) => {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			const path = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (entry.name !== 'node_modules') walk(path);
-			} else if (entry.name.endsWith('.test.ts'))
-				files.push({ path, name: entry.name, source: readFileSync(path, 'utf8') });
+			} else if (SPEC_FILE.test(entry.name))
+				files.push({
+					path: relative(root, path).split(sep).join('/'),
+					source: readFileSync(path, 'utf8')
+				});
 		}
 	};
-	walk(fileURLToPath(new URL('./e2e', import.meta.url)));
-	const problems = specProblems(files, matchers);
+	walk(root);
+	const problems = specProblems(files, everyProject);
 	if (problems.length) throw new Error('e2e spec/project mismatch:\n' + problems.join('\n'));
 }
 checkSpecsHaveProjects();
@@ -182,14 +202,5 @@ export default defineConfig<Appearance>({
 		baseURL: `http://localhost:${port}`,
 		...(chromiumPath ? { launchOptions: { executablePath: chromiumPath } } : {})
 	},
-	projects: [
-		core,
-		...matrix,
-		...sample,
-		reducedMotion,
-		keyboardOnly,
-		...(fixture ? [fixtureWrites, fixtureReads] : []),
-		...(docs ? [docsShots] : []),
-		...(allThemes ? [allThemesProject] : [])
-	]
+	projects
 });
