@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:21Z",
+  "updated_at": "2026-11-13T00:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7812,6 +7812,16 @@
       "id": "rv-781-optional",
       "note": "#781 merged with five optional review findings deferred (rv-781-11d2d193.md); fold into a later Unraid/packaging slice.",
       "added": "2026-11-13T00:21Z"
+    },
+    {
+      "id": "X-lease-reconcile-every-session",
+      "note": "Code review 2026-11-13 CLUSTER-01 (claude/happy-hypatia-i314gf): after #779, take_reconcile() fires only after a spool removal, so a worker restarting inside the lease TTL with an empty spool strands its leases. Fix slice before WK-G: compare counts on every new session, report/Drained on local stop, chaos kill-and-restart-inside-TTL scenario, correct WK-11 decisions sentence. Also CLUSTER-02 lease cap, CLUSTER-05 local-stop drain.",
+      "added": "2026-11-13T00:25Z"
+    },
+    {
+      "id": "code-review-1113-triage",
+      "note": "Runner PR after the drain: Track Q slices from docs/code-review/2026-11-13-full-code-review.md (203 findings, 16 blocking; 19 act-first rows); seven owner decisions to owner_queue (FILTER-01, APIFEAT-01, FILTER-03, UPDATE-01/05, SRC-02, INFRA-01, TEST-05); ask owner where Track Q sits on the ladder. #795 manual rollback wiring must run purge_for_restore (its decisions file says blocking for wiring).",
+      "added": "2026-11-13T00:25Z"
     }
   ],
   "main_health": [
@@ -8835,7 +8845,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:21Z",
+    "updated": "2026-11-13T00:25Z",
     "items": [
       {
         "slot": 1,
@@ -8869,7 +8879,7 @@
         "slice": "X-cmp-egress-api",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8PqqssoVTSpsA9adU: launched after #775 merged (b2a3e94f); brief briefs/X-cmp-egress-api.md; /security-review",
+        "doing": "session_01MMjhn8PqqssoVTSpsA9adU: #805 c9f4a887 fresh review running; kept build slot",
         "since": "2026-11-12T22:33Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -8938,7 +8948,7 @@
         "slice": "M8-REL-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mh12Mrj1m33EM83f: #783 open at ddbd5ea5 (bench/README section runner-approved); review on ready",
+        "doing": "session_01MMjhn8mh12Mrj1m33EM83f: #783 rv-783 CHANGES (B1 12-digit test hashes, I1) relayed; finish only (\u00a72.65)",
         "since": "2026-11-12T20:46:15Z",
         "status": "active",
         "cap": "over cap: finish #783 only, then archive (\u00a72.64)"
@@ -9062,7 +9072,7 @@
         "slice": "ENR-13",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9aiUogqrUAigBpjxV: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/ENR-13.md",
+        "doing": "session_01MMjhn9aiUogqrUAigBpjxV: #793 ac134418 delta OK, merge on green, then archive (\u00a72.65)",
         "since": "2026-11-12T22:08:33Z",
         "status": "active",
         "cap": "over cap: finish #793 only, then archive (\u00a72.64)"
@@ -9205,7 +9215,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:21Z",
+  "updated": "2026-11-13T00:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
