@@ -187,10 +187,6 @@ fn insights_reconcile_on_the_fixture() {
             .map(Result::unwrap)
             .collect()
     };
-    assert!(
-        fetched.iter().any(|&(h, _)| h < anchor / HOUR - 30 * 24),
-        "some fetches are old enough to be folded"
-    );
     // Fold the days past the hourly window (§7), as the recorder's tick
     // does: the all-time range then reads compacted days (30 d starts
     // inside the hourly window).
@@ -225,6 +221,13 @@ fn insights_reconcile_on_the_fixture() {
             |r| r.get(0),
         )
         .unwrap();
+    // Some fetches sit in the folded days, so the compacted path is read.
+    assert!(
+        fetched
+            .iter()
+            .any(|&(h, _)| h * HOUR < compacted_before * DAY),
+        "some fetches are folded"
+    );
 
     let mut searchable_kpi = None;
     for range in ["24h", "7d", "30d", "all"] {

@@ -57,7 +57,8 @@ use lodestar_store::{
 use crate::synth::{EPOCH, Generator};
 
 /// The manifest's format. Bump it whenever the data set or the manifest
-/// changes, so `serve --fixture DIR` rebuilds rather than reuses.
+/// changes, so `serve --fixture DIR` refuses an old fixture folder (and
+/// asks for it to be deleted) rather than reuse it.
 pub const FORMAT: u32 = 3;
 /// The manifest's file name, beside the database.
 pub const MANIFEST: &str = "fixture.json";
