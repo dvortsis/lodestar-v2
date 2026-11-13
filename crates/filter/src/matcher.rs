@@ -1001,7 +1001,11 @@ impl<'a> Doc<'a> {
     /// metered against the core's budget ([`crate::normalize::read_whole`]).
     fn read_whole(&self) -> &NormalizedRead {
         self.texts().normalized.get_or_init(|| {
-            let (mut tokens, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+            // Sized for a typical path, so the read seldom grows them.
+            let files = self.item.files.len();
+            let mut tokens = Vec::with_capacity(32 + files * 24);
+            let mut ends = Vec::with_capacity(files + 1);
+            let mut apart = Vec::with_capacity(files);
             let metered = crate::normalize::read_whole(
                 self.item.name,
                 self.item.files.iter().map(|f| &f.path[..]),
@@ -1016,9 +1020,9 @@ impl<'a> Doc<'a> {
     /// Whether the core can't read the torrent within its budget: it's
     /// too large to judge (CS-0a). Reads it to find out, once.
     pub(crate) fn too_large(&self) -> bool {
-        crate::core::past_budget_unread(self.item)
-            || self.read_whole().3.work.is_none()
-            || self.split_over()
+        // The engine checks the floor first, which reads the cheap check
+        // before reading (`Core::floor_hit`); the read counts its own.
+        self.read_whole().3.work.is_none() || self.split_over()
     }
 
     /// The name, then each path, in the core's tokens.

@@ -258,6 +258,8 @@ struct Plan {
     advance: u32,
     /// A single letter, which may be part of a spelled-out word.
     letter: Option<char>,
+    /// The metered read that last used it ([`Tokenizer::round`]).
+    round: u32,
 }
 
 /// Turns text into tokens, reusing its buffers across calls.
@@ -288,15 +290,12 @@ pub struct Tokenizer {
     /// Where reading stops: past it the rest of a text is skipped. Zero
     /// for no limit.
     limit: u64,
-    /// The meter's own view of the caches: each slot's word or character
-    /// as this read (`round`) left it, as if the caches had started it
-    /// empty. A word or character is charged as new wherever this says
-    /// so, so the same torrent costs the same whatever the thread read
-    /// before, and never less than it does: the caches hold everything
-    /// this does.
+    /// The metered read under way ([`Tokenizer::meter`]). Each cached word
+    /// and character notes the round that last used it, so the meter
+    /// charges as new whatever this read hasn't used yet in that slot, as
+    /// if the caches had started it empty: the same torrent costs the
+    /// same whatever the thread read before, and never less than it does.
     round: u32,
-    seen_plans: Vec<(u32, String)>,
-    seen_chars: Vec<(u32, u32)>,
     /// A [`mark`] was read since [`Tokenizer::meter`]: the text reads
     /// differently in the earlier reading ([`splits`]).
     saw_mark: bool,
@@ -343,6 +342,8 @@ struct CharPlan {
     decomposed: u64,
     /// A [`mark`]: the earlier reading reads it as a word break.
     mark: bool,
+    /// The metered read that last used it ([`Tokenizer::round`]).
+    round: u32,
 }
 
 impl Default for CharPlan {
@@ -352,6 +353,7 @@ impl Default for CharPlan {
             ops: Vec::new(),
             decomposed: 0,
             mark: false,
+            round: 0,
         }
     }
 }
@@ -533,7 +535,6 @@ impl Tokenizer {
         } else {
             if self.chars.is_empty() {
                 self.chars.resize_with(CHARS, CharPlan::default);
-                self.seen_chars.resize(CHARS, (0, 0));
             }
             for c in text.chars() {
                 let slot = c as usize % CHARS;
@@ -542,13 +543,15 @@ impl Tokenizer {
                     // The key last: a slot is never matched before its
                     // plan is made.
                     plan.key = u32::MAX;
+                    plan.round = 0;
                     plan.decomposed = plan_char(c, &mut plan.ops) as u64;
                     plan.mark = mark(c);
                     plan.key = c as u32;
                 }
                 self.saw_mark |= self.chars[slot].mark;
-                if self.limit != 0 && self.seen_chars[slot] != (self.round, c as u32) {
-                    self.seen_chars[slot] = (self.round, c as u32);
+                if self.limit != 0 && self.chars[slot].round != self.round {
+                    // The key is this character: new to this read here.
+                    self.chars[slot].round = self.round;
                     self.work += cost::CHAR_PLAN + self.chars[slot].decomposed * cost::DECOMPOSED;
                 }
                 let n = self.chars[slot].ops.len();
@@ -584,8 +587,8 @@ impl Tokenizer {
             // A new round: every slot of the meter's view reads as empty
             // (round 0 is never one).
             self.round = self.round.checked_add(1).unwrap_or_else(|| {
-                self.seen_plans.iter_mut().for_each(|s| s.0 = 0);
-                self.seen_chars.iter_mut().for_each(|s| s.0 = 0);
+                self.plans.iter_mut().for_each(|p| p.round = 0);
+                self.chars.iter_mut().for_each(|c| c.round = 0);
                 1
             });
         }
@@ -637,28 +640,23 @@ impl Tokenizer {
         // Long words (hashes, junk) aren't kept.
         let plan = if word.len() <= MAX_PLANNED_BYTES {
             let at = slot(word);
-            if self.limit != 0 {
-                if self.seen_plans.len() < PLANS {
-                    self.seen_plans.resize_with(PLANS, Default::default);
-                }
-                let seen = &mut self.seen_plans[at];
-                if seen.0 != self.round || seen.1.as_bytes() != word.as_bytes() {
-                    seen.0 = self.round;
-                    seen.1.clear();
-                    seen.1.push_str(word);
-                    self.work += cost::PLAN + word.len() as u64 * cost::PLANNED_BYTE;
-                }
-            }
             let plan = &mut self.plans[at];
             if plan.key.as_bytes() != word.as_bytes() {
                 // The key last: a plan is never found before it's made,
                 // even if making it was cut short.
+                plan.round = 0;
                 plan.key.clear();
                 plan.word.clear();
                 plan.word.push_str(word);
                 plan.word.make_ascii_lowercase();
                 make_plan(plan, &mut self.plain, &mut self.swapped);
                 plan.key.push_str(word);
+            }
+            // Its key is this word: new to this read in this slot unless
+            // this read used it last.
+            if self.limit != 0 && plan.round != self.round {
+                plan.round = self.round;
+                self.work += cost::PLAN + word.len() as u64 * cost::PLANNED_BYTE;
             }
             plan
         } else {

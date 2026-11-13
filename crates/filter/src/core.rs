@@ -1250,10 +1250,14 @@ impl Core {
             // Read already, and the same as read here: the tokens of the
             // path's segments read apart.
             if let Some(path) = read.and_then(|r| r.path(i)) {
-                tokens.clear();
-                tokens.extend_from_slice(path);
-                flags.clear();
-                self.flags_of(tokens, flags);
+                // `tokens` and `flags` still hold the text before, flag for
+                // flag: the tokens this path starts with alike (its folder,
+                // as a rule) keep theirs, so only the rest are looked up.
+                let same = tokens.iter().zip(path).take_while(|(a, b)| a == b).count();
+                tokens.truncate(same);
+                flags.truncate(same);
+                tokens.extend_from_slice(&path[same..]);
+                self.flags_of(&path[same..], flags);
                 let s = self.signals(tokens, flags, neutral, at);
                 if s.paired() {
                     texts.push((Field::File(i as u32), s));
@@ -1330,18 +1334,29 @@ impl Core {
         let age = |field, pos| Evidence::MinorAge { field, pos };
         let role = |field, pos| Evidence::ChildRole { field, pos };
         // Each text's sexual terms sorted once, for every rule that pairs
-        // them; only where a pair is possible and too many to scan.
-        let near: Vec<Vec<(u32, u32)>> = texts
-            .iter()
-            .map(|(_, s)| {
-                let firsts = s.ages.len().max(s.roles.len());
-                if firsts.saturating_mul(s.sexual.len()) > 64 {
-                    near_index(&s.sexual)
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect();
+        // them; only where a pair is possible and too many to scan, so most
+        // torrents build nothing.
+        let indexed = |s: &Signals| {
+            s.ages
+                .len()
+                .max(s.roles.len())
+                .saturating_mul(s.sexual.len())
+                > 64
+        };
+        let near: Vec<Vec<(u32, u32)>> = if texts.iter().any(|(_, s)| indexed(s)) {
+            texts
+                .iter()
+                .map(|(_, s)| {
+                    if indexed(s) {
+                        near_index(&s.sexual)
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let p = |rule, w, first, evidence| {
             self.pair(texts, &near, educational, rule, w, first, evidence)
         };
@@ -1372,9 +1387,10 @@ impl Core {
     ) -> Option<Hit> {
         texts
             .iter()
-            .zip(near)
-            .filter(|((field, _), _)| !(educational && *field == Field::Name))
-            .find_map(|((field, s), near)| {
+            .enumerate()
+            .filter(|(_, (field, _))| !(educational && *field == Field::Name))
+            .find_map(|(i, (field, s))| {
+                let near = near.get(i).map_or(&[][..], Vec::as_slice);
                 let (x, y) = nearest_pair(first(s), &s.sexual, near, w)?;
                 let sexual = Evidence::Sexual {
                     field: *field,
