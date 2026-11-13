@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:04Z",
+  "updated_at": "2026-11-13T01:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8870,7 +8870,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:04Z",
+    "updated": "2026-11-13T01:08Z",
     "items": [
       {
         "slot": 1,
@@ -9133,13 +9133,8 @@
       },
       {
         "slot": 28,
-        "slice": "WK-18",
-        "status": "active",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn8ht4VBbYS74uVp94c: owner window (\u00a72.64) until 00:00Z 2026-11-13; Sonnet; brief briefs/WK-18.md; /security-review (token)",
-        "since": "2026-11-12T22:46Z",
-        "cap": "over cap: finish #797 only, then archive (\u00a72.64)"
+        "status": "idle",
+        "doing": "WK-18 #797 merged (1256467d) 2026-11-13T01:08Z; session archived (\u00a72.65 drain)"
       },
       {
         "slot": 29,
@@ -9240,7 +9235,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:04Z",
+  "updated": "2026-11-13T01:08Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
