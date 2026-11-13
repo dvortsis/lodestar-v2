@@ -315,6 +315,19 @@ mod tests {
         for (sizes, want) in cases {
             assert_eq!(band_terms(sizes), want, "{sizes:?}");
         }
+        // The copy and volume rule is stored format too: two copies of
+        // a size count once and a size three files share isn't signed,
+        // so this is case 1's signature.
+        let repeated = [MIB, MIB, MIB + 1, MIB + 2, MIB + 3, MIB + 3, MIB + 3];
+        assert_eq!(
+            signed_sizes(&major_sizes(&repeated)),
+            [MIB, MIB + 1, MIB + 2]
+        );
+        assert_eq!(
+            band_terms(&repeated),
+            cases[0].1,
+            "the copy and volume rule"
+        );
     }
 
     #[test]
