@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T11:45Z",
+  "updated_at": "2026-11-13T11:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8036,6 +8036,11 @@
       "id": "insights-cohorts-name-polish",
       "at": "2026-11-13T11:39Z",
       "note": "rv-833 optional: Cohorts announced 3x (h3, region, LinkedBars list); give region a name that adds info or drop inner list label; e2e could reach scroller by Tab"
+    },
+    {
+      "id": "owner-fyi-wk18w-rollback",
+      "at": "2026-11-13T11:59Z",
+      "note": "owner FYI (\u00a72.19): WK-18w and X-wk18w-rollback merged; runner accepted join-finish.ps1 outside owns, rollback before JoinWorker, marker file, deferred prepare step"
     }
   ],
   "main_health": [
@@ -8424,11 +8429,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "832": {
-      "slice": "X-wk18w-rollback",
-      "head": "1f96f889",
-      "note": "fresh Opus+security MERGE (0 B/0 I); one round on 4 optionals (stub refusal test, prepare exit-1 test, 2 messages); runner delta check then merge"
     },
     "829": {
       "slice": "X-ci-filter-rust-inputs",
@@ -9080,7 +9080,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T11:45Z",
+    "updated": "2026-11-13T11:59Z",
     "items": [
       {
         "slot": 1,
@@ -9249,15 +9249,6 @@
         "model": "opus"
       },
       {
-        "slot": 31,
-        "slice": "X-wk18w-rollback",
-        "status": "active",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: #802 WK-18w merged (665935cf); follow-up X-wk18w-rollback in same session",
-        "since": "2026-11-13T10:58Z"
-      },
-      {
         "slot": 32,
         "slice": "X-filter01-fix",
         "role": "build",
@@ -9326,7 +9317,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T11:45Z",
+  "updated": "2026-11-13T11:59Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9691,6 +9682,12 @@
       "slice": "X-insights-scroll-a11y",
       "merged": "cfeac0f7",
       "at": "2026-11-13T11:39Z"
+    },
+    {
+      "pr": 832,
+      "slice": "X-wk18w-rollback",
+      "merged": "2c509fd2",
+      "at": "2026-11-13T11:59Z"
     }
   ]
 }
