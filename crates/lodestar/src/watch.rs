@@ -991,7 +991,20 @@ impl Folder {
     fn read(&self, name: &OsStr, shape: Shape) -> Taken {
         let file = match self.open_file(name) {
             Ok(f) => f,
-            Err(e) => return open_error(&e),
+            Err(e) => {
+                return match open_error(&e) {
+                    // Swapped for a folder or the like since it was listed
+                    // (on Windows a folder won't open as a file): never
+                    // moved, judged afresh by a later poll. This closes a
+                    // gap from UP-1 (runner, #837).
+                    Taken::Refuse(Cause::Unreadable)
+                        if !matches!(self.entry(name), Some(Entry::File(_))) =>
+                    {
+                        Taken::Wait
+                    }
+                    t => t,
+                };
+            }
         };
         let Ok(meta) = file.metadata() else {
             return Taken::Refuse(Cause::Unreadable);
@@ -1808,6 +1821,45 @@ mod tests {
         assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
         assert!(!folder.absent(OsStr::new("a.torrent")));
         assert!(folder.absent(OsStr::new("gone.torrent")));
+    }
+
+    /// A listed file swapped for a folder before its read is never moved
+    /// to `failed/`: it waits, and a later poll judges the folder (left
+    /// alone). On Windows the folder won't open as a file, so without the
+    /// second look it was failed as `unreadable`.
+    #[tokio::test]
+    async fn a_file_swapped_for_a_folder_before_its_read_is_left_alone() {
+        /// Swaps `b.torrent` for a folder when `a.torrent` is sent.
+        struct Swapper<'a> {
+            inner: Fake,
+            at: &'a Path,
+        }
+        impl Sink for Swapper<'_> {
+            async fn submit(&self, body: Vec<u8>) -> Result<Outcome, Closed> {
+                if body == b"fine" {
+                    std::fs::remove_file(self.at).unwrap();
+                    std::fs::create_dir(self.at).unwrap();
+                    std::fs::write(self.at.join("inside"), b"x").unwrap();
+                }
+                self.inner.submit(body).await
+            }
+        }
+        let t = T::new();
+        t.put("a.torrent", b"fine");
+        t.put("b.torrent", b"MALF");
+        let at = t.dir().join("b.torrent");
+        let s = Swapper {
+            inner: Fake::default(),
+            at: &at,
+        };
+        let mut w = t.watcher(After::Move);
+        let p = settle(&mut w, &s).await;
+        assert_eq!((p.added, p.failed, p.waiting), (1, 0, 1));
+        assert!(t.names(FAILED).is_empty());
+        assert!(at.join("inside").exists(), "the folder stays where it is");
+        let p = w.poll(&s.inner).await;
+        assert_eq!((p.failed, p.waiting), (0, 0));
+        assert!(t.names(FAILED).is_empty() && w.stuck.is_empty());
     }
 
     /// An evicted file that sorts after the one that pushed it out is
