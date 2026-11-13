@@ -53,8 +53,8 @@ pub struct TorrentDoc {
     pub payload_sig: Option<u64>,
     /// The MinHash band terms of the major file sizes
     /// ([`lodestar_classify::group::band_terms`]), for "similar
-    /// payloads"; empty below the major-file threshold. Generation 1
-    /// (GS-2).
+    /// payloads"; empty below the major-file threshold and for a partial
+    /// stored file list. Generation 1 (GS-2).
     pub group_minhash: Vec<u64>,
 }
 
@@ -241,7 +241,14 @@ impl TorrentDoc {
             }
         }
         let (file_buckets, file_ext_buckets) = crate::files::covered_buckets(tree);
-        let group_minhash = lodestar_classify::group::band_terms(&sizes);
+        // A partial stored list isn't the payload, so it never confirms
+        // as similar: its terms would only take places in other
+        // torrents' candidate windows (the runner's review, O2).
+        let group_minhash = if row.flags & flags::FILES_PARTIAL == 0 {
+            lodestar_classify::group::band_terms(&sizes)
+        } else {
+            Vec::new()
+        };
         TorrentDoc {
             id: row.id as u64,
             hashes,

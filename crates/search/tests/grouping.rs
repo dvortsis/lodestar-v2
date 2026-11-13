@@ -242,6 +242,21 @@ fn every_torrent_carries_its_band_terms() {
             assert!(!bands(&infos, j).contains(&t), "torrent {j}");
         }
     }
+    // A partial stored file list isn't the payload: no terms, so it
+    // never takes places in another torrent's candidate window.
+    let mut row = store.torrent(1).unwrap().unwrap();
+    let tree = store.files(1).unwrap().unwrap();
+    assert!(
+        !lodestar_search::TorrentDoc::new(&row, &tree)
+            .group_minhash
+            .is_empty()
+    );
+    row.flags |= lodestar_store::flags::FILES_PARTIAL;
+    assert!(
+        lodestar_search::TorrentDoc::new(&row, &tree)
+            .group_minhash
+            .is_empty()
+    );
     // `group_key` isn't written; the title identity is, as before.
     let keys = group_keys(&dir);
     assert_eq!(keys.len(), N);

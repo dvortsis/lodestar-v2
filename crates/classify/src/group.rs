@@ -13,14 +13,17 @@
 //!   sizes), so a torrent has at most 100 major files and the cost is
 //!   bounded whatever its file count;
 //! - only a torrent whose major files have at least [`MIN_MAJOR_FILES`]
-//!   **distinct** sizes is signed: with fewer, an overlap of one or two
-//!   sizes says little, and those torrents rely on the exact payload
-//!   signature ([`crate::payload`]). Distinct, because unrelated split
-//!   archives share their volume size (scene `.rNN` parts of 50,000,000
-//!   bytes, `.7z.001` volumes, 4 GiB FAT32 splits): twenty equal parts
-//!   would otherwise make two different films look alike;
-//! - [`HASHES`] hashes in [`BANDS`] bands of [`ROWS`] (6 in 2 of 3); two
-//!   torrents are candidates when any band agrees;
+//!   **distinct** sizes, not counting a volume size (one more than
+//!   [`MAX_COPIES`] files share), is signed: with fewer, an overlap of
+//!   one or two sizes says little, and those torrents rely on the exact
+//!   payload signature ([`crate::payload`]). Unrelated split archives
+//!   share their volume size (scene `.rNN` parts of 50,000,000 bytes,
+//!   `.7z.001` volumes, 4 GiB FAT32 splits): twenty equal parts would
+//!   otherwise make two different films look alike, and gather
+//!   thousands of releases on one band term;
+//! - [`HASHES`] MinHash values over those sizes ([`signed_sizes`]), in
+//!   [`BANDS`] bands of [`ROWS`] (6 in 2 of 3); two torrents are
+//!   candidates when any band agrees;
 //! - two torrents are *similar* when the Jaccard similarity of their
 //!   major sizes, as multisets, is at least 4/5 ([`SIMILAR`]).
 //!
@@ -44,8 +47,8 @@
 pub const MAJOR_MIN_BYTES: u64 = 1 << 20;
 /// A major file's smallest share of the payload, in percent.
 pub const MAJOR_MIN_PERCENT: u64 = 1;
-/// Distinct major sizes a torrent needs for a signature, and two
-/// similar torrents must share.
+/// [`signed_sizes`] a torrent needs for a signature, and distinct sizes
+/// two similar torrents must share.
 pub const MIN_MAJOR_FILES: usize = 3;
 /// MinHash values per signature.
 pub const HASHES: usize = 6;
@@ -63,7 +66,7 @@ const _: () = assert!(HASHES == BANDS * ROWS);
 pub enum Unsigned {
     /// No content files (none, or only padding).
     NoContent,
-    /// Fewer than [`MIN_MAJOR_FILES`] distinct major sizes.
+    /// Fewer than [`MIN_MAJOR_FILES`] [`signed_sizes`].
     FewMajorFiles,
 }
 
@@ -105,25 +108,24 @@ pub fn band_terms(content_sizes: &[u64]) -> Vec<u64> {
 
 impl MinHash {
     /// The signature of `major` (sorted major sizes, [`major_sizes`]);
-    /// `None` with fewer than [`MIN_MAJOR_FILES`] distinct sizes.
+    /// `None` with fewer than [`MIN_MAJOR_FILES`] [`signed_sizes`].
     ///
-    /// A multiset is hashed as the set of `(size, k)`, `k` counting the
-    /// earlier copies of the same size, so three equal episodes count
-    /// three times and the result doesn't depend on the order.
+    /// Only [`signed_sizes`] are hashed: the distinct sizes, leaving
+    /// out a volume size (one more than [`MAX_COPIES`] files share). So
+    /// the result doesn't depend on the order or the copy counts.
+    /// Split archives share their volume size: hashing it made twenty
+    /// equal parts dominate the signature, and unrelated scene releases
+    /// shared band terms by the hundred (the runner's review, B1).
+    /// Copies still count where the answer is decided, in [`similar`]'s
+    /// Jaccard.
     pub fn of_major(major: &[u64]) -> Option<MinHash> {
-        debug_assert!(major.is_sorted(), "major sizes are sorted");
-        if distinct(major) < MIN_MAJOR_FILES {
+        let signed = signed_sizes(major);
+        if signed.len() < MIN_MAJOR_FILES {
             return None;
         }
         let mut min = [u64::MAX; HASHES];
-        let mut k = 0u64;
-        for (i, &size) in major.iter().enumerate() {
-            k = if i > 0 && major[i - 1] == size {
-                k + 1
-            } else {
-                0
-            };
-            let element = fmix64(fmix64(size ^ ELEMENT_SEED) ^ k.wrapping_mul(COPY_MUL));
+        for &size in &signed {
+            let element = fmix64(fmix64(size ^ ELEMENT_SEED));
             for (m, seed) in min.iter_mut().zip(SEEDS) {
                 *m = (*m).min(fmix64(element ^ seed));
             }
@@ -173,14 +175,14 @@ pub fn jaccard(a: &[u64], b: &[u64]) -> (u64, u64) {
 }
 
 /// Whether two torrents' payloads are similar: both signed (at least
-/// [`MIN_MAJOR_FILES`] distinct major sizes each), sharing at least
+/// [`MIN_MAJOR_FILES`] [`signed_sizes`] each), sharing at least
 /// [`MIN_MAJOR_FILES`] distinct sizes (so a common volume size alone
 /// never makes two split archives similar), and the Jaccard similarity
 /// of their major sizes, as multisets, is at least [`SIMILAR`]. `a` and `b` are sorted
 /// major sizes ([`major_sizes`]). Exact: this is what confirms a
 /// candidate the band terms found.
 pub fn similar(a: &[u64], b: &[u64]) -> bool {
-    if distinct(a) < MIN_MAJOR_FILES || distinct(b) < MIN_MAJOR_FILES {
+    if signed_sizes(a).len() < MIN_MAJOR_FILES || signed_sizes(b).len() < MIN_MAJOR_FILES {
         return false;
     }
     if shared_distinct(a, b) < MIN_MAJOR_FILES {
@@ -190,9 +192,20 @@ pub fn similar(a: &[u64], b: &[u64]) -> bool {
     both * SIMILAR.1 >= union * SIMILAR.0
 }
 
-/// The distinct values of a sorted slice.
-fn distinct(sorted: &[u64]) -> usize {
-    sorted.chunk_by(|a, b| a == b).count()
+/// Files of one size beyond this count are a split archive's volumes,
+/// not distinct content: that size is left out of the signature.
+pub const MAX_COPIES: usize = 2;
+
+/// The sizes a signature hashes: `major`'s distinct sizes (it's sorted,
+/// [`major_sizes`]), leaving out any shared by more than [`MAX_COPIES`]
+/// files. A torrent needs [`MIN_MAJOR_FILES`] of them to be signed.
+pub fn signed_sizes(major: &[u64]) -> Vec<u64> {
+    debug_assert!(major.is_sorted(), "major sizes are sorted");
+    major
+        .chunk_by(|a, b| a == b)
+        .filter(|run| run.len() <= MAX_COPIES)
+        .map(|run| run[0])
+        .collect()
 }
 
 /// The distinct values two sorted multisets share.
@@ -218,7 +231,7 @@ fn shared_distinct(a: &[u64], b: &[u64]) -> usize {
 }
 
 const ELEMENT_SEED: u64 = 0x6772_6f75_706b_6579; // "groupkey"
-const COPY_MUL: u64 = 0x9e37_79b9_7f4a_7c15;
+const GOLDEN: u64 = 0x9e37_79b9_7f4a_7c15;
 const BAND_SEED: u64 = 0x6d69_6e68_6173_6862; // "minhashb"
 
 /// One seed per hash: [`fmix64`] of `i + 1` times the golden ratio.
@@ -226,7 +239,7 @@ const SEEDS: [u64; HASHES] = {
     let mut s = [0; HASHES];
     let mut i = 0;
     while i < HASHES {
-        s[i] = fmix64((i as u64 + 1).wrapping_mul(COPY_MUL));
+        s[i] = fmix64((i as u64 + 1).wrapping_mul(GOLDEN));
         i += 1;
     }
     s
@@ -332,6 +345,12 @@ mod tests {
         assert!(!similar(&a, &b), "unrelated split archives");
         assert_eq!(shared_distinct(&a, &b), 1);
         assert_eq!(shared_distinct(&[1, 1, 2, 4], &[1, 2, 2, 3, 4]), 3);
-        assert_eq!(distinct(&[1, 1, 2, 4, 4]), 3);
+        // A volume size (3 or more copies) is left out of the signature.
+        assert_eq!(signed_sizes(&[1, 1, 2, 4, 4, 4]), [1, 2]);
+        assert_eq!(signed_sizes(&[1, 2, 3]), [1, 2, 3]);
+        assert!(
+            !similar(&[1, 2, 5, 5, 5], &[1, 2, 5, 5, 5]),
+            "2 signed sizes"
+        );
     }
 }

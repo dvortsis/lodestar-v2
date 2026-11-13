@@ -9,6 +9,9 @@
 //! - unrelated split archives sharing a volume size: never similar (a
 //!   torrent needs 3 distinct major sizes to be signed, and two similar
 //!   ones must share 3);
+//! - unrelated scene releases (volumes, a last part, a sample): the
+//!   volume size is never signed, so at most 1 % of pairs share a band
+//!   and no band term is carried by more than 1 % of them;
 //! - Jaccard 0.5: at most 35 % become candidates (theory 23 %), and
 //!   none of them is confirmed ([`similar`] is exact);
 //! - Jaccard 0.8: at least 65 % are found (theory 76 %);
@@ -17,7 +20,8 @@
 use std::collections::HashMap;
 
 use lodestar_classify::group::{
-    BANDS, HASHES, MIN_MAJOR_FILES, MinHash, band_terms, major_sizes, signature, similar,
+    BANDS, HASHES, MIN_MAJOR_FILES, MinHash, band_terms, major_sizes, signature, signed_sizes,
+    similar,
 };
 use proptest::prelude::*;
 
@@ -118,6 +122,61 @@ fn unrelated_split_archives_are_never_similar() {
     }
 }
 
+/// Scene releases: 50,000,000-byte volumes, a last part and a sample.
+/// The volume size is left out of the signature (more than
+/// `MAX_COPIES` files share it), so a plain release is unsigned. One
+/// with extra large files (a second disc's last part, a subtitle pack,
+/// extras) is signed on those alone. Either way unrelated releases
+/// share no volume-size term, so a request's candidate window doesn't
+/// fill with releases that confirmation rejects (the runner's review,
+/// B1). Bound: at most 1 % of unrelated pairs are candidates, and no
+/// band term is carried by more than 1 % of the releases.
+#[test]
+fn unrelated_scene_releases_rarely_share_a_band() {
+    let mut rng = Rng(9);
+    let volume = 50_000_000u64;
+    let n = 400;
+    let mut by_term: HashMap<u64, usize> = HashMap::new();
+    let mut releases = Vec::new();
+    for i in 0..n {
+        // 15–40 parts (up to 2 GB), so the last part (25–50 MB), the
+        // sample (30–70 MB) and any extras are each over 1 % of it.
+        let parts = 15 + (rng.next() % 26) as usize;
+        let mut s = vec![volume; parts];
+        s.push(25_000_000 + rng.next() % (volume - 25_000_000)); // the last part
+        s.push(30_000_000 + rng.next() % 40_000_000); // the sample
+        s.push(4_000 + rng.next() % 4_000); // .nfo, .sfv: never major
+        let plain = band_terms(&s);
+        assert!(plain.is_empty(), "two signed sizes: unsigned");
+        // Every other release has three extra large files.
+        if i % 2 == 0 {
+            s.extend((0..3).map(|_| 25_000_000 + rng.next() % 50_000_000));
+        }
+        let terms = band_terms(&s);
+        assert_eq!(terms.len(), if i % 2 == 0 { BANDS } else { 0 });
+        for t in &terms {
+            *by_term.entry(*t).or_default() += 1;
+        }
+        releases.push(terms);
+    }
+    let mut pairs = 0usize;
+    let mut shared = 0usize;
+    for i in 0..n {
+        for j in i + 1..n {
+            pairs += 1;
+            if releases[i].iter().any(|t| releases[j].contains(t)) {
+                shared += 1;
+            }
+        }
+    }
+    assert!(
+        shared * 100 <= pairs,
+        "{shared} of {pairs} unrelated pairs share a band"
+    );
+    let most = by_term.values().copied().max().unwrap_or(0);
+    assert!(most <= n / 100, "one band term is carried by {most} of {n}");
+}
+
 #[test]
 fn far_payloads_are_rarely_candidates_and_never_similar() {
     // 10 shared, 5 own each: J = 10 / 20 = 0.5.
@@ -191,7 +250,9 @@ proptest! {
     }
 
     /// Equal multisets of major sizes give equal signatures, whatever
-    /// the minor files around them.
+    /// the minor files around them; so do equal signed sizes, whatever
+    /// the copy counts (the signature hashes `signed_sizes`; `similar`
+    /// weighs the copies).
     #[test]
     fn equal_major_multisets_give_equal_signatures(p in payload(), seed in any::<u64>()) {
         let major = major_sizes(&p);
@@ -201,6 +262,14 @@ proptest! {
         shuffle(&mut again, seed);
         again.sort_unstable();
         prop_assert_eq!(MinHash::of_major(&again), from_major);
+        // Two copies of every size: the same signed sizes, unless that
+        // makes a size a volume size (three or more copies).
+        let mut doubled = major.clone();
+        doubled.extend(&major);
+        doubled.sort_unstable();
+        if signed_sizes(&doubled) == signed_sizes(&major) {
+            prop_assert_eq!(MinHash::of_major(&doubled), from_major);
+        }
     }
 
     /// Counts matter: three copies of a size aren't two.
@@ -220,9 +289,7 @@ proptest! {
     #[test]
     fn below_the_threshold_nothing_matches(p in payload()) {
         let major = major_sizes(&p);
-        let mut distinct = major.clone();
-        distinct.dedup();
-        if distinct.len() < MIN_MAJOR_FILES {
+        if signed_sizes(&major).len() < MIN_MAJOR_FILES {
             prop_assert!(signature(&p).is_err());
             prop_assert!(band_terms(&p).is_empty());
             prop_assert!(!similar(&major, &major));

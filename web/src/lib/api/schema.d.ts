@@ -9345,7 +9345,10 @@ export interface components {
              *     disc), newest first. Found by a MinHash of the large file sizes
              *     and confirmed on the stored sizes; identical clones are in
              *     `identical_payload` instead. Unavailable (`few_major_files`) for
-             *     a torrent whose large files have fewer than 3 different sizes.
+             *     a torrent whose large files have fewer than 3 different sizes,
+             *     not counting a split archive's volume size (a size more than 2
+             *     files share). `truncated` also when more candidates matched than
+             *     were read, so some may be missing even from a short list.
              */
             similar_payload: components["schemas"]["HitGroup"];
             /**

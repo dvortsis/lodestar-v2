@@ -472,9 +472,11 @@ fn same_payload(tree: &FileTree, sizes: &[u64]) -> bool {
 /// stored sizes ([`similar_to`]), so a band shared by chance never
 /// shows. `sizes` and `major` are this torrent's ([`content_sizes`] and
 /// its major sizes, which have a signature). Identical clones
-/// are left out: the identical-payload group lists them. Newest first;
-/// `truncated` when more pass than are listed, or when the list is full
-/// and more candidates matched than were read. Partial (the flag) while
+/// are left out: the identical-payload group lists them, so the index
+/// leaves their signature out of the window. Newest first; `truncated`
+/// when more pass than are listed, or when more visible candidates
+/// matched than the window read (so some may be missing, even from a
+/// short list). Partial (the flag) while
 /// the index backfills `group_minhash`.
 fn similar_payload(
     s: &ApiState,
@@ -497,8 +499,17 @@ fn similar_payload(
     };
     cancel.check().map_err(search::search_error)?;
     let visible = shown(&Node::All, adult);
+    // Identical clones (this payload's signature) share every band but
+    // are listed under identical payload: left out before the window.
+    let clones = lodestar_classify::payload::payload_sig_of_sizes(sizes.to_vec());
     let (ids, more) = index
-        .torrents_with_minhash_bands(&signature.bands(), &visible, SIMILAR_CANDIDATES, cancel)
+        .torrents_with_minhash_bands(
+            &signature.bands(),
+            clones,
+            &visible,
+            SIMILAR_CANDIDATES,
+            cancel,
+        )
         .map_err(search::search_error)?;
     // Newest first.
     let ids = ids.into_iter().rev().map(|t| (t as i64, 0.0));
@@ -512,9 +523,11 @@ fn similar_payload(
         |row| row.flags & flags::FILES_PARTIAL == 0,
         |tree| similar_to(tree, sizes, major),
     )?;
-    // Bounded only says so once the visible list is full, as for the
-    // same file.
-    group.truncated |= more && group.hits.len() == MAX_SIBLINGS;
+    // More visible candidates than the window holds: some similar
+    // payloads may not have been read, however short the list. The
+    // window holds visible torrents only (visibility is applied before
+    // it), so this never hints at a withheld one (the runner's review).
+    group.truncated |= more;
     Ok((group, partial))
 }
 

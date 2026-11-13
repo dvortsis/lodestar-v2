@@ -1843,11 +1843,14 @@ impl SearchIndex {
     /// [`SearchIndex::torrents_with_pieces_roots`]: visibility is applied
     /// before the limit, `cancel` is checked before and during
     /// collection, and an index without the field answers no torrent.
+    /// Torrents whose `payload_sig` is `except_sig` (the caller's
+    /// identical clones) are left out before the limit.
     /// Whether the answer is complete is
     /// [`SearchIndex::availability`] of `group_minhash`.
     pub fn torrents_with_minhash_bands(
         &self,
         bands: &[u64],
+        except_sig: Option<u64>,
         visible: &Node,
         limit: usize,
         cancel: &crate::CancelToken,
@@ -1869,13 +1872,29 @@ impl SearchIndex {
             })
             .collect();
         let compiled = self.query_cancelled(visible, 0, 0, cancel)?;
-        let both = BooleanQuery::new(vec![
+        let mut clauses = vec![
             (Occur::Must, compiled.query),
             (
                 Occur::Must,
                 Box::new(BooleanQuery::new(any)) as Box<dyn Query>,
             ),
-        ]);
+        ];
+        // The caller's identical clones share its bands but are never
+        // "similar": leave them out before the limit, so they don't take
+        // places in the window.
+        let sig_field = self.fields().payload_sig;
+        if let Some(sig) = except_sig
+            && sig_field != compile::ABSENT
+        {
+            clauses.push((
+                Occur::MustNot,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(sig_field, sig),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ));
+        }
+        let both = BooleanQuery::new(clauses);
         let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let collector = PostFilter {
             ranges: &compiled.filters,
@@ -2745,7 +2764,7 @@ mod population_tests {
         let visible = Node::All.without_hidden();
         let find = |terms: &[u64], visible: &Node, limit| {
             index
-                .torrents_with_minhash_bands(terms, visible, limit, &cancel)
+                .torrents_with_minhash_bands(terms, None, visible, limit, &cancel)
                 .unwrap()
         };
         // The hidden torrent (id 7) is never found, counted or flagged.
@@ -2760,15 +2779,29 @@ mod population_tests {
         assert_eq!(find(&a, &Node::All, 2), (vec![5, 7], true));
         assert_eq!(find(&[1, 2, 3], &visible, 10), (vec![], false));
         assert_eq!(find(&[], &visible, 10), (vec![], false));
+        // The caller's identical clones (its payload signature) are left
+        // out before the limit: payload A's torrents are all one payload.
+        let sig = |i: u8| {
+            let sizes: Vec<u64> = payload(i).iter().map(|&s| s as u64).collect();
+            lodestar_classify::payload::payload_sig_of_sizes(sizes)
+        };
+        let except = |terms: &[u64], s: Option<u64>, limit| {
+            index
+                .torrents_with_minhash_bands(terms, s, &visible, limit, &cancel)
+                .unwrap()
+        };
+        assert_eq!(except(&a, sig(0), 10), (vec![], false));
+        assert_eq!(except(&both, sig(0), 1), (vec![6], true));
+        assert_eq!(except(&a, sig(1), 10), (vec![1, 3, 5], false));
         let stopped = crate::CancelToken::new();
         stopped.cancel();
         assert!(matches!(
-            index.torrents_with_minhash_bands(&a, &visible, 10, &stopped),
+            index.torrents_with_minhash_bands(&a, None, &visible, 10, &stopped),
             Err(Error::Cancelled)
         ));
         let spent = crate::CancelToken::new().with_budget(std::time::Duration::ZERO);
         assert!(matches!(
-            index.torrents_with_minhash_bands(&a, &visible, 10, &spent),
+            index.torrents_with_minhash_bands(&a, None, &visible, 10, &spent),
             Err(Error::OutOfTime)
         ));
     }

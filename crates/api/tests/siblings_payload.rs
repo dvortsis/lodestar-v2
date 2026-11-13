@@ -1033,3 +1033,35 @@ async fn an_index_without_the_fields_says_each_group_needs_them() {
         "available"
     );
 }
+
+/// More visible candidates than the window reads: the group says it may
+/// be missing some (`truncated`), even with nothing listed. 1,001
+/// near-misses share a band with the reference (8 of 12 sizes: not
+/// similar), so the window fills with candidates confirmation rejects.
+#[tokio::test]
+async fn a_full_candidate_window_says_truncated_however_short_the_list() {
+    let reference = eps(0..10);
+    let near = (0..10_000i64)
+        .map(|k| {
+            let mut s = eps(0..8);
+            s.extend([2 * GIB + 2 * k, 2 * GIB + 2 * k + 1]);
+            s
+        })
+        .find(|s| share_a_band(&reference, s))
+        .expect("a pair sharing a band");
+    let mut torrents = vec![season("Season.Ref", &reference)];
+    for i in 0..1_001 {
+        torrents.push(season(&format!("Near.{i}"), &near));
+    }
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(body["similar_payload"]["status"], "available");
+    assert_eq!(body["similar_payload"]["hits"], json!([]));
+    assert_eq!(body["similar_payload"]["truncated"], true);
+    // Fewer than the window: a short list is complete.
+    let f = plain(&torrents[..20]);
+    let c = session(&f).await;
+    let body = siblings(&f, &c, 0).await;
+    assert_eq!(body["similar_payload"]["truncated"], false);
+}
