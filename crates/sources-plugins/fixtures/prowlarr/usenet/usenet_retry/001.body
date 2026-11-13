@@ -1,0 +1,11 @@
+[
+  {
+    "id": 7,
+    "enable": true,
+    "protocol": "usenet",
+    "privacy": "private",
+    "supportsRss": true,
+    "name": "Example Usenet",
+    "definitionName": "newznab"
+  }
+]

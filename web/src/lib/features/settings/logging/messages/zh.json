@@ -640,5 +640,15 @@
 	"settings_logging_ev_service_restart_paused_n": "“立即重启”已暂停",
 	"settings_logging_ev_service_restart_paused_h": "暂停约一天。请在 Windows 服务中重启该服务。",
 	"settings_logging_ev_service_restarts_unwritable_n": "重启记录未保存",
-	"settings_logging_ev_service_restarts_unwritable_h": "无法保存最近重启的记录。"
+	"settings_logging_ev_service_restarts_unwritable_h": "无法保存最近重启的记录。",
+	"settings_logging_ev_watch_started_n": "监视文件夹已开启",
+	"settings_logging_ev_watch_started_h": "Lodestar 正在监视该文件夹中的 .torrent 文件。",
+	"settings_logging_ev_watch_stopped_n": "监视文件夹已关闭",
+	"settings_logging_ev_watch_stopped_h": "监视文件夹设置已清除。",
+	"settings_logging_ev_watch_disabled_n": "监视文件夹已暂停",
+	"settings_logging_ev_watch_disabled_h": "监视文件夹暂时无法使用，原因中说明了缘由。",
+	"settings_logging_ev_watch_took_n": "已从监视文件夹取得文件",
+	"settings_logging_ev_watch_took_h": "从监视文件夹添加了多少个文件，又有多少个移入 failed/。",
+	"settings_logging_ev_watch_stuck_n": "监视文件夹中的文件未能移动",
+	"settings_logging_ev_watch_stuck_h": "一个文件无法移出监视文件夹，它不会被再次读取。"
 }

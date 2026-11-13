@@ -7,5 +7,13 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'app.import_progress': [
 		m.settings_logging_ev_app_import_progress_n,
 		m.settings_logging_ev_app_import_progress_h
-	]
+	],
+	'watch.started': [m.settings_logging_ev_watch_started_n, m.settings_logging_ev_watch_started_h],
+	'watch.stopped': [m.settings_logging_ev_watch_stopped_n, m.settings_logging_ev_watch_stopped_h],
+	'watch.disabled': [
+		m.settings_logging_ev_watch_disabled_n,
+		m.settings_logging_ev_watch_disabled_h
+	],
+	'watch.took': [m.settings_logging_ev_watch_took_n, m.settings_logging_ev_watch_took_h],
+	'watch.stuck': [m.settings_logging_ev_watch_stuck_n, m.settings_logging_ev_watch_stuck_h]
 };

@@ -27,6 +27,7 @@
 //! All file work runs on blocking threads.
 
 use lodestar_cluster::ClusterError;
+use lodestar_cluster::proto::ReconcileAnswer;
 use lodestar_integrations::SecretStore;
 use lodestar_pipeline::spool::{Caps, Kind, Record, Sealer, Spool, SpoolError, SpoolStats};
 use std::collections::HashMap;
@@ -94,6 +95,12 @@ pub struct WorkerSpool {
     /// Lease-count drift seen after a replay: the difference between the
     /// worker's leases and the coordinator's, each time they differed.
     pub drift: AtomicU64,
+    /// What the coordinator made of the lists sent when they differed
+    /// (WK-11b): leases it gave back for re-grant, listed leases it didn't
+    /// have on record, and lists it refused.
+    pub returned: AtomicU64,
+    pub unknown: AtomicU64,
+    pub refused: AtomicU64,
     /// A replay drained since the last comparison.
     compare: AtomicBool,
 }
@@ -177,6 +184,9 @@ impl WorkerSpool {
             unavailable: AtomicBool::new(false),
             errors: AtomicU64::new(0),
             drift: AtomicU64::new(0),
+            returned: AtomicU64::new(0),
+            unknown: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
             compare: AtomicBool::new(false),
         }
     }
@@ -404,6 +414,23 @@ impl WorkerSpool {
             self.drift.fetch_add(u64::from(d), Ordering::Relaxed);
         }
         d
+    }
+
+    /// Records the coordinator's answer to the list of leases held.
+    pub fn listed(&self, answer: ReconcileAnswer) {
+        match answer {
+            ReconcileAnswer::Done {
+                returned, unknown, ..
+            } => {
+                self.returned
+                    .fetch_add(u64::from(returned), Ordering::Relaxed);
+                self.unknown
+                    .fetch_add(u64::from(unknown), Ordering::Relaxed);
+            }
+            ReconcileAnswer::Refused => {
+                self.refused.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 }
 

@@ -286,7 +286,20 @@ impl WorkerLeases {
     }
 
     fn committed_at(&self, key: &InfoHash, token: Token, now: std::time::Instant) {
-        self.finish(key, token, Some(later(now, FINISHED_GRACE)));
+        let until = later(now, FINISHED_GRACE);
+        // A replayed result (after a restart) never went out through
+        // `send_out`, so it has no entry: it gets a finished one, so the
+        // reconcile list still names its lease until its `Fetched` report
+        // lands (WK-11b). An entry under another token is left alone.
+        if self.horizon.is_some() {
+            let mut l = self.lock();
+            if !l.out.contains_key(key) {
+                l.track(*key, token, until, true);
+                l.prune(now);
+                return;
+            }
+        }
+        self.finish(key, token, Some(until));
     }
 
     fn finish(&self, key: &InfoHash, token: Token, until: Option<std::time::Instant>) {
@@ -314,6 +327,22 @@ impl WorkerLeases {
     /// longer counted).
     pub fn pending_len(&self) -> usize {
         self.lock().pending
+    }
+
+    /// Every lease the worker still holds, as the coordinator may have it
+    /// on record (WK-11b's reconcile list): keys held, and every out entry
+    /// kept, finished or not, read under one lock. A committed entry is in
+    /// it too: the runtime marks an accepted batch's entries committed
+    /// before its `Fetched` report goes out, so a list built in between
+    /// must still name them, or the coordinator could give back a lease
+    /// whose result is already in its intake.
+    pub fn tokens(&self) -> Vec<(InfoHash, Token)> {
+        let l = self.lock();
+        l.held
+            .iter()
+            .map(|(k, t)| (*k, *t))
+            .chain(l.out.iter().map(|(k, o)| (*k, o.token)))
+            .collect()
     }
 
     /// Out entries kept, finished or not.
@@ -670,6 +699,61 @@ mod tests {
         assert_eq!(l.insert(K, Token(8)), Insert::New);
         assert_eq!((l.len(), l.pending_len()), (1, 1));
         assert_eq!(l.take(&K), Some(Token(8)));
+    }
+
+    /// The reconcile list (WK-11b) names keys held and every out entry,
+    /// finished or not: a committed one stays listed through the gap
+    /// before its `Fetched` report goes out.
+    #[test]
+    fn tokens_list_held_keys_and_every_out_entry() {
+        let l = tracking();
+        let [a, b, c] = [2, 3, 4].map(|n| InfoHash([n; 20]));
+        l.insert(K, Token(7));
+        l.insert(a, Token(8));
+        l.insert(b, Token(9));
+        l.insert(c, Token(10));
+        l.send_out(&a);
+        l.send_out(&b);
+        l.send_out(&c);
+        l.committed(&b, Token(9));
+        l.done(&c, Token(10));
+        // A new lease for a key whose old result is still out: both.
+        l.insert(a, Token(11));
+        let mut listed = l.tokens();
+        listed.sort_by_key(|&(_, t)| t);
+        assert_eq!(
+            listed,
+            [
+                (K, Token(7)),
+                (a, Token(8)),
+                (b, Token(9)),
+                (c, Token(10)),
+                (a, Token(11))
+            ]
+        );
+        assert_eq!(l.len(), 2, "the count is still keys held only");
+    }
+
+    /// A replayed result's lease (no out entry: it was spooled before a
+    /// restart) is listed once its batch is committed, for the grace, and
+    /// its own lease coming back isn't new (WK-11b's review).
+    #[test]
+    fn a_replayed_results_commit_keeps_it_listed() {
+        let l = tracking();
+        l.committed(&K, Token(5));
+        assert_eq!(l.tokens(), [(K, Token(5))]);
+        assert_eq!(l.pending_len(), 0, "finished");
+        assert_eq!(l.insert(K, Token(5)), Insert::Out);
+        // An entry under another token is left as it is.
+        let other = InfoHash([9; 20]);
+        l.insert(other, Token(6));
+        l.send_out(&other);
+        l.committed(&other, Token(7));
+        assert_eq!(l.pending_len(), 1);
+        // Untracked leases (the built-in worker) keep nothing.
+        let plain = WorkerLeases::default();
+        plain.committed(&K, Token(5));
+        assert!(plain.tokens().is_empty());
     }
 
     /// The coordinator's built-in worker: nothing is tracked out, and the

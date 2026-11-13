@@ -260,6 +260,13 @@ fn a_served_instance_takes_an_upload_end_to_end() {
     });
     assert!(!feed.contains("Private Cut"), "{feed}");
 
+    // The private one is alerted first, on the instance's own list (it's
+    // kept local), so the feed checks below look at a feed that has had
+    // the chance to hold it (rv-753 N1).
+    until("the private alert", || {
+        let r = get(&s, &format!("/api/v1/saved-searches/{search}/alerts"));
+        r.contains(&private_hash).then_some(r)
+    });
     // The saved search's RSS feed: the public one, never the private
     // one's name, hash or magnet (§18.7, BEP 27).
     let rss = until("the feed", || {
@@ -279,9 +286,4 @@ fn a_served_instance_takes_an_upload_end_to_end() {
         );
         assert!(r.contains("Public"), "{format}: {r}");
     }
-    // And the instance's own alert list does show it: it's kept local.
-    until("the private alert", || {
-        let r = get(&s, &format!("/api/v1/saved-searches/{search}/alerts"));
-        r.contains(&private_hash).then_some(r)
-    });
 }

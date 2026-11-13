@@ -138,6 +138,8 @@ case "$LEAK" in
   fail) echo "fail ipv6_blocked_up"; echo "fail leak_test"; exit 1 ;;
   noline) echo "ok tunnel_healthy"; exit 0 ;;
   rc1) echo "ok leak_test"; exit 1 ;;
+  nohandshake) echo "fail wireguard_handshake_never_completed"; echo "ok no_egress_captured_down"
+               echo "fail leak_test"; exit 1 ;;
   *) echo "ok tunnel_healthy"; echo "ok leak_test" ;;
 esac
 """
@@ -438,6 +440,15 @@ class StartBlock(Base):
                 self.assertFalse(self.block.exists())  # no marker
                 self.assertNotIn("compose", self.log())
                 self.assertNotIn("pull", self.log())
+
+    def test_a_handshake_that_never_completed_is_reported_and_stops(self):
+        self.args()
+        rc, lines, _ = self.run_script("start-block.sh", LEAK="nohandshake")
+        self.assertEqual(rc, 1)
+        self.assertIn("fail wireguard_handshake_never_completed", lines)  # the leak test's own reason, passed on
+        self.assertEqual(lines[-2:], ["fail leak_test_passed", "fail start_block"])
+        self.assertFalse(self.block.exists())
+        self.assertNotIn("compose", self.log())
 
     def test_refuses_mid_block_and_fails_closed(self):
         cases = {"a recorded block": ({}, "block_running", "marker"),

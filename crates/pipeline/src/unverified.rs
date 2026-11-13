@@ -171,12 +171,15 @@ pub struct UnverifiedStats {
     pub existing: AtomicU64,
     /// Claims stored on a torrent that already held the key.
     pub on_torrent: AtomicU64,
-    /// Keys whose claims a rule held: tombstoned or quarantined, never
-    /// stored.
+    /// Keys whose claims the floor or the core held: tombstoned or
+    /// quarantined, never stored. A usenet item the floor or the core
+    /// holds is counted here too, though no hold is written for its key
+    /// (UN-0); any other rule's hit on either network is `dropped`.
     pub held: AtomicU64,
-    /// Claims a rule matched on a stored torrent, dropped without holding
-    /// it (not a floor or core hit: claims never override verified
-    /// metadata).
+    /// Claims a rule other than the floor or the core matched, dropped
+    /// without holding anything: on a stored torrent (claims never
+    /// override verified metadata), on a key nothing stores, or on a
+    /// usenet item.
     pub dropped: AtomicU64,
     /// Discoveries the store refused: the key is held, or the source is
     /// disabled or purged.
@@ -913,11 +916,13 @@ pub fn ingest(
         if d.found.is_usenet() {
             c.adult = None;
             let adult = ctx.adult.has(d.source);
-            if judge_usenet(engine, &c, ctx.sealer, adult, now).is_some() {
-                // Counted as held, though nothing is written (UN-0's gap).
-                UnverifiedStats::add(&stats.held, 1);
-            } else {
-                keep.push((d, Some(c)));
+            match judge_usenet(engine, &c, ctx.sealer, adult, now) {
+                // Counted as the BitTorrent path counts: the floor or the
+                // core as held (though nothing is written, UN-0's gap),
+                // any other rule as dropped.
+                Some(h) if h.core => UnverifiedStats::add(&stats.held, 1),
+                Some(_) => UnverifiedStats::add(&stats.dropped, 1),
+                None => keep.push((d, Some(c))),
             }
             continue;
         }
@@ -1691,6 +1696,27 @@ mod tests {
         assert!(
             store
                 .unverified(Network::Usenet, &key("g2"))
+                .unwrap()
+                .is_none()
+        );
+        // Your rule at ingest: dropped, as on BitTorrent, not held.
+        let stats = UnverifiedStats::default();
+        let batch = [find("g4", "Badword Again")];
+        ingest(
+            &mut store,
+            &filter.current(),
+            ctx,
+            &batch,
+            &stats,
+            T,
+            &|_, _| {},
+        )
+        .unwrap();
+        assert_eq!(stats.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.held.load(Ordering::Relaxed), 0);
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g4"))
                 .unwrap()
                 .is_none()
         );

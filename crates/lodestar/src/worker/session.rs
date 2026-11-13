@@ -25,7 +25,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_cluster::proto::{
-    Capabilities, Hello, MAX_OUTCOME_BATCH, OutcomeItem, RenewRefusal, StopReason,
+    Capabilities, HeldLease, Hello, MAX_OUTCOME_BATCH, OutcomeItem, ReconcileAnswer, RenewRefusal,
+    StopReason,
 };
 use lodestar_cluster::{
     ClientError, Clock, Credentials, RENEW_MIN_INTERVAL_SECS, SessionHandle, WorkerConfig,
@@ -100,6 +101,15 @@ pub trait Work: Send {
     }
     /// The coordinator's lease count for this worker.
     fn reconciled(&mut self, _worker: u32, _coordinator: u32) {}
+    /// Every lease the work still holds (keys held and results not yet
+    /// committed), asked only when the counts differed (WK-11b): the
+    /// coordinator gives back the ones it has on record that the list
+    /// leaves out. `None`: no list.
+    fn holding(&mut self) -> Option<Vec<HeldLease>> {
+        None
+    }
+    /// The coordinator's answer to the list.
+    fn listed(&mut self, _answer: ReconcileAnswer) {}
 }
 
 /// The idle runtime: connected, doing no work. The binary runs WK-10's
@@ -435,11 +445,19 @@ impl<C: Connect> Worker<C> {
         if self.expired() {
             return Some(Ended::Exit(Exit::Expired));
         }
-        // Lease counts after a replay (WK-11).
+        // Lease counts after a replay (WK-11); when they differ, the list
+        // of what's held corrects the coordinator's (WK-11b). An older
+        // coordinator is sent no list.
         if let Some(mine) = work.reconcile()
             && let Ok(ack) = session.heartbeat().await
         {
             work.reconciled(mine, ack.leases);
+            if mine != ack.leases
+                && let Some(list) = work.holding()
+                && let Ok(Some(answer)) = session.holding(list).await
+            {
+                work.listed(answer);
+            }
         }
         if renewing.unsaved {
             self.persist(renewing);
@@ -766,6 +784,75 @@ pub(crate) mod tests {
                 "the token reached the output:\n{all}"
             );
         }
+    }
+
+    /// Compares once with a lease count of its own, lists nothing, and
+    /// keeps the coordinator's answers (WK-11b).
+    #[derive(Clone, Default)]
+    struct Listing {
+        compared: Arc<Mutex<bool>>,
+        answers: Arc<Mutex<Vec<ReconcileAnswer>>>,
+    }
+
+    impl Work for Listing {
+        fn event(&mut self, _: WorkerEvent) {}
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            Vec::new()
+        }
+
+        fn reconcile(&mut self) -> Option<u32> {
+            let mut c = self.compared.lock().unwrap();
+            (!std::mem::replace(&mut *c, true)).then_some(0)
+        }
+
+        fn holding(&mut self) -> Option<Vec<HeldLease>> {
+            Some(Vec::new())
+        }
+
+        fn listed(&mut self, answer: ReconcileAnswer) {
+            self.answers.lock().unwrap().push(answer);
+        }
+    }
+
+    /// When the counts differ after a replay, the session sends the list
+    /// and the coordinator gives back the lease this worker no longer
+    /// knows (one from before this session).
+    #[tokio::test]
+    async fn a_drift_sends_the_list_and_the_lost_lease_goes_back() {
+        let s = joined().await;
+        let key = InfoHash([3; 20]);
+        let authority = s.coord.server.authority();
+        authority.claim(
+            s.worker,
+            Claim {
+                key,
+                source: SourceId::new(0).unwrap(),
+                strategy: 0,
+                at: s.clock.now_secs(),
+            },
+            s.clock.now_secs(),
+        );
+        let work = Listing::default();
+        let running = s.run(work.clone());
+        let answers = until("answered", || {
+            let a = work.answers.lock().unwrap().clone();
+            (!a.is_empty(), a)
+        })
+        .await;
+        assert!(
+            matches!(
+                answers[..],
+                [ReconcileAnswer::Done {
+                    returned: 1,
+                    unknown: 0,
+                    ..
+                }]
+            ),
+            "{answers:?}"
+        );
+        assert_eq!(s.coord.server.snapshot().reconcile_returned, 1);
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
     }
 
     #[tokio::test]
