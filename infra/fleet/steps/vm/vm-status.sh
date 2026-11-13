@@ -23,11 +23,21 @@ NAME=run_clean; say test ! -e "$PIA_RUN"
 
 # The block marker (OP-3b): a recorded block, and its segment.
 case $(block_state) in
-  block) echo "ok block_recorded"; seg=$(marker_get segment | digits); echo "count block_segment ${seg:-0}" ;;
+  block)
+    echo "ok block_recorded"; seg=$(marker_get segment | digits); echo "count block_segment ${seg:-0}"
+    # X-gluetun-guard-reboot: a host guard that couldn't be held mid-block, and
+    # how many times one was found gone (the outage watcher puts it back).
+    NAME=block_intact; say test ! -e "$BLOCK/damaged"
+    drops=$(guard_drops | digits); echo "count host_guard_drops ${drops:-0}" ;;
   none) echo "skip block_recorded" ;;
   *) echo "fail block_recorded" ;;
 esac
 NAME=outage_watcher_running; say watcher_active
+# The boot guard (X-gluetun-guard-reboot) couldn't hold the host guard at
+# boot, so Docker, which requires it, stays down on purpose: a fail here
+# explains a fail of docker_up.
+boot_guard_ok() { ! systemctl is-failed --quiet "$GUARD_UNIT"; }
+NAME=boot_guard_held; say boot_guard_ok
 
 collectors=$(docker ps --filter 'name=^lodestar-collector' --format '{{.ID}}' 2>/dev/null | grep -c . | digits)
 echo "count collectors_running ${collectors:-0}"

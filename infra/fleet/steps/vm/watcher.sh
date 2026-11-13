@@ -1,19 +1,39 @@
 #!/usr/bin/env bash
 # The outage watcher (OP-3b; docs/plan/2026-11-08-cloud-test-plan.md 0e), run
-# detached by start-block and the outage-watcher step as a transient systemd
-# unit (RuntimeMaxSec=44h): watcher.sh <block dir>.
+# detached by start-block and the outage-watcher step as an enabled systemd
+# unit (RuntimeMaxSec=44h; block-lib.sh start_watcher), so it starts again
+# after a reboot mid-block: watcher.sh <block dir> <stack>.
 #
 # It follows gluetun's container events and its log. On a VPN restart or a
 # tunnel-down line it writes a `link_outage` note into the running segment's
 # evidence at once (collect.py note, in that segment's collector), because
 # CR-SPEC rule 6.11 counts notes only when they're written at the time. It
-# never stops or restarts anything: an outage makes the segment invalid, and
-# the analyzer judges that. It exits when the block's marker is gone.
+# never stops or restarts Lodestar: an outage makes the segment invalid, and
+# the analyzer judges that.
+# It also keeps the host guard (X-gluetun-guard-reboot): at its start and every
+# GUARD_EVERY seconds, a guard an iptables flush removed is put back and
+# recorded, and one that can't be held marks the block damaged and stops
+# gluetun (block-lib.sh guard_resume). With a third argument, `boot`, it is the
+# boot guard instead: one check before Docker starts, then it exits.
+# It exits when the block's marker is gone.
 # It prints nothing; everything it keeps stays in the block directory.
 set -uo pipefail
 BLOCK=${1:?block}
+STACK=${2:?stack}
 GAP=${GAP:-30}          # one note per burst: a restart logs several lines
 MAX_NOTES=${MAX_NOTES:-500}  # bounded, whatever gluetun does; every outage is still counted
+GUARD_EVERY=${GUARD_EVERY:-30}
+# shellcheck source=block-lib.sh
+. "${BASH_SOURCE[0]%/*}/block-lib.sh"
+
+# watcher.sh <block> <stack> boot: the boot guard's one check, before Docker
+# starts (block-lib.sh start_watcher). Any failure fails the unit, which keeps
+# Docker, and so gluetun, down.
+if [[ ${3:-} == boot ]]; then
+  guard_resume "$STACK/secrets/wg0.conf" boot; rc=$?
+  ((rc == 0 || rc == 3)) && exit 0
+  exit 1
+fi
 
 # Only a listing that works and shows no marker ends the watcher (fail closed:
 # a block it can't read is still a block).
@@ -41,25 +61,22 @@ outage() {
     *) return 1 ;;
   esac
 }
-note() {
-  local seg notes
-  echo "$(date -u +%s) link_outage" >>"$BLOCK/outages"
-  notes=$(grep -c . "$BLOCK/notes" 2>/dev/null)
-  ((${notes:-0} >= MAX_NOTES)) && return 0
-  seg=$(sed -n 's/^segment=//p' "$BLOCK/marker" 2>/dev/null | head -n 1)
-  [[ $seg =~ ^[1-4]$ ]] || return 0
-  # Between segments no collector runs: the outage is counted, and there is no window to note it in.
-  if timeout 30 docker exec "lodestar-collector-$seg" python3 /tools/linux/collect.py note \
-    --root "/evidence/seg-$seg" --category link_outage >/dev/null 2>&1; then
-    echo "$(date -u +%s) $seg" >>"$BLOCK/notes"
-  fi
-}
+# Between segments no collector runs: the outage is counted, and there is no window to note it in.
+note() { block_record "" link_outage; }
+guard() { guard_resume "$STACK/secrets/wg0.conf"; checked=$SECONDS; }
+
+checked=0
+guard
 
 trap 'kill $(jobs -p) 2>/dev/null' EXIT
 last=0
 { events & logs & wait; } | while :; do
-  if IFS= read -r -t 60 line; then
+  ((SECONDS - checked >= GUARD_EVERY)) && guard
+  wait_for=$((GUARD_EVERY - (SECONDS - checked)))  # the rest of the interval, so a busy log can't push the check back
+  ((wait_for >= 1)) || wait_for=1
+  if IFS= read -r -t "$wait_for" line; then
     if outage "$line"; then
+      guard  # a stop or a restart is when a missing guard matters: check at once, before noting it
       now=$(date -u +%s)
       if ((now - last >= GAP)); then note; last=$now; else echo "$now link_outage" >>"$BLOCK/outages"; fi
     fi

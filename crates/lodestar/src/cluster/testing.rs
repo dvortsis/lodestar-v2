@@ -577,6 +577,11 @@ pub(crate) struct Seen {
 }
 
 /// The real runtime, recording what it's handed into [`Seen`].
+///
+/// **Every [`Work`] method must be forwarded to `rt`.** Most have default
+/// bodies, so one left out compiles and silently does nothing here: the
+/// lease reconciles went unexercised in every scenario until
+/// X-lease-reconcile-every-session forwarded them.
 struct Probe {
     rt: Runtime,
     seen: Arc<Mutex<Seen>>,
@@ -653,6 +658,28 @@ impl Work for Probe {
 
     async fn drain(&mut self) -> Vec<lodestar_cluster::proto::OutcomeItem> {
         self.rt.drain().await
+    }
+
+    // The lease checks (WK-11, WK-11b, CLUSTER-01) and the local stop
+    // (CLUSTER-05), as the binary runs them.
+    fn reconcile(&mut self) -> Option<u32> {
+        self.rt.reconcile()
+    }
+
+    fn reconciled(&mut self, worker: u32, coordinator: u32) {
+        self.rt.reconciled(worker, coordinator);
+    }
+
+    fn holding(&mut self) -> Option<Vec<lodestar_cluster::proto::HeldLease>> {
+        self.rt.holding()
+    }
+
+    fn listed(&mut self, answer: lodestar_cluster::proto::ReconcileAnswer) {
+        self.rt.listed(answer);
+    }
+
+    async fn stop(&mut self) {
+        self.rt.stop().await;
     }
 }
 
@@ -1070,6 +1097,17 @@ impl Harness {
         let _ = run.task.await;
         node.relay.sever();
         node.relay.cut(Cut::None);
+    }
+
+    /// Stops worker `i` locally, as a SIGTERM would: its stop hands the
+    /// work back (CLUSTER-05) before the task ends.
+    pub(crate) async fn stop(&mut self, i: usize) -> Exit {
+        let run = self.nodes[i].run.take().expect("the worker runs");
+        drop(run._stop);
+        tokio::time::timeout(DEADLINE, run.task)
+            .await
+            .expect("the worker stopped in time")
+            .expect("the worker's task")
     }
 
     /// Starts worker `i` again from its saved credentials and folder.

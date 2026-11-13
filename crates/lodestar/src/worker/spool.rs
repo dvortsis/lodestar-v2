@@ -223,6 +223,17 @@ impl WorkerSpool {
         self.stats().map_or(0, |s| s.bytes.load(Ordering::Relaxed))
     }
 
+    /// Whether results may still wait on disk for a replay: the spool
+    /// isn't open yet, or holds bytes. A spool that couldn't be opened
+    /// holds nothing to replay. A new session's lease list waits until
+    /// this is false (CLUSTER-01).
+    pub fn replay_pending(&self) -> bool {
+        !self.unavailable.load(Ordering::Acquire)
+            && self
+                .stats()
+                .is_none_or(|s| s.bytes.load(Ordering::Relaxed) > 0)
+    }
+
     /// Whether the last write found the spool full (fetching pauses).
     pub fn is_full(&self) -> bool {
         self.full.load(Ordering::Acquire)
@@ -511,7 +522,7 @@ mod tests {
     use super::*;
     use crate::worker::runtime::tests::{
         DEADLINE, MapFetch, W, assign_dht, assignment, config, filter_chunks, info, key_of,
-        next_results, sealed, session_pair, until,
+        next_results, sealed, session_pair, session_pair_with, until,
     };
     use crate::worker::runtime::{Config, Runtime};
     use crate::worker::session::Work;
@@ -613,6 +624,95 @@ mod tests {
         assert_eq!(sp.drift.load(Ordering::Relaxed), 3);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
         rt.shutdown().await;
+    }
+
+    /// CLUSTER-05: a local stop in the middle of a batch (sent, not yet
+    /// accepted, and then the session lost) leaves it on disk by the time
+    /// the stop returns, so the process can exit at once. CLUSTER-01: the
+    /// new session's lease list waits while it's there to replay, and goes
+    /// out once the replay has drained.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stop_mid_batch_spools_it_and_the_list_waits_for_the_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
+        let sp = rt.spool().unwrap();
+        let (mut coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        // Kept: the session task ends with the queue.
+        let out = rt.test_outbound();
+        out.send(sealed(4)).await.unwrap();
+        let sent = next_results(&mut coord).await;
+        assert_eq!(records(&sp), 0, "a session up: nothing spooled");
+        rt.disconnected();
+        drop((coord, session));
+        rt.stop().await;
+        // No wait: durable once the stop returns.
+        assert_eq!(records(&sp), 1);
+        assert!(rt.holding().is_none(), "a replay is pending");
+        drop((rt, sp, out));
+
+        // The next start replays it; the list goes out after.
+        let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
+        let sp = rt.spool().unwrap();
+        assert!(rt.holding().is_none(), "not open, or not replayed yet");
+        let (mut coord, mut session) = session_pair().await;
+        rt.connected(session.handle());
+        let again = next_results(&mut coord).await;
+        assert_eq!(again.bytes, sent.bytes);
+        accept(&mut coord, &mut session, &mut rt, again.batch, true).await;
+        until("removed", || (sp.bytes() == 0, sp.bytes())).await;
+        let list = until("listed", || {
+            let l = rt.holding();
+            (l.is_some(), l)
+        })
+        .await;
+        // Its lease stays listed after the commit, for the grace.
+        assert_eq!(list.map(|l| l.len()), Some(1));
+        rt.shutdown().await;
+    }
+
+    /// CLUSTER-05: against a coordinator that stops reading, a batch's
+    /// send waits out the reply timeout (15 s). The local stop's fallback
+    /// runs as the session does it: the hand-back first (its flush can't
+    /// finish within the drain deadline), then the disconnect and the
+    /// offline stop. That stop can't wait behind the stalled send: it's
+    /// given up, and the batch is on disk when the stop returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stop_against_a_stalled_coordinator_still_spools() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
+        let sp = rt.spool().unwrap();
+        // A link of one frame, never read. The handshake leaves its one
+        // slot free: fill it here, so every later frame stalls, whatever
+        // `connected` queues itself.
+        let (_coord, session) = session_pair_with(1).await;
+        let filler = lodestar_cluster::proto::ToCoordinator::SnapshotAck(
+            lodestar_cluster::proto::SnapshotAck {
+                kind: lodestar_cluster::proto::SnapshotKind::Filter,
+                version: 1,
+                seq: 0,
+            },
+        );
+        session.handle().send(filler).await.unwrap();
+        rt.connected(session.handle());
+        let out = rt.test_outbound();
+        out.send(sealed(5)).await.unwrap();
+        // The hand-back: once it gives up, the session task is inside the
+        // stalled send, whichever way the batch reached it.
+        let _ = rt.drain().await;
+        assert_eq!(
+            rt.counts().sent.load(Ordering::Relaxed),
+            0,
+            "nothing got out"
+        );
+        assert_eq!(records(&sp), 0);
+        let started = std::time::Instant::now();
+        rt.disconnected();
+        rt.stop().await;
+        assert_eq!(records(&sp), 1, "spooled when the stop returns");
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+        drop((rt, out, session));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

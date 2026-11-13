@@ -108,6 +108,10 @@ pub struct LeaseTable {
     /// [`PINNED`] for a late result's lease, which the coordinator holds
     /// for a result already in hand. Ends with the lease.
     delivered: HashMap<Token, u64>,
+    /// Leases each worker holds, kept with `leases` so a count is one
+    /// lookup, not a scan (the per-worker cap, CLUSTER-02). A worker with
+    /// none has no entry.
+    held: HashMap<WorkerId, usize>,
 }
 
 /// [`LeaseTable`]'s delivery mark for a lease the coordinator holds on a
@@ -125,7 +129,27 @@ impl LeaseTable {
             workers: HashMap::new(),
             fetched: HashMap::new(),
             delivered: HashMap::new(),
+            held: HashMap::new(),
         }
+    }
+
+    /// Adds a lease; `key` must have none.
+    fn put(&mut self, key: InfoHash, lease: Lease) {
+        *self.held.entry(lease.holder).or_insert(0) += 1;
+        let old = self.leases.insert(key, lease);
+        debug_assert!(old.is_none(), "a key leased twice");
+    }
+
+    /// Removes `key`'s lease, if any, keeping the counts.
+    fn take(&mut self, key: &InfoHash) -> Option<Lease> {
+        let lease = self.leases.remove(key)?;
+        if let Some(n) = self.held.get_mut(&lease.holder) {
+            *n -= 1;
+            if *n == 0 {
+                self.held.remove(&lease.holder);
+            }
+        }
+        Some(lease)
     }
 
     /// Forgets the per-token marks of a lease that ended.
@@ -138,7 +162,7 @@ impl LeaseTable {
     fn end_all(&mut self, keys: Vec<InfoHash>) -> Vec<(InfoHash, Lease)> {
         let mut out = Vec::with_capacity(keys.len());
         for k in keys {
-            if let Some(l) = self.leases.remove(&k) {
+            if let Some(l) = self.take(&k) {
                 self.ended(l.token);
                 out.push((k, l));
             }
@@ -177,7 +201,7 @@ impl LeaseTable {
             };
         }
         let token = self.token();
-        self.leases.insert(
+        self.put(
             c.key,
             Lease {
                 holder: worker,
@@ -209,7 +233,7 @@ impl LeaseTable {
             return l.token;
         }
         let token = self.token();
-        self.leases.insert(
+        self.put(
             key,
             Lease {
                 holder: worker,
@@ -241,7 +265,7 @@ impl LeaseTable {
             return None;
         }
         self.ended(token);
-        self.leases.remove(key)
+        self.take(key)
     }
 
     /// The holder's batch carrying `key`'s result was accepted: marked
@@ -388,7 +412,7 @@ impl LeaseTable {
     }
 
     pub fn held_by(&self, worker: WorkerId) -> usize {
-        self.leases.values().filter(|l| l.holder == worker).count()
+        self.held.get(&worker).copied().unwrap_or(0)
     }
 
     pub fn ttl_secs(&self) -> i64 {
@@ -458,6 +482,10 @@ pub enum BatchAnswer {
     Claimed { claimed: Claimed, harvested: bool },
     /// A new key over what the admission allowed: not leased.
     Busy,
+    /// A new key over the claimer's own lease cap
+    /// ([`LeaseAuthority::set_lease_cap`], CLUSTER-02): not leased. The
+    /// worker claims again once it holds fewer.
+    Capped,
     /// Committed moments ago (a remote claim racing the commit): stored.
     Committed,
 }
@@ -496,11 +524,31 @@ struct AuthorityState {
     /// Commits remembered so far (a sequence number, see
     /// [`LeaseAuthority::commit_seq`]).
     commits: u64,
+    /// The most leases one remote worker may hold (CLUSTER-02): `caps`'
+    /// entry for it, else `cap`. `None` until the cluster server sets one:
+    /// no cap. The built-in worker is never capped.
+    cap: Option<usize>,
+    caps: HashMap<WorkerId, usize>,
 }
 
 impl AuthorityState {
     fn in_flight(&self) -> usize {
         self.table.len() + self.pending.len()
+    }
+
+    /// The worker's lease cap; `None`: uncapped.
+    fn cap_of(&self, worker: WorkerId) -> Option<usize> {
+        if worker == WorkerId::LOCAL {
+            return None;
+        }
+        self.caps.get(&worker).copied().or(self.cap)
+    }
+
+    /// New leases `worker` may still be given under its cap.
+    fn room(&self, worker: WorkerId) -> usize {
+        self.cap_of(worker).map_or(usize::MAX, |cap| {
+            cap.saturating_sub(self.table.held_by(worker))
+        })
     }
 
     fn park(&mut self, key: InfoHash, lease: Lease) {
@@ -598,9 +646,34 @@ impl LeaseAuthority {
                 order: VecDeque::new(),
                 recent: None,
                 commits: 0,
+                cap: None,
+                caps: HashMap::new(),
             }),
             events,
         }
+    }
+
+    /// Sets the most leases one remote worker may hold, for workers
+    /// without a cap of their own (CLUSTER-02). Claims for new keys past
+    /// it are [`BatchAnswer::Capped`], and re-grants pass it by; leases
+    /// already held are kept. The built-in worker is never capped.
+    pub fn set_lease_cap(&self, cap: Option<usize>) {
+        self.lock().cap = cap;
+    }
+
+    /// Sets `worker`'s own lease cap (from its assignment); `None` goes
+    /// back to the default ([`set_lease_cap`](Self::set_lease_cap)).
+    pub fn set_worker_cap(&self, worker: WorkerId, cap: Option<usize>) {
+        let mut s = self.lock();
+        match cap {
+            Some(cap) => s.caps.insert(worker, cap),
+            None => s.caps.remove(&worker),
+        };
+    }
+
+    /// `worker`'s lease cap now; `None`: uncapped.
+    pub fn lease_cap(&self, worker: WorkerId) -> Option<usize> {
+        self.lock().cap_of(worker)
     }
 
     /// Starts remembering recent commits, for remote claims (the cluster
@@ -678,14 +751,18 @@ impl LeaseAuthority {
         let mut allowed = match admit {
             _ if forgotten => 0,
             Some(admit) => {
+                // Keys past the worker's cap aren't asked about.
                 let new = claims
                     .iter()
                     .filter(|c| s.would_lease(&c.key) && !s.committed_recently(worker, &c.key))
-                    .count();
+                    .count()
+                    .min(s.room(worker));
                 if new == 0 { 0 } else { admit(new).min(new) }
             }
             None => usize::MAX,
         };
+        // The worker's own cap (CLUSTER-02), on top of the admission.
+        let mut room = s.room(worker);
         let mut fresh_leases = Vec::new();
         let answers: Vec<BatchAnswer> = claims
             .iter()
@@ -702,10 +779,15 @@ impl LeaseAuthority {
                     return BatchAnswer::Committed;
                 }
                 if s.would_lease(&c.key) {
+                    // Forgotten commits deny everything as busy, cap or not.
+                    if room == 0 && !forgotten {
+                        return BatchAnswer::Capped;
+                    }
                     if allowed == 0 {
                         return BatchAnswer::Busy;
                     }
                     allowed -= 1;
+                    room -= 1;
                 }
                 let (claimed, fresh) = s.claim(worker, *c, now);
                 if let Some(lease) = fresh {
@@ -961,8 +1043,9 @@ impl LeaseAuthority {
     /// Grants waiting keys, in waiting order (oldest first, except keys
     /// whose check couldn't answer, which wait at the back), to `targets`,
     /// each time to the one
-    /// holding the fewest leases, at most `per_target` keys each. Keys left
-    /// over keep waiting. Not a harvest.
+    /// holding the fewest leases, at most `per_target` keys each and never
+    /// past a target's lease cap (CLUSTER-02). Keys left over keep
+    /// waiting. Not a harvest.
     pub fn regrant_pending(
         &self,
         targets: &[WorkerId],
@@ -973,15 +1056,17 @@ impl LeaseAuthority {
         if s.pending.is_empty() || targets.is_empty() || per_target == 0 {
             return Vec::new();
         }
-        let mut load: Vec<(usize, WorkerId, Regranted)> = targets
+        // Each target's leases and how many more it may take: at most
+        // `per_target` now, and never past its cap (CLUSTER-02).
+        let mut load: Vec<(usize, WorkerId, Regranted, usize)> = targets
             .iter()
-            .map(|&w| (s.table.held_by(w), w, Vec::new()))
+            .map(|&w| (s.table.held_by(w), w, Vec::new(), s.room(w).min(per_target)))
             .collect();
         while let Some(key) = s.order.pop_front() {
             let Some(target) = load
                 .iter_mut()
-                .filter(|(_, _, got)| got.len() < per_target)
-                .min_by_key(|(held, w, _)| (*held, *w))
+                .filter(|(_, _, got, most)| got.len() < *most)
+                .min_by_key(|(held, w, _, _)| (*held, *w))
             else {
                 s.order.push_front(key);
                 break;
@@ -998,8 +1083,8 @@ impl LeaseAuthority {
         }
         self.gauge(&s);
         load.into_iter()
-            .filter(|(_, _, got)| !got.is_empty())
-            .map(|(_, w, got)| (w, got))
+            .filter(|(_, _, got, _)| !got.is_empty())
+            .map(|(_, w, got, _)| (w, got))
             .collect()
     }
 
@@ -2298,5 +2383,230 @@ mod tests {
         ];
         assert_eq!(a.held_tokens(A, &asked), [t1]);
         assert_eq!(a.held_tokens(B, &asked), [t2]);
+    }
+
+    /// The table's per-worker counts (CLUSTER-02) against a scan.
+    fn assert_counts(t: &LeaseTable) {
+        let mut scanned: HashMap<WorkerId, usize> = HashMap::new();
+        for l in t.leases.values() {
+            *scanned.entry(l.holder).or_insert(0) += 1;
+        }
+        assert_eq!(t.held, scanned);
+    }
+
+    proptest::proptest! {
+        /// Whatever happens to the table, each worker's count is the
+        /// number of leases it holds, and a worker holding none has no
+        /// entry.
+        #[test]
+        fn held_counts_follow_every_change(
+            ops in proptest::collection::vec((0u8..7, 1u32..4, 0u8..12), 1..200)
+        ) {
+            let mut t = LeaseTable::new(1, 600);
+            let mut now = 0;
+            for (op, w, k) in ops {
+                let (w, key) = (WorkerId(w), InfoHash([k; 20]));
+                match op {
+                    0 | 1 => {
+                        let _ = t.claim(w, claim(k, 0), now);
+                    }
+                    2 => {
+                        if let Some(l) = t.get(&key).copied() {
+                            t.release(&key, l.token);
+                        }
+                    }
+                    3 => {
+                        let _ = t.evict(w);
+                    }
+                    4 => {
+                        now += 400;
+                        t.heartbeat(w, now);
+                        let _ = t.expire(now);
+                    }
+                    5 => {
+                        // A re-grant to another worker, as after an expiry.
+                        if let Some(l) = t.get(&key).copied() {
+                            let l = t.release(&key, l.token).unwrap();
+                            t.regrant(w, key, l, now);
+                        }
+                    }
+                    _ => {
+                        let _ = t.reconcile(w, 9, &std::collections::HashSet::new());
+                    }
+                }
+                assert_counts(&t);
+            }
+        }
+    }
+
+    /// CLUSTER-02: claims for new keys past the worker's cap are
+    /// `Capped`, never leased; its own held keys still answer with their
+    /// lease; the built-in worker is never capped; a worker's own cap
+    /// overrides the default and can be cleared.
+    #[test]
+    fn claims_past_the_cap_are_capped_and_never_leased() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(3));
+        let claims: Vec<Claim> = (1..=5).map(|n| claim(n, 0)).collect();
+        let answers = a.claim_batch(A, &claims, 1, None, None);
+        let capped = answers
+            .iter()
+            .filter(|x| matches!(x, BatchAnswer::Capped))
+            .count();
+        assert_eq!((capped, a.held_by(A)), (2, 3), "{answers:?}");
+        assert!(matches!(
+            answers[3..],
+            [BatchAnswer::Capped, BatchAnswer::Capped]
+        ));
+        assert_eq!(get(&ev.harvested), 3);
+        assert!(a.get(&InfoHash([4; 20])).is_none());
+        // Its own key again: the lease, not a cap.
+        assert!(matches!(
+            a.claim_batch(A, &[claim(1, 1)], 1, None, None)[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, .. },
+                ..
+            }
+        ));
+        // Another worker has its own room.
+        assert!(matches!(
+            a.claim_batch(B, &[claim(4, 0)], 1, None, None)[0],
+            BatchAnswer::Claimed {
+                harvested: true,
+                ..
+            }
+        ));
+        // The built-in worker is never capped.
+        let local: Vec<Claim> = (20..30).map(|n| claim(n, 0)).collect();
+        assert!(
+            a.claim_batch(WorkerId::LOCAL, &local, 1, None, None)
+                .iter()
+                .all(|x| matches!(x, BatchAnswer::Claimed { .. }))
+        );
+        assert_eq!(a.lease_cap(WorkerId::LOCAL), None);
+        // Its own cap, then back to the default.
+        a.set_worker_cap(A, Some(4));
+        assert_eq!(a.lease_cap(A), Some(4));
+        let answers = a.claim_batch(A, &[claim(5, 0), claim(6, 0)], 1, None, None);
+        assert!(
+            matches!(
+                answers[..],
+                [BatchAnswer::Claimed { .. }, BatchAnswer::Capped]
+            ),
+            "{answers:?}"
+        );
+        a.set_worker_cap(A, None);
+        assert_eq!(a.lease_cap(A), Some(3));
+        // A cap lowered under what's held takes nothing back.
+        assert_eq!(a.held_by(A), 4);
+        assert!(matches!(
+            a.claim_batch(A, &[claim(7, 0)], 1, None, None)[0],
+            BatchAnswer::Capped
+        ));
+    }
+
+    /// The admission is asked only about keys within the cap, and a key
+    /// waiting for a re-grant counts against the cap like a new one.
+    #[test]
+    fn the_cap_bounds_what_admission_sees_and_takeovers() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(2));
+        let asked = std::sync::Mutex::new(Vec::new());
+        let admit = |n: usize| {
+            asked.lock().unwrap().push(n);
+            n
+        };
+        let claims: Vec<Claim> = (1..=5).map(|n| claim(n, 0)).collect();
+        let answers = a.claim_batch(A, &claims, 1, Some(&admit), None);
+        assert_eq!(*asked.lock().unwrap(), [2]);
+        assert_eq!(
+            answers
+                .iter()
+                .filter(|x| matches!(x, BatchAnswer::Capped))
+                .count(),
+            3
+        );
+        // B's lease expires: the key waits. A, at its cap, can't take it
+        // over by claiming it.
+        let _ = a.claim_batch(B, &[claim(9, 0)], 1, None, None);
+        a.heartbeat(A, 700);
+        assert_eq!(a.expire(700), 1);
+        assert_eq!(a.pending(), 1);
+        assert!(matches!(
+            a.claim_batch(A, &[claim(9, 0)], 700, None, None)[0],
+            BatchAnswer::Capped
+        ));
+        assert_eq!(a.pending(), 1);
+    }
+
+    /// With commits forgotten since the store check (a stale
+    /// `checked_at`), every new key is busy, even for a worker at its cap:
+    /// the claim is asked again, not counted as capped.
+    #[test]
+    fn a_stale_check_answers_busy_even_at_the_cap() {
+        let (a, _) = counted();
+        a.serve_remote();
+        a.set_lease_cap(Some(1));
+        let _ = a.claim_batch(A, &[claim(1, 0)], 1, None, None);
+        assert_eq!(a.held_by(A), 1);
+        let stale = a.commit_seq();
+        for n in 0..=RECENT_COMMITS as u32 {
+            let key = InfoHash({
+                let mut k = [0xEE; 20];
+                k[..4].copy_from_slice(&n.to_be_bytes());
+                k
+            });
+            let c = Claim { key, ..claim(2, 0) };
+            let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 1) else {
+                panic!("leased")
+            };
+            assert!(a.commit(WorkerId::LOCAL, &key, t).is_some());
+        }
+        assert_eq!(
+            a.claim_batch(A, &[claim(3, 0)], 1, None, Some(stale))[0],
+            BatchAnswer::Busy
+        );
+        // A fresh check: the cap.
+        assert_eq!(
+            a.claim_batch(A, &[claim(3, 0)], 1, None, Some(a.commit_seq()))[0],
+            BatchAnswer::Capped
+        );
+    }
+
+    /// Re-grants pass a target at its cap by and stop at each target's
+    /// room; what's left keeps waiting.
+    #[test]
+    fn regrants_never_take_a_worker_past_its_cap() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(3));
+        let c = WorkerId(3);
+        let _ = a.claim_batch(A, &[claim(1, 0), claim(2, 0), claim(3, 0)], 1, None, None);
+        let _ = a.claim_batch(B, &[claim(4, 0)], 1, None, None);
+        let waiting: Vec<Claim> = (10..16).map(|n| claim(n, 0)).collect();
+        let _ = a.claim_batch(c, &waiting, 1, None, None);
+        // `c` got three (its cap), then goes silent: they wait.
+        assert_eq!(a.held_by(c), 3);
+        a.heartbeat(A, 700);
+        a.heartbeat(B, 700);
+        assert_eq!(a.expire(700), 3);
+        let out = a.regrant_pending(&[A, B], 10, 700);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!((out[0].0, out[0].1.len()), (B, 2));
+        assert_eq!((a.held_by(A), a.held_by(B), a.pending()), (3, 3, 1));
+    }
+
+    /// At the largest pool an assignment allows, the cap is within what a
+    /// reconcile list can carry, so a worker under its cap can always list
+    /// what it holds (WK-11b).
+    #[test]
+    fn the_cap_at_the_largest_pool_is_the_reconcile_lists_limit() {
+        assert!(
+            crate::server::ClusterServer::lease_cap_for(crate::assign::MAX_POOL_CAP)
+                <= crate::proto::MAX_HOLDING
+        );
+        assert_eq!(
+            crate::server::ClusterServer::lease_cap_for(crate::assign::DEFAULT_POOL_CAP),
+            100_000
+        );
     }
 }
