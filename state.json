@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:14Z",
+  "updated_at": "2026-11-13T02:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8896,7 +8896,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:14Z",
+    "updated": "2026-11-13T02:15Z",
     "items": [
       {
         "slot": 1,
@@ -8937,13 +8937,11 @@
       },
       {
         "slot": 5,
-        "slice": "M8-PERF-1a",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnCqKPZbudhT8jXbC8k: #780 c64118eb (rv-780 fixes) CI; finish only; 1b WIP on wip/M8-PERF-1b",
-        "since": "2026-11-12T18:52:01Z",
-        "status": "active",
-        "cap": "over cap: finish #780 only, then archive (\u00a72.64)"
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "M8-PERF-1a #780 merged (198205d2) 2026-11-13T02:15Z; session archived (\u00a72.65 drain); M8-PERF-1b WIP on wip/M8-PERF-1b for a later slice",
+        "status": "idle"
       },
       {
         "slot": 6,
@@ -9245,7 +9243,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:14Z",
+  "updated": "2026-11-13T02:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
