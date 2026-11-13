@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T09:38Z",
+  "updated_at": "2026-11-13T09:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8001,6 +8001,11 @@
       "id": "X-companions-mount-check",
       "note": "From rv-825 I1 and nits: detect a host companions folder nested inside the host data folder or another companion folder by comparing /companions and /data in /proc/self/mountinfo (same device, nested roots); pass known companion folders as taken; openat2 RESOLVE_NO_SYMLINKS for native parent components; the conditional container test assertion. Opus, security review. Owner FYI (\u00a72.19).",
       "at": "2026-11-13T09:19Z"
+    },
+    {
+      "id": "x-filter01-fix-owns-tests",
+      "note": "Next runner plan PR: add crates/pipeline/tests/** to X-filter01-fix owns (runner approved one test-helper change in the PR, by id only).",
+      "at": "2026-11-13T09:48Z"
     }
   ],
   "main_health": [
@@ -9289,7 +9294,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T09:38Z",
+  "updated": "2026-11-13T09:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
