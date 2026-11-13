@@ -36,9 +36,10 @@ use super::util::{
 use crate::config::Config;
 
 /// What an imported torrent costs on disk, store and index together, until
-/// the store holds enough torrents to measure it: the 100k measurement's
-/// figure, rounded up (decisions file).
-pub const DEFAULT_RECORD_BYTES: u64 = 4096;
+/// the store holds enough torrents to measure it: about 1.5 times the
+/// 1,313 B a 1M-torrent Bitmagnet pilot measured, index included
+/// (2026-11-13-X-import-pilot-fixes).
+pub const DEFAULT_RECORD_BYTES: u64 = 2048;
 /// Torrents a store needs before its own size per torrent is trusted.
 const MEASURE_FROM: u64 = 10_000;
 /// Headroom on top of the estimate: the WAL, the index's merges.
@@ -160,6 +161,18 @@ pub struct SourceArgs {
     pub allow_plaintext_loopback: bool,
 }
 
+/// Why a Unix-socket --host needs --allow-plaintext-loopback, and when
+/// that's safe.
+#[cfg(unix)]
+const SOCKET_NEEDS_PLAINTEXT: &str = "--host names a Unix socket folder: add \
+     --allow-plaintext-loopback. PostgreSQL has no TLS on a Unix socket, and none is needed: \
+     the socket is on the same machine, so nothing is sent over a network [bad_settings]";
+/// The importer reaches no Unix socket on Windows, flag or not.
+#[cfg(not(unix))]
+const SOCKET_NEEDS_PLAINTEXT: &str = "--host names a Unix socket folder, which Lodestar can't \
+     use on Windows: connect to 127.0.0.1 and the port PostgreSQL publishes there instead \
+     [bad_settings]";
+
 impl SourceArgs {
     /// The Bitmagnet connection flags given, by name.
     fn pg_flags(&self) -> Vec<&'static str> {
@@ -197,6 +210,13 @@ impl SourceArgs {
                          reached with --host, --port, --dbname and --user"
                             .into(),
                     );
+                }
+                // PostgreSQL has no TLS on a Unix socket, so the library
+                // refuses one without the flag as bad settings; name it.
+                if self.host.as_deref().is_some_and(|h| h.starts_with('/'))
+                    && (!self.allow_plaintext_loopback || cfg!(not(unix)))
+                {
+                    return Err(Failure::Refused(SOCKET_NEEDS_PLAINTEXT.into()));
                 }
             }
         }
@@ -437,8 +457,31 @@ fn space(config: &Config, store: &Store, rows: Option<u64>) -> Space {
     }
 }
 
+/// The torrents a run imports: the source's `rows` (or what's left of
+/// them), capped by `--limit`. The driver checks the limit only between
+/// batches of up to 500, so a run can commit up to a batch less one past
+/// it.
+fn to_import(rows: Option<u64>, limit: Option<u64>) -> Option<u64> {
+    let batch = magnetico::MAX_PARENTS.max(bitmagnet::MAX_PARENTS) as u64;
+    let cap = limit.map(|l| l.max(1).saturating_add(batch - 1));
+    match (rows, cap) {
+        (Some(r), Some(c)) => Some(r.min(c)),
+        (r, c) => r.or(c),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The free space a test's data folder reports, when it sets one.
+    static FREE_FOR_TEST: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
 /// Bytes free to this user on `dir`'s volume (Unix); unknown elsewhere.
 fn free_bytes(dir: &Path) -> Option<u64> {
+    #[cfg(test)]
+    if let Some(free) = FREE_FOR_TEST.with(|f| f.get()) {
+        return Some(free);
+    }
     #[cfg(unix)]
     {
         let s = rustix::fs::statvfs(dir).ok()?;
@@ -458,6 +501,18 @@ fn short_of_space(s: &Space) -> Failure {
         format_bytes(s.needed.unwrap_or(0)),
         format_bytes(s.free.unwrap_or(0))
     ))
+}
+
+/// [`short_of_space`] for `inspect`, which sizes the whole source: a
+/// pilot of part of it may still fit.
+fn whole_source_short(s: &Space) -> Failure {
+    match short_of_space(s) {
+        Failure::Refused(m) => Failure::Refused(format!(
+            "{m} A pilot of part of it may still fit: `lodestar import start` with --limit \
+             checks the space for that many torrents only."
+        )),
+        f => f,
+    }
 }
 
 fn hex8(b: &[u8]) -> String {
@@ -578,7 +633,7 @@ async fn inspect(config: &Config, args: &SourceArgs, json: bool) -> Outcome {
         }
     }
     match space {
-        Some(s) if s.short() => Err(short_of_space(&s)),
+        Some(s) if s.short() => Err(whole_source_short(&s)),
         _ => Ok(()),
     }
 }
@@ -601,7 +656,7 @@ async fn start(
             j.id
         )));
     }
-    let s = space(config, &store, opened.rows);
+    let s = space(config, &store, to_import(opened.rows, limit));
     if s.short() {
         return Err(short_of_space(&s));
     }
@@ -725,9 +780,10 @@ async fn resume(
     }
     if job.control != Control::Running {
         let (dataset, schema_sig) = opened.adapter.identity();
-        // What's left to read, by the job's own share of the source.
+        // What's left to read, by the job's own share of the source, and
+        // no more than this run's --limit.
         let left = opened.rows.map(|n| n.saturating_sub(job.counters.read));
-        let s = space(config, &store, left);
+        let s = space(config, &store, to_import(left, limit));
         let resumed = store
             .resume_import_job(
                 id,
@@ -995,7 +1051,13 @@ fn print_report(id: i64, r: &Report, json: bool) -> Outcome {
             .iter()
             .map(|(k, v)| format!("{k} {}", format_count(*v)))
             .collect();
-        println!("Found this run: {}", found.join(", "));
+        // Per run and per occurrence (one torrent can raise several), and
+        // not kept with the job: only the counters above are (decisions
+        // file, 2026-11-13-X-import-pilot-fixes).
+        println!(
+            "Found this run (each occurrence; not kept with the job): {}",
+            found.join(", ")
+        );
     }
     match r.ended {
         Ended::Exhausted => println!(
