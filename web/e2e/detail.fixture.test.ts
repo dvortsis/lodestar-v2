@@ -8,10 +8,10 @@
 // is checked under `script-src 'self'`.
 import { readFileSync } from 'node:fs';
 import { expect, test, type BrowserContext } from '@playwright/test';
+import { fixtureCookies } from './support/fixture-session';
 
 const URL_ = process.env.E2E_FIXTURE_URL;
 const DIR = process.env.E2E_FIXTURE_DIR ?? '';
-const PASSWORD = process.env.E2E_FIXTURE_PASSWORD ?? '';
 
 interface Entry {
 	key: string;
@@ -28,14 +28,10 @@ test.use({ baseURL: URL_ });
 const manifest = () =>
 	JSON.parse(readFileSync(`${DIR}/fixture.json`, 'utf8')) as { torrents: Entry[] };
 
-// One sign-in for the file: the server rate-limits repeated logins.
+// The project's global setup signs in once (support/fixture-session.ts): the server rate-limits logins.
 let cookies: Awaited<ReturnType<BrowserContext['cookies']>> = [];
-test.beforeAll(async ({ playwright }) => {
-	const api = await playwright.request.newContext({ baseURL: URL_ });
-	const res = await api.post('/api/v1/login', { data: { password: PASSWORD } });
-	expect(res.ok(), 'sign in to the fixture').toBe(true);
-	cookies = (await api.storageState()).cookies;
-	await api.dispose();
+test.beforeAll(() => {
+	cookies = fixtureCookies() as typeof cookies;
 });
 test.beforeEach(async ({ context }) => {
 	await context.addCookies(cookies);
