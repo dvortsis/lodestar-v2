@@ -759,7 +759,7 @@ pub(crate) async fn patch_source(
     // The password is checked before anything is read or written. A
     // route change always needs it: the route is what keeps a source's
     // traffic on the VPN. With an enable, whether the source needs it
-    // (Restricted and Overlay, every time) is the implementation's to
+    // (Account, Restricted and Overlay, every time) is the implementation's to
     // decide.
     let password = body.password.take();
     let needs_check = body.egress.is_some()

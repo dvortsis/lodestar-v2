@@ -15,7 +15,11 @@ This PR tightens. It opens nothing.
 
 ## Account enables ask for the admin password (from SRC-15c's note)
 - **`consent::needs_password` now covers Account,** as it already did Restricted and Overlay. An Account source's credentials can reach services the user runs, such as an indexer manager, so turning one on asks for the password every time. It's never remembered (§20.11).
-- **What changes now:** nothing a user can reach changes, because the gate refuses Account first. `GET /sources` now says `password_required: true` for an Account source.
+- **What changes now:** no Account source can be turned on, because the gate refuses Account first. One thing does show (runner review I1):
+  - `GET /sources` now says `password_required: true` for an Account source.
+  - So `setupNeed` (`web/src/lib/features/sources/sources.ts`) returns `'password'` for a disabled Account source whose key is stored, such as Prowlarr. Its row reads "Needs setup", "Needs your password to be turned on", instead of "Off".
+  - The Account dialog has no password field, and the gate refuses the enable either way.
+  - **A known UI wording gap.** X-sources-restructure fixes it in `web/`, which owns `sources.ts`. This PR changes nothing in `web/` beyond the regenerated API files.
 - **For X-consent-gate-lift-account:** SRC-15c's Account dialog sends `enabled: true` without a password today. The follow-up gives the Account branch of `ConsentDialog.svelte` the password field the Restricted and Overlay branches have. Otherwise the server's `428 confirm_required` would be the answer after the gate opens.
 - **The enable matrix's oracle** (`control::enable_decision`) now expects Account to need the password as well as its credentials.
 

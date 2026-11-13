@@ -58,9 +58,7 @@ use crate::plugin::BoxFuture;
 /// (§2.49) as SRC-15b's dialogs show them. Version 1 was SRC-4's draft,
 /// which a build before the consent gate could record through the API
 /// with no dialog showing it, so a record of it covers nothing now and
-/// the source asks again (X-consent-gate-lift). Account is 0: its consent
-/// is its credentials, never an acknowledgement, until X-consent-gate-lift
-/// r2 ships its dialog.
+/// the source asks again (X-consent-gate-lift).
 pub const fn text_version(class: Consent) -> u32 {
     match class {
         Consent::None => 0,

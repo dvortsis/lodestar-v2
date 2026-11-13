@@ -1398,11 +1398,15 @@ async fn no_class_can_be_enabled_past_its_condition() {
         "{e}"
     );
     assert!(!e.to_string().contains(SECRET), "{e}");
+    assert!(!e.to_string().contains("apikey"), "the refused name: {e}");
+    let s = f.source(&c, "account").await;
     assert_eq!(
-        f.source(&c, "account").await["credentials"],
+        s["credentials"],
         json!(["api_key"]),
         "nothing more was stored"
     );
+    // Enabling an Account source asks for the admin password, every time.
+    assert_eq!(s["password_required"], json!(true), "{s}");
     // Stored credentials don't open it either.
     assert_gated(
         f.patch(&c, "account", json!({ "enabled": true })).await,

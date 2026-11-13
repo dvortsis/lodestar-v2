@@ -766,9 +766,9 @@ pub struct SourceChange {
     pub consent: Option<Consent>,
     /// ...and the version of what they were shown ([`consent::version`]).
     pub consent_version: Option<String>,
-    /// The caller checked the admin password for this change. Accepting
-    /// Restricted or Overlay consent needs it (Q13), and so does any
-    /// egress change.
+    /// The caller checked the admin password for this change. Enabling an
+    /// Account, Restricted or Overlay source needs it, every time (Q13,
+    /// [`consent::needs_password`]), and so does any egress change.
     pub password_confirmed: bool,
     pub egress: Option<EgressSetting>,
     /// `Some(windows)` sets them (`[]`: any time).
