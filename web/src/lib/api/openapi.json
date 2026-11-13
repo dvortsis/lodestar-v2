@@ -8315,7 +8315,7 @@
         "tags": [
           "torrents"
         ],
-        "summary": "Torrents related to one (§10.5): other versions of the same work,\nclones with an identical payload (equal file sizes) and other torrents\nwith one of its files (v2 and hybrid torrents only). Each group is\nconfirmed against the stored state and withheld as other versions\nare; the `*_partial` flags say when the index is still filling in\nwhat a group needs, so some may be missing.",
+        "summary": "Torrents related to one (§10.5): other versions of the same work,\nclones with an identical payload (equal file sizes), torrents with a\nsimilar payload (most of the same major files) and other torrents\nwith one of its files (v2 and hybrid torrents only). Each group is\nconfirmed against the stored state and withheld as other versions\nare; the `*_partial` flags say when the index is still filling in\nwhat a group needs, so some may be missing.",
         "operationId": "getTorrentSiblings",
         "parameters": [
           {
@@ -23667,7 +23667,7 @@
       },
       "SiblingsResponse": {
         "type": "object",
-        "description": "`GET /torrents/{hash}/siblings`: the torrents related to one, in three\ngroups. Each is either available (possibly empty) or unavailable with\na reason.",
+        "description": "`GET /torrents/{hash}/siblings`: the torrents related to one, in four\ngroups. Each is either available (possibly empty) or unavailable with\na reason.",
         "required": [
           "hash",
           "identical_payload",
@@ -23676,7 +23676,9 @@
           "other_versions",
           "same_file",
           "same_file_capped",
-          "same_file_partial"
+          "same_file_partial",
+          "similar_payload",
+          "similar_payload_partial"
         ],
         "properties": {
           "hash": {
@@ -23717,6 +23719,14 @@
           "same_file_partial": {
             "type": "boolean",
             "description": "The file index is still filling in piece roots, so some torrents\nmay be missing from `same_file`."
+          },
+          "similar_payload": {
+            "$ref": "#/components/schemas/HitGroup",
+            "description": "Torrents with a similar payload: most of the same large files\n(a season with an episode swapped or added, a pack with an extra\ndisc), newest first. Found by a MinHash of the large file sizes\nand confirmed on the stored sizes; identical clones are in\n`identical_payload` instead. Unavailable (`few_major_files`) for\na torrent whose large files have fewer than 3 different sizes,\nnot counting a split archive's volume size (a size more than 2\nfiles share). `truncated` also when more candidates matched than\nwere read, so some may be missing even from a short list."
+          },
+          "similar_payload_partial": {
+            "type": "boolean",
+            "description": "The index is still filling in the similarity terms, so some\ntorrents may be missing from `similar_payload`."
           }
         }
       },
@@ -26002,7 +26012,9 @@
           "no_content_files",
           "needs_v2_files",
           "payload_not_specific",
-          "partial_file_list"
+          "partial_file_list",
+          "few_major_files",
+          "needs_group_minhash"
         ]
       },
       "UnderstandKpi": {
