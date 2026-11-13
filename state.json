@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:25Z",
+  "updated_at": "2026-11-13T02:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8906,7 +8906,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:25Z",
+    "updated": "2026-11-13T02:28Z",
     "items": [
       {
         "slot": 1,
@@ -9162,13 +9162,12 @@
       },
       {
         "slot": 30,
-        "slice": "X-gluetun-leak",
+        "slice": "X-gluetun-leak-cmp",
         "status": "active",
-        "role": "build",
+        "role": "tester",
         "agent": "claude",
-        "doing": "#800 head 87be769b: VM leak test 01:35Z PASS (rc 0, every line ok, 0 captured down phases, host egress 0, independent eth0 capture 0 leak-class; inbound RS only, not judged). Fresh Opus delta review running; merge on MERGE + green CI. Bounded rehearsal crawl started 01:36:48Z (not evidence), ends ~14:37Z; then 3 failure drills. Then X-gluetun-leak-cmp (O3).",
-        "since": "2026-11-12T22:52Z",
-        "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
+        "doing": "session_01MMjhn9LiMXgY2GmV4Zu74h: #800 X-gluetun-leak merged (1b26cea4) 2026-11-13T02:28Z; same session now on X-gluetun-leak-cmp (briefs/X-gluetun-leak-cmp.md), unit tests only, no VM until X-test-vm windows end ~15:01Z",
+        "since": "2026-11-13T02:28Z"
       },
       {
         "slot": 31,
@@ -9249,7 +9248,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:25Z",
+  "updated": "2026-11-13T02:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
