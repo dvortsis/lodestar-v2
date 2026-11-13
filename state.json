@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T12:39Z",
+  "updated_at": "2026-11-13T12:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8430,11 +8430,6 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "829": {
-      "slice": "X-ci-filter-rust-inputs",
-      "head": "600cf4be",
-      "note": "fresh Opus CHANGES: B1 whitespace split drops paths with spaces (use -z); scope widened (runner) to docs inputs Rust reads; runner delta check then merge"
-    },
     "831": {
       "slice": "X-companions-mount-check",
       "head": "b840d27d",
@@ -9085,7 +9080,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T12:39Z",
+    "updated": "2026-11-13T12:43Z",
     "items": [
       {
         "slot": 1,
@@ -9170,12 +9165,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-ci-filter-rust-inputs",
-        "role": "other",
+        "slice": "X-e2e-orphan-specs",
+        "role": "build",
         "agent": "claude",
-        "status": "active",
-        "since": "2026-11-13T10:41Z",
-        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: #827 merged (3cf4fd5f); follow-up X-ci-filter-rust-inputs in same session",
+        "since": "2026-11-13T12:43Z",
+        "doing": "session_01MMjhnCVZzZoVoqzHGGFHEC (Sonnet): run orphaned real-server Playwright specs in CI (Track Q TEST-01)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9322,7 +9316,7 @@
     }
   ],
   "heartbeat": "2026-11-13T12:39Z",
-  "updated": "2026-11-13T12:39Z",
+  "updated": "2026-11-13T12:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9693,6 +9687,12 @@
       "slice": "X-wk18w-rollback",
       "merged": "2c509fd2",
       "at": "2026-11-13T11:59Z"
+    },
+    {
+      "pr": 829,
+      "slice": "X-ci-filter-rust-inputs",
+      "merged": "a79efb5b",
+      "at": "2026-11-13T12:43Z"
     }
   ]
 }
