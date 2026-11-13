@@ -1,11 +1,10 @@
 <script lang="ts">
 	// Settings → Sources (§18.8, §10.10): every source plugin of this build, grouped by kind, with its
-	// status, enable toggle, priority and 24 h yield, and the consent and purge dialogs
-	// (X-sources-restructure, owner §2.66: groups collapse behind a summary line, a filter box
-	// narrows the rows by name or kind, rows are one line that expands, and a legend names the
-	// consent classes)
-	// (SRC-15b), loaded on first use. Until a dialog's chunk arrives the screen simply stays as it is. This screen shows the server's last answer and replaces a row
-	// with the PATCH's reply.
+	// status, enable toggle, priority and 24 h yield. Groups collapse behind a summary line, a filter
+	// box narrows the rows by name or kind, each row is one line that expands, and a legend names
+	// the consent classes (X-sources-restructure, owner §2.66). The consent, purge and settings
+	// dialogs (SRC-15b) load on first use; until a dialog's chunk arrives the screen stays as it is.
+	// The screen shows the server's last answer and replaces a row with the PATCH's reply.
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
@@ -204,7 +203,11 @@
 					data-testid="sources-filter"
 				/>
 				<p class="text-small text-muted-text" role="status" data-testid="sources-filter-count">
-					{filtering ? m.sources_filter_count({ shown: shownCount, total: sources.length }) : ''}
+					{filtering
+						? sources.length === 1
+							? m.sources_filter_count_one({ shown: shownCount })
+							: m.sources_filter_count({ shown: shownCount, total: sources.length })
+						: ''}
 				</p>
 			</div>
 			{#if shown.length === 0}

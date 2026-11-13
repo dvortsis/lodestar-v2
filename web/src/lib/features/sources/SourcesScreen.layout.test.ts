@@ -131,4 +131,11 @@ describe('Sources layout', () => {
 			expect(terms).toContain(badge);
 		}
 	});
+
+	it('says "source", not "sources", when there is only one', async () => {
+		setup(sourceList(dht));
+		await screen.findByTestId('source-0');
+		await fireEvent.input(filter(), { target: { value: 'dht' } });
+		expect(screen.getByTestId('sources-filter-count').textContent).toBe('Showing 1 of 1 source');
+	});
 });

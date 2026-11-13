@@ -163,5 +163,6 @@
 	"sources_legend_external": "连接公共网络服务。开启前会显示它连接的地址。",
 	"sources_legend_account": "使用你在其他服务上的账户或 API 密钥。需要你的凭据，凭据加密保存，结果只留在此服务器上。",
 	"sources_legend_restricted": "法律风险较高。开启前需要你同意。强烈建议使用 VPN。",
-	"sources_legend_overlay": "加入另一个网络，例如 I2P 或 IPFS。开启前需要你同意，建议使用 VPN，它找到的内容可以一步清除。"
+	"sources_legend_overlay": "加入另一个网络，例如 I2P 或 IPFS。开启前需要你同意，建议使用 VPN，它找到的内容可以一步清除。",
+	"sources_filter_count_one": "显示 {shown} 个，共 1 个来源"
 }

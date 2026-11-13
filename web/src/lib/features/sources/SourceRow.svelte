@@ -1,12 +1,13 @@
 <script lang="ts">
-	// One source (§18.8), as one line that expands (X-sources-restructure, owner §2.66): the line
-	// has the name (the expand button), status, risk and consent class and the enable toggle, with
-	// the setup note and the companion chip under it when they apply (they say why the switch opens
-	// a dialog, or what the source waits for); the detail has priority, addresses, last error, the
-	// 24 h yield, Settings and Purge. The detail
-	// stays in the page while closed (`hidden`). Turning on a source that needs consent, a password or (Account) credentials opens its
-	// dialog, which sends the enable; the server's gate (§18.7) stays the only judge. While a change is in flight the controls stay focusable (a
-	// disabled control would drop the keyboard user's place) and simply ignore input.
+	// One source (§18.8), as one line that expands (X-sources-restructure, owner §2.66). The line has
+	// the name (the expand button), status, risk and consent class and the enable toggle, with the
+	// setup note and the companion chip under it when they apply: they say why the switch opens a
+	// dialog, or what the source waits for. The detail has priority, addresses, last error, the
+	// 24 h yield, Settings and Purge, and stays in the page while closed (`hidden`).
+	// Turning on a source that needs consent, a password or (Account) credentials opens its dialog,
+	// which sends the enable; the server's gate (§18.7) stays the only judge. While a change is in
+	// flight the controls stay focusable (a disabled control would drop the keyboard user's place)
+	// and simply ignore input.
 	import IconCaret from '~icons/ph/caret-right-bold';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
