@@ -2,14 +2,28 @@
 
 Checks neither pass made. Each says what is unknown and how to close it. Nothing here has a finding yet; treat each as untested, not as passed.
 
+## Done later the same day
+
+The owner asked for the cheap checks to be run. Results, with new finding ids L1–L5:
+
+| Check | Result |
+|---|---|
+| 1440 px, all 44 screens | No new automated findings (no overflow, no console errors; the same three axe findings as elsewhere). The drawer still overlays at this width (I1). |
+| 2560 px, all 44 screens | No overflow. **L3 (polish):** on Search the rows use about the left 35% of the screen while the toolbar's controls sit at the far right, about 1,700 px from the content, and the query bar stops at 1,050 px. Insights is centred with a width cap and reads well. |
+| 200% zoom (683 px layout), 15 key screens | No overflow or clipped controls. **L4 (evidence for I2):** on Search no result is visible in the first screen; the first row starts about 650 px down a 450 px viewport. |
+| Text-spacing overrides (WCAG 1.4.12), 15 key screens | No overflow. **L5 (polish):** histogram axis labels overlap and row facts clip at the right. The server's content security policy blocks a bookmarklet from injecting the test styles; browser extensions and user style sheets are unaffected. |
+| Server stops mid-session | Handled well at first: the pill says "Reconnecting", a banner says "Lost contact with the server. Lodestar keeps trying and will update this page when it is back", and a typed query gets "Couldn't check the query … Retry". **L1 (important):** a page opened while the server was down shows "Something went wrong · Error 500" and stays there after the server returns (checked 33 s later), although the pill recovers. It was a network failure, not a 500. Fix: retry the failed page when the connection returns, and say "Couldn't reach Lodestar". |
+| Session ends with an unsaved setting | **L2 (important):** pressing Save opens "Leave without saving?" with no word about having been signed out. "Save changes" in that dialog closes it and saves nothing. Only "Discard" leads to sign-in; afterwards the user is returned to the same screen, but the change is gone. §10.10.5 says unsaved work is never lost silently. Fix: say "You've been signed out. Sign in to save your change", and keep the draft across sign-in. |
+
+Scripts: `scripts/check-zoom-and-text-spacing.mjs`, `scripts/check-server-stop-and-session-end.mjs`, `scripts/check-session-end-choices.mjs`; the two widths used `CELLS='1440:light,2560:light' node scripts/sweep.mjs`.
+
+Still open from that list: only Search, Insights and Settings were read by eye at 1440 and 2560 px; the rest had automated checks only.
+
 ## Layout and input
 
 | Check | Why it matters | How to run it |
 |---|---|---|
-| 2560 px width | A §10.15 test width; wide screens show stretched rows and unused space first | `CELLS='2560:light' node scripts/sweep.mjs`, then look at Search, Insights and Settings |
-| 1440 px across all screens | Only the drawer was checked there; it is the gap between 1366 and 1920 | `CELLS='1440:light' node scripts/sweep.mjs` |
 | 768 and 1024 px, by eye | Only Search and Insights were looked at; the other 20 screens had automated checks only | Open the `@768-light` and `@1024-light` screenshots the sweep writes |
-| 200% zoom and text-spacing overrides | §10.13 promises both | Chromium at 200% zoom at 1366 px (equals a 683 px layout with large text); apply the WCAG 1.4.12 text-spacing bookmarklet |
 | Real touch devices | Histogram brush, drawer resize and table scroll were driven only by emulation | A phone and a tablet against a LAN install |
 | A language longer than English | Only `en` and `zh` exist; toolbars and segmented controls have no slack | Pseudo-locale with 30–40% longer strings |
 
@@ -33,8 +47,6 @@ Checks neither pass made. Each says what is unknown and how to close it. Nothing
 
 | Check | Why it matters | How to run it |
 |---|---|---|
-| Server stops while the UI is open | The connection screen and its recovery were not seen | Stop the server mid-session; restart it |
-| Session expires mid-edit | Unsaved Settings drafts should survive sign-in | Revoke the session from another browser with a dirty form open |
 | A lazy chunk fails to load | Most screens load on first use | Block one `_app/immutable/chunks/*` request |
 | Day one, small index | The "index is still growing" banner and "Idle" pill were seen only on the fixture | A fresh install for its first hour |
 | Index rebuild, stale Insights, paused crawler | Designed in §10.4 and §10.9.6; the fixture shows none of them | Trigger each on a test install |

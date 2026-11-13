@@ -46,6 +46,10 @@ node measure.mjs    # spacing, radii, control heights, type, icons, motion
 | `flow-settings-auth-locale.mjs` | Drawer at 1440 and 1920, settings save bar and leave guard, sign-in, `zh-CN`, dark |
 | `flow-first-run.mjs` | Setup and the wizard on an unclaimed server (`TOKEN` from its log; see the note below) |
 | `flow-touch-targets.mjs` | Lists controls under 44 px on touch layouts |
+| `check-zoom-and-text-spacing.mjs` | 200% zoom and WCAG 1.4.12 text spacing on 15 key screens |
+| `check-server-stop-and-session-end.mjs` | Stops and restarts the server mid-session (set `LODESTAR_BIN`); ends the session with an unsaved setting |
+| `check-session-end-choices.mjs` | Follows both choices in the dialog that appears after the session ends |
+| `flow-moderate-user-tasks.mjs`, `flow-moderate-user-followups.mjs` | The journeys behind part 4 |
 | `tile.py` | Joins screenshots side by side for reading |
 
 Two torrent hashes in `measure.mjs` and `flow-touch-targets.mjs` come from the fixture as built on 2026-11-12. If the fixture format changes, take new ones from `fixture.json`.
