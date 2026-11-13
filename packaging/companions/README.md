@@ -12,6 +12,7 @@ These files show what Lodestar generates for its companions on Docker and Unraid
 |---|---|
 | `compose/` | One compose file per companion, with and without gluetun (`-gluetun`). |
 | `unraid/` | The filled Unraid templates (`my-<name>.xml`). With gluetun there are two: the companion's and gluetun's. |
+| `gluetun-post-rules.txt` | Lodestar's post-rules for gluetun. Without them, gluetun lets connections opened through the tunnel leave by your normal network once the tunnel drops. The compose files carry them inline; the Unraid template reads them from a file you save (see below). The build embeds `crates/companions/src/gluetun-post-rules.txt`, a copy that must change with this file; a test checks that the two are identical. |
 
 ## What every file follows
 - **Images are pinned by digest** (`image@sha256:…`), never by a tag such as `:latest`.
@@ -19,12 +20,13 @@ These files show what Lodestar generates for its companions on Docker and Unraid
 - **No Docker socket, no privileged mode and no host networking.** gluetun is the only one with an extra capability (`NET_ADMIN`) and a device (`/dev/net/tun`). It needs both to run the VPN tunnel and its firewall.
 - **You fill in gluetun's VPN settings yourself.** Lodestar never asks for or stores a VPN key. gluetun won't start until they're real values, so nothing is sent outside the VPN in the meantime.
 - **Mount real folders, never a link.** Each companion gets its own folder. Lodestar refuses a folder that overlaps its own data folder or another companion's folder it knows about.
+- **gluetun gets Lodestar's post-rules and `VPN_INTERFACE=wg0`,** the tunnel name the rules use. A companion routed through gluetun starts only once gluetun is healthy (compose), or after it in Unraid's autostart order. The compose files carry the rules inline, which needs Docker Compose 2.23.1 or later.
 - **Already running gluetun?** Lodestar can route a companion through it by name instead of generating a new one, so your VPN settings stay as they are.
 
 ## On Unraid
 Unraid can't open a template that's already filled in from a link. Instead:
 
-1. Save the template file to `/boot/config/plugins/dockerMan/templates-user/` on your flash drive. With gluetun there are two: set up gluetun's first.
+1. Save the template file to `/boot/config/plugins/dockerMan/templates-user/` on your flash drive. With gluetun there are two: set up gluetun's first. Before you apply gluetun's, save `gluetun-post-rules.txt` at its **Post-rules** path, as the user guide's chapter 3 shows. Without that file, gluetun won't start.
 2. Open **Docker → Add Container** and pick the template under **Template**.
 3. Check the values, then select **Apply**.
 

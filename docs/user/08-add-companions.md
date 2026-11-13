@@ -159,7 +159,7 @@ To add qBittorrent:
 
 To open the companion's own web page, add a **Port** for its web port in the template form, on your LAN only. Never forward it on your router. Remove it afterwards if you don't need it.
 
-If you chose a new gluetun, Lodestar shows two files, gluetun's first. Apply gluetun's first and fill in its VPN settings. The companion's template shares gluetun's network, so that container must exist already.
+If you chose a new gluetun, Lodestar shows two files, gluetun's first. Apply gluetun's first and fill in its VPN settings. The companion's template shares gluetun's network, so that container must exist already. Before you apply gluetun's, save Lodestar's post-rules file, as [Close gluetun's gap when the VPN drops](03-keep-lodestar-safe.md#close-gluetuns-gap-when-the-vpn-drops) shows. Without the file, gluetun won't start. Once both templates are applied, set the start order, as the same section shows.
 
 Saving a template replaces one of the same name. Applying it replaces the container of that name, with its settings. To keep a gluetun you already run, choose **Through a gluetun container I already run**.
 
