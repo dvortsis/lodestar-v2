@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:20Z",
+  "updated_at": "2026-11-13T02:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7867,6 +7867,11 @@
       "id": "x-test-vm-lane-k-1113",
       "at": "2026-11-13T02:15Z",
       "note": "X-test-vm: Lane K started (owner-approved 1 GB worker). Worker leak test on #800 87be769b passed (rc 0, 0 leak-class packets). Rehearsal crawl from 02:01:26Z, window ends ~15:01Z (Main ~14:37Z). Swap set to the plan 256 MB in suppression; devvm.py swap_size 0 fix on claude/dreamy-edison-xlmtoy 505a092b (fold into a slice). Rehearsal, not evidence. Then Main numbers, 3 failure drills, Lane K memory/OOM/yield record."
+    },
+    {
+      "id": "drain-deltas-checked-1113",
+      "at": "2026-11-13T02:21Z",
+      "note": "Runner checked post-review deltas for #791 f4a522db, #795 8141edc4, #803 dd13fe9b, #799 f3bd484f, #783 e6a2fd36, #807 ce5f55b8, #805 7fa5a8e2, #789 be910a3e: all OK. #800 87be769b reviewed MERGE on the same head. Each merges on green (ci-ok, web-ok, e2e-ok) after pm.sh, then its over-cap session is archived."
     }
   ],
   "main_health": [
@@ -9246,7 +9251,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:20Z",
+  "updated": "2026-11-13T02:21Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
