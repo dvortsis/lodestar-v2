@@ -208,10 +208,11 @@ pub fn judge_source_adult_unshared(
     if detected || says == Some(true) {
         return (v, fix);
     }
-    // A floor hit is final, as the engine returns it.
+    // A locked rule's hit (the floor, CS-0a) is final, as the engine
+    // returns it.
     if v.decision
         .as_ref()
-        .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.floor()))
+        .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.locked()))
     {
         return (v, fix);
     }

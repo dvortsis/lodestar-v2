@@ -341,11 +341,11 @@ impl<'a> Ctx<'a> {
     /// `neutral` is the keys of the Neutralize entries that apply to the
     /// torrent, as the core and your rules get them.
     pub fn new(item: &'a Item<'a>, facts: &'a Facts<'a>, neutral: &'a [String]) -> Ctx<'a> {
-        let mut files = Vec::with_capacity(item.files.len().min(crate::MAX_FILES));
+        let mut files = Vec::with_capacity(item.files.len().min(crate::MATCH_FILES));
         files.extend(
             item.files
                 .iter()
-                .take(crate::MAX_FILES)
+                .take(crate::MATCH_FILES)
                 .filter(|x| !x.padding)
                 .map(|x| (x, ext(x))),
         );
@@ -406,7 +406,7 @@ impl<'a> Ctx<'a> {
         let files: Vec<_> = item
             .files
             .iter()
-            .take(crate::MAX_FILES)
+            .take(crate::MATCH_FILES)
             .filter(|x| !x.padding)
             .zip(text.exts)
             .collect();
@@ -415,7 +415,7 @@ impl<'a> Ctx<'a> {
                 == item
                     .files
                     .iter()
-                    .take(crate::MAX_FILES)
+                    .take(crate::MATCH_FILES)
                     .filter(|x| !x.padding)
                     .count()
                 && files.iter().all(|(f, e)| *e == ext(f)),
@@ -479,7 +479,7 @@ impl<'a> Ctx<'a> {
     /// stands, as in [`Ctx::evidence`]. Words are whole, so a lure inside
     /// a joined word (`MyPassword`) is broken only by neutralizing that
     /// whole word, never by `password`. Every file is read, not only the
-    /// first [`crate::MAX_FILES`], because the classifier reads them all.
+    /// first [`crate::MATCH_FILES`], because the classifier reads them all.
     fn live_lure(&self) -> bool {
         if self.neutral.is_empty() {
             return true;
@@ -723,11 +723,11 @@ const MIN_EPISODE_BYTES: u64 = 16 << 20;
 
 impl Ctx<'_> {
     /// Whether the torrent has more files than the rules read
-    /// ([`crate::MAX_FILES`]). The classifier reads them all, so a guard
+    /// ([`crate::MATCH_FILES`]). The classifier reads them all, so a guard
     /// that passes on the files it sees fails closed here: an executable
     /// or a stray video past the cap can't hide behind it.
     fn truncated(&self) -> bool {
-        self.item.files.len() > crate::MAX_FILES
+        self.item.files.len() > crate::MATCH_FILES
     }
 
     /// MW-2@2's guard (§20.6 "music production packs (VST/samples)"): a
@@ -1120,7 +1120,7 @@ mod tests {
             ("setup.exe", 2 * M),
         ]));
         // Past the files the rules read, a script could hide: fail closed.
-        let mut many: Vec<(String, u64)> = (0..crate::MAX_FILES)
+        let mut many: Vec<(String, u64)> = (0..crate::MATCH_FILES)
             .map(|i| (format!("Samples/Hit {i:04}.wav"), M))
             .collect();
         many.push(("setup.exe".into(), M));
@@ -1210,11 +1210,11 @@ mod tests {
                 n % 100
             )
         };
-        let mut many: Vec<String> = (0..crate::MAX_FILES as u32).map(many_ep).collect();
+        let mut many: Vec<String> = (0..crate::MATCH_FILES as u32).map(many_ep).collect();
         many.push("Other Show S01E01 1080p WEB.mkv".into());
         let all: Vec<(&str, u64)> = many.iter().map(|p| (p.as_str(), 30 * M)).collect();
         assert!(!fk2(&all[..5]));
-        assert!(!fk2(&all[..crate::MAX_FILES]), "a full pack at the cap");
+        assert!(!fk2(&all[..crate::MATCH_FILES]), "a full pack at the cap");
         assert!(fk2(&all), "a stray video past the cap");
         assert_eq!(episode("s01e02"), Some((1, 2)));
         assert_eq!(episode("s1e100"), Some((1, 100)));
@@ -1609,7 +1609,7 @@ mod tests {
         assert!(!hit_with("Movie 2019 1080p", &movie, &[]).contains(&"LU-1"));
         assert!(!hit_with("Movie 2019 1080p", &movie, &["password"]).contains(&"LU-1"));
         // A lure past the files the other rules read still counts.
-        let mut many: Vec<(&str, u64)> = vec![("filler.rar", 1); crate::MAX_FILES];
+        let mut many: Vec<(&str, u64)> = vec![("filler.rar", 1); crate::MATCH_FILES];
         many.push(password);
         many.push(click);
         assert!(lu1(&many, &["password"]));

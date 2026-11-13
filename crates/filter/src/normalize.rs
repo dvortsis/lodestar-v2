@@ -24,8 +24,11 @@ use unicode_normalization::char::is_combining_mark;
 
 use crate::hash::term_hash;
 
-/// Tokens kept per text (a name or one file name).
-pub const MAX_TOKENS: usize = 128;
+/// Tokens kept per text (a name or one file path), and per torrent when
+/// the core reads one whole ([`read_whole`]): a bound on memory. A
+/// metered read that reaches it is past the core's budget, so the core
+/// holds the torrent (CS-0a).
+pub const MAX_TOKENS: usize = 1 << 19;
 /// Words longer than this (in chars) are kept whole, not split or
 /// re-read: they're hashes or junk.
 const MAX_WORD_CHARS: usize = 32;
@@ -255,6 +258,8 @@ struct Plan {
     advance: u32,
     /// A single letter, which may be part of a spelled-out word.
     letter: Option<char>,
+    /// The metered read that last used it ([`Tokenizer::round`]).
+    round: u32,
 }
 
 /// Turns text into tokens, reusing its buffers across calls.
@@ -276,6 +281,170 @@ pub struct Tokenizer {
     /// Reads [`mark`]s as word breaks, as the matching before did
     /// ([`Tokenizer::splitting`]).
     split: bool,
+    /// Each character's reading in non-ASCII text, cached
+    /// ([`CharPlan`]); empty until the first such text.
+    chars: Vec<CharPlan>,
+    /// The work done since [`Tokenizer::meter`], in units of the core's
+    /// budget ([`crate::core::BUDGET`]).
+    work: u64,
+    /// Where reading stops: past it the rest of a text is skipped. Zero
+    /// for no limit.
+    limit: u64,
+    /// The metered read under way ([`Tokenizer::meter`]). Each cached word
+    /// and character notes the round that last used it, so the meter
+    /// charges as new whatever this read hasn't used yet in that slot, as
+    /// if the caches had started it empty: the same torrent costs the
+    /// same whatever the thread read before, and never less than it does.
+    round: u32,
+    /// A [`mark`] was read since [`Tokenizer::meter`]: the text reads
+    /// differently in the earlier reading ([`splits`]).
+    saw_mark: bool,
+}
+
+/// Characters [`Tokenizer`] caches the reading of: a script's block fits
+/// without two characters sharing a slot.
+const CHARS: usize = 2048;
+
+/// What one character of non-ASCII text does to the word being read, once
+/// decomposed, mapped and lowercased ([`plan_char`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    /// A letter or digit: it goes on the word.
+    Push(char),
+    /// `@` or `$`: it goes on a word already started, or ends one.
+    At(char),
+    /// Ends the word.
+    End,
+    /// A [`mark`]: a word break in the earlier reading, nothing in the
+    /// joined one.
+    Mark,
+}
+
+impl Op {
+    fn of(c: char) -> Op {
+        if c.is_alphanumeric() {
+            Op::Push(c)
+        } else if matches!(c, '@' | '$') {
+            Op::At(c)
+        } else {
+            Op::End
+        }
+    }
+}
+
+/// One character's [`Op`]s, cached by the character.
+#[derive(Debug, Clone)]
+struct CharPlan {
+    /// The character, or `u32::MAX` for an empty slot.
+    key: u32,
+    ops: Vec<Op>,
+    /// Characters in its decomposition.
+    decomposed: u64,
+    /// A [`mark`]: the earlier reading reads it as a word break.
+    mark: bool,
+    /// The metered read that last used it ([`Tokenizer::round`]).
+    round: u32,
+}
+
+impl Default for CharPlan {
+    fn default() -> CharPlan {
+        CharPlan {
+            key: u32::MAX,
+            ops: Vec::new(),
+            decomposed: 0,
+            mark: false,
+            round: 0,
+        }
+    }
+}
+
+/// `c`'s [`Op`]s into `ops`, and how many characters its compatibility
+/// decomposition has. Decomposing a text reorders only runs of combining
+/// marks, which are dropped, so a text's reading is its characters' in a
+/// row (`every_reordered_character_is_a_combining_mark`).
+fn plan_char(c: char, ops: &mut Vec<Op>) -> usize {
+    ops.clear();
+    let mut n = 0;
+    for d in std::iter::once(c).nfkd() {
+        n += 1;
+        if is_combining_mark(d) {
+            continue;
+        }
+        if ignored(d) {
+            if mark(d) {
+                ops.push(Op::Mark);
+            }
+            continue;
+        }
+        let d = match confusable(d) {
+            'ß' => 's',
+            d => d,
+        };
+        if d.is_alphanumeric() {
+            for l in d.to_lowercase() {
+                ops.push(Op::of(confusable(l)));
+            }
+        } else {
+            ops.push(Op::of(d));
+        }
+    }
+    n
+}
+
+/// Units of work ([`Tokenizer::meter`]), each about a nanosecond on the
+/// reference runner, measured on the costliest input of each kind
+/// (`budget_worst_case` in `tests/props.rs`).
+mod cost {
+    /// A byte of ASCII text.
+    pub const BYTE: u64 = 1;
+    /// A word whose plan is cached.
+    pub const WORD: u64 = 14;
+    /// A word planned anew, plus [`PLANNED_BYTE`] per byte.
+    pub const PLAN: u64 = 160;
+    pub const PLANNED_BYTE: u64 = 4;
+    /// A spelled-out run's token.
+    pub const SPELLED: u64 = 40;
+    /// A character of non-ASCII text whose reading is cached, plus
+    /// [`OP`] per [`super::Op`].
+    pub const CHAR: u64 = 6;
+    pub const OP: u64 = 2;
+    /// A character read anew, plus [`DECOMPOSED`] per character of its
+    /// decomposition.
+    pub const CHAR_PLAN: u64 = 220;
+    pub const DECOMPOSED: u64 = 90;
+    /// A token copied or looked at again.
+    pub const TOKEN: u64 = 6;
+    /// A [`super::mark`] in the joined reading: what ending a word there
+    /// costs the earlier reading.
+    pub const MARK: u64 = WORD + PLAN + SPELLED;
+    /// A file path, plus [`SEGMENT`] per segment and a unit per
+    /// [`COMPARED`] bytes of it (its folder is compared with the ones
+    /// remembered).
+    pub const FILE: u64 = 40;
+    pub const SEGMENT: u64 = 8;
+    pub const COMPARED: u64 = 16;
+}
+
+/// A [`Tokenizer::meter`] limit no read reaches by its work: the read is
+/// over only where a text reaches [`MAX_TOKENS`]. For the earlier reading
+/// ([`Tokenizer::splitting`]), whose work the joined reading's meter
+/// bounds but whose tokens it doesn't.
+pub(crate) const CUT_ONLY: u64 = u64::MAX / 2;
+
+/// Units of the core's work budget a file costs, however short its path.
+pub(crate) const FILE_UNITS: u64 = cost::FILE;
+
+/// The least a metered read of one path costs ([`read_whole`]): the file,
+/// each segment, its bytes compared with the folders remembered, and its
+/// name read (a byte costs at least a unit). Its folders may be read
+/// once for many files, so they count only as compared.
+pub(crate) fn least_path_cost(path: &[String]) -> u64 {
+    let bytes: usize = path.iter().map(String::len).sum();
+    let name = path.last().map_or(0, String::len);
+    cost::FILE
+        + path.len() as u64 * cost::SEGMENT
+        + bytes as u64 / cost::COMPARED
+        + name as u64 * cost::BYTE
 }
 
 impl Tokenizer {
@@ -338,10 +507,14 @@ impl Tokenizer {
     }
 
     fn feed(&mut self, text: &str, out: &mut Vec<Token>) {
+        if self.over() {
+            return;
+        }
         if text.is_ascii() {
+            self.work += text.len() as u64 * cost::BYTE;
             // A word starts at a letter or digit (the word is empty there,
             // so `@` and `$` can't start one) and takes `@` and `$` after.
-            // Anything else ends it, as `push_char` does one char at a time.
+            // Anything else ends it, as an [`Op::End`] does in other text.
             let bytes = text.as_bytes();
             let mut i = 0;
             while i < bytes.len() {
@@ -354,41 +527,90 @@ impl Tokenizer {
                     j += 1;
                 }
                 self.emit(&text[i..j], out);
+                if self.over() {
+                    return;
+                }
                 i = j;
             }
         } else {
-            for c in text.nfkd() {
-                if is_combining_mark(c) {
-                    continue;
+            if self.chars.is_empty() {
+                self.chars.resize_with(CHARS, CharPlan::default);
+            }
+            for c in text.chars() {
+                let slot = c as usize % CHARS;
+                if self.chars[slot].key != c as u32 {
+                    let plan = &mut self.chars[slot];
+                    // The key last: a slot is never matched before its
+                    // plan is made.
+                    plan.key = u32::MAX;
+                    plan.round = 0;
+                    plan.decomposed = plan_char(c, &mut plan.ops) as u64;
+                    plan.mark = mark(c);
+                    plan.key = c as u32;
                 }
-                if ignored(c) {
-                    if self.split && mark(c) {
-                        self.end_word(out);
-                    }
-                    continue;
+                self.saw_mark |= self.chars[slot].mark;
+                if self.limit != 0 && self.chars[slot].round != self.round {
+                    // The key is this character: new to this read here.
+                    self.chars[slot].round = self.round;
+                    self.work += cost::CHAR_PLAN + self.chars[slot].decomposed * cost::DECOMPOSED;
                 }
-                let c = match confusable(c) {
-                    'ß' => 's',
-                    c => c,
-                };
-                if c.is_alphanumeric() {
-                    for l in c.to_lowercase() {
-                        self.push_char(confusable(l), out);
+                let n = self.chars[slot].ops.len();
+                self.work += cost::CHAR + n as u64 * cost::OP;
+                for i in 0..n {
+                    match self.chars[slot].ops[i] {
+                        Op::Push(c) => self.word.push(c),
+                        Op::At(c) if !self.word.is_empty() => self.word.push(c),
+                        Op::At(_) | Op::End => self.end_word(out),
+                        Op::Mark if self.split => self.end_word(out),
+                        // The earlier reading ends a word here, so the
+                        // joined reading pays for that too: its meter
+                        // bounds both ([`cost::MARK`]).
+                        Op::Mark => self.work += cost::MARK,
                     }
-                } else {
-                    self.push_char(c, out);
+                }
+                if self.over() {
+                    return;
                 }
             }
         }
         self.end_word(out);
     }
 
-    fn push_char(&mut self, c: char, out: &mut Vec<Token>) {
-        if c.is_alphanumeric() || (matches!(c, '@' | '$') && !self.word.is_empty()) {
-            self.word.push(c);
-        } else {
-            self.end_word(out);
+    /// Starts counting the work done ([`cost`]), from zero, and stops
+    /// reading once it passes `limit` (zero for no limit): every text
+    /// after reads as nothing, and [`Tokenizer::over`] says so.
+    pub(crate) fn meter(&mut self, limit: u64) {
+        self.work = 0;
+        self.limit = limit;
+        self.saw_mark = false;
+        if limit != 0 {
+            // A new round: every slot of the meter's view reads as empty
+            // (round 0 is never one).
+            self.round = self.round.checked_add(1).unwrap_or_else(|| {
+                self.plans.iter_mut().for_each(|p| p.round = 0);
+                self.chars.iter_mut().for_each(|c| c.round = 0);
+                1
+            });
         }
+    }
+
+    /// Whether the work passed the limit [`Tokenizer::meter`] set.
+    pub(crate) fn over(&self) -> bool {
+        self.limit != 0 && self.work > self.limit
+    }
+
+    /// A token was dropped at [`MAX_TOKENS`]: a metered read is past its
+    /// limit, so it's never taken for the whole text.
+    fn cut(&mut self) {
+        if self.limit != 0 {
+            self.work = self.work.max(self.limit + 1);
+        }
+    }
+
+    /// Counts `tokens` tokens copied or looked at again outside the
+    /// tokenizer, for the same limit.
+    pub(crate) fn charge(&mut self, tokens: usize) {
+        self.work += tokens as u64 * cost::TOKEN;
     }
 
     /// Emits the word's tokens: its parts, its whole form if it split,
@@ -404,18 +626,25 @@ impl Tokenizer {
     /// Words repeat across a torrent's file names, so each word's tokens
     /// are planned once and replayed.
     fn emit(&mut self, word: &str, out: &mut Vec<Token>) {
-        if word.is_empty() || !self.room(out) {
+        if word.is_empty() || self.over() {
             return;
         }
+        if !self.room(out) {
+            self.cut();
+            return;
+        }
+        self.work += cost::WORD;
         if self.plans.len() < PLANS {
             self.plans.resize_with(PLANS, Plan::default);
         }
         // Long words (hashes, junk) aren't kept.
         let plan = if word.len() <= MAX_PLANNED_BYTES {
-            let plan = &mut self.plans[slot(word)];
+            let at = slot(word);
+            let plan = &mut self.plans[at];
             if plan.key.as_bytes() != word.as_bytes() {
                 // The key last: a plan is never found before it's made,
                 // even if making it was cut short.
+                plan.round = 0;
                 plan.key.clear();
                 plan.word.clear();
                 plan.word.push_str(word);
@@ -423,8 +652,15 @@ impl Tokenizer {
                 make_plan(plan, &mut self.plain, &mut self.swapped);
                 plan.key.push_str(word);
             }
+            // Its key is this word: new to this read in this slot unless
+            // this read used it last.
+            if self.limit != 0 && plan.round != self.round {
+                plan.round = self.round;
+                self.work += cost::PLAN + word.len() as u64 * cost::PLANNED_BYTE;
+            }
             plan
         } else {
+            self.work += cost::PLAN + word.len() as u64 * cost::PLANNED_BYTE;
             let plan = &mut self.long;
             plan.word.clear();
             plan.word.push_str(word);
@@ -436,14 +672,24 @@ impl Tokenizer {
             return;
         }
         let first = self.pos;
+        // Each token is looked at again once read (its flags, the
+        // signals).
+        self.work += plan.tokens.len() as u64 * cost::TOKEN;
         out.reserve(plan.tokens.len());
+        let mut cut = false;
         for (t, guarded) in &plan.tokens {
             if !guarded || out.len() - self.start < MAX_TOKENS {
                 out.push(Token {
                     pos: first + t.pos,
                     ..*t
                 });
+            } else {
+                cut = true;
             }
+        }
+        // `Tokenizer::cut`, on the fields: the plan is still borrowed.
+        if cut && self.limit != 0 {
+            self.work = self.work.max(self.limit + 1);
         }
         self.pos += plan.advance;
         match plan.letter {
@@ -466,8 +712,13 @@ impl Tokenizer {
 
     #[cold]
     fn end_spelled(&mut self, out: &mut Vec<Token>) {
-        if self.spelled.chars().count() >= MIN_SPELLED && self.room(out) {
-            out.push(Token::new(self.spelled_at, &self.spelled));
+        self.work += cost::SPELLED + self.spelled.len() as u64 * cost::BYTE;
+        if self.spelled.chars().count() >= MIN_SPELLED {
+            if self.room(out) {
+                out.push(Token::new(self.spelled_at, &self.spelled));
+            } else {
+                self.cut();
+            }
         }
         self.spelled.clear();
     }
@@ -609,6 +860,9 @@ struct Paused {
     /// folder gets the same tokens with its segments read apart
     /// ([`Tokenizer::path`]), as the core reads them.
     apart: bool,
+    /// The meter's work for reading the folder, charged again for each
+    /// path that the core reads a second time with its segments apart.
+    cost: u64,
 }
 
 impl Tokenizer {
@@ -620,12 +874,15 @@ impl Tokenizer {
     /// its own, and whether a run is open at each `/` noted.
     fn pause(&mut self, dirs: &[String], into: &mut Paused) {
         into.tokens.clear();
+        let before = self.work;
         self.begin(0, 0);
         into.apart = true;
         for d in dirs {
             self.feed(d, &mut into.tokens);
             into.apart &= self.spelled.is_empty();
         }
+        let bytes: usize = dirs.iter().map(String::len).sum();
+        into.cost = (self.work - before).max(bytes as u64 * cost::BYTE);
         into.pos = self.pos;
         into.spelled.clear();
         into.spelled.push_str(&self.spelled);
@@ -639,6 +896,7 @@ impl Tokenizer {
     fn resume(&mut self, paused: &Paused, rest: &str, out: &mut Vec<Token>) {
         let start = out.len();
         out.extend_from_slice(&paused.tokens);
+        self.charge(paused.tokens.len());
         self.begin(start, paused.pos);
         self.spelled.push_str(&paused.spelled);
         self.spelled_at = paused.spelled_at;
@@ -671,6 +929,11 @@ pub(crate) struct Read<'a> {
     pub(crate) ends: &'a [usize],
     /// Whether each path reads the same with its segments apart.
     pub(crate) apart: &'a [bool],
+    /// The read passed the core's work budget ([`read_whole`]): its
+    /// tokens stop short.
+    pub(crate) over: bool,
+    /// A text holds a [`mark`] ([`Metered::marks`]).
+    pub(crate) marks: bool,
 }
 
 impl<'a> Read<'a> {
@@ -696,11 +959,99 @@ pub(crate) fn paths_apart<'p>(
     ends: &mut Vec<usize>,
     apart: &mut Vec<bool>,
 ) {
-    with_tokenizer(|tok| {
+    with_tokenizer(|tok| paths_apart_with(tok, paths, out, ends, apart));
+}
+
+/// What a metered read of a torrent found ([`read_whole`], [`read_split`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Metered {
+    /// The work it took, or `None` once that passed the core's budget.
+    pub(crate) work: Option<u64>,
+    /// A text held a [`mark`], so it reads differently in the earlier
+    /// reading ([`splits`], without reading the text again).
+    pub(crate) marks: bool,
+}
+
+/// Stops metering `tok` when dropped, so a panic mid-read never leaves
+/// the thread's tokenizer metered (and every later read of it empty).
+struct Unmeter<'t>(&'t mut Tokenizer);
+
+impl Drop for Unmeter<'_> {
+    fn drop(&mut self) {
+        self.0.meter(0);
+    }
+}
+
+/// A torrent's name and every path read as [`paths_apart`] reads them,
+/// metered against the core's work budget ([`crate::core::BUDGET`]),
+/// the rest read as nothing once past it (an empty text for each path
+/// left, so the ends still line up with the files).
+pub(crate) fn read_whole<'p>(
+    name: &str,
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+    apart: &mut Vec<bool>,
+) -> Metered {
+    with_tokenizer(|tok| read_with(tok, name, paths, out, ends, apart))
+}
+
+/// [`read_whole`] in the earlier reading ([`Tokenizer::splitting`]), its
+/// own tokenizer, metered against the same budget. Paths read alike
+/// either way here: in one folder they share its part.
+pub(crate) fn read_split<'p>(
+    name: &str,
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+) -> Metered {
+    let mut tok = Tokenizer::splitting();
+    read_with(&mut tok, name, paths, out, ends, &mut Vec::new())
+}
+
+fn read_with<'p>(
+    tok: &mut Tokenizer,
+    name: &str,
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+    apart: &mut Vec<bool>,
+) -> Metered {
+    tok.meter(crate::core::BUDGET);
+    let tok = Unmeter(tok);
+    // Paths are read in turn, so the whole read is cut at the cap too.
+    tok.0.text(name, out);
+    ends.push(out.len());
+    paths_apart_with(tok.0, paths, out, ends, apart);
+    Metered {
+        work: (!tok.0.over()).then_some(tok.0.work),
+        marks: tok.0.saw_mark,
+    }
+}
+
+fn paths_apart_with<'p>(
+    tok: &mut Tokenizer,
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+    apart: &mut Vec<bool>,
+) {
+    {
         let mut paused = std::mem::take(&mut tok.folders);
         let mut dirs_of: [&[String]; FOLDERS] = [&[]; FOLDERS];
         let (mut known, mut next) = (0, 0);
         for path in paths {
+            if out.len() >= MAX_TOKENS {
+                tok.cut();
+            }
+            if tok.over() {
+                apart.push(true);
+                ends.push(out.len());
+                continue;
+            }
+            let bytes: usize = path.iter().map(String::len).sum();
+            tok.work +=
+                cost::FILE + path.len() as u64 * cost::SEGMENT + bytes as u64 / cost::COMPARED;
             match path.split_last() {
                 Some((name, dirs)) if !dirs.is_empty() => {
                     let slot = match dirs_of[..known].iter().position(|d| *d == dirs) {
@@ -720,6 +1071,19 @@ pub(crate) fn paths_apart<'p>(
                         }
                     };
                     tok.resume(&paused[slot], name, out);
+                    if !paused[slot].apart {
+                        // The core reads this path again with its segments
+                        // apart (`Read::path`), so the meter counts that
+                        // read too: its folder in full, its least, and its
+                        // tokens looked at. A read that can't fit the
+                        // text's cap is past the budget.
+                        let again = out.len() - ends.last().copied().unwrap_or(0);
+                        if again + path.len() >= MAX_TOKENS {
+                            tok.cut();
+                        }
+                        tok.work +=
+                            paused[slot].cost + least_path_cost(path) + again as u64 * cost::TOKEN;
+                    }
                     apart.push(paused[slot].apart);
                 }
                 // One segment is its own text; none is an empty one.
@@ -732,7 +1096,7 @@ pub(crate) fn paths_apart<'p>(
             ends.push(out.len());
         }
         tok.folders = paused;
-    });
+    }
 }
 
 #[cfg(test)]
@@ -805,10 +1169,25 @@ mod tests {
         assert!(!out.iter().any(|t| t.hash == term_hash("abcd")));
     }
 
+    /// Decomposing a text reorders only runs of characters with a
+    /// combining class, so reading a text a character at a time
+    /// ([`plan_char`]) gives what decomposing it whole does, as long as
+    /// every such character is dropped: a combining mark.
+    #[test]
+    fn every_reordered_character_is_a_combining_mark() {
+        use unicode_normalization::char::canonical_combining_class;
+        for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            if canonical_combining_class(c) != 0 {
+                assert!(is_combining_mark(c), "U+{:04X}", c as u32);
+            }
+        }
+    }
+
     #[test]
     fn bounded() {
-        let long = "word ".repeat(10_000);
-        assert!(toks(&long).len() <= MAX_TOKENS);
+        // Four tokens a word: past the cap, cut at it.
+        let long = "a1 ".repeat(MAX_TOKENS / 2);
+        assert_eq!(toks(&long).len(), MAX_TOKENS);
         let huge = "x".repeat(100_000);
         assert_eq!(toks(&huge).len(), 1);
     }
@@ -1008,6 +1387,71 @@ mod tests {
         Tokenizer::default().path(&path("l/e/x/a.mkv"), &mut apart_read);
         let (whole, ends, _) = read_apart(&[path("l/e/x/a.mkv")]);
         assert_ne!(&whole[ends[0]..ends[1]], &apart_read[..]);
+    }
+
+    /// A segment for the reads below: words, characters each reading
+    /// reads differently, single letters and other characters.
+    const SEGMENT: &str =
+        "([a-z0-9]{1,6}|[a-z]|\u{2028}|\u{0605}|\u{FFF9}|\u{200B}|\\PC|[ .]){0,12}";
+
+    proptest::proptest! {
+        /// The core's check before reading never counts more than the
+        /// read does, so nothing within the budget is held unread.
+        #[test]
+        fn the_least_cost_is_never_more_than_the_read(
+            name in SEGMENT,
+            folders in proptest::collection::vec(proptest::collection::vec(SEGMENT, 0..4), 1..7),
+            files in proptest::collection::vec((proptest::prelude::any::<proptest::sample::Index>(), SEGMENT), 0..24),
+        ) {
+            let paths: Vec<Vec<String>> = files
+                .into_iter()
+                .map(|(at, own)| {
+                    let mut p = folders[at.index(folders.len())].clone();
+                    if !own.is_empty() || !p.is_empty() {
+                        p.push(own);
+                    }
+                    p
+                })
+                .collect();
+            let least = name.len() as u64 + paths.iter().map(|p| least_path_cost(p)).sum::<u64>();
+            let (mut out, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+            let read = read_whole(&name, paths.iter().map(|p| &p[..]), &mut out, &mut ends, &mut apart);
+            proptest::prop_assert!(least <= read.work.unwrap(), "{} > {:?}", least, read.work);
+        }
+
+        /// The read notes a character the earlier reading reads as a word
+        /// break exactly where [`splits`] finds one, and the earlier
+        /// reading of every path, folders shared, is each path's own.
+        #[test]
+        fn the_reads_note_marks_and_read_each_path_whole(
+            name in SEGMENT,
+            folders in proptest::collection::vec(proptest::collection::vec(SEGMENT, 0..3), 1..6),
+            files in proptest::collection::vec((proptest::prelude::any::<proptest::sample::Index>(), SEGMENT), 0..12),
+        ) {
+            let paths: Vec<Vec<String>> = files
+                .into_iter()
+                .map(|(at, own)| {
+                    let mut p = folders[at.index(folders.len())].clone();
+                    p.push(own);
+                    p
+                })
+                .collect();
+            let (mut out, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+            let read = read_whole(&name, paths.iter().map(|p| &p[..]), &mut out, &mut ends, &mut apart);
+            let texts = std::iter::once(&name[..]).chain(paths.iter().flatten().map(|s| &s[..]));
+            proptest::prop_assert_eq!(read.marks, splits(texts));
+            proptest::prop_assert!(read.work.is_some());
+            let (mut split, mut split_ends) = (Vec::new(), Vec::new());
+            proptest::prop_assert!(read_split(&name, paths.iter().map(|p| &p[..]), &mut split, &mut split_ends).work.is_some());
+            let mut each = Vec::new();
+            Tokenizer::splitting().text(&name, &mut each);
+            proptest::prop_assert_eq!(&split[..split_ends[0]], &each[..]);
+            for (i, p) in paths.iter().enumerate() {
+                let mut each = Vec::new();
+                Tokenizer::splitting().text(&p.join("/"), &mut each);
+                proptest::prop_assert_eq!(&split[split_ends[i]..split_ends[i + 1]], &each[..], "{:?}", p);
+            }
+        }
     }
 
     proptest::proptest! {

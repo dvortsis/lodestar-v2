@@ -4,6 +4,10 @@
 //! - **Floor** (always on, never overridden): CS-1a/1b, exact hashes in
 //!   your CS-1 list or an imported one; CS-8a, the payload signature of a
 //!   CS-1 torrent when the payload is specific.
+//! - **Too large to judge** (CS-0a, locked like the floor): a torrent
+//!   whose name and paths are past the core's work budget ([`BUDGET`]) is
+//!   held, not judged in part. Every torrent within it is judged whole:
+//!   its full name and every path.
 //! - **Pattern rules** (on by default, each can be switched off): CS-2a,
 //!   a minor age near a sexual term; CS-3a/3b, a code term in the name or
 //!   in file names; CS-4a, a child-role term near a sexual term; CS-5a/5b,
@@ -74,6 +78,7 @@ pub enum CoreRule {
     Cs1a,
     Cs1b,
     Cs8a,
+    Cs0a,
     Cs2a,
     Cs3a,
     Cs3b,
@@ -83,11 +88,12 @@ pub enum CoreRule {
 }
 
 impl CoreRule {
-    /// In evaluation order: the floor first.
-    pub const ALL: [CoreRule; 9] = [
+    /// In evaluation order: the floor first, then the work budget.
+    pub const ALL: [CoreRule; 10] = [
         CoreRule::Cs1a,
         CoreRule::Cs1b,
         CoreRule::Cs8a,
+        CoreRule::Cs0a,
         CoreRule::Cs2a,
         CoreRule::Cs3a,
         CoreRule::Cs3b,
@@ -101,6 +107,7 @@ impl CoreRule {
             CoreRule::Cs1a => "CS-1a",
             CoreRule::Cs1b => "CS-1b",
             CoreRule::Cs8a => "CS-8a",
+            CoreRule::Cs0a => "CS-0a",
             CoreRule::Cs2a => "CS-2a",
             CoreRule::Cs3a => "CS-3a",
             CoreRule::Cs3b => "CS-3b",
@@ -124,6 +131,16 @@ impl CoreRule {
         matches!(self, CoreRule::Cs1a | CoreRule::Cs1b | CoreRule::Cs8a)
     }
 
+    /// Always on, never overridden and without exceptions: the floor, and
+    /// CS-0a, which holds a torrent too large to judge. CS-0a quarantines
+    /// rather than drops, and matches no hash, so it isn't [`floor`]: the
+    /// hash-list paths that read that leave it alone.
+    ///
+    /// [`floor`]: CoreRule::floor
+    pub fn locked(self) -> bool {
+        self.floor() || self == CoreRule::Cs0a
+    }
+
     pub fn action(self) -> Action {
         if self.floor() {
             Action::Drop
@@ -133,26 +150,30 @@ impl CoreRule {
     }
 }
 
-/// A floor rule can't be switched off.
+/// A locked rule (the floor, CS-0a) can't be switched off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Locked(pub CoreRule);
 
 impl std::fmt::Display for Locked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} is part of the locked floor", self.0.id())
+        if self.0.floor() {
+            write!(f, "{} is part of the locked floor", self.0.id())
+        } else {
+            write!(f, "{} is locked", self.0.id())
+        }
     }
 }
 
 impl std::error::Error for Locked {}
 
 /// Which core rules are switched off. Every rule is on by default, and
-/// the floor can't be switched off.
+/// the locked rules can't be switched off.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Switches(BTreeSet<CoreRule>);
 
 impl Switches {
     /// Switches as stored: `(rule id, enabled)`. Unknown ids (rules a
-    /// newer version added and this one doesn't have) and the floor are
+    /// newer version added and this one doesn't have) and the locked rules are
     /// ignored.
     pub fn from_stored<'a>(entries: impl IntoIterator<Item = (&'a str, bool)>) -> Switches {
         let mut s = Switches::default();
@@ -165,11 +186,11 @@ impl Switches {
     }
 
     pub fn is_on(&self, rule: CoreRule) -> bool {
-        rule.floor() || !self.0.contains(&rule)
+        rule.locked() || !self.0.contains(&rule)
     }
 
     pub fn set(&mut self, rule: CoreRule, on: bool) -> Result<(), Locked> {
-        if rule.floor() {
+        if rule.locked() {
             return if on { Ok(()) } else { Err(Locked(rule)) };
         }
         if on {
@@ -442,6 +463,60 @@ struct Folder {
     end: u32,
 }
 
+/// A torrent read whole ([`normalize::read_whole`]), kept between
+/// torrents.
+#[derive(Default)]
+struct ReadBufs {
+    tokens: Vec<Token>,
+    ends: Vec<usize>,
+    apart: Vec<bool>,
+    read: normalize::Metered,
+}
+
+impl Default for normalize::Metered {
+    fn default() -> normalize::Metered {
+        normalize::Metered {
+            work: Some(0),
+            marks: false,
+        }
+    }
+}
+
+impl ReadBufs {
+    fn read(&mut self, item: &Item) -> normalize::Read<'_> {
+        self.tokens.clear();
+        self.ends.clear();
+        self.apart.clear();
+        self.read = normalize::read_whole(
+            item.name,
+            item.files.iter().map(|f| &f.path[..]),
+            &mut self.tokens,
+            &mut self.ends,
+            &mut self.apart,
+        );
+        normalize::Read {
+            tokens: &self.tokens,
+            ends: &self.ends,
+            apart: &self.apart,
+            over: self.read.work.is_none(),
+            marks: self.read.marks,
+        }
+    }
+
+    /// Lets go of a large torrent's buffers, so a thread doesn't keep
+    /// them for good.
+    fn trim(&mut self) {
+        const KEEP: usize = 1 << 16;
+        if self.tokens.capacity() > KEEP {
+            self.tokens = Vec::new();
+        }
+        if self.ends.capacity() > KEEP {
+            self.ends = Vec::new();
+            self.apart = Vec::new();
+        }
+    }
+}
+
 /// Buffers for reading a torrent, kept between torrents.
 #[derive(Default)]
 struct Scratch {
@@ -452,13 +527,70 @@ struct Scratch {
     folders: Vec<Folder>,
 }
 
-/// Texts whose positions fit this many get a flag table in `signals`.
+/// Texts whose positions fit this many, or four per token, get a flag
+/// table in `signals`. The tokenizer's positions never pass its tokens,
+/// so only a stored fixture is ever scanned sparse.
 const DENSE_POSITIONS: usize = 4096;
 /// Inside Adult (CS-5a/5b).
 const ADULT_WINDOW: u32 = 12;
-/// File paths read per torrent; the rest add nothing a pack this large
-/// doesn't already show.
-pub const MAX_FILES: usize = 1_000;
+/// The core's work budget per torrent (§20.8), in units of about a
+/// nanosecond on the reference runner: what reading its name and every
+/// path costs, as the tokenizer meters it while it reads (bytes, words,
+/// characters, and how much each costs the first time). A torrent past it
+/// is held as too large to judge (CS-0a); every torrent within it is read
+/// whole. Judging one at the budget, whatever its text, takes about ten
+/// milliseconds at most on the build VM (`budget_worst_case` in
+/// `tests/props.rs`).
+pub const BUDGET: u64 = 9_000_000;
+
+/// The most files a torrent within the budget can have: each costs some
+/// of it, however short its path. Every file of a torrent the core judges
+/// is read.
+pub const MAX_FILES: usize = (BUDGET / normalize::FILE_UNITS) as usize;
+
+/// Whether `item` is past the budget before any of it is read: more
+/// files than [`MAX_FILES`], or more than the least its read can cost (the
+/// name's bytes, and each path's least, [`normalize::least_path_cost`]).
+/// Never more than the metered read would count, so nothing within the
+/// budget is held unread. Stops counting once past, so a torrent far
+/// past costs no more to check than one just past.
+pub(crate) fn past_budget_unread(item: &Item) -> bool {
+    if item.files.len() > MAX_FILES {
+        return true;
+    }
+    let mut least = item.name.len() as u64;
+    for f in item.files {
+        least += normalize::least_path_cost(&f.path);
+        if least > BUDGET {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the core holds `item` as too large to judge (CS-0a): past
+/// the budget before it's read, or while it's read. Reads it to find out.
+pub fn too_large(item: &Item) -> bool {
+    read_cost(item).is_none() || crate::matcher::Doc::new(item, None).too_large()
+}
+
+/// What reading `item` whole costs, in units of [`BUDGET`], or `None`
+/// where it's past the budget. For tests and the budget's bench.
+#[doc(hidden)]
+pub fn read_cost(item: &Item) -> Option<u64> {
+    if past_budget_unread(item) {
+        return None;
+    }
+    let (mut tokens, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+    normalize::read_whole(
+        item.name,
+        item.files.iter().map(|f| &f.path[..]),
+        &mut tokens,
+        &mut ends,
+        &mut apart,
+    )
+    .work
+}
 
 const MINOR_AGES: std::ops::RangeInclusive<u16> = 1..=17;
 
@@ -525,6 +657,12 @@ pub(crate) fn stronger(first: Option<Hit>, second: Option<Hit>) -> Option<Hit> {
     }
 }
 
+/// Whether `hits` hold CS-0a: the torrent wasn't read whole, so nothing
+/// else is read of it.
+fn too_large_read(hits: &[Hit]) -> bool {
+    hits.iter().any(|h| h.rule == CoreRule::Cs0a)
+}
+
 /// The hits of both readings in one list ([`Core::hits`]), its first
 /// switched-on hit the one [`stronger`] picks of the two readings' first:
 /// the earlier reading's hits, then the joined reading's for rules the
@@ -571,10 +709,66 @@ fn lexicon(lists: &Lists) -> IdMap<u16> {
     map
 }
 
+/// Pairs worth a sorted index ([`near_index`]) rather than a scan: one
+/// threshold for where the index is made and where it's read.
+const PAIR_SCAN: usize = 64;
+
+fn indexed(first: usize, second: usize) -> bool {
+    first.saturating_mul(second) > PAIR_SCAN
+}
+
+/// The first `x` of `first`, in order, with a `y` of `second` within `w`
+/// positions, and the first such `y`, in order. `near` is `second` as
+/// [`near_index`] sorts it, made once per text for every rule that reads
+/// it. No hashing: a binary search per `x`, and the window's positions.
+fn nearest_pair(first: &[u32], second: &[u32], near: &[(u32, u32)], w: u32) -> Option<(u32, u32)> {
+    if first.is_empty() || second.is_empty() {
+        return None;
+    }
+    // Few enough to scan, or no index made: scan, so a missing index can
+    // only cost time, never a pair.
+    if !indexed(first.len(), second.len()) || near.is_empty() {
+        return first.iter().find_map(|&x| {
+            let y = second.iter().find(|&&y| x.abs_diff(y) <= w)?;
+            Some((x, *y))
+        });
+    }
+    first.iter().find_map(|&x| {
+        let (lo, hi) = (x.saturating_sub(w), x.saturating_add(w));
+        let from = near.partition_point(|&(y, _)| y < lo);
+        let i = near[from..]
+            .iter()
+            .take_while(|&&(y, _)| y <= hi)
+            .map(|&(_, i)| i)
+            .min()?;
+        Some((x, second[i as usize]))
+    })
+}
+
+/// `second`'s positions with their index in it, sorted, for
+/// [`nearest_pair`].
+fn near_index(second: &[u32]) -> Vec<(u32, u32)> {
+    let mut near: Vec<(u32, u32)> = second
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| (y, i as u32))
+        .collect();
+    near.sort_unstable();
+    near
+}
+
 /// The signals of a torrent's name (first) and files, as the pattern
 /// rules read them ([`Core::pattern_signals`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct PatternSignals(Vec<(Field, Signals)>);
+pub(crate) struct PatternSignals {
+    texts: Vec<(Field, Signals)>,
+    /// The read passed the budget: the torrent is too large to judge
+    /// (CS-0a), and `texts` are empty.
+    over: bool,
+    /// A text reads differently in the earlier reading
+    /// ([`Core::pattern_hits_split`]).
+    marks: bool,
+}
 
 /// What one text (the name or a file path) contains.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -626,7 +820,7 @@ impl Fixture {
     /// a token count (u32) and its tokens (pos u32, hash u64, num u16,
     /// `u16::MAX` for none), little-endian. Hashes only: no names.
     pub fn encode(&self) -> Vec<u8> {
-        let files = &self.files[..self.files.len().min(MAX_FILES)];
+        let files = &self.files[..self.files.len().min(MAX_FIXTURE_FILES)];
         let mut out = vec![FIXTURE_V1, self.content_type.code()];
         out.extend_from_slice(&(files.len() as u16).to_le_bytes());
         for text in std::iter::once(&self.name).chain(files) {
@@ -654,7 +848,7 @@ impl Fixture {
         }
         let content_type = ContentType::from_code(take(1)?[0])?;
         let files = u16::from_le_bytes(take(2)?.try_into().ok()?) as usize;
-        if files > MAX_FILES {
+        if files > MAX_FIXTURE_FILES {
             return None;
         }
         let mut texts = Vec::with_capacity(files + 1);
@@ -690,6 +884,8 @@ impl Fixture {
 const FIXTURE_V1: u8 = 1;
 /// Tokens kept per text of a stored fixture.
 pub const MAX_FIXTURE_TOKENS: usize = 4096;
+/// Files kept in a stored fixture (its file count is a `u16`).
+pub const MAX_FIXTURE_FILES: usize = 1_000;
 
 #[derive(Debug, Clone)]
 pub struct Core {
@@ -734,16 +930,21 @@ impl Core {
         }
         let none = TermSet::default();
         let first = |hits: Vec<Hit>| hits.into_iter().find(|h| h.on);
-        let hit = first(self.patterns(item, &none, None));
+        let (joined, marks) = self.patterns(item, &none, None);
+        if too_large_read(&joined) {
+            return first(joined);
+        }
+        let hit = first(joined);
         // The earlier reading's hit wins a tie, so its rule and evidence
         // stay as they were.
-        match self.pattern_hits_split(item, &none) {
+        match self.pattern_hits_split(item, &none, marks) {
             Some(split) => stronger(first(split), hit),
             None => hit,
         }
     }
 
-    /// The floor alone (CS-1a/1b, CS-8a): final when it hits.
+    /// The locked rules that read no words (CS-1a/1b, CS-8a, and CS-0a for
+    /// a torrent too large to judge): final when one hits.
     pub fn floor_hit(&self, item: &Item) -> Option<Hit> {
         self.floor(item)
     }
@@ -756,8 +957,11 @@ impl Core {
     /// hits of both, the earlier reading's first: a rule hits if it hits
     /// in either reading.
     pub fn pattern_hits(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        let joined = self.patterns(item, neutral, None);
-        match self.pattern_hits_split(item, neutral) {
+        let (joined, marks) = self.patterns(item, neutral, None);
+        if too_large_read(&joined) {
+            return joined;
+        }
+        match self.pattern_hits_split(item, neutral, marks) {
             Some(mut hits) => {
                 hits.extend(joined);
                 hits
@@ -767,21 +971,28 @@ impl Core {
     }
 
     /// The hits of the earlier reading, with the characters
-    /// [`Tokenizer::splitting`] names as word breaks, if the item's name
-    /// or a path holds one; `None` otherwise, when both readings are the
-    /// same. Rare, so it pays for a tokenizer of its own.
-    pub(crate) fn pattern_hits_split(&self, item: &Item, neutral: &TermSet) -> Option<Vec<Hit>> {
-        let paths = item
-            .files
-            .iter()
-            .take(MAX_FILES)
-            .flat_map(|f| f.path.iter().map(String::as_str));
-        if !normalize::splits(std::iter::once(item.name).chain(paths)) {
+    /// [`Tokenizer::splitting`] names as word breaks, where `marks` (the
+    /// joined reading found one in the name or a path); `None` otherwise,
+    /// when both readings are the same. Rare, so it pays for a tokenizer
+    /// of its own.
+    pub(crate) fn pattern_hits_split(
+        &self,
+        item: &Item,
+        neutral: &TermSet,
+        marks: bool,
+    ) -> Option<Vec<Hit>> {
+        if !marks {
             return None;
         }
         let mut tok = Tokenizer::splitting();
+        tok.meter(normalize::CUT_ONLY);
         let mut scratch = Scratch::default();
         let s = self.patterns_with(&mut tok, &mut scratch, item, neutral, None);
+        if tok.over() {
+            // A text of this reading reached the token cap: it isn't read
+            // whole, so the torrent is too large to judge.
+            return Some(vec![self.too_large_hit()]);
+        }
         Some(self.judge_signals(&s, item.content_type))
     }
 
@@ -806,9 +1017,16 @@ impl Core {
     /// stronger, and so is the verdict, it leads.
     pub fn hits(&self, item: &Item) -> Vec<Hit> {
         let mut hits: Vec<Hit> = self.floor(item).into_iter().collect();
+        if too_large_read(&hits) {
+            return hits;
+        }
         let none = TermSet::default();
-        let joined = self.patterns(item, &none, None);
-        match self.pattern_hits_split(item, &none) {
+        let (joined, marks) = self.patterns(item, &none, None);
+        if too_large_read(&joined) {
+            hits.extend(joined);
+            return hits;
+        }
+        match self.pattern_hits_split(item, &none, marks) {
             Some(split) => hits.extend(both_readings(split, joined)),
             None => hits.extend(joined),
         }
@@ -835,12 +1053,14 @@ impl Core {
         if let Some(o) = best {
             return Some(self.hit(o.rule(), vec![Evidence::Hash(o)]));
         }
-        if self.cs.sigs.is_empty() {
-            return None;
-        }
-        payload_sig(item.files)
+        let payload = (!self.cs.sigs.is_empty())
+            .then(|| payload_sig(item.files))
+            .flatten()
             .filter(|p| p.specific && self.cs.sigs.contains(&p.sig))
-            .map(|_| self.hit(CoreRule::Cs8a, vec![Evidence::Payload]))
+            .map(|_| self.hit(CoreRule::Cs8a, vec![Evidence::Payload]));
+        // A torrent past the budget is held whole, before any of its text
+        // is read.
+        payload.or_else(|| past_budget_unread(item).then(|| self.too_large_hit()))
     }
 
     /// Each token's lexicon flags, appended to `out`.
@@ -863,7 +1083,7 @@ impl Core {
             return s;
         }
         let end = tokens.iter().map(|t| t.pos as usize + 3).max().unwrap_or(0);
-        let dense = end <= DENSE_POSITIONS;
+        let dense = end <= DENSE_POSITIONS.max(tokens.len().saturating_mul(4));
         table.clear();
         if dense {
             table.resize(end, 0);
@@ -884,7 +1104,9 @@ impl Core {
         for (t, &f) in tokens.iter().zip(flags) {
             if let Some(n) = t.num {
                 // CSX-4: only 1 to 17 can be a minor age.
-                if !MINOR_AGES.contains(&n) || s.ages.contains(&t.pos) {
+                // A position is listed once. Its numbers come one after
+                // another, so only the last needs checking.
+                if !MINOR_AGES.contains(&n) || s.ages.last() == Some(&t.pos) {
                     continue;
                 }
                 let before = t.pos.checked_sub(1);
@@ -914,11 +1136,16 @@ impl Core {
         s
     }
 
-    fn patterns(&self, item: &Item, neutral: &TermSet, read: Option<normalize::Read>) -> Vec<Hit> {
-        self.judge_signals(
-            &self.pattern_signals(item, neutral, read),
-            item.content_type,
-        )
+    /// The joined reading's hits, and whether a text reads differently
+    /// in the earlier one.
+    fn patterns(
+        &self,
+        item: &Item,
+        neutral: &TermSet,
+        read: Option<normalize::Read>,
+    ) -> (Vec<Hit>, bool) {
+        let s = self.pattern_signals(item, neutral, read);
+        (self.judge_signals(&s, item.content_type), s.marks)
     }
 
     /// The pattern rules' hits on signals [`Core::pattern_signals`] read,
@@ -927,7 +1154,15 @@ impl Core {
     /// read after the signals. A torrent read again as Adult reuses its
     /// signals so (`engine::Adult`).
     pub(crate) fn judge_signals(&self, s: &PatternSignals, content_type: ContentType) -> Vec<Hit> {
-        self.judge(&s.0, content_type)
+        if s.over {
+            return vec![self.too_large_hit()];
+        }
+        self.judge(&s.texts, content_type)
+    }
+
+    /// CS-0a's hit: the torrent is too large to judge.
+    pub(crate) fn too_large_hit(&self) -> Hit {
+        self.hit(CoreRule::Cs0a, Vec::new())
     }
 
     /// What the name and each file path hold, as the pattern rules read
@@ -943,14 +1178,42 @@ impl Core {
         thread_local! {
             // Kept per thread: its buffers carry over between torrents.
             static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
+            static READ: std::cell::RefCell<ReadBufs> = Default::default();
         }
         // The thread's tokenizer, whose word plans keyword entries' pass
         // over the same torrent just made (`normalize::with_tokenizer`).
-        normalize::with_tokenizer(|tok| {
-            SCRATCH.with(|s| match s.try_borrow_mut() {
-                Ok(mut scratch) => self.patterns_with(tok, &mut scratch, item, neutral, read),
-                Err(_) => self.patterns_with(tok, &mut Scratch::default(), item, neutral, read),
-            })
+        let judge = |read: normalize::Read| {
+            if read.over {
+                return PatternSignals {
+                    texts: Vec::new(),
+                    over: true,
+                    marks: read.marks,
+                };
+            }
+            let mut s = normalize::with_tokenizer(|tok| {
+                SCRATCH.with(|s| match s.try_borrow_mut() {
+                    Ok(mut scratch) => {
+                        self.patterns_with(tok, &mut scratch, item, neutral, Some(read))
+                    }
+                    Err(_) => {
+                        self.patterns_with(tok, &mut Scratch::default(), item, neutral, Some(read))
+                    }
+                })
+            });
+            s.marks = read.marks;
+            s
+        };
+        if let Some(read) = read {
+            return judge(read);
+        }
+        // Read whole, metered, as an entry's read of the torrent would be.
+        READ.with(|r| match r.try_borrow_mut() {
+            Ok(mut bufs) => {
+                let s = judge(bufs.read(item));
+                bufs.trim();
+                s
+            }
+            Err(_) => judge(ReadBufs::default().read(item)),
         })
     }
 
@@ -968,10 +1231,10 @@ impl Core {
             at,
             folders,
         } = scratch;
-        // The read has a path for each file the core reads, in order: a
-        // filter on either side would misalign them.
+        // The read has a path for each file, in order: a filter on either
+        // side would misalign them.
         debug_assert!(
-            read.is_none_or(|r| r.apart.len() == item.files.len().min(MAX_FILES)),
+            read.is_none_or(|r| r.apart.len() == item.files.len()),
             "the read's paths don't match the files"
         );
         tokens.clear();
@@ -988,20 +1251,23 @@ impl Core {
         let mut dirs_of: [&[String]; FOLDERS] = [&[]; FOLDERS];
         let mut known = 0;
         let mut next = 0;
-        for (i, f) in item.files.iter().take(MAX_FILES).enumerate() {
+        for (i, f) in item.files.iter().enumerate() {
+            // Every path, a padding file's too: the torrent marks a file
+            // padding, and its path is shown like any other.
             let Some((name, dirs)) = f.path.split_last() else {
                 continue;
             };
-            if f.padding {
-                continue;
-            }
             // Read already, and the same as read here: the tokens of the
             // path's segments read apart.
             if let Some(path) = read.and_then(|r| r.path(i)) {
-                tokens.clear();
-                tokens.extend_from_slice(path);
-                flags.clear();
-                self.flags_of(tokens, flags);
+                // `tokens` and `flags` still hold the text before, flag for
+                // flag: the tokens this path starts with alike (its folder,
+                // as a rule) keep theirs, so only the rest are looked up.
+                let same = tokens.iter().zip(path).take_while(|(a, b)| a == b).count();
+                tokens.truncate(same);
+                flags.truncate(same);
+                tokens.extend_from_slice(&path[same..]);
+                self.flags_of(&path[same..], flags);
                 let s = self.signals(tokens, flags, neutral, at);
                 if s.paired() {
                     texts.push((Field::File(i as u32), s));
@@ -1044,7 +1310,11 @@ impl Core {
                 texts.push((Field::File(i as u32), s));
             }
         }
-        PatternSignals(texts)
+        PatternSignals {
+            texts,
+            over: false,
+            marks: false,
+        }
     }
 
     /// Every pattern rule's hit on a hashed fixture (§20.4): the fixture
@@ -1058,7 +1328,7 @@ impl Core {
             self.signals(tokens, &flags, &none, &mut at)
         };
         let mut texts = vec![(Field::Name, signals(&f.name))];
-        for (i, tokens) in f.files.iter().enumerate().take(MAX_FILES) {
+        for (i, tokens) in f.files.iter().enumerate().take(MAX_FIXTURE_FILES) {
             texts.push((Field::File(i as u32), signals(tokens)));
         }
         self.judge(&texts, f.content_type)
@@ -1073,24 +1343,46 @@ impl Core {
         let roles: fn(&Signals) -> &[u32] = |s| &s.roles;
         let age = |field, pos| Evidence::MinorAge { field, pos };
         let role = |field, pos| Evidence::ChildRole { field, pos };
+        // Each text's sexual terms sorted once, for every rule that pairs
+        // them; only where a pair is possible and too many to scan, so most
+        // torrents build nothing.
+        let wanted = |s: &Signals| indexed(s.ages.len().max(s.roles.len()), s.sexual.len());
+        let near: Vec<Vec<(u32, u32)>> = if texts.iter().any(|(_, s)| wanted(s)) {
+            texts
+                .iter()
+                .map(|(_, s)| {
+                    if wanted(s) {
+                        near_index(&s.sexual)
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let p = |rule, w, first, evidence| {
+            self.pair(texts, &near, educational, rule, w, first, evidence)
+        };
         let mut hits = Vec::new();
-        hits.extend(self.pair(texts, educational, CoreRule::Cs2a, WINDOW, ages, age));
+        hits.extend(p(CoreRule::Cs2a, WINDOW, ages, age));
         hits.extend(self.code(texts, CoreRule::Cs3a));
         hits.extend(self.code(texts, CoreRule::Cs3b));
-        hits.extend(self.pair(texts, educational, CoreRule::Cs4a, WINDOW, roles, role));
+        hits.extend(p(CoreRule::Cs4a, WINDOW, roles, role));
         if adult {
-            let w = ADULT_WINDOW;
-            hits.extend(self.pair(texts, educational, CoreRule::Cs5a, w, roles, role));
-            hits.extend(self.pair(texts, educational, CoreRule::Cs5b, w, ages, age));
+            hits.extend(p(CoreRule::Cs5a, ADULT_WINDOW, roles, role));
+            hits.extend(p(CoreRule::Cs5b, ADULT_WINDOW, ages, age));
         }
         hits
     }
 
     /// The first text with a `first` signal within `w` words of a sexual
     /// term. CSX-2 skips the name of an educational torrent.
+    #[allow(clippy::too_many_arguments)]
     fn pair(
         &self,
         texts: &[(Field, Signals)],
+        near: &[Vec<(u32, u32)>],
         educational: bool,
         rule: CoreRule,
         w: u32,
@@ -1099,12 +1391,11 @@ impl Core {
     ) -> Option<Hit> {
         texts
             .iter()
-            .filter(|(field, _)| !(educational && *field == Field::Name))
-            .find_map(|(field, s)| {
-                let (x, y) = first(s).iter().find_map(|&x| {
-                    let y = s.sexual.iter().find(|&&y| x.abs_diff(y) <= w)?;
-                    Some((x, *y))
-                })?;
+            .enumerate()
+            .filter(|(_, (field, _))| !(educational && *field == Field::Name))
+            .find_map(|(i, (field, s))| {
+                let near = near.get(i).map_or(&[][..], Vec::as_slice);
+                let (x, y) = nearest_pair(first(s), &s.sexual, near, w)?;
                 let sexual = Evidence::Sexual {
                     field: *field,
                     pos: y,
@@ -1130,6 +1421,12 @@ impl Core {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// The store never expires the hold of a torrent too large to judge.
+    #[test]
+    fn the_stores_kept_rules_are_cs0a() {
+        assert_eq!(lodestar_store::KEPT_RULES, [CoreRule::Cs0a.id()]);
+    }
 
     /// The store keeps the floor's rule ids for the purge (§20.9).
     #[test]
@@ -1245,6 +1542,8 @@ mod tests {
             tokens: &tokens,
             ends: &ends,
             apart: &apart,
+            over: false,
+            marks: false,
         };
         let none = TermSet::default();
         for (files, hits) in [
@@ -1258,7 +1557,7 @@ mod tests {
                 files,
                 content_type: ContentType::Video,
             };
-            let own = c.patterns(&item, &none, None);
+            let own = c.patterns(&item, &none, None).0;
             assert_eq!(!own.is_empty(), hits, "{files:?}");
             // Only the files given: the read's paths past them aren't read.
             let (mut t, mut a) = (Vec::new(), Vec::new());
@@ -1269,8 +1568,10 @@ mod tests {
                 tokens: &t,
                 ends: &e,
                 apart: &a,
+                over: false,
+                marks: false,
             };
-            assert_eq!(c.patterns(&item, &none, Some(read_of)), own, "{files:?}");
+            assert_eq!(c.patterns(&item, &none, Some(read_of)).0, own, "{files:?}");
         }
         // Reusing the whole read's tokens for the first path would differ.
         let item = Item {
@@ -1285,9 +1586,30 @@ mod tests {
             ..read
         };
         assert_ne!(
-            c.patterns(&item, &none, Some(forced)),
-            c.patterns(&item, &none, None)
+            c.patterns(&item, &none, Some(forced)).0,
+            c.patterns(&item, &none, None).0
         );
+    }
+
+    proptest! {
+        /// The sorted pairing finds what scanning every pair finds: the
+        /// first of `first`, in order, with one of `second` close enough,
+        /// and the first of those, in order.
+        #[test]
+        fn pairing_finds_what_the_scan_finds(
+            first in prop::collection::vec(0u32..400, 0..120),
+            second in prop::collection::vec(0u32..400, 0..120),
+            w in 0u32..16,
+        ) {
+            let scan = first.iter().find_map(|&x| {
+                let y = second.iter().find(|&&y| x.abs_diff(y) <= w)?;
+                Some((x, *y))
+            });
+            let near = near_index(&second);
+            prop_assert_eq!(nearest_pair(&first, &second, &near, w), scan);
+            // Without an index it scans: never fewer pairs.
+            prop_assert_eq!(nearest_pair(&first, &second, &[], w), scan);
+        }
     }
 
     proptest! {
@@ -1359,14 +1681,14 @@ mod tests {
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };
                 let item = Item { content_type: ct, ..item };
-                prop_assert_eq!(c.patterns(&item, &none, None), c.judge(&texts, ct));
+                prop_assert_eq!(c.patterns(&item, &none, None).0, c.judge(&texts, ct));
             }
         }
 
         /// Reusing keyword entries' read of the name and paths finds what
         /// the core's own read finds: paths whose spelled-out letters
         /// run on over a `/` (`y/o`), which read differently whole, are
-        /// read again, and padding files are skipped either way.
+        /// read again, and padding files are read like any other.
         #[test]
         fn reusing_the_whole_read_finds_the_same(
             segs in prop::collection::vec(
@@ -1397,14 +1719,14 @@ mod tests {
             normalize::tokens(name, &mut tokens);
             let mut ends = vec![tokens.len()];
             normalize::paths_apart(files.iter().map(|f| &f.path[..]), &mut tokens, &mut ends, &mut apart);
-            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart };
+            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false, marks: false };
             let neutral = TermSet::of(&neutral);
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };
                 let item = Item { hashes: &[], name, files: &files, content_type: ct };
                 prop_assert_eq!(
-                    c.patterns(&item, &neutral, Some(read)),
-                    c.patterns(&item, &neutral, None)
+                    c.patterns(&item, &neutral, Some(read)).0,
+                    c.patterns(&item, &neutral, None).0
                 );
             }
         }

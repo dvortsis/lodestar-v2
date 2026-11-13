@@ -9,6 +9,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use lodestar_api::filters::FiltersApi;
+use lodestar_api::keys::{self, scope};
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::ContentType;
@@ -16,7 +17,9 @@ use lodestar_filter::lists::SharedIps;
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, HeldSet, Lists, Sealer, Switches};
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::{Filtered, Held, NewTorrent, SourceId, Store, StoreConfig, WriteBatch};
+use lodestar_store::{
+    Filtered, Held, KeyKind, NewApiKey, NewTorrent, SourceId, Store, StoreConfig, WriteBatch,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -29,6 +32,7 @@ struct Fixture {
     app: Router,
     auth: Arc<Auth>,
     api: Arc<FiltersApi>,
+    user_data: Arc<Mutex<Store>>,
     _dir: tempfile::TempDir,
 }
 
@@ -41,6 +45,10 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
     let db = dir.path().join("t.db");
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    // Where API keys live, so a test can mint a real one.
+    let user_data = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
     let engine = Handle::new(Engine::new(Core::new(
         Lists::shipped().unwrap(),
         CsList::default(),
@@ -71,7 +79,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
             events: None,
             settings: None,
             ops: None,
-            user_data: None,
+            user_data: Some(user_data.clone()),
             adult: Default::default(),
             insights: None,
         }),
@@ -80,6 +88,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         app,
         auth,
         api,
+        user_data,
         _dir: dir,
     }
 }
@@ -297,6 +306,139 @@ async fn the_floor_is_locked() {
         "{w}"
     );
     assert!(body["assessment"]["neutralize"].is_object());
+}
+
+/// CS-0a, a torrent too large to judge, is locked like the floor: on
+/// always, no exception, shown as locked; releasing what it holds needs
+/// the warning and the password, and says it's held again when next seen.
+#[tokio::test]
+async fn too_large_to_judge_is_locked() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let change = json!({ "op": "core_switch", "rule": "CS-0a", "on": false });
+    let (status, body) = apply(&f, &c, change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "add_exception", "rule": "CS-0a", "hashes": ["aa".repeat(20)] }),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let o = overview(&f, &c).await;
+    let row = o["core"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "CS-0a")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (&row["on"], &row["floor"], &row["action"]),
+        (&json!(true), &json!(true), &json!("quarantine"))
+    );
+    // Releasing a held one. Two are held, so the second release shows a
+    // password confirmed once isn't kept for the next.
+    let (one, two) = ([0x5a; 20], [0x5b; 20]);
+    hold(&f, one, "CS-0a", Held::Quarantine, 1_000);
+    hold(&f, two, "CS-0a", Held::Quarantine, 1_000);
+    let release = |hash: [u8; 20]| json!({ "op": "release", "hash": hex(&hash) });
+    let held = |hash: [u8; 20]| {
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .quarantine_rule(&hash)
+            .unwrap()
+            .is_some()
+    };
+    // Without a session: refused before anything is read.
+    let (status, _, _) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/apply",
+            None,
+            json!({ "change": release(one), "password": PASSWORD }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(held(one));
+    // The warning first, saying what releasing it means.
+    let (status, body) = apply(&f, &c, release(one), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    let w = body["assessment"]["warning"].as_str().unwrap();
+    assert!(w.contains("too large") && w.contains("held again"), "{w}");
+    assert!(held(one));
+    // A wrong password releases nothing.
+    let (status, body) = apply(&f, &c, release(one), Some("not the password")).await;
+    assert!(
+        status.is_client_error() && status != StatusCode::OK,
+        "{status} {body}"
+    );
+    assert!(held(one));
+    // The admin password releases it.
+    let (status, body) = apply(&f, &c, release(one), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!held(one));
+    // And it's asked for again, every time.
+    let (status, body) = apply(&f, &c, release(two), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    assert!(held(two));
+    // An API key never reaches it, even a live one with every scope and
+    // the password: only the admin's session does.
+    let m = keys::mint(KeyKind::ApiKey).unwrap();
+    f.user_data
+        .lock()
+        .unwrap()
+        .create_api_key(
+            &NewApiKey {
+                kind: KeyKind::ApiKey,
+                name: "every scope",
+                prefix: &m.prefix,
+                hash: m.hash,
+                scopes: scope::ALL,
+                saved_search_id: None,
+                expires_at: None,
+            },
+            0,
+        )
+        .unwrap();
+    let key = m.secret.expose().to_string();
+    // The key works where keys do.
+    let caps = Request::get("/api/v1/torznab/api?t=caps")
+        .header("x-api-key", &key)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = call(&f.app, caps).await;
+    assert_eq!(status, StatusCode::OK, "the key is live");
+    let body = json!({ "change": release(two), "password": PASSWORD }).to_string();
+    let bearer = format!("Bearer {key}");
+    for (header, value) in [
+        (header::AUTHORIZATION.as_str(), bearer.as_str()),
+        ("x-api-key", key.as_str()),
+    ] {
+        let req = Request::post("/api/v1/filters/apply")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header, value)
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let (status, _, _) = call(&f.app, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{header}");
+    }
+    assert!(held(two));
+    // A false positive is an exception, which a locked rule doesn't take.
+    let fp = json!({ "op": "false_positive", "hash": hex(&two) });
+    let (status, body) = apply(&f, &c, fp, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let why = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(why.contains("locked"), "{body}");
+    assert!(held(two));
+}
+
+fn hex(hash: &[u8; 20]) -> String {
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Stored filter text never uses `..<`: a binary one release back can't

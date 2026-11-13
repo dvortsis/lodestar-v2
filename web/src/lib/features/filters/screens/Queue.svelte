@@ -3,6 +3,8 @@
 	// name: a sealed name opens only through the reveal dialog (warning and password). A hold marked
 	// adult is left out unless "Show adult content" is on. Release, False positive and Confirm
 	// each go through the flow's dialog, and the list reloads when the overview's version moves.
+	// A torrent held as too large to judge (CS-0a) says so, and has no False positive: that rule is
+	// locked and takes no exceptions.
 	import { onDestroy } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
@@ -63,6 +65,8 @@
 	});
 	onDestroy(() => ctl?.abort());
 
+	// The rule's own id, before any suffix a stored hold carries, as the server reads it.
+	const tooLarge = (rule: string) => rule.split('+')[0] === 'CS-0a';
 	const rows = $derived(
 		queue ? [...queue.quarantine, ...more].filter((r) => model.adult || !r.adult_hold) : []
 	);
@@ -93,6 +97,11 @@
 			<li class="flex flex-wrap items-center gap-3" data-testid="queue-{r.hash}">
 				<Mono wrap>{r.hash}</Mono>
 				<Badge>{r.rule}</Badge>
+				{#if tooLarge(r.rule)}
+					<span class="text-muted-text" data-testid="queue-too-large-{r.hash}"
+						>{m.filters_queue_too_large()}</span
+					>
+				{/if}
 				{#if r.sealed}
 					<Button dense onclick={() => reveal(r.hash)} data-testid="queue-reveal-{r.hash}"
 						>{m.filters_queue_reveal()}</Button
@@ -107,15 +116,17 @@
 						})}
 					data-testid="queue-release-{r.hash}">{m.filters_queue_release()}</Button
 				>
-				<Button
-					dense
-					onclick={() =>
-						ask(falsePositive(r.hash), {
-							title: m.filters_queue_fp_title(),
-							applyLabel: m.filters_queue_fp()
-						})}
-					data-testid="queue-fp-{r.hash}">{m.filters_queue_fp()}</Button
-				>
+				{#if !tooLarge(r.rule)}
+					<Button
+						dense
+						onclick={() =>
+							ask(falsePositive(r.hash), {
+								title: m.filters_queue_fp_title(),
+								applyLabel: m.filters_queue_fp()
+							})}
+						data-testid="queue-fp-{r.hash}">{m.filters_queue_fp()}</Button
+					>
+				{/if}
 				<Button
 					dense
 					onclick={() =>

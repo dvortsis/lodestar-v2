@@ -682,7 +682,7 @@ fn sp4_hash_exceptions(set: &RuleSet) -> HashSet<(PackRule, [u8; 20])> {
 /// this hash for this rule.
 fn released_by_hash(engine: &Engine, hash: &[u8; 20], rule: &str) -> bool {
     let covers = |m: &Match| matches!(m, Match::Hashes(hs) if hs.contains(hash));
-    let floor = CoreRule::from_id(rule).is_some_and(|r| r.floor());
+    let floor = CoreRule::from_id(rule).is_some_and(|r| r.locked());
     if floor {
         return false;
     }
@@ -949,6 +949,11 @@ const ADULT_HOLD_NOTE: &str = "It was held because your correction or an Is adul
     adult rule matches it when it's next seen, it's judged as detection classifies it, and if \
     that isn't adult, the Adult-only child-safety checks won't look at it.";
 
+/// The warning for releasing a torrent held as too large to judge (CS-0a).
+const TOO_LARGE_RELEASE: &str = "This torrent is too large for the child-safety core to judge, \
+     so it was held. Releasing it removes the hold, and the next time it's seen it's held again \
+     unless it has become small enough to judge. Safer: keep it held.";
+
 /// The effect warning (§20.11): what it does, what else it lets
 /// through, the numbers, and a safer alternative.
 fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: bool) -> String {
@@ -1123,10 +1128,15 @@ impl FiltersApi {
                 let r = CoreRule::from_id(rule).ok_or_else(|| {
                     bad("unknown_rule", format!("There's no rule {rule:?}.")).field("rule")
                 })?;
-                if r.floor() && !on {
+                if r.locked() && !on {
+                    let what = if r.floor() {
+                        "part of the locked floor"
+                    } else {
+                        "locked"
+                    };
                     return Err(conflict(
                         "floor_locked",
-                        format!("{rule} is part of the locked floor and can't be switched off."),
+                        format!("{rule} is {what} and can't be switched off."),
                     ));
                 }
                 // As stored: the engine can lag the store after an apply
@@ -1255,7 +1265,7 @@ impl FiltersApi {
                     .hits
                     .iter()
                     .map(|(r, _, _)| r.clone())
-                    .filter(|r| !CoreRule::from_id(r).is_some_and(|c| c.floor()))
+                    .filter(|r| !CoreRule::from_id(r).is_some_and(|c| c.locked()))
                     .collect();
                 let bound = rules(bypassable);
                 a.preview.caught_30d = bound.caught_30d;
@@ -1347,6 +1357,11 @@ impl FiltersApi {
                 a.weakening = true;
                 a.preview.quarantine = snap.quarantine.iter().filter(|q| q.hash == h).count();
                 a.preview.tombstones = snap.tombstones.iter().filter(|t| t.hash == h).count();
+                let rule = self.store().quarantine_rule(&h).map_err(internal)?;
+                let held_by = rule.as_deref().map(|r| r.split('+').next().unwrap_or(r));
+                if held_by == Some(CoreRule::Cs0a.id()) {
+                    a.warning = Some(TOO_LARGE_RELEASE.to_owned());
+                }
             }
             Change::RevealName { hash } => {
                 hex20(hash)?;
@@ -1696,7 +1711,7 @@ impl FiltersApi {
         // The set being replaced becomes the one Undo goes back to.
         let replaced = self.previous_data(store)?;
         store.replace_rule_set(&set).map_err(internal)?;
-        for r in CoreRule::ALL.iter().filter(|r| !r.floor()) {
+        for r in CoreRule::ALL.iter().filter(|r| !r.locked()) {
             let on = arr("core")
                 .iter()
                 .find(|c| c[0].as_str() == Some(r.id()))
@@ -1932,11 +1947,15 @@ impl FiltersApi {
                 let r = CoreRule::from_id(rule).ok_or_else(|| {
                     bad("unknown_rule", format!("There's no rule {rule:?}.")).field("rule")
                 })?;
-                if r.floor() {
+                if r.locked() {
                     if !on {
                         return Err(conflict(
                             "floor_locked",
-                            "The locked floor can't be switched off.",
+                            if r.floor() {
+                                "The locked floor can't be switched off."
+                            } else {
+                                "A locked rule can't be switched off."
+                            },
                         ));
                     }
                 } else {
@@ -2525,7 +2544,7 @@ impl FiltersApi {
                 .iter()
                 .map(|r| CoreRuleState {
                     action: r.action().as_str().to_string(),
-                    floor: r.floor(),
+                    floor: r.locked(),
                     id: r.id().to_string(),
                     on: engine.core.switches.is_on(*r),
                 })
@@ -3419,7 +3438,8 @@ impl FiltersApi {
             let files: Vec<lodestar_classify::FileInfo> = s
                 .files
                 .iter()
-                .take(lodestar_filter::MAX_FILES)
+                // One past the core's cap is enough to show it held.
+                .take(lodestar_filter::MAX_FILES + 1)
                 .map(|f| {
                     let (path, size) = match f {
                         SampleFile::Path(p) => (p, 0),

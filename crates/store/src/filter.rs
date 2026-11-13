@@ -89,6 +89,21 @@ const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// tombstones.
 pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 
+/// Rules whose quarantine never expires (the filter's CS-0a; a filter
+/// test keeps it equal): the core couldn't judge the torrent, so only a
+/// release lifts the hold, never the passing of time.
+pub const KEPT_RULES: [&str; 1] = ["CS-0a"];
+
+/// A quarantine row under one of [`KEPT_RULES`], with or without a
+/// suffix (`+adult`), over `col`: left out of every expiry.
+pub(crate) fn kept_hold_sql(col: &str) -> String {
+    let [a] = KEPT_RULES;
+    format!(
+        "({col} = '{a}' OR substr({col}, 1, {n}) = '{a}+')",
+        n = a.len() + 1
+    )
+}
+
 /// The stored rule of a floor drop a remote worker reported (WK-10d),
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
 /// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
@@ -473,11 +488,13 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut expired = Vec::new();
         {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare(&format!(
                 "SELECT hash FROM quarantine
                  WHERE expires_at <= ?1 AND substr(rule, -length(?2)) != ?2
+                   AND NOT {}
                    AND hash NOT IN (SELECT hash FROM tombstones)",
-            )?;
+                kept_hold_sql("rule")
+            ))?;
             let adult = ADULT_HOLD;
             for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
                 expired.push(hash20(row?)?);
@@ -489,15 +506,22 @@ impl Store {
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
                      SELECT hash, rule, at FROM quarantine
-                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2 AND NOT {}
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
+                    kept_hold_sql("rule"),
                     floor_hold_sql("tombstones.rule")
                 ),
                 params![now, adult],
             )?;
         }
-        tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
+        tx.execute(
+            &format!(
+                "DELETE FROM quarantine WHERE expires_at <= ?1 AND NOT {}",
+                kept_hold_sql("rule")
+            ),
+            [now],
+        )?;
         let hits = tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         tx.commit()?;
         // Every purge scrubs (hourly on the writer), not only one that
@@ -684,13 +708,19 @@ impl Store {
     /// [`release`](Store::release) for many hashes in one transaction,
     /// with one WAL scrub at the end rather than one per hash. Returns,
     /// per hash, whether a row was removed (a hash a worker's floor report
-    /// holds stays held, as with `release`).
+    /// holds stays held, as with `release`, and so does one a kept rule
+    /// holds, [`KEPT_RULES`], which only `release` lifts).
     pub fn release_many(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<bool>> {
         let tx = self.conn.transaction()?;
         let mut had = Vec::with_capacity(hashes.len());
         {
             let mut tomb = tx.prepare_cached(&release_tombstone_sql())?;
-            let mut quar = tx.prepare_cached("DELETE FROM quarantine WHERE hash = ?1")?;
+            // A kept hold is lifted only by its own release (`release`),
+            // which shows its warning: never as part of a batch by hash.
+            let mut quar = tx.prepare_cached(&format!(
+                "DELETE FROM quarantine WHERE hash = ?1 AND NOT {}",
+                kept_hold_sql("rule")
+            ))?;
             for h in hashes {
                 had.push(tomb.execute([&h[..]])? + quar.execute([&h[..]])? > 0);
             }
@@ -782,6 +812,19 @@ impl Store {
             });
         }
         Ok(out)
+    }
+
+    /// The rule `hash` is quarantined under, as stored (an adult hold's
+    /// with its suffix), if it's quarantined.
+    pub fn quarantine_rule(&self, hash: &[u8; 20]) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT rule FROM quarantine WHERE hash = ?1",
+                [&hash[..]],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     /// Whether `hash` is held (quarantined or tombstoned) as an adult hold.
@@ -1180,6 +1223,67 @@ mod tests {
             s.filter_state().unwrap().held,
             vec![([2; 20], Held::Tombstone)]
         );
+    }
+
+    /// A release of many hashes at once leaves a kept hold: only that
+    /// hold's own release lifts it.
+    #[test]
+    fn a_batch_release_leaves_a_kept_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        for (h, rule) in [(1u8, kept), (2, "CS-3")] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            s.release_many(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![true, false]
+        );
+        assert!(s.release(&[1; 20]).unwrap());
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+    }
+
+    /// A hold under a kept rule survives the purge, however long past its
+    /// expiry, and isn't reported released; another rule's lapses.
+    #[test]
+    fn kept_holds_survive_the_purge() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        for (h, rule) in [(1u8, kept), (2, "CS-3"), (3, "CS-0a+adult")] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        let (released, _) = s.purge_filter(i64::MAX, 0).unwrap();
+        assert_eq!(released, vec![[2; 20]]);
+        let left: Vec<[u8; 20]> = s
+            .quarantined(10)
+            .unwrap()
+            .into_iter()
+            .map(|q| q.hash)
+            .collect();
+        assert_eq!(left.len(), 2);
+        assert!(left.contains(&[1; 20]) && left.contains(&[3; 20]));
+        assert!(
+            s.tombstones(10).unwrap().is_empty(),
+            "kept, not turned into a tombstone"
+        );
+        // A release still lifts it.
+        assert!(s.release(&[1; 20]).unwrap());
+        assert!(s.quarantine_rule(&[1; 20]).unwrap().is_none());
     }
 
     /// Deleting a held hash through any of the store's paths leaves its

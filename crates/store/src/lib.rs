@@ -54,8 +54,8 @@ pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
-    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, LATEST_HITS_CHUNK, Quarantined,
-    Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX, is_floor_hold,
+    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, KEPT_RULES, LATEST_HITS_CHUNK,
+    Quarantined, Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX, is_floor_hold,
 };
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};

@@ -496,7 +496,7 @@ pub struct AllowEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CoreRuleState {
     pub action: String,
-    /// Part of the locked floor: can't be switched off.
+    /// Locked: can't be switched off, and takes no exception.
     pub floor: bool,
     #[schema(example = "CS-3a")]
     pub id: String,

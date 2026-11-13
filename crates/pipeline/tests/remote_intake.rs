@@ -687,11 +687,23 @@ async fn hints_are_filtered_and_never_stored() {
 
 /// A multi-file info dict of `files` files, each with one path segment
 /// `path_len` bytes long.
+/// An info dictionary of about `files * path_len` bytes: every file in one
+/// folder `path_len` bytes long, which the dictionary spells out in each
+/// file's path and the batch's path budget counts for each, while the
+/// core reads it once, so the torrent is judged whole.
 fn big_info(name: &str, files: usize, path_len: usize) -> Vec<u8> {
+    let folder = "a".repeat(path_len.saturating_sub(6).max(1));
     let mut out = b"d5:filesl".to_vec();
     for f in 0..files {
-        let seg = format!("{f:06}{}", "a".repeat(path_len - 6));
-        out.extend(format!("d6:lengthi1048576e4:pathl{}:{seg}ee", seg.len()).into_bytes());
+        let seg = format!("{f:06}");
+        out.extend(
+            format!(
+                "d6:lengthi1048576e4:pathl{}:{folder}{}:{seg}ee",
+                folder.len(),
+                seg.len()
+            )
+            .into_bytes(),
+        );
     }
     out.extend(
         format!(

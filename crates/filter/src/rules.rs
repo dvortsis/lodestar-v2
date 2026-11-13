@@ -320,6 +320,11 @@ impl Exception {
                 "the locked floor has no exceptions: remove the CS-1 entry instead",
             ));
         }
+        if let RuleRef::Core(r) = self.rule
+            && r.locked()
+        {
+            return Err(Invalid("a locked rule has no exceptions"));
+        }
         if matches!(self.what, Match::Keyword(_)) {
             return Err(Invalid("exceptions match torrents, payloads or queries"));
         }

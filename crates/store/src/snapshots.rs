@@ -983,7 +983,10 @@ fn purge_one(
         }
         drop(stmt);
         expiring = conn.query_row(
-            "SELECT count(*) FROM quarantine WHERE expires_at <= ?1",
+            &format!(
+                "SELECT count(*) FROM quarantine WHERE expires_at <= ?1 AND NOT {}",
+                crate::filter::kept_hold_sql("rule")
+            ),
             [now],
             |r| r.get(0),
         )?;
@@ -1113,8 +1116,14 @@ fn purge_one(
         let mut quarantine = 0;
         if plan.filter {
             for h in &unsealed {
+                // A kept hold never expires, so it's cleared here whatever
+                // its expiry: the purge below leaves it.
                 quarantine += tx.execute(
-                    "UPDATE quarantine SET sealed = NULL WHERE hash = ?1 AND expires_at > ?2",
+                    &format!(
+                        "UPDATE quarantine SET sealed = NULL
+                         WHERE hash = ?1 AND (expires_at > ?2 OR {})",
+                        crate::filter::kept_hold_sql("rule")
+                    ),
                     params![h, now],
                 )?;
             }
@@ -1125,14 +1134,21 @@ fn purge_one(
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
                      SELECT hash, rule, at FROM quarantine
-                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2 AND NOT {}
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
+                    crate::filter::kept_hold_sql("rule"),
                     crate::filter::floor_hold_sql("tombstones.rule")
                 ),
                 params![now, ADULT_HOLD],
             )?;
-            quarantine += tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
+            quarantine += tx.execute(
+                &format!(
+                    "DELETE FROM quarantine WHERE expires_at <= ?1 AND NOT {}",
+                    crate::filter::kept_hold_sql("rule")
+                ),
+                [now],
+            )?;
             tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         }
         let mut query_log = 0;
@@ -2840,6 +2856,38 @@ mod tests {
         let r = store.purge_snapshots(now + 1, 0);
         assert_eq!(r, PurgeReport::default());
         assert_eq!(std::fs::read(&snap).unwrap(), before);
+    }
+
+    /// A kept hold the live store released loses its sealed name from a
+    /// snapshot, however long past its expiry, and one still held keeps
+    /// its row.
+    #[test]
+    fn a_snapshot_loses_a_released_kept_holds_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let [kept] = crate::filter::KEPT_RULES;
+        let released = b"kept-released-snapshot-marker-3a9d";
+        let held = b"kept-held-snapshot-marker-c41e";
+        quarantine(store.connection(), [1; 20], kept, released, T + DAY);
+        quarantine(store.connection(), [2; 20], kept, held, T + DAY);
+        let snap = take(&store, &db, 10, T);
+        assert!(contains(&snap, released) && contains(&snap, held));
+        store.release(&[1; 20]).unwrap();
+        // Well past both expiries, while the snapshot is still kept.
+        let now = T + 30 * DAY;
+        store.purge_filter(now, 0).unwrap();
+        let r = store.purge_snapshots(now, 0);
+        assert_eq!(r.warnings, Vec::<String>::new());
+        assert!(!contains(&snap, released), "released live: cleared");
+        let conn = Connection::open(&snap).unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM quarantine WHERE hash = ?1",
+                [&[2u8; 20][..]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "still held: kept");
     }
 
     /// The snapshot purge does what `purge_filter` does to the same rows:
