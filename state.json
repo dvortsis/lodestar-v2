@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T09:21Z",
+  "updated_at": "2026-11-13T09:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9035,7 +9035,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T09:21Z",
+    "updated": "2026-11-13T09:22Z",
     "items": [
       {
         "slot": 1,
@@ -9213,12 +9213,12 @@
       },
       {
         "slot": 31,
-        "slice": "WK-18s",
+        "slice": "WK-18w",
         "status": "active",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: WK-18s #801 rv MERGE at 76e391d4, one fix round (I1-I3, N1, N2) then runner delta check",
-        "since": "2026-11-13T05:22Z"
+        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: #801 WK-18s merged (f107f53d) after runner delta check; now #802 WK-18w: bring main in, undraft, ready",
+        "since": "2026-11-13T09:22Z"
       },
       {
         "slot": 32,
@@ -9289,7 +9289,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T09:21Z",
+  "updated": "2026-11-13T09:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9600,6 +9600,12 @@
       "slice": "X-gluetun-pin-ci-filter",
       "merged": "ff6ddab2",
       "at": "2026-11-13T09:21Z"
+    },
+    {
+      "pr": 801,
+      "slice": "WK-18s",
+      "merged": "f107f53d",
+      "at": "2026-11-13T09:22Z"
     }
   ]
 }
