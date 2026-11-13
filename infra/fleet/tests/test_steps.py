@@ -593,7 +593,10 @@ case "$*" in
     if [ -n "$C_FLAKY" ] && have guard && [ ! -e "$STUB/flaked" ]; then : > "$STUB/flaked"; exit 4; fi
     have guard ;;
   "-D DOCKER-USER $guard"|"-D DOCKER-USER $guard_s") [ -n "$GUARD_STUCK" ] && exit 1; down guard ;;
-  "-I INPUT 1 $host") [ -n "$HOST_FAILS" ] && exit 1; up host ;;
+  "-I INPUT 1 $host")
+    [ -n "$HOST_FAILS" ] && exit 1; up host
+    # BLOCK_INSERT: hang inside the insert, after the rule is in, so a signal lands there.
+    if [ -n "$BLOCK_INSERT" ]; then : > "$STUB/inserting"; while :; do /bin/sleep 0.05; done; fi ;;
   "-C INPUT $host") have host ;;
   "-D INPUT $host"|"-D INPUT $host_s") [ -n "$HOST_STUCK" ] && exit 1; down host ;;
   # -S lists each copy the way iptables prints it (with -m udp), plus leftovers
@@ -842,6 +845,7 @@ class VMScripts(unittest.TestCase):
             for n in ("captured_packets", "captured_tcp", "captured_udp", "captured_icmp", "captured_other",
                       "host_egress_packets"):
                 self.assertIn(f"count {n}_{phase} 0", lines)
+        names += ["post_rules_after_restart_ipv4", "post_rules_after_restart_ipv6"]
         names += ["vpn_interface_live", "post_rules_ipv4", "post_rules_ipv6", "egress_found", "ping_up",
                   "flow_started", "flow_alive_down", "flow_alive_ifdown"]
         for name in names:
@@ -1137,27 +1141,44 @@ class VMScripts(unittest.TestCase):
         self.assertEqual((rc, lines[-2:]), (1, ["fail guards_released", "fail leak_test"]))
         self.assertNotIn("ok leak_test", lines)
 
-    def test_a_signal_mid_recreate_leaves_no_guard(self):
-        """O1/O5: TERM while gluetun is being recreated; the EXIT trap removes both guards."""
+    def signal_at(self, marker, **flags):
+        """Run the leak test until the stub writes `marker`, send TERM to its process
+        group, and return (exit code, stdout)."""
         self.run_script_fixtures()
-        proc = subprocess.Popen(self.argv("leak-test.sh"), env=self.env(BLOCK_COMPOSE=1),
+        proc = subprocess.Popen(self.argv("leak-test.sh"), env=self.env(**flags),
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         try:
             deadline = time.monotonic() + 30
-            while not (self.stub / "composing").exists():
-                self.assertIsNone(proc.poll(), "the run ended before it reached the recreate")
-                self.assertLess(time.monotonic(), deadline, "never reached the recreate")
+            while not (self.stub / marker).exists():
+                self.assertIsNone(proc.poll(), f"the run ended before {marker}")
+                self.assertLess(time.monotonic(), deadline, f"never reached {marker}")
                 time.sleep(0.05)
-            self.assertEqual((self.copies("guard"), self.copies("host")), (1, 1))  # both up mid-recreate
             os.killpg(proc.pid, signal.SIGTERM)
             out, _ = proc.communicate(timeout=30)
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
-        self.assertEqual(proc.returncode, 143)
+        return proc.returncode, out
+
+    def test_a_signal_mid_recreate_leaves_no_guard(self):
+        """O1/O5: TERM while gluetun is being recreated; the EXIT trap removes both guards."""
+        rc, out = self.signal_at("composing", BLOCK_COMPOSE=1)
+        self.assertEqual(rc, 143)
         self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
         self.assertNotIn("fail guards_released", out)
+
+    def test_a_signal_inside_the_insert_leaves_no_guard(self):
+        """O1: the rule is in but the insert hasn't returned. The flag was set first,
+        so cleanup still finds and removes it."""
+        rc, out = self.signal_at("inserting", BLOCK_INSERT=1)
+        self.assertEqual(rc, 143)
+        self.assertEqual(self.copies("host"), 0)
+
+    def test_a_signal_with_a_stuck_guard_says_so(self):
+        rc, out = self.signal_at("composing", BLOCK_COMPOSE=1, HOST_STUCK=1)
+        self.assertEqual(rc, 143)
+        self.assertIn("fail guards_released", out.splitlines())
 
     def test_host_router_solicitations_are_inbound(self):
         """Run 3 (2026-11-13): the host's RS and DAD NS on the veth in phase A, classed

@@ -67,6 +67,7 @@ finish() {
   echo "fail leak_test"; exit 1
 }
 cleanup() {
+  trap '' HUP INT TERM  # a second signal must not cut the release short
   [[ -n $cap_pid ]] && kill "$cap_pid" 2>/dev/null
   # The endpoint block never outlives the test, whatever ended it.
   [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
@@ -489,6 +490,10 @@ down_probes ifdown example.edu
 refute vpn_interface_stayed_down iface_up
 judge_capture ifdown
 judge_counter ifdown
+# The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules
+# must still head OUTPUT afterwards.
+check post_rules_after_restart_ipv4 post_rules_on iptables "$iface"
+check post_rules_after_restart_ipv6 post_rules_on ip6tables "$iface"
 check flow_alive_ifdown running "$FLOW"
 timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1 && flow=""
 
