@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:53Z",
+  "updated_at": "2026-11-13T04:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7915,6 +7915,10 @@
     {
       "id": "gluetun-pin-ci-filter",
       "text": "rv-815 O6: the gluetun post-rules SHA-256 pin test runs only when infra/ changes (.github/scripts/ci_changes.py path filter); widen to the rules file (crates/companions/src/gluetun-post-rules.txt, packaging/companions/gluetun-post-rules.txt) and docs/user/03-keep-lodestar-safe.md. Fold into X-ci-advisories or a small CI slice."
+    },
+    {
+      "id": "account-setupneed",
+      "text": "X-sources-restructure (runner-accepted): setupNeed returns the password step only for Restricted/Overlay, not Account (no gate-closed field in GET /sources). X-consent-gate-lift-account must revisit setupNeed in web/src/lib/features/sources/sources.ts when the Account dialog gains its password field; add to its notes in the next runner PR."
     }
   ],
   "main_health": [
@@ -9283,7 +9287,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:53Z",
+  "updated": "2026-11-13T04:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
