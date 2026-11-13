@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:49Z",
+  "updated_at": "2026-11-13T00:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8855,7 +8855,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:49Z",
+    "updated": "2026-11-13T00:50Z",
     "items": [
       {
         "slot": 1,
@@ -9142,7 +9142,7 @@
         "status": "active",
         "role": "build",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: testing blocker #1; brief briefs/X-gluetun-leak.md",
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #800 HELD: VM run 00:30Z TCP leak fixed, ICMP to VPN endpoint still leaks (down/ifdown); runner: fix, not accept; awaiting tester diagnostic (ICMP type/time), then one round + VM re-run with 0 leak-class packets before merge",
         "since": "2026-11-12T22:52Z",
         "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
@@ -9225,7 +9225,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T00:49Z",
+  "updated": "2026-11-13T00:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
