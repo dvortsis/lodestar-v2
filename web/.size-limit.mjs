@@ -147,7 +147,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -187,7 +187,7 @@ const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 const settingsConnections = [
 	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget|Advanced|LoadFailed)\.svelte$/,
 	/features\/settings\/screens2\/privacy\.ts$/,
-	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
+	// The five navigation icons (Language too), loaded after the navigation shows (`Screen.iconLoad`).
 	/features\/settings\/screens2\/icons\.ts$/
 ];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
@@ -482,7 +482,8 @@ const eventNamesLimits = {
 	dht: '1120 B',
 	filters: '1740 B',
 	search: '2250 B',
-	sources: '490 B',
+	// runner §2.26, UP-1: measured 704 B, the watch labels.
+	sources: '768 B',
 	workers: '3780 B',
 	api: '650 B',
 	companions: '1160 B',
@@ -1262,6 +1263,13 @@ const adultSection = ownChunk('src/lib/features/detail/adult/AdultEnrichment.sve
 	...drawerView,
 	...torrentView
 ]);
+// ENR-13: the "Identified as" section loads only when the API sent `identified_as`; own entry, as above.
+const identifiedSection = ownChunk(
+	'src/lib/features/detail/identified/Identified.svelte',
+	[],
+	false,
+	[...drawerView, ...torrentView]
+);
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
@@ -1362,7 +1370,8 @@ export default [
 	entry('Insights print layout (on demand)', insightsPrintLazy, '1.62 KB'),
 	// S-privacy-banner: measured + 10%.
 	entry('Privacy banner (on demand)', privacyBannerLazy, '3.71 KB'),
-	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
+	// runner §2.26, UP-1: measured 4220 B, the watch labels.
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4.25 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
@@ -1602,7 +1611,8 @@ export default [
 	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
 	// hashes in its imports moved by a few bytes). Runner to confirm.
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('Detail drawer (own JS + CSS)', drawerView, '28064 B'),
+	// ENR-13: one dynamic import for the identified-as section (§2.26, runner): 28,064 B -> 28,128 B.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28128 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1614,12 +1624,13 @@ export default [
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared clients (measured
 	// 21,795 B, residue 19 B, rounded up to 64 B).
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21904 B'),
+	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21952 B'),
 	entry(
 		'Detail sections (on demand)',
 		[
 			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
-		].filter((f) => !adultSection.includes(f)),
+		].filter((f) => !adultSection.includes(f) && !identifiedSection.includes(f)),
 		'38608 B' // runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
@@ -1628,6 +1639,8 @@ export default [
 	// ENR-8: the adult-enrichment section, loaded on demand and only when the API sent the field.
 	// Measured 1,530 B; limit = measured + 10%, rounded.
 	entry('Detail adult-enrichment section (on demand)', adultSection, '1700 B'),
+	// ENR-13: the "Identified as" section, on demand and only when the API sent the field. Measured 1,830 B; limit = measured + at most 10%, rounded up to 100 B.
+	entry('Detail identified-as section (on demand)', identifiedSection, '2000 B'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	entry(
@@ -1646,7 +1659,8 @@ export default [
 	// them. Limits: measured + 10%. Part 2 (S-wizard-2) adds the download client's cards and the
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
-	entry('Wizard steps (on demand)', wizardLazy, '53.6 KB'),
+	// runner §2.26, UP-1: measured 53603 B, the watch labels.
+	entry('Wizard steps (on demand)', wizardLazy, '53.7 KB'),
 	// S-blocklists: the wizard's blocklist step, measured separately so the limit above stays.
 	entry('Blocklist wizard step (on demand)', blocklistStepLazy, '8.3 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:

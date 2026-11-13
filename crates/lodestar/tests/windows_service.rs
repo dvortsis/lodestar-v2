@@ -667,9 +667,22 @@ fn portable_restart(bind: &str) -> (u16, u16) {
         dump(&console, &jsonl, &seen)
     );
 
-    // The new copy: same config, so the same log, and the same store.
-    let second = nth_port(&jsonl, 2, Duration::from_secs(90))
-        .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl, &seen)));
+    // The new copy: same config, so the same log, and the same store (the
+    // session below still signs in). Its `app.serving` line is read from the
+    // console it shares with the old process, or from `lodestar.jsonl`,
+    // whichever shows it first (X-test-blockers-1112): on a saturated host
+    // the copy, at below-normal priority, serves well before its file log
+    // flushes, and the file then missed the deadline.
+    let second = wait_for(Duration::from_secs(90), || {
+        let c = console.lock().unwrap().clone();
+        let log = std::fs::read_to_string(&jsonl).unwrap_or_default();
+        [c, log]
+            .iter()
+            .filter(|text| text.matches("app.serving").count() >= 2)
+            .find_map(|text| common::serving_port(text))
+    })
+    .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl, &seen)));
+    seen.push(("saw the new copy serving", jiff::Timestamp::now()));
     let health = wait_for(Duration::from_secs(60), || healthz(second)).unwrap_or_else(|| {
         panic!(
             "no healthz from the new copy\n{}",

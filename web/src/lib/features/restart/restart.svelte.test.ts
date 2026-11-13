@@ -80,3 +80,26 @@ it('a read in flight when a restart starts is dropped even after the restart sta
 	expect(await stale).toBe(true);
 	expect(restart.system).toBe(before);
 });
+
+it('a save drops a read from before it and asks again, so the old restart_required cannot win', async () => {
+	const none = { ...awaiting(), address_change: null, restart_required: [] } as System;
+	api.get.mockResolvedValueOnce(none);
+	await restart.refresh();
+	let release!: (s: System) => void;
+	api.get.mockReturnValueOnce(new Promise<System>((done) => (release = done)));
+	const stale = restart.refresh();
+	// The save answers while that read is still out; the fresh read sees the saved field.
+	api.get.mockResolvedValueOnce({ ...none, restart_required: ['network.dht_port'] });
+	expect(await restart.saved()).toBe(true);
+	expect(api.get).toHaveBeenCalledTimes(3);
+	expect(restart.pending).not.toBeNull();
+	release(none);
+	expect(await stale).toBe(true);
+	expect(restart.system?.restart_required).toEqual(['network.dht_port']);
+});
+
+it('a save while a restart lasts does not ask', async () => {
+	restart.begin({ target: null, startedAt: 1, estimateSeconds: 4 });
+	expect(await restart.saved()).toBe(true);
+	expect(api.get).not.toHaveBeenCalled();
+});

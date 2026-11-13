@@ -142,6 +142,7 @@ fn every_section_reports_every_field() {
             "crawler",
             "transport",
             "storage",
+            "watch",
             "search",
             "trackers",
             "content",

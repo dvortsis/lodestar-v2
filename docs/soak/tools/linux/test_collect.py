@@ -1245,7 +1245,8 @@ class ScreenTests(Base):
                 'search_mmap_cache_entries{index="main"}': 20, 'search_mmap_cache_entries{index="files"}': 60,
                 'search_segments{index="main"}': 4, 'search_segments{index="files"}': 12,
                 'mem_anon_mappings{size="128k_512k"}': 2 + mappings_per_hour * t / 3600,
-                "mem_mimalloc_committed_bytes": 568 * 2**20, "fetch_held_bytes": 2**24}.items())
+                "mem_mimalloc_committed_bytes": 568 * 2**20, "mem_rss_anon_bytes": 608 * 2**20,
+                "fetch_held_bytes": 2**24}.items())
             return 200, metrics_text(t, extra=extra).encode()
         self.lodestar.metrics = metrics
         c = self.collector(self.docker(), "--screen-thresholds", str(path), "--sample-seconds", "600",

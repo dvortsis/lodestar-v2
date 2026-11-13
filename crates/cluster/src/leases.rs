@@ -103,7 +103,17 @@ pub struct LeaseTable {
     /// the TTL after the mark ends one; meanwhile the holder's own claims
     /// are answered as committed, never with the lease.
     fetched: HashMap<Token, (InfoHash, i64)>,
+    /// The session each lease was last handed to its holder on (WK-11b):
+    /// a grant, a re-grant, or the holder's own claim answered with it.
+    /// [`PINNED`] for a late result's lease, which the coordinator holds
+    /// for a result already in hand. Ends with the lease.
+    delivered: HashMap<Token, u64>,
 }
+
+/// [`LeaseTable`]'s delivery mark for a lease the coordinator holds on a
+/// worker's behalf for a result already in hand (a late result, plan Q7):
+/// never returned by a reconcile.
+const PINNED: u64 = u64::MAX;
 
 impl LeaseTable {
     pub fn new(epoch: u32, ttl_secs: i64) -> LeaseTable {
@@ -114,7 +124,26 @@ impl LeaseTable {
             leases: HashMap::new(),
             workers: HashMap::new(),
             fetched: HashMap::new(),
+            delivered: HashMap::new(),
         }
+    }
+
+    /// Forgets the per-token marks of a lease that ended.
+    fn ended(&mut self, token: Token) {
+        self.fetched.remove(&token);
+        self.delivered.remove(&token);
+    }
+
+    /// Ends the leases of `keys` (those still leased), with their marks.
+    fn end_all(&mut self, keys: Vec<InfoHash>) -> Vec<(InfoHash, Lease)> {
+        let mut out = Vec::with_capacity(keys.len());
+        for k in keys {
+            if let Some(l) = self.leases.remove(&k) {
+                self.ended(l.token);
+                out.push((k, l));
+            }
+        }
+        out
     }
 
     fn token(&mut self) -> Token {
@@ -211,7 +240,7 @@ impl LeaseTable {
         if !self.is_current(key, token) {
             return None;
         }
-        self.fetched.remove(&token);
+        self.ended(token);
         self.leases.remove(key)
     }
 
@@ -280,13 +309,7 @@ impl LeaseTable {
                 .get(k)
                 .is_some_and(|l| !dead.contains(&l.holder))
         }));
-        expired
-            .into_iter()
-            .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
-            .inspect(|(_, l)| {
-                self.fetched.remove(&l.token);
-            })
-            .collect()
+        self.end_all(expired)
     }
 
     /// Grants an expired lease to another worker under a new token,
@@ -310,12 +333,50 @@ impl LeaseTable {
             .filter(|(_, l)| l.holder == worker)
             .map(|(k, _)| *k)
             .collect();
-        keys.into_iter()
-            .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
-            .inspect(|(_, l)| {
-                self.fetched.remove(&l.token);
+        self.end_all(keys)
+    }
+
+    /// Records that `key`'s lease was handed to `worker` on `session`,
+    /// if `worker` holds it under `token` and it isn't [`PINNED`].
+    pub fn mark_delivered(&mut self, worker: WorkerId, key: &InfoHash, token: Token, session: u64) {
+        if self
+            .leases
+            .get(key)
+            .is_some_and(|l| l.holder == worker && l.token == token)
+        {
+            let mark = self.delivered.entry(token).or_insert(session);
+            if *mark != PINNED {
+                *mark = session;
+            }
+        }
+    }
+
+    /// Ends the leases `worker` holds that a reconcile on `session` may
+    /// return (WK-11b): not in `listed`, not marked fetched, and not
+    /// handed to it on `session` itself (one may still be on its way) nor
+    /// [`PINNED`]. The worker stays alive; the caller grants the keys
+    /// again.
+    pub fn reconcile(
+        &mut self,
+        worker: WorkerId,
+        session: u64,
+        listed: &std::collections::HashSet<Token>,
+    ) -> Vec<(InfoHash, Lease)> {
+        let keys: Vec<InfoHash> = self
+            .leases
+            .iter()
+            .filter(|(_, l)| {
+                l.holder == worker
+                    && !listed.contains(&l.token)
+                    && !self.fetched.contains_key(&l.token)
+                    && self
+                        .delivered
+                        .get(&l.token)
+                        .is_none_or(|&s| s != session && s != PINNED)
             })
-            .collect()
+            .map(|(k, _)| *k)
+            .collect();
+        self.end_all(keys)
     }
 
     pub fn len(&self) -> usize {
@@ -707,6 +768,9 @@ impl LeaseAuthority {
             return None;
         }
         let token = s.table.restore(worker, key, lease, now);
+        // Held for a result already in hand: a reconcile never returns it
+        // (WK-11b).
+        s.table.delivered.insert(token, PINNED);
         self.gauge(&s);
         Some(token)
     }
@@ -969,6 +1033,64 @@ impl LeaseAuthority {
         true
     }
 
+    /// Records that these leases were handed to `worker` on its session
+    /// `session` (a grant, a re-grant, or its own claim answered with the
+    /// lease), under one lock. Leases `worker` doesn't hold under that
+    /// token are left alone. A reconcile on `session` never returns them
+    /// (WK-11b): the worker may not have seen them yet.
+    pub fn delivered(&self, worker: WorkerId, session: u64, leases: &[(InfoHash, Token)]) {
+        if leases.is_empty() {
+            return;
+        }
+        let mut s = self.lock();
+        for (key, token) in leases {
+            s.table.mark_delivered(worker, key, *token, session);
+        }
+    }
+
+    /// Of `leases`, the tokens `worker` holds under their key now, under
+    /// one lock (a reconcile's list, WK-11b).
+    pub fn held_tokens(&self, worker: WorkerId, leases: &[(InfoHash, Token)]) -> Vec<Token> {
+        let s = self.lock();
+        leases
+            .iter()
+            .filter(|(k, t)| {
+                s.table
+                    .get(k)
+                    .is_some_and(|l| l.holder == worker && l.token == *t)
+            })
+            .map(|&(_, t)| t)
+            .collect()
+    }
+
+    /// A reconcile (WK-11b): the leases `worker` holds that its list
+    /// (`listed`, from session `session`) left out go back to wait for a
+    /// re-grant, as after an expiry: cohort, sources and finder kept, no
+    /// loss counted, and their tokens stale from now on (a report or
+    /// result under one is late, WK-9). Kept: a lease marked fetched (its
+    /// result is in the coordinator's hands), one handed to the worker on
+    /// `session` itself (it may still be on its way), and a late result's.
+    /// Returns how many went back. The built-in worker is never
+    /// reconciled.
+    pub fn reconcile(
+        &self,
+        worker: WorkerId,
+        session: u64,
+        listed: &std::collections::HashSet<Token>,
+    ) -> usize {
+        if worker == WorkerId::LOCAL {
+            return 0;
+        }
+        let mut s = self.lock();
+        let returned = s.table.reconcile(worker, session, listed);
+        let n = returned.len();
+        for (key, lease) in returned {
+            s.park(key, lease);
+        }
+        self.gauge(&s);
+        n
+    }
+
     /// Whether `key` is in flight: leased to any worker, or waiting for a
     /// re-grant (late results, plan Q7).
     pub fn in_flight(&self, key: &InfoHash) -> bool {
@@ -979,6 +1101,11 @@ impl LeaseAuthority {
     #[cfg(test)]
     fn fetched_marks_for_test(&self) -> usize {
         self.lock().table.fetched.len()
+    }
+
+    #[cfg(test)]
+    fn delivered_marks_for_test(&self) -> usize {
+        self.lock().table.delivered.len()
     }
 
     #[cfg(test)]
@@ -2059,5 +2186,117 @@ mod tests {
         assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "leased");
         assert_eq!(a.evict(WorkerId::LOCAL), 1);
         assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "pending");
+    }
+
+    fn granted(a: &LeaseAuthority, w: WorkerId, n: u8) -> Token {
+        let Claimed::Granted(t) = a.claim(w, claim(n, 0), 0) else {
+            panic!("not granted")
+        };
+        t
+    }
+
+    /// A reconcile returns only what the list left out of the worker's own
+    /// leases delivered on an earlier session, as an expiry would: waiting
+    /// for a re-grant with its cohort kept, no loss counted.
+    #[test]
+    fn a_reconcile_returns_only_the_workers_unlisted_leases_from_earlier_sessions() {
+        let (a, ev) = counted();
+        let [k1, k2, k3, k4] = [1, 2, 3, 4].map(|n| InfoHash([n; 20]));
+        let t1 = granted(&a, A, 1);
+        let t2 = granted(&a, A, 2);
+        let t3 = granted(&a, A, 3);
+        let tb = granted(&a, B, 4);
+        a.delivered(A, 1, &[(k1, t1), (k2, t2), (k3, t3)]);
+        // Handed to A again on its session 2 (its own claim answered with
+        // the lease): it may still be on its way, so it stays.
+        a.delivered(A, 2, &[(k3, t3)]);
+        // B's lease, under A's name: no mark, and never A's to return.
+        a.delivered(A, 2, &[(k4, tb)]);
+        let listed = std::collections::HashSet::from([t1, tb]);
+        let cohort = a.get(&k2).unwrap().cohort;
+        assert_eq!(a.reconcile(A, 2, &listed), 1);
+        assert_eq!(a.get(&k2), None, "returned");
+        assert_eq!(a.pending(), 1);
+        assert_eq!(a.get(&k1).map(|l| l.token), Some(t1), "listed");
+        assert_eq!(a.get(&k3).map(|l| l.token), Some(t3), "this session's");
+        assert_eq!(a.get(&k4).map(|l| (l.holder, l.token)), Some((B, tb)));
+        // Its old token is stale: a report under it counts nothing.
+        assert!(a.report(A, &k2, t2, Some(1)).is_none());
+        assert_eq!(get(&ev.lost), 0);
+        // Granted again under a new token, cohort kept, not a new harvest.
+        let before = get(&ev.harvested);
+        let regranted = a.regrant_pending(&[B], 8, 1);
+        assert_eq!(regranted.len(), 1);
+        let (_, keys) = &regranted[0];
+        assert_eq!(keys[0].0, k2);
+        assert_ne!(keys[0].1, t2);
+        assert_eq!(a.get(&k2).unwrap().cohort, cohort, "cohort kept");
+        assert_eq!(get(&ev.harvested), before);
+        // The built-in worker is never reconciled.
+        let tl = granted(&a, WorkerId::LOCAL, 5);
+        assert_eq!(a.reconcile(WorkerId::LOCAL, 9, &Default::default()), 0);
+        assert!(a.current(&InfoHash([5; 20]), tl).is_some());
+    }
+
+    /// A lease marked fetched (its result is in the coordinator's hands)
+    /// and a late result's lease are never returned, listed or not.
+    #[test]
+    fn a_reconcile_keeps_fetched_and_late_result_leases() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let (k1, k2) = (InfoHash([1; 20]), InfoHash([2; 20]));
+        let t1 = granted(&a, A, 1);
+        assert!(matches!(a.fetched(A, &k1, t1, 0), FetchedReport::Marked(_)));
+        let restored = RestoredLease {
+            cohort: 0,
+            source: src(0),
+            sources: 1,
+            strategy: 0,
+            discovered_at: 0,
+        };
+        let seq = a.commit_seq();
+        let t2 = a.restore_if_free(A, k2, restored, 0, seq).unwrap();
+        // Even a mark from a session can't unpin it.
+        a.delivered(A, 1, &[(k2, t2)]);
+        assert_eq!(a.reconcile(A, 2, &Default::default()), 0);
+        assert!(a.current(&k1, t1).is_some());
+        assert!(a.current(&k2, t2).is_some());
+    }
+
+    /// The delivery marks end with their lease, however it ends.
+    #[test]
+    fn delivery_marks_end_with_their_lease() {
+        let (a, _) = counted();
+        let keys: Vec<InfoHash> = (1..=4).map(|n| InfoHash([n; 20])).collect();
+        let tokens: Vec<Token> = (1..=4).map(|n| granted(&a, A, n)).collect();
+        let pairs: Vec<(InfoHash, Token)> = keys.iter().copied().zip(tokens.clone()).collect();
+        a.delivered(A, 1, &pairs);
+        // Another worker's mark, or a stale token's, is never made.
+        a.delivered(B, 1, &pairs);
+        a.delivered(A, 1, &[(keys[0], Token(tokens[0].0 + 100))]);
+        assert_eq!(a.delivered_marks_for_test(), 4);
+        assert!(a.commit(A, &keys[0], tokens[0]).is_some());
+        assert!(a.report(A, &keys[1], tokens[1], Some(1)).is_some());
+        assert_eq!(a.reconcile(A, 2, &[tokens[3]].into()), 1);
+        assert_eq!(a.evict(A), 1);
+        assert_eq!(a.delivered_marks_for_test(), 0);
+        assert_eq!(a.fetched_marks_for_test(), 0);
+    }
+
+    /// `held_tokens` answers only for the worker's own current leases.
+    #[test]
+    fn held_tokens_are_the_workers_own_current_ones() {
+        let (a, _) = counted();
+        let (k1, k2) = (InfoHash([1; 20]), InfoHash([2; 20]));
+        let t1 = granted(&a, A, 1);
+        let t2 = granted(&a, B, 2);
+        let asked = [
+            (k1, t1),
+            (k2, t2),
+            (k1, Token(t1.0 + 9)),
+            (InfoHash([3; 20]), t1),
+        ];
+        assert_eq!(a.held_tokens(A, &asked), [t1]);
+        assert_eq!(a.held_tokens(B, &asked), [t2]);
     }
 }

@@ -640,5 +640,15 @@
 	"settings_logging_ev_service_restart_paused_n": "Restart now paused",
 	"settings_logging_ev_service_restart_paused_h": "Paused for about a day. Restart the service in Windows Services.",
 	"settings_logging_ev_service_restarts_unwritable_n": "Restart record not saved",
-	"settings_logging_ev_service_restarts_unwritable_h": "The record of recent restarts couldn't be saved."
+	"settings_logging_ev_service_restarts_unwritable_h": "The record of recent restarts couldn't be saved.",
+	"settings_logging_ev_watch_started_n": "Watch folder on",
+	"settings_logging_ev_watch_started_h": "Lodestar is watching the folder for .torrent files.",
+	"settings_logging_ev_watch_stopped_n": "Watch folder off",
+	"settings_logging_ev_watch_stopped_h": "The watch folder setting was cleared.",
+	"settings_logging_ev_watch_disabled_n": "Watch folder paused",
+	"settings_logging_ev_watch_disabled_h": "The watch folder can't be used right now; the reason says why.",
+	"settings_logging_ev_watch_took_n": "Watch folder files taken",
+	"settings_logging_ev_watch_took_h": "How many files from the watch folder were added, and how many went to failed/.",
+	"settings_logging_ev_watch_stuck_n": "Watch folder file not moved",
+	"settings_logging_ev_watch_stuck_h": "A file couldn't be moved out of the watch folder. It won't be read again."
 }

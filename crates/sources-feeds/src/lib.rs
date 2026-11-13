@@ -8,10 +8,12 @@
 pub mod archive_org;
 mod common;
 pub mod json;
+pub mod lemmy;
 pub mod nostr;
 pub mod rss;
 pub mod stashdb;
 pub mod torznab;
 pub mod tpdb;
+pub mod wikidata;
 
 pub use common::external_ref;

@@ -1,0 +1,9 @@
+{
+ "error": {
+  "code": "maxlag",
+  "info": "SENTINEL-SERVICE-TEXT",
+  "host": "SENTINEL-HOST",
+  "lag": 12
+ },
+ "servedby": "SENTINEL-HOST"
+}

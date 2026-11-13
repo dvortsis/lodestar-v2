@@ -102,6 +102,7 @@ export const group = (hits: Hit[] = []) => ({
 export const siblings = (hash = HASH) => ({
 	hash,
 	identical_payload: group(),
+	identical_payload_partial: false,
 	identity: {
 		absolute: [],
 		episodes: [],
@@ -110,7 +111,9 @@ export const siblings = (hash = HASH) => ({
 		years: ['2019']
 	},
 	other_versions: group(),
-	same_file: group()
+	same_file: group(),
+	same_file_capped: false,
+	same_file_partial: false
 });
 
 /** `n` files in 5 folders, torrent order. */

@@ -37,6 +37,13 @@ enum Layout {
     Legacy,
 }
 
+/// The fixture tables' storage options: no autovacuum or autoanalyze
+/// (X-test-blockers-1112). A test's bulk insert is over the autoanalyze
+/// threshold, and an autoanalyze that lands mid-import commits a
+/// transaction, which moves the cluster's snapshot that the quiescence
+/// check compares, so the import is refused as not quiescent.
+const NO_AUTOVACUUM: &str = "WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)";
+
 fn ddl(layout: Layout) -> String {
     let status = match layout {
         Layout::Legacy => "single_file boolean,",
@@ -51,14 +58,14 @@ fn ddl(layout: Layout) -> String {
         _ => "",
     };
     let pieces_table = match layout {
-        Layout::V0_10 | Layout::NoFilesCount => {
+        Layout::V0_10 | Layout::NoFilesCount => format!(
             "CREATE TABLE torrent_pieces (
                 info_hash bytea NOT NULL PRIMARY KEY REFERENCES torrents ON DELETE CASCADE,
                 piece_length bigint NOT NULL,
                 pieces bytea NOT NULL,
-                created_at timestamptz NOT NULL);"
-        }
-        _ => "",
+                created_at timestamptz NOT NULL) {NO_AUTOVACUUM};"
+        ),
+        _ => String::new(),
     };
     format!(
         "CREATE TYPE \"FilesStatus\" AS ENUM ('no_info', 'single', 'multi', 'over_threshold');
@@ -69,7 +76,7 @@ fn ddl(layout: Layout) -> String {
             private boolean NOT NULL,
             {status} {piece_cols} {count}
             created_at timestamptz NOT NULL,
-            updated_at timestamptz NOT NULL);
+            updated_at timestamptz NOT NULL) {NO_AUTOVACUUM};
          CREATE TABLE torrent_files (
             info_hash bytea NOT NULL REFERENCES torrents ON DELETE CASCADE,
             \"index\" integer NOT NULL,
@@ -78,7 +85,7 @@ fn ddl(layout: Layout) -> String {
             created_at timestamptz NOT NULL,
             updated_at timestamptz NOT NULL,
             PRIMARY KEY (info_hash, path),
-            UNIQUE (info_hash, \"index\"));
+            UNIQUE (info_hash, \"index\")) {NO_AUTOVACUUM};
          {pieces_table}"
     )
 }
@@ -134,6 +141,14 @@ impl Fixture {
         ))
         .await
         .unwrap();
+        // Each fixture's DROP and CREATE DATABASE also counts toward the
+        // shared catalog `pg_database`'s autoanalyze threshold, which the
+        // tables' storage options can't reach. An autoanalyze of it
+        // mid-import would move the snapshot `quiet()` compares, so it's
+        // analyzed here, before the test reads anything.
+        a.batch_execute("ANALYZE pg_catalog.pg_database")
+            .await
+            .unwrap();
         let db = admin(base, Some(&name)).await;
         if let Some(l) = layout {
             db.batch_execute(&ddl(l)).await.unwrap();

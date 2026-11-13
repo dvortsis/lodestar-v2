@@ -38,7 +38,7 @@ CORE_COUNTERS = ("writer_stored_total", "writer_errors_total", "fetch_attempts_t
 STOP_REASONS = {
     "baseline_window_complete", "operator_stop", "collector_error", "evidence_write_error",
     "disk_monitor_failed", "disk_reserve_reached", "redirected_logs_limit",
-    "embedded_ui_mismatch",
+    "embedded_ui_mismatch", "service_process_exited",
     "overall_deadline_without_complete_baseline", "three_consecutive_health_failures",
     "three_consecutive_metrics_failures", "three_consecutive_capacity_violations",
     "rss_over_1GiB_for_five_samples", "process_memory_over_1GiB_for_five_samples",
@@ -137,7 +137,7 @@ MEMORY_SERIES = re.compile(
 # reads or changes the gate's inputs, window, bar or verdict.
 SCREEN_INPUT = re.compile(
     r'^lodestar_(search_mmap_cache_entries|search_segments|mem_anon_mappings|mem_mimalloc_committed_bytes'
-    r'|fetch_held_bytes)(?:\{(index|size)="([a-z_0-9]{1,24})"\})? ([0-9]+(?:\.[0-9]+)?)\r?$')
+    r'|mem_rss_anon_bytes|fetch_held_bytes)(?:\{(index|size)="([a-z_0-9]{1,24})"\})? ([0-9]+(?:\.[0-9]+)?)\r?$')
 SCREEN_INDEXES = ("main", "files")
 
 
@@ -161,6 +161,7 @@ def screen_inputs(values, text):
                ("search_segments", "index"): "segments",
                ("mem_anon_mappings", "size"): "anon_mappings",
                ("mem_mimalloc_committed_bytes", None): "mimalloc_committed_mib",
+               ("mem_rss_anon_bytes", None): "rss_anon_mib",
                ("fetch_held_bytes", None): "fetch_held_mib"}.get((name, label))
         if key is None or (label == "index" and value not in SCREEN_INDEXES):
             continue
@@ -177,12 +178,18 @@ def screen_inputs(values, text):
         entries, segments = out.get(f"mmap_cache_entries[{index}]"), out.get(f"segments[{index}]")
         if entries is not None and segments is not None:
             out[f"mmap_cache_excess[{index}]"] = entries - SCREEN_FILES_PER_SEGMENT * segments
+    # Anonymous memory mimalloc doesn't account for: in musl builds, where it holds the
+    # Rust and C heaps, that's everything else (r4's C heap grew here, outside it).
+    rss, committed = out.get("rss_anon_mib"), out.get("mimalloc_committed_mib")
+    if rss is not None and committed is not None:
+        out["anon_outside_mimalloc_mib"] = rss - committed
     return out
 
 
 SCREEN_FILES_PER_SEGMENT = 8  # thresholds' in_run.files_per_segment; checked on load
 # Each in-run counter: (threshold key, kind, input). Growth is the OLS slope of the
 # input against stored torrents, per 1,000; a bound is the value at the checkpoint.
+# Counters in SCREEN_INFO are computed and shown, and never trip or hold back ok.
 SCREEN_COUNTERS = (
     ("mmap_cache_entries_per_1000_stored", "growth", "mmap_cache_entries[]"),
     ("mmap_cache_excess", "bound", "mmap_cache_excess[]"),
@@ -192,9 +199,18 @@ SCREEN_COUNTERS = (
     ("anon_mappings_128k_512k", "bound", "anon_mappings_128k_512k"),
     ("mimalloc_committed_mib_per_1000_stored", "growth", "mimalloc_committed_mib"),
     ("mimalloc_committed_mib", "bound", "mimalloc_committed_mib"),
+    ("anon_outside_mimalloc_mib_per_1000_stored", "growth", "anon_outside_mimalloc_mib"),
     ("fetch_pending", "bound", "fetch_pending"),
     ("fetch_held_mib", "bound", "fetch_held_mib"),
 )
+SCREEN_INFO = ("mimalloc_committed_mib_per_1000_stored",)  # read 37.79 on the passing r5
+# A counter in one of these states has no reading; the checkpoint decides without it
+# and names it. Any other state that isn't ok or a trip (unusable) holds back ok.
+SCREEN_MISSING = ("absent", "absent_at_checkpoint", "too_few_samples", "too_little_stored")
+# The judged memory counters. With none of them read, a checkpoint that would be ok is
+# `unjudged` instead: an ok on structure alone isn't evidence of clean memory (r4's rc.3).
+SCREEN_MEMORY = ("anon_mappings_128k_512k_per_1000_stored", "anon_mappings_128k_512k",
+                 "mimalloc_committed_mib", "anon_outside_mimalloc_mib_per_1000_stored")
 
 
 def screen_config(thresholds):
@@ -212,6 +228,10 @@ def screen_config(thresholds):
     if not isinstance(counters, dict) or set(counters) != {c[0] for c in SCREEN_COUNTERS}:
         raise ValueError("Screen counters don't match the screen")
     for name, c in counters.items():
+        if name in SCREEN_INFO:  # information only: no threshold to trip
+            if not isinstance(c, dict) or c.get("trips") != "never" or "value" in c:
+                raise ValueError(f"Invalid screen information counter {name}")
+            continue
         v = c.get("value") if isinstance(c, dict) else None
         if (not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v)
                 or c.get("trips") != "above"):
@@ -234,7 +254,9 @@ def screen_checkpoint(points, last_hour, hour, run):
     """One checkpoint. `points` are (baseline hours, inputs) of every usable baseline
     sample of one process, in order; `last_hour` is the latest baseline row's hour,
     usable or not. Only samples at or before `hour` count. A counter trips when its
-    value is strictly above its threshold."""
+    value is strictly above its threshold. The checkpoint trips on any trip; else it
+    is ok when a counter is ok and none is unusable. Either way it names each counter
+    with no reading (`without`); with no reading at all it is not_available."""
     out = {"hour": hour, "status": "not_available", "counters": {}}
     if last_hour is None or last_hour < hour:
         out["reason"] = "not_reached"
@@ -245,17 +267,20 @@ def screen_checkpoint(points, last_hour, hour, run):
         return screen_line(out)
     at = window[-1][1]
     for name, kind, key in SCREEN_COUNTERS:
-        limit = run["counters"][name]["value"]
+        info = name in SCREEN_INFO
+        limit = None if info else run["counters"][name]["value"]
         keys = ([(f"{name}[{i}]", key.replace("[]", f"[{i}]")) for i in SCREEN_INDEXES]
                 if key.endswith("[]") else [(name, key)])
         for label, k in keys:
             r = {"kind": kind, "threshold": limit, "value": None}
+            if info:
+                r["info"] = True
             if not any(k in p for _, p in window):
                 r["status"] = "absent"
             elif kind == "bound":
                 r["value"] = at.get(k)
                 r["status"] = "absent_at_checkpoint" if r["value"] is None else (
-                    "trip" if r["value"] > limit else "ok")
+                    "info" if info else "trip" if r["value"] > limit else "ok")
             else:
                 pairs = [(p["stored"] / 1000, p[k]) for _, p in window if k in p and "stored" in p]
                 stored = [x * 1000 for x, _ in pairs]
@@ -265,19 +290,26 @@ def screen_checkpoint(points, last_hour, hour, run):
                     r["status"] = "too_little_stored"
                 else:
                     r["value"] = screen_slope(pairs)
-                    r["status"] = "trip" if r["value"] > limit else "ok"
+                    r["status"] = "info" if info else "trip" if r["value"] > limit else "ok"
             if r["value"] is not None and not math.isfinite(r["value"]):
                 # Sums of huge finite inputs overflow; a slope that isn't a number is no reading.
                 r.update(value=None, status="unusable")
             out["counters"][label] = r
-    states = [(n, r["status"]) for n, r in out["counters"].items()]
+    states = [(n, r["status"]) for n, r in out["counters"].items() if not r.get("info")]
     trips = [n for n, s in states if s == "trip"]
+    missing = [f"{s}:{n}" for n, s in states if s in SCREEN_MISSING]
     if trips:
         out.update(status="trip", counter=trips[0])
-    elif all(s == "ok" for _, s in states):
+    elif any(s == "ok" for _, s in states) and all(s == "ok" or s in SCREEN_MISSING for _, s in states):
         out["status"] = "ok"
-    else:
-        out["reason"] = next(f"{s}:{n}" for n, s in states if s != "ok")
+    if out["status"] != "not_available" and missing:
+        out["without"] = missing
+    memory = [f"{s}:{n}" for n, s in states if n in SCREEN_MEMORY]
+    if out["status"] == "ok" and all(m.split(":", 1)[0] in SCREEN_MISSING for m in memory):
+        out.update(status="unjudged", memory_missing=memory)
+    if out["status"] == "not_available":  # an unusable reading first: it's the cause
+        out["reason"] = next((f"{s}:{n}" for n, s in states if s != "ok" and s not in SCREEN_MISSING),
+                             next(f"{s}:{n}" for n, s in states if s != "ok"))
     return screen_line(out)
 
 
@@ -288,7 +320,9 @@ def screen_line(out):
         shown = f"{v:.2f}" if abs(v) < 1e9 else f"{v:.3e}"  # a short line, whatever the value
         out["line"] = f"trip({out['counter']}, {shown}, {r['threshold']:g})"
     elif out["status"] == "ok":
-        out["line"] = "ok"
+        out["line"] = f"ok(without {', '.join(out['without'])})" if out.get("without") else "ok"
+    elif out["status"] == "unjudged":
+        out["line"] = f"unjudged(no memory inputs: {', '.join(out['memory_missing'])})"
     else:
         out["line"] = f"not_available({out['reason']})"
     return out
@@ -301,10 +335,14 @@ def screen_overall(checkpoints):
     if trip:
         return {"status": "trip", "line": trip["line"], "hour": trip["hour"]}
     if reached and all(c["status"] == "ok" for c in reached):
+        without = list(dict.fromkeys(m for c in reached for m in c.get("without", [])))
+        if without:
+            return {"status": "ok", "line": f"ok(without {', '.join(without)})", "without": without}
         return {"status": "ok", "line": "ok"}
-    first = next((c for c in reached if c["status"] != "ok"), None)
-    reason = first["reason"] if first else "not_reached"
-    return {"status": "not_available", "line": f"not_available({reason})"}
+    first = next((c for c in reached if c["status"] != "ok"), None)  # unjudged is never ok
+    if first is None:
+        return {"status": "not_available", "line": "not_available(not_reached)"}
+    return {"status": first["status"], "line": first["line"]}
 # --- end of screen core
 
 
@@ -344,7 +382,8 @@ def parse_memory(text):
 
 # The prefixes of the series the screen reads (SCREEN_INPUT); only these lines are kept.
 SCREEN_PREFIXES = ("lodestar_search_mmap_cache_entries", "lodestar_search_segments", "lodestar_mem_anon_mappings",
-                   "lodestar_mem_mimalloc_committed_bytes", "lodestar_fetch_held_bytes")
+                   "lodestar_mem_mimalloc_committed_bytes", "lodestar_mem_rss_anon_bytes",
+                   "lodestar_fetch_held_bytes")
 
 
 def load_rows(root, issues, screen=False):
@@ -850,9 +889,97 @@ def memory_context(rows):
     return out
 
 
+def windows_checks(root, rows, result, run):
+    """The 1.0 Windows soak checks beside the memory rule (M8-WIN-1, plan OQ3):
+    no service restart, upgrade from the last release, clean uninstall. Each is
+    pass, fail or absent (the evidence predates the field); none touches MEMORY_FIT."""
+    checks = {}
+    seen = {(r["service_pid"], json.dumps(r.get("service_start_ticks"), sort_keys=True)) for r in rows
+            if number(r.get("service_pid"))}  # json.dumps: a list in the file stays hashable
+    starts = {r["values"]["start_time_seconds"] for r in rows
+              if r.get("service_pid") is not None and number(r["values"].get("start_time_seconds"))}
+    service_mode = bool(seen) or (run.get("settings") or {}).get("service_mode") is True
+    if not service_mode:
+        checks["service_restart"] = ("absent", "no service identity in the samples")
+    else:
+        # A restart ends the collector's loop before another sample, so the samples alone
+        # can't prove none happened: the run must also have ended by completing its window.
+        done = (bool(rows) and result is not None and result.get("service_detached") is True
+                and result.get("reason") == "baseline_window_complete"
+                and result.get("samples") == len(rows) and result.get("finalization_complete") is True)
+        missing = sum(1 for r in rows if not number(r.get("service_pid")))
+        problems = []
+        if len(seen) > 1 or len(starts) > 1:
+            problems.append(f"{len(seen)} service process identities, {len(starts)} start times")
+        if not done:
+            problems.append("run did not complete its window with the service attached")
+        if missing:
+            problems.append(f"{missing} samples without a service identity")
+        checks["service_restart"] = (("fail", "; ".join(problems)) if problems else
+                                     ("pass", f"one service process across {len(rows)} samples, window complete"))
+    seen_hashes = {r["image_sha256"] for r in rows if isinstance(r.get("image_sha256"), str)}
+    bound = run.get("service_image_sha256")
+    if not isinstance(bound, str):
+        bound = None  # a list or number can't match a hash; it fails below
+    if not service_mode:
+        checks["build_binding"] = ("absent", "not a service-mode run")
+    elif not seen_hashes and bound is None:
+        checks["build_binding"] = ("fail", "no service binary hash recorded")
+    else:
+        bad = []
+        if seen_hashes != {bound}:
+            bad.append(f"{len(seen_hashes)} sample hashes, attach hash "
+                       + ("matches" if bound in seen_hashes else "differs"))
+        if sum(1 for r in rows if not isinstance(r.get("image_sha256"), str)):
+            bad.append("samples without a hash")
+        checks["build_binding"] = (("fail", "; ".join(bad)) if bad else
+                                   ("pass", "service binary hash unchanged at every sample"))
+    life, unreadable = {}, False
+    try:
+        life = read_json(root / "lifecycle.json") if (root / "lifecycle.json").exists() else {}
+    except (ValueError, OSError):
+        checks["upgrade"] = checks["uninstall"] = ("fail", "lifecycle.json is unreadable")
+        unreadable = True
+    up = life.get("upgrade")
+    if unreadable:
+        pass
+    elif not isinstance(up, dict):
+        checks["upgrade"] = ("absent", "no upgrade record")
+    else:
+        old, new = up.get("from_version"), up.get("to_version")
+        before, after = up.get("torrents_before"), up.get("torrents_after")
+        # The versions are information (--version prints the base version, so an RC and the
+        # release look alike); the binary hash is the proof the service changed.
+        ok = (isinstance(old, str) and isinstance(new, str) and up.get("service_running") is True
+              and up.get("service_restarted") is True and up.get("image_matches_installed") is True
+              and isinstance(up.get("from_image_sha256"), str) and bound is not None
+              and up.get("from_image_sha256") != up.get("to_image_sha256") == bound
+              and up.get("data_present") is True and number(before) and number(after)
+              and before > 0 and after >= before)
+        checks["upgrade"] = ("pass" if ok else "fail",
+                             f"{old} -> {new}, running {up.get('service_running')}, restarted "
+                             f"{up.get('service_restarted')}, image matches {up.get('image_matches_installed')}, "
+                             f"data present {up.get('data_present')}, torrents {before} -> {after}")
+    un = life.get("uninstall")
+    if unreadable:
+        pass
+    elif not isinstance(un, dict):
+        checks["uninstall"] = ("absent", "no uninstall record")
+    else:
+        policy = un.get("data_policy")
+        ok = (un.get("service_present") is False and un.get("program_files_present") is False
+              and policy in ("kept", "removed") and un.get("data_present") is (policy == "kept"))
+        checks["uninstall"] = ("pass" if ok else "fail",
+                               f"service present {un.get('service_present')}, program files present "
+                               f"{un.get('program_files_present')}, data {policy}, data present {un.get('data_present')}")
+    return {name: {"status": s, "evidence": e} for name, (s, e) in checks.items()}
+
+
 def result_state(result):
     if result is None:
         return "completion_unknown"
+    if result.get("service_detached") is True:
+        return "detached_service_running"
     if result.get("schema_version", 1) >= 2:
         shutdown = result.get("shutdown")
         return "stopped" if isinstance(shutdown, dict) and shutdown.get("exit_confirmed") is True else "completion_unknown"
@@ -862,8 +989,8 @@ def result_state(result):
 
 
 def clean_shutdown(result):
-    if result is None:
-        return None
+    if result is None or result.get("service_detached") is True:
+        return None  # a service is left running by design; the restart check covers it
     if result_state(result) != "stopped":
         return False
     if result.get("schema_version", 1) == 1:
@@ -1136,6 +1263,7 @@ def analyze(root, max_gap=90, now=None, intensity=None, allocator=None, screen=T
         },
         "baseline_status": status, "baseline_required_hours": hours,
         "memory_fit": fit,
+        "windows_checks": windows_checks(root, rows, result, run),
         "memory_context": memory_context(rows),
         "search": search_summary(rows),
         "memory_attribution": memory_attribution(rows, malloc),
@@ -1316,6 +1444,9 @@ def markdown(report):
                 "| --- | ---: | ---: | ---: | ---: |"]
         for name, b in p["bounds"].items():
             out.append(f"| {name} | {fmt(b['max'])} | {b['limit']} | {b['at_capacity_samples']} | {b['over_capacity_samples']} |")
+    out += ["", "## Windows 1.0 checks (service restart, build binding, upgrade, uninstall)", ""]
+    out += [f"- {name.replace('_', ' ')}: **{c['status']}** ({c['evidence']})"
+            for name, c in report["windows_checks"].items()]
     out += ["", "## Interpretation", ""] + [f"- {s}" for s in report["limitations"]]
     if "screen" in report:  # after everything else, so the gate's lines are unchanged
         out += screen_markdown(report["screen"])

@@ -799,6 +799,24 @@ impl Work for Runtime {
         }
     }
 
+    /// The leases still held, keys and results out (WK-11b).
+    fn holding(&mut self) -> Option<Vec<lodestar_cluster::proto::HeldLease>> {
+        let list = self.shared.leases.tokens().into_iter();
+        Some(
+            list.map(|(key, token)| lodestar_cluster::proto::HeldLease {
+                key: key.0,
+                token: token.0,
+            })
+            .collect(),
+        )
+    }
+
+    fn listed(&mut self, answer: lodestar_cluster::proto::ReconcileAnswer) {
+        if let Some(sp) = &self.shared.spool {
+            sp.listed(answer);
+        }
+    }
+
     async fn drain(&mut self) -> Vec<OutcomeItem> {
         let started = std::time::Instant::now();
         self.stop_stages().await;
