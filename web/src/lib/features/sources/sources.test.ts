@@ -113,3 +113,24 @@ describe('filter, attention and summary (X-sources-restructure)', () => {
 		for (const c of CONSENT_CLASSES) expect(consentHelp(c).length).toBeGreaterThan(10);
 	});
 });
+
+describe('Account and the password (X-consent-gate-lift r2)', () => {
+	it('a disabled Account source with its key stored needs no separate password step', () => {
+		// r2 makes `password_required` true for Account; the Account dialog asks for it, so the
+		// row shows no "needs your password" note and no Needs setup status.
+		const stored = { ...prowlarr, enabled: false, state: 'disabled' as const, needs: null };
+		for (const password_required of [false, true]) {
+			const s = { ...stored, password_required, restart_required: false };
+			expect(setupNeed(s)).toBeNull();
+			expect(statusOf(s)).toBe('off');
+		}
+		// Its missing key is still a setup step.
+		expect(setupNeed({ ...stored, password_required: true, needs: 'credentials' })).toBe(
+			'credentials'
+		);
+		// Restricted and Overlay still ask for the password as their own step.
+		expect(setupNeed({ ...stored, consent: 'restricted', password_required: true })).toBe(
+			'password'
+		);
+	});
+});

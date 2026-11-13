@@ -45,15 +45,20 @@ export type Status =
 /**
  * What a user must still do before the server lets this source on; null when enabling is a
  * toggle. `needs` is the server's own answer (null once the class's condition holds, so a source
- * acknowledged earlier toggles back on); `password_required` (restricted and overlay) asks every
- * time, and that prompt is SRC-15b. The server's gate still judges every PATCH.
+ * acknowledged earlier toggles back on). `password_required` asks every time: for Restricted and
+ * Overlay that's a setup step of its own, the SRC-15b prompt. For Account it isn't: every Account
+ * enable already goes through the Account dialog, which asks for whatever the class needs, and
+ * while this build's gate refuses Account the dialog shows that refusal. So a disabled Account
+ * source whose credentials are stored shows no "needs your password" note
+ * (X-sources-restructure, from X-consent-gate-lift r2, which makes `password_required` true for
+ * Account). The server's gate still judges every PATCH.
  */
 export function setupNeed(s: Source): 'consent' | 'endpoints' | 'credentials' | 'password' | null {
 	if (s.enabled) return null;
 	if (s.needs === 'credentials') return 'credentials';
 	if (s.needs === 'endpoints_ack') return 'endpoints';
 	if (s.needs === 'consent') return 'consent';
-	return s.password_required ? 'password' : null;
+	return s.password_required && s.consent !== 'account' ? 'password' : null;
 }
 
 export function statusOf(s: Source): Status {
