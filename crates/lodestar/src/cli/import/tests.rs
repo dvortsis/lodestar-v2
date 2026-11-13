@@ -115,6 +115,36 @@ fn each_source_takes_only_its_own_flags() {
     assert!(b.check().is_err());
 }
 
+#[test]
+fn a_unix_socket_names_the_plaintext_flag_and_why_it_is_safe() {
+    let mut b = source(SourceKind::Bitmagnet);
+    b.host = Some("/run/postgresql".into());
+    let Err(Failure::Refused(e)) = b.check() else {
+        panic!()
+    };
+    #[cfg(unix)]
+    {
+        for want in ["--allow-plaintext-loopback", "same machine", "network"] {
+            assert!(e.contains(want), "{want}: {e}");
+        }
+        // The flag is still required, and still enough.
+        b.allow_plaintext_loopback = true;
+        assert!(b.check().is_ok());
+    }
+    // Windows has no Unix socket to reach: the flag doesn't help there,
+    // so the message points at loopback instead.
+    #[cfg(not(unix))]
+    {
+        assert!(e.contains("127.0.0.1"), "{e}");
+        b.allow_plaintext_loopback = true;
+        assert!(b.check().is_err());
+    }
+    // A loopback address without it is left to the library, as before.
+    b.host = Some("127.0.0.1".into());
+    b.allow_plaintext_loopback = false;
+    assert!(b.check().is_ok());
+}
+
 const NOW: i64 = 1_700_000_000;
 
 /// A Magnetico database with `n` torrents of one file each, in
@@ -355,6 +385,95 @@ fn space_is_estimated_per_torrent_and_refused_when_short() {
     let s = space(&config, &store, Some(1_000));
     assert_eq!((s.per_record, s.measured), (DEFAULT_RECORD_BYTES, false));
     assert_eq!(s.needed, Some(1_000 * DEFAULT_RECORD_BYTES * 125 / 100));
+}
+
+#[test]
+fn a_run_is_sized_by_its_limit_and_one_batch_of_overshoot() {
+    assert_eq!(to_import(Some(1_000_000), None), Some(1_000_000));
+    assert_eq!(to_import(Some(1_000_000), Some(200_000)), Some(200_499));
+    assert_eq!(to_import(Some(1_000_000), Some(1)), Some(500));
+    assert_eq!(to_import(Some(1_000_000), Some(0)), Some(500));
+    assert_eq!(to_import(Some(1_000_000), Some(501)), Some(1_000));
+    assert_eq!(to_import(Some(300), Some(200_000)), Some(300));
+    assert_eq!(to_import(None, Some(1_000)), Some(1_499));
+    assert_eq!(to_import(None, None), None);
+    assert_eq!(to_import(Some(10), Some(u64::MAX)), Some(10));
+}
+
+/// Free space this test's data folder reports, on this thread.
+fn with_free<T>(free: u64, f: impl FnOnce() -> T) -> T {
+    FREE_FOR_TEST.with(|c| c.set(Some(free)));
+    let out = f();
+    FREE_FOR_TEST.with(|c| c.set(None));
+    out
+}
+
+#[test]
+fn a_pilot_of_a_source_too_big_for_the_disk_is_accepted_and_the_rest_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 1_200);
+    let config = data(&dir.path().join("data"));
+    let args = magnetico(&src);
+    // Room for one batch of 500 with its 25 % headroom (625 torrents' worth),
+    // not for all 1,200 (1,500).
+    let free = 700 * DEFAULT_RECORD_BYTES;
+    with_free(free, || {
+        // Inspect sizes the whole source, and points at a pilot.
+        let r = block_on(inspect(&config, &args, true));
+        assert!(
+            matches!(&r, Err(Failure::Refused(m))
+                if m.contains("not enough free space") && m.contains("--limit")),
+            "{r:?}"
+        );
+        // The whole source is refused, and no job is made.
+        let r = block_on(start(&config, &args, None, true, None));
+        assert!(
+            matches!(&r, Err(Failure::Refused(m)) if m.contains("not enough free space")),
+            "{r:?}"
+        );
+        assert!(
+            Store::open(config.db_path(), StoreConfig::default())
+                .unwrap()
+                .import_jobs(None, 10)
+                .unwrap()
+                .is_empty()
+        );
+        // A pilot of one batch fits.
+        block_on(start(&config, &args, Some(1), true, None)).unwrap();
+        let j = job(&config, 1);
+        assert_eq!((j.control, j.counters.read), (Control::Paused, 500));
+        // Resuming is sized by what's left under its own limit: one more
+        // batch fits, the remaining 700 don't.
+        block_on(resume(&config, 1, &args, Some(1), true)).unwrap();
+        let j = job(&config, 1);
+        assert_eq!((j.control, j.counters.read), (Control::Paused, 1_000));
+    });
+    // The last 200 (250 with headroom) fit where the 700 before didn't.
+    with_free(300 * DEFAULT_RECORD_BYTES, || {
+        block_on(resume(&config, 1, &args, None, true)).unwrap();
+    });
+    assert_eq!(job(&config, 1).counters.read, 1_200);
+}
+
+#[test]
+fn resume_without_a_limit_is_refused_when_the_rest_does_not_fit() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 1_200);
+    let config = data(&dir.path().join("data"));
+    let args = magnetico(&src);
+    with_free(700 * DEFAULT_RECORD_BYTES, || {
+        block_on(start(&config, &args, Some(1), true, None)).unwrap();
+        let r = block_on(resume(&config, 1, &args, None, true));
+        assert!(
+            matches!(&r, Err(Failure::Failed(m)) if m.contains("free space")),
+            "{r:?}"
+        );
+        // A limited leg still fits.
+        block_on(resume(&config, 1, &args, Some(1), true)).unwrap();
+    });
+    assert_eq!(job(&config, 1).counters.read, 1_000);
 }
 
 fn hash_of(i: u32) -> [u8; 20] {

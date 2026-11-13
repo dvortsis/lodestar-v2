@@ -186,13 +186,23 @@ class Lodestar:
         return json.load(self.req(path))
 
     def login(self):
+        """Sets up or logs in, accepting the Legal Notice the way the UI
+        does: setup sends the version `GET /api/v1/legal/notice` shows
+        (without it, `409 notice_required`), and a login that
+        `GET /api/v1/auth` says still owes the current notice accepts it
+        through `/api/v1/legal/accept`."""
+        version = self.get("/api/v1/legal/notice")["version"]
         with open(self.log) as f:
             m = re.search(r"setup token ([0-9A-F-]{19})", f.read())
         if m:
-            r = self.req("/api/v1/setup", {"token": m.group(1), "password": PASSWORD})
-        else:
-            r = self.req("/api/v1/login", {"password": PASSWORD})
+            r = self.req("/api/v1/setup", {"token": m.group(1), "password": PASSWORD,
+                                           "notice_version": version})
+            self.cookie = r.headers["Set-Cookie"].split(";")[0]
+            return
+        r = self.req("/api/v1/login", {"password": PASSWORD})
         self.cookie = r.headers["Set-Cookie"].split(";")[0]
+        if self.get("/api/v1/auth")["notice_required"]:
+            self.req("/api/v1/legal/accept", {"version": version}).read()
 
     def search(self, q, limit=50):
         t = now()
