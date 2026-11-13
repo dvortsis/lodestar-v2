@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:54Z",
+  "updated_at": "2026-11-13T18:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8519,19 +8519,13 @@
       "head": "ccd0aac7",
       "review": "fresh Opus MERGE (0 B / 0 I); nits 1-2 (evict re-check, NotFound->Gone) relayed for one round; runner delta check then merge",
       "at": "2026-11-13T16:54Z",
-      "state": "nits fixed; runner delta check passed; awaiting green"
+      "state": "ci-ok red: own new test fails on Windows (eviction_moves_only_a_regular_file); root-cause fix asked"
     },
     "839": {
       "slice": "X-lease-reconcile-every-session",
       "head": "3182efc8",
       "review": "fresh Opus MERGE, 2 Important (stalled-coordinator spool fallback; local stop waits for Drained) relayed with chaos scenario, one push; runner delta check then merge",
       "at": "2026-11-13T17:06Z"
-    },
-    "840": {
-      "slice": "X-import-pilot-fixes",
-      "head": "08b4677f",
-      "review": "fresh Opus + security review running",
-      "at": "2026-11-13T17:12Z"
     }
   },
   "merged_log": [
@@ -9178,7 +9172,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T17:54Z",
+    "updated": "2026-11-13T18:07Z",
     "items": [
       {
         "slot": 1,
@@ -9258,12 +9252,8 @@
       },
       {
         "slot": 14,
-        "status": "active",
-        "doing": "cloud-testing: session_01MMjhnBa3bturH1qvVXJ9a9 (Opus): #840 open, CI + runner review running",
-        "slice": "X-import-pilot-fixes",
-        "agent": "claude",
-        "role": "build",
-        "since": "2026-11-13T16:24Z"
+        "status": "idle",
+        "doing": "X-import-pilot-fixes #840 merged b4813b50; session archived; cloud-testing slot idle until the AWS connector is reconnected"
       },
       {
         "slot": 15,
@@ -9420,7 +9410,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:54Z",
+  "updated": "2026-11-13T18:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9833,6 +9823,12 @@
       "slice": "X-utp-spurious-rto",
       "merged": "2bd32715",
       "at": "2026-11-13T17:54Z"
+    },
+    {
+      "pr": 840,
+      "slice": "X-import-pilot-fixes",
+      "merged": "b4813b50",
+      "at": "2026-11-13T18:07Z"
     }
   ]
 }
