@@ -24,7 +24,7 @@ The cloud tester's drill 3 (2026-11-13) stopped gluetun for 60 s mid-block, with
 - **Part of "(b) Host rules" in `2026-11-12-X-gluetun-leak.md`.** It said every host rule lasts only for the leak test's own run, and gave a reason: a standing host DROP would hide a gluetun regression from the leak test. For the length of a block, the host guard now stays on. That reason doesn't apply to this rule:
   - **It matches only the endpoint's UDP arriving at the host's own INPUT.** The container's traffic is forwarded and never crosses INPUT, so the guard can't hide anything gluetun sends.
   - **The leak test already judged gluetun with this guard on.** It held the same rule through every gluetun recreate.
-  - **Still no standing rule outside a block.** Between blocks, and on any VM not running one, there is still none.
+  - **Still no standing rule outside a block.** Between blocks, and on any VM not running one, there is none, apart from a failed start's leftover. The next start-block or a stand-alone leak test removes that.
 
   This changes a slice decision, not an owner decision. It's a runner §2.19 flag to the owner.
 
@@ -48,4 +48,5 @@ The cloud tester's drill 3 (2026-11-13) stopped gluetun for 60 s mid-block, with
   - renew-vpn re-holds the guard (it can call `host_guard_hold`).
 
   Either belongs to the slice that owns `infra/pia-bridge`.
+- **A reboot or an iptables flush mid-block.** Either one drops the guard while the marker still records a running block, and gluetun then restarts by itself, unguarded. This gap was there before this PR too. Nothing re-holds the guard until the next start-block. A fix could re-hold it wherever a block is resumed, or have the outage watcher check for it.
 - **Between blocks.** gluetun keeps running on the VM after copy-off with no guard, so a stop there isn't covered. Nothing is measured then. The earlier file's "(b) Host rules" leaves a standing rule to be proposed with the crawl phase. If that phase wants one, the guard can be held from `up` to teardown with `host_guard_hold`.

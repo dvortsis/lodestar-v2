@@ -851,6 +851,18 @@ class CopyOff(Base):
         rc, lines, _ = self.run_script("copy-off.sh")
         self.assertEqual(lines, ["fail evidence_present", "fail copy_off"])
 
+    def test_with_no_marker_copy_off_still_releases_a_leftover_guard(self):
+        """state=none: the block already ended (or a start failed after staging),
+        and a leftover guard is still removed."""
+        self.make_block(segment=4)
+        (self.block / "marker").unlink()
+        (self.stub / "host").write_text("1")
+        (self.stub / "oldhost").write_text("1")
+        rc, lines, raw = self.run_script("copy-off.sh")
+        self.assertEqual((rc, lines[-3:]), (0, ["ok host_guard_released", "skip block_ended", "ok copy_off"]))
+        self.assertEqual((self.stub / "host").read_text().strip(), "0")
+        self.assertEqual((self.stub / "oldhost").read_text().strip(), "0")
+
     def test_every_tagged_guard_comes_off_and_a_stuck_one_keeps_the_block(self):
         self.make_block(segment=4)
         (self.stub / "host").write_text("2")  # the block's, and a stuck duplicate
