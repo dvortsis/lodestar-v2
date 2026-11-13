@@ -8016,6 +8016,11 @@
       "id": "gluetun-hostfile-ui-codes",
       "note": "When X-gluetun-hostfile-ui launches: send it the refusal codes (inside_data_folder, companions_dir_shared, and any reason X-companions-mount-check adds) and the system.companions_dir / companions_dir_left log events.",
       "at": "2026-11-13T10:26Z"
+    },
+    {
+      "id": "slices-yaml-x-wk18w-rollback",
+      "note": "Next runner plan PR: add X-wk18w-rollback (named in WK-18w decisions file; recovery after a join rolled back by StartServices failure or cancel). Also add crates/pipeline/tests/** to X-filter01-fix owns.",
+      "at": "2026-11-13T10:32Z"
     }
   ],
   "main_health": [
