@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T08:15Z",
+  "updated_at": "2026-11-13T08:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7981,6 +7981,16 @@
     {
       "id": "filter01-owner-question",
       "status": "2026-11-13T08:15Z: X-filter01-fix has an owner question pending (by id only, detail held, asked in chat). The session holds its push until the runner relays the answer."
+    },
+    {
+      "id": "ci-filter-fleet-emergency-down",
+      "note": "Next runner PR: INFRA in .github/scripts/ci_changes.py misses .github/workflows/fleet-emergency-down.yml, which infra/fleet/tests/test_emergency_cleanup.py reads (found by X-gluetun-pin-ci-filter self-review). Open a small slice or fold into the next CI-filter change.",
+      "at": "2026-11-13T08:46Z"
+    },
+    {
+      "id": "slices-yaml-x-flake-relevance-lock",
+      "note": "Next runner PR: add the X-flake-relevance-lock entry to runner/slices.yaml (owns bench/tests/relevance_sets.rs, bench/src/bin/relevance/** if needed, its decisions file).",
+      "at": "2026-11-13T08:46Z"
     }
   ],
   "main_health": [
@@ -9015,7 +9025,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T08:15Z",
+    "updated": "2026-11-13T08:46Z",
     "items": [
       {
         "slot": 1,
@@ -9049,13 +9059,13 @@
       },
       {
         "slot": 7,
-        "slice": "X-gs2-nits",
+        "slice": "X-flake-relevance-lock",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #817 (52a3edfd) green; first review cut short by full disk, fresh review re-run",
-        "since": "2026-11-13T06:04Z",
+        "doing": "session_01MMjhn9NYyxgoQ8Bj2zXNHQ: launched after #817 X-gs2-nits merged (a96bb5b7); Windows lock-file race in bench/tests/relevance_sets.rs seen on #824",
+        "since": "2026-11-13T08:46Z",
         "status": "active",
-        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
+        "cap": "kept build (\u00a72.64 4+4)"
       },
       {
         "slot": 8,
@@ -9104,7 +9114,7 @@
         "agent": "claude",
         "status": "active",
         "since": "2026-11-13T07:31Z",
-        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: CI filter for the gluetun pin checks",
+        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: #824 one Windows re-run allowed (relevance_sets lock race, not its diff; fix slice X-flake-relevance-lock)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9177,7 +9187,7 @@
         "slice": "X-sources-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #816 merged 667479cb (06:00Z); now X-sources-nits, then X-insights-funnel-fixture, then X-insights-scroll-a11y (briefs on runner-state)",
+        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #823 X-insights-funnel-fixture ready at 53980b6d; fresh Opus review running; next X-insights-scroll-a11y",
         "since": "2026-11-13T06:04Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
         "status": "active"
@@ -9269,7 +9279,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T08:15Z",
+  "updated": "2026-11-13T08:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9568,6 +9578,12 @@
       "slice": "X-ci-advisories",
       "at": "2026-11-13T07:31Z",
       "merged": "361de078"
+    },
+    {
+      "pr": 817,
+      "slice": "X-gs2-nits",
+      "merged": "a96bb5b7",
+      "at": "2026-11-13T08:46Z"
     }
   ]
 }
