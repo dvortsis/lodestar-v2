@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:08Z",
+  "updated_at": "2026-11-13T01:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7690,7 +7690,7 @@
     },
     {
       "id": "review-798",
-      "note": "#798 P-master-plan-r4 (82246b02a, docs): fresh Opus review when a slot frees; then steps 2-9 into runner PR; owner points (v0.6 tag conditions vs r4 \u00a72.25; import pilots off Unraid, \u00a72.52) to owner summary.",
+      "note": "#798 merged 010a11e3 2026-11-13T01:15Z; steps 2-9 into next runner PR; owner points to owner summary.",
       "added": "2026-11-12T23:12Z"
     },
     {
@@ -8632,6 +8632,12 @@
       "pr": 771,
       "sha": "65dda95ee86cd861f29efa82743396a2155a6848",
       "at": "2026-11-12T18:16:59Z"
+    },
+    {
+      "pr": 798,
+      "sha": "010a11e3",
+      "at": "2026-11-13T01:15Z",
+      "note": "P-master-plan-r4 merged; steps 2-9 into next runner PR"
     }
   ],
   "active_sessions": {
@@ -8870,7 +8876,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:08Z",
+    "updated": "2026-11-13T01:15Z",
     "items": [
       {
         "slot": 1,
@@ -9235,7 +9241,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:08Z",
+  "updated": "2026-11-13T01:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
