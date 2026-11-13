@@ -9,13 +9,13 @@ The spec is the slices.yaml entry `X-filter01-fix` (Track Q, blocking, child-saf
 **Rules (security README §5):**
 - No file on any branch may describe the finding or the chosen fix. That covers code comments, test names, commit messages, the PR title and body, the decisions file and runner-state.
 - Name things by behaviour only where the code needs a name. When unsure, ask the runner.
-- The decisions file records "FILTER-01 fixed as the owner chose (owner-decisions §2.70)" and the measured numbers the runner asks for. Nothing that explains the flaw.
+- The decisions file records "FILTER-01 fixed (Track Q, detail held)" and whatever measured numbers the runner asks for by message. Nothing that explains the flaw.
 - The PR title is "X-filter01-fix: Track Q fix", with a body by id only.
 
 **Quality:**
 - Opus builds it. /security-review, plus an unanchored second read.
 - Every crate's tests stay green, and the filter budget and filter bench jobs stay green.
-- Property tests where the change touches a parser or limit.
+- Property tests where the change touches parsing of untrusted input.
 - No fixed sleeps.
 
 **Order:** X-filter03-fix and X-apifeat01-fix share these owns and wait for this slice to merge.
