@@ -135,9 +135,10 @@ configs:
       #    tunnel down, the endpoint's packets draw "port unreachable" from the
       #    host's address) and not gluetun's health-check pings to the VPN server.
       #    gluetun needs none outside the tunnel. Exempt: this container's own
-      #    addresses (loopback keeps its errors) and, for IPv6, link-scoped
-      #    traffic that can't leave the Docker network: link-local or multicast
-      #    destinations, and neighbour discovery (always hop limit 255).
+      #    addresses (loopback keeps its errors) and, for IPv6, link-local
+      #    destinations, multicast destinations of any scope, and anything with
+      #    hop limit 255 (neighbour discovery). None of these can carry a flow off
+      #    the tunnel: rule 2 and gluetun's own policy still apply to them.
       #    Side effect: the container no longer answers pings from your network.
       iptables -I OUTPUT 3 ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP
       ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp ! -d fe80::/10 -m addrtype ! --dst-type LOCAL,MULTICAST -m hl ! --hl-eq 255 -j DROP

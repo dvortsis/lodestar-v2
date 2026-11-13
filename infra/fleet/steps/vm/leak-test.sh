@@ -48,6 +48,7 @@ guard_rule=()   # the recreate guard (DOCKER-USER), once the endpoint is known
 host_rule=()    # the host's own guard (INPUT), once the endpoint is known
 guard_set=""
 guard_held=""
+released_bad=""
 host_set=""
 counter=""
 flow=""
@@ -61,10 +62,12 @@ check() { local n=$1 rc; shift; "$@" >/dev/null 2>&1; rc=$?; if ((rc == 0)); the
 refute() { local n=$1 rc; shift; "$@" >/dev/null 2>&1; rc=$?; if ((rc != 0 && rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi; }
 finish() {
   [[ -n $not_run ]] && bad probe_ran
+  release_guards || { bad guards_released; released_bad=1; }  # before the verdict: a guard left behind fails the run
   if [[ $fails -eq 0 ]]; then echo "ok leak_test"; exit 0; fi
   echo "fail leak_test"; exit 1
 }
 cleanup() {
+  trap '' HUP INT TERM  # a second signal must not cut the release short
   [[ -n $cap_pid ]] && kill "$cap_pid" 2>/dev/null
   # The endpoint block never outlives the test, whatever ended it.
   [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
@@ -73,20 +76,52 @@ cleanup() {
     for _ in 1 2 3; do iptables -D DOCKER-USER $counter 2>/dev/null || break; done
   fi
   [[ -n $block ]] && iptables -D DOCKER-USER $block 2>/dev/null
-  [[ -n $guard_set ]] && drop_all DOCKER-USER "${guard_rule[@]}"
-  [[ -n $host_set ]] && drop_all INPUT "${host_rule[@]}"
+  # finish has released the guards; a signal skips finish, so they're released
+  # here too, and a failure is reported (the run's exit code is already non-zero).
+  release_guards || [[ -n $released_bad ]] || echo "fail guards_released"
   return 0
 }
-# drop_all chain rule...: remove every copy of a rule (a killed run, or a
-# failed delete, can leave more than one). Fails when a copy is still there.
+release_guards() {  # remove both guards, every copy; fails when one won't come off
+  local rc=0
+  if [[ -n $guard_set ]]; then
+    if drop_all DOCKER-USER "${guard_rule[@]}"; then guard_set=""; else rc=1; fi
+  fi
+  if [[ -n $host_set ]]; then
+    if drop_all INPUT "${host_rule[@]}"; then host_set=""; else rc=1; fi
+  fi
+  return "$rc"
+}
+# drop_all chain rule...: remove every copy of a rule (a failed delete can
+# leave more than one). Only `-C` exit 1 means absent (iptables also uses 1
+# for some generic errors, such as a missing chain); any other exit is an
+# error, never read as "gone". Fails when a copy may still be there.
 drop_all() {
-  local chain=$1 i
+  local chain=$1 i rc
   shift
   for ((i = 0; i < 5; i++)); do
-    iptables -C "$chain" "$@" 2>/dev/null || return 0
+    iptables -C "$chain" "$@" 2>/dev/null; rc=$?
+    ((rc == 1)) && return 0
+    ((rc == 0)) || return 1
     iptables -D "$chain" "$@" 2>/dev/null || return 1
   done
-  ! iptables -C "$chain" "$@" 2>/dev/null
+  iptables -C "$chain" "$@" 2>/dev/null; rc=$?
+  ((rc == 1))
+}
+# clear_tagged chain tag: remove every rule in the chain that carries the
+# leak test's comment tag, whatever endpoint it names (a killed run against an
+# earlier endpoint). Each line of `iptables -S` is turned from -A into -D and
+# run as words, never through a shell.
+clear_tagged() {
+  local chain=$1 tag=$2 i out line words
+  for ((i = 0; i < 10; i++)); do
+    out=$(iptables -S "$chain" 2>/dev/null) || return 1
+    line=$(printf '%s\n' "$out" | grep -m 1 -e "--comment $tag ") || return 0
+    read -ra words <<<"$line"
+    [[ ${words[0]} == -A && ${words[1]} == "$chain" ]] || return 1
+    words[0]=-D
+    iptables "${words[@]}" 2>/dev/null || return 1
+  done
+  return 1
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -141,16 +176,16 @@ read_iface() {  # the VPN interface gluetun's config names; the image's own defa
 #     replies are de-NATed and forwarded, never delivered to the host.
 tunnel_up() {
   local rc i ready=""
+  guard_set=1  # before the insert: a signal in between still has cleanup look for it
   iptables -I DOCKER-USER 1 "${guard_rule[@]}" 2>/dev/null || { bad recreate_guarded; return 1; }
-  guard_set=1
   LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
   rc=$?
   if ((rc == 0)); then
     for ((i = 0; i < 30; i++)); do  # gluetun turns its firewall on within seconds of starting
       if [[ $(read_iface) =~ ^[a-z][a-z0-9]{0,14}$ ]] \
-        && timeout 10 docker exec gluetun sh -c "$POST_RULES_CHECK" rules iptables "$(read_iface)" >/dev/null 2>&1 \
-        && timeout 10 docker exec gluetun sh -c "$POST_RULES_CHECK" rules ip6tables "$(read_iface)" >/dev/null 2>&1; then
+        && post_rules_on iptables "$(read_iface)" >/dev/null 2>&1 \
+        && post_rules_on ip6tables "$(read_iface)" >/dev/null 2>&1; then
         ready=1; break
       fi
       sleep 1
@@ -343,10 +378,12 @@ if ((rc == 0)); then bad block_running; finish; fi
 install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
 guard_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-guard -j DROP)
 host_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-host -j DROP)
-# A killed run can have left either guard behind; neither may outlive its run.
-{ drop_all DOCKER-USER "${guard_rule[@]}" && drop_all INPUT "${host_rule[@]}"; } || { bad recreate_guard_lifted; finish; }
+# A killed run can have left a guard behind, for this endpoint or an earlier
+# one: every rule with the leak test's tag goes first.
+{ clear_tagged DOCKER-USER lodestar-leak-guard && clear_tagged INPUT lodestar-leak-host; } \
+  || { bad recreate_guard_lifted; finish; }
+host_set=1  # before the insert: a signal in between still has cleanup look for it
 iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null || { bad host_guarded; finish; }
-host_set=1
 tunnel_up || { bad tunnel_started; finish; }
 wait_healthy; up=$?
 unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so
@@ -383,7 +420,7 @@ rx_zero() {
 no_handshake=""
 if ((up == 0)); then
   pass tunnel_healthy
-elif [[ -n $guard_held ]]; then
+elif [[ -n $guard_held || -n $guard_set ]]; then
   bad recreate_guard_held  # gluetun never loaded its post-rules, so the endpoint stays held: not a credentials problem
 elif rx_zero; then
   no_handshake=1
@@ -454,6 +491,10 @@ down_probes ifdown example.edu
 refute vpn_interface_stayed_down iface_up
 judge_capture ifdown
 judge_counter ifdown
+# The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules
+# must still head OUTPUT afterwards.
+check post_rules_after_restart_ipv4 post_rules_on iptables "$iface"
+check post_rules_after_restart_ipv6 post_rules_on ip6tables "$iface"
 check flow_alive_ifdown running "$FLOW"
 timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1 && flow=""
 

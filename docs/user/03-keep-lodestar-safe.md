@@ -89,11 +89,11 @@ These steps are for WireGuard, the VPN type Lodestar's templates use, and the ru
 
     ```sh
     mkdir -p /mnt/cache/appdata/gluetun
-    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/dbad7937994c786675a65ee3b69e5058fd99e56e/packaging/companions/gluetun-post-rules.txt
+    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt
     sha256sum /mnt/cache/appdata/gluetun/post-rules.txt
     ```
 
-   **Result:** The `sha256sum` line starts with `ca05435e6f16ee2f44e35e79613a6a35d18f4019da1989cf11119deb348d746a`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
+   **Result:** The `sha256sum` line starts with `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
 2. Edit the gluetun container and add a **Path**: container path `/iptables/post-rules.txt`, host path `/mnt/cache/appdata/gluetun/post-rules.txt`, access mode **Read Only**.
 3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`, and gluetun's own default is `tun0`. Without this variable the rules do nothing.
 4. Select **Apply**. Then, in the terminal, check that gluetun loaded the rules:
@@ -117,7 +117,7 @@ If gluetun stops instead:
 
 To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
 
-With the file, a connection that used the VPN never leaves any other way. No ping or error message leaves your server outside the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network. The [companion](glossary.md#companion) templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
+With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends to the internet goes around the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network. The [companion](glossary.md#companion) templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 
