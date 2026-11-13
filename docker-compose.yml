@@ -38,6 +38,10 @@ services:
       - "8090:8090/tcp"
       - "6881:6881/udp"
       - "6881:6881/tcp"
+      # Cluster port, for workers (Settings, Workers, Allow workers). Uncomment
+      # only if you add workers, and keep it on your home network or a private
+      # link: don't forward it on your router.
+      # - "8091:8091/tcp"
 
     # For better DHT reachability on Linux, host networking skips Docker's
     # UDP NAT, so remote nodes see the real address and port. To use it,
