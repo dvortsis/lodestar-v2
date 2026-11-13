@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:05Z",
+  "updated_at": "2026-11-13T02:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8896,7 +8896,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:05Z",
+    "updated": "2026-11-13T02:14Z",
     "items": [
       {
         "slot": 1,
@@ -9110,12 +9110,11 @@
       },
       {
         "slot": 24,
-        "slice": "ENR-13",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn9aiUogqrUAigBpjxV: #793 ac134418 delta OK, merge on green, then archive (\u00a72.65)",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "ENR-13 #793 merged (7a1216ea) 2026-11-13T02:14Z; session archived (\u00a72.65 drain)",
+        "status": "idle",
         "cap": "over cap: finish #793 only, then archive (\u00a72.64)"
       },
       {
@@ -9246,7 +9245,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:05Z",
+  "updated": "2026-11-13T02:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
