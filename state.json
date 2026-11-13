@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:44Z",
+  "updated_at": "2026-11-13T01:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8891,7 +8891,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:44Z",
+    "updated": "2026-11-13T01:47Z",
     "items": [
       {
         "slot": 1,
@@ -9125,13 +9125,8 @@
       },
       {
         "slot": 25,
-        "slice": "X-banner-live-region",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnBn59gULGWufMiioeP: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-banner-live-region.md",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #794 only, then archive (\u00a72.64)"
+        "status": "idle",
+        "doing": "X-banner-live-region #794 merged (548b2b02) 2026-11-13T01:47Z; session archived (\u00a72.65 drain)"
       },
       {
         "slot": 26,
@@ -9256,7 +9251,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:44Z",
+  "updated": "2026-11-13T01:47Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
