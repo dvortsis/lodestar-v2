@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T14:47Z",
+  "updated_at": "2026-11-13T15:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8061,6 +8061,11 @@
       "id": "e2e-guard-single-project-list",
       "note": "web/playwright.config.ts: projects and everyProject are still two lists (side by side); a project dropped from projects but left in everyProject would make the spec guard pass falsely. Derive projects from everyProject with the opt-in flags (#834 review nit).",
       "at": "2026-11-13T14:46Z"
+    },
+    {
+      "id": "slices-yaml-x-fixed-sleep-nits",
+      "note": "Add X-fixed-sleep-nits (deps [X-fixed-sleep-asserts]; owns LineChart.test.ts, crates/dht/tests/{network,pause}.rs, crates/dht/tests/wait/mod.rs, the X-fixed-sleep-asserts decisions file) with placement in the next runner PR.",
+      "at": "2026-11-13T15:20Z"
     }
   ],
   "main_health": [
@@ -8449,11 +8454,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "835": {
-      "slice": "X-fixed-sleep-asserts",
-      "head": "85315fef",
-      "note": "CI running; decisions heading (#835) rides next fix round"
     }
   },
   "merged_log": [
@@ -9100,7 +9100,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T14:47Z",
+    "updated": "2026-11-13T15:20Z",
     "items": [
       {
         "slot": 1,
@@ -9260,12 +9260,12 @@
       },
       {
         "slot": 30,
-        "slice": "X-fixed-sleep-asserts",
+        "slice": "X-fixed-sleep-nits",
         "status": "active",
         "role": "other",
         "agent": "claude",
-        "doing": "session_01MMjhn9YivYQVrtLb8466ue (Opus): fixed-sleep asserts to condition waits; exact files sent by message",
-        "since": "2026-11-13T13:34Z",
+        "doing": "session_01MMjhn9YivYQVrtLb8466ue (Opus, same session): #835 review nits (LineChart dynamicImportSettled, dht deny-test tick coverage, decisions heading); previous X-fixed-sleep-asserts #835 merged (ebfddfe9) 2026-11-13T15:20Z",
+        "since": "2026-11-13T15:20Z",
         "model": "opus"
       },
       {
@@ -9337,7 +9337,7 @@
     }
   ],
   "heartbeat": "2026-11-13T12:39Z",
-  "updated": "2026-11-13T14:47Z",
+  "updated": "2026-11-13T15:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9726,6 +9726,12 @@
       "slice": "X-e2e-orphan-specs",
       "merged": "8ab24fa1",
       "at": "2026-11-13T14:46Z"
+    },
+    {
+      "pr": 835,
+      "slice": "X-fixed-sleep-asserts",
+      "merged": "ebfddfe9",
+      "at": "2026-11-13T15:20Z"
     }
   ]
 }
