@@ -7919,6 +7919,10 @@
     {
       "id": "account-setupneed",
       "text": "X-sources-restructure (runner-accepted): setupNeed returns the password step only for Restricted/Overlay, not Account (no gate-closed field in GET /sources). X-consent-gate-lift-account must revisit setupNeed in web/src/lib/features/sources/sources.ts when the Account dialog gains its password field; add to its notes in the next runner PR."
+    },
+    {
+      "id": "next-runner-pr-1113",
+      "text": "Next runner PR: add X-test-vm (owner-started cloud-testing lane, slot 13) to runner/slices.yaml with a placement rule; add X-consent-gate-lift-account note on setupNeed (account-setupneed); widen gluetun pin CI filter (gluetun-pin-ci-filter)."
     }
   ],
   "main_health": [
