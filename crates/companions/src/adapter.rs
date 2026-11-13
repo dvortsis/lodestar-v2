@@ -1103,6 +1103,7 @@ impl dyn Configure + Send + Sync + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn delete_has_no_body() {
@@ -1114,7 +1115,6 @@ mod tests {
         assert_eq!(r.method, Method::Delete);
         assert!(r.body.is_none());
     }
-    use std::sync::Mutex;
 
     #[test]
     fn entered_urls() {

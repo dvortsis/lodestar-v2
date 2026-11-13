@@ -412,9 +412,14 @@ fn opt_text(j: &mut json::Reader<'_>) -> json::R<Option<String>> {
     }
 }
 
-/// Refuses a key with an escape, or a key seen before in this object.
+/// The most keys one object may have. Prowlarr's objects have about 15,
+/// so this keeps the duplicate check in [`fresh`] small whatever the body.
+const MAX_KEYS: usize = 64;
+
+/// Refuses a key with an escape, a key seen before in this object, or
+/// more than [`MAX_KEYS`] keys.
 fn fresh<'a>(seen: &mut Vec<&'a str>, k: &'a str) -> json::R<()> {
-    if k.contains('\\') || seen.contains(&k) {
+    if k.contains('\\') || seen.len() >= MAX_KEYS || seen.contains(&k) {
         return Err(json::Stop::Malformed);
     }
     seen.push(k);
@@ -741,12 +746,14 @@ impl Pairing {
         input: &ConfigureInput<'_>,
         plan: &ConfigPlan,
     ) -> Result<(), AdapterError> {
-        check_plan(plan, &self.switch)?;
-        let mut have = read_have(http, target, input).await?;
+        check_plan(plan, &self.switch).map_err(|e| failed(ID, "apply", e))?;
+        let mut have = read_have(http, target, input)
+            .await
+            .map_err(|e| failed(ID, "apply", e))?;
         // What's still needed now, limited to what the plan lists: a step
         // another apply already took is skipped, and nothing unlisted is
         // done.
-        let now = differing(&self.switch, &have)?;
+        let now = differing(&self.switch, &have).map_err(|e| failed(ID, "apply", e))?;
         let todo: Vec<SettingKey> = ORDER
             .into_iter()
             .filter(|k| plan.changes().contains(k) && now.contains(k))
@@ -1082,6 +1089,22 @@ mod tests {
         assert_eq!(parse_tags(br#"[{"label":"x"}]"#), None);
         assert_eq!(parse_tag(br#"{"label":"x","id":2}"#), Some(tag(2, "x")));
         assert_eq!(parse_tag(br#"[{"label":"x","id":2}]"#), None);
+    }
+
+    #[test]
+    fn objects_have_at_most_64_keys() {
+        let obj = |n: usize| {
+            let keys: Vec<String> = (0..n).map(|i| format!(r#""k{i}":0"#)).collect();
+            format!(r#"[{{"id":1,{}}}]"#, keys.join(","))
+        };
+        assert!(parse_proxies(obj(MAX_KEYS - 1).as_bytes()).is_some());
+        assert_eq!(parse_proxies(obj(MAX_KEYS).as_bytes()), None);
+        let tags = |n: usize| {
+            let keys: Vec<String> = (0..n).map(|i| format!(r#""k{i}":0"#)).collect();
+            format!(r#"[{{"id":1,"label":"x",{}}}]"#, keys.join(","))
+        };
+        assert!(parse_tags(tags(MAX_KEYS - 2).as_bytes()).is_some());
+        assert_eq!(parse_tags(tags(MAX_KEYS - 1).as_bytes()), None);
     }
 
     #[test]
