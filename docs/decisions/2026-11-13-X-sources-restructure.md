@@ -1,4 +1,4 @@
-# X-sources-restructure decisions
+# X-sources-restructure decisions (#816)
 
 The runner's choices where the owner's Sources decision (`docs/owner-decisions.md` §2.66 item 4; `docs/decisions/2026-11-13-runner-ui-review-decisions.md`, "Settings → Sources") leaves the detail open. None changes a consent dialog or what a switch does (§18.7, §10.10.7).
 
@@ -9,3 +9,4 @@ The runner's choices where the owner's Sources decision (`docs/owner-decisions.m
 - **The setup note and the companion chip stay on the row's line, not in the detail.** The setup note is the switch's description: it says why turning the source on opens a dialog instead. The chip is the one action a source waiting for a companion needs. Why: hiding either would leave the switch's behaviour, or the next step, out of sight until the row is opened. The rest of the detail (priority, addresses, last error, yield, Settings, Purge) opens with the row. It stays in the page while closed, so nothing it describes goes missing.
 - **The legend calls the class with no consent "Open", and it has no badge on the rows.** §18.7 calls it "None". The rows show no badge for it, as before, so the legend says so.
 - **The legend sits below the groups.** It's reference text, so it doesn't push the rows down on a phone.
+- **A disabled Account source whose key is stored shows "Off", with no password note.** Before, once X-consent-gate-lift r2 made `password_required` true for Account, it showed "Needs setup" and "Needs your password to be turned on" (`setupNeed`, `web/src/lib/features/sources/sources.ts`). The password is a separate setup step only for Restricted and Overlay. Why: the Account switch already opens the Account dialog, which asks for what the class needs and shows the gate's refusal while Account is closed, so nothing is lost. The API has no field saying the gate refuses a class, so this can't key off the gate itself. A missing key still shows as a setup step.

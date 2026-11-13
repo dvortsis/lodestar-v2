@@ -163,5 +163,6 @@
 	"sources_legend_external": "Contacts public web services. You see the addresses it contacts before it turns on.",
 	"sources_legend_account": "Uses your account or API key with another service. It asks for your credentials, which are stored encrypted, and its results stay on this server.",
 	"sources_legend_restricted": "Carries more legal risk. It asks for your consent first. A VPN is strongly advised.",
-	"sources_legend_overlay": "Joins another network, such as I2P or IPFS. It asks for your consent first, a VPN is advised, and what it found can be purged in one step."
+	"sources_legend_overlay": "Joins another network, such as I2P or IPFS. It asks for your consent first, a VPN is advised, and what it found can be purged in one step.",
+	"sources_filter_count_one": "Showing {shown} of 1 source"
 }

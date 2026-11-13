@@ -133,5 +133,6 @@ describe('Account and the password (X-consent-gate-lift r2)', () => {
 		expect(setupNeed({ ...stored, consent: 'restricted', password_required: true })).toBe(
 			'password'
 		);
+		expect(setupNeed({ ...stored, consent: 'overlay', password_required: true })).toBe('password');
 	});
 });
