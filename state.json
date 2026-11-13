@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:06Z",
+  "updated_at": "2026-11-13T17:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8091,6 +8091,16 @@
       "id": "up1-watch-took-fields-pointer",
       "note": "docs/decisions/2026-11-12-UP-1.md:87 lists watch.took fields as added/failed/errors; point it at 2026-11-13-X-watch-stall-retry.md (pending_full etc.) in a runner docs PR",
       "at": "2026-11-13T16:54Z"
+    },
+    {
+      "id": "slices-yaml-x-gluetun-host-guard",
+      "note": "add X-gluetun-host-guard entry (owns infra/fleet/steps/vm/{start-block,copy-off,block-lib,leak-test}.sh, run.py, tests/test_steps.py, its decisions file) in the next runner PR",
+      "at": "2026-11-13T17:10Z"
+    },
+    {
+      "id": "discovery-to-searchable-p95-over-2h",
+      "note": "cloud Main crawl 2026-11-13 (Balanced): discovery_to_searchable p50 ~7.1k s, p95 >7.2k s (top bucket). Likely fetch-pool queue wait at 4.8% fetch success; look under Track C (CR-ADM) before any M2-style change; check the histogram needs buckets above 7200",
+      "at": "2026-11-13T17:10Z"
     }
   ],
   "main_health": [
@@ -9143,7 +9153,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T17:06Z",
+    "updated": "2026-11-13T17:10Z",
     "items": [
       {
         "slot": 1,
@@ -9242,8 +9252,10 @@
       },
       {
         "slot": 16,
-        "status": "idle",
-        "doing": "cloud-testing: reserved: Cloud Tester lanes first; then the gluetun-leak fix when its diagnosis lands (X-soak-screen-calibrate moved to slot 6)"
+        "doing": "cloud-testing: launching (Opus): host INPUT guard kept while the test stack runs (drill 3 ICMP finding); brief briefs/X-gluetun-host-guard.md",
+        "slice": "X-gluetun-host-guard",
+        "role": "build",
+        "since": "2026-11-13T17:10Z"
       },
       {
         "slot": 17,
@@ -9383,7 +9395,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:06Z",
+  "updated": "2026-11-13T17:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
