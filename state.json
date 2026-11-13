@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T07:05Z",
+  "updated_at": "2026-11-13T07:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9003,7 +9003,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T07:05Z",
+    "updated": "2026-11-13T07:31Z",
     "items": [
       {
         "slot": 1,
@@ -9087,8 +9087,13 @@
       },
       {
         "slot": 15,
-        "status": "idle",
-        "doing": "X-unraid-validate-all #781 merged (7e826fe4); session archived; cloud-testing slot free for the next ready cloud-testing slice"
+        "slice": "X-gluetun-pin-ci-filter",
+        "role": "other",
+        "agent": "claude",
+        "status": "active",
+        "since": "2026-11-13T07:31Z",
+        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: CI filter for the gluetun pin checks",
+        "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
         "slot": 16,
@@ -9185,13 +9190,13 @@
       },
       {
         "slot": 32,
-        "slice": "X-ci-advisories",
+        "slice": "X-filter01-fix",
         "role": "build",
-        "status": "active",
         "agent": "claude",
-        "doing": "ctutils lock bump, rustix =1.1.6, dated ignore for RUSTSEC-2026-0459 (runner call 06:2xZ); X-rusqlite-041 follow-up",
-        "since": "2026-11-13T06:04Z",
-        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
+        "status": "active",
+        "since": "2026-11-13T07:31Z",
+        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: launched after #820 X-ci-advisories merged (361de078); Track Q, by id only",
+        "cap": "kept build (\u00a72.64 4+4)"
       }
     ]
   },
@@ -9252,7 +9257,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T07:05Z",
+  "updated": "2026-11-13T07:31Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9545,6 +9550,12 @@
       "slice": "runner PR (Track Q fix slices by id, X-gluetun-pin-ci-filter)",
       "merged": "f0ad6e83",
       "at": "2026-11-13T07:00Z"
+    },
+    {
+      "pr": 820,
+      "slice": "X-ci-advisories",
+      "sha": "361de078",
+      "at": "2026-11-13T07:31Z"
     }
   ]
 }
