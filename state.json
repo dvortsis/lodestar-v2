@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T21:20Z",
+  "updated_at": "2026-11-13T21:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8170,11 +8170,6 @@
     },
     "track-q-triage-candidate-from-843-review (held; local note only)",
     "slices-yaml-x-flake-scrape-udp-port",
-    {
-      "id": "X-scrub-fields-readers",
-      "note": "nothing reads scrubbed host_guard_drops/damaged yet (analyzer/control-plane evidence summary); from #848",
-      "at": "2026-11-13T21:12Z"
-    },
     "slices-yaml-x-scrub-guard-fields(+nits, copy-off.sh)"
   ],
   "main_health": [
@@ -9221,7 +9216,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T21:20Z",
+    "updated": "2026-11-13T21:36Z",
     "items": [
       {
         "slot": 1,
@@ -9306,11 +9301,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-damaged-mark-links",
+        "slice": "X-scrub-fields-readers",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-13T21:20Z",
-        "doing": "building (follow-up to #849)",
+        "since": "2026-11-13T21:36Z",
+        "doing": "building (follow-up to #848/#851)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9482,7 +9477,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T21:20Z",
+  "updated": "2026-11-13T21:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9949,6 +9944,12 @@
       "slice": "X-scrub-guard-fields-nits",
       "merged": "592fd0b8",
       "at": "2026-11-13T21:20Z"
+    },
+    {
+      "pr": 851,
+      "slice": "X-damaged-mark-links",
+      "merged": "b46665b9",
+      "at": "2026-11-13T21:36Z"
     }
   ]
 }
