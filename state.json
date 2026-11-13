@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:13Z",
+  "updated_at": "2026-11-13T17:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8116,6 +8116,11 @@
       "id": "busy-capped-metrics-export",
       "note": "#839 review nit 4: busy_capped only in the snapshot; export on /metrics with a docs/metrics.md row; log hitting the cap (rate-limited)",
       "at": "2026-11-13T17:13Z"
+    },
+    {
+      "id": "regrant-pool-room",
+      "note": "#839 session: re-grants never check the worker pool room; a full pool evicts and reports lost, then re-harvests. Now bounded by the 2x pool-cap lease cap (was unbounded); consider room-aware regrant",
+      "at": "2026-11-13T17:22Z"
     }
   ],
   "main_health": [
@@ -9416,7 +9421,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:13Z",
+  "updated": "2026-11-13T17:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
