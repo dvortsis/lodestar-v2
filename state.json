@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:27Z",
+  "updated_at": "2026-11-13T00:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8766,12 +8766,13 @@
     }
   ],
   "limits": {
-    "phase_total": 8,
+    "phase_total": 4,
     "note": "owner \u00a72.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). \u00a72.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (\u00a72.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session.",
     "source": "owner \u00a72.59 2026-11-12T06:03Z: \"Reduce max sessions to 8. Allow sessions to finish.\" (replaces \u00a72.56 12)",
     "rule_2_59": "9 active at the time: none stopped; each finishes its slice incl. review rounds; no launch and no follow-on slice while >= 8 active; finished slots are removed until <= 8.",
     "rule_2_60": "owner 07:00Z \"You can reserve 4 additional sessions exclusively for Cloud Tester\"; then to X-test-vm 07:01:20Z \"...You and Agent Runner can share those 4 slots between yourselves. Make sure you coordinate...\" Split agreed: tester <=2 (cloud_tester), runner <=2 (extra); ask before a 3rd; whoever frees one tells the other. #746.",
-    "extra_shared": 4
+    "extra_shared": 4,
+    "note_2_64": "owner 2026-11-12 22:30Z (\u00a72.64): window of 10 extra sessions ended 2026-11-13T00:00Z; now 4 build + 4 cloud-testing. Kept build: GS-2, X-cmp-egress-api, X-percolate-promoted-hold, X-consent-gate-lift. Kept cloud-testing: X-test-vm, X-gluetun-leak, X-unraid-validate-all, X-win-soak-attach-proc-hash. Others with open PRs finish only that PR (review/CI fixes), then archive; drafts #801/#802 parked as WIP. Account weekly usage limit hit ~23:30Z 2026-11-12, reset 00:00Z."
   },
   "owner_instructions": [
     {
@@ -8784,7 +8785,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:27Z",
+    "updated": "2026-11-13T00:04Z",
     "items": [
       {
         "slot": 1,
@@ -8809,9 +8810,9 @@
         "slice": "WK-11b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBmg6Pjb9KW5ozkWGR: #779 security MERGE + I1/I2 relayed; head 8f531987 red only on the Rust 1.100 breakage #776 fixed; merging main",
+        "doing": "#779 merged 4e19431a; session archived 00:0xZ",
         "since": "2026-11-12T18:52:01Z",
-        "status": "active"
+        "status": "idle"
       },
       {
         "slot": 4,
@@ -8820,7 +8821,8 @@
         "agent": "claude",
         "doing": "session_01MMjhn8PqqssoVTSpsA9adU: launched after #775 merged (b2a3e94f); brief briefs/X-cmp-egress-api.md; /security-review",
         "since": "2026-11-12T22:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 5,
@@ -8829,7 +8831,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnCqKPZbudhT8jXbC8k: #780 M8-PERF-1a: 10M bench mode; M8-PERF-1b follows (briefs/M8-PERF-1.md)",
         "since": "2026-11-12T18:52:01Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #780 only, then archive (\u00a72.64)"
       },
       {
         "slot": 6,
@@ -8838,7 +8841,8 @@
         "agent": "claude",
         "doing": "cloud-testing: session_01MMjhnBGH1xNKfTqZShKexC: launched after #777 merged; screen recalibration (r5 no trip, r4 trip), absent inputs; advisory only",
         "since": "2026-11-12T22:13:28Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #796 only, then archive (\u00a72.64)"
       },
       {
         "slot": 7,
@@ -8847,7 +8851,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnC44KzkX1DrvLVgHim: launched after #772 GS-1 merged (88a632a0); brief briefs/GS-2.md (includes rv-772 O2 Missing-path tests)",
         "since": "2026-11-12T22:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 8,
@@ -8856,7 +8861,8 @@
         "agent": "claude",
         "doing": "cloud-testing: session_01MMjhn9uwcjth652E14uw9Z: launched after #773 merged; Windows soak refuses a running process that is not the hashed file (rv-777 O1)",
         "since": "2026-11-12T22:27:39Z",
-        "status": "active"
+        "status": "active",
+        "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 9,
@@ -8865,7 +8871,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnBZQeRoCk9GRPDM6HP: cloud-testing priority: #784 at 07abd0b7 (concurrency test wired into lint job); review on ready",
         "since": "2026-11-12T22:01:40Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #784 only, then archive (\u00a72.64)"
       },
       {
         "slot": 10,
@@ -8883,7 +8890,8 @@
         "agent": "claude",
         "doing": "session_01MMjhn8mh12Mrj1m33EM83f: #783 open at ddbd5ea5 (bench/README section runner-approved); review on ready",
         "since": "2026-11-12T20:46:15Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #783 only, then archive (\u00a72.64)"
       },
       {
         "slot": 12,
@@ -8901,14 +8909,15 @@
         "agent": "claude",
         "doing": "cloud-testing (owner-started): session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy. Owner authorized AWS setup (06:49Z/06:52Z, verified). Owner 2026-11-12 (\u00a72.61, to record): 12 build slots + up to 4 for cloud testing; the tester and its lanes use the 4 (see cloud_tester).",
         "since": "2026-11-12T06:37:34Z",
-        "status": "active"
+        "status": "active",
+        "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 14,
         "slice": "X-test-blockers-1112",
         "role": "build",
         "agent": "claude",
-        "doing": "#778 merged 9f3723ad; session to archive after 2-min reply window",
+        "doing": "#778 merged 9f3723ad; session archived",
         "since": "2026-11-12T23:25Z",
         "status": "idle"
       },
@@ -8919,7 +8928,8 @@
         "agent": "claude",
         "doing": "cloud-testing: session_01MMjhn8oFWgqJZRqVkfGYoW: launched; validator checks every template + Requires (gluetun template Requires empty today), CI job inside ci-ok",
         "since": "2026-11-12T21:02:06Z",
-        "status": "active"
+        "status": "active",
+        "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 16,
@@ -8936,7 +8946,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnB3JA4wKEcwoa3rh91: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-utp-backoff.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #788 only, then archive (\u00a72.64)"
       },
       {
         "slot": 18,
@@ -8945,7 +8956,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-0.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #789 only, then archive (\u00a72.64)"
       },
       {
         "slot": 19,
@@ -8954,7 +8966,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnAT9qFMjMJiH91VUfM: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/LEM-0.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #787 only, then archive (\u00a72.64)"
       },
       {
         "slot": 20,
@@ -8963,16 +8976,17 @@
         "agent": "claude",
         "doing": "session_01MMjhn9T6q1G9rBENxYZuHb: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-2a.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #791 only, then archive (\u00a72.64)"
       },
       {
         "slot": 21,
         "slice": "X-restart-save-lag",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAmqVHzHLPT4ZUX58K: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-restart-save-lag.md",
+        "doing": "#790 merged a930623d; session archived",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "idle"
       },
       {
         "slot": 22,
@@ -8981,7 +8995,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnA7MTzJty5dGrxtPTC: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-win-upd-manual-rollback.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #795 only, then archive (\u00a72.64)"
       },
       {
         "slot": 23,
@@ -8990,7 +9005,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnCiy9xmJwkhkDiZsd4: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-SEC-0.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #786 only, then archive (\u00a72.64)"
       },
       {
         "slot": 24,
@@ -8999,7 +9015,8 @@
         "agent": "claude",
         "doing": "session_01MMjhn9aiUogqrUAigBpjxV: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/ENR-13.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #793 only, then archive (\u00a72.64)"
       },
       {
         "slot": 25,
@@ -9008,16 +9025,17 @@
         "agent": "claude",
         "doing": "session_01MMjhnBn59gULGWufMiioeP: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-banner-live-region.md",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "active",
+        "cap": "over cap: finish #794 only, then archive (\u00a72.64)"
       },
       {
         "slot": 26,
         "slice": "M8-DOC-2",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnA41Z4h2JU2HX9jca2: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-DOC-2.md",
+        "doing": "#785 merged 07351e82; session archived",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active"
+        "status": "idle"
       },
       {
         "slot": 27,
@@ -9026,7 +9044,8 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnB3vNLPygvFq3LtvZp: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/CMP-12.md; /security-review",
-        "since": "2026-11-12T22:46Z"
+        "since": "2026-11-12T22:46Z",
+        "cap": "over cap: finish #799 only, then archive (\u00a72.64)"
       },
       {
         "slot": 28,
@@ -9035,7 +9054,8 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhn8ht4VBbYS74uVp94c: owner window (\u00a72.64) until 00:00Z 2026-11-13; Sonnet; brief briefs/WK-18.md; /security-review (token)",
-        "since": "2026-11-12T22:46Z"
+        "since": "2026-11-12T22:46Z",
+        "cap": "over cap: finish #797 only, then archive (\u00a72.64)"
       },
       {
         "slot": 29,
@@ -9044,7 +9064,8 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnA6QRL7ZBHsGodHmKo: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/X-percolate-promoted-hold.md",
-        "since": "2026-11-12T22:47Z"
+        "since": "2026-11-12T22:47Z",
+        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 30,
@@ -9053,7 +9074,8 @@
         "role": "build",
         "agent": "claude",
         "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: testing blocker #1; brief briefs/X-gluetun-leak.md",
-        "since": "2026-11-12T22:52Z"
+        "since": "2026-11-12T22:52Z",
+        "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
       {
         "slot": 31,
@@ -9062,7 +9084,8 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhn9uJBPzSurs8AkipKz: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UP-1 (#765 merged); brief briefs/WK-18w.md",
-        "since": "2026-11-12T22:52Z"
+        "since": "2026-11-12T22:52Z",
+        "cap": "over cap: finish #802 only, then archive (\u00a72.64)"
       },
       {
         "slot": 32,
@@ -9071,7 +9094,8 @@
         "status": "active",
         "agent": "claude",
         "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UN-1 (#769 merged); briefs/X-consent-gate-lift.md; /security-review",
-        "since": "2026-11-12T22:55Z"
+        "since": "2026-11-12T22:55Z",
+        "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       }
     ]
   },
@@ -9132,7 +9156,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:27Z",
+  "updated": "2026-11-13T00:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
