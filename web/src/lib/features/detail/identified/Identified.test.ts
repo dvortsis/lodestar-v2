@@ -65,7 +65,7 @@ describe('Identified', () => {
 		const { container } = show({ alternatives: [answer()], resolved_via: null });
 		expect(container.textContent).not.toMatch(/from.{0,3}name|resolved via/i);
 	});
-	it('formats the confidence for the locale', () => {
+	it('formats the confidence as a percent and shows the year', () => {
 		show({ alternatives: [answer({ confidence: 92 })], resolved_via: null });
 		expect(text('detail-identified-confidence')).toBe('92% sure');
 		expect(text('detail-identified-year')).toBe('1994');

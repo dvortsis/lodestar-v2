@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/svelte';
+import { configure, render, screen, waitFor, within } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 import { HASH, searchHit, torrentDetail } from './fixtures';
 vi.mock('./visibility', () => ({ watchDetailVisibility: vi.fn() }));
+// The lazy chunks (ErrorState, Identified) arrive by dynamic import: wait for them as long as the slowest CI runner needs.
+configure({ asyncUtilTimeout: 10_000 });
 
 vi.mock('$app/paths', () => ({
 	resolve: (route: string, params?: Record<string, string>) =>

@@ -37,14 +37,14 @@
 					<bdi data-testid="detail-identified-source"
 						>{m.detail_identified_by({ source: showBidi(a.source.name) })}</bdi
 					>
-					·
+					<span aria-hidden="true">·</span>
 					<span data-testid="detail-identified-confidence"
 						>{m.detail_identified_confidence({
 							percent: formatPercent(a.confidence / 100, currentLocale(), 0)
 						})}</span
 					>{#if a.chosen}
-						· <span data-testid="detail-identified-chosen">{m.detail_identified_chosen()}</span
-						>{/if}
+						<span aria-hidden="true">·</span>
+						<span data-testid="detail-identified-chosen">{m.detail_identified_chosen()}</span>{/if}
 				</p>
 				<dl class="ls-detail-facts">
 					{#if a.canonical_title}
