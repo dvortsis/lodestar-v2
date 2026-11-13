@@ -274,6 +274,8 @@ placement:
   - M-auth
   - X-settings-trim
   - X-settings-followups
+  - X-wizard-labels-signout
+  - X-ui-guards
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -506,6 +508,7 @@ placement:
   - SRC-14b
   - SRC-15*
   - X-sources-api-spec
+  - X-sources-restructure
   - SRC-16
   - SRC-17
   - SRC-17a
@@ -604,6 +607,9 @@ placement:
   - X-cmp-native-handover
   - X-cmp-handover-followups
   - X-cmp-egress-api
+  - X-gluetun-leak
+  - X-gluetun-leak-cmp
+  - X-gluetun-templates
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish
