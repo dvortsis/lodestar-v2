@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T16:56Z",
+  "updated_at": "2026-11-13T17:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8491,6 +8491,12 @@
       "head": "d23c7f9a",
       "review": "fresh Opus + security review running; ECHO_HORIZON 2^31 us is a runner \u00a72.26 call (owner FYI after merge)",
       "at": "2026-11-13T16:56Z"
+    },
+    "839": {
+      "slice": "X-lease-reconcile-every-session",
+      "head": "3182efc8",
+      "review": "fresh Opus + security + concurrency review running; chaos scenario for cap/stop approved (testing.rs graceful per-worker stop, test-only, \u00a72.33) to ride with review fixes in one push; owner FYI: lease cap 2x pool cap (100k default, 2M max), stop deadline 30 s (25 + 5)",
+      "at": "2026-11-13T17:06Z"
     }
   },
   "merged_log": [
@@ -9137,7 +9143,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T16:56Z",
+    "updated": "2026-11-13T17:06Z",
     "items": [
       {
         "slot": 1,
@@ -9174,7 +9180,7 @@
         "slice": "X-lease-reconcile-every-session",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVaVQgTXvM11UK7nv: CLUSTER-01/02/05 implemented; chaos scenario last; shared edit approved: Probe impl Work forwards reconcile/reconciled/holding/listed/stop (cluster/testing.rs)",
+        "doing": "session_01MMjhnCVaVQgTXvM11UK7nv: #839 open; runner review running; chaos scenario for cap/stop next, one push with fixes",
         "since": "2026-11-13T10:09Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
@@ -9377,7 +9383,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T16:56Z",
+  "updated": "2026-11-13T17:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
