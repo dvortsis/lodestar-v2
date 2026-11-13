@@ -428,7 +428,12 @@ impl Watcher {
                 }
             }
             let shape = match entry {
-                Entry::Other => continue,
+                Entry::Other => {
+                    // A held name that's now a folder or other entry is no
+                    // longer pending: it keeps no slot.
+                    self.held.remove(&name);
+                    continue;
+                }
                 Entry::Link => {
                     self.finish(&folder, &name, None, Some(Cause::Link), &mut out)
                         .await;
@@ -560,6 +565,8 @@ impl Watcher {
         let now = self.now();
         let (first, evict) = match self.held.get(name) {
             Some(h) if now.duration_since(h.first) >= PENDING_FOR => return Hold::Fail,
+            // Reached only through a race: an unchanged file isn't read
+            // while its span runs (`waits_unread`).
             Some(h) if h.shape == shape => {
                 return if now.duration_since(h.since) < MALFORMED_SPAN {
                     Hold::Keep
@@ -680,7 +687,9 @@ impl Watcher {
     }
 
     /// Fails the oldest pending file to make room in a full held set,
-    /// counted in `failed` and `pending_full`, unless it's gone already.
+    /// counted in `failed` and `pending_full`, if a regular file is still
+    /// there by that name. Anything else (gone, a folder, a link) is only
+    /// dropped from the set; a later poll judges what's there as usual.
     async fn evict(
         &mut self,
         folder: &std::sync::Arc<Folder>,
@@ -688,6 +697,10 @@ impl Watcher {
         shape: Shape,
         out: &mut Polled,
     ) {
+        let (f, n) = (folder.clone(), name.to_os_string());
+        if !matches!(blocking(move || f.entry(&n)).await, Some(Entry::File(_))) {
+            return;
+        }
         let cause = Some(Cause::Malformed);
         let moved = self.put_away(folder, name, cause).await;
         if !matches!(moved, Err(MoveError::Gone)) {
@@ -1046,7 +1059,9 @@ impl Folder {
             match self.rename_no_replace(name, sub, &target) {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Gone only if the file itself is: a missing `added/` or
+                // `failed/` leaves it stuck, never read again.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.absent(name) => {
                     return Err(MoveError::Gone);
                 }
                 Err(_) => return Err(MoveError::Io),
@@ -1140,9 +1155,21 @@ impl Folder {
         #[cfg(windows)]
         let done = std::fs::remove_file(self.path.join(name));
         done.map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => MoveError::Gone,
+            std::io::ErrorKind::NotFound if self.absent(name) => MoveError::Gone,
             _ => MoveError::Io,
         })
+    }
+
+    /// Whether nothing is in the folder by `name`, read without following
+    /// it (through the folder's handle on Unix).
+    fn absent(&self, name: &OsStr) -> bool {
+        #[cfg(unix)]
+        let found = rustix::fs::statat(&self.fd, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map(drop)
+            .map_err(std::io::Error::from);
+        #[cfg(windows)]
+        let found = std::fs::symlink_metadata(self.path.join(name)).map(drop);
+        found.is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
     }
 }
 
@@ -1701,6 +1728,76 @@ mod tests {
         assert_eq!(w.held.len(), MAX_HELD);
         assert!(!w.held.contains_key(OsStr::new("m0.torrent")));
         assert!(t.names(FAILED).is_empty());
+    }
+
+    /// A held name replaced by a folder is never moved by an eviction,
+    /// and a held name that turns into something other than a file keeps
+    /// no slot.
+    #[tokio::test]
+    async fn eviction_moves_only_a_regular_file() {
+        /// Swaps `m0.torrent` for a folder on the first new file it's sent.
+        struct Swapper<'a> {
+            inner: Fake,
+            at: &'a Path,
+            done: std::sync::atomic::AtomicBool,
+        }
+        impl Sink for Swapper<'_> {
+            async fn submit(&self, body: Vec<u8>) -> Result<Outcome, Closed> {
+                if body.ends_with(b"NEW") && !self.done.swap(true, Ordering::SeqCst) {
+                    std::fs::remove_file(self.at).unwrap();
+                    std::fs::create_dir(self.at).unwrap();
+                    std::fs::write(self.at.join("inside"), b"x").unwrap();
+                }
+                self.inner.submit(body).await
+            }
+        }
+        let t = T::new();
+        t.put("m0.torrent", b"MALF");
+        let at = t.dir().join("m0.torrent");
+        let s = Swapper {
+            inner: Fake::default(),
+            at: &at,
+            done: Default::default(),
+        };
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &s).await;
+        age_by(&mut w, Duration::from_secs(1));
+        for i in 1..=MAX_HELD {
+            t.put(&format!("m{i}.torrent"), b"MALF NEW");
+        }
+        let p = settle(&mut w, &s).await;
+        assert_eq!((p.failed, p.pending_full), (0, 0));
+        assert!(at.join("inside").exists(), "the folder stays where it is");
+        assert!(t.names(FAILED).is_empty());
+        assert!(w.stuck.is_empty() && !w.held.contains_key(OsStr::new("m0.torrent")));
+        // A held name that becomes a folder between polls is dropped too.
+        std::fs::remove_file(t.dir().join("m1.torrent")).unwrap();
+        std::fs::create_dir(t.dir().join("m1.torrent")).unwrap();
+        w.poll(&s.inner).await;
+        assert!(!w.held.contains_key(OsStr::new("m1.torrent")));
+    }
+
+    /// A rename that fails with "not found" because `failed/` went
+    /// missing mid-move is no proof the file is gone: `absent` says it's
+    /// still there, so the move is `Io` (stuck, never read again), not
+    /// `Gone`.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_subfolder_mid_move_is_not_gone() {
+        let t = T::new();
+        t.put("a.torrent", b"FLOOR");
+        let folder = Folder::open(t.dir(), t.data.path()).unwrap();
+        std::fs::remove_dir(t.dir().join(FAILED)).unwrap();
+        let e = folder
+            .rename_no_replace(
+                OsStr::new("a.torrent"),
+                FAILED,
+                OsStr::new("a.refused.torrent"),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        assert!(!folder.absent(OsStr::new("a.torrent")));
+        assert!(folder.absent(OsStr::new("gone.torrent")));
     }
 
     /// An evicted file that sorts after the one that pushed it out is
