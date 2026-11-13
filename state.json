@@ -7872,6 +7872,11 @@
       "id": "drain-deltas-checked-1113",
       "at": "2026-11-13T02:21Z",
       "note": "Runner checked post-review deltas for #791 f4a522db, #795 8141edc4, #803 dd13fe9b, #799 f3bd484f, #783 e6a2fd36, #807 ce5f55b8, #805 7fa5a8e2, #789 be910a3e: all OK. #800 87be769b reviewed MERGE on the same head. Each merges on green (ci-ok, web-ok, e2e-ok) after pm.sh, then its over-cap session is archived."
+    },
+    {
+      "id": "x-gluetun-templates",
+      "at": "2026-11-13T02:28Z",
+      "note": "New slice X-gluetun-templates (next runner PR; user-docs skill; owner-visible template defaults, so flag per \u00a72.19): compose depends_on gluetun service_healthy and the Unraid autostart wait; VPN_INTERFACE matched to VPN type (wg0 for WireGuard, tun0 for OpenVPN); post-rules file delivery (compose inline configs:, Unraid read-only Path written by Lodestar; a missing file fails closed); the gluetun Overview overclaim; HEALTH_SMALL_CHECK_TYPE=dns in the troubleshooting table for users whose ICMP health target is on the LAN. From the X-gluetun-leak session notes, 2026-11-13."
     }
   ],
   "main_health": [

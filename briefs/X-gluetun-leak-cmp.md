@@ -18,7 +18,11 @@ Follow-up to #800 (X-gluetun-leak, merged 1b26cea4). Same session, in a tester s
    - runbook §3.2: move `container_mac` to its own bullet, and say `post_rules_before_egress` without `recreate_guard_held` is a stop too.
 5. O6: call `post_rules_on` instead of the inlined copy.
 6. The multicast comment in `gluetun-post-rules.txt` (O3 of rv-800-e46cb683): comment only. Any rule change needs a new runner call first.
-7. Optional, if small: the old O5 (`git cat-file -e <pin>:packaging/companions/gluetun-post-rules.txt`) and old O7 (`-Q in`).
+7. Re-check the post-rules after phase B's reconnect (the session's own note). A missing rule fails the run, as before egress.
+8. Optional, if small: the old O5 (`git cat-file -e <pin>:packaging/companions/gluetun-post-rules.txt`) and old O7 (`-Q in`).
+
+## Not in this slice
+- The template items (compose `depends_on: gluetun: condition: service_healthy` / Unraid autostart wait, `VPN_INTERFACE` per VPN type, the post-rules file delivery, the gluetun Overview overclaim, `HEALTH_SMALL_CHECK_TYPE=dns` in troubleshooting) go to a separate runner slice, X-gluetun-templates. Don't edit `packaging/` templates or docs/user beyond the one sentence.
 
 ## Don't
 - **Don't touch either test VM.** X-test-vm's Main and Lane K windows run until about 15:01Z; nobody touches the VMs until then. No cloud calls, no terraform, never read AWS_* variables. Unit tests only.
