@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:15Z",
+  "updated_at": "2026-11-13T01:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7847,6 +7847,11 @@
       "id": "consent-gate-external-notes",
       "note": "rv-807 for X-consent-gate-lift-external: fix legal_facts.rs:176 stale comment (O3); CONSENT_GATE_REASON then covers Account only, any wording change is the owner's (O2); slice id to add to slices.yaml; Legal Notice \u00a72 torrent-cache sentence proposal in docs/decisions/2026-11-12-X-consent-gate-lift.md goes to owner.",
       "added": "2026-11-13T00:55Z"
+    },
+    {
+      "id": "uiux-moderate-user-1113",
+      "added": "2026-11-13T01:17Z",
+      "note": "Codebase-review session part 4 (owner-requested): docs/review/2026-11-13-ui-ux/04-plan-and-flow-review-moderate-user.md on claude/codebase-review-bugs-x9ff7p 5138adbe (re-commit into main with the other evidence folders; 34cbbafb has a bad trailer). Flow findings U1-U33, plan concerns D1-D11. Triage with code-review-1113-triage in the next runner PR. Act-first: U8 near-miss syntax silent zero results; U9 natural chips unasked; U1/U6/U7 setup length + empty index; U2 setup-token help; U4 SAFETY (wizard leads with router port forwarding, VPN second; route with content-safety/security eye); U10/U11 rail/rows expert-first; U13 Open in torrent client; U17-U20 alert naming/flow; U22/U23 download-client card; U25/U26 Insights plain summary + undo; U28 UTC vs Automatic TZ; U29-U31 Settings/Learn more; U33 single-key shortcuts default. Small copy/order: U16 U17 U19 U24 U27. OWNER QUESTION SET (proposals, one set to owner_queue): 1 name UI reader in s10.0; 2 reorder Search around words/clicks + default facets/row facts; 3 plain health summary ahead of Insights story; 4 three setup steps + checklist; 5 network step leads with safety; 6 accept GB as typed or units pref; 7 'Alert' single noun; 8 first-use prompt or default-off for single-key actions launching programs."
     }
   ],
   "main_health": [
@@ -8876,7 +8881,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:15Z",
+    "updated": "2026-11-13T01:17Z",
     "items": [
       {
         "slot": 1,
@@ -9241,7 +9246,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:15Z",
+  "updated": "2026-11-13T01:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
