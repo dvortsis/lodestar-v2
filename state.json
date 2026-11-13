@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:28Z",
+  "updated_at": "2026-11-13T02:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8911,7 +8911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:28Z",
+    "updated": "2026-11-13T02:51Z",
     "items": [
       {
         "slot": 1,
@@ -9171,7 +9171,7 @@
         "status": "active",
         "role": "tester",
         "agent": "claude",
-        "doing": "session_01MMjhn9LiMXgY2GmV4Zu74h: #800 X-gluetun-leak merged (1b26cea4) 2026-11-13T02:28Z; same session now on X-gluetun-leak-cmp (briefs/X-gluetun-leak-cmp.md), unit tests only, no VM until X-test-vm windows end ~15:01Z",
+        "doing": "session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-leak-cmp #808 at 38bea423; runner review rv-808 running 2026-11-13T02:51Z; CI running; VM re-run after ~15:01Z via X-test-vm",
         "since": "2026-11-13T02:28Z"
       },
       {
@@ -9253,7 +9253,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:28Z",
+  "updated": "2026-11-13T02:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
