@@ -58,7 +58,7 @@ use crate::synth::{EPOCH, Generator};
 
 /// The manifest's format. Bump it whenever the data set or the manifest
 /// changes, so `serve --fixture DIR` rebuilds rather than reuses.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 /// The manifest's file name, beside the database.
 pub const MANIFEST: &str = "fixture.json";
 /// The database's file name (the server's `Config::db_path`).
@@ -263,6 +263,10 @@ pub struct RollupExpect {
     /// `STORED` in the 24 h and 7 d before the anchor (event time).
     pub stored_24h: i64,
     pub stored_7d: i64,
+    /// Fetches by event time (`FUNNEL_EVENTS`, stage Fetched): over the
+    /// whole history and in the 24 h before the anchor.
+    pub fetched: i64,
+    pub fetched_24h: i64,
     /// Torrents that became searchable in those windows
     /// (`index_watermark_hour`).
     pub new_searchable_24h: u64,
@@ -2200,6 +2204,9 @@ impl Insights {
             }
         }
         ins.cohorts = cohorts;
+        ins.counters.extend(funnel_events(&ins.cohort_rows));
+        ins.counters
+            .sort_by_key(|c| (c.hour, c.metric, c.dim, c.key));
 
         let a = clock.anchor;
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
@@ -2235,6 +2242,28 @@ impl Insights {
         }
         ins
     }
+}
+
+/// The funnel by event time (`FUNNEL_EVENTS`), as each pipeline flush
+/// writes it beside its cohort rows (`lodestar_pipeline`'s
+/// `rollups::funnel_events`): one row per (hour, stage, reason), summed
+/// over sources, `dim` the stage and `key` the reason. Each cohort's
+/// counts fall in its own hour. Without these rows the overview's Fetch
+/// stage read 0 against the funnel's fetches (UI review 2026-11-13, B4).
+fn funnel_events(cohort_rows: &[CohortCount]) -> Vec<Counter> {
+    let mut by: BTreeMap<(i64, u8, u8), i64> = BTreeMap::new();
+    for c in cohort_rows {
+        *by.entry((c.cohort, c.stage, c.reason)).or_default() += c.count;
+    }
+    by.into_iter()
+        .map(|((hour, stage, reason), value)| Counter {
+            hour,
+            metric: metric::FUNNEL_EVENTS,
+            dim: u32::from(stage),
+            key: i64::from(reason),
+            value,
+        })
+        .collect()
 }
 
 // ---- user data --------------------------------------------------------------
@@ -2649,6 +2678,15 @@ fn manifest(
     let mut hours = BTreeSet::new();
     for c in &insights.counters {
         hours.insert(c.hour);
+        if c.metric == metric::FUNNEL_EVENTS {
+            if c.dim == u32::from(stage::FETCHED) {
+                rollups.fetched += c.value;
+                if c.hour * HOUR >= a - DAY {
+                    rollups.fetched_24h += c.value;
+                }
+            }
+            continue;
+        }
         let sum = match c.metric {
             metric::HARVESTED => &mut rollups.harvested,
             metric::REDISCOVERED => &mut rollups.rediscovered,
@@ -2975,6 +3013,8 @@ impl Manifest {
             ("hours", J::u(r.hours)),
             ("stored_24h", J::Int(r.stored_24h)),
             ("stored_7d", J::Int(r.stored_7d)),
+            ("fetched", J::Int(r.fetched)),
+            ("fetched_24h", J::Int(r.fetched_24h)),
             ("new_searchable_24h", J::u(r.new_searchable_24h)),
             ("new_searchable_7d", J::u(r.new_searchable_7d)),
             ("watermark_hours", J::u(r.watermark_hours)),

@@ -2,6 +2,8 @@
 	// Orientation (§10.9.1): the five stages with one headline number each, as an ordered list of
 	// links that move you to the level explaining the stage. The list is its own text equivalent:
 	// the exact count is visually hidden beside the compact one. Discover is always approximate.
+	// A line under it says the time base: the range, by event time, except Discover (by first
+	// harvest, its cohorts) and Index (now) (UI review 2026-11-13, B4).
 	import { formatCompact, formatCount, type MetricValue } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -78,4 +80,5 @@
 			</li>
 		{/each}
 	</ol>
+	<p class="ins-sub" data-testid="insights-strip-time">{m.insights_overview_strip_time()}</p>
 </nav>

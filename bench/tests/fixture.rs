@@ -428,6 +428,67 @@ fn hex(b: &[u8]) -> String {
 }
 
 #[test]
+fn funnel_events_agree_with_the_cohort_rows() {
+    // The overview's Fetch stage and the stage pages read FUNNEL_EVENTS
+    // (event time); the funnel reads cohort_hour. Each flush writes both
+    // from the same counts (UI review 2026-11-13, B4), so every
+    // (hour, stage, reason) agrees, summed over sources.
+    const FUNNEL_EVENTS: i64 = 14;
+    let b = built();
+    let conn = db(b.dir.path());
+    let rows = |sql: &str| -> BTreeMap<(i64, i64, i64), i64> {
+        let mut st = conn.prepare(sql).unwrap();
+        st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?), r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let events = rows(&format!(
+        "SELECT hour, dim, key, value FROM rollup_hour WHERE metric = {FUNNEL_EVENTS}"
+    ));
+    // Searchable is counted at index commits (`record_searchable`), not by
+    // the pipeline's flush.
+    let cohorts = rows(&format!(
+        "SELECT cohort, stage, reason, sum(count) FROM cohort_hour WHERE stage != {} \
+         GROUP BY cohort, stage, reason",
+        stage::SEARCHABLE
+    ));
+    assert!(!events.is_empty());
+    let differ: Vec<_> = cohorts
+        .iter()
+        .filter(|(k, v)| events.get(k) != Some(v))
+        .chain(events.iter().filter(|(k, _)| !cohorts.contains_key(k)))
+        .take(5)
+        .collect();
+    assert!(differ.is_empty(), "{differ:?}");
+
+    let fetched = i64::from(stage::FETCHED);
+    let total: i64 = events
+        .iter()
+        .filter(|((_, d, _), _)| *d == fetched)
+        .map(|(_, v)| v)
+        .sum();
+    let day: i64 = events
+        .iter()
+        .filter(|((h, d, _), _)| *d == fetched && h * 3600 >= ANCHOR - 86_400)
+        .map(|(_, v)| v)
+        .sum();
+    assert!(day > 0, "the last 24 h have fetches");
+    assert_eq!(b.manifest.rollups.fetched, total);
+    assert_eq!(b.manifest.rollups.fetched_24h, day);
+    // Every loss reason is there, by event time too.
+    let lost = i64::from(stage::LOST);
+    for (code, name) in LOSSES {
+        assert!(
+            events
+                .keys()
+                .any(|(_, d, k)| *d == lost && *k == i64::from(code)),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn funnel_stages_never_increase_within_a_cohort() {
     let b = built();
     let store = Store::open_reader(b.dir.path().join(fixture::DB), StoreConfig::default()).unwrap();

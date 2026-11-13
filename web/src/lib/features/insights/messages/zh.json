@@ -335,5 +335,7 @@
 	"insights_overview_exc_ports_bare": "Windows 可用于对外连接的端口太少。请在设置中降低抓取器的强度，然后重启 Lodestar。",
 	"insights_overview_exc_ports_clears": "此提示会在一小时内消失。",
 	"insights_overview_exc_fix_guide": "打开指南",
-	"insights_overview_exc_new_tab": "（在新标签页打开）"
+	"insights_overview_exc_new_tab": "（在新标签页打开）",
+	"insights_overview_strip_time": "所选时间范围内，按各步骤发生的时间计数。发现按密钥首次收集的时间计数；索引为当前数量。",
+	"insights_stage_fetch_none": "此范围内没有获取或丢失任何密钥。"
 }
