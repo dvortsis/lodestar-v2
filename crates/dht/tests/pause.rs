@@ -12,6 +12,9 @@ use lodestar_metainfo::InfoHash;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+mod wait;
+use wait::wait_for;
+
 fn config(bootstrap: Vec<String>, paused: bool) -> Config {
     Config {
         bind: vec![SocketAddr::from(([127, 0, 0, 1], 0))],
@@ -45,9 +48,15 @@ fn query(tid: u16, method: Method<'_>) -> Vec<u8> {
 
 /// Sends a ping from `socket` and waits for the node's answer.
 async fn ping(socket: &UdpSocket, to: SocketAddr, tid: u16) -> bool {
-    socket.send_to(&query(tid, Method::Ping), to).await.unwrap();
+    ask(socket, to, &query(tid, Method::Ping), tid).await
+}
+
+/// Sends `msg` (a query with transaction id `tid`) from `socket` and waits
+/// for the node's answer to it.
+async fn ask(socket: &UdpSocket, to: SocketAddr, msg: &[u8], tid: u16) -> bool {
+    socket.send_to(msg, to).await.unwrap();
     let mut buf = vec![0u8; 2048];
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + wait::DEADLINE;
     loop {
         let Ok(Ok((n, from))) = tokio::time::timeout_at(deadline, socket.recv_from(&mut buf)).await
         else {
@@ -62,14 +71,57 @@ async fn ping(socket: &UdpSocket, to: SocketAddr, tid: u16) -> bool {
     }
 }
 
-async fn eventually(mut check: impl AsyncFnMut() -> bool) -> bool {
-    for _ in 0..100 {
-        if check().await {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+/// Waits until `node` has run a maintenance tick that started after this
+/// call, then until that tick has finished. A positive event stands in
+/// for a fixed wait before a check that something did *not* happen:
+/// sampling and held lookups start only in a tick, so a tick that ran
+/// while paused, and did nothing, is what the check needs.
+///
+/// The signal: a ping from a stranger that never answers makes the node
+/// ping back to verify it; the node expires that ping a query timeout
+/// later, early in a tick and before sampling or lookups start. The snapshot then
+/// waits for the rest of the tick, because the node's actor is one task
+/// that serves a command only between ticks and datagrams.
+async fn a_tick_ran(node: &Node) {
+    let stranger = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let to = node.local_addrs()[0];
+    let before = node.stats().timeouts;
+    let ping = Message {
+        transaction_id: &[0, 9],
+        version: None,
+        ip: None,
+        // Not read-only, so the node verifies us.
+        read_only: false,
+        body: Body::Query(Query {
+            id: NodeId([0x3c; 20]),
+            method: Method::Ping,
+        }),
     }
-    false
+    .encode();
+    stranger.send_to(&ping, to).await.unwrap();
+    let mut buf = vec![0u8; 2048];
+    let pinged_back = tokio::time::timeout(wait::DEADLINE, async {
+        loop {
+            let (n, from) = stranger.recv_from(&mut buf).await.unwrap();
+            if from == to
+                && let Ok(m) = krpc::parse(&buf[..n])
+                && matches!(m.body, Body::Query(_))
+            {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        pinged_back.is_ok(),
+        "the node didn't ping the stranger back within 10 s"
+    );
+    assert!(
+        wait_for(async || node.stats().timeouts > before, wait::DEADLINE).await,
+        "the node expired no query within 10 s: timeouts still {} (from {before})",
+        node.stats().timeouts
+    );
+    node.snapshot().await.expect("running");
 }
 
 #[tokio::test]
@@ -85,7 +137,11 @@ async fn a_paused_node_answers_but_doesnt_crawl() {
     assert!(a.snapshot().await.unwrap().paused);
 
     // Maintenance goes on: A bootstraps from B and answers queries.
-    assert!(eventually(async || a.stats().routing_nodes > 0).await);
+    assert!(
+        wait_for(async || a.stats().routing_nodes > 0, wait::DEADLINE).await,
+        "the paused node didn't bootstrap from B within 10 s: {:?}",
+        a.stats()
+    );
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     assert!(
         ping(&client, a_addr, 1).await,
@@ -104,9 +160,15 @@ async fn a_paused_node_answers_but_doesnt_crawl() {
             noseed: false,
         },
     );
-    client.send_to(&get_peers, a_addr).await.unwrap();
+    // Its answer comes after the query is handled, harvest or not.
+    assert!(
+        ask(&client, a_addr, &get_peers, 2).await,
+        "a paused node still answers get_peers"
+    );
+    // The scrape's answer also orders the queued lookup (an earlier command)
+    // before the tick that `a_tick_ran` waits for.
     assert_eq!(handle.scrape(key).await, None, "no scrape while paused");
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    a_tick_ran(&a).await;
     let s = a.stats();
     assert_eq!(s.samples_sent, 0);
     assert_eq!(s.harvested_get_peers, 0);
@@ -116,8 +178,12 @@ async fn a_paused_node_answers_but_doesnt_crawl() {
     // Resumed: sampling starts, and the queued lookup runs.
     assert!(handle.set_paused(false).await);
     assert!(!a.snapshot().await.unwrap().paused);
-    assert!(eventually(async || a.stats().samples_sent > 0).await);
-    let got = tokio::time::timeout(Duration::from_secs(10), async {
+    assert!(
+        wait_for(async || a.stats().samples_sent > 0, wait::DEADLINE).await,
+        "the resumed node sent no sample within 10 s: {:?}",
+        a.stats()
+    );
+    let got = tokio::time::timeout(wait::DEADLINE, async {
         loop {
             let h = harvests.recv().await.unwrap();
             if h.source == Source::Lookup {
@@ -144,7 +210,7 @@ async fn only_queries_from_nodes_we_never_asked_count_as_unsolicited() {
     .unwrap();
     let addr = node.local_addrs()[0];
     let mut buf = vec![0u8; 2048];
-    let (_, from) = tokio::time::timeout(Duration::from_secs(5), known.recv_from(&mut buf))
+    let (_, from) = tokio::time::timeout(wait::DEADLINE, known.recv_from(&mut buf))
         .await
         .expect("the bootstrap query arrives")
         .unwrap();
