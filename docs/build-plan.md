@@ -1,44 +1,92 @@
 # Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
 > First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-11-02, r3) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.33 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md` (an external review's findings).
+> **§0 (2026-11-12, r4) is the current plan.** It replaces the 2026-11-02 r3 status, ladder, owner queue and next actions, which the build had outrun; the track tables, the crawler program and the gate definitions keep their r3 text. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.60, on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md`, and on `docs/decisions/2026-11-12-master-plan-r4.md`.
 > **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
-## 0. Status and plan from 2026-11-02
+## 0. Status and plan
 
 ### 0.1 Where things stand
-Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`). Live per-slice state is on the `runner-state` branch (`state.json`); reconcile it against `main`'s merges before acting on it ([handoff §2](handoff.md#2-where-the-truth-lives)).
+Status as of `main` at `f47369b8` (committed 2026-11-12T22:53Z). This table is a snapshot and goes stale within hours: `main` takes 40 to 60 merges a day. **The live view is the roadmap dashboard** (`tools/status-connector`, reading `runner/slices.yaml`, `runner/dashboard.yaml` and GitHub) and the `runner-state` branch (`state.json`); reconcile both against `main`'s merges before acting ([handoff §2](handoff.md#2-where-the-truth-lives)).
 
-| Area | Done | In flight | Next |
-|---|---|---|---|
-| **M0–M5** | All merged. G-v05 passed 10-24. **G-m5 passed 11-01** (#352): analytics-validation matrix, reporting overhead 0.08–0.09 % of a 1 % gate, design review with all 7 blocking findings fixed (#340 and FX-1..4; important and polish in FX-5..6) | — | Backlog only (Track B) |
-| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Soak r4 on rc.3 failed the memory gate**: 29.35 MiB/h, 95 % CI [28.75, 29.96], growth in C-allocator mappings outside mimalloc's arena (`docs/decisions/2026-11-05-soak-r4-verdict.md`). **rc.4** (§2.40) = the memory fixes (R-rc4-cut, with the runner-added redaction fix) + the release-branch Legal Notice (LEGAL-1r); X-mimalloc-override is #448. Soak r3 on rc.2 **failed the memory gate**: 1.88 MiB/h, 95 % CI [1.43, 2.33] (`docs/decisions/2026-11-03-soak-r3-verdict.md`). #357 is on `release/v0.5.1` as #377 (`0acc5a37`) | **Soak r5 on rc.4 passed**: 0.91 MiB/h, 95 % CI [0.47, 1.35] (`docs/decisions/2026-11-06-soak-r5-verdict.md`). Next: the gluetun leg (running from about 2026-11-06T15:00Z) and a short Windows smoke on rc.4; the owner tags `v0.5.1` (§0.4) |
-| **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL, **CR-4** (#365: uTP in the fetch path and IPv6 route backoff, `dht.utp` and `dht.route_backoff`) | — | CR-COL-3 and CR-SPEC, then live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
-| **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
-| **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) now that migrations may land on `main` (owner-decisions §2.28); SRC-7 after SRC-2, SRC-4 and SRC-5 |
-| **Blocklist subscriptions** | B-subscriptions-api (#362) merged | S-blocklists (Sonnet) | — |
-| **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357), F-filter-standin-undo (#367, 785b282c, not in rc.3) | Adult stand-in holds stay held (owner-decisions §2.28) | — |
-| **Update engine** | B-update-1..6 (signed manifest, install, rollback, fail-closed checks). Ships **disabled** in v0.5.1 | — | Owner: nightly signing key |
-| **Remote workers** | `crates/cluster` library: cluster CA, mTLS 1.3, join tokens, postcard-over-WebSocket protocol, leases and fencing (~104 tests) | — | Epic **held** until the soak verdict. **Nothing wires it**: there is no `lodestar worker` command, though `packaging/unraid/lodestar-worker.xml` calls one |
-| **Companions** | — | — | Epic held until the soak verdict. No code |
-| **M6 packaging** | CLI (`backup`, `rollback`, `vacuum`, `reindex`, `stats`, `import`, …), Windows service and port handling, WiX MSI and portable zip, Unraid templates (main, gluetun, worker), systemd unit, Linux tarball, Docker multi-arch, smoke jobs, user guide in `docs/user/` | — | Epic held until the soak verdict; expansion starts with a gap audit (§0.2 Track M6) |
-| **M7** | Pulled forward and merged: download clients (qBittorrent, Transmission, Deluge, rTorrent, aria2), notifiers (webhook, ntfy, Discord, email, RSS), secret storage and SSRF guard, Send UI, uTP library | — | Epic ready to expand (deps met) |
+**Slices:** 588 in `runner/slices.yaml`. The dashboard counts 436 merged, 19 in progress, 123 not started, 3 closed and 7 epics (all expanded). Four of the 123 are in fact finished and only need marking (CR-AB-COMP, X-tokio-1541-v052, WK-10d-store, WK-10; `docs/decisions/2026-11-12-master-plan-r4.md`), so about 120 slices are left to start. Slice PRs are open all the time (the live list is GitHub's open pull requests; at the snapshot there were 21), plus #632, the owner's own branch, which the runner leaves alone.
 
-**Code facts** (they replace the 2026-10-22 "what the code shows" list, which is gone): the store is at **V13**; search is at `SCHEMA_VERSION` **5** with a working blue/green rebuild (`crates/search/src/rebuild.rs`); `crates/utp` is a real BEP 29 library that CR-4 is wiring in; the only production source plugin is `DhtSource` (`crates/pipeline/src/dht.rs`); there is no Torznab server (only an outbound connection test in `crates/integrations/src/torznab.rs`); scheduled CI runs live in `ci.yml` and `e2e.yml`, so there is no `nightly.yml`. Rust has 4 TODOs and no `todo!()`.
+| Area | State | What's left |
+|---|---|---|
+| **M0–M5, v0.5** | Done. G-v05 passed 10-24, G-m5 passed 11-01 (#352) | Backlog only (Track B) |
+| **v0.5.1** | **Published 2026-11-07** from `12cd25ca`. Soak r5 on rc.4 passed (0.91 MiB/h, 95 % CI [0.47, 1.35], bar 2.0); the gluetun leg and the Windows MSI check passed (`docs/decisions/2026-11-07-v051-release-verdict.md`) | The owner replaces the published release text with the runner's draft |
+| **v0.5.2** | `release/v0.5.2` cut at `045d4a38` (`docs/decisions/2026-11-07-P-v052-cut.md`). Three candidates assembled on the branch: rc.1, rc.2 (adds #579) and **rc.3 = `833a0d25`** (rc.2 plus tokio 1.54.1 and the notice's "applies to" line, #740, §2.58), with release notes checked against the branch (#751). The owner's long runs were moved to rc.2 (`docs/releases/v0.5.2-rc2-delta.md` on the branch). **No `v0.5.2` tag exists, and `main` records no soak verdict for it** | The gate in §0.4 on the current candidate, the owner's tag, the notes brought to `main` |
+| **v0.6 Sources** | Done: 37 of 38 slices (SRC-10b dropped). **SRC-G passed** (`docs/decisions/2026-11-07-SRC-G.md`) | ENR-G; X-consent-gate-lift (building); SRC-3b moved to v0.7 |
+| **v0.6 crawler** | Every experiment built behind its switch, all off by default (7 of 7). The bitmagnet comparator ran and was accepted: **317.8 stored/min** over 24 h. Lodestar's accepted baseline is **12.3/min** (CR-0) | Every live A/B run (none has run), Checkpoint 1, CR-1c, CR-5, CR-COMB, G-v06-crawler (§0.5) |
+| **v0.6 remote workers** | 18 of 24 on the roadmap step: the `lodestar worker` command, replication, the sharded DHT, fetch on workers and the spool are merged. In review: WK-11b (#779), WK-18 (#797) | WK-12 → WK-13 → WK-16 → WK-19; then the chaos gate WK-G (it needs WK-11b, WK-13 and WK-16, not the guide) |
+| **v0.6 companions** | 20 of 23: catalogue, signature and checksum checks, supervision, credentials, Settings → Companions. CMP-D in review (#782); X-cmp-egress-api and CMP-12 building | X-cmp-egress-ui, D-companions-guide, then CMP-G |
+| **M6 packaging** | 16 of 17. Windows updates, the release manifest, the settings CLI, the install smoke and the user guide are merged | **G-m6**, which waits only on the owner's manual installs (`ext:owner-m6-manual`). Two Windows rollback slices are follow-ups, not part of the gate: X-win-upd-manual-rollback (#795) and X-win-upd-first-rollback |
+| **Imports** | Tools done (IMP-0..5), SB-6 and X-search-files-3 merged, the smoke stages ran. Only a synthetic figure exists: 100k at ~13,900/s | G-import-1M, G-import-10M, G-rebuild-10M, G-import-50M, all on the owner's import host; then CR-3 |
+| **v0.7 / M7** | 15 of 47: GS-0, GS-1, UP-0, UP-1, UN-0..2, ENR-9, ENR-10, ENR-12, TZ-0, OUT-0, OUT-2 and others. In review: ENR-14 (#764), ENR-13 (#793). Building: GS-2 | §0.2 rung 5 |
+| **v0.8** | 0 of 24 merged; NOS-0 (#789), NOS-2a (#791) and LEM-0 (#787) in review | §0.2 rung 7 |
+| **M8 hardening** | 3 of 30 on the roadmap step (M8-NET-E2E, M8-THEME, M8-WIN-1). In review: M8-REL-1 (#783), M8-PERF-1a (#780), M8-SEC-0 (#786), M8-DOC-2 (#785) | §0.2 rung 8 |
+| **1.0 release candidate and gates** | 0 of 13 | §0.2 rung 9 |
 
-**All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
+**Code facts** (they replace the 2026-11-02 list): the store is at **V14**; search is at `SCHEMA_VERSION` **7** (`crates/search/src/schema.rs`), and v0.5.2 ships both, so a v0.5.1 user rebuilds once, v5 → v7. The workspace has 25 crates, about 565k lines of Rust including tests, and 38 fuzz targets. There is no `todo!()`; every `unimplemented!()` is in a test double; Rust has 3 TODOs. All 24 theme families ship in light and dark. Packaging is real for Docker, Unraid, Windows (WiX MSI and portable) and Linux. The workspace version in `Cargo.toml` on `main` is still `0.5.0`: each release branch sets its own version, and `release.yml` checks the tag against it.
+
+**What the code defers on purpose** (each is stated in the code or the guide, none is a stub):
+- Discover's "rising" and "recently resolved" groups answer unavailable (`crates/api/src/discover.rs`): they need swarm history and a resolution timestamp.
+- The StashDB and ThePornDB plug-ins are on hold and never registered as a running source (`crates/sources-plugins/src/stashdb.rs`, `tpdb.rs`).
+- Worker version, uptime, egress, shards, throughput and quarantine are left out of the API until WK-13.
+- `docs/operations.md` lists as not built: the Community Applications listing, incoming peers on 6881/tcp, a Settings screen for the web address, a Settings screen for worker join tokens, and Windows updates that install themselves.
+- Windows artifacts ship unsigned until the owner provides a certificate (`ext:owner-signing-cert`).
+- The `search-latency`, `filter-budget` and `reporting-overhead` CI jobs are not part of `ci-ok`, so a failure in them doesn't block a merge.
+
+The runner checks each of these against `runner/slices.yaml` and adds a slice where none covers it (`docs/decisions/2026-11-12-master-plan-r4.md`).
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **eight slices at a time in total** from 2026-11-12T06:03Z (owner, §2.59, replacing §2.56's twelve, which replaced §2.54's eight): Opus, helper and docs slices alike. Sessions already running finish their slices. Nothing new launches while eight or more are running. On top of the eight, four more sessions are shared by the cloud tester (X-test-vm) and the runner, at most two each unless the other agrees (owner, §2.60). Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** from 2026-11-13T00:00Z the cap is **four build slices and four cloud-testing slices** (owner, 2026-11-12T22:30Z, §2.64, not yet recorded in `docs/owner-decisions.md`). Before that it was eight in total plus four shared by the cloud tester and the runner (§2.59, §2.60), with owner windows of more sessions on 2026-11-12 (§2.61, §2.63). Opus, helper and docs slices all count. Sessions already running finish their slices; nothing new launches while the cap is reached. The live list is `slots` in `runner-state`, and the runner records the §2.61 to §2.64 decisions it cites. Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder, with one exception, the next rule.
 
-**The ladder** (fill free slots in this order; the owner can reorder it in one line):
-1. **Close v0.5.1** (Track R): rc.4 (§2.40: the memory fixes and the release-branch Legal Notice), soak r5 (**passed**, 2026-11-06), the gluetun leg, the Windows smoke, rc.5 (text-only Legal Notice v3, #540), the legal-documents check (§2.48), the tag on rc.5.
-2. **The crawler's live evidence** (Track C): CR-SPEC, then CR-COL-3 (no host needed, so they start now), then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
-3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7 (Q2/Q15 answered by §2.28).
-4. **Unhold the epics** once the soak verdict is in: build E-M6, E-v06-workers and E-v06-companions from their plans (the planning wave below expands them now).
-5. **Expand E-M7**, starting with the schema-bump convergence slice SB-6.
-6. **Import pilots** (Track I), on the owner's import host, never alongside an A/B run.
-7. **Backlog and polish** (Track B).
+**Above the ladder: cloud testing first** (owner, 2026-11-12 about 18:56Z, §2.62, not yet recorded: "Have Agent Runner prioritize anything needed for cloud testing"). Cloud-testing PRs are reviewed and merged first, and cloud-testing fix slices take the next free build slot ahead of features. The cloud-testing lanes use the four cloud-testing slots (§2.64).
+
+**What decides the date of 1.0.** Building isn't the constraint: about 140 slices remain, and the build lands 40 to 60 PRs a day. Three things are:
+1. **The crawler gate.** 12.3/min measured against 100/min. The comparator shows the target is reachable on this host. The experiment calendar is 8 to 9 measured days, about three weeks with start-up and retries (§0.7). The comparator's day is done; no A/B run has started.
+2. **One Unraid box serves four queues:** crawler runs, import pilots, the 1.0 Linux soak and the 1.0 crawler re-measure. Every booking is exclusive.
+3. **Owner actions** (§0.3).
+
+So: **the host is never idle, and build slots never wait for it.**
+
+**The ladder** (r4; the owner approved it on 2026-11-12 by approving this plan, recorded in `docs/decisions/2026-11-12-master-plan-r4.md` until the runner adds it to `docs/owner-decisions.md`; fill free slots in this order; the owner can reorder it in one line). Rungs 2 to 8 run in parallel wherever their slices are ready; the order decides only between ready slices competing for a slot.
+1. **Land what's open.** The open PRs go through review and the landing lane before new launches. #632 (`feat/lodestar-secure-pia-bridge`) is the owner's branch: the runner leaves it alone, and the owner decides whether it lands, goes to a slice or is closed. A cloud review the owner ran on it raised 11 findings, not yet verified, four of which could stop live fleet runs; they are with the owner.
+2. **Ship v0.5.2** (§0.4): the gate on the current candidate, then the owner's tag. v0.5.1 carries tokio 1.54.0, which was yanked; §2.58 puts the fix in v0.5.2, so this rung doesn't wait behind the crawler runs for the host. §2.58 also has the runner prepare a v0.5.1.1 if v0.5.2 slips by more than a few days.
+3. **The v0.6 build side, to its three gates:**
+   - workers: WK-11b and WK-18 (in review); WK-12 (the next migration) → WK-13 → WK-16 → **WK-G**; WK-19, the guide chapter, after WK-16 and WK-18;
+   - companions: X-cmp-egress-api → X-cmp-egress-ui; CMP-12; CMP-D, D-companions-guide → **CMP-G**;
+   - M6: **G-m6** waits only on the owner's manual installs; the two Windows rollback slices follow up and don't hold it;
+   - small: ENR-G (ready), X-consent-gate-lift (building).
+4. **The crawler's live evidence** (Track C, on the owner's host): CR-AB-ADM → CR-AB-4 → CR-CP1 (Checkpoint 1) → CR-AB-1 → CR-5 → CR-COMB → **G-v06-crawler**. CR-1c is a build slice that needs only CR-AB-ADM's result, so it is built alongside CR-AB-4 and Checkpoint 1. **The v0.6 tag follows P4 in §3 until the owner answers:** the crawler gate passes (or the owner re-decides at Checkpoint 1) and the cluster chaos and transport tests stay green; each feature's own gate (SRC-G, passed; WK-G; CMP-G) decides whether that feature ships in v0.6. **Question for the owner:** does the tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? §2.25 and §2.27 say only that the crawler gate "gates the v0.6 tag".
+5. **v0.7 / M7.** It doesn't wait for the v0.6 tag:
+   - grouping and regex: GS-2 → GS-3, GS-4, RX-1; GS-3 → GS-5; RX-1 → ENR-11 → OUT-1 → OUT-3;
+   - enrichment: ENR-14 → the twelve plug-ins (ENR-tmdb, -tvdb, -anilist, -anidb, -mb, -ol, -igdb, -discogs, -steam, -srrdb, -predb, -debrid), which run side by side; ENR-13;
+   - upload: UP-2, X-watch-env, and X-watch-stall-retry (a stalled copy into the watch folder is failed for good on Unix; from the 2026-11-12 codebase review). The three own different files and can run side by side;
+   - uTP: X-utp-spurious-rto after X-utp-backoff (#788); it also makes a connection time out when the peer's packets acknowledge nothing (same review);
+   - unverified items and usenet: SRC-3b (after GS-3 and ENR-11; a migration) → UN-3 → UN-4;
+   - IRC: NOS-2a → IRC-0 → IRC-1 → IRC-2, IRC-3;
+   - small: X-unverified-cap-index (ready), X-percolate-promoted-hold (building);
+   - then G-v07-scale and **G-v07**.
+6. **Import pilots** (Track I), in the gaps between crawler runs: G-import-1M → G-import-10M and G-rebuild-10M → G-import-50M → the owner approves the numbers → CR-3 and the full library.
+7. **v0.8:** the parsers and transports first, since they wait on no gate (NOS-0, NOS-2a, LEM-0, ADH-0, then NOS-1, NOS-2b, NOS-3, LEM-1); plug-ins and companions on workers (PL-0 to PL-8, CW-0 to CW-3) after WK-G and CMP-G; PL-7b after the owner approves the per-worker consent wording; then DOC-v08 and **G-v08**.
+8. **M8 hardening:** what waits on no gate starts now (M8-SEC-0, then the security reviews as each surface settles; M8-REL-1, M8-REL-2; M8-PERF-1, M8-PERF-3; M8-DOC-2); after WK-G: M8-CHAOS-1 to M8-CHAOS-4, then M8-PERF-2 and M8-CI, which need M8-CHAOS-1; after G-m6, G-v07 and G-v08: M8-POL, M8-PURGE, M8-DR, the other M8-DOC slices and the last security reviews. Each slice's exact `deps` are in `runner/slices.yaml`.
+9. **The 1.0 release candidate:** R-v1-cut, the owner tags the rc, the eleven G-v1-* gates run on it, then **G-v1** and the owner tags v1.0.0.
+10. **Backlog and polish** (Track B) in whatever slots remain. The cloud operator slices and their gate OP-G run in the cloud-testing slots (§2.64) and, where cloud testing needs them, ahead of the ladder (§2.62), once the owner finishes the operator setup.
+
+After 1.0: the Unraid Community Apps submission and package installers (owner), then v1.1 I2P, v1.2 eD2k and v1.3 IPFS (§3 below, architecture §14).
+
+**Track status at r4.** The tables below keep their r3 text as the record of how each track was planned. Where they stand now:
+- **Track R:** complete through R4. R5, the v0.5.2 cut, is done; its gate and tag are rung 2.
+- **Track C:** C0a to C3 done. C4 onwards is rung 4.
+- **Track I:** I1, I1b and I2 done. I3 onwards is rung 6.
+- **Track S:** complete, SRC-G passed.
+- **Tracks W, K and M6:** no longer held. Their slices are in `runner/slices.yaml` (plans `docs/plan/2026-11-06-v06-workers.md`, `-v06-companions.md`, `-m6-gap-audit.md`); what's left is rung 3.
+- **Track M7** (its heading still says "ready to expand"; it was expanded on 2026-11-05): SB-6 and X-search-files-5 merged; the plan is `docs/plan/2026-11-05-v07-m7.md`; what's left is rung 5.
+- **Track B:** every item its list names as running or in review has merged; the live backlog is in `runner/slices.yaml`.
+- **v0.8 and M8** were planned after r3: `docs/plan/2026-11-06-v08.md` and `docs/plan/2026-11-06-m8-hardening.md`.
+
 
 Each track below lists its steps in order. "Owner" marks a step only the owner can take; `ext:` names match the `external` section of `runner/slices.yaml`.
 
@@ -101,7 +149,7 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 - **P-v06-rulepacks:** plan the other half of E-v06-sources (curated rule packs, ThePornDB/StashDB enrichment) the same way P-v06-sources-plan did.
 - Verification fetches of unverified keys stay behind `sources.verify_unverified` (off) until the crawler acceptance soak (C8) ends.
 
-**Track W: remote workers (E-v06-workers, held for the soak verdict).** The expansion starts from what's built: the library covers P4 steps 1–2. Still to build, in order:
+**Track W: remote workers (E-v06-workers; r3 text, written while the epic was held; it was unheld on 2026-11-06).** The expansion starts from what's built: the library covers P4 steps 1–2. Still to build, in order:
 1. the `lodestar worker` subcommand and the coordinator side in `crates/lodestar`, wired to `ClusterServer`/`WorkerSession`;
 2. have-filter replication (today the worker ignores the message);
 3. the `sharded(keyspace)` DHT;
@@ -111,9 +159,9 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 
 Any worker table goes through the migration queue (§0.7). Interface changes from the crawler program keep `crates/cluster`'s chaos and transport tests green.
 
-**Track K: companions (E-v06-companions, held).** No code. Expand per P4: signed catalogue, checksum and signature checks, supervised child processes, encrypted credentials (Opus), then compose and CA-template generation, detection adapters and the Companions UI (Sonnet).
+**Track K: companions (E-v06-companions; r3 text, unheld on 2026-11-06 and now mostly built).** At r3 there was no code. Expand per P4: signed catalogue, checksum and signature checks, supervised child processes, encrypted credentials (Opus), then compose and CA-template generation, detection adapters and the Companions UI (Sonnet).
 
-**Track M6 (E-M6, held).** Most of P3 is built (§0.1). The expansion is a **gap audit** against P3 and §14, then slices for what's missing. Known items:
+**Track M6 (E-M6; r3 text, unheld on 2026-11-06).** Most of P3 is built (§0.1). The expansion is a **gap audit** against P3 and §14, then slices for what's missing. Known items:
 - FUSE and network-filesystem detection: verify whether it exists;
 - the worker template: label it "requires v0.6" more prominently, or keep it out of the CA submission until Track W step 1 lands;
 - the user guide refreshed for v0.5.1 (the first hours are slow because of the 6 h sampling suppression; `docs/decisions/2026-10-31-owner-delegation.md`);
@@ -140,38 +188,49 @@ Any worker table goes through the migration queue (§0.7). Interface changes fro
 - **D-egress-note**: the user guide says plainly that blocklist list fetches ignore `HTTPS_PROXY` and use the container's own route (a whole-container VPN still applies), per §2.28's acceptance of #362. The in-app copy under Settings → Blocklists is **X-egress-copy**, a follow-up web slice after S-blocklists (#370), which isn't widened.
 
 ### 0.3 Owner queue
-On 2026-11-02 the owner told the runner to take its recommendation on every question that was waiting (`docs/owner-decisions.md` §2.28). The answers are recorded there; the owner can veto any of them. What's left needs the owner's hands, ordered by what each unblocks. The runner keeps working on everything else meanwhile.
+What only the owner can do, ordered by what each unblocks. The live list, with the smaller items, is `owner_queue` in `runner/dashboard.yaml`. The runner keeps working on everything else meanwhile.
 
 | # | Action | Unblocks |
 |---|---|---|
-| 1 | Soak r4 on rc.3 failed (memory); soak r5 on rc.4 (§2.40: R-rc4-cut + LEGAL-1r) **passed** (2026-11-06). The Windows MSI smoke on rc.4 **passed** (2026-11-06). The gluetun leg **passed** (2026-11-06). Tag `v0.5.1` on `12cd25ca38f8eac1a930316623dec742c1ba585d` (rc.5, #540, plus the operator-guidance fix #558; never on `a0eb0a90`) once the runner gives the go after CI on that commit, and approve the release environment. (r1's upgrade still counts per §2.28 if rc.4 changes no migration code; LEGAL-1r stores the notice version in `auth.json`, not the database, a runner refinement recorded in §2.40.) | v0.5.1; the three held epics |
-| 2 | Name the **experiment host** for crawler A/B runs and book its calendar (about three weeks of exclusive use, §0.7) | Track C's live work (C2–C8) and the v0.6 tag |
-| 3 | Create the **nightly signing key** and its environment (deferred, §2.52: before 1.0, only if the Nightly channel is offered) | update checks on the Nightly channel |
-| 4 | Add `web-ok` and `e2e-ok` (X-required-web-checks' aggregates) to the main ruleset's required checks; the owner said yes (§2.37) | safer merges |
-| 5 | The Unraid Community Apps submission, after the 1.0 release is complete (§2.37) | the Unraid app-store listing |
-| 6 | ✔ Approve the Q1 consent texts SRC-4 drafted (`docs/decisions/2026-11-02-SRC-4.md`, "Draft consent texts"): **approved** 2026-11-06, with the Account sentence bounded (`docs/owner-decisions.md` §2.49) | SRC-15b |
-| Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6); B-import-server-2's API surface and the `.torrent` upload middleware exception go with the runner's recommendation, recorded when they're planned, and back to the owner only if what's built deviates (§2.37) | the v0.6 tag; the full-corpus import; server-side imports and M7 upload |
+| 1 | Book the next crawler run on the experiment host (CR-AB-ADM), and keep the runs back to back (`ext:experiment-host`) | Track C and the v0.6 tag |
+| 2 | Do the M6 manual Unraid and MSI installs and approve the rc's signing (`ext:owner-m6-manual`) | G-m6 |
+| 3 | Tag and publish v0.5.2 once its gate passes | A current release; `ext:release-after-parser` (i9-stage2) |
+| 4 | Book each import pilot on the import host and restore the Bitmagnet dump (`ext:import-host`) | The 1M, 10M and 50M gates |
+| 5 | **Checkpoint 1**: re-decide the crawler gate if the projection falls short (`ext:owner-checkpoint-1`) | CR-AB-1, CR-5, CR-COMB |
+| 6 | Register the dedicated benchmark runner (`ext:bench-runner`) | G-v1-10m |
+| 7 | Approve the per-worker consent wording (`ext:owner-v08-q3`) | PL-7b |
+| 8 | Complete the cloud operator setup (`ext:owner-operator-setup`) | OP-G |
+| 9 | Name the Windows host for the 1.0 soak and free the Unraid box for the 1.0 Linux soak (`ext:windows-soak-host`, `ext:unraid-soak-host`) | G-v1-windows, G-v1-soak-linux |
+| 10 | Approve the 50M numbers (`ext:owner-50m-approval`) | The full library and CR-3 |
+| 11 | Provide a code-signing certificate (`ext:owner-signing-cert`) | Signed Windows artifacts |
+| 12 | Tag the 1.0 release candidate, then v1.0.0 (`ext:owner-v1-rc`, `ext:v1-tagged`) | The release |
 
-Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the drafted texts) (plan `2026-11-01-v06-sources.md` §5), migrations on `main` before the tag (allowed, so SRC-1 may land), #362's egress trade-off (accepted for v0.6), and adult stand-in holds (not released automatically).
+**Any time:** add `web-ok` and `e2e-ok` to the main ruleset's required checks (§2.37); replace the published v0.5.1 release text; add the Cloudflare secrets so the status connector deploys (#742); delete the branch `wip/CMP-0-catalogue`; say whether a whole-index Wikidata backfill counts as "bulk" (`docs/decisions/2026-11-12-runner-notes.md`, ENR-14); the runner calls open to a veto (§2.19) listed in the dashboard's owner queue.
 
-Answered by §2.37: rule-pack Q1-Q5 (plan `2026-11-04-v06-rulepacks.md` §5), SRC-12's grey case (skip), required web checks (yes), the server-import surface and upload exception (the runner's recorded recommendation), and no veto of SB-6's `size_bucket`, SRC-11's automatic export or dropping SRC-10b.
+**Only if the Nightly channel is offered:** the nightly signing key (§2.52) and the host for nightly update manifests (`ext:owner-pk-nightly-host`).
 
-`docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
+**After 1.0:** the Unraid Community Apps submission (§2.37) and winget and other package installers (§2.52).
+
+**A choice worth making:** the import pilots share the Unraid box with the crawler runs (§2.52). Running them elsewhere would remove the largest calendar conflict. It changes an owner decision, so it's the owner's to make; until then imports fill the gaps between crawler runs (§0.7).
+
+Every question the earlier plans raised is answered: §2.28 and §2.37 (Sources, rule packs, required checks, the server-import surface, the upload exception), and the v0.7, companions, workers, M6, v0.8 and M8 questions recorded as met conditions in `runner/dashboard.yaml`. `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
 
 ### 0.4 v0.5.1 gate (and v0.5.2)
-**v0.5.1** (G-v051), from the 2026-10-30 plan:
+**v0.5.1** (G-v051), from the 2026-10-30 plan. **Passed: v0.5.1 was published on 2026-11-07** (`docs/decisions/2026-11-07-v051-release-verdict.md`).
 - ✔ Release branch at a fixed SHA (`c3f6341a`); `v0.5.1-rc.N` candidates with hashes (rc.2 `6be95525`).
 - ✔ Delta from the soaked `744b84d6` mapped to targeted tests.
 - ✔ L1–L7 and F-* merged; the CR-0 soak accepted (`docs/decisions/2026-10-30-CR-0-acceptance.md`).
 - ✔ Every workflow green on rc.2, no regenerated baselines.
 - ✔ Windows ≥ 6 h service-mode run of the rc MSI, plus a portable smoke test.
-- ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 on rc.2 failed the memory gate (1.88 MiB/h, CI [1.43, 2.33]); attempt r4 on rc.3 failed too (29.35 MiB/h, CI [28.75, 29.96]); **attempt r5 on rc.4 passed** (0.91 MiB/h, CI [0.47, 1.35], `docs/decisions/2026-11-06-soak-r5-verdict.md`). **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
-- ☐ ≥ 2 h gluetun leg.
-- ☐ rc.4 = rc.3 + the memory fixes + LEGAL-1r (§2.40), plus the runner-added redaction fix, with its delta mapped (Track R step R3″), then soak r5 on rc.4 (R1″, **passed** 2026-11-06) and a short Windows MSI smoke (R-win, **passed** 2026-11-06).
+- ✔ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 on rc.2 failed the memory gate (1.88 MiB/h, CI [1.43, 2.33]); attempt r4 on rc.3 failed too (29.35 MiB/h, CI [28.75, 29.96]); **attempt r5 on rc.4 passed** (0.91 MiB/h, CI [0.47, 1.35], `docs/decisions/2026-11-06-soak-r5-verdict.md`). **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
+- ✔ ≥ 2 h gluetun leg.
+- ✔ rc.4 = rc.3 + the memory fixes + LEGAL-1r (§2.40), plus the runner-added redaction fix, with its delta mapped (Track R step R3″), then soak r5 on rc.4 (R1″, **passed** 2026-11-06) and a short Windows MSI smoke (R-win, **passed** 2026-11-06).
 - ✔ Updates ship off (no nightly key yet; the release key exists).
-- ☐ The owner tags, approves the release environment and publishes.
+- ✔ The owner tags, approves the release environment and publishes.
 
-**v0.5.2 (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, the M5 exit fixes and later work) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. **Freeze the cut first:** a feature manifest that lists every behaviour enabled in the build with its own acceptance, and every partly landed feature (Sources, M7) as inactive or excluded. The gate is v0.5.1's: the 24 h Linux Docker soak stays the binding memory gate, plus a ≥ 6 h Windows service run, and the delta rule adds re-soaks for crawler lifecycle, sampler or endpoint-policy changes. **A cut from `main` ships one-way migrations** (V13, and V14 if SRC-1 has merged), so the gate adds a V12 → V13+ upgrade smoke on a copy of a v0.5.1 data folder, pinned by its schema version and the snapshot file the upgrade writes (`<db>.pre-v13.db`), and a rollback-to-snapshot check: `lodestar rollback` to that file, then the v0.5.1 binary starts on it and serves. Crawler switches stay off in v0.5.2 unless they've passed C8.
+**v0.5.2 status at r4.** `release/v0.5.2` is cut from `main` at `045d4a38` with the feature manifest frozen (`docs/plan/2026-11-06-v052-feature-manifest.md`, delta in its §9; `docs/decisions/2026-11-07-P-v052-cut.md`). The branch holds three candidates: rc.1, rc.2 and rc.3 = `833a0d25`, which is rc.2 plus tokio 1.54.1 and the notice's "applies to" line (#740, §2.58); the release notes on the branch name rc.3 and are checked against it (#751). No `v0.5.2-rc.N` or `v0.5.2` tag exists as a git ref. The owner's long runs were moved to rc.2: the 24 h Docker soak on an upgraded folder with every pack on, the ≥ 6 h Windows run on a fresh folder, and the V12 → V14 upgrade smoke and rollback check (`docs/releases/v0.5.2-rc2-delta.md` on the branch). `main` holds no verdict for any of them. Still to do: the runner states which candidate the gate runs on and what evidence exists; the long runs and their verdict in a release decisions file; the legal-documents check (§2.48); the owner tags; the notes come to `main`, where `docs/releases/v0.5.2.md` is still the first draft.
+
+**v0.5.2 as planned (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, the M5 exit fixes and later work) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. **Freeze the cut first:** a feature manifest that lists every behaviour enabled in the build with its own acceptance, and every partly landed feature (Sources, M7) as inactive or excluded. The gate is v0.5.1's: the 24 h Linux Docker soak stays the binding memory gate, plus a ≥ 6 h Windows service run, and the delta rule adds re-soaks for crawler lifecycle, sampler or endpoint-policy changes. **A cut from `main` ships one-way migrations** (V13, and V14 if SRC-1 has merged), so the gate adds a V12 → V13+ upgrade smoke on a copy of a v0.5.1 data folder, pinned by its schema version and the snapshot file the upgrade writes (`<db>.pre-v13.db`), and a rollback-to-snapshot check: `lodestar rollback` to that file, then the v0.5.1 binary starts on it and serves. Crawler switches stay off in v0.5.2 unless they've passed C8.
 
 ### 0.5 Crawler program
 **Evidence so far.**
@@ -239,14 +298,20 @@ Answered by §2.37: rule-pack Q1-Q5 (plan `2026-11-04-v06-rulepacks.md` §5), SR
 
 **Other gates, for reference:**
 
-| Gate | Where it's defined | Status |
+| Gate | Where it's defined | Status at r4 |
 |---|---|---|
-| G-v051 | §0.4 | soak and tag pending |
-| G-v052 (proposed) | §0.4 | after v0.5.1 |
-| SRC-G (v0.6 sources) | plan `2026-11-01-v06-sources.md` §4.2 | not started |
-| §19.8 chaos gates (workers) | architecture §19.8 | not started |
-| §20.8 filter budget (50 µs) | architecture §20.8, owner §2.20 | held; the Neutralize case is reported, not held, at ~55 µs on Intel 8573C runners |
-| §17 1.0 gates (NDCG@10, 10M perf and size, Windows soak, full security review, chaos, politeness and purge audits) | architecture §17, P7 below | after M7/v0.8 |
+| G-v051 | §0.4 | **passed**; v0.5.1 published 2026-11-07 |
+| G-v052 | §0.4, manifest §6 | cut done; rc, soaks and tag open |
+| SRC-G (v0.6 sources) | plan `2026-11-01-v06-sources.md` §4.2 | **passed** (`docs/decisions/2026-11-07-SRC-G.md`) |
+| G-v06-crawler | above | open: 12.3/min against 100/min |
+| G-import (1M, 10M, rebuild 10M, 50M) | above | open: no pilot has run |
+| WK-G, the §19.8 chaos gates (workers, v0.6) | architecture §19.8, plan `2026-11-06-v06-workers.md` | open |
+| CMP-G (companions, v0.6) | plan `2026-11-06-v06-companions.md` §4.3 | open |
+| G-m6 | architecture §14, plan `2026-11-06-m6-gap-audit.md` | open; waits on the owner's manual installs |
+| G-v07-scale, G-v07 | architecture §14 and §18.9, plan `2026-11-05-v07-m7.md` | open |
+| G-v08 | architecture §19.8 and §18.9, plan `2026-11-06-v08.md` | open |
+| §20.8 filter budget (50 µs) | architecture §20.8, owner §2.20 | held; the Neutralize case is reported, not held, at ~55 µs on Intel 8573C runners. Checked on the reference CPU in G-v1-audits |
+| G-v1 and the eleven G-v1-* gates (CI on the rc, relevance, 10M performance and size, crawler re-measured, Windows soak, Linux soak, chaos, audits, security, design, UI) | architecture §17, plan `2026-11-06-m8-hardening.md` | open; relevance has a synthetic NDCG@10 of 0.9186 |
 
 ### 0.7 Dependencies and serial points
 ```mermaid
@@ -276,9 +341,9 @@ flowchart LR
 ```
 
 **Things that run one at a time:**
-- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: V12 → V13 (merged) → **V14 SRC-1** (§2.28 lifted the migration hold) → **V15 CR-3** (after the 50M gate), with any worker or companion table taking the next number when it reaches the slot. The runner records the queue in `runner-state` `migration_order`.
+- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. V12 → V13 → **V14 SRC-1** are merged. Four slices wait for a number: WK-12 (v0.6), SRC-3b (v0.7), PL-8 (v0.8) and CR-3 (after the 50M gate). `runner-state` `migration_order` and several plans still reserve **V15 for CR-3**, which lands last. r4 recommends the order **WK-12, SRC-3b, PL-8, CR-3**, each taking the next free number when it reaches the slot, which means releasing CR-3's reservation; the numbers are the runner's to assign, and until it does, V15 stays CR-3's. The runner records the queue in `runner-state` `migration_order`.
 - **Search schema:** a released user rebuilds the search index once per release. Normally that's one `SCHEMA_VERSION` bump per milestone. M7 has two, SB-6 (v6) and X-search-files-5 (v7), both before the v0.5.2 cut, so users rebuild once, v5 → v7 (runner, 2026-11-05; the rebuild always goes straight to the current version). A slice that needs a new indexed field asks the milestone's open bump to carry it instead of bumping again.
-- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint.
+- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint. **At r4** the v0.5.1 soak and the comparator are done; the order from here is: the v0.5.2 soak first, if it hasn't run (ladder rung 2); then crawler A/B blocks, with an import pilot in each gap between them; and the 1.0 Linux soak and crawler re-measure last, on the release candidate.
 - **The experiment calendar** (the slice cap can't shorten this serial path):
 
   | Run | Measured time |
@@ -314,26 +379,28 @@ flowchart LR
 | The filter budget on common runners | The Neutralize case projects ~55 µs on Intel 8573C against 50 µs | Reported, not held (`docs/decisions/2026-10-30-F-filters-neutral-perf.md`); revisit if rule packs add Neutralize terms |
 | File search at 10M | Cold p95 projected over 150 ms | SB-6 adds the field, X-search-files-3 uses it, both before the 10M pilot |
 | `main` outruns the release branch | Cherry-pick chains get long and risky | v0.5.2 soon after v0.5.1 |
-| Promises the binary can't keep | The Unraid worker template calls a missing `worker` command; Settings Overview is a placeholder; menu links lead to "unavailable" | Track M6 gap audit, Track B items |
-| Stale runner state | `state.json` shows merged slices as building, and its `migration_order` stops at V11 | A successor reconciles against `main` first ([handoff](handoff.md)); the runner trims `state.json` and moves history to `log/<id>.md` (`runner/README.md` step 10) |
+| Promises the binary can't keep (r3; the `worker` command and the Settings Overview have since been built) | The Unraid worker template calls a missing `worker` command; Settings Overview is a placeholder; menu links lead to "unavailable" | Track M6 gap audit, Track B items |
+| Stale runner state | `state.json` shows merged slices as building; at r3 its `migration_order` stopped at V11 (it now runs to V15) | A successor reconciles against `main` first ([handoff](handoff.md)); the runner trims `state.json` and moves history to `log/<id>.md` (`runner/README.md` step 10) |
 | Usage runs out mid-slice | A session stops with a half-done branch | Small PRs, one decisions file per slice, the handoff; a branch with no PR is restarted from its brief, not resumed blind |
 | Toolchain debt | MSRV 1.89 and one temporarily allowed clippy lint, `chunks_exact_to_as_chunks` (`Cargo.toml`) | Remove the allow when CI's clippy reaches 1.99 (runner follow-up) |
-| Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
+| Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with the ladder's other rungs meanwhile |
 
 ### 0.9 Next actions
-In order, as slots allow (eight slices in total from 2026-11-11, §2.54; no two with overlapping `owns`). **2026-11-05 planning wave** (§2.44, §2.45): the epics are expanded into slices now, so building can start the moment the soak verdict allows: P-v07 (E-M7), P-m8 (E-M8), P-v08 (E-v08), P-v06-workers (E-v06-workers), P-v06-companions (E-v06-companions), P-m6-audit (E-M6) and P-v052-manifest (the v0.5.2 freeze list for P-v052-cut). The runner adds their slices to `runner/slices.yaml` after review. Building the held epics (E-M6, E-v06-workers, E-v06-companions) still waits for the soak verdict. Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
-1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since).
-2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
-3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first. 2026-11-04: SB-6 merged; P-v06-rulepacks merged (19 slices added); next on Track S: SRC-3 after SB-6b, SRC-12b, and SRC-10d after SRC-8b. SRC-10b (AnimeTosho) is dropped: the site stopped ingesting in May 2026.
-4. r3 and r4 failed (memory). R3″ (rc.4 = R-rc4-cut + LEGAL-1r, §2.40) is tagged and R1″ (soak r5 on rc.4) **passed** (2026-11-06); the Windows smoke and the gluetun leg passed (2026-11-06); then the tag on `12cd25ca` (owner queue #1, `docs/decisions/2026-11-07-v051-release-verdict.md`). The experiment host is named (§2.51); the owner books each run (#2).
-5. On the soak verdict: build E-M6, E-v06-workers and E-v06-companions from the planning wave's slices (P-m6-audit, P-v06-workers, P-v06-companions).
-6. Launch SB-6 when SRC-2 merges; expand the rest of E-M7; launch P-v06-rulepacks.
-7. Launch the 10k/100k import smoke stages; X-search-files-3 after SB-6; G-rebuild-10M's v5 corpus is built with a pinned pre-SB-6 binary, so it can be prepared whenever the import host is free.
-8. Drain Track B with whatever slots remain, X-required-web-checks first (the owner's ruleset change waits for it).
+In ladder order, as slots allow (§0.2; no two with overlapping `owns`):
+1. **Land the open PRs** (the live list is GitHub's open pull requests). #632 waits for the owner (§0.2 rung 1).
+2. **Bring the records up to date** (runner): the slices missing from `runner/slices.yaml`, the gates and notes in `runner/dashboard.yaml` that still describe 2026-11-08, the owner decisions made after §2.60, and `state.json`'s slice statuses. The list is in `docs/decisions/2026-11-12-master-plan-r4.md`.
+3. **v0.5.2:** state which candidate the gate runs on (rc.3 = `833a0d25` is the newest) and what evidence exists, finish the gate in §0.4, give the owner the go for the tag.
+4. **Launch what's ready** (at 2026-11-12T22:55Z, not yet in a slot): ENR-G, X-unverified-cap-index, X-win-upd-first-rollback, ADH-0, UP-2, X-watch-env, X-watch-stall-retry (once the runner adds it).
+5. **Assign the next migration numbers** (§0.7): WK-12 first, since WK-13, WK-16, WK-19 and WK-G all wait behind it; then SRC-3b, PL-8 and CR-3.
+6. **As each merges:** GS-2 → GS-3, GS-4, RX-1; ENR-14 → the twelve enrichment plug-ins; NOS-2a → IRC-0; WK-12 → WK-13; X-cmp-egress-api → X-cmp-egress-ui.
+7. **The host calendar:** the v0.5.2 soak if it's still owed, then the owner books CR-AB-ADM; the runner states the next booking in every daily summary and proposes an import pilot for each gap.
+8. **Gates as their slices finish:** WK-G, CMP-G, then G-v07-scale and G-v07, then G-v08.
+9. **M8** alongside all of this, the security reviews first; then R-v1-cut and the 1.0 gates.
 
 ### 0.10 History of this section
 - **2026-10-30:** the post-CR-0 plan: lanes L (land the owner's work), F (release blockers), C (crawler candidates behind switches), I (imports), S (Settings reconcile), D (docs), and the v0.5.1 gate. All lanes finished by 11-01. Its text is in git history (`git log -p docs/build-plan.md`) and its reasoning in `docs/decisions/2026-10-30-master-plan.md`.
-- **2026-11-02:** this rewrite (`docs/decisions/2026-11-02-master-plan-r2.md`), then §2.28's answers (#371), then r3 after an external review (`docs/decisions/2026-11-02-master-plan-r3.md`).
+- **2026-11-02:** the r2 rewrite (`docs/decisions/2026-11-02-master-plan-r2.md`), then §2.28's answers (#371), then r3 after an external review (`docs/decisions/2026-11-02-master-plan-r3.md`).
+- **2026-11-12:** r4 (`docs/decisions/2026-11-12-master-plan-r4.md`). The status (§0.1), the ladder (§0.2), the owner queue (§0.3), the gate table (§0.6) and the next actions (§0.9) are rewritten from `main`, the dashboard and `runner-state`; §0.4 and §0.7 are brought up to date. The r3 text of those sections is in git history.
 
 ---
 
@@ -371,7 +438,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 ### 1.2 How a helper runs
 - **Launch:** the runner starts each slice in its own cloud session (`runner/README.md`). Inside a session, a helper is an Agent with `isolation: "worktree"`, `run_in_background: true` and the model above, branched from `main`.
 - **Brief:** every slice gets one, using the template in §7. The runner keeps them on the `runner-state` branch under `briefs/`.
-- **Cap:** at most eight slices in total at a time in the current phase, from 2026-11-11 (owner §2.54, replacing §2.42's four), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
+- **Cap:** from 2026-11-13T00:00Z, four build slices and four cloud-testing slices at a time (§0.2; owner §2.64, not yet recorded), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
 - **Review gate** (for every result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;

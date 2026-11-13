@@ -2,13 +2,13 @@
 
 This page is for whoever continues the build when the current sessions stop: a restarted Claude runner, a single Claude session, or an agent from another vendor. It tells you what to read, where the truth lives, how to find the next piece of work and the rules you can't break. It doesn't repeat the plan; it points to it.
 
-Written 2026-11-02. The plan it points to is [`docs/build-plan.md` §0](build-plan.md#0-status-and-plan-from-2026-11-02).
+Written 2026-11-02; last brought up to date 2026-11-12 with plan r4. The plan it points to is [`docs/build-plan.md` §0](build-plan.md#0-status-and-plan).
 
 ## 1. Start here
 Read these in order before changing anything:
 1. **[`CLAUDE.md`](../CLAUDE.md).** The order of authority, working conventions, multi-session rules, model policy, UI rules and environment notes. Every agent follows it, whatever its vendor.
 2. **[`docs/owner-decisions.md`](owner-decisions.md).** The owner's own decisions. They outrank everything else. §2.19 and §2.26 say what you may decide yourself and what goes to the owner.
-3. **[`docs/build-plan.md` §0](build-plan.md#0-status-and-plan-from-2026-11-02).** Where things stand, the tracks and their order, the owner queue, the gates, the serial points and the expected complications.
+3. **[`docs/build-plan.md` §0](build-plan.md#0-status-and-plan).** Where things stand, the tracks and their order, the owner queue, the gates, the serial points and the expected complications.
 4. **[`runner/standards.md`](../runner/standards.md).** The bar for every change and every review.
 5. **For the slice you take:** its brief (on `runner-state` under `briefs/<id>.md`, or the plan file that drafts it), the architecture sections it cites, and the newest `docs/decisions/*` files for that area (`ls docs/decisions | grep <area>`).
 
@@ -19,12 +19,12 @@ Read these in order before changing anything:
 | Code, docs, decisions, plans | `main` | Everything merged. **The final word on what's done** |
 | The slice graph | `runner/slices.yaml` on `main` | Ids, deps, owned paths, `ext:` conditions |
 | Live slice state, briefs, runbooks | branch `runner-state`: `state.json`, `briefs/`, `notes/` (v0.5.1 cut runbook, owner steps, delta draft) | What's running, who's on it, review rounds, owner checklist |
-| The v0.5.1 release | branch `release/v0.5.1`, tags `v0.5.1-rc.1`, `v0.5.1-rc.2` | Release notes, cut decisions |
+| Releases | v0.5.1: branch `release/v0.5.1`, tag `v0.5.1` (published 2026-11-07). v0.5.2: branch `release/v0.5.2`, not yet tagged | Release notes, cut decisions |
 | Soak and run evidence | `docs/soak/` (reports, `evidence/`, collector and analyzer in `tools/`) | Measured numbers |
 | What the roadmap dashboard shows beyond GitHub | `runner/dashboard.yaml` on `main`: workstreams, outside conditions and whether they hold, owner queue, gates, notes | Anything the dashboard says about the plan's shape. Slice PRs edit only their own `placement` and `gates` entries; the runner edits the rest (CLAUDE.md) |
 | Decisions after 2026-10-22 | `docs/decisions/<date>-<slice>.md`, one file per PR | Why things are the way they are |
 
-**`state.json` lags.** The runner updates it by hand, and on 2026-11-02 it still showed merged slices as building and a migration order that stops at V11. Before acting on it, reconcile it:
+**`state.json` lags.** The runner updates it by hand. Its `slots` list is kept current, but on 2026-11-12 many per-slice statuses still showed merged slices as running, and its queue note dated from 2026-11-02. Before acting on it, reconcile it:
 ```bash
 git fetch origin main runner-state
 ```
@@ -40,7 +40,7 @@ Then list open pull requests: the GitHub UI, the GitHub MCP `list_pull_requests`
 1. Read the ladder and track tables in [build-plan §0.2](build-plan.md#02-order-of-work-and-tracks) and the list in [§0.9 Next actions](build-plan.md#09-next-actions).
 2. Check the slice in `runner/slices.yaml`. It's **ready** when every id in `deps` is merged and every `ext:<name>` condition in the `external` section holds. Most `ext:` conditions are owner actions (§0.3 of the plan).
 3. Check that nobody else has it: no open PR on its branch, no running session for it in `state.json`, and no running slice whose `owns` overlaps its paths.
-4. **Check the slot count.** In this phase at most eight slices run at once, in total, and filling them all isn't required (owner §2.54, from 2026-11-11, replacing §2.42's four; build-plan §0.2, `limits.phase_total`). Count the running sessions and open slice PRs first. When several slices are ready, **the ladder in §0.2 decides**, not graph readiness: a low-ranked slice that happens to be ready waits for a higher-ranked one.
+4. **Check the slot count, and the cloud-testing rule.** From 2026-11-13T00:00Z at most four build slices and four cloud-testing slices run at once (owner §2.64, not yet recorded in `docs/owner-decisions.md`; build-plan §0.2, `limits.phase_total`), and filling them all isn't required. The owner sometimes allows more for a stated window; the live list is `slots` in `state.json`. **Cloud testing comes first** (owner §2.62, not yet recorded): cloud-testing PRs are reviewed and merged first, and cloud-testing fix slices take the next free build slot ahead of features. Count the running sessions and open slice PRs first. When several slices are ready, **the ladder in §0.2 decides**, not graph readiness: a low-ranked slice that happens to be ready waits for a higher-ranked one.
 5. If it's an `epic`, it needs expanding into slices first (`runner/README.md` step 8): read the architecture sections and the code as it stands, write the slices into `slices.yaml` in a docs PR, then start them.
 
 ## 4. Path A: a Claude runner
@@ -110,19 +110,12 @@ Each comes from `CLAUDE.md`, the owner's decisions or the runner's standards.
 - **Soak evidence:** commit aggregates and hourly snapshots only, with personal paths, machine names, IPs and tokens scrubbed.
 
 ## 7. Owner queue and gates
-The owner's open decisions are in [build-plan §0.3](build-plan.md#03-owner-queue), ordered by what they unblock. The gates (v0.5.1, the crawler's v0.6 gate, import scale, SRC-G, 1.0) are in [§0.4](build-plan.md#04-v051-gate-and-v052) and [§0.6](build-plan.md#06-gates-added-by-this-plan). When you need an owner answer, ask once with your recommendation and keep working on everything else.
+The owner's open decisions are in [build-plan §0.3](build-plan.md#03-owner-queue), ordered by what they unblock. The gates (v0.5.2, the crawler's v0.6 gate, import scale, workers, companions, M6, v0.7, v0.8, 1.0) are in [§0.4](build-plan.md#04-v051-gate-and-v052) and [§0.6](build-plan.md#06-gates-added-by-this-plan). When you need an owner answer, ask once with your recommendation and keep working on everything else.
 
-## 8. In flight on 2026-11-02
-Superseded by live state as soon as anything moves; check §2 first. Slots at 03:22Z: **4 of 4** (F-filter-standin-undo, openapi-example-size, S-blocklists, X-strip-format-chars). CR-4 merged as #365.
+## 8. In flight
+This page no longer keeps a dated list: it was out of date within a day. For what's running now, read, in this order:
+1. **The roadmap dashboard** (`tools/status-connector`): roadmap steps, gates, the owner queue, outside conditions, and what each worker slot is doing.
+2. **`state.json` on `runner-state`**, its `slots` list above all (§2).
+3. **Open pull requests** (§2).
 
-| Item | State | Waits on |
-|---|---|---|
-| F-filter-standin-undo (#367) | runner's review passed; merge on green | CI |
-| openapi-example-size (#368) | runner's review passed; merge on green | CI |
-| S-blocklists (#370) | open | runner review |
-| X-strip-format-chars | building | — |
-| Unraid soak r3 on rc.2 | baseline ends 2026-11-02 22:16Z | analysis; then rc.3 with #357 (owner §2.29), the owner's gluetun leg, rc.3 smoke and tag |
-| Held epics: E-M6, E-v06-workers, E-v06-companions | held | the soak verdict |
-| SRC-1 (V14) | ready; the migration hold is lifted (§2.28) | a free slot |
-| SRC-7 | Q2 and Q15 answered (§2.28) | SRC-2, SRC-4, SRC-5 |
-| CR-COL-3, CR-SPEC | ready | free slots; they gate every booked crawler run |
+[build-plan §0.1](build-plan.md#01-where-things-stand) has a snapshot with its date and commit, and [§0.9](build-plan.md#09-next-actions) the next actions in ladder order.
