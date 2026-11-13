@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T18:34Z",
+  "updated_at": "2026-11-13T18:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8125,7 +8125,8 @@
     "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
     "docs-host-icmp-note-user-setup (gluetun guide: host ICMP in a user own setup)",
     "gluetun-guard-reboot-mid-block (re-hold on resume or outage-watcher check)",
-    "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)"
+    "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
+    "X-flake-companions-loopback: detect.rs bind-then-drop port race on Windows; next slice in slot 7 after #839 (owns crates/companions/tests/detect.rs); slices.yaml entry in next runner PR"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8523,9 +8524,11 @@
     },
     "839": {
       "slice": "X-lease-reconcile-every-session",
-      "head": "3182efc8",
+      "head": "914c14fb",
       "review": "fresh Opus MERGE, 2 Important (stalled-coordinator spool fallback; local stop waits for Drained) relayed with chaos scenario, one push; runner delta check then merge",
-      "at": "2026-11-13T17:06Z"
+      "at": "2026-11-13T17:06Z",
+      "state": "fixes in; Windows companions detect.rs loopback flake (not this PR); one re-run used",
+      "rerun_used": true
     },
     "842": {
       "slice": "X-offline-retry",
@@ -9178,7 +9181,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T18:34Z",
+    "updated": "2026-11-13T18:35Z",
     "items": [
       {
         "slot": 1,
@@ -9416,7 +9419,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T18:34Z",
+  "updated": "2026-11-13T18:35Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
