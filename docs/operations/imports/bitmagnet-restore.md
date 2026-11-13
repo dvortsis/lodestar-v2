@@ -87,6 +87,17 @@ Work out the space before you copy anything, and keep a reserve so the volume ne
 
 The "2 × the dump" is an estimate: table data plus Bitmagnet's indexes (about 35 of them, which the restore keeps up to date row by row, so it is slow as well as large). Watch the real growth during the restore (step 4) and stop if the reserve is in danger. After a successful check (step 7) you can delete `backup.sql` and get 97 GiB back.
 
+**What one measured run took.** One full restore of a dump this size has been measured (2026-11-13), on a test machine, so treat it as a guide, not a promise:
+
+| | Measured |
+|---|---|
+| The dump | 45.6 million torrents, 281.6 million files |
+| Restored cluster | about 190 GB (177 GiB), under the 195 GiB estimate above |
+| WAL | 8 GB more |
+| Time for step 4's restore | about 25 hours |
+
+In that run the restore was limited by PostgreSQL itself: it loads the dump in one PostgreSQL process, which uses one CPU core however many the machine has, so more cores didn't help. Plan for a day or more, on a machine that can stay on.
+
 Measure the inputs and the free space.
 
 Unraid:
@@ -143,7 +154,7 @@ If Unraid answers `unzip: command not found`, unpack it in a throwaway container
 tar -xf "$O\backup.zip" -C "$W\dump" backup.sql     # Windows (tar.exe reads ZIP)
 ```
 
-Then look at what the dump is, without running it:
+Then look at what the dump is, without running it. (To check it before you unpack it, or without keeping the unpacked copy, see "Checking the dump without unpacking it" below.)
 
 ```bash
 head -c 5 "$W/dump/backup.sql"; echo                                    # "PGDMP" = custom format, else plain SQL
@@ -164,6 +175,25 @@ What to expect, and what to do otherwise:
 - **`ON CONFLICT DO NOTHING` (1).** Bitmagnet's guide adds it. The migrations already insert a few rows of their own (into `torrent_sources` and `metadata_sources`), and without it the dump's copies of those rows stop the restore with a duplicate-key error, perhaps hours in. If the count is 0 and the table list includes `torrent_sources` or `metadata_sources`, step 4 deletes the migrations' rows before loading.
 - **The table list** is Bitmagnet's (`torrents`, `torrent_files`, `content`, …), with `goose_db_version` possibly among them; `apply-migrations.sh` creates that table too. Any table you don't recognise: stop and ask.
 - **The only psql commands are `\restrict` and `\unrestrict`.** Any other line starting with a backslash, `\!` above all, could run commands: stop and look at it before going on. psql also accepts commands later on a line, but after `\restrict` it refuses every command until the matching `\unrestrict`, which is why a dump starts with it.
+
+**Checking the dump without unpacking it.** The checks above only read the dump from start to end, so they can read it straight out of the read-only `backup.zip` instead: the 97 GiB `backup.sql` doesn't have to be on disk for them. This is useful to check a dump before you make room for it. `unzip -p` writes the member to the pipe and nothing to disk. The checks that read the whole file are combined into one pass, because each pass decompresses all 97 GiB again.
+
+Unraid:
+
+```bash
+Z="$O/backup.zip"
+unzip -p "$Z" backup.sql | head -c 5; echo                                   # "PGDMP" = custom format, else plain SQL
+unzip -p "$Z" backup.sql | grep -a -m1 "client_encoding"                     # SET client_encoding = 'SQL_ASCII';
+unzip -p "$Z" backup.sql | head -c 67108864 | grep -a -c "^CREATE TABLE"     # 0 = data-only
+unzip -p "$Z" backup.sql | grep -a -m1 -c "ON CONFLICT DO NOTHING"           # 1 = re-runnable inserts
+unzip -p "$Z" backup.sql | grep -a -o -E '^(INSERT INTO public\.[a-z_]*|\\[a-zA-Z!]+)' | sort | uniq -c   # tables it fills, and psql commands in it
+```
+
+The last line gives both lists of the slow checks in one pass: the `INSERT INTO` lines are the tables, and the lines starting with a backslash are the psql commands. `unzip` may warn about a broken pipe on the lines that stop early (`head`, `grep -m1`); that's expected.
+
+Windows: run the same lines in a throwaway container that sees the original read-only. It needs the internet to install `unzip`: `docker run --rm -it -v "${O}:/o:ro" alpine:3 sh -c "apk add --no-cache unzip && sh"`, then set `Z=/o/backup.zip` and run the lines.
+
+Read the results as in the list above. **The restore itself still reads the unpacked `backup.sql`** (`restore.sh` takes a file), so step 4 needs it on disk; unpack it once the checks pass.
 
 **Input B, the data directory.** Copy it while nothing is running on it.
 
@@ -232,7 +262,7 @@ docker exec -u postgres bitmagnet-restore psql -X -v ON_ERROR_STOP=1 -d bitmagne
 - `restore-settings.sql` turns off crash safety (`fsync`) for speed. **If the host or container crashes before the end of this step, delete the cluster and start step 4 again;** it may be silently damaged.
 - `restore.sh` refuses to run unless the database is `SQL_ASCII`, and loads the dump with client encoding `SQL_ASCII` and `ON_ERROR_STOP`, so the first error ends it. `docker exec -d` keeps it running when you close the terminal.
 
-**Watch it.** The restore takes hours. Check progress and space now and then:
+**Watch it.** The restore takes hours: about 25 for the dump in step 2's measured run, most of it one PostgreSQL process at 100 % of one core. Check progress and space now and then:
 
 ```bash
 docker exec -u postgres bitmagnet-restore psql -X -d bitmagnet -c "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC LIMIT 5"
@@ -354,7 +384,7 @@ On a database the size of the owner's, the exact counts take minutes. If a count
 - **`schema` fails:** the restore is incomplete or isn't Bitmagnet 0.10.0. The JSON names each missing column and wrong type.
 - **`encoding` fails:** the database was created with the wrong encoding, so text may have been converted. Delete it and redo step 4.
 - **`row_counts`:** compare the `torrents` count with what Bitmagnet showed (about 45 million for the dump).
-- **`samples`:** `utf8_valid` below `rows` is expected for `SQL_ASCII` data. `rows` can be below `--sample` for `torrent_files` when there are few torrents: it takes at most two files from each one it lands on. Keep the two `sha256` values: running the checker again with the same `--seed` on an unchanged database gives the same ones, so they show later that nothing changed the bytes.
+- **`samples`:** `utf8_valid` below `rows` is expected for `SQL_ASCII` data. `rows` can be below `--sample` for `torrent_files` when there are few torrents: it takes at most two files from each one it lands on. The sample is spread over the hashes the database actually holds, so a partial restore (a slice) still gets a full one. When a table bigger than the sample still gives fewer rows, the summary and the JSON's `warnings` say so: the checks on that column then rest on fewer values. Keep the two `sha256` values: running the checker again with the same `--seed` on an unchanged database gives the same ones, so they show later that nothing changed the bytes.
 - **`disk` fails:** free space before going on.
 
 Keep `check.json` with the import records.

@@ -329,6 +329,82 @@ async fn an_empty_database_fails_even_on_estimates() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slice_restored_by_key_range_still_gets_a_full_sample() {
+    let Some(s) = server() else { return };
+    let db = database(&s, "slice", "SQL_ASCII", false).await;
+    let admin = connect(&format!("{} dbname={db}", s.base)).await;
+    // 2,000 torrents whose hashes all start 0x00..0x0b: the low 1/21 of
+    // the key space, as a slice restored by key range holds. Random starts
+    // over the whole space would leave most past the end, and a sample of
+    // a few dozen.
+    admin
+        .batch_execute(
+            "INSERT INTO public.torrents (info_hash, name, size, private, created_at, \
+             updated_at, files_status, files_count) \
+             SELECT set_byte(sha256(int4send(i)), 0, i % 12), 'Slice torrent ' || i, 1, false, \
+               '2024-01-01', '2024-01-01', 'single', 1 \
+             FROM generate_series(1, 2000) i; \
+             INSERT INTO public.torrent_files (info_hash, index, path, size, created_at, \
+             updated_at) \
+             SELECT info_hash, 0, 'a.bin', 1, '2024-01-01', '2024-01-01' FROM public.torrents; \
+             ANALYZE;",
+        )
+        .await
+        .unwrap();
+    let out = run(&s, &db, &["--sample", "500", "--counts", "estimate"]);
+    let (json, summary) = text(&out);
+    assert!(
+        json.contains(r#""column":"name","rows":500,"#),
+        "{summary}\n{json}"
+    );
+    assert!(
+        json.contains(r#""column":"path","rows":500,"#),
+        "{summary}\n{json}"
+    );
+    assert!(
+        !json.contains("asked for"),
+        "no thin-sample warning: {json}"
+    );
+    drop_database(&s, &db).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thin_sample_says_so() {
+    let Some(s) = server() else { return };
+    let db = database(&s, "thin", "SQL_ASCII", false).await;
+    let admin = connect(&format!("{} dbname={db}", s.base)).await;
+    // 600 files on only 10 torrents: each start lands on a torrent's first
+    // file and takes two, so at most 20 distinct files are sampled of the
+    // 500 asked for.
+    admin
+        .batch_execute(
+            "INSERT INTO public.torrents (info_hash, name, size, private, created_at, \
+             updated_at, files_status, files_count) \
+             SELECT sha256(int4send(i)), 'Thin torrent ' || i, 1, false, \
+               '2024-01-01', '2024-01-01', 'multi', 60 \
+             FROM generate_series(1, 10) i; \
+             INSERT INTO public.torrent_files (info_hash, index, path, size, created_at, \
+             updated_at) \
+             SELECT t.info_hash, f, 'f' || f, 1, '2024-01-01', '2024-01-01' \
+             FROM public.torrents t CROSS JOIN generate_series(0, 59) f; \
+             ANALYZE;",
+        )
+        .await
+        .unwrap();
+    let out = run(&s, &db, &["--sample", "500", "--counts", "estimate"]);
+    let (json, summary) = text(&out);
+    assert!(
+        json.contains("torrent_files.path: sampled ") && json.contains(" of the 500 asked for"),
+        "{summary}\n{json}"
+    );
+    assert!(summary.contains("asked for"), "{summary}");
+    // The 10 torrents are fewer than the sample, so they're read whole and
+    // no warning names them.
+    assert!(!json.contains("torrents.name: sampled"), "{json}");
+    drop_database(&s, &db).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_missing_or_retyped_column_fails_the_schema_check() {
     let Some(s) = server() else { return };
     let db = database(&s, "schema", "SQL_ASCII", true).await;

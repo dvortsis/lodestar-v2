@@ -797,21 +797,72 @@ fn splitmix(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// `count` random 20-byte starting keys from the seed. info_hashes are
-/// uniform, so the first row at or after each random key is a random row,
-/// read from the primary key index rather than by scanning the table.
-fn starts(seed: u64, count: usize) -> Vec<Vec<u8>> {
+/// `count` random starting keys from the seed, spread over `lo..hi`, the
+/// table's lowest and highest keys. info_hashes are uniform within the
+/// range a database holds, so the first row at or after each random key is
+/// a random row, read from the primary key index rather than by scanning
+/// the table. Drawing from the whole key space instead would put most
+/// starts past the end of a slice restored by key range, where they all
+/// wrap round to the same first rows (88 of 1,000 on a 2M-torrent slice).
+fn starts(seed: u64, count: usize, lo: &[u8], hi: &[u8]) -> Vec<Vec<u8>> {
+    let width = lo.len().max(hi.len()).max(1);
+    let pad = |k: &[u8]| {
+        let mut v = k.to_vec();
+        v.resize(width, 0);
+        v
+    };
+    let (lo, hi) = (pad(lo), pad(hi));
+    let span = sub(&hi, &lo);
     let mut state = seed;
-    let mut out = Vec::with_capacity(count);
-    for _ in 0..count {
-        let mut key = Vec::with_capacity(24);
-        for _ in 0..3 {
-            key.extend_from_slice(&splitmix(&mut state).to_be_bytes());
-        }
-        key.truncate(20);
-        out.push(key);
+    (0..count)
+        .map(|_| add(&lo, &scale(&span, splitmix(&mut state))))
+        .collect()
+}
+
+/// `a - b` for big-endian numbers of one width, `a >= b`; zero otherwise.
+fn sub(a: &[u8], b: &[u8]) -> Vec<u8> {
+    if a < b {
+        return vec![0; a.len()];
+    }
+    let mut out = vec![0; a.len()];
+    let mut borrow = 0i16;
+    for i in (0..a.len()).rev() {
+        let d = i16::from(a[i]) - i16::from(b[i]) - borrow;
+        borrow = i16::from(d < 0);
+        out[i] = d.rem_euclid(256) as u8;
     }
     out
+}
+
+/// `a + b` for big-endian numbers of one width; the sum fits, as it's at
+/// most the table's highest key.
+fn add(a: &[u8], b: &[u8]) -> Vec<u8> {
+    let mut out = vec![0; a.len()];
+    let mut carry = 0u16;
+    for i in (0..a.len()).rev() {
+        let s = u16::from(a[i]) + u16::from(b[i]) + carry;
+        out[i] = s as u8;
+        carry = s >> 8;
+    }
+    out
+}
+
+/// `n * r / 2^64` for a big-endian `n`: a point in `0..n`, as `r` runs
+/// over the `u64`s.
+fn scale(n: &[u8], r: u64) -> Vec<u8> {
+    let mut wide = vec![0u8; n.len() + 8];
+    let mut carry = 0u128;
+    for i in (0..n.len()).rev() {
+        let acc = u128::from(n[i]) * u128::from(r) + carry;
+        wide[i + 8] = acc as u8;
+        carry = acc >> 8;
+    }
+    for i in (0..8).rev() {
+        wide[i] = carry as u8;
+        carry >>= 8;
+    }
+    wide.truncate(n.len());
+    wide
 }
 
 /// The SQL for one sample. Rows come back ordered by the table's key; the
@@ -887,13 +938,42 @@ async fn check_samples(client: &Client, args: &Args, r: &mut Report) -> Result<(
             &[&(total + 1)],
         )
         .await;
-        let (starts, per_start) = match probe {
-            Ok(rows) if rows[0].get::<_, i64>(0) <= total => (vec![Vec::new()], total),
+        let (starts, per_start, whole) = match probe {
+            Ok(rows) if rows[0].get::<_, i64>(0) <= total => (vec![Vec::new()], total, true),
             // Twice as many random starts as rows wanted, so the few that
             // land on the same row still leave a full sample.
             Ok(_) => {
+                let first_key = key.split(',').next().unwrap_or(key).trim();
+                let range = query(
+                    client,
+                    args.timeout,
+                    &format!(
+                        // bytea has no min()/max(); each end is read
+                        // from the primary key index.
+                        "SELECT (SELECT {first_key} FROM public.{table} \
+                           ORDER BY {first_key} LIMIT 1), \
+                         (SELECT {first_key} FROM public.{table} \
+                           ORDER BY {first_key} DESC LIMIT 1)"
+                    ),
+                    &[],
+                )
+                .await;
+                let (lo, hi): (Vec<u8>, Vec<u8>) = match range {
+                    Ok(rows) => (
+                        rows[0].get::<_, Option<Vec<u8>>>(0).unwrap_or_default(),
+                        rows[0].get::<_, Option<Vec<u8>>>(1).unwrap_or_default(),
+                    ),
+                    Err(e) => {
+                        failed.push(format!("{table}.{column}: {e}"));
+                        continue;
+                    }
+                };
+                // The keys come from the database, which may be hostile:
+                // a start needs no more than an info_hash's 20 bytes, and a
+                // prefix still finds the first row at or after it.
+                let (lo, hi) = (&lo[..lo.len().min(20)], &hi[..hi.len().min(20)]);
                 let n = (args.sample as usize * 2).div_ceil(*per_start as usize);
-                (starts(args.seed, n), *per_start)
+                (starts(args.seed, n, lo, hi), *per_start, false)
             }
             Err(e) => {
                 failed.push(format!("{table}.{column}: {e}"));
@@ -936,6 +1016,15 @@ async fn check_samples(client: &Client, args: &Args, r: &mut Report) -> Result<(
             ));
         }
         s.sha256 = digest;
+        // A table bigger than the sample should fill it; say so plainly
+        // when it didn't, so a thin sample isn't read as a full one.
+        if !whole && s.rows < u64::from(args.sample) {
+            r.warnings.push(format!(
+                "{table}.{column}: sampled {} of the {} asked for; the checks on it rest on \
+                 fewer values",
+                s.rows, args.sample
+            ));
+        }
         r.samples.push(s);
     }
     // An empty corpus, or one hidden from this role, has nothing to import.
@@ -1411,14 +1500,50 @@ mod tests {
 
     #[test]
     fn starts_are_seeded_and_spread() {
-        let a = starts(0, 1000);
+        let (lo, hi) = ([0u8; 20], [0xff; 20]);
+        let a = starts(0, 1000, &lo, &hi);
         assert_eq!(a.len(), 1000);
         assert!(a.iter().all(|k| k.len() == 20));
-        assert_eq!(a, starts(0, 1000));
-        assert_ne!(a, starts(1, 1000));
+        assert_eq!(a, starts(0, 1000, &lo, &hi));
+        assert_ne!(a, starts(1, 1000, &lo, &hi));
         // Spread over the key space: every top-byte sixteenth is hit.
         let buckets: BTreeSet<u8> = a.iter().map(|k| k[0] >> 4).collect();
         assert_eq!(buckets.len(), 16);
+    }
+
+    #[test]
+    fn starts_stay_inside_a_slice_of_the_key_space() {
+        // A slice restored by key range: the lowest 12/256 (about 1/21) of
+        // the space.
+        let mut lo = [0u8; 20];
+        lo[19] = 3;
+        let mut hi = [0xff; 20];
+        hi[0] = 0x0b;
+        let a = starts(7, 2000, &lo, &hi);
+        assert!(
+            a.iter()
+                .all(|k| k.as_slice() >= &lo[..] && k.as_slice() <= &hi[..])
+        );
+        // Spread over the slice, not bunched at one end.
+        let buckets: BTreeSet<u8> = a.iter().map(|k| k[0]).collect();
+        assert_eq!(buckets.len(), 12, "{buckets:?}");
+        let distinct: BTreeSet<&Vec<u8>> = a.iter().collect();
+        assert_eq!(distinct.len(), 2000);
+        // Keys of other widths are padded to the wider one.
+        let b = starts(7, 10, &[1], &[2, 0, 0]);
+        assert!(b.iter().all(|k| k.len() == 3 && k[0] == 1));
+        // One key: every start is it.
+        assert!(starts(1, 5, &hi, &hi).iter().all(|k| k == &hi));
+    }
+
+    #[test]
+    fn big_endian_arithmetic() {
+        assert_eq!(sub(&[1, 0], &[0, 1]), [0, 255]);
+        assert_eq!(sub(&[0, 1], &[1, 0]), [0, 0]);
+        assert_eq!(add(&[0, 255], &[0, 1]), [1, 0]);
+        assert_eq!(scale(&[255, 255], u64::MAX), [255, 254]);
+        assert_eq!(scale(&[1, 0], 1 << 63), [0, 128]);
+        assert_eq!(scale(&[9, 9], 0), [0, 0]);
     }
 
     #[test]
