@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T06:28Z",
+  "updated_at": "2026-11-13T06:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7951,6 +7951,12 @@
       "at": "2026-11-13T06:28Z",
       "what": "rv-815 O6: widen .github/scripts/ci_changes.py COMPANION_PINS to the gluetun rules files and docs/user chapter 3. Own small slice X-gluetun-pin-ci-filter (helper, sonnet) after X-ci-advisories merges; add to slices.yaml in the next runner PR and remove the O6 line from X-ci-advisories notes.",
       "status": "open"
+    },
+    {
+      "id": "next-runner-pr-owns",
+      "at": "2026-11-13T06:31Z",
+      "what": "Next runner PR: X-gluetun-templates-hostfile owns += crates/lodestar/src/privdrop.rs (+tests; /companions + gluetun only, no-follow fchown, never create /companions, /security-review) and crates/companions/tests/flaresolverr.rs; add X-gluetun-pin-ci-filter; add FILTER-01 / FILTER-03 / APIFEAT-01 fix slices by id only (choices sent to sessions directly).",
+      "status": "open"
     }
   ],
   "main_health": [
@@ -8985,7 +8991,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T06:28Z",
+    "updated": "2026-11-13T06:31Z",
     "items": [
       {
         "slot": 1,
@@ -9234,7 +9240,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T06:28Z",
+  "updated": "2026-11-13T06:31Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
