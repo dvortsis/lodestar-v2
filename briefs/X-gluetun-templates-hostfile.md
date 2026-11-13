@@ -15,7 +15,7 @@ The spec is the slices.yaml entry `X-gluetun-templates-hostfile` (deps X-gluetun
 **How the file is written:**
 - atomically (temp file in the same folder, then rename);
 - with no symlink following;
-- mode 0644, under the data folder only;
+- mode 0644, in the separate companion-files folder only (Unraid default `/mnt/user/appdata/lodestar-companions`, mounted rw at `/companions`), never in Lodestar's data folder (runner, 2026-11-13; recorded in #819);
 - refusing a path outside it.
 
 **Rules:**
