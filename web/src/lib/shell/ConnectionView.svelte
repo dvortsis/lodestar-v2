@@ -20,6 +20,10 @@
 	} = $props();
 </script>
 
+<svelte:head>
+	{#if kind === 'offline'}<title>{m.shell_state_offline_title()}</title>{/if}
+</svelte:head>
+
 {#if kind === 'offline'}
 	<StateScreen
 		title={m.shell_state_offline_title()}

@@ -13,7 +13,18 @@ describe('serverAnswers', () => {
 	it('is true for any HTTP answer, including a 500', async () => {
 		const f = vi.fn(async () => new Response('boom', { status: 500 }));
 		expect(await serverAnswers(f as unknown as typeof fetch)).toBe(true);
-		expect(f).toHaveBeenCalledWith('/healthz', expect.objectContaining({ cache: 'no-store' }));
+		expect(f).toHaveBeenCalledWith(
+			'/_app/version.json',
+			expect.objectContaining({ cache: 'no-store' })
+		);
+	});
+
+	it('asks version.json, so a Lodestar 503 from /healthz does not matter', async () => {
+		const f = vi.fn(async (url: string) =>
+			url === '/healthz' ? new Response('stopped: a source', { status: 503 }) : new Response('{}')
+		);
+		expect(await serverAnswers(f as unknown as typeof fetch)).toBe(true);
+		expect(f.mock.calls.map((c) => c[0])).toEqual(['/_app/version.json']);
 	});
 
 	it.each([502, 503, 504])('is false when a proxy in front answers %i', async (status) => {

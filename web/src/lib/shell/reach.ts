@@ -1,7 +1,10 @@
 // Telling "the server is not there" from "the server said no", and waiting for it to come back.
 // Kit shows +error.svelte with status 500 both when a route's code or data could not be fetched
 // because nothing answered, and when the server really failed. Only the first is a connection
-// problem: ask the server's health endpoint. Any HTTP answer, whatever its status, means it is up.
+// problem. The probe is a file Lodestar always serves with a 200 (`/_app/version.json`, no-cache),
+// never `/healthz`, which answers 503 while a source plugin is stopped on a perfectly reachable
+// server.
+export const PROBE_URL = '/_app/version.json';
 
 export const FIRST_MS = 1_000;
 export const CAP_MS = 30_000;
@@ -14,14 +17,14 @@ export function backoffMs(attempt: number): number {
 export const PROBE_MS = 5_000;
 
 /** True when the server answered; false when the request failed, timed out, or a reverse proxy in
- *  front of a stopped server said so (502, 503, 504). Any other HTTP answer, even a 500, is the
- *  server's own. */
+ *  front of a stopped server said so (502, 503, 504: Lodestar never sends these for this file).
+ *  Any other HTTP answer is the server's own. */
 export async function serverAnswers(
 	fetcher: typeof fetch = (input, init) => fetch(input, init),
 	signal?: AbortSignal
 ): Promise<boolean> {
 	try {
-		const res = await fetcher('/healthz', {
+		const res = await fetcher(PROBE_URL, {
 			cache: 'no-store',
 			signal: signal ?? AbortSignal.timeout(PROBE_MS)
 		});
