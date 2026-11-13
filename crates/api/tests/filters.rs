@@ -329,16 +329,58 @@ async fn too_large_to_judge_is_locked() {
         (&row["on"], &row["floor"], &row["action"]),
         (&json!(true), &json!(true), &json!("quarantine"))
     );
-    // Releasing a held one.
-    let hash = [0x5a; 20];
-    hold(&f, hash, "CS-0a", Held::Quarantine, 1_000);
-    let release = json!({ "op": "release", "hash": "5a".repeat(20) });
-    let (status, body) = apply(&f, &c, release.clone(), None).await;
+    // Releasing a held one. Two are held, so the second release shows a
+    // password confirmed once isn't kept for the next.
+    let (one, two) = ([0x5a; 20], [0x5b; 20]);
+    hold(&f, one, "CS-0a", Held::Quarantine, 1_000);
+    hold(&f, two, "CS-0a", Held::Quarantine, 1_000);
+    let release = |hash: [u8; 20]| json!({ "op": "release", "hash": hex(&hash) });
+    let held = |hash: [u8; 20]| {
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .quarantine_rule(&hash)
+            .unwrap()
+            .is_some()
+    };
+    // Without a session: refused before anything is read.
+    let (status, _, _) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/apply",
+            None,
+            json!({ "change": release(one), "password": PASSWORD }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(held(one));
+    // The warning first, saying what releasing it means.
+    let (status, body) = apply(&f, &c, release(one), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
     let w = body["assessment"]["warning"].as_str().unwrap();
     assert!(w.contains("too large") && w.contains("held again"), "{w}");
-    let (status, body) = apply(&f, &c, release, Some(PASSWORD)).await;
+    assert!(held(one));
+    // A wrong password releases nothing.
+    let (status, body) = apply(&f, &c, release(one), Some("not the password")).await;
+    assert!(
+        status.is_client_error() && status != StatusCode::OK,
+        "{status} {body}"
+    );
+    assert!(held(one));
+    // The admin password releases it.
+    let (status, body) = apply(&f, &c, release(one), Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!held(one));
+    // And it's asked for again, every time.
+    let (status, body) = apply(&f, &c, release(two), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    assert!(held(two));
+}
+
+fn hex(hash: &[u8; 20]) -> String {
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Stored filter text never uses `..<`: a binary one release back can't
