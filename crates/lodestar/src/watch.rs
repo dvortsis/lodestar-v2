@@ -409,6 +409,9 @@ impl Watcher {
         }
         let mut seen = HashMap::new();
         let mut submitted = 0;
+        // Names an eviction dealt with this poll: what's there now is
+        // judged by a later poll, never by this one's stale listing.
+        let mut evicted: HashSet<OsString> = HashSet::new();
         let mut entries = entries.into_iter();
         for (name, entry) in entries.by_ref() {
             // A problem putting files away (rv-765 B2), or the set full:
@@ -416,6 +419,9 @@ impl Watcher {
             if self.halted || out.problem.is_some() {
                 seen.extend(self.seen.remove_entry(&name));
                 break;
+            }
+            if evicted.contains(&name) {
+                continue;
             }
             if self.retry_stuck(&folder, &name, &entry, &mut out).await {
                 continue;
@@ -519,6 +525,7 @@ impl Watcher {
                         out.waiting += 1;
                         out.rechecking += 1;
                         self.evict(&folder, &oldest, its, &mut out).await;
+                        evicted.insert(oldest);
                         continue;
                     }
                 }
@@ -1767,6 +1774,9 @@ mod tests {
         }
         let p = settle(&mut w, &s).await;
         assert_eq!((p.failed, p.pending_full), (0, 0));
+        // Not looked at again this poll from the stale listing: on Windows
+        // that read fails as `unreadable` (rv: CI on #837).
+        assert_eq!(p.waiting, MAX_HELD as u64);
         assert!(at.join("inside").exists(), "the folder stays where it is");
         assert!(t.names(FAILED).is_empty());
         assert!(w.stuck.is_empty() && !w.held.contains_key(OsStr::new("m0.torrent")));
@@ -1801,8 +1811,8 @@ mod tests {
     }
 
     /// An evicted file that sorts after the one that pushed it out is
-    /// reached later in the same poll: it's gone by then, so it's neither
-    /// read again nor failed twice.
+    /// skipped for the rest of the poll: neither read again, nor counted
+    /// again, nor failed twice.
     #[tokio::test]
     async fn an_evicted_file_later_in_the_poll_is_not_read() {
         let t = T::new();
@@ -1815,7 +1825,10 @@ mod tests {
             t.put(&format!("a{i}.torrent"), b"MALF");
         }
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.failed, p.pending_full), (1, 1));
+        assert_eq!(
+            (p.failed, p.pending_full, p.waiting),
+            (1, 1, MAX_HELD as u64)
+        );
         assert_eq!(t.names(FAILED), ["z0.malformed.torrent"]);
         assert_eq!(calls(&f), 1 + MAX_HELD, "z0 read once only");
         assert!(w.stuck.is_empty());
