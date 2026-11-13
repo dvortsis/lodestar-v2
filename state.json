@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T13:34Z",
+  "updated_at": "2026-11-13T13:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8044,13 +8044,18 @@
     },
     {
       "id": "slices-yaml-x-e2e-orphan-specs-owns",
-      "note": "Add web/e2e/support/** to X-e2e-orphan-specs owns in the next runner PR (runner approved fixture-session.ts, test-only, 2026-11-13T12:56Z).",
+      "note": "Add web/e2e/support/** and web/scripts/e2e-spec-guard*.ts to X-e2e-orphan-specs owns in the next runner PR (runner approved, test-only).",
       "at": "2026-11-13T12:56Z"
     },
     {
       "id": "gluetun-hostfile-ui-refusal-kinds",
       "note": "When X-gluetun-hostfile-ui launches (gated on X-cmp-egress-ui): system.companions_dir_left now also has kinds nested and mounts (#831); the UI must name them.",
       "at": "2026-11-13T13:32Z"
+    },
+    {
+      "id": "e2e-fixture-pr-lane",
+      "note": "Weigh a path-filtered PR lane that runs the Playwright fixture projects (release build) only when web/e2e fixture specs or support change; today they run nightly only (#834).",
+      "at": "2026-11-13T13:42Z"
     }
   ],
   "main_health": [
@@ -8439,6 +8444,11 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
+    },
+    "834": {
+      "slice": "X-e2e-orphan-specs",
+      "head": "71b20171",
+      "note": "not ready; fixture project nightly-only (runner call); owns exceptions web/e2e/support/fixture-session.ts, web/scripts/e2e-spec-guard{,.test}.ts"
     }
   },
   "merged_log": [
@@ -9085,7 +9095,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T13:34Z",
+    "updated": "2026-11-13T13:42Z",
     "items": [
       {
         "slot": 1,
@@ -9321,7 +9331,7 @@
     }
   ],
   "heartbeat": "2026-11-13T12:39Z",
-  "updated": "2026-11-13T13:34Z",
+  "updated": "2026-11-13T13:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
