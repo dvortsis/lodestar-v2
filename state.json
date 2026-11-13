@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:50Z",
+  "updated_at": "2026-11-13T03:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7877,6 +7877,12 @@
       "id": "x-gluetun-templates",
       "at": "2026-11-13T02:28Z",
       "note": "New slice X-gluetun-templates (next runner PR; user-docs skill; owner-visible template defaults, so flag per \u00a72.19): compose depends_on gluetun service_healthy and the Unraid autostart wait; VPN_INTERFACE matched to VPN type (wg0 for WireGuard, tun0 for OpenVPN); post-rules file delivery (compose inline configs:, Unraid read-only Path written by Lodestar; a missing file fails closed); the gluetun Overview overclaim; HEALTH_SMALL_CHECK_TYPE=dns in the troubleshooting table for users whose ICMP health target is on the LAN. From the X-gluetun-leak session notes, 2026-11-13."
+    },
+    {
+      "id": "X-gluetun-templates-hostfile",
+      "added": "2026-11-13T03:52Z",
+      "for": "next runner PR",
+      "text": "New slice: ServiceInput gluetun_paths + crates/lodestar callers (cli/companion.rs, companions.rs) + Lodestar writes post-rules.txt from the embedded copy (config_files.rs or manager.rs). Deps X-gluetun-templates, X-cmp-egress-api. Opus, /security-review. X-gluetun-templates ships plan A (user-saved file, read-only Path default /mnt/cache/appdata/gluetun/post-rules.txt): \u00a72.19 flag to owner."
     }
   ],
   "main_health": [
@@ -9248,7 +9254,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T03:50Z",
+  "updated": "2026-11-13T03:52Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
