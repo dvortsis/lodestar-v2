@@ -330,7 +330,7 @@ pub enum SpecError {
 /// Checks `spec` against what the credential store takes and what
 /// [`need_with`] accepts for `manifest`: each name passes [`check_name`], isn't
 /// an egress name and is declared once with a label, and for an Account
-/// source, storing every required one satisfies [`need`].
+/// source, storing every required one satisfies [`need_with`].
 pub fn check_spec(manifest: &Manifest, spec: &[CredentialSpec]) -> Result<(), SpecError> {
     if spec.len() > MAX_CREDENTIALS {
         return Err(SpecError::TooMany);

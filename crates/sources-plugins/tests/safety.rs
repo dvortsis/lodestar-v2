@@ -724,7 +724,12 @@ async fn no_enable_path_opens_a_consent_class_in_any_shipped_plugin() {
                         || (class == Some(m.consent)
                             && version.as_deref() == Some(current.as_str())))
                         && password_ok;
-                    if !consent_text_approved(m.consent) {
+                    // This version's answer, pinned here rather than read
+                    // from the gate: External and Account are refused
+                    // whatever is sent (X-consent-gate-lift).
+                    let refused_here = matches!(m.consent, Consent::External | Consent::Account);
+                    assert_eq!(refused_here, !consent_text_approved(m.consent), "{}", m.id);
+                    if refused_here {
                         assert!(
                             matches!(&r, Err(SourceError::Invalid { field: "enabled", reason })
                                 if *reason == CONSENT_GATE_REASON),

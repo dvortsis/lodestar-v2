@@ -19,8 +19,9 @@
 //!   operational control, not a filter change.
 //! - **Consent (§18.7):** the server refuses to enable a source until its
 //!   class's condition holds (the binary checks it against the store;
-//!   this crate only checks the password). In this build that refuses
-//!   every class but `none` (see `patchSource`).
+//!   this crate only checks the password). In this build `restricted` and
+//!   `overlay` need their consent text accepted exactly and the password,
+//!   and `external` and `account` are refused (see `patchSource`).
 //! - **What a source declares** (`credential_spec`, `config_schema`) is
 //!   read-only and compiled in: it describes fields, never a value.
 //! - **Credentials** (`PATCH /sources/{id}/credentials`) are taken in and
