@@ -671,6 +671,7 @@ impl Pipeline {
                 let m = p.manifest();
                 Registering {
                     manifest: m.clone(),
+                    credentials: p.policy().credentials,
                     peer_finder: m.is(Kind::PeerFinder),
                 }
             })
@@ -1378,6 +1379,11 @@ fn sources_egress_routes(sources: &[SourceEntry]) -> Vec<&'static str> {
 /// What [`prepare`] needs of a plugin's manifest.
 struct Registering {
     manifest: lodestar_sources::Manifest,
+    /// Its declared credentials (`Policy::credentials`), which an Account
+    /// source's condition is judged against ([`consent::need_with`]).
+    ///
+    /// [`consent::need_with`]: lodestar_sources::consent::need_with
+    credentials: &'static [lodestar_sources::consent::CredentialSpec],
     peer_finder: bool,
 }
 
@@ -1385,8 +1391,11 @@ struct Registering {
 /// by default (the Mainline DHT, §18.1) whose class needs nothing more
 /// than a toggle starts enabled; the rest wait for the user, and their
 /// consent (§18.7).
-fn first_state(m: &lodestar_sources::Manifest) -> SourceState {
-    if m.enabled_by_default && lodestar_sources::consent::need(m, None, &[]).is_none() {
+fn first_state(r: &Registering) -> SourceState {
+    let m = &r.manifest;
+    if m.enabled_by_default
+        && lodestar_sources::consent::need_with(m, r.credentials, None, &[]).is_none()
+    {
         SourceState::Enabled
     } else {
         SourceState::Disabled
@@ -1424,14 +1433,20 @@ fn prepare(
         .iter()
         .map(|r| {
             let m = &r.manifest;
-            store.register_source_as(m.id, m.version, first_state(m), now)
+            store.register_source_as(m.id, m.version, first_state(r), now)
         })
         .collect::<Result<Vec<_>, _>>()?;
     // Every start checks each enabled source's class condition again
     // (§18.7, §18.9): one whose consent text or endpoints changed since
     // it was acknowledged, whose credentials are gone, or that was
     // enabled some other way, is switched off before it can run.
-    control::switch_off_unapproved(&mut store, manifests.iter().map(|r| &r.manifest).zip(&ids))?;
+    control::switch_off_unapproved(
+        &mut store,
+        manifests
+            .iter()
+            .map(|r| (&r.manifest, r.credentials))
+            .zip(&ids),
+    )?;
     let states: HashMap<SourceId, SourceState> = store
         .sources()?
         .into_iter()
@@ -1550,6 +1565,12 @@ struct Intake {
     enrichers: adult_enrich::EnrichSources,
 }
 
+/// Whether the intake may claim `d`'s key for the pool: never for a
+/// usenet find, whose key is only a writer-map key (UN-1).
+fn claimable(d: &Discovery) -> bool {
+    !d.found.is_usenet()
+}
+
 /// The worker's intake: known keys go to the writer as rediscoveries; new
 /// ones are claimed from the coordinator (§19.3) and go to the pool.
 ///
@@ -1569,11 +1590,15 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
         };
         if !retried {
             io.stats.received.fetch_add(1, Ordering::Relaxed);
-            // An enrichment match (ENR-1b) is an answer about a stored
-            // torrent, not a key the source harvested.
+            // An enrichment match (ENR-1b) or identification (ENR-10) is
+            // an answer about a stored torrent, not a key the source
+            // harvested.
             // Nor is a usenet result (UN-1): it has no swarm hash, and it's
             // sent again on every poll.
-            if !adult_enrich::is_match(&d, io.enrichers) && !d.found.is_usenet() {
+            if !adult_enrich::is_match(&d, io.enrichers)
+                && !unverified::is_identification(&d, io.enrichers)
+                && !d.found.is_usenet()
+            {
                 io.rollups.add(
                     d.at,
                     metric::HARVESTED,
@@ -1632,6 +1657,13 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
                 }
                 continue;
             }
+        }
+        // Defensive (X-un1-nits): a usenet find has no swarm hash, so
+        // whatever path brought it here (a retry, say), its key is never
+        // claimed, leased or looked up as one.
+        if !claimable(&d) {
+            io.stats.refused.fetch_add(1, Ordering::Relaxed);
+            continue;
         }
         let claim = Claim {
             key: d.found.key,
@@ -1731,6 +1763,20 @@ pub fn save_hot(store: &mut Store, hot: &HotColumns, dir: &Path) -> Result<(), E
 mod tests {
     use super::*;
     use lodestar_metainfo::InfoHash;
+
+    #[test]
+    fn a_usenet_find_is_never_claimable() {
+        let d = |found| Discovery {
+            source: SourceId::new(1).unwrap(),
+            found,
+            at: 0,
+            reply: false,
+        };
+        let usenet = lodestar_sources::Found::usenet("7", "g", 0).unwrap();
+        assert!(!claimable(&d(usenet)));
+        let bt = lodestar_sources::Found::key(InfoHash([1; 20]), 0);
+        assert!(claimable(&d(bt)));
+    }
 
     #[test]
     fn a_saved_refetch_is_matched_by_code_and_owner() {

@@ -23,6 +23,9 @@
 //!   network interface or a SOCKS5 proxy, for per-plugin egress (§18.4).
 //!   The route is the only way out: there's no fallback to a direct
 //!   connection when it's down.
+//! - **Raw TCP** ([`connect_tcp_routed`]) takes the same routes, with an
+//!   in-house SOCKS5 handshake ([`socks`]) and an optional kill-switch
+//!   ([`KillSwitch`]). [`connect_tcp`] keeps the direct route.
 //! - **No URL in any error or log.** URLs can carry tokens (Discord webhooks
 //!   do), so errors name only the address class; [`redact`] gives a safe
 //!   form for logs.
@@ -40,6 +43,7 @@ use reqwest::{Method, Request, Response, Url};
 use crate::BoxFuture;
 use crate::secret::Secret;
 
+pub mod socks;
 mod tracker;
 pub use tracker::public_tracker_url;
 
@@ -1130,6 +1134,343 @@ pub async fn connect_tcp_with(
     tokio::time::timeout(timeout, connect)
         .await
         .map_err(|_| NetError::Timeout)?
+}
+
+/// A route's kill-switch, for [`connect_tcp_routed`] (§18.4, §5): while
+/// it's down, no connection is opened, and a connection still being made
+/// when it goes down is abandoned. Once the stream is handed over, keeping
+/// it under the switch is the caller's job (it owns the stream).
+pub trait KillSwitch: Send + Sync {
+    /// Whether connections may be opened now.
+    fn is_up(&self) -> bool;
+    /// Resolves once the route is down. It must also resolve when the
+    /// state can no longer change, so a lost switch fails closed.
+    fn went_down(&self) -> BoxFuture<'_, ()>;
+}
+
+/// A `watch` channel of "the route is up". A closed channel counts as down.
+impl KillSwitch for tokio::sync::watch::Receiver<bool> {
+    fn is_up(&self) -> bool {
+        self.has_changed().is_ok() && *self.borrow()
+    }
+
+    fn went_down(&self) -> BoxFuture<'_, ()> {
+        let mut rx = self.clone();
+        Box::pin(async move {
+            // `Err` means the sender is gone: down for good.
+            let _ = rx.wait_for(|up| !*up).await;
+        })
+    }
+}
+
+/// Why [`connect_tcp_routed`] failed. No variant carries a host, a
+/// credential or proxy bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TcpRouteError {
+    /// The guard refused the destination, or resolving or connecting
+    /// failed. [`NetError::Connect`] also covers a bind address or
+    /// interface that's gone, and a destination with no address in the
+    /// bind address's family.
+    Net(NetError),
+    /// The route can't be used here (an interface off Linux, a bad
+    /// interface name or proxy login).
+    Route(RouteError),
+    /// The SOCKS5 proxy's handshake failed.
+    Socks(socks::SocksError),
+    /// The kill-switch is down.
+    KillSwitch,
+}
+
+impl fmt::Display for TcpRouteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TcpRouteError::Net(e) => e.fmt(f),
+            TcpRouteError::Route(e) => e.fmt(f),
+            TcpRouteError::Socks(e) => e.fmt(f),
+            TcpRouteError::KillSwitch => {
+                f.write_str("the route is down, so the kill-switch refused the connection")
+            }
+        }
+    }
+}
+
+impl StdError for TcpRouteError {}
+
+impl From<NetError> for TcpRouteError {
+    fn from(e: NetError) -> Self {
+        TcpRouteError::Net(e)
+    }
+}
+
+impl From<RouteError> for TcpRouteError {
+    fn from(e: RouteError) -> Self {
+        TcpRouteError::Route(e)
+    }
+}
+
+impl From<socks::SocksError> for TcpRouteError {
+    fn from(e: socks::SocksError) -> Self {
+        TcpRouteError::Socks(e)
+    }
+}
+
+/// A guarded TCP connection over a [`Route`], for protocols that can't use
+/// [`GuardedClient`]'s HTTP stack (IRC, WebSocket).
+///
+/// - **The guard** is [`connect_tcp_with`]'s: the destination is resolved
+///   once and every answer checked, or, on a SOCKS5 route that resolves on
+///   the proxy ([`SocksDns::Proxy`]), a literal address is checked and a
+///   plainly local name refused as the HTTP client does.
+/// - **The route** is the only way out: a bind address or interface that's
+///   gone, or a proxy that doesn't answer, fails the connection. Nothing
+///   falls back to a direct connection.
+/// - **The kill-switch**, when given, is checked before anything is sent,
+///   races the whole connection (an abandoned attempt's socket is closed),
+///   and is checked again before the stream is returned.
+/// - `timeout` covers resolving, connecting and the proxy handshake.
+pub async fn connect_tcp_routed(
+    resolver: &dyn Resolve,
+    host: &str,
+    port: u16,
+    policy: NetPolicy,
+    route: &Route,
+    kill: Option<&dyn KillSwitch>,
+    timeout: Duration,
+) -> Result<tokio::net::TcpStream, TcpRouteError> {
+    let refused = || kill.is_some_and(|k| !k.is_up());
+    if refused() {
+        return Err(TcpRouteError::KillSwitch);
+    }
+    check_route(route)?;
+    let work = async {
+        tokio::time::timeout(timeout, connect_on(resolver, host, port, policy, route))
+            .await
+            .map_err(|_| TcpRouteError::Net(NetError::Timeout))?
+    };
+    let stream = match kill {
+        None => work.await?,
+        // A biased race without tokio's `macros` feature: the switch is
+        // polled first, so a switch that went down wins over a connection
+        // finishing in the same wake-up.
+        Some(k) => {
+            let mut work = std::pin::pin!(work);
+            let mut down = k.went_down();
+            std::future::poll_fn(|cx| {
+                if down.as_mut().poll(cx).is_ready() {
+                    return std::task::Poll::Ready(Err(TcpRouteError::KillSwitch));
+                }
+                work.as_mut().poll(cx)
+            })
+            .await?
+        }
+    };
+    if refused() {
+        return Err(TcpRouteError::KillSwitch);
+    }
+    Ok(stream)
+}
+
+/// The DNS-free checks of a route, so a route that can't work fails before
+/// any lookup or connection.
+fn check_route(route: &Route) -> Result<(), RouteError> {
+    match route {
+        Route::Direct | Route::BindAddress(_) => Ok(()),
+        Route::Interface(name) => {
+            check_interface_name(name)?;
+            if cfg!(target_os = "linux") {
+                Ok(())
+            } else {
+                Err(RouteError::Unsupported(INTERFACE_UNSUPPORTED))
+            }
+        }
+        Route::Socks5(s) => match &s.auth {
+            Some(a)
+                if !(1..=255).contains(&a.username.expose().len())
+                    || !(1..=255).contains(&a.password.expose().len()) =>
+            {
+                Err(RouteError::InvalidCredentials)
+            }
+            _ => Ok(()),
+        },
+    }
+}
+
+async fn connect_on(
+    resolver: &dyn Resolve,
+    host: &str,
+    port: u16,
+    policy: NetPolicy,
+    route: &Route,
+) -> Result<tokio::net::TcpStream, TcpRouteError> {
+    let socket_for = |addr: SocketAddr| {
+        if addr.is_ipv4() {
+            tokio::net::TcpSocket::new_v4()
+        } else {
+            tokio::net::TcpSocket::new_v6()
+        }
+    };
+    match route {
+        Route::Direct => {
+            for addr in resolve_tcp(resolver, host, port, policy).await? {
+                if let Ok(s) = tokio::net::TcpStream::connect(addr).await {
+                    return Ok(s);
+                }
+            }
+        }
+        Route::BindAddress(local) => {
+            let family = Family::of(*local);
+            let addrs = resolve_tcp(resolver, host, port, policy).await?;
+            for addr in addrs.into_iter().filter(|a| Family::of(a.ip()) == family) {
+                let Ok(sock) = socket_for(addr) else { continue };
+                if sock.bind(SocketAddr::new(*local, 0)).is_err() {
+                    // The address is gone: every attempt would fail alike.
+                    break;
+                }
+                if let Ok(s) = sock.connect(addr).await {
+                    return Ok(s);
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        Route::Interface(name) => {
+            for addr in resolve_tcp(resolver, host, port, policy).await? {
+                let Ok(sock) = socket_for(addr) else { continue };
+                if sock.bind_device(Some(name.as_bytes())).is_err() {
+                    break;
+                }
+                if let Ok(s) = sock.connect(addr).await {
+                    return Ok(s);
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        Route::Interface(_) => {
+            return Err(RouteError::Unsupported(INTERFACE_UNSUPPORTED).into());
+        }
+        Route::Socks5(s) => return via_socks(resolver, host, port, policy, s).await,
+    }
+    Err(TcpRouteError::Net(NetError::Connect))
+}
+
+/// The destinations to ask the proxy for, checked by the guard, then one
+/// handshake per destination until one connects. A proxy that refuses a
+/// destination is asked for the next; any other failure (a malformed
+/// answer, a refused login) ends the attempt.
+async fn via_socks(
+    resolver: &dyn Resolve,
+    host: &str,
+    port: u16,
+    policy: NetPolicy,
+    route: &Socks5Route,
+) -> Result<tokio::net::TcpStream, TcpRouteError> {
+    use socks::Target;
+    let targets: Vec<Target> = match route.dns {
+        SocksDns::Local => resolve_tcp(resolver, host, port, policy)
+            .await?
+            .into_iter()
+            .map(Target::Addr)
+            .collect(),
+        SocksDns::Proxy => {
+            let url = check_host(host, port, policy)?;
+            match literal_ip(&url) {
+                Some(ip) => vec![Target::Addr(SocketAddr::new(ip, port))],
+                None => {
+                    let name = url
+                        .host_str()
+                        .ok_or(NetError::InvalidUrl("it has no host"))?;
+                    if let Some(class) = local_name_class(name) {
+                        policy.check_class(class)?;
+                    }
+                    vec![Target::Name(name.to_owned(), port)]
+                }
+            }
+        }
+    };
+    let mut last = TcpRouteError::Net(NetError::Connect);
+    for target in &targets {
+        match socks_handshake(route, target).await {
+            Ok(s) => return Ok(s),
+            Err(e @ TcpRouteError::Socks(socks::SocksError::Refused(_))) => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+/// One SOCKS5 `CONNECT` through a fresh connection to the proxy. The proxy
+/// is infrastructure the user chose, so its own address isn't checked
+/// against the policy (as on the HTTP route).
+async fn socks_handshake(
+    route: &Socks5Route,
+    target: &socks::Target,
+) -> Result<tokio::net::TcpStream, TcpRouteError> {
+    let stream = tokio::net::TcpStream::connect(route.proxy)
+        .await
+        .map_err(|_| NetError::Connect)?;
+    let with_auth = route.auth.is_some();
+    write_all(&stream, &socks::greeting(with_auth)).await?;
+    socks::parse_method(read_array(&stream).await?, with_auth)?;
+    if let Some(auth) = &route.auth {
+        let req = zeroize::Zeroizing::new(socks::auth_request(
+            auth.username.expose().as_bytes(),
+            auth.password.expose().as_bytes(),
+        )?);
+        write_all(&stream, &req).await?;
+        socks::parse_auth(read_array(&stream).await?)?;
+    }
+    write_all(&stream, &socks::connect_request(target)?).await?;
+    let prefix: [u8; socks::REPLY_PREFIX] = read_array(&stream).await?;
+    let len = socks::reply_len(prefix)?;
+    let mut reply = [0u8; socks::MAX_REPLY];
+    reply[..socks::REPLY_PREFIX].copy_from_slice(&prefix);
+    read_full(&stream, &mut reply[socks::REPLY_PREFIX..len]).await?;
+    // The bound address is the proxy's own outbound socket, not the
+    // destination, so it's checked for form only (decisions NOS-2a).
+    socks::parse_reply(&reply[..len])?;
+    Ok(stream)
+}
+
+/// Writes all of `buf`. Uses the socket's readiness API, so the crate needs
+/// no `io-util`.
+async fn write_all(stream: &tokio::net::TcpStream, mut buf: &[u8]) -> Result<(), TcpRouteError> {
+    while !buf.is_empty() {
+        stream.writable().await.map_err(|_| NetError::Connect)?;
+        match stream.try_write(buf) {
+            Ok(0) => return Err(NetError::Connect.into()),
+            Ok(n) => buf = &buf[n..],
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => return Err(NetError::Connect.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Reads exactly `buf.len()` bytes and not one more, so nothing of the
+/// tunnelled stream is consumed. An early close is a malformed answer.
+async fn read_full(
+    stream: &tokio::net::TcpStream,
+    mut buf: &mut [u8],
+) -> Result<(), TcpRouteError> {
+    while !buf.is_empty() {
+        stream.readable().await.map_err(|_| NetError::Connect)?;
+        match stream.try_read(buf) {
+            Ok(0) => {
+                return Err(socks::SocksError::Malformed("the proxy closed mid-handshake").into());
+            }
+            Ok(n) => buf = &mut buf[n..],
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => return Err(NetError::Connect.into()),
+        }
+    }
+    Ok(())
+}
+
+async fn read_array<const N: usize>(
+    stream: &tokio::net::TcpStream,
+) -> Result<[u8; N], TcpRouteError> {
+    let mut buf = [0u8; N];
+    read_full(stream, &mut buf).await?;
+    Ok(buf)
 }
 
 #[cfg(test)]

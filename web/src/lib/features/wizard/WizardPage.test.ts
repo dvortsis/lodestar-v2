@@ -99,7 +99,7 @@ describe('wizard shell', () => {
 	it('Skip sends nothing, even with an edit in the field', async () => {
 		start('intensity');
 		await heading('Crawl intensity');
-		await fireEvent.click(await screen.findByRole('radio', { name: 'low' }));
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Low' }));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
 		await heading('Storage & retention');
 		expect(patches()).toHaveLength(0);
@@ -110,7 +110,7 @@ describe('wizard shell', () => {
 	it('Save and continue sends one patch and moves on', async () => {
 		start('intensity');
 		await heading('Crawl intensity');
-		await fireEvent.click(await screen.findByRole('radio', { name: 'low' }));
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Low' }));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Storage & retention');
 		expect(patches().map((c) => c.body)).toEqual([
@@ -121,7 +121,7 @@ describe('wizard shell', () => {
 	it('continues without a request when nothing was changed', async () => {
 		start('intensity');
 		await heading('Crawl intensity');
-		await screen.findByRole('radio', { name: 'low' });
+		await screen.findByRole('radio', { name: 'Low' });
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Storage & retention');
 		expect(patches()).toHaveLength(0);
@@ -130,7 +130,7 @@ describe('wizard shell', () => {
 	it('a refused save stays on the step with the engine’s error and the server’s value', async () => {
 		start('intensity');
 		await heading('Crawl intensity');
-		await fireEvent.click(await screen.findByRole('radio', { name: 'low' }));
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Low' }));
 		server.next(
 			'PATCH /settings',
 			server.err(422, 'invalid_setting', { section: 'crawler', field: 'intensity' })

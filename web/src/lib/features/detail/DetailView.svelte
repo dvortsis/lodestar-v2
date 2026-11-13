@@ -37,6 +37,7 @@
 	let Parsed = $state.raw<typeof import('./parsed/Parsed.svelte').default>();
 	let ErrorState = $state.raw<typeof import('./ErrorState.svelte').default>();
 	let Adult = $state.raw<typeof import('./adult/AdultEnrichment.svelte').default>();
+	let Identified = $state.raw<typeof import('./identified/Identified.svelte').default>();
 	let contentsAsked = false;
 	let parsedAsked = false;
 	function loadContents() {
@@ -63,6 +64,9 @@
 			void import('./ErrorState.svelte').then((mod) => (ErrorState = mod.default));
 		if (detail?.adult_enrichment)
 			void import('./adult/AdultEnrichment.svelte').then((mod) => (Adult = mod.default));
+		// Likewise "Identified as": the API omits the field when it has nothing to show.
+		if (detail?.identified_as && !Identified)
+			void import('./identified/Identified.svelte').then((mod) => (Identified = mod.default));
 	});
 </script>
 
@@ -101,6 +105,7 @@
 		</div>
 		<Summary {detail} {hit} {level} />
 		<Provenance provenance={detail.provenance} {level} />
+		{#if Identified}<Identified {detail} {level} />{/if}
 		{#if Adult}<Adult {detail} {level} />{/if}
 		<section
 			class="ls-detail-section"

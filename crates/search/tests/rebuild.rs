@@ -772,8 +772,16 @@ fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
         );
     }
     for f in V6_FIELDS {
-        let want = if ["verified", "source", "network", "payload_sig"].contains(&f) {
-            // SRC-3's and GS-0's: a rebuild writes them for every torrent.
+        let produced = [
+            "verified",
+            "source",
+            "network",
+            "payload_sig",
+            "group_minhash",
+        ];
+        let want = if produced.contains(&f) {
+            // SRC-3's, GS-0's and GS-2's: a rebuild writes them for every
+            // torrent.
             Availability::Ready
         } else {
             Availability::NoProducer

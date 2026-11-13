@@ -82,7 +82,7 @@ test.describe('keyboard: Sources account and purge', () => {
 	}) => {
 		await go('/settings/sources');
 		const toggle = page.getByRole('switch', { name: 'Private Tracker: on' });
-		await kbd.tabTo(toggle, 40);
+		await kbd.tabTo(toggle, 60);
 		await kbd.press('Space');
 		const dialog = page.getByRole('dialog', {
 			name: 'Private Tracker signs in with your account.'
@@ -113,7 +113,12 @@ test.describe('keyboard: Sources account and purge', () => {
 
 	test('Purge shows the counts before the password is asked', async ({ page, go, kbd }) => {
 		await go('/settings/sources');
-		await kbd.tabTo(page.getByTestId('source-5-purge'), 60);
+		// Purge sits in the row's detail: open it first (X-sources-restructure).
+		const expand = page.getByTestId('source-5-expand');
+		await kbd.tabTo(expand, 60);
+		await kbd.press('Enter');
+		await expect(expand).toHaveAttribute('aria-expanded', 'true');
+		await kbd.tabTo(page.getByTestId('source-5-purge'), 20);
 		await kbd.press('Enter');
 		const dialog = page.getByRole('dialog', { name: 'Purge Private Tracker?' });
 		await expect(dialog.getByTestId('preview-torrents')).toContainText('1,204,331');

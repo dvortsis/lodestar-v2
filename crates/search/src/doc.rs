@@ -51,6 +51,11 @@ pub struct TorrentDoc {
     /// ([`lodestar_classify::payload::payload_sig`], the one CS-8a reads),
     /// for `sig:`; `None` with no content files. Generation 1 (GS-0).
     pub payload_sig: Option<u64>,
+    /// The MinHash band terms of the major file sizes
+    /// ([`lodestar_classify::group::band_terms`]), for "similar
+    /// payloads"; empty below the major-file threshold and for a partial
+    /// stored file list. Generation 1 (GS-2).
+    pub group_minhash: Vec<u64>,
 }
 
 /// The provenance fields of a document (§18.6): `verified`, `network`
@@ -236,6 +241,14 @@ impl TorrentDoc {
             }
         }
         let (file_buckets, file_ext_buckets) = crate::files::covered_buckets(tree);
+        // A partial stored list isn't the payload, so it never confirms
+        // as similar: its terms would only take places in other
+        // torrents' candidate windows (the runner's review, O2).
+        let group_minhash = if row.flags & flags::FILES_PARTIAL == 0 {
+            lodestar_classify::group::band_terms(&sizes)
+        } else {
+            Vec::new()
+        };
         TorrentDoc {
             id: row.id as u64,
             hashes,
@@ -254,6 +267,7 @@ impl TorrentDoc {
             file_buckets,
             file_ext_buckets,
             payload_sig: lodestar_classify::payload::payload_sig_of_sizes(sizes),
+            group_minhash,
         }
     }
 
@@ -344,6 +358,9 @@ impl TorrentDoc {
         }
         if let Some(sig) = self.payload_sig {
             d.add_u64(f.payload_sig, sig);
+        }
+        for band in &self.group_minhash {
+            d.add_u64(f.group_minhash, *band);
         }
         d
     }

@@ -4,6 +4,8 @@
 The shipped templates must pass, and a template that still carries a field described as
 "not used yet" (the old Hot path and Cold path fields) must be refused.
 """
+import contextlib
+import io
 import re
 import tempfile
 import unittest
@@ -55,6 +57,91 @@ class ValidateTemplates(unittest.TestCase):
         text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
         self.assertIn("(planned)", text)
         self.assertEqual(self.check_text("lodestar.xml", text), [])
+
+
+class RequiresAndOverview(unittest.TestCase):
+    def broken(self, name: str, old: str, new: str) -> list[str]:
+        text = (HERE / name).read_text(encoding="utf-8")
+        self.assertIn(old, text, name)
+        return ValidateTemplates.check_text(self, name, text.replace(old, new, 1))
+
+    def test_a_missing_requires_element_is_refused(self):
+        for name in validate.TEMPLATES:
+            text = (HERE / name).read_text(encoding="utf-8")
+            removed = re.sub(r"<Requires>.*?</Requires>\s*", "", text, flags=re.S)
+            self.assertNotEqual(removed, text, name)
+            errors = ValidateTemplates.check_text(self, name, removed)
+            self.assertTrue(any("<Requires> element missing" in e for e in errors), (name, errors))
+
+    def test_an_empty_gluetun_requires_is_refused(self):
+        text = (HERE / "lodestar-gluetun.xml").read_text(encoding="utf-8")
+        emptied = re.sub(r"<Requires>.*?</Requires>", "<Requires></Requires>", text)
+        errors = ValidateTemplates.check_text(self, "lodestar-gluetun.xml", emptied)
+        self.assertTrue(any("'gluetun'" in e for e in errors), errors)
+
+    def test_a_requires_naming_another_container_is_refused(self):
+        errors = self.broken("lodestar-gluetun.xml", "--network=container:gluetun", "--network=container:vpn")
+        self.assertTrue(any("'vpn'" in e for e in errors), errors)
+
+    def test_a_worker_requires_without_the_version_is_refused(self):
+        errors = self.broken("lodestar-worker.xml", "Lodestar v0.6 or newer running as the main instance", "A Lodestar")
+        self.assertTrue(any("v0.6" in e and "<Requires>" in e for e in errors), errors)
+
+    def test_lodestar_may_leave_requires_empty(self):
+        text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
+        blank = re.sub(r"<Requires>.*?</Requires>", "<Requires>  </Requires>", text, flags=re.S)
+        self.assertEqual(ValidateTemplates.check_text(self, "lodestar.xml", blank), [])
+
+    def test_every_way_to_join_another_containers_network_needs_requires(self):
+        text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
+        forms = [
+            ("<ExtraParams>--stop-timeout=60", "<ExtraParams>--net=container:vpn --stop-timeout=60"),
+            ("<ExtraParams>--stop-timeout=60", "<ExtraParams>--network container:vpn --stop-timeout=60"),
+            ("<ExtraParams>--stop-timeout=60", "<ExtraParams>--network=container:vpn --stop-timeout=60"),
+        ]
+        for old, new in forms:
+            self.assertIn(old, text)
+            errors = ValidateTemplates.check_text(self, "lodestar.xml", text.replace(old, new, 1))
+            self.assertTrue(any("'vpn'" in e for e in errors), (new, errors))
+        net = re.sub(r"<Network>.*?</Network>", "<Network>container:vpn</Network>", text, flags=re.S)
+        self.assertNotEqual(net, text)
+        errors = ValidateTemplates.check_text(self, "lodestar.xml", net)
+        self.assertTrue(any("'vpn'" in e for e in errors), errors)
+
+    def test_the_worker_overview_must_still_say_v0_6(self):
+        errors = self.broken("lodestar-worker.xml", "Requires Lodestar v0.6+. ", "")
+        self.assertTrue(any("Overview must say it requires" in e for e in errors), errors)
+
+    def test_an_overview_whose_first_sentence_does_not_say_what_it_is_is_refused(self):
+        errors = self.broken("lodestar.xml", "Lodestar crawls the BitTorrent DHT,", "Open the web UI first,")
+        self.assertTrue(any("first sentence" in e for e in errors), errors)
+
+    def test_an_empty_overview_is_refused(self):
+        text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
+        emptied = re.sub(r"<Overview>.*?</Overview>", "<Overview></Overview>", text, flags=re.S)
+        errors = ValidateTemplates.check_text(self, "lodestar.xml", emptied)
+        self.assertTrue(any("<Overview> missing or empty" in e for e in errors), errors)
+
+
+class EveryTemplateIsChecked(unittest.TestCase):
+    def test_the_real_folder_passes_as_a_whole(self):
+        self.assertEqual(validate.unlisted(HERE), [])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(validate.main(), 0)
+
+    def test_an_unlisted_template_is_refused_by_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in validate.TEMPLATES:
+                (Path(d) / name).write_text("<Container/>", encoding="utf-8")
+            (Path(d) / "lodestar-new.xml").write_text("<Container/>", encoding="utf-8")
+            errors = validate.unlisted(Path(d))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = validate.main(Path(d))
+        self.assertEqual(code, 1)
+        self.assertIn("lodestar-new.xml", out.getvalue())
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("lodestar-new.xml", errors[0])
 
 
 if __name__ == "__main__":

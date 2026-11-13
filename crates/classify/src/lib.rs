@@ -24,6 +24,7 @@ mod composition;
 mod content;
 mod effective;
 pub mod ext;
+pub mod group;
 mod junk;
 pub mod payload;
 mod record;

@@ -7,16 +7,18 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/qdm12/gluetun</Support>
   <Project>https://github.com/qdm12/gluetun</Project>
-  <Overview>gluetun, the VPN client companion traffic goes through. Fill in the VPN settings yourself: Lodestar never asks for or stores them. Its firewall blocks all traffic while the VPN is down. Applying it replaces a container or template you already have with the same name: check first. Create the Docker network first: Unraid starts a container on a network it doesn&apos;t know with none.</Overview>
+  <Overview>gluetun, the VPN client companion traffic goes through. Fill in the VPN settings yourself: Lodestar never asks for or stores them. While the VPN is down, its firewall blocks new connections, and Lodestar&apos;s post-rules stop connections that were already open from leaving outside the VPN. Before you start it, save Lodestar&apos;s post-rules file at the Post-rules path, as the Lodestar user guide shows (chapter 3, &quot;Close gluetun&apos;s gap when the VPN drops&quot;). Without the file, gluetun won&apos;t start, and check it, as the guide shows: an empty or wrong file starts gluetun with no rules. Applying it replaces a container or template you already have with the same name: check first. Create the Docker network first: Unraid starts a container on a network it doesn&apos;t know with none.</Overview>
   <Category>Network:VPN</Category>
   <WebUI/>
   <TemplateURL/>
   <Icon/>
   <ExtraParams>--network-alias=prowlarr --cap-add=NET_ADMIN --device=/dev/net/tun --publish=127.0.0.1:9696:9696/tcp</ExtraParams>
   <PostArgs/>
+  <Config Name="Post-rules" Target="/iptables/post-rules.txt" Default="/mnt/cache/appdata/gluetun/post-rules.txt" Mode="ro" Description="Lodestar&apos;s post-rules file, read-only. Save it here before you start gluetun." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/gluetun/post-rules.txt</Config>
   <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="rw" Description="Set by Lodestar." Type="Variable" Display="advanced" Required="true" Mask="false">Etc/UTC</Config>
   <Config Name="VPN_SERVICE_PROVIDER" Target="VPN_SERVICE_PROVIDER" Default="" Mode="rw" Description="You fill this in, from your VPN provider. Lodestar never asks for or stores it." Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="VPN_TYPE" Target="VPN_TYPE" Default="wireguard" Mode="rw" Description="Set by Lodestar." Type="Variable" Display="advanced" Required="true" Mask="false">wireguard</Config>
+  <Config Name="VPN_INTERFACE" Target="VPN_INTERFACE" Default="wg0" Mode="rw" Description="Set by Lodestar. Keep wg0: Lodestar&apos;s post-rules name this tunnel, and with any other value they do nothing." Type="Variable" Display="advanced" Required="true" Mask="false">wg0</Config>
   <Config Name="WIREGUARD_PRIVATE_KEY" Target="WIREGUARD_PRIVATE_KEY" Default="" Mode="rw" Description="You fill this in, from your VPN provider. Lodestar never asks for or stores it." Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="WIREGUARD_ADDRESSES" Target="WIREGUARD_ADDRESSES" Default="" Mode="rw" Description="You fill this in, from your VPN provider. Lodestar never asks for or stores it." Type="Variable" Display="always" Required="true" Mask="true"/>
 </Container>

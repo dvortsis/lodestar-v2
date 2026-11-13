@@ -256,10 +256,27 @@ impl std::fmt::Debug for GateCtx<'_> {
 /// then the query. Every lookup goes through it. The plugin-wide
 /// conditions are read first; while one fails, nothing is read about the
 /// item.
+///
+/// [`check_with`] for a plugin that declares no credentials.
 pub fn check(
     store: &mut Store,
     engine: &Engine,
     ctx: GateCtx<'_>,
+    id: i64,
+    now: i64,
+) -> Result<Result<Candidate, Ineligible>, lodestar_store::Error> {
+    check_with(store, engine, ctx, &[], id, now)
+}
+
+/// [`check`] for a plugin declaring `credentials` (its
+/// `Policy::credentials`): its consent condition is judged against them
+/// ([`lodestar_sources::consent::need_with`]), as `Control` judges it, so
+/// the two never disagree about an Account plugin (X-consent-gate-lift r2).
+pub fn check_with(
+    store: &mut Store,
+    engine: &Engine,
+    ctx: GateCtx<'_>,
+    credentials: &[lodestar_sources::consent::CredentialSpec],
     id: i64,
     now: i64,
 ) -> Result<Result<Candidate, Ineligible>, lodestar_store::Error> {
@@ -272,7 +289,8 @@ pub fn check(
             .sources()?
             .iter()
             .any(|s| s.id == ctx.source && s.state == SourceState::Enabled);
-        g.consent_met = lodestar_sources::consent::need_in(store, ctx.manifest)?.is_none();
+        g.consent_met =
+            lodestar_sources::consent::need_in_with(store, ctx.manifest, credentials)?.is_none();
     }
     let plugin_wide = Gate { stored: true, ..g };
     if let Err(why) = eligible(&plugin_wide) {
@@ -692,6 +710,7 @@ impl IdentifySource {
             let store = self.store.clone();
             let engine = self.filter.current();
             let manifest = self.plugin.manifest().clone();
+            let credentials = self.plugin.policy().credentials;
             let kinds = self.plugin.kinds().to_vec();
             let switches = self.switches.clone();
             let (source, adult) = (ctx.source, self.adult);
@@ -704,7 +723,7 @@ impl IdentifySource {
                     adult,
                     switches: &*switches,
                 };
-                check(&mut store, &engine, ctx, id, now)
+                check_with(&mut store, &engine, ctx, credentials, id, now)
             })
             .await
         };

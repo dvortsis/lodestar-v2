@@ -16,6 +16,11 @@
     # The kernel's tunnel device, which the VPN needs (upstream setup).
     "devices":
       - "/dev/net/tun:/dev/net/tun"
+    # Lodestar's post-rules (configs, at the end): gluetun reads them when it
+    # turns its firewall on. Compose copies them in read-only (mode 0444 by default).
+    "configs":
+      - "source": "gluetun-post-rules"
+        "target": "/iptables/post-rules.txt"
     # Lodestar reaches the companion by its own name, through gluetun.
     "networks":
       "lodestar":
@@ -26,6 +31,7 @@
       # Your VPN provider, as gluetun names it.
       "VPN_SERVICE_PROVIDER": "FILL_IN_YOURSELF"
       "VPN_TYPE": "wireguard"
+      "VPN_INTERFACE": "wg0"
       # Your WireGuard private key, from your provider.
       "WIREGUARD_PRIVATE_KEY": "FILL_IN_YOURSELF"
       # Your WireGuard address, from your provider.
@@ -60,3 +66,39 @@
   "lodestar":
     "name": "lodestar"
     "external": true
+# gluetun's post-rules. Without them, gluetun lets connections opened through
+# the tunnel leave by your normal network once the tunnel drops. Each rule
+# only marks or drops traffic. Keep VPN_INTERFACE as it is: the rules name it.
+"configs":
+  "gluetun-post-rules":
+    "content": |
+      # Lodestar's post-rules for gluetun (checked on v3.41.3). gluetun reads this
+      # file at /iptables/post-rules.txt when it turns its firewall on, before the
+      # tunnel starts. It runs each line that starts with "iptables " or
+      # "ip6tables " and skips every other line.
+      # Why: gluetun accepts packets of an open connection on any interface. When
+      # the tunnel drops, a connection opened through it is routed out of your
+      # normal network, and those packets pass. These rules stop that.
+      # Every rule only marks or drops traffic; none lets anything new through.
+      # They name the tunnel wg0: set VPN_INTERFACE=wg0 on gluetun. Its image
+      # defaults to tun0, and with another name these rules do nothing.
+      # 1. Mark every connection that sends a packet out of the tunnel: set one
+      #    bit of its conntrack mark. CONNMARK changes no verdict.
+      iptables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+      ip6tables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+      # 2. A marked connection never leaves by any other interface. Loopback,
+      #    the Docker network, replies to the web UI and WireGuard's own UDP
+      #    to the endpoint never use the tunnel, so they keep their mark clear.
+      iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+      ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+      # 3. No ICMP leaves outside the tunnel, of any type: not errors (with the
+      #    tunnel down, the endpoint's packets draw "port unreachable" from the
+      #    host's address) and not gluetun's health-check pings to the VPN server.
+      #    gluetun needs none outside the tunnel. Exempt: this container's own
+      #    addresses (loopback keeps its errors) and, for IPv6, link-local
+      #    destinations, multicast destinations of any scope, and anything with
+      #    hop limit 255 (neighbour discovery). None of these can carry a flow off
+      #    the tunnel: rule 2 and gluetun's own policy still apply to them.
+      #    Side effect: the container no longer answers pings from your network.
+      iptables -I OUTPUT 3 ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP
+      ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp ! -d fe80::/10 -m addrtype ! --dst-type LOCAL,MULTICAST -m hl ! --hl-eq 255 -j DROP

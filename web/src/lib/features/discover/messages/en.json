@@ -25,6 +25,8 @@
 	"discover_unavailable_needs_v2_files": "Finding the same file needs a v2 or hybrid torrent. This one is v1 only.",
 	"discover_unavailable_payload_not_specific": "This torrent's files are too small or too common in size to match reliably with other torrents.",
 	"discover_unavailable_partial_file_list": "Lodestar has only part of this torrent's file list, so it can't find clones of it.",
+	"discover_unavailable_few_major_files": "Finding similar torrents needs large files of at least 3 different sizes, not counting a split archive's equal parts. This one has fewer, so only exact clones are matched.",
+	"discover_unavailable_needs_group_minhash": "Finding similar torrents isn't available until the search index finishes rebuilding.",
 	"discover_unavailable_label": "Not available",
 	"discover_adult_hidden": "Adult content is hidden. Turn on Show adult content in Settings to see it.",
 	"discover_adult_hidden_action": "Open settings",

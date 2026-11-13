@@ -14,6 +14,10 @@ A group of SSDs or NVMe drives in Unraid, used for fast storage. A path starting
 
 A short fingerprint of a file. If the file changes, the fingerprint changes, so you can check a download.
 
+## Companion
+
+A separate program that Lodestar works with, such as qBittorrent, Prowlarr or gluetun. Lodestar finds it, configures it and checks it, and never bundles it.
+
 ## Container
 
 A packaged, running copy of an app. An update replaces it, so only mapped folders keep their files.

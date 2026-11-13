@@ -14,12 +14,17 @@ request gets:
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
 - the soak tools' Python tests only if it touches `docs/soak/tools/`;
+- the Unraid template checks only if it touches `packaging/unraid/` (UNRAID below);
 - the companion pin tool's tests only if it touches `tools/companion-pins/`, its
   workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
   fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
+- the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
+  workflow or this file (ADVISORIES below). Main and the nightly always run it,
+  so an advisory published against a crate already locked turns main red the
+  next night;
 - `web` and `e2e` for web.yml / e2e.yml (see WEB_INPUTS below). Those two
   workflows always run on a pull request and use these outputs to skip their
   heavy jobs, so their `web-ok` / `e2e-ok` aggregates can be required.
@@ -49,6 +54,8 @@ RUST_ALSO = re.compile(
     r"|^\.github/scripts/(test_)?log_lint\.py$"
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
+    # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.
+    r"|^packaging/companions/"
 )
 
 # Web and E2E applicability. Both workflows run on every pull request; these
@@ -73,7 +80,12 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 # Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
 # The fleet and operator workflows too, whose structure and public-log leak
 # tests live in infra/fleet/tests (OP-1) and infra/operator/tests (OP-4).
-INFRA = re.compile(r"^(infra/|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)")
+# The rules file and the docs that quote it: the fleet tests that read them run in this job.
+INFRA = re.compile(
+    r"^(infra/"
+    r"|packaging/companions/gluetun-post-rules\.txt$|docs/user/03-keep-lodestar-safe\.md$|docs/operations\.md$"
+    r"|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
+)
 # The update manifest's builder, the workflow that signs with it, and the
 # verifier it round-trips through.
 UPDATE_MANIFEST = re.compile(
@@ -86,6 +98,15 @@ COMPANION_PINS = re.compile(
     r"^(tools/companion-pins/|\.github/workflows/companion-pins\.yml$|crates/companions/data/catalogue\.json$"
     r"|crates/companions/src/catalogue\.rs$|crates/lodestar/src/update/check\.rs$)"
 )
+
+# The RustSec advisory check (X-ci-advisories): what it reads (the lockfile and
+# deny.toml), and what decides how it runs. A Cargo.toml change that moves a
+# version also changes Cargo.lock.
+ADVISORIES = re.compile(r"^(Cargo\.lock|deny\.toml|\.github/workflows/ci\.yml|\.github/scripts/ci_changes\.py)$")
+
+# The Unraid templates and their validator. The validator and its tests live beside
+# the templates, so one prefix covers all of them.
+UNRAID = re.compile(r"^packaging/unraid/")
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"
@@ -172,7 +193,9 @@ def main() -> None:
             soak_tools="true",
             companion_pins="true",
             infra="true",
+            unraid="true",
             update_manifest="true",
+            advisories="true",
             web="true",
             e2e="true",
         )
@@ -221,8 +244,10 @@ def main() -> None:
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
     out["companion_pins"] = str(everything or any(COMPANION_PINS.match(f) for f in changed)).lower()
+    out["unraid"] = str(everything or any(UNRAID.match(f) for f in changed)).lower()
     out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     out["update_manifest"] = str(everything or any(UPDATE_MANIFEST.match(f) for f in changed)).lower()
+    out["advisories"] = str(any(ADVISORIES.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate
     # that holds it, or anything it builds (the search crate among them).
     out["mmap_retention"] = str(needs({"lodestar-bench"}, tested=True)).lower()

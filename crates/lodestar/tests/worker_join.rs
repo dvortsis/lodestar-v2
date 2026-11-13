@@ -310,6 +310,69 @@ fn joins_restarts_and_never_shows_the_token() {
     );
 }
 
+/// `--join-only` (WK-18s, the Windows installer's one-shot join): joins,
+/// saves the credentials and exits 0 without running the worker; on the
+/// joined folder it refuses (exit 3) before reading the token file, which
+/// here doesn't exist; and the token reaches no output.
+#[test]
+fn join_only_joins_exits_and_refuses_a_joined_folder() {
+    let coord_dir = tempfile::tempdir().unwrap();
+    let worker_dir = tempfile::tempdir().unwrap();
+    let port = ports::test_port();
+    let server = serve(coord_dir.path(), port);
+    let token = make_token(coord_dir.path(), "once");
+    let token_file = coord_dir.path().join("join-token");
+    std::fs::write(&token_file, format!("{token}\n")).unwrap();
+    let url = format!("https://127.0.0.1:{port}");
+
+    let (exit, log) = spawn(worker(
+        worker_dir.path(),
+        &[
+            "--join",
+            &url,
+            "--token-file",
+            token_file.to_str().unwrap(),
+            "--join-only",
+        ],
+    ))
+    .finish();
+    assert!(exit.success(), "{exit:?}: {log}");
+    assert!(log.contains("joined 127.0.0.1"), "{log}");
+    // It never ran the worker.
+    assert!(!log.contains("connecting to"), "{log}");
+    assert!(!leaks(&log, &token), "the token reached the output:\n{log}");
+    assert!(worker_dir.path().join("cluster/credentials").exists());
+    // The token file is the caller's to delete (the installer does).
+    assert!(token_file.exists());
+
+    let missing = coord_dir.path().join("no-such-token");
+    let (exit, log) = spawn(worker(
+        worker_dir.path(),
+        &[
+            "--join",
+            &url,
+            "--token-file",
+            missing.to_str().unwrap(),
+            "--join-only",
+        ],
+    ))
+    .finish();
+    assert_eq!(exit.code(), Some(3), "{log}");
+    assert!(
+        log.contains("already joined") && log.contains("worker once"),
+        "{log}"
+    );
+
+    // Plain `lodestar worker` runs from what --join-only saved.
+    let mut restarted = spawn(worker(worker_dir.path(), &[]));
+    restarted.wait_for("connected as worker once");
+    let (exit, log) = restarted.stop();
+    assert!(exit.success(), "{exit:?}: {log}");
+
+    let (exit, log) = server.stop();
+    assert!(exit.success(), "{exit:?}: {log}");
+}
+
 /// `--data` and `LODESTAR_DATA_DIR` naming different folders is refused
 /// before anything is created or owned.
 #[test]

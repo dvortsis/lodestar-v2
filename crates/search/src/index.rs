@@ -1835,6 +1835,85 @@ impl SearchIndex {
         )
     }
 
+    /// The torrents with any of `bands` among their `group_minhash`
+    /// terms ("similar payloads", GS-2: candidates by band term, which
+    /// the caller confirms on the stored sizes) that `visible` also
+    /// matches (the caller's visibility clauses, no relative dates): the
+    /// `limit` highest ids, sorted, and whether more matched. As
+    /// [`SearchIndex::torrents_with_pieces_roots`]: visibility is applied
+    /// before the limit, `cancel` is checked before and during
+    /// collection, and an index without the field answers no torrent.
+    /// Torrents whose `payload_sig` is `except_sig` (the caller's
+    /// identical clones) are left out before the limit.
+    /// Whether the answer is complete is
+    /// [`SearchIndex::availability`] of `group_minhash`.
+    pub fn torrents_with_minhash_bands(
+        &self,
+        bands: &[u64],
+        except_sig: Option<u64>,
+        visible: &Node,
+        limit: usize,
+        cancel: &crate::CancelToken,
+    ) -> Result<(Vec<u64>, bool)> {
+        debug_assert!(
+            !relative(visible),
+            "visibility clauses have no relative dates"
+        );
+        cancel.check()?;
+        let field = self.fields().group_minhash;
+        if bands.is_empty() || field == compile::ABSENT {
+            return Ok((Vec::new(), false));
+        }
+        let any: Vec<(Occur, Box<dyn Query>)> = bands
+            .iter()
+            .map(|&band| {
+                let q = TermQuery::new(Term::from_field_u64(field, band), IndexRecordOption::Basic);
+                (Occur::Should, Box::new(q) as Box<dyn Query>)
+            })
+            .collect();
+        let compiled = self.query_cancelled(visible, 0, 0, cancel)?;
+        let mut clauses = vec![
+            (Occur::Must, compiled.query),
+            (
+                Occur::Must,
+                Box::new(BooleanQuery::new(any)) as Box<dyn Query>,
+            ),
+        ];
+        // The caller's identical clones share its bands but are never
+        // "similar": leave them out before the limit, so they don't take
+        // places in the window.
+        let sig_field = self.fields().payload_sig;
+        if let Some(sig) = except_sig
+            && sig_field != compile::ABSENT
+        {
+            clauses.push((
+                Occur::MustNot,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(sig_field, sig),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ));
+        }
+        let both = BooleanQuery::new(clauses);
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let collector = PostFilter {
+            ranges: &compiled.filters,
+            hot: compiled.hot.as_ref(),
+            inner: crate::percolate::TopIds {
+                keep: limit,
+                cancel: Some(cancel.clone()),
+                stopped: stopped.clone(),
+            },
+        };
+        let (top, more, _) = self.reader.searcher().search(&both, &collector)?;
+        newest_or_stopped(
+            top,
+            more,
+            stopped.load(std::sync::atomic::Ordering::Relaxed),
+            cancel,
+        )
+    }
+
     /// Whether the file index holds every torrent the torrent index does
     /// (its committed watermark has reached the torrent index's). It lags
     /// after it's recreated or rebuilt, until it catches up: a file-index
@@ -2609,6 +2688,128 @@ mod population_tests {
         );
     }
 
+    /// GS-2's band lookup: torrents sharing a band, under the caller's
+    /// visibility applied before the limit, newest first within it, and
+    /// stoppable.
+    #[test]
+    fn torrents_with_minhash_bands_is_bounded_and_cancellable() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        // Torrent i (id i + 1): payload A (three distinct large sizes) for
+        // even i, payload B for odd; torrent 6 (id 7, payload A) is hidden.
+        let payload = |i: u8| -> [i64; 3] {
+            let base = if i.is_multiple_of(2) {
+                1 << 30
+            } else {
+                3 << 30
+            };
+            [base, base + 7, base + 19]
+        };
+        for i in 0..7u8 {
+            let d = |e: Vec<(&str, OwnedValue)>| {
+                OwnedValue::Dict(
+                    e.into_iter()
+                        .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                        .collect(),
+                )
+            };
+            let b = |v: &[u8]| OwnedValue::Bytes(v.to_vec());
+            let files = payload(i)
+                .iter()
+                .enumerate()
+                .map(|(j, &len)| {
+                    d(vec![
+                        ("length", OwnedValue::Int(len)),
+                        (
+                            "path",
+                            OwnedValue::List(vec![b(format!("f{j}").as_bytes())]),
+                        ),
+                    ])
+                })
+                .collect();
+            let name = format!("Pack.{i}");
+            let raw = to_vec(&d(vec![
+                ("files", OwnedValue::List(files)),
+                ("name", b(name.as_bytes())),
+                ("piece length", OwnedValue::Int(1 << 16)),
+                ("pieces", b(&[0; 20])),
+            ]));
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1_700_000_000,
+                    metadata_at: 1_700_000_001,
+                    extra_flags: if i == 6 {
+                        lodestar_store::flags::HIDDEN
+                    } else {
+                        0
+                    },
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        let bands = |i: u8| {
+            let sizes: Vec<u64> = payload(i).iter().map(|&s| s as u64).collect();
+            lodestar_classify::group::band_terms(&sizes)
+        };
+        let (a, b) = (bands(0), bands(1));
+        assert_eq!(a.len(), lodestar_classify::group::BANDS);
+        let cancel = crate::CancelToken::new();
+        let visible = Node::All.without_hidden();
+        let find = |terms: &[u64], visible: &Node, limit| {
+            index
+                .torrents_with_minhash_bands(terms, None, visible, limit, &cancel)
+                .unwrap()
+        };
+        // The hidden torrent (id 7) is never found, counted or flagged.
+        assert_eq!(find(&a, &visible, 10), (vec![1, 3, 5], false));
+        assert_eq!(find(&a[..1], &visible, 10), (vec![1, 3, 5], false));
+        let both: Vec<u64> = a.iter().chain(&b).copied().collect();
+        assert_eq!(find(&both, &visible, 10), (vec![1, 2, 3, 4, 5, 6], false));
+        // The newest within the limit, and more said; visibility first,
+        // so the hidden newest never takes a place.
+        assert_eq!(find(&a, &visible, 2), (vec![3, 5], true));
+        assert_eq!(find(&a, &visible, 3), (vec![1, 3, 5], false));
+        assert_eq!(find(&a, &Node::All, 2), (vec![5, 7], true));
+        assert_eq!(find(&[1, 2, 3], &visible, 10), (vec![], false));
+        assert_eq!(find(&[], &visible, 10), (vec![], false));
+        // The caller's identical clones (its payload signature) are left
+        // out before the limit: payload A's torrents are all one payload.
+        let sig = |i: u8| {
+            let sizes: Vec<u64> = payload(i).iter().map(|&s| s as u64).collect();
+            lodestar_classify::payload::payload_sig_of_sizes(sizes)
+        };
+        let except = |terms: &[u64], s: Option<u64>, limit| {
+            index
+                .torrents_with_minhash_bands(terms, s, &visible, limit, &cancel)
+                .unwrap()
+        };
+        assert_eq!(except(&a, sig(0), 10), (vec![], false));
+        assert_eq!(except(&both, sig(0), 1), (vec![6], true));
+        assert_eq!(except(&a, sig(1), 10), (vec![1, 3, 5], false));
+        // Before the limit, not after: the window holds exactly the rest
+        // (a filter after it would give ([4, 6], true) and ([], true)).
+        assert_eq!(except(&both, sig(0), 3), (vec![2, 4, 6], false));
+        assert_eq!(except(&both, sig(1), 1), (vec![5], true));
+        let stopped = crate::CancelToken::new();
+        stopped.cancel();
+        assert!(matches!(
+            index.torrents_with_minhash_bands(&a, None, &visible, 10, &stopped),
+            Err(Error::Cancelled)
+        ));
+        let spent = crate::CancelToken::new().with_budget(std::time::Duration::ZERO);
+        assert!(matches!(
+            index.torrents_with_minhash_bands(&a, None, &visible, 10, &spent),
+            Err(Error::OutOfTime)
+        ));
+    }
+
     /// A file index catching up behind the torrent index (recreated):
     /// once its commit is on disk but before its reader reloads, a
     /// search still has the old, empty file snapshot. An extension less
@@ -2829,7 +3030,7 @@ mod population_tests {
         assert!(index.prefilter("name", &partial, q()).is_some());
         assert!(
             index
-                .prefilter("group_key", &index.searcher(), q())
+                .prefilter("name_trigram", &index.searcher(), q())
                 .is_none()
         );
     }

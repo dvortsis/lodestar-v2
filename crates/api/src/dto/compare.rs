@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 use super::discover::HitGroup;
 use super::search::CompositionShare;
 
-/// `GET /torrents/{hash}/siblings`: the torrents related to one, in three
+/// `GET /torrents/{hash}/siblings`: the torrents related to one, in four
 /// groups. Each is either available (possibly empty) or unavailable with
 /// a reason.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -41,6 +41,19 @@ pub struct SiblingsResponse {
     /// The file index is still filling in piece roots, so some torrents
     /// may be missing from `same_file`.
     pub same_file_partial: bool,
+    /// Torrents with a similar payload: most of the same large files
+    /// (a season with an episode swapped or added, a pack with an extra
+    /// disc), newest first. Found by a MinHash of the large file sizes
+    /// and confirmed on the stored sizes; identical clones are in
+    /// `identical_payload` instead. Unavailable (`few_major_files`) for
+    /// a torrent whose large files have fewer than 3 different sizes,
+    /// not counting a split archive's volume size (a size more than 2
+    /// files share). `truncated` also when more candidates matched than
+    /// were read, so some may be missing even from a short list.
+    pub similar_payload: HitGroup,
+    /// The index is still filling in the similarity terms, so some
+    /// torrents may be missing from `similar_payload`.
+    pub similar_payload_partial: bool,
 }
 
 /// A work's title identity (`docs/decisions/2026-10-22-B13.md`): its normalized title plus the

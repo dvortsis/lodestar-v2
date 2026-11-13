@@ -134,4 +134,12 @@ pub enum Unavailable {
     /// Only part of the torrent's file list is stored (an import that
     /// dropped files), so its sizes aren't its payload.
     PartialFileList,
+    /// Similar payloads need large files (each at least 1 MiB and 1 %
+    /// of the payload) of at least 3 different sizes; this torrent has
+    /// fewer (a split archive's volume size doesn't count), so it's
+    /// matched only as an identical payload.
+    FewMajorFiles,
+    /// Similar payloads need the grouping terms (M7), which the serving
+    /// index doesn't have (an older index serving during a rebuild).
+    NeedsGroupMinhash,
 }

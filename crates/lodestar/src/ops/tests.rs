@@ -947,9 +947,30 @@ fn sampling_blocked_follows_the_dht_report() {
 /// A source of each class, doing nothing while it runs.
 struct Gated(Manifest, Arc<std::sync::atomic::AtomicBool>);
 
+/// What the Account plugin of [`gated`] declares: a required `api_key`.
+/// The credentials route takes only declared names (X-consent-gate-lift
+/// r2). The other classes declare none.
+const ACCOUNT_POLICY: lodestar_sources::Policy = lodestar_sources::Policy {
+    credentials: &[consent::CredentialSpec {
+        name: "api_key",
+        label: "API key",
+        kind: consent::CredentialKind::Secret,
+        required: true,
+    }],
+    ..lodestar_sources::Policy::STRICT
+};
+
 impl SourcePlugin for Gated {
     fn manifest(&self) -> &Manifest {
         &self.0
+    }
+
+    fn policy(&self) -> &lodestar_sources::Policy {
+        if self.0.consent == Consent::Account {
+            &ACCOUNT_POLICY
+        } else {
+            &lodestar_sources::Policy::STRICT
+        }
     }
 
     fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
@@ -970,8 +991,27 @@ const GATED: [(&str, Consent); 5] = [
 ];
 
 /// Asserts a `PATCH /sources/{id}` answer is the consent gate's refusal
-/// (X-consent-gate-052): no consent text is owner-approved yet, so a source
-/// whose class asks for one isn't turned on, however it's asked.
+/// (X-consent-gate-052): this build can't turn on a source of its class
+/// (External, until the Legal Notice's new wording; Account, until
+/// X-consent-gate-lift r2), however it's asked.
+#[track_caller]
+fn assert_asks_consent((status, e): (u16, Value), class: &str, what: &str) {
+    assert_eq!(
+        (
+            status,
+            e["error"]["code"].clone(),
+            e["error"]["field"].clone()
+        ),
+        (409, json!("consent_required"), json!("consent")),
+        "{what}: {e}"
+    );
+    let message = e["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("\"{class}\"")),
+        "{what}: {message}"
+    );
+}
+
 #[track_caller]
 fn assert_gated((status, e): (u16, Value), what: &str) {
     assert_eq!(
@@ -1274,8 +1314,9 @@ async fn no_class_can_be_enabled_past_its_condition() {
     }
 
     // External: refused whatever is sent, its own acknowledgement and the
-    // password included, until its consent text is approved
-    // (X-consent-gate-052). Nothing is recorded.
+    // password included, in this version: the Legal Notice says
+    // the torrent cache can't be turned on (X-consent-gate-052,
+    // X-consent-gate-lift). Nothing is recorded.
     let ext = f.source(&c, "external").await;
     let version = ext["consent_version"].as_str().unwrap().to_string();
     assert_eq!(ext["endpoints"], json!(["https://example.org"]));
@@ -1346,6 +1387,26 @@ async fn no_class_can_be_enabled_past_its_condition() {
         (status, e["error"]["code"].clone()),
         (400, json!("invalid_credentials"))
     );
+    // A well-formed name the plugin doesn't declare is refused the same
+    // way, naming neither the name nor the value (X-consent-gate-lift r2).
+    let (status, e) = f
+        .send(creds(json!({ "credentials": { "apikey": SECRET } })))
+        .await;
+    assert_eq!(
+        (status, e["error"]["code"].clone()),
+        (400, json!("invalid_credentials")),
+        "{e}"
+    );
+    assert!(!e.to_string().contains(SECRET), "{e}");
+    assert!(!e.to_string().contains("apikey"), "the refused name: {e}");
+    let s = f.source(&c, "account").await;
+    assert_eq!(
+        s["credentials"],
+        json!(["api_key"]),
+        "nothing more was stored"
+    );
+    // Enabling an Account source asks for the admin password, every time.
+    assert_eq!(s["password_required"], json!(true), "{s}");
     // Stored credentials don't open it either.
     assert_gated(
         f.patch(&c, "account", json!({ "enabled": true })).await,
@@ -1357,43 +1418,71 @@ async fn no_class_can_be_enabled_past_its_condition() {
         (json!(false), Value::Null)
     );
 
-    // Restricted and Overlay: refused like External, with or without the
-    // password. A wrong password is still refused as one first (the
-    // route checks it before the source is looked at).
+    // Restricted and Overlay: the acknowledgement of exactly what's shown
+    // and the admin password. A wrong password is refused as one first
+    // (the route checks it before the source is looked at).
     for (host, id) in [(10, "restricted"), (11, "overlay")] {
         let version = f.source(&c, id).await["consent_version"].clone();
-        assert_gated(
-            f.patch_from(host, &c, id, json!({ "enabled": true })).await,
-            id,
-        );
+        let draft = json!(version.as_str().unwrap().replacen("t2 ", "t1 ", 1));
+        for body in [
+            json!({ "enabled": true }),
+            json!({ "enabled": true, "password": "correct horse battery" }),
+            json!({ "enabled": true, "consent": id, "consent_version": draft,
+                    "password": "correct horse battery" }),
+            json!({ "enabled": true, "consent": "external", "consent_version": version,
+                    "password": "correct horse battery" }),
+        ] {
+            assert_asks_consent(
+                f.patch_from(host, &c, id, body.clone()).await,
+                id,
+                &body.to_string(),
+            );
+        }
         let ack = json!({ "enabled": true, "consent": id, "consent_version": version });
-        assert_gated(f.patch_from(host, &c, id, ack.clone()).await, id);
+        let (status, e) = f.patch_from(host, &c, id, ack.clone()).await;
+        assert_eq!(
+            (status, e["error"]["code"].clone()),
+            (428, json!("confirm_required")),
+            "{id}: {e}"
+        );
         let mut wrong = ack.clone();
         wrong["password"] = json!("not the password");
         let (status, _) = f.patch_from(host, &c, id, wrong).await;
         assert_eq!(status, 401, "{id}");
-        let mut right = ack;
-        right["password"] = json!("correct horse battery");
-        assert_gated(f.patch_from(host, &c, id, right).await, id);
         let s = f.source(&c, id).await;
         assert_eq!(
             (s["enabled"].clone(), s["needs"].clone()),
             (json!(false), json!("consent")),
-            "{id}"
+            "{id}: nothing saved by a refusal"
         );
-        // Turning it off is never refused.
+        let mut right = ack;
+        right["password"] = json!("correct horse battery");
+        let (status, s) = f.patch_from(host, &c, id, right).await;
+        assert_eq!(
+            (status, s["enabled"].clone(), s["needs"].clone()),
+            (200, json!(true), Value::Null),
+            "{id}: {s}"
+        );
+        // Turning it off is never refused, and turning it on again asks
+        // for the password again, not for the acknowledgement.
         assert_eq!(
             f.patch_from(host, &c, id, json!({ "enabled": false }))
                 .await
                 .0,
             200
         );
+        let (status, _) = f.patch_from(host, &c, id, json!({ "enabled": true })).await;
+        assert_eq!(status, 428, "{id}");
     }
-    assert!(
-        !sources_keys()
-            .iter()
-            .any(|k| k.starts_with("sources.consent.")),
-        "no acknowledgement recorded"
+    // Exactly the two accepted acknowledgements are recorded.
+    let keys: Vec<String> = sources_keys()
+        .into_iter()
+        .filter(|k| k.starts_with("sources.consent."))
+        .collect();
+    assert_eq!(
+        keys,
+        ["sources.consent.overlay", "sources.consent.restricted"],
+        "{keys:?}"
     );
 
     // Settings: an import can't enable a source or record consent, and
@@ -1439,7 +1528,7 @@ async fn no_class_can_be_enabled_past_its_condition() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_restart_ignores_a_stored_acknowledgement_and_a_new_text_asks_again() {
+async fn a_restart_keeps_an_accepted_acknowledgement_and_a_new_text_asks_again() {
     let plugins = gated();
     let ran: Vec<_> = plugins.iter().map(|(_, r)| r.clone()).collect();
     let f = gated_fixture(
@@ -1454,9 +1543,12 @@ async fn a_restart_ignores_a_stored_acknowledgement_and_a_new_text_asks_again() 
     let GatedFixture { pipeline, dir, .. } = f;
     pipeline.shutdown().await.unwrap();
 
-    // A build before X-consent-gate-052 (a nightly) recorded current
-    // acknowledgements and turned both sources on.
+    // Current acknowledgements, as the API records them, with both
+    // sources on; and an Overlay one of the draft text (version 1), as a
+    // build before the gate could record it.
     let db = dir.path().join("t.db");
+    let overlay_version = consent::version(plugins[4].0.manifest());
+    let draft = format!("overlay|{}|1", overlay_version.replacen("t2 ", "t1 ", 1));
     let records = [
         (
             "restricted",
@@ -1474,19 +1566,30 @@ async fn a_restart_ignores_a_stored_acknowledgement_and_a_new_text_asks_again() 
             let id = rows.iter().find(|r| r.plugin == *plugin).unwrap().id;
             store.enable_source(id, Some(record)).unwrap();
         }
+        let id = rows.iter().find(|r| r.plugin == "overlay").unwrap().id;
+        store.enable_source(id, Some(&draft)).unwrap();
     }
 
-    // Same build: switched off at the start and never run, because no
-    // consent text is approved yet; the records are kept for when one is.
+    // The same build: the current ones stay on and run. The draft one is
+    // switched off before it runs: its text version moved on. Every record
+    // is kept.
     let f = gated_fixture(dir, plugins.iter().map(|(p, _)| p.clone()).collect()).await;
-    eventually("the None source runs", String::new, || {
-        ran[0].load(Ordering::SeqCst)
+    eventually("the accepted sources run", String::new, || {
+        ran[0].load(Ordering::SeqCst) && ran[3].load(Ordering::SeqCst)
     })
     .await;
+    // External stays behind the gate in this version, so it's switched
+    // off too, its record kept.
     for s in f.pipeline.sources() {
-        assert_eq!(s.enabled, s.plugin == "none", "{}", s.plugin);
+        assert_eq!(
+            s.enabled,
+            ["none", "restricted"].contains(&s.plugin),
+            "{}",
+            s.plugin
+        );
     }
-    assert!(!ran[1].load(Ordering::SeqCst) && !ran[3].load(Ordering::SeqCst));
+    assert!(!ran[4].load(Ordering::SeqCst), "the draft-text overlay ran");
+    assert!(!ran[1].load(Ordering::SeqCst), "the gated external ran");
     {
         let store = Store::open(&db, StoreConfig::default()).unwrap();
         for (plugin, record) in &records {
@@ -1496,9 +1599,8 @@ async fn a_restart_ignores_a_stored_acknowledgement_and_a_new_text_asks_again() 
                 "{plugin}"
             );
         }
+        assert_eq!(store.source_consent("overlay").unwrap(), Some(draft));
     }
-    // The record covers what's shown (`needs` is none), and enabling is
-    // still refused.
     let c = f.session().await;
     let s = f.source(&c, "external").await;
     assert_eq!(
@@ -1508,6 +1610,29 @@ async fn a_restart_ignores_a_stored_acknowledgement_and_a_new_text_asks_again() 
     assert_gated(
         f.patch(&c, "external", json!({ "enabled": true })).await,
         "external",
+    );
+    let s = f.source(&c, "restricted").await;
+    assert_eq!(
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(true), Value::Null)
+    );
+    // The draft record doesn't open the Overlay source, with or without
+    // the password: it asks for the current text.
+    let s = f.source(&c, "overlay").await;
+    assert_eq!(
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(false), json!("consent"))
+    );
+    assert_eq!(s["consent_version"], json!(overlay_version));
+    assert_asks_consent(
+        f.patch(
+            &c,
+            "overlay",
+            json!({ "enabled": true, "password": "correct horse battery" }),
+        )
+        .await,
+        "overlay",
+        "a draft record",
     );
     let GatedFixture { pipeline, dir, .. } = f;
     pipeline.shutdown().await.unwrap();

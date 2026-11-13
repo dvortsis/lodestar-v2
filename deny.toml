@@ -1,0 +1,39 @@
+# cargo-deny's configuration. CI runs only the advisory check
+# (`cargo deny check advisories`, the `advisories` job in ci.yml): every crate
+# in Cargo.lock against the RustSec advisory database
+# (X-ci-advisories, INFRA-09). Licences are checked by
+# .github/scripts/licenses.py, not here.
+#
+# Each ignore names the advisory, the crate, why it doesn't reach Lodestar and a
+# review date at most 90 days out. The decisions file records the triage:
+# docs/decisions/2026-11-13-X-ci-advisories.md.
+
+[graph]
+# Every target Lodestar ships on, so a crate used only on Windows or macOS
+# is checked too.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Vulnerabilities fail the check (cargo-deny always denies them). So do
+# unmaintained crates, including transitive ones, and yanked versions.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # libsqlite3-sys 0.38.2 bundles SQLite 3.53.2: a crafted -wal with another
+    # page size can make queries return uninitialized page-cache memory. The
+    # fix (0.39) needs rusqlite 0.41, a semver-major bump in the store and the
+    # importers. Lodestar's own database is written only by Lodestar. The one
+    # database it opens that someone else may have written is a Magnetico
+    # import, and the importer refuses a non-empty -wal or a -journal
+    # (crates/sources-importers/src/magnetico.rs, `quiescent`), checked before
+    # it opens the file and before each batch. The check is a stat, not atomic
+    # with SQLite's read, so it narrows the exposure; it doesn't close it.
+    # Review by 2026-12-13 (30 days); fix: X-rusqlite-041.
+    { id = "RUSTSEC-2026-0459", reason = "narrowed, not closed: Lodestar writes its own database, and the Magnetico importer refuses a non-empty -wal or a -journal before opening and before each batch (a stat, not atomic); review by 2026-12-13; fix: X-rusqlite-041" },
+]

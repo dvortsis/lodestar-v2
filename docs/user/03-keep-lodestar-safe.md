@@ -69,11 +69,71 @@ In words: Lodestar sends everything through the gluetun container to your VPN pr
 To use it:
 
 1. Install gluetun first. The template expects the container to be named `gluetun`.
-2. In the gluetun container, publish port `8090`, the web UI port. Lodestar can't publish ports itself.
-3. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
+2. Add Lodestar's post-rules to gluetun, as in [Close gluetun's gap when the VPN drops](#close-gluetuns-gap-when-the-vpn-drops) below.
+3. In the gluetun container, publish port `8090`, the web UI port. Lodestar can't publish ports itself.
+4. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
    **Result:** Lodestar starts on gluetun's network.
-4. Open the web UI at your server address and the port you published on gluetun.
-5. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
+5. Open the web UI at your server address and the port you published on gluetun.
+6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
+
+### Close gluetun's gap when the VPN drops
+
+gluetun's firewall is its kill switch. When the VPN drops, it blocks every new connection. On its own, though, it lets packets of connections that were already open leave through your normal network, with your home IP. Lodestar's post-rules file closes that gap.
+
+> [!IMPORTANT]
+> Add the post-rules file to gluetun before you start Lodestar. Without it, a few packets can leave outside the VPN each time the tunnel drops.
+
+If Lodestar generated your gluetun from its [companion](glossary.md#companion) templates, most of this is done:
+
+| Template | What it already has | What you do |
+|---|---|---|
+| Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Use Docker Compose 2.23.1 or later: run `docker compose version` to see yours. Older versions refuse the file. Then check the rules: run step 4's commands with `docker compose exec` in place of `docker exec`. Don't skip it: a Compose tool that ignores the built-in rules starts gluetun without them, and without an error. |
+| Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. If you changed the **Post-rules** path in the form, use your path in step 1's commands. Then set the start order (below). |
+
+To set the start order on Unraid:
+
+1. Open the **Docker** tab and switch it to **Advanced View** (top right).
+2. Select the lock icon above the container list to unlock it, then drag gluetun above the companion. Select the lock again.
+3. Turn on **Autostart** for both, and in gluetun's row set **wait** to `30`.
+
+   **Result:** After each restart, Unraid starts gluetun, waits 30 seconds for its firewall, then starts the companion.
+
+The steps below are for a gluetun you set up yourself. With Lodestar's Unraid template, do only steps 1 and 4: the template already has steps 2 and 3. The steps are for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
+
+1. Open the Unraid terminal (**>_** in the top bar). Save the file, then check it:
+
+    ```sh
+    mkdir -p /mnt/cache/appdata/gluetun
+    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt
+    sha256sum /mnt/cache/appdata/gluetun/post-rules.txt
+    ```
+
+   **Result:** The `sha256sum` line starts with `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
+2. Edit the gluetun container and add a **Path**: container path `/iptables/post-rules.txt`, host path `/mnt/cache/appdata/gluetun/post-rules.txt`, access mode **Read Only**.
+3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`, and gluetun's own default is `tun0`. Without this variable the rules do nothing.
+4. Select **Apply**. Then, in the terminal, check that gluetun loaded the rules:
+
+    ```sh
+    docker exec gluetun iptables -S OUTPUT | head -4
+    docker exec gluetun ip link show wg0
+    ```
+
+   **Result:** After the first line (`-P OUTPUT DROP`), the next three lines name `wg0`: one ends in `CONNMARK --set-xmark 0x800000/0x800000` and two end in `-j DROP`. The second command shows the `wg0` link. If either is different, gluetun is running without the rules: check steps 1 to 3. Its log line `[firewall] enabled successfully` alone doesn't prove it, because gluetun skips a missing file without a word.
+5. If Lodestar already runs, restart it now.
+
+With OpenVPN, gluetun names the tunnel `tun0`, and `wg0` isn't a valid OpenVPN device name. Leave `VPN_INTERFACE` unset, and run `sed -i 's/wg0/tun0/g' /mnt/cache/appdata/gluetun/post-rules.txt` after step 1. In step 4, look for `tun0` instead. This variant wasn't tested, so step 4's check is what tells you it works.
+
+If gluetun stops or keeps restarting instead:
+
+| Log line | What to do |
+|---|---|
+| `post-rules.txt: is a directory` | The file wasn't at the host path, so Docker made a folder there. Delete the folder, repeat step 1, and start gluetun again. |
+| `ip6tables is required` | Your server's kernel has no IPv6 firewall. Delete the three lines that start with `ip6tables` from the file, then start gluetun again. |
+| `restarting VPN`, again and again | gluetun's health check pings an address outside the VPN, such as one on your network set with `HEALTH_ICMP_TARGET_IP`, and the rules drop that ping. Add the variable `HEALTH_SMALL_CHECK_TYPE` with value `dns`, or remove `HEALTH_ICMP_TARGET_IP`. |
+
+To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
+
+With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends to the internet goes around the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network.
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 

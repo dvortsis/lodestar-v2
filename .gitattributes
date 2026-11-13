@@ -12,3 +12,7 @@ docs/operations/imports/bitmagnet-restore/** text eol=lf
 # Windows batch files run with CRLF line endings: cmd can miss labels and
 # misparse lines in a file with Unix ones (#651).
 /packaging/windows/**/*.cmd text eol=crlf
+# gluetun's post-rules are pinned by SHA-256 in the guide and embedded with
+# include_str!, so every checkout holds the same LF bytes.
+/crates/companions/src/gluetun-post-rules.txt text eol=lf
+/packaging/companions/gluetun-post-rules.txt text eol=lf

@@ -210,6 +210,38 @@ function Get-SoakServiceImage([string]$Name,
     @{ sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 }
 
+function Assert-SoakAttachBinding([string]$Name, [string]$Exe, [hashtable]$Probe = @{}) {
+    # At attach, the file the soak hashes must be the file the service process runs.
+    # An MSI upgrade can replace the file and leave the old process running (files in use,
+    # reboot pending). Refuse then, so run.sha256 and the samples describe the process measured.
+    # Only hashes are compared and reported; no path leaves this function. $Probe replaces the Windows calls in tests.
+    $p = @{
+        Identity = { param($n) Get-SoakServiceIdentity $n }
+        ProcessImage = { param($procId) (Get-Process -Id $procId).Path }
+        Hash = { param($f) (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash }
+        ServiceImage = { param($n) (Get-SoakServiceImage $n).sha256 }
+    }
+    foreach ($key in $Probe.Keys) { $p[$key] = $Probe[$key] }
+    $registered = & $p.ServiceImage $Name
+    $id = & $p.Identity $Name
+    $running = & $p.ProcessImage $id.pid
+    if ([string]::IsNullOrEmpty($running)) { throw 'Cannot read the running service program file. Run this from an elevated PowerShell.' }
+    if ((& $p.Hash $running) -ne $registered) {
+        throw 'The running service is not the installed program file (an upgrade may be waiting on a restart). Restart the service, or reboot if Windows says a restart is pending, then start the soak again.'
+    }
+    if ((& $p.Hash $Exe) -ne $registered) {
+        throw '-Exe is not the file the service is installed from. Point -Exe at the installed lodestar.exe.'
+    }
+    # The identity and hash the check passed on; the collector must see the same ones when it binds.
+    return @{ pid = $id.pid; start_ticks = $id.start_ticks; sha256 = $registered }
+}
+
+function Assert-SoakAttachUnchanged($Attach, $Identity, [string]$ImageSha256, [string]$ExeSha256) {
+    # The service the collector binds must be the process and file Assert-SoakAttachBinding passed on.
+    if ($Identity.pid -ne $Attach.pid -or $Identity.start_ticks -ne $Attach.start_ticks) { throw 'The service restarted while the soak was starting. Start the soak again.' }
+    if ($ImageSha256 -ne $Attach.sha256 -or $ImageSha256 -ne $ExeSha256) { throw 'The service program file changed while the soak was starting. Start the soak again.' }
+}
+
 function Save-SoakLifecycle([string]$Path, [string]$Step, [hashtable]$Fields) {
     # Merge one step ('upgrade' or 'uninstall') into lifecycle.json.
     $record = if ([IO.File]::Exists($Path)) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable } else { @{ schema_version = 1 } }

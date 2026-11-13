@@ -1,0 +1,6 @@
+{
+ "error": {
+  "code": "ratelimited",
+  "info": "SENTINEL-SERVICE-TEXT"
+ }
+}

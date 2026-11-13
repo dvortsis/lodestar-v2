@@ -118,8 +118,34 @@ try {
     [IO.File]::WriteAllText($exe, 'fixture')
     $image = Get-SoakServiceImage 'Lodestar' { '"' + $exe + '" serve' }
     Assert ($image.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash) 'image hash'
+    # Attach binding: real files, only the service and process calls are stubbed.
+    $other = Join-Path $fixture 'other.exe'
+    [IO.File]::WriteAllText($other, 'older build')
+    $registered = (Get-FileHash -LiteralPath $exe).Hash
+    function New-BindProbe([string]$Running, [string]$Registered) {
+        @{ Identity = { param($n) @{ pid = 7; start_ticks = 99 } }
+           ProcessImage = { param($procId) if ($procId -eq 7) { $Running } else { $null } }.GetNewClosure()
+           ServiceImage = { param($n) $Registered }.GetNewClosure() }
+    }
+    $attach = Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $exe $registered)
+    Assert ($attach.pid -eq 7 -and $attach.start_ticks -eq 99 -and $attach.sha256 -eq $registered) 'attach identity returned'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $other $registered) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*not the installed program file*') 'a different running binary not refused for the right reason'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $other (New-BindProbe $exe $registered) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '-Exe is not*') 'a different -Exe not refused for the right reason'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe '' $registered) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*elevated*') 'an unreadable process path not refused for the right reason'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $exe ('A' * 64)) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*not the installed program file*') 'a differing ImagePath hash was accepted'
+    Assert-SoakAttachUnchanged $attach @{ pid = 7; start_ticks = 99 } $registered $registered
+    $why = ''; try { Assert-SoakAttachUnchanged $attach @{ pid = 8; start_ticks = 120 } $registered $registered } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*restarted*') 'a restart in the gap was accepted'
+    $why = ''; try { Assert-SoakAttachUnchanged $attach @{ pid = 7; start_ticks = 99 } ('A' * 64) $registered } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*file changed*') 'a file change in the gap was accepted'
+    $why = ''; try { Assert-SoakAttachUnchanged $attach @{ pid = 7; start_ticks = 99 } $registered ('A' * 64) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*file changed*') 'an -Exe that differs at binding was accepted'
 } finally {
-    foreach ($f in @($life, $exe)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
+    foreach ($f in @($life, $exe, $other)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
     [IO.Directory]::Delete($fixture)
 }
 # Every changed script must parse: a slip in a branch would otherwise first show on the owner's PC.
