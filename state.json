@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:19Z",
+  "updated_at": "2026-11-13T02:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8901,7 +8901,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:19Z",
+    "updated": "2026-11-13T02:20Z",
     "items": [
       {
         "slot": 1,
@@ -9050,13 +9050,11 @@
       },
       {
         "slot": 17,
-        "slice": "X-utp-backoff",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnB3JA4wKEcwoa3rh91: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-utp-backoff.md",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #788 only, then archive (\u00a72.64)"
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "X-utp-backoff #788 merged (eb6620d2) 2026-11-13T02:20Z after runner delta check of rv-788 B1 option (b); session archived (\u00a72.65 drain)",
+        "status": "idle"
       },
       {
         "slot": 18,
@@ -9248,7 +9246,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:19Z",
+  "updated": "2026-11-13T02:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
