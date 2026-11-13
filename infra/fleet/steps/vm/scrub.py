@@ -62,6 +62,11 @@ def digest(v):
     return isinstance(v, str) and bool(_DIGEST.match(v))
 
 
+def count(v):
+    """A non-negative whole number (a count of records)."""
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 10**15
+
+
 def scalar(v):
     return v is None or num(v) or boolean(v) or word(v) or time(v)
 
@@ -102,7 +107,8 @@ SEGMENT = {"segment": num, "arm": one_of("control", "treatment"), "result": RESU
 DOC = {"version": num, "rules_commit": commit, "spec_commit": commit, "lodestar_commit": commit,
        "image_digest": digest, "treatment": one_of("adm", "utp", "route"), "segment_hours": num,
        "role": one_of("main", "worker"),
-       "outages": num, "outage_notes": num, "segments": [SEGMENT]}
+       "outages": num, "outage_notes": num, "host_guard_drops": count, "damaged": boolean,
+       "segments": [SEGMENT]}
 MAX_ITEMS = 200
 
 
@@ -157,6 +163,28 @@ def count_lines(path: Path) -> int:
         return 0
 
 
+# The block's outage records (block-lib.sh block_record): `<unix seconds> <kind>`,
+# one per line, with a fixed kind. Only exact lines of a named kind count, so
+# nothing else in the file is ever read into the document.
+def count_kind(path: Path, kind: str) -> int:
+    line = re.compile(r"[0-9]{1,20} " + re.escape(kind) + r"\Z")
+    try:
+        return sum(1 for ln in path.read_text(encoding="ascii", errors="replace").split("\n") if line.match(ln))
+    except OSError:
+        return 0
+
+
+def damaged(block: Path) -> bool:
+    """X-gluetun-guard-reboot's damaged mark: whether it exists, never what it
+    says. guard_lost writes `host_guard_lost` to the outages with it, so that
+    line counts too (copy-off mounts the outages, not the mark)."""
+    try:
+        marked = (block / "damaged").exists()
+    except OSError:
+        marked = False
+    return marked or count_kind(block / "outages", "host_guard_lost") > 0
+
+
 def collect(block: Path, out: Path, run=subprocess.run) -> dict:
     """The raw document from a block directory (`evidence/seg-N`, `block.env`,
     `tools/analyze_cr.py`), scrubbed. Reports are written to out, never into
@@ -169,7 +197,9 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
            "lodestar_commit": env.get("LODESTAR_COMMIT"), "image_digest": "sha256:" + env.get("IMAGE_DIGEST", ""),
            "treatment": env.get("TREATMENT"), "segment_hours": int(env.get("SEGMENT_HOURS", "0") or 0),
            "role": env.get("ROLE"), "outages": count_lines(block / "outages"),
-           "outage_notes": count_lines(block / "notes"), "segments": []}
+           "outage_notes": count_lines(block / "notes"),
+           "host_guard_drops": count_kind(block / "outages", "host_guard_dropped"), "damaged": damaged(block),
+           "segments": []}
     for n in range(1, 5):
         seg = block / "evidence" / f"seg-{n}"
         if not seg.is_dir():

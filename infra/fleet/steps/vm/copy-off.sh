@@ -40,9 +40,11 @@ load_block_env || fail block_env
 echo "ok nothing_running"
 
 rm -rf -- "$work/out" && mkdir -m 0700 -- "$work/out" || fail scrubbed
-# Only what the scrubber reads is mounted (never the password).
+# Only what the scrubber reads is mounted (never the password). The damaged
+# mark (X-gluetun-guard-reboot) goes in too, when there is one: the scrubber
+# only tests that it exists (X-scrub-guard-fields).
 mounts=()
-for f in evidence block.env tools outages notes; do
+for f in evidence block.env tools outages notes damaged; do
   [[ -e $BLOCK/$f ]] && mounts+=(-v "$BLOCK/$f:/block/$f:ro")
 done
 doc=$(timeout 600 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true \
