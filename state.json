@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T10:57Z",
+  "updated_at": "2026-11-13T10:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8019,7 +8019,7 @@
     },
     {
       "id": "slices-yaml-x-wk18w-rollback",
-      "note": "Next runner plan PR: add X-wk18w-rollback (named in WK-18w decisions file; recovery after a join rolled back by StartServices failure or cancel). Also add crates/pipeline/tests/** to X-filter01-fix owns.",
+      "note": "Next runner plan PR: add X-wk18w-rollback (named in WK-18w decisions file; recovery after a join rolled back by StartServices failure or cancel). Also add crates/pipeline/tests/** to X-filter01-fix owns. Brief written 2026-11-13 (helper, sonnet, deps [WK-18w], owns packaging/windows join files + decisions). WK-19 must say delete/back up C:\\ProgramData\\Lodestar, never uninstall with REMOVE_DATA=1 when nothing is installed.",
       "at": "2026-11-13T10:32Z"
     },
     {
@@ -9060,7 +9060,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T10:57Z",
+    "updated": "2026-11-13T10:58Z",
     "items": [
       {
         "slot": 1,
@@ -9240,12 +9240,12 @@
       },
       {
         "slot": 31,
-        "slice": "WK-18w",
+        "slice": "X-wk18w-rollback",
         "status": "active",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: #801 WK-18s merged (f107f53d) after runner delta check; now #802 WK-18w: bring main in, undraft, ready",
-        "since": "2026-11-13T09:22Z"
+        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: #802 WK-18w merged (665935cf); follow-up X-wk18w-rollback in same session",
+        "since": "2026-11-13T10:58Z"
       },
       {
         "slot": 32,
@@ -9316,7 +9316,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T10:57Z",
+  "updated": "2026-11-13T10:58Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9663,6 +9663,12 @@
       "slice": "X-insights-funnel-fixture",
       "merged": "ffe49bbb",
       "at": "2026-11-13T10:57Z"
+    },
+    {
+      "pr": 802,
+      "slice": "WK-18w",
+      "merged": "665935cf",
+      "at": "2026-11-13T10:58Z"
     }
   ]
 }
