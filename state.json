@@ -9252,7 +9252,7 @@
       },
       {
         "slot": 16,
-        "doing": "cloud-testing: launching (Opus): host INPUT guard kept while the test stack runs (drill 3 ICMP finding); brief briefs/X-gluetun-host-guard.md",
+        "doing": "cloud-testing: session_01MMjhn9s8h9qWRv7YbYcMme (Opus): host INPUT guard kept while the test stack runs (drill 3 ICMP finding); brief briefs/X-gluetun-host-guard.md",
         "slice": "X-gluetun-host-guard",
         "role": "build",
         "since": "2026-11-13T17:10Z"
