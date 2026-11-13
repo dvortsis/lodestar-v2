@@ -1,20 +1,29 @@
 <script lang="ts">
 	// Settings → Sources (§18.8, §10.10): every source plugin of this build, grouped by kind, with its
 	// status, enable toggle, priority and 24 h yield, and the consent and purge dialogs
+	// (X-sources-restructure, owner §2.66: groups collapse behind a summary line, a filter box
+	// narrows the rows by name or kind, rows are one line that expands, and a legend names the
+	// consent classes)
 	// (SRC-15b), loaded on first use. Until a dialog's chunk arrives the screen simply stays as it is. This screen shows the server's last answer and replaces a row
 	// with the PATCH's reply.
 	import { onDestroy, onMount } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
+	import IconCaret from '~icons/ph/caret-right-bold';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import Input from '$lib/ui/fields/Input.svelte';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import EmptyState from '$lib/ui/feedback/EmptyState.svelte';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
+	import Legend from './Legend.svelte';
 	import SourceRow from './SourceRow.svelte';
 	import {
 		group,
 		kindText,
+		matches,
 		refusalText,
+		summary,
 		type Priority,
 		type Source,
 		type SourcePatch
@@ -55,6 +64,25 @@
 	type EnableBody = SourcePatch & { password?: string };
 
 	const groups = $derived(sources ? group(sources) : []);
+	// The filter box narrows the rows; groups with no match are left out.
+	let query = $state('');
+	const filtering = $derived(query.trim() !== '');
+	const shown = $derived(
+		groups
+			.map((g) => ({ ...g, sources: g.sources.filter((s) => matches(s, query)) }))
+			.filter((g) => g.sources.length > 0)
+	);
+	const shownCount = $derived(shown.reduce((n, g) => n + g.sources.length, 0));
+	// Groups start open; a closed one opens again when the filter changes, so a match is never
+	// hidden behind a closed group.
+	let closed = $state.raw<readonly string[]>([]);
+	const keyOf = (g: { kind: string | null }) => g.kind ?? 'other';
+	const toggleGroup = (key: string) =>
+		(closed = closed.includes(key) ? closed.filter((k) => k !== key) : [...closed, key]);
+	function filtered(e: Event & { currentTarget: HTMLInputElement }) {
+		query = e.currentTarget.value;
+		closed = [];
+	}
 
 	async function load() {
 		if (destroyed) return;
@@ -163,13 +191,74 @@
 			data-testid="sources-empty"
 		/>
 	{:else}
-		<div class="flex flex-col gap-8" data-testid="sources-screen">
-			{#each groups as g (g.kind ?? 'other')}
-				<section class="flex flex-col gap-3" aria-labelledby="sources-{g.kind ?? 'other'}-h">
-					<h2 id="sources-{g.kind ?? 'other'}-h" class="text-small font-semibold">
-						{kindText(g.kind)}
+		<div class="flex flex-col gap-6" data-testid="sources-screen">
+			<div class="flex flex-col gap-2">
+				<Input
+					type="search"
+					class="max-w-md"
+					aria-label={m.sources_filter_label()}
+					placeholder={m.sources_filter_placeholder()}
+					value={query}
+					oninput={filtered}
+					data-testid="sources-filter"
+				/>
+				<p class="text-small text-muted-text" role="status" data-testid="sources-filter-count">
+					{filtering ? m.sources_filter_count({ shown: shownCount, total: sources.length }) : ''}
+				</p>
+			</div>
+			{#if shown.length === 0}
+				<EmptyState
+					headingLevel={2}
+					title={m.sources_filter_empty_title()}
+					text={m.sources_filter_empty_text()}
+					data-testid="sources-filter-empty"
+				>
+					{#snippet action()}
+						<Button
+							onclick={() => {
+								query = '';
+								closed = [];
+							}}
+							data-testid="sources-filter-clear">{m.sources_filter_clear()}</Button
+						>
+					{/snippet}
+				</EmptyState>
+			{/if}
+			{#each shown as g (keyOf(g))}
+				{@const key = keyOf(g)}
+				{@const open = !closed.includes(key)}
+				{@const sum = summary(g.sources)}
+				<section class="flex flex-col gap-3" aria-labelledby="sources-{key}-h">
+					<h2 id="sources-{key}-h" class="text-small">
+						<button
+							type="button"
+							class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-field text-start {FOCUS_RING} {TARGET_MIN}"
+							aria-expanded={open}
+							aria-controls="sources-group-{key}"
+							onclick={() => toggleGroup(key)}
+							data-testid="sources-group-{key}-toggle"
+						>
+							<IconCaret
+								class="size-(--icon-size-row) shrink-0 {open ? 'rotate-90' : ''}"
+								aria-hidden="true"
+							/>
+							<span class="font-semibold">{kindText(g.kind)}</span>
+							<span class="text-muted-text" data-testid="sources-group-{key}-summary">
+								{m.sources_group_on({ on: sum.on, total: sum.total })}
+							</span>
+							{#if sum.attention > 0}
+								<span data-testid="sources-group-{key}-attention">
+									{m.sources_group_attention({ count: sum.attention })}
+								</span>
+							{/if}
+						</button>
 					</h2>
-					<ul class="flex flex-col gap-3" data-testid="sources-group-{g.kind ?? 'other'}">
+					<ul
+						id="sources-group-{key}"
+						class="flex flex-col gap-3"
+						hidden={!open}
+						data-testid="sources-group-{key}"
+					>
 						{#each g.sources as s (s.id)}
 							<SourceRow
 								source={s}
@@ -185,6 +274,7 @@
 					</ul>
 				</section>
 			{/each}
+			<Legend />
 		</div>
 	{/if}
 {:else if failed}

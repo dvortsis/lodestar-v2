@@ -147,5 +147,22 @@
 	"sources_cfg_not_set": "Not set",
 	"sources_cfg_save_off": "Saving is off: this screen can't show all of this source's settings, and saving would reset the ones it can't. Use the API to change them.",
 	"sources_cx_credential_remove_ask": "Remove the saved {label}? This can't be undone.",
-	"sources_purge_confirm_count_one": "Delete 1 torrent found only by {name}"
+	"sources_purge_confirm_count_one": "Delete 1 torrent found only by {name}",
+	"sources_filter_label": "筛选来源",
+	"sources_filter_placeholder": "按名称或类型筛选",
+	"sources_filter_count": "显示 {shown} 个，共 {total} 个来源",
+	"sources_filter_empty_title": "没有匹配的来源",
+	"sources_filter_empty_text": "试试其他名称或类型，或清除筛选。",
+	"sources_filter_clear": "清除筛选",
+	"sources_group_on": "已开启 {on} 个，共 {total} 个",
+	"sources_group_attention": "需要处理：{count}",
+	"sources_legend_heading": "同意类别",
+	"sources_legend_intro": "每个来源上的标记说明开启它需要你做什么。",
+	"sources_consent_open": "开放",
+	"sources_legend_open": "没有标记。用开关即可开启。",
+	"sources_legend_external": "连接公共网络服务。开启前会显示它连接的地址。",
+	"sources_legend_account": "登录你在其他服务上的账户。需要你的凭据，凭据加密保存，结果只留在此服务器上。",
+	"sources_legend_restricted": "法律风险较高。开启前需要你同意。强烈建议使用 VPN。",
+	"sources_legend_overlay": "加入另一个网络，例如 I2P 或 IPFS。开启前需要你同意，建议使用 VPN，它找到的内容可以一步清除。",
+	"sources_details_name": "{name}，详情"
 }

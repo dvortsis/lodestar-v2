@@ -147,5 +147,22 @@
 	"sources_cfg_not_set": "Not set",
 	"sources_cfg_save_off": "Saving is off: this screen can't show all of this source's settings, and saving would reset the ones it can't. Use the API to change them.",
 	"sources_cx_credential_remove_ask": "Remove the saved {label}? This can't be undone.",
-	"sources_purge_confirm_count_one": "Delete 1 torrent found only by {name}"
+	"sources_purge_confirm_count_one": "Delete 1 torrent found only by {name}",
+	"sources_filter_label": "Filter sources",
+	"sources_filter_placeholder": "Filter by name or kind",
+	"sources_filter_count": "Showing {shown} of {total} sources",
+	"sources_filter_empty_title": "No sources match",
+	"sources_filter_empty_text": "Try another name or kind, or clear the filter.",
+	"sources_filter_clear": "Clear filter",
+	"sources_group_on": "{on} of {total} on",
+	"sources_group_attention": "Needs attention: {count}",
+	"sources_legend_heading": "Consent classes",
+	"sources_legend_intro": "The badge on each source says what turning it on asks of you.",
+	"sources_consent_open": "Open",
+	"sources_legend_open": "No badge. Turns on with its switch.",
+	"sources_legend_external": "Contacts public web services. You see the addresses it contacts before it turns on.",
+	"sources_legend_account": "Signs in to a service of yours. It asks for your credentials, which are stored encrypted, and its results stay on this server.",
+	"sources_legend_restricted": "Carries more legal risk. It asks for your consent first. A VPN is strongly advised.",
+	"sources_legend_overlay": "Joins another network, such as I2P or IPFS. It asks for your consent first, a VPN is advised, and what it found can be purged in one step.",
+	"sources_details_name": "{name}, details"
 }
