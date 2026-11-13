@@ -86,6 +86,7 @@ case "$1" in
   logs)
     [ "$*" = "logs lodestar" ] || bad "$*"
     echo "2026-11-11T00:00:00Z INFO auth First run: open Lodestar in a browser and enter setup token ${TOKEN-ABCD-0123-4567-89EF}" ;;
+  update) [ "$*" = "update --restart=no gluetun" ] || bad "$*"; : > "$STUB/gluetun_no_restart" ;;
   kill) [ "$*" = "kill gluetun" ] || bad "$*"
         : > "$STUB/gluetun_killed"
         grep -vx gluetun "$STUB/running" > "$STUB/running.new" 2>/dev/null; mv "$STUB/running.new" "$STUB/running" ;;
@@ -154,7 +155,12 @@ n() { cat "$STUB/$1" 2>/dev/null || echo 0; }
 down() { [ "$(n "$1")" -gt 0 ] || exit 1; echo $(($(n "$1") - 1)) > "$STUB/$1"; }
 case "$*" in
   "-I INPUT 1 $host") [ -n "$HOST_FAILS" ] && exit 1; echo $(($(n host) + 1)) > "$STUB/host" ;;
-  "-C INPUT $host") [ "$(n host)" -gt 0 ] ;;
+  "-C INPUT $host")
+    # CHECK_ERR: an iptables error (the xtables lock, say), not "absent"; CHECK_ERRS: only the first n checks.
+    if [ -n "$CHECK_ERR" ] || [ "$(n check_errs_seen)" -lt "${CHECK_ERRS:-0}" ]; then
+      echo $(($(n check_errs_seen) + 1)) > "$STUB/check_errs_seen"; exit 4
+    fi
+    [ "$(n host)" -gt 0 ] ;;
   "-D INPUT $host"|"-D INPUT $host_s") [ -n "$HOST_STUCK" ] && exit 1; down host ;;
   "-D INPUT $old_host_s") [ -n "$HOST_STUCK" ] && exit 1; down oldhost ;;
   "-S INPUT")
@@ -434,6 +440,14 @@ class StartBlock(Base):
         self.assertIn(f"ExecStart=/bin/bash {self.block}/tools/watcher.sh {self.block} {self.stack}", unit)
         self.assertIn("WantedBy=multi-user.target", unit)
         self.assertTrue((self.stub / "watcher_enabled").exists())
+        # The boot guard, which Docker requires, runs before the network and Docker come up.
+        guard = (self.units / "lodestar-block-guard.service").read_text().splitlines()
+        self.assertIn("Before=network-pre.target docker.service", guard)
+        self.assertIn("DefaultDependencies=no", guard)
+        self.assertIn("Type=oneshot", guard)
+        self.assertIn(f"ExecStart=/bin/bash {self.block}/tools/watcher.sh {self.block} {self.stack} boot", guard)
+        self.assertEqual((self.units / "docker.service.d" / "lodestar-block-guard.conf").read_text().splitlines(),
+                         ["[Unit]", "Requires=lodestar-block-guard.service", "After=lodestar-block-guard.service"])
         self.assertEqual((self.block / "tools" / "block-lib.sh").read_text(), (VM / "block-lib.sh").read_text())
         log = self.log()
         self.assertLess(log.index("compose"), log.index("run -d --name lodestar-collector-1"))
@@ -847,14 +861,16 @@ class GuardResume(Base):
 
     def test_another_endpoints_guard_is_kept(self):
         """A renewal mid-block changes wg0.conf, not gluetun's session: the old
-        endpoint's copy stays, and the change is recorded."""
+        endpoint's copy stays, and the new one is added as a precaution."""
         self.make_block(segment=2)
         (self.stub / "host").write_text("0")
         (self.stub / "oldhost").write_text("1")
+        self.running("gluetun", "lodestar", "lodestar-collector-2")
         rc, lines, raw = self.run_script("outage-watcher.sh")
-        self.assertEqual((rc, lines[:2]), (0, ["ok host_guard_reheld", "count host_guard_drops 1"]))
-        self.assertEqual((self.copies(), self.copies("oldhost")), (1, 1))
-        self.assertEqual(self.outages(), ["host_guard_endpoint_changed"])
+        self.assertEqual((rc, lines[:2]), (0, ["ok host_guarded", "count host_guard_drops 0"]))
+        self.assertEqual((self.copies(), self.copies("oldhost")), (1, 1))  # added; the old one kept
+        self.assertEqual(self.outages(), [])  # no guard dropped: the segment isn't voided
+        self.assertFalse((self.stub / "collector_notes").exists())
         self.assertNotIn("-D INPUT", self.log())
 
     def test_a_guard_that_cant_be_held_damages_the_block_and_stops_gluetun(self):
@@ -874,6 +890,7 @@ class GuardResume(Base):
                 self.assertEqual(lines[:2], ["fail host_guarded", "fail block_intact"])
                 self.assertEqual(lines[-1], "fail outage_watcher")
                 self.assertTrue((self.stub / "gluetun_stopped").exists())
+                self.assertTrue((self.stub / "gluetun_no_restart").exists())  # a kill or a reboot can't bring it back
                 self.assertNotIn("gluetun", (self.stub / "running").read_text())  # never left running unguarded
                 self.assertEqual((self.stub / "gluetun_killed").exists(), "GLUETUN_STOP_FAIL" in flags)
                 self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
@@ -919,6 +936,7 @@ case "$1" in
     exit 0 ;;
   logs) exit 0 ;;
   stop) [ "$*" = "stop -t 10 gluetun" ] || echo "$*" >> "$STUB/badargs"; : > "$STUB/gluetun_stopped" ;;
+  update) [ "$*" = "update --restart=no gluetun" ] || echo "$*" >> "$STUB/badargs" ;;
   inspect) [ "$*" = "inspect --type container -f {{.State.Running}} gluetun" ] || echo "$*" >> "$STUB/badargs"
            [ -e "$STUB/gluetun_stopped" ] && echo false || echo true ;;
   exec) exit 1 ;;  # no collector runs
@@ -970,6 +988,96 @@ esac
         self.assertEqual(self.watch(), 0)
         self.assertEqual(self.outages(), [])
         self.assertNotIn("iptables -I", self.log())
+
+
+    def test_an_iptables_error_is_not_read_as_gone(self):
+        self.make_block(segment=2)
+        rc, lines, _ = self.run_script("outage-watcher.sh", CHECK_ERRS=2)  # a passing glitch: tried again
+        self.assertEqual((rc, lines[:2]), (0, ["ok host_guarded", "count host_guard_drops 0"]))
+        self.assertEqual((self.copies(), self.outages()), (1, []))
+        self.running("gluetun")
+        rc, lines, _ = self.run_script("outage-watcher.sh", CHECK_ERR=1)  # one that persists fails closed
+        self.assertEqual((rc, lines[:2]), (1, ["fail host_guarded", "fail block_intact"]))
+        self.assertEqual(self.outages(), ["host_guard_lost"])
+        self.assertTrue((self.stub / "gluetun_stopped").exists())
+        self.assertNotIn("iptables -I", self.log())
+
+    def test_a_held_lock_means_try_again(self):
+        """Another check holds the lock: nothing is recorded or stopped, and the step says so."""
+        import fcntl
+        self.make_block(segment=2)
+        (self.stub / "host").write_text("0")
+        with open(self.block / ".guard.lock", "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            rc, lines, _ = self.run_script("outage-watcher.sh", GUARD_LOCK_WAIT=1)
+        self.assertEqual((rc, lines[0], lines[-1]), (1, "fail host_guard_checked", "fail outage_watcher"))
+        self.assertEqual((self.copies(), self.outages()), (0, []))
+        self.assertFalse((self.stub / "gluetun_stopped").exists())
+        rc, lines, _ = self.run_script("outage-watcher.sh")  # once it's free, the guard is put back
+        self.assertEqual((rc, lines[0]), (0, "ok host_guard_reheld"))
+
+    def test_a_lock_that_cant_be_opened_fails_closed(self):
+        self.make_block(segment=2)
+        (self.block / ".guard.lock").mkdir()
+        self.running("gluetun")
+        rc, lines, raw = self.run_script("outage-watcher.sh")
+        self.assertEqual((rc, lines[:2]), (1, ["fail host_guarded", "fail block_intact"]))
+        self.assertTrue((self.stub / "gluetun_stopped").exists())
+        self.assertEqual(raw.count("\n"), len(lines))  # nothing but its lines
+
+    def test_unit_paths_are_checked_before_they_are_written(self):
+        for name in ("lodestar block", "lodestar%block", "lodestar\nblock"):
+            with self.subTest(name=name):
+                self.setUp()
+                self.block = self.tmp / name
+                self.make_block(segment=2)
+                rc, lines, _ = self.run_script("outage-watcher.sh")
+                self.assertEqual((rc, lines[-1]), (1, "fail outage_watcher_started"))
+                self.assertEqual(list(self.units.iterdir()), [])
+                self.assertNotIn("systemctl daemon-reload", self.log())
+
+    def boot(self, **flags):
+        """watcher.sh's boot check, as the boot guard runs it before Docker: any docker call is a failure."""
+        (self.stub / "bin" / "docker").write_text('#!/bin/sh\necho "$*" >> "$STUB/badargs"; exit 1\n')
+        (self.stub / "bin" / "docker").chmod(0o755)
+        env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub),
+               **{k: str(v) for k, v in flags.items()}}
+        r = subprocess.run(["bash", str(VM / "watcher.sh"), str(self.block), str(self.stack), "boot"], env=env,
+                           capture_output=True, text=True, timeout=60)
+        bad = self.stub / "badargs"
+        self.assertFalse(bad.exists(), bad.read_text() if bad.exists() else "")
+        self.assertEqual((r.stdout, r.stderr), ("", ""))
+        return r.returncode
+
+    def test_the_boot_guard_holds_it_before_docker(self):
+        self.make_block(segment=2)
+        (self.stub / "host").write_text("0")  # the reboot flushed INPUT
+        self.assertEqual(self.boot(), 0)
+        self.assertEqual((self.copies(), self.outages()), (1, ["host_guard_dropped"]))
+        self.assertEqual(self.boot(), 0)  # held: nothing more
+        self.assertEqual(self.outages(), ["host_guard_dropped"])
+
+    def test_a_boot_guard_that_cant_hold_keeps_docker_down(self):
+        self.make_block(segment=2)
+        (self.stub / "host").write_text("0")
+        self.assertEqual(self.boot(HOST_FAILS=1), 1)  # the unit fails, and Docker requires it
+        self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
+        self.assertEqual(self.outages(), ["host_guard_dropped", "host_guard_lost"])
+
+    def test_the_boot_guard_covers_the_gap_before_copy_off(self):
+        """After the last segment the marker is gone, but the guard is held until copy-off."""
+        self.make_block(segment=4)
+        (self.block / "marker").unlink()
+        (self.stub / "host").write_text("0")
+        self.assertEqual(self.boot(), 0)
+        self.assertEqual(self.copies(), 1)
+        (self.stub / "host").write_text("0")
+        (self.block / "copied").write_text("")  # copied off: nothing is expected
+        self.assertEqual(self.boot(), 0)
+        self.assertEqual(self.copies(), 0)
+        subprocess.run(["rm", "-rf", str(self.block)], check=True)  # no block at all
+        self.assertEqual(self.boot(), 0)
+        self.assertEqual(self.copies(), 0)
 
 
 class CopyOff(Base):

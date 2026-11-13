@@ -11,9 +11,10 @@
 # never stops or restarts Lodestar: an outage makes the segment invalid, and
 # the analyzer judges that.
 # It also keeps the host guard (X-gluetun-guard-reboot): at its start and every
-# GUARD_EVERY seconds, a guard a reboot or an iptables flush removed is put back
-# and recorded, and one that can't be held marks the block damaged and stops
-# gluetun (block-lib.sh guard_resume).
+# GUARD_EVERY seconds, a guard an iptables flush removed is put back and
+# recorded, and one that can't be held marks the block damaged and stops
+# gluetun (block-lib.sh guard_resume). With a third argument, `boot`, it is the
+# boot guard instead: one check before Docker starts, then it exits.
 # It exits when the block's marker is gone.
 # It prints nothing; everything it keeps stays in the block directory.
 set -uo pipefail
@@ -24,6 +25,15 @@ MAX_NOTES=${MAX_NOTES:-500}  # bounded, whatever gluetun does; every outage is s
 GUARD_EVERY=${GUARD_EVERY:-30}
 # shellcheck source=block-lib.sh
 . "${BASH_SOURCE[0]%/*}/block-lib.sh"
+
+# watcher.sh <block> <stack> boot: the boot guard's one check, before Docker
+# starts (block-lib.sh start_watcher). Any failure fails the unit, which keeps
+# Docker, and so gluetun, down.
+if [[ ${3:-} == boot ]]; then
+  guard_resume "$STACK/secrets/wg0.conf" boot; rc=$?
+  ((rc == 0 || rc == 3)) && exit 0
+  exit 1
+fi
 
 # Only a listing that works and shows no marker ends the watcher (fail closed:
 # a block it can't read is still a block).
@@ -52,7 +62,7 @@ outage() {
   esac
 }
 # Between segments no collector runs: the outage is counted, and there is no window to note it in.
-note() { block_record link_outage; }
+note() { block_record "" link_outage; }
 guard() { guard_resume "$STACK/secrets/wg0.conf"; checked=$SECONDS; }
 
 checked=0

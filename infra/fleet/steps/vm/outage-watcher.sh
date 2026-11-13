@@ -19,7 +19,9 @@ case $(block_state) in
   none) echo "fail block_recorded"; exit 1 ;;
   *) echo "fail block_check"; exit 1 ;;
 esac
-command -v iptables >/dev/null 2>&1 || { echo "fail tool_missing_iptables"; exit 1; }
+for tool in iptables flock; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "fail tool_missing_$tool"; exit 1; }
+done
 failed=""
 guard_resume "$STACK/secrets/wg0.conf"; rc=$?
 case $rc in

@@ -1020,7 +1020,7 @@ class VMScripts(unittest.TestCase):
         self.assertIn("ok block_intact", lines)
         self.assertIn("count host_guard_drops 0", lines)
         # X-gluetun-guard-reboot: guards found gone and put back, and one that couldn't be held.
-        (self.block / "outages").write_text("1 link_outage\n2 host_guard_dropped\n3 host_guard_endpoint_changed\n"
+        (self.block / "outages").write_text("1 link_outage\n2 host_guard_dropped\n3 host_guard_dropped\n"
                                             "4 host_guard_lost\n")
         (self.block / "damaged").write_text("host_guard_lost\n")
         _, lines, _ = self.run_script("vm-status.sh")
