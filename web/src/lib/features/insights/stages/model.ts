@@ -78,6 +78,8 @@ export interface BarsSpec {
 	/** The server sent no list (null): not available, which is not an empty list. */
 	unavailable?: boolean;
 	csv?: string;
+	/** What the card says when there are no items; the generic "nothing to show" otherwise. */
+	empty?: string;
 }
 
 export interface HistSpec {
@@ -672,13 +674,18 @@ export function fetchBars(
 	reasonLabel: (k: string) => string,
 	locale?: string
 ): BarsSpec[] {
+	const losses = r.losses ?? [];
+	// No losses: say so, not ten rows of 0 (UI review 2026-11-13, B4).
+	const shown = losses.some((l) => l.count > 0) ? losses : [];
 	return [
 		{
 			id: 'losses',
 			title: m.insights_stage_fetch_losses(),
 			csv: 'fetch.losses',
 			unavailable: r.losses === null,
-			items: (r.losses ?? []).map((l) => ({
+			// Only a Fetched count of 0 says nothing was fetched; otherwise just nothing was lost.
+			empty: r.kpi.fetched === 0 ? m.insights_stage_fetch_none() : m.insights_stage_lost_none(),
+			items: shown.map((l) => ({
 				key: l.key,
 				label: reasonLabel(l.key),
 				value: l.count,

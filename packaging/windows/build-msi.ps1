@@ -31,11 +31,34 @@ Set-Content -Path $rtfPath -Value ('{\rtf1\ansi\deff0{\fonttbl{\f0\fmodern Conso
 $env:LODESTAR_PACKAGING = Join-Path $root 'packaging'
 $env:LODESTAR_LICENSE_RTF = $rtfPath
 
+# The JoinWorker custom action (join.wxs, join-ca\): C# on .NET Framework 4, packed by WiX's
+# MakeSfxCA with its Windows Installer interop (DTF), both from WiX Toolset 3's SDK folder.
+$candle = Get-Command candle.exe -ErrorAction SilentlyContinue
+$wixBin = if ($env:WIX) { Join-Path $env:WIX 'bin' } elseif ($candle) { Split-Path -Parent $candle.Source } else { throw 'WiX Toolset 3 not found (candle.exe on PATH, or WIX set)' }
+$sdk = Join-Path (Split-Path -Parent $wixBin) 'SDK'
+$dtf = Join-Path $sdk 'Microsoft.Deployment.WindowsInstaller.dll'
+$sfxca = Join-Path $sdk 'x64\sfxca.dll'
+$makeSfx = Join-Path $sdk 'MakeSfxCA.exe'
+foreach ($f in $dtf, $sfxca, $makeSfx) { if (-not (Test-Path $f)) { throw "WiX SDK file missing: $f" } }
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $csc)) { throw ".NET Framework 4 compiler missing: $csc" }
+$caDir = Join-Path ([IO.Path]::GetTempPath()) ('lodestar-join-ca-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory $caDir | Out-Null
+$caSrc = Join-Path $PSScriptRoot 'join-ca'
+$caLib = Join-Path $caDir 'LodestarJoinCA.dll'
+& $csc /nologo /target:library /optimize+ /warnaserror+ "/out:$caLib" "/reference:$dtf" `
+  (Join-Path $caSrc 'JoinRunner.cs') (Join-Path $caSrc 'JoinWorkerCA.cs')
+if ($LASTEXITCODE -ne 0) { throw "csc failed ($LASTEXITCODE)" }
+$env:LODESTAR_JOIN_CA = Join-Path $caDir 'LodestarJoinCA.CA.dll'
+& $makeSfx $env:LODESTAR_JOIN_CA $sfxca $caLib (Join-Path $caSrc 'CustomAction.config') $dtf
+if ($LASTEXITCODE -ne 0) { throw "MakeSfxCA failed ($LASTEXITCODE)" }
+
 $msi = Join-Path $OutDir "lodestar-$Version-x86_64.msi"
 Push-Location $root
 try {
   cargo wix --package lodestar --target $Target --no-build --nocapture `
     --include (Join-Path $PSScriptRoot 'main.wxs') `
+    --include (Join-Path $PSScriptRoot 'join.wxs') `
     --install-version $Version `
     --compiler-arg '-ext' --compiler-arg 'WixFirewallExtension' `
     --linker-arg '-ext' --linker-arg 'WixFirewallExtension' `

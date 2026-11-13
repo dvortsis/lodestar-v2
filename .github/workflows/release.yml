@@ -677,6 +677,10 @@ jobs:
         shell: powershell
         run: packaging/windows/test-secure-datadir.ps1
 
+      - name: Unit test (worker join custom action, WK-18w)
+        shell: powershell
+        run: packaging/windows/test-join-worker.ps1
+
       - name: Build
         # Without the `fixture` feature (`serve --fixture` test data): not for releases.
         run: cargo build --locked --release -p lodestar --bin lodestar --no-default-features --features web --target x86_64-pc-windows-msvc

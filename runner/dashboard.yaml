@@ -322,6 +322,7 @@ placement:
   - X-wk-out-set-polish
   - X-wk-fetched-lease
   - X-wk-fetched-lease-nits
+  - X-wk18w-rollback
   - X-lease-reconcile-every-session
   - X-worker-service-log
 - ws: ws-web
@@ -634,6 +635,7 @@ placement:
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
   - X-ci-filter-fleet
+  - X-ci-filter-rust-inputs
   - X-companions-mount-check
   - X-cmp-egress-ui
   - D-companions-guide

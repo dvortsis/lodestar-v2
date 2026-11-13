@@ -472,3 +472,41 @@ for (const mode of ['light', 'dark'] as const) {
 		});
 	}
 }
+
+test.describe('the cohort list scrolls by keyboard (UI review 2026-11-13, B3)', () => {
+	// Enough cohorts to overflow the list's height, as on a real install: the mock's two don't.
+	const many = () => {
+		const base = overviewFixture().funnel[1]!;
+		return Array.from({ length: 24 }, (_, i) => ({
+			...base,
+			cohort: NOW - (4 + i) * 3600,
+			final: i > 0
+		}));
+	};
+	for (const width of [390, 768, 1366, 1440]) {
+		test(`axe finds no scrollable region without keyboard access at ${width} px`, async ({
+			page,
+			mock,
+			go
+		}) => {
+			serve(mock, { funnel: many() });
+			await page.setViewportSize({ width, height: 900 });
+			await go('/insights');
+			const scroller = page.getByTestId('insights-cohorts-scroller');
+			await expect(scroller).toBeVisible({ timeout: 10_000 });
+			// The test means something only if the list really overflows.
+			expect(await scroller.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+			await expect(scroller).toHaveAttribute('tabindex', '0');
+			await expect(scroller).toHaveAccessibleName('Cohorts');
+			await scroller.focus();
+			await page.keyboard.press('End');
+			await expect
+				.poll(() => scroller.evaluate((el) => el.scrollTop), { timeout: 10_000 })
+				.toBeGreaterThan(0);
+			await expectNoA11yViolations(page);
+			await page.getByTestId('insights-cohorts-panel-toggle').click();
+			await expect(page.getByTestId('insights-cohorts-panel-table')).toBeVisible();
+			await expectNoA11yViolations(page);
+		});
+	}
+});
