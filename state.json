@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:21Z",
+  "updated_at": "2026-11-13T03:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8911,7 +8911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T03:21Z",
+    "updated": "2026-11-13T03:22Z",
     "items": [
       {
         "slot": 1,
@@ -9081,13 +9081,11 @@
       },
       {
         "slot": 20,
-        "slice": "NOS-2a",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn9T6q1G9rBENxYZuHb: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-2a.md",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #791 only, then archive (\u00a72.64)"
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "retired: NOS-2a #791 merged (914607c7) 2026-11-13T03:22Z, session archived; over cap (\u00a72.65)",
+        "status": "idle"
       },
       {
         "slot": 21,
@@ -9250,7 +9248,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T03:21Z",
+  "updated": "2026-11-13T03:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
