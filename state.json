@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T07:44Z",
+  "updated_at": "2026-11-13T08:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7973,6 +7973,14 @@
     {
       "id": "flake-landlock-companion",
       "status": "2026-11-13T07:41Z: crates/companions landlock_keeps_the_companion_out_of_lodestars_data (limits.rs:173) failed once on #817 test (ubuntu-latest), passed on re-run. Not this PR. If it recurs anywhere: open X-flake-landlock-companion (Opus, core: sandbox) before any further re-run."
+    },
+    {
+      "id": "rv801-runner-items",
+      "status": "2026-11-13T08:15Z: rv-801 MERGE (76e391d4); fix round I1 I2 I3 N1 N2 sent. Runner items: next runner PR adds crates/lodestar/tests/windows_service.rs + worker_join.rs to WK-18s owns (I4); WK-18w notes: SecureDataFolder must run before --join-only and the join refuses if it failed; exit 3 also means folder in use, check cluster/credentials (I5, N4); owner flag: legal notice \u00a75 temp-log wording now also covers a worker stop reason (N3, legal wording is the owner's)."
+    },
+    {
+      "id": "filter01-owner-question",
+      "status": "2026-11-13T08:15Z: X-filter01-fix has an owner question pending (by id only, detail held, asked in chat). The session holds its push until the runner relays the answer."
     }
   ],
   "main_health": [
@@ -9007,7 +9015,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T07:44Z",
+    "updated": "2026-11-13T08:15Z",
     "items": [
       {
         "slot": 1,
@@ -9044,7 +9052,7 @@
         "slice": "X-gs2-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #817 (52a3edfd) green after one re-run; fresh Opus review running",
+        "doing": "PR #817 (52a3edfd) green; first review cut short by full disk, fresh review re-run",
         "since": "2026-11-13T06:04Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -9189,7 +9197,7 @@
         "status": "active",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: resumed 2026-11-13T05:22Z into the build slot NOS-0 freed: #801 WK-18s Windows e2e tests",
+        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: WK-18s #801 rv MERGE at 76e391d4, one fix round (I1-I3, N1, N2) then runner delta check",
         "since": "2026-11-13T05:22Z"
       },
       {
@@ -9261,7 +9269,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T07:44Z",
+  "updated": "2026-11-13T08:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
