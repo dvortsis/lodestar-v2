@@ -900,9 +900,13 @@ mod scm {
                         }
                         // Its message can name a path: the kind only.
                         Err(_) => {
+                            let kind = match role {
+                                super::Role::Serve => "serve",
+                                super::Role::Worker => "worker",
+                            };
                             lodestar_log::log_event!(
                                 crate::logging::events::SERVICE_FAILED,
-                                error = lodestar_log::Error::kind("serve")
+                                error = lodestar_log::Error::kind(kind)
                             );
                             1
                         }
@@ -1153,7 +1157,13 @@ mod scm {
         let report: crate::worker::session::Report = std::sync::Arc::new(|_: &str| {});
         crate::cli::worker::run_until(config, args, stopping, report)
             .map(|()| Ended::Stopped)
-            .map_err(|e| BoxError::from(e.to_string()))
+            .map_err(|e| {
+                // Why it stopped (revoked, expired, outdated, …), which says
+                // what to do and never holds a token, goes beside the
+                // installer's log, as a refused start's reason does.
+                let _ = crate::windows::temp_log::append("worker stopped", &e.to_string());
+                BoxError::from(e.to_string())
+            })
     }
 
     /// Resolves once a stop is requested.

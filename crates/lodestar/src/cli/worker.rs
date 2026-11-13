@@ -283,11 +283,13 @@ pub fn run_until(
 
 /// Why `--join-only` refuses a folder that has already joined. It names
 /// the worker, never a token.
-fn already_joined(name: &str) -> String {
+fn already_joined(name: Option<&str>) -> String {
+    let who = name.map_or_else(String::new, |n| format!(" as worker {n}"));
     format!(
-        "this folder has already joined a coordinator as worker {name}, so --join-only did \
-         nothing. To keep it, run `lodestar worker`; to join again, remove the worker in \
-         Settings → Workers and give this worker an empty data folder."
+        "this folder has already joined a coordinator{who}, so --join-only did nothing. To \
+         keep it, run `lodestar worker`; to join again, remove the worker in Settings → \
+         Workers and start from an empty data folder (on Windows, uninstall with \
+         REMOVE_DATA=1)."
     )
 }
 
@@ -327,13 +329,16 @@ fn run_with(
         };
     }
     let join_only = args.join_only;
+    // Before anything else is read or created: a joined folder is refused
+    // even if its key can't be read, and the name is shown only if it can.
+    if join_only && layout.is_joined() {
+        let name = layout.load().ok().flatten().map(|c| c.name().to_owned());
+        return Err(Failure::Refused(already_joined(name.as_deref())));
+    }
     let joined = layout
         .load()
         .map_err(failed("reading the credentials"))?
         .map(|c| c.name().to_owned());
-    if join_only && let Some(name) = &joined {
-        return Err(Failure::Refused(already_joined(name)));
-    }
     let plan = plan(&args, env, joined.is_some())?;
     for w in &plan.warnings {
         report(w);
@@ -518,12 +523,16 @@ fn finish(exit: Exit, report: &Report) -> Outcome {
 }
 
 fn block_on(f: impl Future<Output = Outcome>) -> Outcome {
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
-        .map_err(failed("starting the runtime"))?
-        .block_on(f)
+        .map_err(failed("starting the runtime"))?;
+    let out = runtime.block_on(f);
+    // A blocking task still running (a stuck file operation) can't hold the
+    // exit, or a service's stop, without limit: `serve` does the same.
+    runtime.shutdown_timeout(crate::services::RUNTIME_GRACE);
+    out
 }
 
 #[cfg(test)]
@@ -765,12 +774,39 @@ mod tests {
 
     #[test]
     fn join_only_on_a_joined_folder_says_how_to_go_on() {
-        let m = already_joined("w-1");
+        let m = already_joined(Some("w-1"));
         assert!(
             m.contains("w-1") && m.contains("lodestar worker") && !m.contains('\n'),
             "{m}"
         );
         assert!(!m.contains("lsj1"), "{m}");
+        assert!(!already_joined(None).contains("as worker"));
+    }
+
+    #[test]
+    fn join_only_refuses_a_joined_folder_before_reading_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster = dir.path().join("cluster");
+        std::fs::create_dir_all(&cluster).unwrap();
+        // Unreadable credentials still mean joined; the token file is missing.
+        std::fs::write(cluster.join("credentials"), b"not credentials").unwrap();
+        let config = Config::load(None, |_| None).unwrap();
+        let args = WorkerArgs {
+            join: Some("https://c:8091".into()),
+            token_file: Some(dir.path().join("no-such-token")),
+            data: Some(dir.path().to_path_buf()),
+            rotate_key: false,
+            join_only: true,
+        };
+        let Err(Failure::Refused(m)) =
+            run_with(&config, args, &|_| None, std::future::pending(), quiet())
+        else {
+            panic!("not refused");
+        };
+        assert!(
+            m.contains("already joined") && !m.contains("as worker"),
+            "{m}"
+        );
     }
 
     #[test]
