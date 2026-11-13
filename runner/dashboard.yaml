@@ -275,7 +275,6 @@ placement:
   - X-settings-trim
   - X-settings-followups
   - X-wizard-labels-signout
-  - X-ui-guards
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -292,6 +291,7 @@ placement:
   - S-discover
 - ws: ws-insights
   match:
+  - X-insights-funnel-fixture
   - S-alerts
   - S-insights-*
   - B9
@@ -317,6 +317,7 @@ placement:
   - X-wk-fetched-lease-nits
 - ws: ws-web
   match:
+  - X-ui-guards
   - W*
   - C0
   - C1
