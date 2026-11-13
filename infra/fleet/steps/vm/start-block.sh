@@ -84,7 +84,7 @@ printf '%s\n' "$out"
 [[ $rc -eq 0 && $(printf '%s\n' "$out" | tail -n 1) == "ok leak_test" ]] || fail leak_test_passed
 echo "ok leak_test_passed"
 
-# 3. The marker, first. From here on every mid-block check sees a block.
+# 3. The boot guard, then the marker. From here on every mid-block check sees a block.
 # A past block's directory (its evidence) is kept beside the new one, never wiped.
 if [[ -d $BLOCK ]]; then mv -- "$BLOCK" "$BLOCK.$(date -u +%Y%m%dT%H%M%SZ)" || fail block_dir; fi
 mkdir -m 0700 -- "$BLOCK" || fail block_dir
