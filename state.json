@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:07Z",
+  "updated_at": "2026-11-13T00:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8800,7 +8800,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:07Z",
+    "updated": "2026-11-13T00:09Z",
     "items": [
       {
         "slot": 1,
@@ -9018,10 +9018,9 @@
         "slice": "M8-SEC-0",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCiy9xmJwkhkDiZsd4: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-SEC-0.md",
+        "doing": "#786 merged 8d954dab; session archived",
         "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #786 only, then archive (\u00a72.64)"
+        "status": "idle"
       },
       {
         "slot": 24,
@@ -9171,7 +9170,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:07Z",
+  "updated": "2026-11-13T00:09Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
