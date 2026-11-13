@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T23:39Z",
+  "updated_at": "2026-11-13T23:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8138,7 +8138,12 @@
     "slices.yaml entry for x-filter01-hardening (no brief file; worked from runner messages) in next runner PR",
     "owner FYI after #855 merges: FILTER-01 held count 0 of 515 on in-repo corpora (no realistic corpus in repo)",
     "slices-yaml-x-companions-loopback-nits + x-worker-839-followups entries in next runner PR",
-    "slices.yaml entry for x-filter01-rejudge in next runner PR"
+    "slices.yaml entry for x-filter01-rejudge in next runner PR",
+    {
+      "id": "ci-filter-docs-runs-rust",
+      "note": "#854 (docs + one runner/dashboard.yaml line) ran the full Rust matrix (~55 min Windows); check the CI change filter for docs/decisions, docs/operations, runner/ paths",
+      "at": "2026-11-13T23:57Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8526,6 +8531,12 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
+    },
+    "854": {
+      "slice": "X-fleet-guard-docs",
+      "head": "8d9b816e",
+      "state": "Opus MERGE + nit round requested",
+      "at": "2026-11-13T23:57Z"
     }
   },
   "merged_log": [
@@ -9172,7 +9183,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T23:39Z",
+    "updated": "2026-11-13T23:57Z",
     "items": [
       {
         "slot": 1,
@@ -9433,7 +9444,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T23:39Z",
+  "updated": "2026-11-13T23:57Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
