@@ -2408,7 +2408,8 @@ export interface paths {
         };
         /**
          * Torrents related to one (§10.5): other versions of the same work,
-         *     clones with an identical payload (equal file sizes) and other torrents
+         *     clones with an identical payload (equal file sizes), torrents with a
+         *     similar payload (most of the same major files) and other torrents
          *     with one of its files (v2 and hybrid torrents only). Each group is
          *     confirmed against the stored state and withheld as other versions
          *     are; the `*_partial` flags say when the index is still filling in
@@ -9297,7 +9298,7 @@ export interface components {
         /** @enum {string} */
         Severity: "warning" | "error";
         /**
-         * @description `GET /torrents/{hash}/siblings`: the torrents related to one, in three
+         * @description `GET /torrents/{hash}/siblings`: the torrents related to one, in four
          *     groups. Each is either available (possibly empty) or unavailable with
          *     a reason.
          */
@@ -9338,6 +9339,20 @@ export interface components {
              *     may be missing from `same_file`.
              */
             same_file_partial: boolean;
+            /**
+             * @description Torrents with a similar payload: most of the same large files
+             *     (a season with an episode swapped or added, a pack with an extra
+             *     disc), newest first. Found by a MinHash of the large file sizes
+             *     and confirmed on the stored sizes; identical clones are in
+             *     `identical_payload` instead. Unavailable (`few_major_files`) for
+             *     a torrent with fewer than 3 large files.
+             */
+            similar_payload: components["schemas"]["HitGroup"];
+            /**
+             * @description The index is still filling in the similarity terms, so some
+             *     torrents may be missing from `similar_payload`.
+             */
+            similar_payload_partial: boolean;
         };
         /** @description `POST /updates/skip`. */
         SkipRequest: {
@@ -10607,7 +10622,7 @@ export interface components {
          * @description Why a section isn't available. Stable keys; the UI words them.
          * @enum {string}
          */
-        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files" | "payload_not_specific" | "partial_file_list";
+        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files" | "payload_not_specific" | "partial_file_list" | "few_major_files" | "needs_group_minhash";
         UnderstandKpi: {
             /**
              * Format: int64

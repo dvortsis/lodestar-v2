@@ -68,11 +68,11 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     ("network", 1),
     // GS-0: `lodestar_classify::payload::payload_sig`, the hash CS-8a reads.
     ("payload_sig", 1),
-    // GS-2: `group_key` is `title_identity`'s value in the fast column
-    // (one identity rule, plan Q8), so a change to
-    // `TitleIdentityParts::key` bumps both; `group_minhash` is
-    // `lodestar_classify::group::band_terms` (plan Q9).
-    ("group_key", 1),
+    // No producer: as declared (INDEXED | FAST) it would copy
+    // `title_identity`'s terms and cost ~30 B per torrent, over §3's
+    // budget (GS-2 decisions); GS-3 settles its shape.
+    ("group_key", 0),
+    // GS-2: `lodestar_classify::group::band_terms` (plan Q9, Q10 (a)).
     ("group_minhash", 1),
     ("name_trigram", 0),
     ("file.size_bucket", 1),
@@ -428,30 +428,28 @@ mod tests {
         assert_eq!(reopened.pending(), None);
     }
 
-    /// GS-2 ships `group_key` and `group_minhash` together: an index
-    /// from GS-0's build walks once for both, and neither is Ready until
-    /// that walk is done.
+    /// GS-2 ships `group_minhash`, and `group_key` stays without a
+    /// producer: an index from GS-0's build walks for the one, and it
+    /// isn't Ready until that walk is done.
     #[test]
-    fn the_grouping_producers_share_one_walk() {
-        let before = gens().with("group_key", 0).with("group_minhash", 0);
+    fn the_minhash_producer_starts_a_walk_and_group_key_has_none() {
+        let before = gens().with("group_minhash", 0);
         let mut s = PopState::fresh(&before, Side::Torrents);
         assert_eq!(
             s.availability("group_minhash"),
             Some(Availability::NoProducer)
         );
         s.reconcile(&gens(), Side::Torrents, 300);
-        for f in ["group_key", "group_minhash"] {
-            assert_eq!(
-                s.availability(f),
-                Some(Availability::Backfilling { done: 0, upto: 300 }),
-                "{f}"
-            );
-        }
+        assert_eq!(
+            s.availability("group_minhash"),
+            Some(Availability::Backfilling { done: 0, upto: 300 })
+        );
+        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
         assert_eq!(s.availability("payload_sig"), Some(Availability::Ready));
         assert_eq!(s.pending(), Some((0, 300)));
         s.advance(300);
-        assert_eq!(s.availability("group_key"), Some(Availability::Ready));
         assert_eq!(s.availability("group_minhash"), Some(Availability::Ready));
+        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
     }
 
     #[test]

@@ -1,15 +1,15 @@
-//! GS-2: the `group_key` and `group_minhash` producers against a real
-//! store, and their backfill under the population contract
+//! GS-2: the `group_minhash` producer against a real store, and its
+//! backfill under the population contract
 //! (`docs/decisions/2026-11-04-SB-6.md`): an index built before GS-2
-//! (both fields at generation 0, no document carrying them), then this
-//! build, with a restart mid-walk. Neither field reads Ready until the
+//! (the field at generation 0, no document carrying it), then this
+//! build, with a restart mid-walk. The field doesn't read Ready until the
 //! walk is done, so no consumer takes "no term" for "no match"
-//! meanwhile.
+//! meanwhile. `group_key` has no producer yet (GS-2 decisions): no
+//! document carries it, and it says so.
 //!
-//! The fields are read here with Tantivy itself: neither is in the query
-//! language. `group_key` is the fast-column copy of `title_identity`
-//! (plan Q8) and `group_minhash` holds the band terms
-//! `lodestar_classify::group::band_terms` gives (plan Q9).
+//! The field is read here with Tantivy itself: it isn't in the query
+//! language. It holds the band terms
+//! `lodestar_classify::group::band_terms` gives (plan Q9, Q10 (a)).
 
 use std::path::Path;
 
@@ -91,8 +91,7 @@ fn torrent(i: usize) -> Vec<u8> {
     ]))
 }
 
-/// The store, every torrent classified except the last (no record, so
-/// no title identity and no `group_key`).
+/// The store, every torrent classified except the last (no record).
 fn store(root: &Path) -> (Store, Vec<Info>) {
     let mut store = Store::open(root.join("s.db"), StoreConfig::default()).unwrap();
     store.register_source("dht", "1", 1).unwrap();
@@ -217,14 +216,13 @@ fn sharing(infos: &[Info], band: u64) -> usize {
 }
 
 #[test]
-fn every_torrent_carries_its_group_fields() {
+fn every_torrent_carries_its_band_terms() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = index_dir(tmp.path());
     let (mut store, infos) = store(tmp.path());
     let index = complete_index(tmp.path(), &mut store);
-    for f in ["group_key", "group_minhash"] {
-        assert_eq!(index.availability(f), Availability::Ready, "{f}");
-    }
+    assert_eq!(index.availability("group_minhash"), Availability::Ready);
+    assert_eq!(index.availability("group_key"), Availability::NoProducer);
     // Band terms: families 0 and 1 have BANDS each, family 2 none.
     for i in 0..N {
         let b = bands(&infos, i);
@@ -244,22 +242,19 @@ fn every_torrent_carries_its_group_fields() {
             assert!(!bands(&infos, j).contains(&t), "torrent {j}");
         }
     }
-    // `group_key` is the title identity, in the column and as a term.
+    // `group_key` isn't written; the title identity is, as before.
     let keys = group_keys(&dir);
     assert_eq!(keys.len(), N);
-    for (id, key) in &keys {
-        assert_eq!(*key, identity(&store, *id as i64), "id {id}");
-    }
-    assert_eq!(keys[N - 1].1, None, "the unclassified torrent has none");
+    assert!(keys.iter().all(|(_, k)| k.is_none()), "{keys:?}");
     let family0 = identity(&store, 1).unwrap();
-    assert_eq!(with_term(&dir, "group_key", family0), N / 3);
+    assert_eq!(with_term(&dir, "group_key", family0), 0);
     assert_eq!(with_term(&dir, "title_identity", family0), N / 3);
 }
 
-/// A torrent written after the index is complete carries both fields
+/// A torrent written after the index is complete carries its band terms
 /// (the live indexer's new-document path).
 #[test]
-fn new_torrents_are_written_with_both_fields() {
+fn new_torrents_are_written_with_their_band_terms() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = index_dir(tmp.path());
     let mut store = Store::open(tmp.path().join("s.db"), StoreConfig::default()).unwrap();
@@ -277,16 +272,15 @@ fn new_torrents_are_written_with_both_fields() {
     w.commit().unwrap();
     // Torrents 10..13: family 1, 2, 0. Torrent 10 is family 1.
     assert_eq!(with_term(&dir, "group_minhash", t), before + 1);
-    let keys = group_keys(&dir);
-    assert_eq!(keys.len(), 13);
-    assert_eq!(keys[10].1, identity(&store, 11));
-    assert!(keys[10].1.is_some());
+    // Torrent 11 (family 2): too few major files, no terms.
+    assert!(bands(&infos, 11).is_empty());
+    assert_eq!(index.num_docs(), 13);
     assert_eq!(index.availability("group_minhash"), Availability::Ready);
 }
 
 /// Rewrites the torrent index under `dir` as GS-0's build left it: no
-/// document carries `group_key` or `group_minhash`, and the payload
-/// records both at generation 0.
+/// document carries `group_minhash`, and the payload records it at
+/// generation 0.
 fn unpopulate(dir: &Path, store: &mut Store) {
     let index = raw(dir);
     let payload = index.load_metas().unwrap().payload.unwrap();
@@ -294,12 +288,12 @@ fn unpopulate(dir: &Path, store: &mut Store) {
     let old_pop = pop
         .split(',')
         .map(|e| match e.split_once('=').unwrap().0 {
-            f @ ("group_key" | "group_minhash") => format!("{f}=0"),
+            "group_minhash" => "group_minhash=0".to_owned(),
             _ => e.to_owned(),
         })
         .collect::<Vec<_>>()
         .join(",");
-    assert!(old_pop.contains("group_key=0") && old_pop.contains("group_minhash=0"));
+    assert!(old_pop.contains("group_minhash=0"), "{old_pop}");
     let (_, f) = lodestar_search::schema::build();
     let mut w = index.writer::<TantivyDocument>(HEAP).unwrap();
     w.delete_all_documents().unwrap();
@@ -311,7 +305,7 @@ fn unpopulate(dir: &Path, store: &mut Store) {
         let full = doc.to_document(&f);
         let mut old = TantivyDocument::new();
         for (field, v) in full.field_values() {
-            if field != f.group_key && field != f.group_minhash {
+            if field != f.group_minhash {
                 old.add_field_value(field, v);
             }
         }
@@ -331,41 +325,37 @@ fn the_backfill_resumes_after_a_restart_and_reports_partial_meanwhile() {
     unpopulate(&dir, &mut store);
     // Family 1's first band: torrents 1, 4, …, 28 (ids 2, 5, …, 29).
     let t = bands(&infos, 1)[0];
-    let family1 = identity(&store, 2).unwrap();
     let done_of = |done: usize| (0..done).filter(|i| i % 3 == 1).count();
 
     // GS-0's build: no producer, nothing to walk.
-    let old = Generations::current()
-        .with("group_key", 0)
-        .with("group_minhash", 0);
+    let old = Generations::current().with("group_minhash", 0);
     let index = SearchIndex::open(&dir)
         .unwrap()
         .with_generations(old)
         .unwrap();
-    for f in ["group_key", "group_minhash"] {
-        assert_eq!(index.availability(f), Availability::NoProducer);
-    }
+    assert_eq!(
+        index.availability("group_minhash"),
+        Availability::NoProducer
+    );
     assert_eq!(with_term(&dir, "group_minhash", t), 0);
     drop(index);
 
-    // This build: both walk the 30 torrents in one pass.
+    // This build: the field walks the 30 torrents.
     let index = SearchIndex::open(&dir).unwrap();
     let backfilling = |done| Availability::Backfilling {
         done,
         upto: N as i64,
     };
-    for f in ["group_key", "group_minhash"] {
-        assert_eq!(index.availability(f), backfilling(0), "{f}");
-        assert!(!index.availability(f).complete(), "no prefilter on it");
-        assert!(index.unpopulated().iter().any(|u| u.field == f), "{f}");
-    }
+    let f = "group_minhash";
+    assert_eq!(index.availability(f), backfilling(0));
+    assert!(!index.availability(f).complete(), "no prefilter on it");
+    assert!(index.unpopulated().iter().any(|u| u.field == f));
     let mut w = index.writer(HEAP).unwrap();
     let c = w.catch_up_counted(&mut store, 12).unwrap();
     assert_eq!((c.added, c.replayed, c.backfilled), (0, 0, 12));
     w.commit().unwrap();
     assert_eq!(index.availability("group_minhash"), backfilling(12));
     assert_eq!(with_term(&dir, "group_minhash", t), done_of(12));
-    assert_eq!(with_term(&dir, "group_key", family1), done_of(12));
     // Partial before ready: the term finds only what the walk reached.
     assert!(done_of(12) < N / 3);
     // More, lost to a crash before its commit.
@@ -375,7 +365,7 @@ fn the_backfill_resumes_after_a_restart_and_reports_partial_meanwhile() {
 
     let index = SearchIndex::open(&dir).unwrap();
     assert_eq!(
-        index.availability("group_key"),
+        index.availability("group_minhash"),
         backfilling(12),
         "resumed from the commit"
     );
@@ -388,10 +378,8 @@ fn the_backfill_resumes_after_a_restart_and_reports_partial_meanwhile() {
         steps += 1;
     }
     assert_eq!(steps, 2, "18 left in steps of 10");
-    assert_eq!(index.availability("group_key"), Availability::Ready);
     assert_eq!(index.num_docs(), N as u64, "replaced, not duplicated");
     assert_eq!(with_term(&dir, "group_minhash", t), N / 3);
-    assert_eq!(with_term(&dir, "group_key", family1), N / 3);
     assert_eq!(w.catch_up_counted(&mut store, 10).unwrap().backfilled, 0);
     drop(w);
     drop(index);

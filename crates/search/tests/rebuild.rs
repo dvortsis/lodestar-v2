@@ -777,7 +777,6 @@ fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
             "source",
             "network",
             "payload_sig",
-            "group_key",
             "group_minhash",
         ];
         let want = if produced.contains(&f) {

@@ -247,30 +247,15 @@ mod tests {
         let cases: [(&[u64], [u64; BANDS]); 3] = [
             (
                 &[MIB, MIB, MIB],
-                [
-                    0x120c_ffe1_d175_6fe3,
-                    0xc12c_17f1_4be3_fe19,
-                    0x17ce_b23f_72f1_19d7,
-                    0xe262_af62_e20a_5f80,
-                ],
+                [0x376b_4e79_2974_b2b9, 0xf05d_7d03_84e9_1919],
             ),
             (
                 &[1_400_000_000, 1_400_000_123, 1_399_999_999, 7 << 20],
-                [
-                    0x701b_bdb7_6e07_b392,
-                    0xc0d4_3699_1fca_c0b6,
-                    0xf6b6_af48_0e18_bb36,
-                    0x3b38_2c8c_4636_4da3,
-                ],
+                [0xccb3_3d6a_5eb7_0c47, 0xe744_bb42_ac3b_cc8c],
             ),
             (
                 &[u64::MAX, u64::MAX - 1, u64::MAX - 2],
-                [
-                    0x6f7b_aaae_63e0_9af0,
-                    0xa4c5_9d57_9e3d_5bbf,
-                    0x2f8c_a4da_a43f_2c17,
-                    0x0c64_b4d5_f1eb_eed5,
-                ],
+                [0xa67b_06c9_368c_a069, 0x8267_a989_bdb9_ced5],
             ),
         ];
         for (sizes, want) in cases {

@@ -887,7 +887,7 @@ mod population {
             .map(|f| (f.field, f.availability))
             .collect();
         let none = |f: &str| (f.to_owned(), Availability::NoProducer);
-        assert_eq!(un, [none("name_trigram")]);
+        assert_eq!(un, [none("group_key"), none("name_trigram")]);
         assert_eq!(index.availability("file.category"), Availability::Ready);
         assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
         assert_eq!(index.availability("name"), Availability::Ready);
