@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T06:40Z",
+  "updated_at": "2026-11-13T06:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8997,7 +8997,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T06:40Z",
+    "updated": "2026-11-13T06:41Z",
     "items": [
       {
         "slot": 1,
@@ -9246,7 +9246,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T06:40Z",
+  "updated": "2026-11-13T06:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9520,5 +9520,13 @@
     "ends": "2026-11-12T23:30:00Z",
     "after": "sessions stop; their PRs or drafts are resumed in normal slots (12 + 4) as those free"
   },
-  "evidence": {}
+  "evidence": {},
+  "merges": [
+    {
+      "pr": 819,
+      "slice": "runner records (owner queue answers, FILTER-01/03 chosen by id, \u00a72.67-\u00a72.70)",
+      "merged": "0e899e69",
+      "at": "2026-11-13T06:41Z"
+    }
+  ]
 }
