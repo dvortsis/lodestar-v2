@@ -17,7 +17,7 @@ The cloud tester's drill 3 (2026-11-13) stopped gluetun for 60 s mid-block, with
 - **Tests.**
   - `test_block.py`: the guard is in before the leak test runs and is held through start-block. copy-off removes it. A re-run leaves exactly one copy and removes leftovers after the new copy is in. A guard that can't be set, or a leftover that won't come off, stops the run before gluetun is recreated. A bad endpoint is refused before any iptables call. A stuck copy fails copy-off and keeps the block.
   - `test_steps.py`: under `held`, the leak test adds and removes nothing, and refuses to run without the guard. An unknown fifth argument is refused. More bad endpoints are covered (an octet out of range, IPv6).
-  - `test_block.py` gained an iptables stub and a `wg0.conf` for this. It is outside the brief's owned paths, so this was asked of the runner.
+  - `test_block.py` gained an iptables stub and a `wg0.conf` for this. It was outside the brief's owned paths and was added with the runner's OK.
 
 ## In a user's own setup
 - **The same thing can happen.** When a user's gluetun stops, restarts or is updated, Docker flushes its conntrack in the same way. The VPN server's leftover UDP still reaches the home router's public address. The router's own NAT entry, typically 30 to 180 s for UDP, forwards it to the host. The host's kernel can then answer with "port unreachable", and the router sends that back out to the VPN server outside the tunnel. Whether it does depends on the host's firewall: many NAS and desktop firewalls drop unsolicited inbound UDP silently, and some routers drop the reply.
