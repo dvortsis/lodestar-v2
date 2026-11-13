@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:55Z",
+  "updated_at": "2026-11-13T04:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7888,6 +7888,11 @@
       "id": "809-merged",
       "added": "2026-11-13T03:55Z",
       "text": "Runner PR #809 merged a553fd1b (\u00a72.66 UI review decisions; X-wizard-labels-signout, X-ui-guards, X-sources-restructure, X-insights-funnel-fixture, gluetun slices). Tell slot 30 when #799 also merged."
+    },
+    {
+      "id": "notify-after-805",
+      "added": "2026-11-13T04:03Z",
+      "text": "When #805 merges: tell slot 32 (session_01MMjhn9jUpmXebS4BaDhn2o, X-consent-gate-lift-r2) to bring main in, regenerate openapi/schema, push. Approved outside owns: companion_wiring.rs tests, api dto/ops.rs + ops.rs docs, generated openapi.json + schema.d.ts."
     }
   ],
   "main_health": [
@@ -9259,7 +9264,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T03:55Z",
+  "updated": "2026-11-13T04:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
