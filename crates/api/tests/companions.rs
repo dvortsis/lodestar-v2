@@ -14,8 +14,8 @@ use axum::http::{Request, header};
 use axum::{Extension, Router};
 use lodestar_api::companions::{CompanionsApi, CompanionsError, Revealed};
 use lodestar_api::dto::companions::{
-    Companion, CompanionTemplate, InstallOffer, RemovalItem, RemovalItemKind, RemovalPlan,
-    TemplateKind, TemplateRequest,
+    Companion, CompanionRuns, CompanionTemplate, InstallOffer, RemovalItem, RemovalItemKind,
+    RemovalPlan, TemplateKind, TemplateRequest,
 };
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::{ApiState, Auth, router};
@@ -56,6 +56,7 @@ fn companion(id: &str) -> Companion {
     Companion {
         available: Some("5.1.2".into()),
         credentials: vec!["webui_password".into()],
+        egress: None,
         health: None,
         id: id.into(),
         installed: None,
@@ -63,6 +64,7 @@ fn companion(id: &str) -> Companion {
         name: "qBittorrent".into(),
         opt_in: false,
         refusal: None,
+        runs: CompanionRuns::Lodestar,
         templates: vec![TemplateKind::Compose, TemplateKind::Unraid],
     }
 }

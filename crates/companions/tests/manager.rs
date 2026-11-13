@@ -1087,6 +1087,7 @@ async fn an_operation_in_progress_refuses_others_on_the_same_companion() {
     let w = World::new();
     let cat = catalogue("5.0.3");
     let m = Arc::new(w.manager(cat, LINUX));
+    assert!(!m.busy(&qbt()));
     w.run.park.store(true, Ordering::SeqCst);
     let held = tokio::spawn({
         let m = m.clone();
@@ -1095,6 +1096,8 @@ async fn an_operation_in_progress_refuses_others_on_the_same_companion() {
     tokio::time::timeout(std::time::Duration::from_secs(10), w.run.parked.notified())
         .await
         .expect("the install never reached its start");
+    // `busy` sees the slot the install holds, as a route change asks.
+    assert!(m.busy(&qbt()));
     let busy = refused::<Version>(Refusal::Busy);
     assert_eq!(m.install(&token("5.0.3")).await, busy);
     assert_eq!(m.remove(&qbt()).await, refused(Refusal::Busy));
@@ -1110,6 +1113,7 @@ async fn an_operation_in_progress_refuses_others_on_the_same_companion() {
         .expect("the install didn't finish")
         .unwrap();
     assert_eq!(done.unwrap().as_str(), "5.0.3");
+    assert!(!m.busy(&qbt()));
     assert!(m.remove(&qbt()).await.is_ok());
 }
 
