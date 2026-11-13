@@ -77,6 +77,22 @@ class CompanionFiles(unittest.TestCase):
             self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
 
 
+class RustPackagingInputs(unittest.TestCase):
+    def test_the_packaging_files_rust_reads_turn_the_rust_jobs_on(self):
+        for f in ["packaging/windows/main.wxs", "packaging/windows/portable/Start Lodestar.cmd",
+                  "packaging/windows/build-msi.ps1", "packaging/windows/join-ca/x.ps1", "packaging/unraid/x.ps1",
+                  "packaging/keys/lodestar-release.pub", "packaging/keys/lodestar-recovery.pub"]:
+            self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
+
+    def test_near_misses_dont(self):
+        for f in ["packaging/windows/main.wxs.bak", "packaging/windows/join.wxs", "packaging/windows/x.ps1.txt",
+                  "packaging/windows/portable/Start Lodestar.cmd.bak", "packaging/windows/portable/other.cmd",
+                  "packaging/keysx/a.pub", "packaging/keys/README.md", "packaging/keys/sub/a.pub",
+                  "packaging/companions/compose-old/a.yml", "packaging/companions/unraid",
+                  "packaging/companions/composed.yml"]:
+            self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
+
+
 class UpdateManifest(unittest.TestCase):
     def test_the_builder_release_yml_and_the_verifier_apply(self):
         for f in [".github/scripts/update_manifest.py", ".github/scripts/test_update_manifest.py",

@@ -6,8 +6,11 @@ request gets:
 
 - the Rust jobs (fmt, clippy, openapi drift, Linux and Windows tests) only if
   it touches Rust: a crate, bench/, fuzz/, a Cargo manifest or lockfile, the
-  toolchain file, this workflow, or web/src/lib/api/openapi.json (the drift
-  job checks it);
+  toolchain file, this workflow, web/src/lib/api/openapi.json (the drift
+  job checks it), or one of the files listed in RUST_ALSO below (the
+  companion templates, the Windows launcher, main.wxs, the packaging
+  PowerShell scripts, the public keys, the licence notices and the
+  scripts the Rust jobs run);
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
@@ -58,6 +61,12 @@ RUST_ALSO = re.compile(
     r"|^LICENSE$|^brand/LICENSE\.md$"
     # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.
     r"|^packaging/companions/(gluetun-post-rules\.txt$|compose/|unraid/)"
+    # Windows packaging that Rust reads: the portable launcher (portable.rs include_str!),
+    # main.wxs and every packaging/**/*.ps1 (legal_facts.rs), and the public keys that
+    # crates/update/src/keys.rs compares with its embedded copies.
+    r"|^packaging/windows/(main\.wxs$|portable/Start Lodestar\.cmd$)"
+    r"|^packaging/.*\.ps1$"
+    r"|^packaging/keys/[^/]+\.pub$"
 )
 
 # Web and E2E applicability. Both workflows run on every pull request; these
