@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T07:31Z",
+  "updated_at": "2026-11-13T07:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7964,11 +7964,15 @@
     {
       "id": "pr817-landlock-rerun",
       "note": "2026-11-13T06:39Z: #817 ubuntu test red on companions limits.rs landlock_keeps_the_companion_out_of_lodestars_data (not the PR's). Runner uses #817's one re-run once the run completes; if red again, open a fix slice for the test.",
-      "status": "one re-run of the failed jobs started 2026-11-13T07:02Z; pass = review + merge, red again = fix slice for the landlock test"
+      "status": "2026-11-13T07:41Z: re-run passed (ci-ok green); fresh review running. Landlock test now a suspected flake: X-flake-landlock-companion (watch; fix slice if it recurs on any PR or main)"
     },
     {
       "id": "gluetun-hostfile-privdrop-notes",
       "status": "2026-11-13T07:05Z: runner approved X-gluetun-templates-hostfile switching privdrop from the chown handover to root writing a fixed root-owned post-rules file (stricter: the dropped user cannot alter rules gluetun runs as root). Next runner PR: update its slices.yaml notes. Owner \u00a72.19 flag via dashboard."
+    },
+    {
+      "id": "flake-landlock-companion",
+      "status": "2026-11-13T07:41Z: crates/companions landlock_keeps_the_companion_out_of_lodestars_data (limits.rs:173) failed once on #817 test (ubuntu-latest), passed on re-run. Not this PR. If it recurs anywhere: open X-flake-landlock-companion (Opus, core: sandbox) before any further re-run."
     }
   ],
   "main_health": [
@@ -9003,7 +9007,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T07:31Z",
+    "updated": "2026-11-13T07:41Z",
     "items": [
       {
         "slot": 1,
@@ -9040,7 +9044,7 @@
         "slice": "X-gs2-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #817 open (52a3edfd); awaiting ci-ok, then review",
+        "doing": "PR #817 (52a3edfd) green after one re-run; fresh Opus review running",
         "since": "2026-11-13T06:04Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -9257,7 +9261,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T07:31Z",
+  "updated": "2026-11-13T07:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
