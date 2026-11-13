@@ -504,6 +504,9 @@ test.describe('the cohort list scrolls by keyboard (UI review 2026-11-13, B3)', 
 				.poll(() => scroller.evaluate((el) => el.scrollTop), { timeout: 10_000 })
 				.toBeGreaterThan(0);
 			await expectNoA11yViolations(page);
+			await page.getByTestId('insights-cohorts-panel-toggle').click();
+			await expect(page.getByTestId('insights-cohorts-panel-table')).toBeVisible();
+			await expectNoA11yViolations(page);
 		});
 	}
 });
