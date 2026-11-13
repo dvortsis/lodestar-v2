@@ -185,6 +185,17 @@ describe('fetchBars', () => {
 		const first = fetchBars(fetchFixture(), (k) => k)[0]?.items[0];
 		expect(first).toMatchObject({ key: 'no_peers', text: '500', sub: '65%' });
 	});
+	it('lists no rows when nothing was lost, and says only what it knows', () => {
+		const losses = (fetchFixture().losses ?? []).map((l) => ({ ...l, count: 0, share: 0 }));
+		const [b] = fetchBars(fetchFixture({ losses }), (k) => k);
+		expect(b?.unavailable).toBe(false);
+		expect(b?.items).toEqual([]);
+		// The fixture fetched 4,321: only the losses are none.
+		expect(b?.empty).toBe('No keys were lost in this range.');
+		const idle = fetchFixture({ losses });
+		idle.kpi = { ...idle.kpi, fetched: 0 };
+		expect(fetchBars(idle, (k) => k)[0]?.empty).toBe('No keys were fetched or lost in this range.');
+	});
 });
 
 describe('mapDiscover', () => {

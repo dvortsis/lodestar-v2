@@ -46,6 +46,13 @@ describe('every number is a response field through a formatter', () => {
 		expect(screen.getByTestId('insights-stage-serve').textContent).toContain('Not measured yet');
 	});
 
+	it('stage strip says its time base', () => {
+		render(StageStrip, { stages: o.stages, onjump: () => {} });
+		expect(text('insights-strip-time')).toBe(
+			'In the selected time range, by when each step happened. Discover counts keys by when they were first harvested; Index is the count now.'
+		);
+	});
+
 	it('names why search is off', () => {
 		render(StageStrip, { stages: { ...o.stages, index: null }, onjump: () => {} });
 		expect(screen.getByTestId('insights-stage-index').textContent).toContain('Search is off');
