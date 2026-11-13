@@ -234,6 +234,24 @@ Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
   reaches fewer nodes.
 - If gluetun restarts, restart Lodestar afterwards; a container sharing
   another container's network stays attached to the old one.
+- **Add Lodestar's post-rules to gluetun.** gluetun's firewall (its kill
+  switch) blocks new connections while the VPN is down, but as of v3.41.3 it
+  lets packets of connections opened earlier leave through the normal
+  network, with your own address. Download the file, pinned to the commit it
+  was checked at, and check it (gluetun runs its lines as root):
+  `https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt`,
+  SHA-256 `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`.
+  Mount it read-only at `/iptables/post-rules.txt` in gluetun and set
+  `VPN_INTERFACE=wg0` (gluetun's default is `tun0`, which the rules don't
+  name; checked with WireGuard). Confirm with
+  `docker exec gluetun iptables -S OUTPUT | head -4`: the three lines after the
+  policy name `wg0`. Gluetun's "enabled successfully" log line alone proves
+  nothing, because a missing file is skipped. Then a connection that used
+  the tunnel never leaves another way. Every rule only marks or drops traffic.
+  In compose, a `configs:` entry with the file's text copies it in, with no
+  host file (`infra/fleet/steps/vm/compose.yaml`). If gluetun then stops with
+  `ip6tables is required`, the kernel has no IPv6 firewall: remove the
+  `ip6tables` lines. Restart Lodestar after gluetun.
 
 ### 4.4 IPv6
 `dht.bind` accepts at most one IPv4 and one IPv6 address in `config.toml`

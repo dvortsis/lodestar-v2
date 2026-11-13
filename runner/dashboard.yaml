@@ -274,6 +274,7 @@ placement:
   - M-auth
   - X-settings-trim
   - X-settings-followups
+  - X-wizard-labels-signout
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -290,6 +291,7 @@ placement:
   - S-discover
 - ws: ws-insights
   match:
+  - X-insights-funnel-fixture
   - S-alerts
   - S-insights-*
   - B9
@@ -315,6 +317,7 @@ placement:
   - X-wk-fetched-lease-nits
 - ws: ws-web
   match:
+  - X-ui-guards
   - W*
   - C0
   - C1
@@ -506,6 +509,7 @@ placement:
   - SRC-14b
   - SRC-15*
   - X-sources-api-spec
+  - X-sources-restructure
   - SRC-16
   - SRC-17
   - SRC-17a
@@ -604,6 +608,9 @@ placement:
   - X-cmp-native-handover
   - X-cmp-handover-followups
   - X-cmp-egress-api
+  - X-gluetun-leak
+  - X-gluetun-leak-cmp
+  - X-gluetun-templates
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish

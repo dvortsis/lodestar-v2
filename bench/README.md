@@ -183,6 +183,36 @@ in the PR description (`docs/decisions/2026-10-22-R-relevance.md`):
 cargo run --release -p lodestar-bench --bin relevance -- --write-baseline
 ```
 
+### Scoring an existing data directory
+
+```sh
+relevance --data-dir /path/to/data --dir /path/to/set            # report
+relevance --data-dir /path/to/data --dir /path/to/set --held-out # aggregates only
+```
+
+`--data-dir` scores a Lodestar data directory (`lodestar.db` and
+`index/`) instead of building one from a corpus. `--dir` holds the set's
+`judgments.txt` and `baseline.txt`, and there's no `corpus.txt`.
+
+- **Judgments** use the grammar above, with each torrent keyed by its
+  40-hex-digit v1 info hash (a v2-only torrent: the first 40 digits of its
+  v2 hash). Judged torrents the store doesn't hold are counted and left
+  out of the scores.
+- **It opens read-only.** It refuses while Lodestar is running, when the
+  store wasn't closed cleanly, and when the store or index is at another
+  schema. It never migrates or rebuilds, and the index must be writable
+  (a tantivy reader locks `.tantivy-meta.lock`). A run holds shared locks
+  on the server's lock files, so a Lodestar started during it fails to
+  start, reporting the index as locked.
+- **The baseline** records the judgments' hash, the store's torrent
+  count and the index version. `--gate` fails if any of them changed.
+- **`--held-out`** is for judged sets that must stay on the machine. It
+  prints only the overall figures and counts, never a name, hash or
+  query. Its errors give only a line number, and it writes nothing.
+
+The full grammar and the rules are in the module docs:
+`src/bin/relevance/judgments.rs` and `src/bin/relevance/data_dir.rs`.
+
 ## Fixture backend
 
 `lodestar serve --fixture [DIR]` runs the real server over a data
