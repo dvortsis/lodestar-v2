@@ -316,3 +316,10 @@ path = "fuzz_targets/nzbget_answer.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "socks_reply"
+path = "fuzz_targets/socks_reply.rs"
+test = false
+doc = false
+bench = false
