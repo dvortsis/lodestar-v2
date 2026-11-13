@@ -7,6 +7,7 @@ A review of the web UI on `main` at `55e155a9`, made by a review session at the 
 | [`01-review.md`](01-review.md) | Part 1: every screen against architecture §10. B1–B3, I1–I20, P1–P14 |
 | [`02-skills-pass-and-future-modules.md`](02-skills-pass-and-future-modules.md) | Part 2: the pass with all 15 design skills, blind spots, opportunities, the UI plan for unbuilt modules, and the owner's decisions |
 | [`03-not-done.md`](03-not-done.md) | Checks neither pass made, and how to run each |
+| [`04-plan-and-flow-review-moderate-user.md`](04-plan-and-flow-review-moderate-user.md) | Part 4: the plan (§10) and eight journeys judged for a moderately technical user. U1–U33, D1–D11 |
 | [`scripts/`](scripts) | The capture and measurement scripts, so any check can be repeated |
 
 Screenshots and per-screen JSON are not committed (about 500 files); the scripts regenerate them.
