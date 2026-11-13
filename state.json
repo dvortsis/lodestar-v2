@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:17Z",
+  "updated_at": "2026-11-13T03:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8911,7 +8911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T03:17Z",
+    "updated": "2026-11-13T03:21Z",
     "items": [
       {
         "slot": 1,
@@ -9004,13 +9004,11 @@
       },
       {
         "slot": 11,
-        "slice": "M8-REL-1",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn8mh12Mrj1m33EM83f: #783 rv-783 CHANGES (B1 12-digit test hashes, I1) relayed; finish only (\u00a72.65)",
-        "since": "2026-11-12T20:46:15Z",
-        "status": "active",
-        "cap": "over cap: finish #783 only, then archive (\u00a72.64)"
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "retired: M8-REL-1 #783 merged (1dc0791c) 2026-11-13T03:21Z, session archived; over cap (\u00a72.65)",
+        "status": "idle"
       },
       {
         "slot": 12,
@@ -9252,7 +9250,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T03:17Z",
+  "updated": "2026-11-13T03:21Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
