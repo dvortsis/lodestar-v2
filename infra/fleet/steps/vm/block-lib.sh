@@ -44,10 +44,12 @@ endpoint_read() {
 host_guard_rule() {  # sets host_rule, for the endpoint endpoint_read read
   host_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment "$HOST_TAG" -j DROP)
 }
-# host_guard_hold: exactly one host guard, this endpoint's, at the top of INPUT.
-# The new copy goes in first and the rest (a stuck copy, a duplicate, or an
+# host_guard_hold: exactly one host guard, this endpoint's. The new copy goes
+# in at the top of INPUT first and the rest (a stuck copy, a duplicate, or an
 # earlier endpoint's) come out after, so there's never a moment without one.
-# Re-running it leaves the same single rule.
+# Re-running it leaves the same single rule. (With an identical copy already
+# there, deleting by spec removes the new one, so the old copy keeps its place;
+# nothing else on the VM adds INPUT rules above it.)
 host_guard_hold() {
   iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null || return 1
   clear_tagged INPUT "$HOST_TAG" 1 || return 1

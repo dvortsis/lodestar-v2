@@ -1187,7 +1187,8 @@ class VMScripts(unittest.TestCase):
         """Run the leak test until the stub writes `marker`, send TERM to its process
         group, and return (exit code, stdout)."""
         self.run_script_fixtures()
-        proc = subprocess.Popen(self.argv("leak-test.sh"), env=self.env(**flags),
+        argv = self.argv("leak-test.sh") + ([flags["ARGV5"]] if "ARGV5" in flags else [])
+        proc = subprocess.Popen(argv, env=self.env(**flags),
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         try:
             deadline = time.monotonic() + 30
@@ -1210,6 +1211,16 @@ class VMScripts(unittest.TestCase):
         rc, out = self.signal_at("composing", BLOCK_COMPOSE=1)
         self.assertEqual(rc, 143)
         self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
+        self.assertNotIn("fail guards_released", out)
+
+    def test_a_signal_under_start_block_keeps_the_held_guard(self):
+        """X-gluetun-host-guard: TERM mid-recreate in a `held` run; cleanup lifts the
+        recreate guard but leaves start-block's host guard for the block."""
+        (self.stub / "host").write_text("1")
+        rc, out = self.signal_at("composing", BLOCK_COMPOSE=1, ARGV5="held")
+        self.assertEqual(rc, 143)
+        self.assertEqual((self.copies("guard"), self.copies("host")), (0, 1))
+        self.assertNotIn("-D INPUT", self.log())
         self.assertNotIn("fail guards_released", out)
 
     def test_a_signal_inside_the_insert_leaves_no_guard(self):
