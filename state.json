@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T06:04Z",
+  "updated_at": "2026-11-13T06:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7939,6 +7939,12 @@
       "id": "next-runner-pr-0600",
       "status": "open",
       "note": "Add slices.yaml entries X-sources-nits and X-gs2-nits; owner decision 2026-11-13: API credit Q1/Q2 + runner may dispatch operator-apply and choose use of remaining ~$40 (confirmed directly by owner in runner chat)."
+    },
+    {
+      "id": "operator-apply-inputs",
+      "at": "2026-11-13T06:14Z",
+      "what": "operator-apply needs RUNNER_USER_ID, OPERATOR_BOT_USER_ID, CHANNEL_PR, OPERATOR_MODEL_ROUTINE + env secrets/AWS; checklist sent to owner via dashboard; waiting on owner OK to open the operator-channel draft PR. Do not dispatch until owner confirms all set.",
+      "status": "open"
     }
   ],
   "main_health": [
@@ -8973,7 +8979,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T06:04Z",
+    "updated": "2026-11-13T06:14Z",
     "items": [
       {
         "slot": 1,
@@ -9010,7 +9016,7 @@
         "slice": "X-gs2-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: #804 GS-2 merged cf3d2975 (06:00Z); same session now X-gs2-nits (rv-804 O1-O5)",
+        "doing": "PR #817 open (52a3edfd); awaiting ci-ok, then review",
         "since": "2026-11-13T06:04Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -9159,7 +9165,7 @@
         "role": "build",
         "status": "active",
         "agent": "claude",
-        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: #814 merged 0cceec88 (06:00Z); consent-gate slices wait on owner Notice wording; now X-ci-advisories (Track Q, INFRA-09)",
+        "doing": "ctutils lock bump, rustix =1.1.6, dated ignore for RUSTSEC-2026-0459 (runner call 06:2xZ); X-rusqlite-041 follow-up",
         "since": "2026-11-13T06:04Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       }
@@ -9222,7 +9228,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T06:04Z",
+  "updated": "2026-11-13T06:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
