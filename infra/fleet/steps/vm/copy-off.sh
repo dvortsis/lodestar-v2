@@ -41,15 +41,16 @@ echo "ok nothing_running"
 
 rm -rf -- "$work/out" && mkdir -m 0700 -- "$work/out" || fail scrubbed
 # Only what the scrubber reads is mounted (never the password). The scrubber
-# only tests that the damaged mark (X-gluetun-guard-reboot) exists, so an
-# empty file stands in for it: the container never holds the mark's text,
-# even if the mark is a symlink (X-scrub-guard-fields-nits). A dangling link
-# still counts as a mark.
+# only tests that the damaged mark (X-gluetun-guard-reboot) exists, so
+# /dev/null, a character device that reads as empty, stands in for it: the
+# container never holds the mark's text, even if the mark is a symlink
+# (X-scrub-guard-fields-nits). A dangling link still counts as a mark
+# (block-lib.sh damaged_marked).
 mounts=()
 for f in evidence block.env tools outages notes; do
   [[ -e $BLOCK/$f ]] && mounts+=(-v "$BLOCK/$f:/block/$f:ro")
 done
-[[ -e $BLOCK/damaged || -L $BLOCK/damaged ]] && mounts+=(-v /dev/null:/block/damaged:ro)
+damaged_marked && mounts+=(-v /dev/null:/block/damaged:ro)
 doc=$(timeout 600 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true \
   --read-only --tmpfs /tmp "${mounts[@]}" -v "$work/scrub.py:/scrub.py:ro" -v "$work/out:/out" \
   "$COLLECTOR_IMAGE" python3 /scrub.py collect /block /out 2>/dev/null) || fail scrubbed

@@ -9,10 +9,10 @@
 - **`damaged`: a boolean.**
   - **True when** the `damaged` mark exists, or the outages hold a `host_guard_lost` line.
   - **The mark is only tested for existence, never read.** Its text is not evidence and can't pass.
-  - **copy-off mounts the mark,** read-only, beside the outages and only when it exists. A block without one copies off as before. (The runner added `copy-off.sh` to this slice's owns for this one change.)
-  - **What it mounts is an empty stand-in** (`/dev/null` at `/block/damaged`), never the mark itself (X-scrub-guard-fields-nits). The scrubber only needs to know the mark exists, so the container never holds the mark's text, even when the mark is a symlink. A dangling link still counts as a mark.
+  - **copy-off mounts a stand-in for the mark,** read-only, beside the outages and only when it exists. A block without one copies off as before. (The runner added `copy-off.sh` to this slice's owns for this one change.)
+  - **What it mounts is an empty stand-in** (`/dev/null`, a character device that reads as empty, at `/block/damaged`), never the mark itself (X-scrub-guard-fields-nits). The scrubber only needs to know the mark exists, so the container never holds the mark's text, even when the mark is a symlink. A dangling link still counts as a mark.
   - **Why the outages line counts too:** `guard_lost` is the only writer of either, and it writes both once: the mark first, then the line. Either one is enough.
-  - **No false negative is left.** A reboot between the two writes, or a failed append to the outages (a full disk, say; both writes are silenced), leaves the mark without the line. The mark is mounted, so the evidence still says `damaged: true`, as vm-status's `fail block_intact` does. A test runs copy-off with the mark and no `host_guard_lost` line, then scrubs exactly the files it mounted.
+  - **No false negative is left.** A reboot between the two writes, or a failed append to the outages (a full disk, say; both writes are silenced), leaves the mark without the line. A stand-in for the mark is mounted, so the evidence still says `damaged: true`, as vm-status's `fail block_intact` does. A test runs copy-off with the mark and no `host_guard_lost` line, then scrubs exactly the files it mounted.
 - **A new shape, `count`, for `host_guard_drops`.** It's a whole number from 0 up, narrower than `num`, which also allows negatives and floats. `damaged` uses the existing `boolean`. Both go through `clean()`, so the control plane's `scrub(doc)` drops a value of the wrong shape, as it does for every other field.
 - **The scrubber stays an allow-list.** No free text passes, and no shape is broader than the existing ones.
 
@@ -28,7 +28,10 @@ New tests in `infra/fleet/tests/test_block.py`, class `ScrubGuardFields`:
 - **a hostile mark and hostile outage lines:** an address, a hex ID, a path and an instance ID, all fake documentation values. Only the boolean and the exact records survive, through both `collect()` and the `scrub.py collect` command line;
 - malformed values (negative, float, string, boolean, oversized, an address, a list) are dropped by `scrub(doc)`.
 
-In `CopyOff`: copy-off mounts the mark read-only when it's there, and not when it isn't. With the mark and no `host_guard_lost` line, scrubbing exactly the files copy-off mounted gives `damaged: true`.
+In `CopyOff`: copy-off mounts a stand-in for the mark, read-only, when it's there, and not when it isn't. With the mark and no `host_guard_lost` line, scrubbing exactly the files copy-off mounted gives `damaged: true`.
 
 ## Left as it is (for the runner)
 - **Nothing reads the new fields yet.** No analyzer, control-plane report or runbook section reads `outages` or `outage_notes` from the scrubbed document either. A report that shows them is a follow-up.
+
+## Follow-up (X-damaged-mark-links)
+- **Every check of the mark agrees with copy-off.** vm-status's `block_intact`, the outage-watcher step and `guard_lost` all use `damaged_marked` in `block-lib.sh` (`-e || -L`), so a dangling link counts as a mark everywhere. The scrubber counts a link too. `guard_lost` never writes through a link: a link already counts as a mark and is left in place, and the mark is created with `noclobber`, so a link that appears in between makes the write fail rather than follow it.

@@ -1044,6 +1044,11 @@ class VMScripts(unittest.TestCase):
         _, lines, _ = self.run_script("vm-status.sh")
         self.assertIn("fail block_intact", lines)
         self.assertIn("count host_guard_drops 2", lines)
+        # A dangling link is a mark too, as copy-off counts it (X-damaged-mark-links).
+        (self.block / "damaged").unlink()
+        (self.block / "damaged").symlink_to(self.tmp / "missing")
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("fail block_intact", lines)
         for name in ("outages", "damaged"):
             (self.block / name).unlink()
         (self.block / "marker").unlink()
