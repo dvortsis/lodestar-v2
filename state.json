@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:47Z",
+  "updated_at": "2026-11-13T02:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8891,7 +8891,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:47Z",
+    "updated": "2026-11-13T02:00Z",
     "items": [
       {
         "slot": 1,
@@ -8942,13 +8942,8 @@
       },
       {
         "slot": 6,
-        "slice": "X-soak-screen-calibrate",
-        "role": "build",
-        "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhnBGH1xNKfTqZShKexC: launched after #777 merged; screen recalibration (r5 no trip, r4 trip), absent inputs; advisory only",
-        "since": "2026-11-12T22:13:28Z",
-        "status": "active",
-        "cap": "over cap: finish #796 only, then archive (\u00a72.64)"
+        "status": "idle",
+        "doing": "X-soak-screen-calibrate #796 merged (4b20e531) 2026-11-13T02:00Z; session archived (\u00a72.65 drain)"
       },
       {
         "slot": 7,
@@ -9251,7 +9246,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:47Z",
+  "updated": "2026-11-13T02:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
