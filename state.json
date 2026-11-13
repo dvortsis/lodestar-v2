@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T16:07Z",
+  "updated_at": "2026-11-13T16:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8071,6 +8071,16 @@
       "id": "slices-yaml-x-lease-reconcile-testing-rs",
       "note": "Add crates/lodestar/src/cluster/testing.rs to X-lease-reconcile-every-session owns in the next runner PR (runner approved Probe forwarding).",
       "at": "2026-11-13T16:07Z"
+    },
+    {
+      "id": "bitmagnet-importer-tables-route",
+      "note": "Cloud tester proposal: importer-tables-only restore route (~123 GB, ~17 h) via quote-aware awk filter over unzip -p into a FIFO; and how Lodestar gets the reader password. Needs a design slice; not in X-import-pilot-fixes.",
+      "at": "2026-11-13T16:24Z"
+    },
+    {
+      "id": "slices-yaml-x-import-pilot-fixes",
+      "note": "Add X-import-pilot-fixes (cloud-testing fix, owns per brief) with placement in the next runner PR.",
+      "at": "2026-11-13T16:24Z"
     }
   ],
   "main_health": [
@@ -9114,7 +9124,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T16:07Z",
+    "updated": "2026-11-13T16:24Z",
     "items": [
       {
         "slot": 1,
@@ -9194,8 +9204,12 @@
       },
       {
         "slot": 14,
-        "status": "idle",
-        "doing": "X-test-blockers-1112 #778 merged 9f3723ad; session archived"
+        "status": "active",
+        "doing": "cloud-testing: launching (Opus): import --limit space check (blocks pilots), estimate 2048, loopback flag message, smoke.py notice, bitmagnet_check samples, findings counters, runbook duration",
+        "slice": "X-import-pilot-fixes",
+        "agent": "claude",
+        "role": "build",
+        "since": "2026-11-13T16:24Z"
       },
       {
         "slot": 15,
@@ -9351,7 +9365,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T16:07Z",
+  "updated": "2026-11-13T16:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
