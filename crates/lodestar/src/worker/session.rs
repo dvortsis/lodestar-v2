@@ -612,15 +612,26 @@ impl<C: Connect> Worker<C> {
         // `drained` returns once it's written: wait for the coordinator's
         // `Stop(Drained)`, sent once it has evicted the leases, so nothing
         // queued ahead of it is lost to a reset as the connection drops.
+        // Events are read while `Drained` waits to go out too: a full event
+        // queue stalls the session, and `Drained` with it.
         let confirmed = async {
-            if session.drained().await.is_err() {
-                return false;
-            }
+            let mut sent = std::pin::pin!(handle.drained());
+            let mut written = false;
             loop {
-                match session.next_event().await {
-                    Some(WorkerEvent::Ended(Some(StopReason::Drained))) => return true,
-                    None | Some(WorkerEvent::Ended(_)) => return false,
-                    Some(_) => {}
+                tokio::select! {
+                    r = &mut sent, if !written => {
+                        if r.is_err() {
+                            return false;
+                        }
+                        written = true;
+                    }
+                    // The coordinator says this only once it has evicted the
+                    // leases, even in the same wake as `drained`'s reply.
+                    event = session.next_event() => match event {
+                        Some(WorkerEvent::Ended(Some(StopReason::Drained))) => return true,
+                        None | Some(WorkerEvent::Ended(_)) => return false,
+                        Some(_) => {}
+                    },
                 }
             }
         };
@@ -842,12 +853,23 @@ pub(crate) mod tests {
         lines: &Lines,
         work: W,
     ) -> Running {
+        run_with(layout, dial, clock, lines, work, settings())
+    }
+
+    fn run_with<W: Work + 'static>(
+        layout: &Layout,
+        dial: &Dial,
+        clock: &Arc<ManualClock>,
+        lines: &Lines,
+        work: W,
+        settings: Settings,
+    ) -> Running {
         let worker = Worker {
             layout: layout.clone(),
             creds: layout.load().unwrap().expect("joined"),
             connect: dial.clone(),
             clock: clock.clone(),
-            settings: settings(),
+            settings,
             report: lines.report(),
             jitter: || 0,
             wait: sleep(),
@@ -910,6 +932,17 @@ pub(crate) mod tests {
     impl Setup {
         fn run<W: Work + 'static>(&self, work: W) -> Running {
             run(&self.layout, &self.dial, &self.clock, &self.lines, work)
+        }
+
+        fn run_with<W: Work + 'static>(&self, work: W, settings: Settings) -> Running {
+            run_with(
+                &self.layout,
+                &self.dial,
+                &self.clock,
+                &self.lines,
+                work,
+                settings,
+            )
         }
 
         async fn until_connected(&self, coord: &Coord) {
@@ -1232,6 +1265,57 @@ pub(crate) mod tests {
             s.lines
                 .all()
                 .contains("stopping: handing the current work back")
+        );
+    }
+
+    /// Floods its own session with large events as its drain ends, more
+    /// than a one-slot event queue holds.
+    struct Flooding {
+        server: Arc<ClusterServer>,
+        worker: WorkerId,
+    }
+
+    impl Work for Flooding {
+        fn event(&mut self, _: WorkerEvent) {}
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            // Large, so they're still arriving once the hand-back is done.
+            for revision in 1..64 {
+                let msg =
+                    lodestar_cluster::proto::ToWorker::Assign(lodestar_cluster::proto::Assign {
+                        revision,
+                        payload: vec![0; lodestar_cluster::proto::MAX_OPAQUE],
+                    });
+                if self.server.send(self.worker, msg).is_err() {
+                    break;
+                }
+            }
+            Vec::new()
+        }
+    }
+
+    /// X-worker-839-followups: the stop reads the session's events while
+    /// `Drained` waits to go out, so a full event queue can't hold it up:
+    /// the stop ends on the coordinator's confirmation, not on its deadline.
+    #[tokio::test]
+    async fn a_full_event_queue_doesnt_hold_up_a_local_stop() {
+        let s = joined().await;
+        let mut quick = settings();
+        quick.session.event_queue = 1;
+        let work = Flooding {
+            server: s.coord.server.clone(),
+            worker: s.worker,
+        };
+        let running = s.run_with(work, quick);
+        s.until_connected(&s.coord).await;
+        lost_leases(&s, 1, 3);
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
+        let authority = s.coord.server.authority();
+        assert_eq!(authority.held_by(s.worker), 0);
+        assert!(
+            !s.lines.all().contains("keeping it for the next start"),
+            "{}",
+            s.lines.all()
         );
     }
 

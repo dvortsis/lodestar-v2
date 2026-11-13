@@ -452,10 +452,11 @@ async fn a_closed_port_refuses_and_cant_be_taken() {
         io::ErrorKind::ConnectionRefused,
         "{refused}"
     );
-    // Taken: `AddrInUse`. `PermissionDenied` is accepted too, as Windows'
-    // answer for an exclusive or excluded port.
+    // Taken: neither socket sets `SO_REUSEADDR`, so this is `AddrInUse` on
+    // every target (an excluded-range `PermissionDenied` can't arise for a
+    // port the system just handed out).
     let taken = TcpListener::bind(closed.v4()).await.unwrap_err();
-    assert!(in_use(&taken), "{taken}");
+    assert_eq!(taken.kind(), io::ErrorKind::AddrInUse, "{taken}");
 }
 
 #[tokio::test]
@@ -507,8 +508,8 @@ async fn loopback_falls_back_to_ipv6() {
     let limits = |secs| Limits::new(Duration::from_secs(secs), 1024).unwrap();
     let version_path = || RequestPath::parse("/api/v2/app/version").unwrap();
     let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
-        // CI runners have IPv6 loopback: there, this is a failure, never a
-        // pass of the fallback.
+        // CI runners have IPv6 loopback: there (`CI` set to any value), this
+        // is a failure, never a pass of the fallback.
         assert!(
             std::env::var_os("CI").is_none(),
             "::1 can't be bound here, so the IPv6 fallback is untested"

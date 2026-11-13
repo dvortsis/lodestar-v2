@@ -27,8 +27,8 @@ The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z.
   - The same holding approach would fit.
 
 ## Follow-up: X-companions-loopback-nits
-- **A port Windows won't hand out counts as taken.** A `::1` (or 127.0.0.1) bind that fails with `PermissionDenied` is retried like `AddrInUse`, because Windows answers that way for a port in an excluded range (Hyper-V, WinNAT). The bounded retry and the loud panic stay.
-- **The held-port test checks why the second bind fails:** `AddrInUse`, or `PermissionDenied` where Windows refuses it that way.
+- **A port Windows won't hand out counts as taken.** A `::1` bind that fails with `PermissionDenied` is retried like `AddrInUse`, because Windows answers that way for a port in an excluded range (Hyper-V, WinNAT). The bounded retry and the loud panic stay.
+- **The held-port test checks why the second bind fails:** exactly `AddrInUse` (X-worker-839-followups: `PermissionDenied` can't arise there).
 - **`loopback_falls_back_to_ipv6` no longer passes without asserting.**
   - It used to skip if another program held the port on IPv4. Now it holds 127.0.0.1 closed on the server's port itself, so the IPv4 attempt is always refused and the fallback is always asserted.
   - Without IPv6 loopback, it checks only that a held port is found closed. On CI (`CI` set) the test fails instead, since every CI target has `::1`, so a missing fallback is never counted as a pass.

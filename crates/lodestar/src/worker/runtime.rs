@@ -2262,21 +2262,28 @@ async fn send_results(
                 {
                     spool_live(&s, sp, &mut flight).await;
                 }
-                // The session gone while sending: what's left goes to
-                // the spool now, not at the next round.
-                match send_due_or_changed(&s, session, &mut flight, true, &mut sessions).await {
-                    Sending::Done => {}
-                    Sending::Changed => {
-                        let now = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
-                        if let Some(sp) = &s.spool
-                            && offline(&now)
-                        {
-                            spool_live(&s, sp, &mut flight).await;
+                // The session changed while sending: gone, what's left goes
+                // to the spool now, not at the next round; a new one, it's
+                // sent there before the flush is answered. Each round needs
+                // a real session change, and the drain's deadline bounds
+                // the wait for the answer.
+                let mut session = session;
+                loop {
+                    match send_due_or_changed(&s, session, &mut flight, true, &mut sessions).await {
+                        Sending::Done => break,
+                        Sending::Changed => {
+                            session = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
+                            if offline(&session) {
+                                if let Some(sp) = &s.spool {
+                                    spool_live(&s, sp, &mut flight).await;
+                                }
+                                break;
+                            }
                         }
-                    }
-                    Sending::Gone => {
-                        let _ = done.send(());
-                        return;
+                        Sending::Gone => {
+                            let _ = done.send(());
+                            return;
+                        }
                     }
                 }
                 let _ = done.send(());

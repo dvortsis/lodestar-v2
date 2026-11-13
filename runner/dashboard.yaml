@@ -440,6 +440,7 @@ placement:
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
   - X-companions-loopback-nits
+  - X-worker-839-followups
   - X-svc-eventcreate-bounded
   - X-win-fs-followups
   - X-flake-portable-restart-3
