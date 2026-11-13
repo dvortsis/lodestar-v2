@@ -70,6 +70,22 @@ function Fail([string]$msg, [int]$code = 1) {
 
 . (Join-Path $PSScriptRoot 'dacl-check.ps1')
 . (Join-Path $PSScriptRoot 'join-token-file.ps1')
+. (Join-Path $PSScriptRoot 'service-sid.ps1')
+
+# Why $dir isn't the data folder secure-datadir.ps1 made, or $null: it exists, it's a real
+# folder (no link), its list is protected, and every entry, read raw, is a plain Allow for
+# SYSTEM, Administrators or the service. lodestar --join-only doesn't check the folder's
+# permissions itself (WK-18s), so the join relies on SecureDataFolder having run first.
+function Get-DataDirProblem([string]$dir, [Security.Principal.SecurityIdentifier]$service) {
+  if (-not [IO.Directory]::Exists($dir)) { return 'it does not exist' }
+  $item = Get-Item -LiteralPath $dir -Force
+  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return 'it is a link or junction' }
+  $raw = Get-RawDescriptor $dir
+  if (-not ($raw.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclProtected)) {
+    return 'it inherits permissions from its parent'
+  }
+  return Get-DaclProblem $raw @($script:jtSystem, $script:jtAdmins, $service)
+}
 
 # One argument for a Windows command line. Every value here is a path in Program Files,
 # ProgramData or Windows\Temp, or an address checked below: none may hold a quote.
@@ -122,6 +138,9 @@ try {
   Initialize-RawReader $work
   $why = Get-PrivateProblem $work
   if ($why) { Fail "The private folder $work is not private: $why. Install again." 2 }
+  # The worker's key and credentials go into the data folder: only once it's secured.
+  $why = Get-DataDirProblem $DataDir (Get-ServiceSid $ServiceName)
+  if ($why) { Fail "The data folder $DataDir is not secured yet ($why), so nothing was joined. Run the installer again." 2 }
 
   New-PrivateFolder $tokenDir
   Write-TokenFile $tokenFile $script:token
@@ -178,7 +197,6 @@ try {
     # The join ran as SYSTEM, so SYSTEM owns the key and the credentials, and their lists
     # allow only OWNER RIGHTS, SYSTEM and Administrators (integrations secret.rs): the
     # service's own account gets them as their owner. /L: never through a link.
-    . (Join-Path $PSScriptRoot 'service-sid.ps1')
     $svc = (Get-ServiceSid $ServiceName).Value
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
     $owned = $true

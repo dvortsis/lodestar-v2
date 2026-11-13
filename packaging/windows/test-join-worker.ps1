@@ -88,12 +88,19 @@ public static class Stub {
 
 Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'join-ca\JoinRunner.cs'))
 
+# The helpers: data folders are made private first, as secure-datadir.ps1 makes the real one.
+. (Join-Path $PSScriptRoot 'dacl-check.ps1')
+. (Join-Path $PSScriptRoot 'join-token-file.ps1')
+. (Join-Path $PSScriptRoot 'service-sid.ps1')
+Initialize-RawReader $tmp
+
 $case = 0
 # Runs one join through JoinRunner and returns what came back, what it logged, what the stub
 # saw and the folders the script made.
-function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address = 'https://192.168.1.10:8091', [int]$timeout = 30) {
+function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address = 'https://192.168.1.10:8091', [int]$timeout = 30, [switch]$OpenData) {
   $script:case++
   $data = Join-Path $root "data-$script:case"
+  if ($OpenData) { New-Item -ItemType Directory -Path $data | Out-Null } else { New-PrivateFolder $data }
   $log = New-Object 'Collections.Generic.List[string]'
   # EventLog: a service every Windows has, so icacls can name its SID as an owner.
   $extra = "-StubArgs $mode -TimeoutSeconds $timeout -ServiceName EventLog"
@@ -153,7 +160,6 @@ Assert-PrivateSddl $r.Seen.dirsddl 'ok: the token folder'
 Assert ($r.Seen.dirsddl -match 'D:P') 'ok: the token folder inherits permissions'
 $creds = Join-Path $r.Data 'cluster\credentials'
 Assert (Test-Path -LiteralPath $creds) 'ok: no credentials'
-. (Join-Path $PSScriptRoot 'service-sid.ps1')
 $credsOwner = (Get-Acl -LiteralPath $creds).GetOwner([Security.Principal.SecurityIdentifier]).Value
 Assert ($credsOwner -eq (Get-ServiceSid 'EventLog').Value) "ok: the credentials are owned by $credsOwner, not the service"
 Assert-TokenGone $r 'ok'
@@ -205,10 +211,16 @@ $r = Invoke-Join 'ok' -address 'https://c:8091/path'
 Assert ($r.Result -like '*should look like*') "path: unexpected result: $($r.Result)"
 Assert ($r.Seen.Count -eq 0) 'path: lodestar ran'
 
+# ---- a data folder that isn't secured yet: refused before any token file or process ----
+$r = Invoke-Join 'ok' -OpenData
+Assert ($r.Result -like '*is not secured yet*') "open data: unexpected result: $($r.Result)"
+Assert ($r.Seen.Count -eq 0) 'open data: lodestar ran'
+foreach ($w in $r.Work) {
+  Assert (@(Get-ChildItem -LiteralPath $w.FullName -Directory -Filter 't-*').Count -eq 0) 'open data: a token folder was made'
+}
+Assert-NoToken $r 'open data'
+
 # ---- the helpers themselves ----
-. (Join-Path $PSScriptRoot 'dacl-check.ps1')
-. (Join-Path $PSScriptRoot 'join-token-file.ps1')
-Initialize-RawReader $tmp
 
 $fresh = Join-Path $tmp 'fresh'
 New-PrivateFolder $fresh
