@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T19:31Z",
+  "updated_at": "2026-11-13T19:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8124,7 +8124,6 @@
     },
     "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
     "docs-host-icmp-note-user-setup (gluetun guide: host ICMP in a user own setup)",
-    "gluetun-guard-reboot-mid-block (re-hold on resume or outage-watcher check)",
     "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
     "X-flake-companions-loopback: detect.rs bind-then-drop port race on Windows; next slice in slot 7 after #839 (owns crates/companions/tests/detect.rs); slices.yaml entry in next runner PR",
     {
@@ -8141,6 +8140,11 @@
       "id": "X-filter01-guard-regression",
       "what": "post-release: exact-input regression test for the filter core split-reading guard (security README section 5 timing)",
       "added": "2026-11-13T19:31Z"
+    },
+    {
+      "id": "X-worker-drained-read-events",
+      "what": "worker session: read events while drained() waits for its reply, so a full event queue cannot push the stop onto the slow path (pre-existing, from #839 review)",
+      "added": "2026-11-13T19:38Z"
     }
   ],
   "main_health": [
@@ -8530,21 +8534,14 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "837": {
-      "slice": "X-watch-stall-retry",
-      "head": "ccd0aac7",
-      "review": "fresh Opus MERGE (0 B / 0 I); nits 1-2 (evict re-check, NotFound->Gone) relayed for one round; runner delta check then merge",
-      "at": "2026-11-13T16:54Z",
-      "state": "ci-ok red: own new test fails on Windows (eviction_moves_only_a_regular_file); root-cause fix asked"
-    },
     "839": {
       "slice": "X-lease-reconcile-every-session",
       "head": "914c14fb",
       "review": "fresh Opus MERGE, 2 Important (stalled-coordinator spool fallback; local stop waits for Drained) relayed with chaos scenario, one push; runner delta check then merge",
-      "at": "2026-11-13T19:31Z",
+      "at": "2026-11-13T19:38Z",
       "state": "fixes in; Windows companions detect.rs loopback flake (not this PR); one re-run used",
       "rerun_used": true,
-      "status": "ready; Opus delta review running; Windows test running"
+      "status": "MERGE verdict; one more small round asked (test race, flush version, Err return, leases test)"
     },
     "842": {
       "slice": "X-offline-retry",
@@ -9205,7 +9202,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T19:31Z",
+    "updated": "2026-11-13T19:38Z",
     "items": [
       {
         "slot": 1,
@@ -9290,13 +9287,12 @@
       },
       {
         "slot": 15,
-        "slice": "X-watch-stall-retry",
+        "slice": "X-gluetun-guard-reboot",
         "role": "build",
-        "agent": "claude",
-        "since": "2026-11-13T14:46Z",
-        "doing": "session_01MMjhnAxsG2ZD8KZKntFRCp (Opus): hold a Malformed verdict for one more poll; /security-review",
-        "cap": "kept cloud-testing (\u00a72.64 4+4)",
-        "status": "active"
+        "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
+        "since": "2026-11-13T19:38Z",
+        "doing": "building",
+        "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
         "slot": 16,
@@ -9443,7 +9439,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T19:31Z",
+  "updated": "2026-11-13T19:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9862,6 +9858,12 @@
       "slice": "X-import-pilot-fixes",
       "merged": "b4813b50",
       "at": "2026-11-13T18:07Z"
+    },
+    {
+      "pr": 837,
+      "slice": "X-watch-stall-retry",
+      "merged": "3f098e35",
+      "at": "2026-11-13T19:38Z"
     }
   ]
 }
