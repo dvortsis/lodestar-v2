@@ -8,7 +8,87 @@ gates on (architecture §3, §8, §17). Run each in release:
 | `size-report` | Bytes per torrent against the §3 size budget | `size budget (§3)` |
 | `search-bench` | Search latency p95 per query class, count estimates | `search latency (§3)` |
 | `relevance` | Ranking quality: NDCG@10, MRR, recall@50 | `relevance (§8)` |
+| `size-report --dataset` | Every §3 size figure at 10M, with a JSON report ([10M mode](#10m-mode)) | none yet (M8-PERF-3) |
 | `reporting-overhead` (an example: it needs the API crate, a dev-dependency) | Insights' cost: search p95 and ingest with Insights open and the digest running, rollup bytes per year | `reporting overhead (§3)`, nightly |
+
+## 10M mode
+
+The §3 budgets are set "on a synthetic 10M-torrent / 300M-file dataset, 4
+cores, NVMe". `--dataset DIR` runs `size-report` there; `search-bench`'s
+10M rows follow in M8-PERF-1b. It can't run in a pull request's CI
+(M8-PERF-3 adds the dedicated runner's workflow). The CI gates above don't
+change: without `--dataset` the bins run exactly as before.
+
+```sh
+# Builds the dataset once (hours at 10M; about 25 GB), then measures it.
+cargo run --release -p lodestar-bench --bin size-report -- \
+    --dataset /bench/10m --torrents 10000000 --json size.json
+cargo run --release -p lodestar-bench --bin size-report -- \
+    --dataset /bench/10m --torrents 10000000 --json size-low.json --low-resource
+```
+
+### The dataset
+
+`lodestar_bench::dataset` builds it once into the folder you name and
+reuses it after that:
+
+- **Keyed** by the dataset format (`dataset::FORMAT`), the generator's
+  version (`synth::VERSION`), the seed and the torrent count, recorded in
+  `dataset.json`. A folder whose key differs is refused, and the message
+  names both keys. Raise `synth::VERSION` in any change to what a seed
+  generates, and `FORMAT` in any change to how a dataset is built.
+  A dataset built with another store schema is refused too: it's never
+  migrated in place.
+- **Never a data directory.** It builds only in a new or empty folder, or
+  one holding a `dataset.json`, and refuses `$LODESTAR_DATA_DIR` and any
+  folder under it.
+- **Built like a real store:** 20,000 torrents, a trained zstd
+  dictionary, the rest with it; enrichment; one scrape a torrent from 20
+  synthetic trackers; a year of Insights rollups (B11a's wide hour, every
+  metric) compacted at the anchor; then both indexes. An interrupted build
+  resumes from its last finished phase. A newer search schema or tokenizer
+  names a new index folder, so the stored corpus is indexed again; every
+  open checks that the index holds the whole corpus.
+- **Deterministic:** nothing reads the clock, so two clean builds of one
+  key give the same SQLite file byte for byte, except two header counters
+  SQLite bumps at each checkpoint (`bench/tests/dataset.rs`).
+  Tantivy names its segments at random, so the indexes match by their
+  documents, not their bytes.
+- **Read-only once built.** Measurements that write (M8-PERF-1b's new
+  torrent → searchable) run on `DIR/scratch`, a copy `dataset::scratch`
+  makes and `dataset::drop_scratch` removes. Leave room for it: as much
+  again as the dataset.
+
+### What size-report adds
+
+`size-report --dataset` measures the dataset's files instead of a
+temporary corpus: the four CI figures, store plus torrent index
+(≤ 1,536 B), the all-in figure (store and both indexes, about 2.3 KB,
+reported, never gated), and a row for each index field that isn't
+populated, which keeps the verdict `incomplete` until every 1.0 field has
+a producer. `--low-resource` drops the file index's budget (`off`) and
+reports the switches this build lacks for that mode as `unavailable`.
+
+### The JSON report
+
+`--json PATH` writes one object:
+
+| Field | What |
+|---|---|
+| `report_format` | 1. Raised when a field changes meaning. |
+| `tool`, `mode` | `size-report` (or `search-bench`, M8-PERF-1b); `default` or `low-resource`. |
+| `verdict` | `fail` if a row failed; else `incomplete` if one is `unavailable` or `unmeasured`; else `pass`. |
+| `machine` | `cores`, `memory_bytes`, `cpu`, `os`, `arch`, `kernel`, and `disk` (`nvme`, `ssd`, `hdd` or `unknown`) for the dataset's folder. Anything unreadable is `null`. |
+| `dataset` | The key: `format`, `generator`, `seed`, `torrents` (`null` without `--dataset`). |
+| `git` | `rev` (`$GITHUB_SHA`, else `git rev-parse HEAD`) and `dirty`. |
+| `rows` | Each `{id, budget_row, value, unit, budget, status, reason}`. |
+
+A row passes when `value <= budget`. `status` is one of `pass`, `fail`,
+`reported` (no budget in §3), `off` (not offered in this mode),
+`unavailable` (the build can't do it yet) or `unmeasured` (the value can't
+be trusted);
+the last three carry a `reason`. With `--gate`, a `--dataset` run exits 1
+unless the verdict is `pass`. Row ids are stable; M8-PERF-3 gates on them.
 
 ## Reporting overhead
 
