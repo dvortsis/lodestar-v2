@@ -56,6 +56,116 @@ host_guard_hold() {
   iptables -C INPUT "${host_rule[@]}" 2>/dev/null
 }
 host_guard_release() { clear_tagged INPUT "$HOST_TAG"; }  # every copy, whatever endpoint it names
+
+# A guard dropped mid-block (X-gluetun-guard-reboot): a reboot or an iptables
+# flush removes it while the marker still records a block, and gluetun, which
+# Docker restarts by itself, would then run unguarded. Three places check:
+# - at boot, before Docker starts: the boot unit (start_watcher), which Docker
+#   requires, so a guard that can't be held at boot keeps Docker down;
+# - the outage watcher, at its start and every GUARD_EVERY seconds;
+# - the outage-watcher step.
+#
+# guard_resume conf [boot]: while a guard is expected, this endpoint's guard
+# is in INPUT, or it's put back. Expected means a recorded block; at boot also
+# a block that ended but isn't copied off yet (copy-off releases the guard).
+# It only adds: a copy for another endpoint (a VPN renewal mid-block replaces
+# wg0.conf but not gluetun's session) is left in place, and copy-off removes
+# every tagged copy. It acts first and records after. Returns
+#   0  the guard is there, or nothing is expected; with only another
+#      endpoint's copy left, this endpoint's is added (a precaution, not a
+#      drop, so it isn't recorded);
+#   3  it had gone and is back: recorded as `host_guard_dropped`;
+#   1  it can't be held (no valid endpoint, iptables refuses or keeps
+#      erroring, or the lock can't be opened): gluetun is stopped (not at
+#      boot, when Docker isn't up), the block is marked damaged and
+#      `host_guard_lost` is recorded once;
+#   2  another check held the lock for GUARD_LOCK_WAIT seconds; the caller
+#      tries again.
+# Records are lines in $BLOCK/outages, which copy-off's evidence counts, plus
+# one link_outage note in the running segment, so the block can't read as
+# clean. It prints nothing.
+GUARD_LOCK_WAIT=${GUARD_LOCK_WAIT:-15}
+guard_expected() {
+  [[ $(block_state) != none ]] && return 0
+  [[ ${1:-} == boot && -d $BLOCK/evidence && ! -e $BLOCK/copied ]]
+}
+guard_resume() {
+  local conf=$1 mode=${2:-} fd rc=1 i tagged dropped=""
+  if ! { exec {fd}>>"$BLOCK/.guard.lock"; } 2>/dev/null; then
+    guard_expected "$mode" || return 0
+    guard_lost "$mode" ""; return 1
+  fi
+  if ! flock -w "$GUARD_LOCK_WAIT" "$fd" 2>/dev/null; then exec {fd}>&-; return 2; fi
+  if ! guard_expected "$mode"; then exec {fd}>&-; return 0; fi
+  if endpoint_read "$conf"; then
+    host_guard_rule
+    # Only exit 1 means gone (as in drop_all). Any other exit (the xtables
+    # lock held past -w's 5 s, say) is tried again, and fails closed if it
+    # persists.
+    for ((i = 0; i < 3; i++)); do
+      iptables -w 5 -C INPUT "${host_rule[@]}" 2>/dev/null; rc=$?
+      ((rc <= 1)) && break
+      sleep 2
+    done
+    if ((rc == 0)); then exec {fd}>&-; return 0; fi
+    if ((rc == 1)); then
+      tagged=$(iptables -w 5 -S INPUT 2>/dev/null | grep -c -e "--comment $HOST_TAG ")
+      ((${tagged:-0} > 0)) || dropped=1
+      if iptables -w 5 -I INPUT 1 "${host_rule[@]}" 2>/dev/null \
+        && iptables -w 5 -C INPUT "${host_rule[@]}" 2>/dev/null; then
+        exec {fd}>&-
+        [[ -n $dropped ]] || return 0
+        block_record "$mode" host_guard_dropped
+        return 3
+      fi
+    fi
+  fi
+  guard_lost "$mode" "$dropped"
+  exec {fd}>&-
+  return 1
+}
+# guard_lost mode dropped: stop gluetun first, then record. The records and
+# the damaged mark are written once, by the first failed check; gluetun is
+# stopped on every one, in case it came back.
+guard_lost() {
+  local kinds=()
+  [[ $1 == boot ]] || stop_gluetun
+  if [[ ! -e $BLOCK/damaged ]]; then
+    [[ -n $2 ]] && kinds+=(host_guard_dropped)
+    echo host_guard_lost 2>/dev/null >"$BLOCK/damaged"
+    kinds+=(host_guard_lost)
+  fi
+  ((${#kinds[@]})) && block_record "$1" "${kinds[@]}"
+  return 0
+}
+# block_record mode kind...: a line in $BLOCK/outages per kind, then one
+# link_outage note in the running segment's evidence when its collector runs
+# (never at boot, when Docker isn't up; bounded by MAX_NOTES).
+block_record() {
+  local mode=$1 k
+  shift
+  for k in "$@"; do echo "$(date -u +%s) $k" 2>/dev/null >>"$BLOCK/outages"; done
+  [[ $mode == boot ]] || segment_note
+}
+segment_note() {  # 0 noted, 1 not (no collector, no segment, or the bound reached)
+  local seg notes
+  notes=$(grep -c . "$BLOCK/notes" 2>/dev/null)
+  ((${notes:-0} >= ${MAX_NOTES:-500})) && return 1
+  seg=$(marker_get segment)
+  [[ $seg =~ ^[1-4]$ ]] || return 1
+  timeout 30 docker exec "lodestar-collector-$seg" python3 /tools/linux/collect.py note \
+    --root "/evidence/seg-$seg" --category link_outage >/dev/null 2>&1 || return 1
+  echo "$(date -u +%s) $seg" >>"$BLOCK/notes"
+}
+# gluetun, kept down: its restart policy off first (so neither a kill nor a
+# reboot brings it back; the next leak test recreates it from compose.yaml),
+# then stopped, or killed if it won't stop. 0 when it's no longer running.
+stop_gluetun() {
+  timeout 15 docker update --restart=no gluetun >/dev/null 2>&1
+  timeout 30 docker stop -t 10 gluetun >/dev/null 2>&1 || timeout 15 docker kill gluetun >/dev/null 2>&1
+  ! running gluetun
+}
+guard_drops() { grep -cE ' host_guard_dropped$' "$BLOCK/outages" 2>/dev/null || true; }
 # drop_all chain rule...: remove every copy of a rule (a failed delete can
 # leave more than one). Only `-C` exit 1 means absent (iptables also uses 1
 # for some generic errors, such as a missing chain); any other exit is an
@@ -244,13 +354,51 @@ load_block_env() {
   esac
 }
 watcher_active() { systemctl is-active --quiet "$WATCHER_UNIT" 2>/dev/null; }
-# The outage watcher, detached as a transient unit, bounded by RuntimeMaxSec.
+# The boot guard: a oneshot that Docker requires (a drop-in), run before the
+# network and Docker come up, which holds the host guard while one is expected
+# (guard_resume boot) and does nothing otherwise. boot_guard_install stages
+# watcher.sh and this library into $BLOCK/tools and writes both; start-block
+# calls it before the marker, so the guard is in place for the whole block.
+# The unit runs whenever the block has a marker or evidence (trigger
+# conditions): a block whose script is missing then fails the unit and keeps
+# Docker down, rather than being skipped (a skipped unit satisfies Requires=).
+# It's ordered after the usual host firewalls, which may load rules at boot.
+UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
+GUARD_UNIT=lodestar-block-guard
+UNIT_PATH='^/[A-Za-z0-9._/-]+$'  # the units' paths are written into them unquoted
+unit_write() {  # path, then its lines
+  local f=$1
+  shift
+  printf '%s\n' "$@" >"$f.tmp" && mv -f -- "$f.tmp" "$f"
+}
+boot_guard_install() {
+  [[ $BLOCK =~ $UNIT_PATH && $STACK =~ $UNIT_PATH ]] || return 1
+  mkdir -p -m 0700 -- "$BLOCK/tools" \
+    && install -m 0700 -- "$work/watcher.sh" "$BLOCK/tools/watcher.sh" \
+    && install -m 0600 -- "$work/block-lib.sh" "$BLOCK/tools/block-lib.sh" \
+    && mkdir -p -- "$UNIT_DIR/docker.service.d" || return 1
+  unit_write "$UNIT_DIR/$GUARD_UNIT.service" "[Unit]" "Description=Lodestar block host guard, before Docker" \
+    "DefaultDependencies=no" "After=local-fs.target netfilter-persistent.service ufw.service firewalld.service" \
+    "Before=network-pre.target docker.service" "Wants=network-pre.target" \
+    "ConditionPathExists=|$BLOCK/marker" "ConditionPathExists=|$BLOCK/evidence" \
+    "[Service]" "Type=oneshot" "ExecStart=/bin/bash $BLOCK/tools/watcher.sh $BLOCK $STACK boot" || return 1
+  unit_write "$UNIT_DIR/docker.service.d/$GUARD_UNIT.conf" "[Unit]" "Requires=$GUARD_UNIT.service" \
+    "After=$GUARD_UNIT.service" || return 1
+  systemctl daemon-reload >/dev/null 2>&1
+}
+# The outage watcher, as an enabled unit bounded by RuntimeMaxSec, so it starts
+# again after a reboot mid-block; with no marker it doesn't start. stop_watcher
+# disables it at the block's end. It runs from $BLOCK/tools with its own copy
+# of this library; starting it re-installs the boot guard too.
 start_watcher() {
   watcher_active && return 0
-  install -m 0700 -- "$work/watcher.sh" "$BLOCK/tools/watcher.sh" || return 1
-  systemd-run --quiet --collect --unit="$WATCHER_UNIT" --property=RuntimeMaxSec=44h \
-    bash "$BLOCK/tools/watcher.sh" "$BLOCK" >/dev/null 2>&1
+  boot_guard_install || return 1
+  unit_write "$UNIT_DIR/$WATCHER_UNIT.service" "[Unit]" "Description=Lodestar block outage watcher and host guard" \
+    "Wants=docker.service" "After=docker.service" "ConditionPathExists=$BLOCK/marker" \
+    "[Service]" "ExecStart=/bin/bash $BLOCK/tools/watcher.sh $BLOCK $STACK" "RuntimeMaxSec=44h" \
+    "[Install]" "WantedBy=multi-user.target" || return 1
+  systemctl daemon-reload >/dev/null 2>&1 && systemctl enable --now "$WATCHER_UNIT" >/dev/null 2>&1
 }
 # At the block's end: nothing is left that can reach Docker's socket.
 stop_proxy() { timeout 60 docker rm -f lodestar-docker-proxy >/dev/null 2>&1 || true; }
-stop_watcher() { systemctl stop "$WATCHER_UNIT" >/dev/null 2>&1 || true; }
+stop_watcher() { systemctl disable --now "$WATCHER_UNIT" >/dev/null 2>&1 || true; }

@@ -422,6 +422,7 @@ placement:
   - X-cloud-infra
   - X-cloud-infra-2
   - X-test-vm
+  - X-gluetun-guard-reboot
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*

@@ -1008,14 +1008,44 @@ class VMScripts(unittest.TestCase):
         self.assertEqual((rc, lines[-2:]), (1, ["fail block_check", "fail leak_test"]))
         self.assertNotIn("compose", self.log())
 
+    def test_vm_status_says_why_docker_is_down(self):
+        """X-gluetun-guard-reboot: a boot guard that couldn't hold the host guard
+        keeps Docker down on purpose, and vm-status says so."""
+        (self.stub / "bin" / "systemctl").write_text(
+            '#!/bin/sh\ncase "$*" in\n  "is-failed --quiet lodestar-block-guard") [ -n "$BOOT_FAILED" ] ;;\n'
+            '  "is-active --quiet lodestar-outage-watcher") exit 1 ;;\n  *) echo "$*" >> "$STUB/badargs"; exit 1 ;;\nesac\n')
+        (self.stub / "bin" / "systemctl").chmod(0o755)
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("ok boot_guard_held", lines)
+        _, lines, _ = self.run_script("vm-status.sh", BOOT_FAILED=1, NO_DOCKER=1)
+        self.assertIn("fail boot_guard_held", lines)
+        self.assertIn("fail docker_up", lines)
+        self.assertFalse((self.stub / "badargs").exists())
+
+    def test_the_outage_watcher_step_has_time_for_the_guard_check(self):
+        # The lock (15 s), the retries and keeping gluetun down (about 90 s) fit, with room.
+        self.assertEqual(steps.BUILT["outage-watcher"]["timeout"], 180)
+
     def test_vm_status_reports_the_block(self):
         _, lines, _ = self.run_script("vm-status.sh")
         self.assertIn("skip block_recorded", lines)
+        self.assertNotIn("count host_guard_drops 0", lines)  # only for a recorded block
         self.block.mkdir()
         (self.block / "marker").write_text("block=1-1\nsegment=3\n")
         _, lines, _ = self.run_script("vm-status.sh")
         self.assertIn("ok block_recorded", lines)
         self.assertIn("count block_segment 3", lines)
+        self.assertIn("ok block_intact", lines)
+        self.assertIn("count host_guard_drops 0", lines)
+        # X-gluetun-guard-reboot: guards found gone and put back, and one that couldn't be held.
+        (self.block / "outages").write_text("1 link_outage\n2 host_guard_dropped\n3 host_guard_dropped\n"
+                                            "4 host_guard_lost\n")
+        (self.block / "damaged").write_text("host_guard_lost\n")
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("fail block_intact", lines)
+        self.assertIn("count host_guard_drops 2", lines)
+        for name in ("outages", "damaged"):
+            (self.block / name).unlink()
         (self.block / "marker").unlink()
         self.block.rmdir()
         self.block.write_text("")
