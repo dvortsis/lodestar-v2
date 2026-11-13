@@ -419,6 +419,7 @@ placement:
   - X-collect-checklist-launch-2
   - X-cloud-infra
   - X-cloud-infra-2
+  - X-test-vm
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
@@ -520,6 +521,7 @@ placement:
   - SRC-15*
   - X-sources-api-spec
   - X-sources-restructure
+  - X-sources-nits
   - X-consent-gate-lift-r2
   - X-consent-gate-lift-account
   - X-consent-gate-lift-external
@@ -551,6 +553,7 @@ placement:
 - ws: ws-m7-w3
   match:
   - GS-2
+  - X-gs2-nits
   - ENR-14
   - UN-1
   - UN-2
@@ -627,6 +630,7 @@ placement:
   - X-gluetun-leak-cmp
   - X-gluetun-templates
   - X-gluetun-templates-hostfile
+  - X-gluetun-hostfile-ui
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish
@@ -709,6 +713,7 @@ placement:
   - X-e2e-orphan-specs
   - X-ci-advisories
   - X-fixed-sleep-asserts
+  - X-rusqlite-041
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -723,7 +728,8 @@ pinned:
   X-strip-format-chars: ws-small
   i9-stage2: ws-small
   openapi-example-size: ws-small
-held: []
+held:
+- PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
 - E-v06-sources
 - E-M6
@@ -827,13 +833,15 @@ conditions:
     label: You tag and publish v0.5.1
     auto: tag:v0.5.1
   experiment-host:
-    met: false
+    met: true
     who: you
-    label: 'Not booked. cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h. Next booking: CR-AB-ADM, after 2026-11-09T02:01Z and rc.2 steps B-E'
+    label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check, with a restore step that always runs'
+    note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h'
   owner-checkpoint-1:
-    met: false
+    met: true
     who: you
     label: You re-decide at Checkpoint 1 if the crawler projection falls short
+    note: 'The first step is decided by the runner on your delegation, §2.69: Track C fixes and a new measurement first. If still short, you re-decide the number (§2.27)'
   import-host:
     met: false
     who: you
@@ -931,9 +939,10 @@ conditions:
     who: you
     label: You do the M6 manual Unraid and MSI installs and approve the rc's signing (M6 Q14)
   owner-pk-nightly-host:
-    met: false
+    met: true
     who: you
     label: You approve the host that serves the nightly update manifests (PK-nightly-host)
+    note: 'The PK-manifest proposal is approved as written by the runner on your delegation, §2.69; only if the Nightly channel is offered'
   owner-v08-q1:
     met: true
     who: you
@@ -997,37 +1006,45 @@ conditions:
     label: You tag and publish v1.0.0
     auto: tag:v1.0.0
   owner-filter01-choice:
-    met: false
+    met: true
     who: you
     label: You choose between the two held fixes for FILTER-01 (the runner gives you the detail directly)
+    note: 'Chosen by you on 2026-11-13 (§2.70); held by id only'
   owner-apifeat01-choice:
-    met: false
+    met: true
     who: you
     label: You choose between the two held options for APIFEAT-01 (the runner gives you the detail directly)
+    note: 'Decided by the runner on your delegation, §2.69 (docs/decisions/2026-11-13-runner-owner-queue.md)'
   owner-filter03-choice:
-    met: false
+    met: true
     who: you
     label: You choose between the two held fixes for FILTER-03 (the runner gives you the detail directly)
+    note: 'Chosen by you on 2026-11-13 (§2.70); held by id only'
   owner-infra01-image-gate:
-    met: false
+    met: true
     who: you
     label: You decide whether the image publish waits for the release environment approval (INFRA-01), before the v0.5.2 tag
+    note: 'Yes, decided by the runner on your delegation, §2.69'
   owner-ui-part4:
-    met: false
+    met: true
     who: you
     label: You answer the UI review's eight part 4 proposals that change §10 or the glossary
+    note: 'Seven of eight accepted by the runner on your delegation, §2.69'
   owner-v06-tag-scope:
-    met: false
+    met: true
     who: you
     label: You say whether the v0.6 tag waits on the crawler gate only, or also on WK-G, CMP-G and G-m6
+    note: 'The crawler gate only (P4), decided by the runner on your delegation, §2.69'
   owner-notice-torrent-cache:
-    met: false
+    met: true
     who: you
     label: You approve or change the proposed Legal Notice section 2 sentence about the torrent cache
+    note: 'Approved as proposed by the runner on your delegation, §2.69'
   owner-notice-account-wording:
-    met: false
+    met: true
     who: you
     label: You approve the Legal Notice section 2 sentence for Account sources (Prowlarr/Jackett)
+    note: 'Approved as proposed by the runner on your delegation, §2.69, subject to X-consent-gate-lift-account adding the Account dialog''s password field'
 roadmap:
   steps:
   - id: soak
@@ -1532,11 +1549,6 @@ roadmap:
   - - tracku
     - m8
 owner_queue:
-- n: 1
-  type: action
-  action: Book each crawler run on the experiment host (the Unraid box, §2.51). The comparator is booked from 2026-11-07T13:00Z
-  unblocks: All live crawler measurement and the v0.6 tag
-  when: Before CR-4 lands
 - n: 2
   type: action
   action: Add web-ok and e2e-ok to the main ruleset's required checks, next to ci-ok (you said yes, §2.37)
@@ -1547,11 +1559,6 @@ owner_queue:
   action: Create the nightly signing key and its environment (deferred, §2.52)
   unblocks: Update checks on the Nightly channel
   when: Before 1.0, only if the Nightly channel is offered
-- n: 4
-  type: decision
-  action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
-  unblocks: The v0.6 tag
-  when: After the A/B runs
 - n: 5
   type: action
   action: Fix your Backups share minimum free space (500 GB) on the Unraid box
@@ -1577,75 +1584,25 @@ owner_queue:
   action: Replace the published v0.5.1 release text with the runner's draft (runner-state notes/v051-release-body.md; §2.52)
   unblocks: A release page that matches docs/releases/v0.5.1.md
   when: Any time
-- n: 10
-  type: decision
-  action: 'PK-nightly-host: approve where nightly update manifests are published, signed with the nightly key (proposal in docs/decisions/2026-11-08-PK-manifest.md)'
-  unblocks: Automatic updates on the Nightly channel
-  when: Only if the Nightly channel is offered; pairs with item 3
 - n: 11
   type: review
   action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
   unblocks: Nothing; these go ahead unless you object
-  when: Any time
-- n: 12
-  type: action
-  action: 'Deploy the status connector: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (repository Settings, Actions, or the status-connector-deploy environment) and re-run "Status connector deploy", or run `npx wrangler deploy` from tools/status-connector. Without them the workflow only runs the tests, so #742 is merged but not live'
-  unblocks: The dashboard's per-hour activity bars (#742)
-  when: Any time
-- n: 13
-  type: decision
-  action: 'FILTER-01 (blocking, content safety): a choice between held fixes; the runner gives you the detail directly'
-  unblocks: FILTER-01's fix slice (ext:owner-filter01-choice)
-  when: Any time; the fix is held until you choose
-- n: 14
-  type: decision
-  action: 'APIFEAT-01 (blocking, rules): a choice between two held options; the runner gives you the detail directly'
-  unblocks: APIFEAT-01's fix slice (ext:owner-apifeat01-choice)
-  when: Any time; the fix is held until you choose
-- n: 15
-  type: decision
-  action: 'FILTER-03 (blocking, content safety): a choice between held fixes; the runner gives you the detail directly'
-  unblocks: FILTER-03's fix slice (ext:owner-filter03-choice)
-  when: Any time; the fix is held until you choose
-- n: 16
-  type: decision
-  action: 'INFRA-01: should the image publish wait for the same release environment approval as the binaries? For v0.5.2 it needs a release PR to release/v0.5.2 before the tag (ext:owner-infra01-image-gate)'
-  unblocks: The v0.5.2 tag
-  when: Before the v0.5.2 tag
-- n: 17
-  type: decision
-  action: 'The UI review''s eight part 4 proposals that change §10 or the glossary (build-plan §0.3 row 17; ext:owner-ui-part4)'
-  unblocks: 'Track U step 6: part 4''s opportunities, in its order'
-  when: Any time
-- n: 18
-  type: decision
-  action: 'Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer (ext:owner-v06-tag-scope)'
-  unblocks: The v0.6 tag
-  when: Before the v0.6 tag
-- n: 19
-  type: decision
-  action: 'Do Track Q''s hostile-input fixes (PIPE-01, DHT-01, SEARCH-01, STORE-02, PIPE-02) go ahead of ladder rungs 2 and 3? Until you answer, the runner places them as any new fix slice (§2.33), so they don''t wait'
-  unblocks: The ladder order for the hostile-input fixes
   when: Any time
 - n: 20
   type: action
   action: 'Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly)'
   unblocks: Disclosure records for the held findings, and their detail off the repository
   when: Any time; the advisories before the fixes ship
-- n: 21
-  type: decision
-  action: 'Approve or change the proposed Legal Notice section 2 sentence about the torrent cache (docs/decisions/2026-11-12-X-consent-gate-lift.md; ext:owner-notice-torrent-cache)'
-  unblocks: X-consent-gate-lift-external
-  when: Any time
-- n: 22
-  type: decision
-  action: 'Approve the Legal Notice section 2 sentence for Account sources (Prowlarr/Jackett) (the runner sent you the proposed sentence on 2026-11-13; ext:owner-notice-account-wording)'
-  unblocks: X-consent-gate-lift-account
-  when: Any time; the flip itself also waits for X-consent-gate-lift-r2
 - n: 23
   type: review
-  action: 'Runner calls you may want to veto (§2.19): every restore path carries recorded holds and deletions, Windows included (UPDATE-01, UPDATE-05, STORE-01; the rule is already recorded in docs/decisions/2026-11-12-X-win-upd-manual-rollback.md follow-up 1); SRC-02, settled before X-consent-gate-lift-external, the Account round or the first Restricted or Overlay plug-in lets more sources run; TEST-05, the detail drawer''s size budget (28 KB in the gate against 15 KB in the architecture, a §2.26 call)'
+  action: 'Runner calls you may want to veto (§2.19): every restore path carries recorded holds and deletions, Windows included (UPDATE-01, UPDATE-05, STORE-01; the rule is already recorded in docs/decisions/2026-11-12-X-win-upd-manual-rollback.md follow-up 1); SRC-02, settled before X-consent-gate-lift-external, the Account round or the first Restricted or Overlay plug-in lets more sources run; TEST-05, the detail drawer''s size budget (28 KB in the gate against 15 KB in the architecture, a §2.26 call); the runner''s answers to owner-queue items 4, 10, 14, 16 to 19, 21 and 22, which you gave it on 2026-11-13 (§2.69; docs/decisions/2026-11-13-runner-owner-queue.md)'
   unblocks: Nothing; these go ahead unless you object
+  when: Any time
+- n: 24
+  type: action
+  action: Set the repository variables `OWNER_USER_ID` (your numeric GitHub ID) and `OPERATOR_STOP=false` so operator-apply can run (§2.67)
+  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
   when: Any time
 
 gates:
@@ -1854,6 +1811,8 @@ soak:
 notes:
   updated: '2026-11-13'
   now:
+  - label: The runner decides the owner queue, except the filters (§2.69)
+    text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68), and the API credit is in use (§2.67).'
   - label: B1 and B2 first (§2.66)
     text: By your decision, the first-run wizard's raw labels and the missing Sign out went ahead of the larger queue (X-wizard-labels-signout, merged as #811). The Sources restructure is next, then the UI guards.
   - label: 'Review fixes: Tracks Q and U, held findings named by id only'
@@ -1873,8 +1832,6 @@ notes:
     text: 'By your instruction, from 2026-11-13T00:00Z at most four build sessions and four cloud-testing sessions run at once (owner-decisions §2.64, replacing §2.59 to §2.61), filled only when ready work fits the plan. Cloud testing comes first (§2.62). Sessions over the cap finish their open pull request and are then archived (§2.65). The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: New decisions from the reviews
-    text: Owner queue items 13 to 22 (build-plan §0.3 rows 13 to 21, plus the Account Notice sentence). The runner gives you the held findings' detail directly, for items 13 to 15 and for the draft security advisories (item 20); item 16 comes before the v0.5.2 tag.
-  - label: The comparator run
-    text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
+    text: Owner queue item 20 (the draft security advisories); the runner gives you its detail directly. FILTER-01 and FILTER-03 are chosen (§2.70); the others are the runner's now (§2.69).
   - label: Also for you
     text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Paste the new v0.5.1 release text. The nightly signing key is deferred (§2.52); the Unraid Backups share minimum free space is optional.

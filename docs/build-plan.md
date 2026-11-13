@@ -110,7 +110,7 @@ Already done or in flight: CLUSTER-06 points 1 and 2 (#797, merged; points 3 and
 3. **I1 and I3 together**, one slice, per §2.66 items 1 to 3: the drawer beside the results from 1366 px, rows that adapt to their container, "Group versions" and "Identified as" as decided there.
 4. **B3** (`/insights` fails the scrollable-region axe check at every width) is fixed in or before X-ui-guards, whose fixture-backed axe run covers `/insights` and would otherwise be red; X-ui-guards may only touch icon imports and dead classes in `web/src/lib/**`, so B3 is its own small slice or the runner widens that slice. Then **L1** (a page opened while the server is down stays on "Error 500" after it returns: say "Couldn't reach Lodestar" and retry) and **L2** (when the session ends with an unsaved setting, the Save dialog never says so and the change is lost after sign-in: keep the draft across sign-in).
 5. **The rest of the review** (I2, I4 to I28, L3 to L5, polish), grouped by cause by the runner: one page frame and header, one label formatter, one control height set, Insights narrative and chart choices, Settings search and badges, and the 407-against-409 count gap.
-6. **Part 4's opportunities, in its order**, once the owner answers its proposals (§0.3, 17): a checklist in place of the nine-step wizard, zero-result rescue, a plain health sentence, "What's this?" popovers, per-screen help links, simpler row and rail defaults, one noun for alerts, "Open in torrent client".
+6. **Part 4's opportunities, in its order**, as the runner decided them (§2.69, `docs/decisions/2026-11-13-runner-owner-queue.md`; the nine-step wizard stays, per §2.9, §2.13 and §2.39): zero-result rescue, a plain health sentence, "What's this?" popovers, per-screen help links, simpler row and rail defaults, one noun for alerts, "Open in torrent client".
 7. **The UI plan for unbuilt modules** (part 2, section 5) feeds the briefs of GS-3, GS-4, GS-5, RX-1, UP-2, UN-3, UN-4, ENR-11, ENR-13b (the follow-up the runner plans, not yet sliced), OUT-1, OUT-3, WK-16, PL-7a, PL-7b, CW-0 to CW-3, IRC-2, NOS-3, LEM-1, ADH-0 and M8-DR. ADH-0 is ready to launch now, so its brief must say first that it needs no new switch.
 8. **The 1.0 design gate** (M8-DR, G-v1-design): design review with all skills on fixture data at eight widths including 1440, with the review's scripts kept as repeatable checks.
 
@@ -147,7 +147,7 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | C0a **CR-COL-3**: the Linux collector and analyzer keep and judge the gate's evidence. Today `collect.py` keeps only the CR-0 series, so `searchable_new_total`, the latency histogram and its dropped counter, and CR-4's family-labelled, connect-timeout, no-route and uTP series are discarded; only `fetch_attempts_total` and `fetch_success_total` survive with their `transport` label (reproduced by the 2026-11-02 review). Retain bounded, validated labels and histogram buckets including `+Inf`; compute searchable rate, hourly minima, latency coverage and per-transport/per-family breakdowns; reject missing evidence and counter resets; fixtures that pass and fail; a short end-to-end rehearsal | Opus | — |
 | C0b **CR-SPEC**: a frozen measurement specification, written before any data is collected (§0.5 "Measurement specification") | Opus (docs) | — |
 | C1 CR-4 merged (#365, 2026-11-02) ✔ | Opus | — |
-| C2 Experiment host ready (one node, one public IP, no imports, not the Windows PC that ran CR-0): **the Unraid box, DHT port not forwarded** (§2.51), and **booked exclusively per run** (§0.7 calendar) | **owner** | `ext:experiment-host` |
+| C2 Experiment host ready (one node, one public IP, no imports, not the Windows PC that ran CR-0): **the Unraid box, DHT port not forwarded** (§2.51), and **no per-run booking** (§2.68): a run never overlaps another run, a comparator day, an import pilot or a soak (§0.7 calendar) | **owner** | `ext:experiment-host` |
 | C3 Pinned bitmagnet comparator, 24 h, fresh data, its own day | owner runs, runner analyses | C0a, C0b, C2 |
 | C4 Live ABBA A/B, 6 h measured × ≥ 2 reps per arm: CR-ADM, then CR-4 uTP; route backoff only if a baseline shows `fetch_no_route_total{family="ipv6"} > 0` (CR-4's own gate), otherwise recorded as skipped | owner runs, runner analyses | C0a, C0b, C1, C3 |
 | C5 **Checkpoint 1**: projection to the gate, reported to the owner | runner → **owner** | C3, C4 |
@@ -220,11 +220,11 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 
 | # | Action | Unblocks |
 |---|---|---|
-| 1 | Book the next crawler run on the experiment host (CR-AB-ADM), and keep the runs back to back (`ext:experiment-host`) | Track C and the v0.6 tag |
+| 1 | No booking needed now: the runner runs crawler tests on the experiment host whenever needed, back to back (§2.68; `ext:experiment-host`) | Track C and the v0.6 tag |
 | 2 | Do the M6 manual Unraid and MSI installs and approve the rc's signing (`ext:owner-m6-manual`) | G-m6 |
 | 3 | Tag and publish v0.5.2 once its gate passes | A current release; `ext:release-after-parser` (i9-stage2) |
 | 4 | Book each import pilot on the import host and restore the Bitmagnet dump (`ext:import-host`) | The 1M, 10M and 50M gates |
-| 5 | **Checkpoint 1**: re-decide the crawler gate if the projection falls short (`ext:owner-checkpoint-1`) | CR-AB-1, CR-5, CR-COMB |
+| 5 | **Checkpoint 1**: delegated to the runner (§2.69): Track C fixes and a new measurement first; if still short, the owner re-decides the number (§2.27: the runner never loosens the gate) (`ext:owner-checkpoint-1` holds) | CR-AB-1, CR-5, CR-COMB |
 | 6 | Register the dedicated benchmark runner (`ext:bench-runner`) | G-v1-10m |
 | 7 | Approve the per-worker consent wording (`ext:owner-v08-q3`) | PL-7b |
 | 8 | Complete the cloud operator setup (`ext:owner-operator-setup`) | OP-G |
@@ -233,31 +233,31 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 | 11 | Provide a code-signing certificate (`ext:owner-signing-cert`) | Signed Windows artifacts |
 | 12 | Tag the 1.0 release candidate, then v1.0.0 (`ext:owner-v1-rc`, `ext:v1-tagged`) | The release |
 
-**Any time:** add `web-ok` and `e2e-ok` to the main ruleset's required checks (§2.37); replace the published v0.5.1 release text; add the Cloudflare secrets so the status connector deploys (#742); delete the branch `wip/CMP-0-catalogue`; say whether a whole-index Wikidata backfill counts as "bulk" (`docs/decisions/2026-11-12-runner-notes.md`, ENR-14); the runner calls open to a veto (§2.19) listed in the dashboard's owner queue.
+**Any time:** add `web-ok` and `e2e-ok` to the main ruleset's required checks (§2.37); replace the published v0.5.1 release text; set `OWNER_USER_ID` and `OPERATOR_STOP=false` so operator-apply can run (§2.67); delete the branch `wip/CMP-0-catalogue`; say whether a whole-index Wikidata backfill counts as "bulk" (`docs/decisions/2026-11-12-runner-notes.md`, ENR-14); the runner calls open to a veto (§2.19) listed in the dashboard's owner queue.
 
-**Only if the Nightly channel is offered:** the nightly signing key (§2.52) and the host for nightly update manifests (`ext:owner-pk-nightly-host`).
+**Only if the Nightly channel is offered:** the nightly signing key (§2.52). The host for nightly update manifests is approved (§2.69; `ext:owner-pk-nightly-host` holds).
 
 **After 1.0:** the Unraid Community Apps submission (§2.37) and winget and other package installers (§2.52).
 
-**Questions the reviews and the plan raise (2026-11-13).** The owner's answers to the UI review are recorded (§2.66, runner PR #809); what is still open:
+**Questions the reviews and the plan raise (2026-11-13).** The owner's answers to the UI review are recorded (§2.66, runner PR #809). On 2026-11-13 the owner gave rows 14, 16 to 19 and 21 (and the Account sentence) to the runner (§2.69; `docs/decisions/2026-11-13-runner-owner-queue.md`); rows 13, 15 and 20 are still open:
 
 | # | Question | From |
 |---|---|---|
-| 13 | FILTER-01 (content safety): the review offers two fixes; which one? The detail is held (`docs/security/v1/README.md` §5) and the runner gives it to you directly | Code review |
-| 14 | APIFEAT-01 (rules): which of the review's two options for how your own rules rank against packs and lists? Detail held as above | Code review |
-| 15 | FILTER-03 (content safety): which of the review's two fixes? Detail held as above | Code review |
-| 16 | INFRA-01: should the image publish wait for the same `release` environment approval as the binaries? For the v0.5.2 tag it needs a release PR to `release/v0.5.2` before the tag | Code review |
-| 17 | Eight proposals that change §10 or the glossary (UI review part 4, section 8): name the app's intended reader in §10.0; reorder Search around words and clicks, with new default facets and row facts; a plain health summary ahead of the Insights story; three required setup steps and a checklist in place of nine inline steps; lead the network step with safety, not port forwarding; accept GB as typed, or a units preference; "alert" as the single noun; a first-use prompt, or default off, for single-key actions that launch another program | UI review part 4 |
-| 18 | Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer | Plan r4 |
-| 19 | Do Track Q's fixes for the hostile-input group go ahead of ladder rungs 2 and 3? Until you answer, the runner places them as it places any new fix slice (§2.33), so they don't wait; the question is only whether they go ahead of those rungs | This plan |
+| 13 | FILTER-01 (content safety): **chosen by the owner (§2.70)**; held, the runner gives the fix session the choice directly | Code review |
+| 14 | APIFEAT-01 (blocking, rules): **delegated to the runner (§2.69)**; the runner gives the fix session the choice directly | Code review |
+| 15 | FILTER-03 (content safety): **chosen by the owner (§2.70)**; held as above | Code review |
+| 16 | **Delegated (§2.69): yes.** INFRA-01: should the image publish wait for the same `release` environment approval as the binaries? For the v0.5.2 tag it needs a release PR to `release/v0.5.2` before the tag | Code review |
+| 17 | **Delegated (§2.69): seven accepted, the setup checklist not** (it conflicts with §2.9, §2.13 and §2.39). Eight proposals that change §10 or the glossary (UI review part 4, section 8): name the app's intended reader in §10.0; reorder Search around words and clicks, with new default facets and row facts; a plain health summary ahead of the Insights story; three required setup steps and a checklist in place of nine inline steps; lead the network step with safety, not port forwarding; accept GB as typed, or a units preference; "alert" as the single noun; a first-use prompt, or default off, for single-key actions that launch another program | UI review part 4 |
+| 18 | **Delegated (§2.69): the crawler gate only.** Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer | Plan r4 |
+| 19 | **Delegated (§2.69): yes.** Do Track Q's fixes for the hostile-input group go ahead of ladder rungs 2 and 3? Until you answer, the runner places them as it places any new fix slice (§2.33), so they don't wait; the question is only whether they go ahead of those rungs | This plan |
 | 20 | Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly) | Code review |
-| 21 | Approve or change the proposed replacement sentence about the torrent cache in the Legal Notice (§2), which gates X-consent-gate-lift-external, not yet in `runner/slices.yaml` (`docs/decisions/2026-11-12-X-consent-gate-lift.md`) | Runner PR #807 |
+| 21 | **Delegated (§2.69): approved as proposed.** Approve or change the proposed replacement sentence about the torrent cache in the Legal Notice (§2), which gates X-consent-gate-lift-external, not yet in `runner/slices.yaml` (`docs/decisions/2026-11-12-X-consent-gate-lift.md`) | Runner PR #807 |
 
 **Runner calls open to your veto (§2.19):** every restore path carries recorded holds and deletions, Windows included (UPDATE-01, UPDATE-05, STORE-01; the rule is already recorded in `docs/decisions/2026-11-12-X-win-upd-manual-rollback.md` follow-up 1); SRC-02, the recorded decision in `docs/decisions/2026-11-02-SRC-2.md`, to be settled before X-consent-gate-lift-external (not yet in `runner/slices.yaml`), the Account r2 or the first Restricted or Overlay plug-in lets more sources run; and TEST-05, the detail drawer's size budget (28 KB in the gate against 15 KB in the architecture, a §2.26 call).
 
 **A choice worth making:** the import pilots share the Unraid box with the crawler runs (§2.52). Running them elsewhere would remove the largest calendar conflict. It changes an owner decision, so it's the owner's to make; until then imports fill the gaps between crawler runs (§0.7).
 
-Every question the earlier plans raised was answered, except those in rows 13 to 21 above and the older open points below: §2.28 and §2.37 (Sources, rule packs, required checks, the server-import surface, the upload exception), and the v0.7, companions, workers, M6, v0.8 and M8 questions recorded as met conditions in `runner/dashboard.yaml`. `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
+Every question the earlier plans raised was answered, except rows 13, 15 and 20 above and the older open points below: §2.28 and §2.37 (Sources, rule packs, required checks, the server-import surface, the upload exception), and the v0.7, companions, workers, M6, v0.8 and M8 questions recorded as met conditions in `runner/dashboard.yaml`. `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
 
 ### 0.4 v0.5.1 gate (and v0.5.2)
 **v0.5.1** (G-v051), from the 2026-10-30 plan. **Passed: v0.5.1 was published on 2026-11-07** (`docs/decisions/2026-11-07-v051-release-verdict.md`).
@@ -364,7 +364,7 @@ flowchart LR
   R --> V52[v0.5.2 cut]
   CR4[CR-4 merged] --> AB[A/B: CR-ADM, CR-4]
   TOOL[CR-COL-3 + CR-SPEC] --> COMP
-  HOST[(owner: experiment host, booked per run)] --> COMP[bitmagnet comparator]
+  HOST[(owner: experiment host, standing §2.68)] --> COMP[bitmagnet comparator]
   COMP --> AB
   COMP --> CP1{Checkpoint 1}
   AB --> CP1
@@ -387,7 +387,7 @@ flowchart LR
 **Things that run one at a time:**
 - **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. V12 → V13 → **V14 SRC-1** are merged. Four slices wait for a number: WK-12 (v0.6), SRC-3b (v0.7), PL-8 (v0.8) and CR-3 (after the 50M gate). `runner-state` `migration_order` and several plans still reserve **V15 for CR-3**, which lands last. r4 recommends the order **WK-12, SRC-3b, PL-8, CR-3**, each taking the next free number when it reaches the slot, which means releasing CR-3's reservation; the numbers are the runner's to assign, and until it does, V15 stays CR-3's. The runner records the queue in `runner-state` `migration_order`.
 - **Search schema:** a released user rebuilds the search index once per release. Normally that's one `SCHEMA_VERSION` bump per milestone. M7 has two, SB-6 (v6) and X-search-files-5 (v7), both before the v0.5.2 cut, so users rebuild once, v5 → v7 (runner, 2026-11-05; the rebuild always goes straight to the current version). A slice that needs a new indexed field asks the milestone's open bump to carry it instead of bumping again.
-- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint. **At r4** the v0.5.1 soak and the comparator are done; the order from here is: the v0.5.2 soak first, if it hasn't run (ladder rung 2); then crawler A/B blocks, with an import pilot in each gap between them; and the 1.0 Linux soak and crawler re-measure last, on the release candidate.
+- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Runs are exclusive:** `ext:import-host` holds for one booked run, not once for all. `ext:experiment-host` is a standing permission since §2.68 (no booking), but its runs still never overlap each other, a comparator day, an import pilot or a soak, so two gates can't share the host because their `owns` happen to be disjoint. **At r4** the v0.5.1 soak and the comparator are done; the order from here is: the v0.5.2 soak first, if it hasn't run (ladder rung 2); then crawler A/B blocks, with an import pilot in each gap between them; and the 1.0 Linux soak and crawler re-measure last, on the release candidate.
 - **The experiment calendar** (the slice cap can't shorten this serial path):
 
   | Run | Measured time |
@@ -399,7 +399,7 @@ flowchart LR
   | CR-COMB 24 h acceptance | 1 day |
   | **Total measured** | **8–9 days** |
 
-  Add each arm's start-up: a fresh data directory means the 6 h sampling suppression plus warmup before measurement starts, unless CR-SPEC adopts a crash-safe restart between arms. Add a retry budget of about 30 % for interruptions and repeats. **Plan for roughly three weeks of exclusive host time**, and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the booking calendar in `runner-state` and states the next booking in every daily summary.
+  Add each arm's start-up: a fresh data directory means the 6 h sampling suppression plus warmup before measurement starts, unless CR-SPEC adopts a crash-safe restart between arms. Add a retry budget of about 30 % for interruptions and repeats. **Plan for roughly three weeks of exclusive host time**, and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the host calendar in `runner-state` (import-pilot bookings, and the planned experiment-host runs, which need no booking since §2.68) and states the next run in every daily summary.
 - **CI capacity:** each push starts about 37 jobs that every PR queues behind. One push per round of fixes.
 - **Release branches:** fixes for a release land on `main` first and are cherry-picked; nothing is developed on a release branch.
 - **Hub files** (§1.3 table): unchanged.
@@ -437,7 +437,7 @@ In ladder order, as slots allow (§0.2; no two with overlapping `owns`):
 4. **Launch what's ready** (at 2026-11-12T22:55Z, not yet in a slot): ENR-G, X-unverified-cap-index, X-win-upd-first-rollback, ADH-0, UP-2, X-watch-env, X-watch-stall-retry (once the runner adds it).
 5. **Assign the next migration numbers** (§0.7): WK-12 first, since WK-13, WK-16, WK-19 and WK-G all wait behind it; then SRC-3b, PL-8 and CR-3.
 6. **As each merges:** GS-2 → GS-3, GS-4, RX-1; ENR-14 → the twelve enrichment plug-ins; NOS-2a → IRC-0; WK-12 → WK-13; X-cmp-egress-api → X-cmp-egress-ui.
-7. **The host calendar:** the v0.5.2 soak if it's still owed, then the owner books CR-AB-ADM; the runner states the next booking in every daily summary and proposes an import pilot for each gap.
+7. **The host calendar:** the v0.5.2 soak if it's still owed, then CR-AB-ADM (no booking needed, §2.68); the runner states the next planned run in every daily summary and proposes an import pilot for each gap.
 8. **Gates as their slices finish:** WK-G, CMP-G, then G-v07-scale and G-v07, then G-v08.
 9. **M8** alongside all of this, the security reviews first; then R-v1-cut and the 1.0 gates.
 10. **The reviews' fixes** (r4.1): B1 and B2 (launched 2026-11-13, owner); then the guards and the Sources restructure in #809; the runner turns Track Q and the UI review into slices (neither X-watch-stall-retry nor X-utp-spurious-rto is in `runner/slices.yaml` yet), sends the held findings' detail to the owner for draft advisories, asks the owner the questions in §0.3 (13 to 21), and decides what comes to `main` from the review branches.
