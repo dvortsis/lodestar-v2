@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T11:08Z",
+  "updated_at": "2026-11-13T11:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8420,15 +8420,15 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "830": {
-      "slice": "runner",
-      "head": "1c32b07f",
-      "note": "plan entries X-ci-filter-rust-inputs, X-wk18w-rollback; X-filter01-fix owns; fresh review running"
-    },
     "832": {
       "slice": "X-wk18w-rollback",
       "head": "8d0e8bbd",
       "note": "CI running; await ready; Opus + /security-review"
+    },
+    "833": {
+      "slice": "X-insights-scroll-a11y",
+      "head": "c7851a99",
+      "note": "ready; fresh Opus review running"
     }
   },
   "merged_log": [
@@ -9075,7 +9075,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T11:08Z",
+    "updated": "2026-11-13T11:37Z",
     "items": [
       {
         "slot": 1,
@@ -9331,7 +9331,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T11:08Z",
+  "updated": "2026-11-13T11:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9684,6 +9684,12 @@
       "slice": "WK-18w",
       "merged": "665935cf",
       "at": "2026-11-13T10:58Z"
+    },
+    {
+      "pr": 830,
+      "slice": "runner",
+      "merged": "8396f16c",
+      "at": "2026-11-13T11:37Z"
     }
   ]
 }
