@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T09:05Z",
+  "updated_at": "2026-11-13T09:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8001,6 +8001,11 @@
       "id": "operator-bot-user-id",
       "note": "Tripwire on #821 reports OPERATOR_BOT_USER_ID is not set, so nothing was checked. Repo variable is the owner's to set; asked the owner in chat.",
       "at": "2026-11-13T09:05Z"
+    },
+    {
+      "id": "X-companions-mount-check",
+      "note": "From rv-825 I1 and nits: detect a host companions folder nested inside the host data folder or another companion folder by comparing /companions and /data in /proc/self/mountinfo (same device, nested roots); pass known companion folders as taken; openat2 RESOLVE_NO_SYMLINKS for native parent components; the conditional container test assertion. Opus, security review. Owner FYI (\u00a72.19).",
+      "at": "2026-11-13T09:19Z"
     }
   ],
   "main_health": [
@@ -9035,7 +9040,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T09:05Z",
+    "updated": "2026-11-13T09:19Z",
     "items": [
       {
         "slot": 1,
@@ -9208,7 +9213,7 @@
         "status": "active",
         "role": "other",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #825 ready at 9fffec07; fresh Opus review + security review running",
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #825 rv MERGE at 9fffec07 (I1-I3); fix round for I2, I3 and I1 wording; then delta check and merge",
         "since": "2026-11-13T06:04Z"
       },
       {
@@ -9289,7 +9294,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T09:05Z",
+  "updated": "2026-11-13T09:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
