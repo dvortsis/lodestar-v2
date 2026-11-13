@@ -67,6 +67,24 @@ class RenderTests(unittest.TestCase):
         self.assertEqual([ln for ln in sshd.splitlines() if ln.startswith("HostKey")],
                          ["HostKey /etc/ssh/ssh_host_ed25519_key"])
 
+    def test_worker_gets_small_swap_and_no_toolchain(self):
+        with tempfile.TemporaryDirectory() as d:
+            k = Path(d) / "k"
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(k)], check=True)
+            main = devvm.render_user_data(PUB, k.read_text(), (Path(d) / "k.pub").read_text())
+            worker = devvm.render_user_data(PUB, k.read_text(), (Path(d) / "k.pub").read_text(), worker=True)
+        boot = lambda text: next(f for f in yaml.safe_load(text)["write_files"]
+                                 if f["path"].endswith("devvm-bootstrap.sh"))["content"]
+        self.assertIn("fallocate -l 8G", boot(main))
+        self.assertIn("rustup", boot(main))
+        self.assertIn("fallocate -l 256M", boot(worker))
+        for word in ("rustup", "nodejs.org", "claude.ai/install", "git clone"):
+            self.assertNotIn(word, boot(worker))
+        for text in (main, worker):
+            self.assertIn("docker-compose-plugin", boot(text))
+            self.assertIn("echo \"ok $(date", boot(text))
+            self.assertNotIn("__", boot(text))
+
     def test_template_carries_no_secret_placeholders(self):
         t = (Path(devvm.__file__).parent / "cloud-init.yaml.tmpl").read_text()
         for word in ("PIA", "TOKEN", "PASSWORD", "GITHUB"):

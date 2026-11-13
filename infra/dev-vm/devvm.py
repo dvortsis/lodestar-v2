@@ -110,8 +110,14 @@ def cmd_status(_a) -> None:
     print(f"test spend so far (live VMs or uninvoiced, whichever is larger): ${spent:.2f} of the $50 cap, stop line ${STOP_USD:.0f}: {flag}")
 
 
-def render_user_data(pubkey: str, host_priv: str, host_pub: str) -> str:
+def render_user_data(pubkey: str, host_priv: str, host_pub: str, worker: bool = False) -> str:
+    """A worker (Lane K, the 1 GiB lane) gets the plan's 256 MB swap and only
+    Docker: no Node, Rust, Claude Code or clone, which 1 GiB can't use anyway
+    and which would skew its memory and disk numbers."""
     t = (HERE / "cloud-init.yaml.tmpl").read_text()
+    t = t.replace("__SWAP_SIZE__", "256M" if worker else "8G")
+    if worker:
+        t = re.sub(r"      # BEGIN dev-toolchain.*?      # END dev-toolchain\n", "", t, flags=re.S)
     indented = "\n".join("    " + ln for ln in host_priv.strip().splitlines())
     t = t.replace("__SSH_PUBKEY__", pubkey.strip())
     t = t.replace("__HOST_KEY_PRIVATE_INDENTED__", indented)
@@ -169,7 +175,7 @@ def cmd_create(a) -> None:
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", label, "-f", str(keyfile)], check=True)
     host_pub = (work / "host_ed25519.pub").read_text()
     fp = subprocess.run(["ssh-keygen", "-lf", str(keyfile) + ".pub"], check=True, capture_output=True, text=True).stdout.strip()
-    user_data = render_user_data(pubkey, keyfile.read_text(), host_pub)
+    user_data = render_user_data(pubkey, keyfile.read_text(), host_pub, worker=a.role == "worker")
     # The private host key now lives only in the user data; drop the local copy.
     keyfile.unlink()
 

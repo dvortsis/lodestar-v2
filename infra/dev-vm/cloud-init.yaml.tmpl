@@ -78,9 +78,10 @@ write_files:
       . /etc/os-release
       [[ "$ID" == "ubuntu" && "$VERSION_ID" == "24.04" ]] || { echo "ERROR: expected Ubuntu 24.04" >&2; exit 1; }
       export DEBIAN_FRONTEND=noninteractive
-      # A swap file: release builds with LTO can pass 8 GiB.
+      # A swap file: release builds with LTO can pass 8 GiB. A worker gets the
+      # test plan's 256 MB instead (Lane K), and no build toolchain.
       if ! swapon --show | grep -q /swapfile; then
-        fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+        fallocate -l __SWAP_SIZE__ /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
         echo '/swapfile none swap sw 0 0' >> /etc/fstab
       fi
       # Docker Engine and the Compose plugin from Docker's own repository.
@@ -101,6 +102,7 @@ write_files:
       systemctl enable --now docker
       # lodestar already has passwordless sudo, so the docker group adds no privilege.
       usermod -aG docker lodestar
+      # BEGIN dev-toolchain (left out on a worker)
       # Node.js 22 (web/ needs >=22), official tarball checked against its SHASUMS.
       NODE_MAJOR=22
       cd /tmp
@@ -121,6 +123,7 @@ write_files:
       [ -d ~/lodestar-v2 ] || git clone https://github.com/dvortsis/lodestar-v2.git ~/lodestar-v2
       install -d -m 0700 ~/secrets
       USEREOF
+      # END dev-toolchain
       rm -f /etc/ssh/ssh_host_rsa_key* /etc/ssh/ssh_host_ecdsa_key*
       systemctl restart ssh
       test -c /dev/net/tun || { echo "ERROR: /dev/net/tun unavailable" >&2; exit 1; }
