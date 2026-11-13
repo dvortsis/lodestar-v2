@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T07:41Z",
+  "updated_at": "2026-11-13T07:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7968,7 +7968,7 @@
     },
     {
       "id": "gluetun-hostfile-privdrop-notes",
-      "status": "2026-11-13T07:05Z: runner approved X-gluetun-templates-hostfile switching privdrop from the chown handover to root writing a fixed root-owned post-rules file (stricter: the dropped user cannot alter rules gluetun runs as root). Next runner PR: update its slices.yaml notes. Owner \u00a72.19 flag via dashboard."
+      "status": "2026-11-13T07:05Z: runner approved X-gluetun-templates-hostfile switching privdrop from the chown handover to root writing a fixed root-owned post-rules file (stricter: the dropped user cannot alter rules gluetun runs as root). Next runner PR: update its slices.yaml notes. Owner \u00a72.19 flag via dashboard. | 2026-11-13T07:44Z: PR #825 open. Also: /companions and gluetun must be root-owned with no g/o write (start-up and template time); native uses only a user-named folder (no sibling default); native refuses shared/foreign folders (companions_dir_shared). Extra owns to add to the slice entry: crates/api dto + openapi/schema.d.ts, packaging/companions/README.md, docs/user/03, web logging system.ts. UI codes for X-gluetun-hostfile-ui: inside_data_folder, inside_other_companion, dot_folder, bad_template_input, companions_dir_link, companions_dir_shared, companions_dir_unwritable. All \u00a72.19 flags."
     },
     {
       "id": "flake-landlock-companion",
@@ -9007,7 +9007,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T07:41Z",
+    "updated": "2026-11-13T07:44Z",
     "items": [
       {
         "slot": 1,
@@ -9180,7 +9180,7 @@
         "status": "active",
         "role": "other",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #815 merged 5e24a99d (06:00Z); now X-gluetun-templates-hostfile (brief briefs/X-gluetun-templates-hostfile.md)",
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-templates-hostfile PR #825 open (2c9842fa), CI running; fresh Opus + /security-review on ready",
         "since": "2026-11-13T06:04Z"
       },
       {
@@ -9261,7 +9261,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T07:41Z",
+  "updated": "2026-11-13T07:44Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
