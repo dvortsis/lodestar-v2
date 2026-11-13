@@ -28,13 +28,13 @@ param(
   [Parameter(Mandatory)][string]$Exe,
   [Parameter(Mandatory)][string]$Coordinator,
   [Parameter(Mandatory)][string]$DataDir,
-  # The custom action's name for the folders, so it can delete the token folder if it has
-  # to stop this script.
-  [Parameter(Mandatory)][ValidatePattern('\A[0-9a-f]{32}\z')][string]$WorkId,
+  # The work folder and the token folder inside it, as the custom action named them
+  # (JoinRunner.WorkFolders), so it deletes the same token folder if it has to stop this
+  # script. Checked below: lodestar-join-<id> and its own t-<id>.
+  [Parameter(Mandatory)][string]$WorkDir,
+  [Parameter(Mandatory)][string]$TokenDir,
   [ValidateRange(10, 600)][int]$TimeoutSeconds = 120,
-  # Tests only: where the private folders go (default C:\Windows\Temp) and extra arguments
-  # put before `worker` (a stub's mode). The MSI passes neither.
-  [string]$TempRoot = '',
+  # Tests only: extra arguments put before `worker` (a stub's mode). The MSI passes none.
   [string[]]$StubArgs = @(),
   # Tests only: a service that exists on the test machine (the Lodestar service doesn't yet),
   # whose SID is given the worker's files.
@@ -81,6 +81,7 @@ function Get-DataDirProblem([string]$dir, [Security.Principal.SecurityIdentifier
   $item = Get-Item -LiteralPath $dir -Force
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return 'it is a link or junction' }
   $raw = Get-RawDescriptor $dir
+  if ((@($script:jtOwners) + $service) -notcontains $raw.Owner) { return "it is owned by $($raw.Owner)" }
   if (-not ($raw.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclProtected)) {
     return 'it inherits permissions from its parent'
   }
@@ -137,16 +138,25 @@ if ($script:token -notmatch '\A(?i:lsj1)[A-Za-z2-7]{122}\z') {
 # The address goes on lodestar's command line, so only https://host[:port], host[:port] or an
 # [IPv6] literal; lodestar checks it again.
 $addr = $Coordinator.Trim()
+# A join token pasted into the address field: refused without repeating it.
+if ($addr -match '\A(?i:lsj1)') {
+  Fail "That looks like the join token, not the main Lodestar's address. The address looks like https://192.168.1.10:8091."
+}
 if ($addr -notmatch '\A(https://)?([A-Za-z0-9]([A-Za-z0-9.-]{0,252})|\[[0-9A-Fa-f:.]{2,45}\])(:[0-9]{1,5})?/?\z') {
-  Fail "The main Lodestar's address should look like https://192.168.1.10:8091 (got '$addr')."
+  Fail "The main Lodestar's address should look like https://192.168.1.10:8091."
 }
 
 $DataDir = [IO.Path]::GetFullPath($DataDir).TrimEnd('\')
 
 # ---- 2. the private folders ----
-$root = if ($TempRoot) { $TempRoot } else { Join-Path $env:SystemRoot 'Temp' }
-$work = Join-Path $root ('lodestar-join-' + $WorkId)
-$tokenDir = Join-Path $work ('t-' + $WorkId)
+$work = [IO.Path]::GetFullPath($WorkDir).TrimEnd('\')
+$tokenDir = [IO.Path]::GetFullPath($TokenDir).TrimEnd('\')
+$id = (Split-Path -Leaf $work) -replace '\Alodestar-join-', ''
+if ((Split-Path -Leaf $work) -notmatch '\Alodestar-join-[0-9a-f]{32}\z' -or
+    (Split-Path -Parent $tokenDir) -ne $work -or (Split-Path -Leaf $tokenDir) -ne "t-$id") {
+  Fail 'Unexpected work folders for the join. Install again.' 2
+}
+$root = Split-Path -Parent $work
 $tokenFile = Join-Path $tokenDir 'join-token'
 $exitCode = 2
 $message = $null
@@ -209,6 +219,12 @@ try {
 
   if ($timedOut) {
     $message = "Joining $addr took longer than $TimeoutSeconds seconds. Check that this PC can reach the main Lodestar's cluster port (8091 unless you changed it), then make a new join token and install again."
+    $exitCode = 1
+  } elseif ($p.ExitCode -ne 0 -and [IO.File]::Exists((Join-Path $DataDir 'cluster\credentials'))) {
+    # Already joined: most likely an earlier install joined and was then undone, which
+    # leaves the worker's files in the data folder (X-wk18w-rollback). Uninstalling can't
+    # help, since nothing is installed, so say how to start over. Still a failure.
+    $message = "This PC has already joined a Lodestar: an earlier setup joined and was then undone, and left its files in $DataDir. On the main Lodestar, remove this worker in Settings, Workers. Then, as an administrator, delete $DataDir and run setup again with a new join token."
     $exitCode = 1
   } elseif ($p.ExitCode -ne 0) {
     # lodestar's own last line says why (refused, expired, unreachable, wrong CA); it never

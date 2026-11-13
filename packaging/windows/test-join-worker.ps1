@@ -67,6 +67,7 @@ public static class Stub {
       case "ok":
         Directory.CreateDirectory(Path.Combine(data, "cluster"));
         File.WriteAllText(Path.Combine(data, "cluster", "credentials"), "stub");
+        File.WriteAllText(Path.Combine(data, "secrets.key"), "stub");
         Console.Error.WriteLine("lodestar worker: joined " + join + " as worker stub-1");
         return 0;
       case "fail":
@@ -97,16 +98,22 @@ Initialize-RawReader $tmp
 $case = 0
 # Runs one join through JoinRunner and returns what came back, what it logged, what the stub
 # saw and the folders the script made.
-function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address = 'https://192.168.1.10:8091', [int]$timeout = 30, [switch]$OpenData) {
+# -runnerMs is the custom action's own deadline (JoinRunner), -timeout the script's.
+# -service: EventLog by default, a service every Windows has, so icacls can name its SID.
+# -Joined: the data folder already holds credentials, as after a join that was undone.
+function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address = 'https://192.168.1.10:8091', [int]$timeout = 30, [switch]$OpenData, [int]$runnerMs = 120000, [string]$service = 'EventLog', [switch]$Joined) {
   $script:case++
   $data = Join-Path $root "data-$script:case"
   if ($OpenData) { New-Item -ItemType Directory -Path $data | Out-Null } else { New-PrivateFolder $data }
+  if ($Joined) {
+    New-Item -ItemType Directory -Path (Join-Path $data 'cluster') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $data 'cluster\credentials'), 'earlier')
+  }
   $log = New-Object 'Collections.Generic.List[string]'
-  # EventLog: a service every Windows has, so icacls can name its SID as an owner.
-  $extra = "-StubArgs $mode -TimeoutSeconds $timeout -ServiceName EventLog"
+  $extra = "-StubArgs $mode -TimeoutSeconds $timeout -ServiceName $service"
   $before = @(Get-ChildItem -LiteralPath $tmp -Directory | ForEach-Object FullName)
   $result = [Lodestar.Setup.JoinRunner]::Run($install, $data, $address, $token,
-    [Action[string]] ({ param($l) $log.Add($l) }.GetNewClosure()), $tmp, $extra, 120000)
+    [Action[string]] ({ param($l) $log.Add($l) }.GetNewClosure()), $tmp, $extra, $runnerMs)
   $work = @(Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { $before -notcontains $_.FullName })
   $seen = @{}
   $seenFile = Join-Path $data 'stub-seen.txt'
@@ -162,6 +169,8 @@ $creds = Join-Path $r.Data 'cluster\credentials'
 Assert (Test-Path -LiteralPath $creds) 'ok: no credentials'
 $credsOwner = (Get-Acl -LiteralPath $creds).GetOwner([Security.Principal.SecurityIdentifier]).Value
 Assert ($credsOwner -eq (Get-ServiceSid 'EventLog').Value) "ok: the credentials are owned by $credsOwner, not the service"
+$keyOwner = (Get-Acl -LiteralPath (Join-Path $r.Data 'secrets.key')).GetOwner([Security.Principal.SecurityIdentifier]).Value
+Assert ($keyOwner -eq (Get-ServiceSid 'EventLog').Value) "ok: secrets.key is owned by $keyOwner, not the service"
 Assert-TokenGone $r 'ok'
 Assert-NoToken $r 'ok'
 Assert ($r.Work.Count -eq 1) "ok: expected one work folder, got $($r.Work.Count)"
@@ -210,6 +219,32 @@ Assert ($r.Log.Count -eq 0) 'quote: join-worker.ps1 ran'
 $r = Invoke-Join 'ok' -address 'https://c:8091/path'
 Assert ($r.Result -like '*should look like*') "path: unexpected result: $($r.Result)"
 Assert ($r.Seen.Count -eq 0) 'path: lodestar ran'
+
+# ---- the custom action's own deadline: it stops the script and deletes the token folder ----
+# The script's deadline (60 s) is past the action's (15 s), so the action's kill path runs
+# and the script's finally never does.
+$r = Invoke-Join 'hang' -timeout 60 -runnerMs 15000
+Assert ($r.Result -like '*did not finish in time*') "runner deadline: unexpected result: $($r.Result)"
+Assert ($r.Seen.pid) 'runner deadline: the stub did not start'
+Assert ($null -eq (Get-Process -Id ([int]$r.Seen.pid) -ErrorAction SilentlyContinue)) 'runner deadline: lodestar is still running'
+Assert-TokenGone $r 'runner deadline'
+Assert-NoToken $r 'runner deadline'
+
+# ---- already joined (an earlier setup joined and was undone): how to start over ----
+$r = Invoke-Join 'fail' -Joined
+Assert ($r.Result -like '*already joined a Lodestar*remove this worker*') "joined: unexpected result: $($r.Result)"
+Assert-TokenGone $r 'joined'
+
+# ---- the files can't be handed to the service: the install fails ----
+$r = Invoke-Join 'ok' -service 'NoSuchLodestarTestService'
+Assert ($r.Result -like '*could not be handed to the Lodestar service*') "hand-off: unexpected result: $($r.Result)"
+Assert-TokenGone $r 'hand-off'
+
+# ---- the token pasted into the address field: refused, and never repeated ----
+$r = Invoke-Join 'ok' -address $sentinel
+Assert ($r.Result -like '*looks like the join token*') "token as address: unexpected result: $($r.Result)"
+Assert ($r.Log.Count -eq 0) 'token as address: join-worker.ps1 ran'
+Assert-NoToken $r 'token as address'
 
 # ---- a data folder that isn't secured yet: refused before any token file or process ----
 $r = Invoke-Join 'ok' -OpenData

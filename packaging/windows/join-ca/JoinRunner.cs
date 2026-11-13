@@ -28,12 +28,17 @@ namespace Lodestar.Setup {
     static readonly Regex AddressChars = new Regex(@"\A[A-Za-z0-9\[][A-Za-z0-9.:/\[\]\-]{0,299}\z");
 
     // tempRoot: where join-worker.ps1 makes its folders (null: %SystemRoot%\Temp; tests
-    // pass their own). This side names the folders, so it can delete the token folder
-    // itself if it has to stop the script.
+    // pass their own). This side alone names the work and token folders (WorkFolders)
+    // and passes the exact paths, so it deletes the same token folder the script made
+    // if it has to stop the script.
     public static string Run(string installFolder, string dataDir, string address, string token,
         Action<string> log, string tempRoot, string extraArgs, int timeoutMs) {
       if (string.IsNullOrWhiteSpace(token)) return FailedPrefix + "No join token was given.";
       address = (address ?? "").Trim();
+      // A join token pasted into the address field: refused without repeating it.
+      if (address.StartsWith("lsj1", StringComparison.OrdinalIgnoreCase)) {
+        return FailedPrefix + "That looks like the join token, not the main Lodestar's address. The address looks like https://192.168.1.10:8091; the token goes in the field below it.";
+      }
       if (!AddressChars.IsMatch(address)) {
         return FailedPrefix + "The main Lodestar's address should look like https://192.168.1.10:8091.";
       }
@@ -46,16 +51,16 @@ namespace Lodestar.Setup {
       string folder = installFolder.TrimEnd('\\');
       string root = tempRoot ?? Path.Combine(Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows", "Temp");
       if (root.IndexOf('"') >= 0) return FailedPrefix + "Unexpected temporary folder.";
-      string id = Guid.NewGuid().ToString("N");
-      string tokenDir = Path.Combine(Path.Combine(root, "lodestar-join-" + id), "t-" + id);
+      string workDir, tokenDir;
+      WorkFolders(root, Guid.NewGuid().ToString("N"), out workDir, out tokenDir);
       string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
       ProcessStartInfo psi = new ProcessStartInfo(ps);
       psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + folder + "\\join-worker.ps1\""
         + " -Exe \"" + folder + "\\lodestar.exe\""
         + " -Coordinator \"" + address + "\""
         + " -DataDir \"" + dataDir.TrimEnd('\\') + "\""
-        + " -WorkId " + id
-        + (tempRoot == null ? "" : " -TempRoot \"" + root.TrimEnd('\\') + "\"")
+        + " -WorkDir \"" + workDir + "\""
+        + " -TokenDir \"" + tokenDir + "\""
         + (string.IsNullOrEmpty(extraArgs) ? "" : " " + extraArgs);
       psi.UseShellExecute = false;
       psi.CreateNoWindow = true;
@@ -125,11 +130,18 @@ namespace Lodestar.Setup {
         }
         if (!finished) {
           log("join-worker.ps1 did not finish in time: stopped it");
-          return FailedPrefix + "Joining " + address + " did not finish in time. Make a new join token and install again.";
+          return FailedPrefix + "Joining " + safe(address) + " did not finish in time. Make a new join token and install again.";
         }
         if (p.ExitCode == 0) return null;
-        return failed ?? (FailedPrefix + "Joining " + address + " failed (exit status " + p.ExitCode + "). The MSI log has the details.");
+        return failed ?? (FailedPrefix + "Joining " + safe(address) + " failed (exit status " + p.ExitCode + "). The MSI log has the details.");
       }
+    }
+
+    // The work folder and the token folder inside it, for one join: the only place their
+    // names are made (join-worker.ps1 takes both paths and checks their shape).
+    public static void WorkFolders(string root, string id, out string workDir, out string tokenDir) {
+      workDir = Path.Combine(root.TrimEnd('\\'), "lodestar-join-" + id);
+      tokenDir = Path.Combine(workDir, "t-" + id);
     }
 
     // Deletes dir, retrying for up to 10 s while a stopped process still holds a file in

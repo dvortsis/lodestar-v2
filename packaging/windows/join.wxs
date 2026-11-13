@@ -32,7 +32,8 @@
     <Property Id="LODESTAR_MODE_PREV">
       <RegistrySearch Id="LodestarModePrev" Root="HKLM" Key="Software\Lodestar" Name="Mode" Type="raw" Win64="yes" />
     </Property>
-    <Property Id="JOIN_ADDRESS" Secure="yes" />
+    <!-- Hidden too: a join token pasted here by mistake must not reach the MSI log either. -->
+    <Property Id="JOIN_ADDRESS" Secure="yes" Hidden="yes" />
     <!-- Hidden: listed in MsiHiddenProperties, so its value never appears in the MSI log. -->
     <Property Id="JOIN_TOKEN" Secure="yes" Hidden="yes" />
     <!-- JoinWorker's CustomActionData holds the token too: hidden from the log's property list. -->
