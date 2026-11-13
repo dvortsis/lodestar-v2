@@ -421,8 +421,7 @@ mod imp {
                 Path::new(crate::companions::CONTAINER_COMPANIONS),
                 &dir,
                 geteuid().as_raw(),
-                &std::fs::read_to_string(crate::companions::post_rules::MOUNTINFO)
-                    .unwrap_or_default(),
+                &crate::companions::post_rules::read_mountinfo(),
             ));
             report.data_dir = Some(dir);
         }
