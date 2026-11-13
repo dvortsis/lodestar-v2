@@ -13636,7 +13636,7 @@
           },
           "floor": {
             "type": "boolean",
-            "description": "Part of the locked floor: can't be switched off."
+            "description": "Locked: can't be switched off, and takes no exception."
           },
           "id": {
             "type": "string",

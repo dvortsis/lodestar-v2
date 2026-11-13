@@ -4341,7 +4341,7 @@ export interface components {
         };
         CoreRuleState: {
             action: string;
-            /** @description Part of the locked floor: can't be switched off. */
+            /** @description Locked: can't be switched off, and takes no exception. */
             floor: boolean;
             /** @example CS-3a */
             id: string;
