@@ -1776,6 +1776,8 @@ pub(crate) const CONTAINER_COMPANIONS: &str = "/companions";
 /// mounted, the mount table, and who owns what privdrop saved there.
 struct Container {
     root: PathBuf,
+    // Read only on Unix, where the mount check runs.
+    #[cfg_attr(not(unix), allow(dead_code))]
     mountinfo: String,
     owner: u32,
 }
@@ -1814,6 +1816,7 @@ impl Container {
 
 /// The catalogue's companions by their container (and appdata folder)
 /// names.
+#[cfg(unix)]
 pub(crate) fn companion_names(catalogue: &Catalogue) -> Vec<&str> {
     catalogue
         .entries()
