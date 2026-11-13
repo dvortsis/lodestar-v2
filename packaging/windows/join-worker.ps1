@@ -15,7 +15,10 @@
        once, with a deadline (-TimeoutSeconds), and stops it if it runs over;
     4. deletes the token file and its folder whatever happened (finally), and checks they are
        gone;
-    5. on success checks that the data folder now holds the worker's credentials.
+    5. on success checks that the data folder now holds the worker's credentials, writes
+       <data>\cluster\joined-by-setup (only when the folder hadn't joined before), so a
+       rollback of this install removes this join's files (join-finish.ps1), and hands the
+       worker's files to the service's account.
 
   Output: lines for the MSI log (the token is replaced by [join token] if anything ever printed
   it), and on failure one line starting "LODESTAR JOIN FAILED: " that the custom action shows
@@ -34,8 +37,10 @@ param(
   [Parameter(Mandatory)][string]$WorkDir,
   [Parameter(Mandatory)][string]$TokenDir,
   [ValidateRange(10, 600)][int]$TimeoutSeconds = 120,
-  # Tests only: extra arguments put before `worker` (a stub's mode). The MSI passes none.
+  # Tests only: extra arguments put before `worker` (a stub's mode), and the folder the
+  # work folder must be in instead of %SystemRoot%\Temp. The MSI passes neither.
   [string[]]$StubArgs = @(),
+  [string]$TestTempRoot = '',
   # Tests only: a service that exists on the test machine (the Lodestar service doesn't yet),
   # whose SID is given the worker's files.
   [ValidatePattern('\A[A-Za-z0-9_]{1,64}\z')][string]$ServiceName = 'Lodestar'
@@ -71,6 +76,11 @@ function Fail([string]$msg, [int]$code = 1) {
 . (Join-Path $PSScriptRoot 'dacl-check.ps1')
 . (Join-Path $PSScriptRoot 'join-token-file.ps1')
 . (Join-Path $PSScriptRoot 'service-sid.ps1')
+
+# For a data folder that holds a coordinator's database.
+function Get-CoordinatorFolderMessage {
+  "$DataDir holds the database of a Lodestar that ran on this PC before (uninstalling keeps it). A worker needs that folder for itself. If you want to keep that Lodestar's library, back up $DataDir first. Then, as an administrator, delete $DataDir and run setup again."
+}
 
 # Why $dir isn't the data folder secure-datadir.ps1 made, or $null: it exists, it's a real
 # folder (no link), its list is protected, and every entry, read raw, is a plain Allow for
@@ -139,7 +149,7 @@ if ($script:token -notmatch '\A(?i:lsj1)[A-Za-z2-7]{122}\z') {
 # [IPv6] literal; lodestar checks it again.
 $addr = $Coordinator.Trim()
 # A join token pasted into the address field: refused without repeating it.
-if ($addr -match '\A(?i:lsj1)') {
+if ($addr -match '\A(https://)?(?i:lsj1)') {
   Fail "That looks like the join token, not the main Lodestar's address. The address looks like https://192.168.1.10:8091."
 }
 if ($addr -notmatch '\A(https://)?([A-Za-z0-9]([A-Za-z0-9.-]{0,252})|\[[0-9A-Fa-f:.]{2,45}\])(:[0-9]{1,5})?/?\z') {
@@ -157,6 +167,9 @@ if ((Split-Path -Leaf $work) -notmatch '\Alodestar-join-[0-9a-f]{32}\z' -or
   Fail 'Unexpected work folders for the join. Install again.' 2
 }
 $root = Split-Path -Parent $work
+# Only in %SystemRoot%\Temp (the folder the custom action uses), or a test's own folder.
+$expectedRoot = if ($TestTempRoot) { [IO.Path]::GetFullPath($TestTempRoot).TrimEnd('\') } else { Join-Path $env:SystemRoot 'Temp' }
+if ($root -ne $expectedRoot) { Fail 'Unexpected work folders for the join. Install again.' 2 }
 $tokenFile = Join-Path $tokenDir 'join-token'
 $exitCode = 2
 $message = $null
@@ -177,6 +190,15 @@ try {
   # The worker's key and credentials go into the data folder: only once it's secured.
   $why = Get-DataDirProblem $DataDir (Get-ServiceSid $ServiceName)
   if ($why) { Fail "The data folder $DataDir is not secured yet ($why), so nothing was joined. Run the installer again." 2 }
+  # A Lodestar that ran here before and was uninstalled keeps its database (the default), and
+  # lodestar never makes a worker of a coordinator's folder.
+  if ([IO.File]::Exists((Join-Path $DataDir 'lodestar.db'))) { Fail (Get-CoordinatorFolderMessage) }
+  $credentials = Join-Path $DataDir 'cluster\credentials'
+  $marker = Join-Path $DataDir 'cluster\joined-by-setup'
+  $wasJoined = [IO.File]::Exists($credentials)
+  # A marker left by a setup that was cut off (neither its commit nor its rollback ran) isn't
+  # this setup's: a rollback of this one must never remove that join's files.
+  if ([IO.File]::Exists($marker)) { [IO.File]::Delete($marker); Log 'removed a marker an earlier setup left' }
 
   New-PrivateFolder $tokenDir
   Write-TokenFile $tokenFile $script:token
@@ -220,7 +242,10 @@ try {
   if ($timedOut) {
     $message = "Joining $addr took longer than $TimeoutSeconds seconds. Check that this PC can reach the main Lodestar's cluster port (8091 unless you changed it), then make a new join token and install again."
     $exitCode = 1
-  } elseif ($p.ExitCode -ne 0 -and [IO.File]::Exists((Join-Path $DataDir 'cluster\credentials'))) {
+  } elseif ($p.ExitCode -ne 0 -and ($lines -match "coordinator's data folder")) {
+    $message = Get-CoordinatorFolderMessage
+    $exitCode = 1
+  } elseif ($p.ExitCode -ne 0 -and [IO.File]::Exists($credentials)) {
     # Already joined: most likely an earlier install joined and was then undone, which
     # leaves the worker's files in the data folder (X-wk18w-rollback). Uninstalling can't
     # help, since nothing is installed, so say how to start over. Still a failure.
@@ -232,10 +257,15 @@ try {
     $last = if ($lines.Count) { ($lines[-1] -replace '^lodestar worker: ', '').Trim() } else { "exit status $($p.ExitCode)" }
     $message = "Could not join $addr`: $last"
     $exitCode = 1
-  } elseif (-not [IO.File]::Exists((Join-Path $DataDir 'cluster\credentials'))) {
+  } elseif (-not [IO.File]::Exists($credentials)) {
     $message = "lodestar finished but $DataDir holds no worker credentials. Install again with a new join token."
     $exitCode = 1
   } else {
+    # This setup made the join: a rollback of it removes the join's files (join-finish.ps1).
+    if (-not $wasJoined) {
+      [IO.File]::WriteAllText($marker, "This setup joined. Removed when setup finishes, or with the join's files if setup is undone.`r`n")
+      Log 'marked the join as made by this setup'
+    }
     # The join ran as SYSTEM, so SYSTEM owns the key and the credentials, and their lists
     # allow only OWNER RIGHTS, SYSTEM and Administrators (integrations secret.rs): the
     # service's own account gets them as their owner. /L: never through a link.
@@ -254,7 +284,7 @@ try {
       Log "joined $addr"
       $exitCode = 0
     } else {
-      $message = "Joined $addr, but the worker's files in $DataDir could not be handed to the Lodestar service. Remove the worker in Settings, Workers on the main Lodestar, then install again with a new join token."
+      $message = "Joined $addr, but the worker's files in $DataDir could not be handed to the Lodestar service, so setup is undone and removes them. On the main Lodestar, remove this worker in Settings, Workers. Then run setup again with a new join token."
       $exitCode = 1
     }
   }
