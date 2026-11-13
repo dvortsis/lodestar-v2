@@ -54,6 +54,20 @@ class Infra(unittest.TestCase):
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 
+class CompanionFiles(unittest.TestCase):
+    def test_the_rules_and_the_docs_quoting_them_turn_infra_on(self):
+        for f in ["packaging/companions/gluetun-post-rules.txt", "docs/user/03-keep-lodestar-safe.md", "docs/operations.md"]:
+            self.assertTrue(ci_changes.INFRA.match(f), f)
+        for f in ["packaging/companions/gluetun-post-rules.txt.bak", "docs/operations.md.bak", "docs/user/03-keep-lodestar-safe.mdx"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+    def test_the_packaging_copy_turns_the_rust_jobs_on(self):
+        for f in ["packaging/companions/gluetun-post-rules.txt", "packaging/companions/other.yml"]:
+            self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
+        for f in ["packaging/docker/Dockerfile", "packaging/companions-x/a"]:
+            self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
+
+
 class UpdateManifest(unittest.TestCase):
     def test_the_builder_release_yml_and_the_verifier_apply(self):
         for f in [".github/scripts/update_manifest.py", ".github/scripts/test_update_manifest.py",

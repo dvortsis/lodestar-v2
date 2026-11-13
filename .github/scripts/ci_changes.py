@@ -54,6 +54,8 @@ RUST_ALSO = re.compile(
     r"|^\.github/scripts/(test_)?log_lint\.py$"
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
+    # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.
+    r"|^packaging/companions/"
 )
 
 # Web and E2E applicability. Both workflows run on every pull request; these
@@ -78,7 +80,12 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 # Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
 # The fleet and operator workflows too, whose structure and public-log leak
 # tests live in infra/fleet/tests (OP-1) and infra/operator/tests (OP-4).
-INFRA = re.compile(r"^(infra/|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)")
+# The rules file and the docs that quote it: the fleet tests that read them run in this job.
+INFRA = re.compile(
+    r"^(infra/"
+    r"|packaging/companions/gluetun-post-rules\.txt$|docs/user/03-keep-lodestar-safe\.md$|docs/operations\.md$"
+    r"|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
+)
 # The update manifest's builder, the workflow that signs with it, and the
 # verifier it round-trips through.
 UPDATE_MANIFEST = re.compile(
