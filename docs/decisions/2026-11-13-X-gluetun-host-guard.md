@@ -1,4 +1,4 @@
-# X-gluetun-host-guard decisions (#PR)
+# X-gluetun-host-guard decisions (#841)
 
 The cloud tester's drill 3 (2026-11-13) stopped gluetun for 60 s mid-block, with Lodestar still running. The host sent 14 ICMP packets from its own public address to the VPN endpoint on its egress interface. Nothing from inside the tunnel leaked, and the bridge's non-endpoint egress was 0. The verdict still fails, because the plan counts any packet outside the tunnel. It extends the host guard of `2026-11-12-X-gluetun-leak.md` ("The leak test") from the leak test's own run to the whole block. That supersedes part of that file's "(b) Host rules" (see "Supersedes" below).
 
