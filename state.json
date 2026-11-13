@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:41Z",
+  "updated_at": "2026-11-13T03:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8911,7 +8911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T03:41Z",
+    "updated": "2026-11-13T03:50Z",
     "items": [
       {
         "slot": 1,
@@ -9162,12 +9162,12 @@
       },
       {
         "slot": 30,
-        "slice": "X-gluetun-leak-cmp",
+        "slice": "X-gluetun-templates",
         "status": "active",
         "role": "tester",
         "agent": "claude",
-        "doing": "session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-leak-cmp #808; rv-808-38bea423 CHANGES (B1 item-7 failure test, I1 DOCKER-USER insert-window test) relayed 2026-11-13T03:17Z; VM re-run after ~15:01Z via X-test-vm",
-        "since": "2026-11-13T02:28Z"
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-templates (brief briefs/X-gluetun-templates.md); building locally, push after #799 and #809 merge; #808 merged 400cc479",
+        "since": "2026-11-13T03:50Z"
       },
       {
         "slot": 31,
@@ -9248,7 +9248,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T03:41Z",
+  "updated": "2026-11-13T03:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
