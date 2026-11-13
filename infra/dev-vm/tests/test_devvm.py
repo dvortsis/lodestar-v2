@@ -159,6 +159,24 @@ class CreateTests(unittest.TestCase):
         self.assertFalse(body["backups_enabled"])
 
 
+class RefusedCreateTests(unittest.TestCase):
+    def test_a_refused_vm_takes_its_firewall_with_it(self):
+        api = FakeApi()
+        real = api.call
+
+        def refuse(method, path, body=None, ok404=False):
+            if (method, path) == ("POST", "/linode/instances"):
+                api.calls.append((method, path))
+                raise SystemExit("HTTP 400: a limit on your account")
+            return real(method, path, body, ok404)
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.multiple(devvm, call=refuse, all_pages=api.all_pages), self.assertRaises(SystemExit):
+            devvm.cmd_create(CreateTests.args(None, d))
+        self.assertEqual(api.mutations(), [("POST", "/networking/firewalls"), ("POST", "/linode/instances"),
+                                           ("DELETE", "/networking/firewalls/7")])
+
+
 class DeleteTests(unittest.TestCase):
     def test_refuses_outside_prefix_or_without_exact_confirmation(self):
         api = FakeApi(linodes=[{"label": "lodestar-main", "id": 1}])

@@ -42,8 +42,10 @@ API = "https://api.linode.com/v4"
 PREFIX = "claude-dev-"
 REGION = "us-east"
 TYPE = "g6-dedicated-4"
-# Types a test VM may use: the main lane's, and the 1 GiB worker lane's (Lane K).
-TYPES = ("g6-dedicated-4", "g6-nanode-1")
+# Types a test VM may use: the main lane's, the 1 GiB worker lane's (Lane K),
+# and the import lane's, whose 640 GB disk holds the owner's real Bitmagnet and
+# Magnetico dumps, their restore and Lodestar's store at once (2026-11-13).
+TYPES = ("g6-dedicated-4", "g6-nanode-1", "g6-dedicated-8", "g6-dedicated-16")
 MAX_VMS = 3  # a hard ceiling on concurrent claude-dev VMs
 # The owner's cap is $50 per cloud for the whole testing period (2026-11-12T16:58Z);
 # status warns from here so the coordinator can delete in time.
@@ -200,7 +202,14 @@ def cmd_create(a) -> None:
         "disk_encryption": "enabled",
         "metadata": {"user_data": base64.b64encode(user_data.encode()).decode()},
     }
-    vm = call("POST", "/linode/instances", body)
+    try:
+        vm = call("POST", "/linode/instances", body)
+    except BaseException:
+        # A refused create (an account limit, say) would leave the firewall
+        # behind, and the next create would stop on it.
+        call("DELETE", f"/networking/firewalls/{fw['id']}")
+        print(f"VM not created; deleted firewall {fw['id']}", file=sys.stderr)
+        raise
     print(f"created {label} id={vm['id']} firewall={fw['id']} ipv4={vm['ipv4'][0]}")
     for _ in range(60):
         st = call("GET", f"/linode/instances/{vm['id']}")["status"]
