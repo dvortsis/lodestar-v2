@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T06:14Z",
+  "updated_at": "2026-11-13T06:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7945,6 +7945,12 @@
       "at": "2026-11-13T06:14Z",
       "what": "operator-apply needs RUNNER_USER_ID, OPERATOR_BOT_USER_ID, CHANNEL_PR, OPERATOR_MODEL_ROUTINE + env secrets/AWS; checklist sent to owner via dashboard; waiting on owner OK to open the operator-channel draft PR. Do not dispatch until owner confirms all set.",
       "status": "open"
+    },
+    {
+      "id": "gluetun-pin-ci-filter",
+      "at": "2026-11-13T06:28Z",
+      "what": "rv-815 O6: widen .github/scripts/ci_changes.py COMPANION_PINS to the gluetun rules files and docs/user chapter 3. Own small slice X-gluetun-pin-ci-filter (helper, sonnet) after X-ci-advisories merges; add to slices.yaml in the next runner PR and remove the O6 line from X-ci-advisories notes.",
+      "status": "open"
     }
   ],
   "main_health": [
@@ -8979,7 +8985,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T06:14Z",
+    "updated": "2026-11-13T06:28Z",
     "items": [
       {
         "slot": 1,
@@ -9228,7 +9234,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T06:14Z",
+  "updated": "2026-11-13T06:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
