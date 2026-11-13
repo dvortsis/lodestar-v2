@@ -6,12 +6,12 @@ These are the runner's answers. Each is a §2.19 call, flagged to the owner, who
 
 ## The owner queue
 - **Item 4, Checkpoint 1:** if the projection falls short of the crawler gate, the runner first runs the Track C fixes and measures again.
-  - Lowering the gate's number is a §2.26 performance call. The runner makes it only with the evidence recorded in a decisions file, and flags it to the owner (§2.19).
+  - If it is still short, the runner reports to the owner with the evidence, and the owner re-decides the number. The runner never loosens the gate (§2.27); this delegation doesn't change that.
   - `ext:owner-checkpoint-1` now holds: the rule for the checkpoint is decided ahead of it.
 - **Item 10, PK-nightly-host:** the proposal in `docs/decisions/2026-11-08-PK-manifest.md` is approved as written.
   - It applies only if the Nightly channel is offered.
   - It pairs with owner item 3, the nightly signing key, which stays with the owner (§2.52).
-- **Item 14, APIFEAT-01 (blocking, rules):** the runner chose between the two held options. The fix slice's brief carries the choice.
+- **Item 14, APIFEAT-01 (blocking, rules):** the runner chose between the two held options. The runner gives the fix session the choice directly (`docs/security/v1/README.md` §5 step 4); no file holds it.
 - **Item 16, INFRA-01: yes.** The image publish waits for the same `release` environment approval as the binaries.
   - On `main` this is a fix slice. For v0.5.2 it's a release PR to `release/v0.5.2` before the tag.
   - A workflow change that only adds a gate is a tightening.
@@ -35,6 +35,8 @@ These are the runner's answers. Each is a §2.19 call, flagged to the owner, who
     - **What the code does now:** the server asks for the admin password on every Account enable (`consent::needs_password`, X-consent-gate-lift r2), and asks for the declared API key (`consent::need_with`). The Account dialog shows the §2.49 Account text and the key fields.
     - **What it doesn't do yet:** the Account dialog has no password field (`needsPassword` in `web/src/lib/features/sources/consent.ts` leaves out Account), so the user can't confirm with the password there. X-consent-gate-lift-account adds that field, as r2's decisions file says. The sentence ships only with it.
   - `ext:owner-notice-torrent-cache` and `ext:owner-notice-account-wording` now hold, so X-consent-gate-lift-external and X-consent-gate-lift-account are unblocked. SRC-02 is still settled before either flip, as build-plan §0.3's veto list says.
+
+- **Item 12, the status connector deploy:** done (the connector is deployed), so the item leaves the queue.
 
 ## Other runner calls (§2.19)
 - **The gluetun host file lives outside Lodestar's data folder.** Nothing from Lodestar's data folder is ever mounted into a companion. X-gluetun-templates-hostfile writes `post-rules.txt` to a separate companion-files folder and mounts that one. Why: the data folder holds the store, keys and credentials, and a companion has no reason to see any of it.

@@ -728,7 +728,8 @@ pinned:
   X-strip-format-chars: ws-small
   i9-stage2: ws-small
   openapi-example-size: ws-small
-held: []
+held:
+- PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
 - E-v06-sources
 - E-M6
@@ -834,13 +835,13 @@ conditions:
   experiment-host:
     met: true
     who: you
-    label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check or sync, with a restore step that always runs'
+    label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check, with a restore step that always runs'
     note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h'
   owner-checkpoint-1:
     met: true
     who: you
     label: You re-decide at Checkpoint 1 if the crawler projection falls short
-    note: 'The rule is decided by the runner on your delegation, §2.69: Track C fixes and a new measurement first; lowering the gate is a §2.26 call with the evidence recorded'
+    note: 'The first step is decided by the runner on your delegation, §2.69: Track C fixes and a new measurement first. If still short, you re-decide the number (§2.27)'
   import-host:
     met: false
     who: you
@@ -1840,7 +1841,5 @@ notes:
   you:
   - label: New decisions from the reviews
     text: Owner queue items 13, 15 and 20 (FILTER-01, FILTER-03 and the draft security advisories). The runner gives you their detail directly. The others are the runner's now (§2.69).
-  - label: The comparator run
-    text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
   - label: Also for you
     text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Paste the new v0.5.1 release text. The nightly signing key is deferred (§2.52); the Unraid Backups share minimum free space is optional.

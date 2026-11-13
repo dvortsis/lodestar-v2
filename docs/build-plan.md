@@ -147,7 +147,7 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | C0a **CR-COL-3**: the Linux collector and analyzer keep and judge the gate's evidence. Today `collect.py` keeps only the CR-0 series, so `searchable_new_total`, the latency histogram and its dropped counter, and CR-4's family-labelled, connect-timeout, no-route and uTP series are discarded; only `fetch_attempts_total` and `fetch_success_total` survive with their `transport` label (reproduced by the 2026-11-02 review). Retain bounded, validated labels and histogram buckets including `+Inf`; compute searchable rate, hourly minima, latency coverage and per-transport/per-family breakdowns; reject missing evidence and counter resets; fixtures that pass and fail; a short end-to-end rehearsal | Opus | — |
 | C0b **CR-SPEC**: a frozen measurement specification, written before any data is collected (§0.5 "Measurement specification") | Opus (docs) | — |
 | C1 CR-4 merged (#365, 2026-11-02) ✔ | Opus | — |
-| C2 Experiment host ready (one node, one public IP, no imports, not the Windows PC that ran CR-0): **the Unraid box, DHT port not forwarded** (§2.51), and **booked exclusively per run** (§0.7 calendar) | **owner** | `ext:experiment-host` |
+| C2 Experiment host ready (one node, one public IP, no imports, not the Windows PC that ran CR-0): **the Unraid box, DHT port not forwarded** (§2.51), and **no per-run booking** (§2.68): a run never overlaps another run, a comparator day, an import pilot or a soak (§0.7 calendar) | **owner** | `ext:experiment-host` |
 | C3 Pinned bitmagnet comparator, 24 h, fresh data, its own day | owner runs, runner analyses | C0a, C0b, C2 |
 | C4 Live ABBA A/B, 6 h measured × ≥ 2 reps per arm: CR-ADM, then CR-4 uTP; route backoff only if a baseline shows `fetch_no_route_total{family="ipv6"} > 0` (CR-4's own gate), otherwise recorded as skipped | owner runs, runner analyses | C0a, C0b, C1, C3 |
 | C5 **Checkpoint 1**: projection to the gate, reported to the owner | runner → **owner** | C3, C4 |
@@ -224,7 +224,7 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 | 2 | Do the M6 manual Unraid and MSI installs and approve the rc's signing (`ext:owner-m6-manual`) | G-m6 |
 | 3 | Tag and publish v0.5.2 once its gate passes | A current release; `ext:release-after-parser` (i9-stage2) |
 | 4 | Book each import pilot on the import host and restore the Bitmagnet dump (`ext:import-host`) | The 1M, 10M and 50M gates |
-| 5 | **Checkpoint 1**: delegated to the runner (§2.69): Track C fixes and a new measurement first; lowering the gate is a §2.26 call (`ext:owner-checkpoint-1` holds) | CR-AB-1, CR-5, CR-COMB |
+| 5 | **Checkpoint 1**: delegated to the runner (§2.69): Track C fixes and a new measurement first; if still short, the owner re-decides the number (§2.27: the runner never loosens the gate) (`ext:owner-checkpoint-1` holds) | CR-AB-1, CR-5, CR-COMB |
 | 6 | Register the dedicated benchmark runner (`ext:bench-runner`) | G-v1-10m |
 | 7 | Approve the per-worker consent wording (`ext:owner-v08-q3`) | PL-7b |
 | 8 | Complete the cloud operator setup (`ext:owner-operator-setup`) | OP-G |
@@ -244,7 +244,7 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 | # | Question | From |
 |---|---|---|
 | 13 | FILTER-01 (content safety): the review offers two fixes; which one? The detail is held (`docs/security/v1/README.md` §5) and the runner gives it to you directly | Code review |
-| 14 | APIFEAT-01 (blocking, rules): **delegated to the runner (§2.69)**; the fix slice's brief carries the choice | Code review |
+| 14 | APIFEAT-01 (blocking, rules): **delegated to the runner (§2.69)**; the runner gives the fix session the choice directly | Code review |
 | 15 | FILTER-03 (content safety): which of the review's two fixes? Detail held as above | Code review |
 | 16 | **Delegated (§2.69): yes.** INFRA-01: should the image publish wait for the same `release` environment approval as the binaries? For the v0.5.2 tag it needs a release PR to `release/v0.5.2` before the tag | Code review |
 | 17 | **Delegated (§2.69): seven accepted, the setup checklist not** (it conflicts with §2.9, §2.13 and §2.39). Eight proposals that change §10 or the glossary (UI review part 4, section 8): name the app's intended reader in §10.0; reorder Search around words and clicks, with new default facets and row facts; a plain health summary ahead of the Insights story; three required setup steps and a checklist in place of nine inline steps; lead the network step with safety, not port forwarding; accept GB as typed, or a units preference; "alert" as the single noun; a first-use prompt, or default off, for single-key actions that launch another program | UI review part 4 |
@@ -364,7 +364,7 @@ flowchart LR
   R --> V52[v0.5.2 cut]
   CR4[CR-4 merged] --> AB[A/B: CR-ADM, CR-4]
   TOOL[CR-COL-3 + CR-SPEC] --> COMP
-  HOST[(owner: experiment host, booked per run)] --> COMP[bitmagnet comparator]
+  HOST[(owner: experiment host, standing §2.68)] --> COMP[bitmagnet comparator]
   COMP --> AB
   COMP --> CP1{Checkpoint 1}
   AB --> CP1
@@ -437,7 +437,7 @@ In ladder order, as slots allow (§0.2; no two with overlapping `owns`):
 4. **Launch what's ready** (at 2026-11-12T22:55Z, not yet in a slot): ENR-G, X-unverified-cap-index, X-win-upd-first-rollback, ADH-0, UP-2, X-watch-env, X-watch-stall-retry (once the runner adds it).
 5. **Assign the next migration numbers** (§0.7): WK-12 first, since WK-13, WK-16, WK-19 and WK-G all wait behind it; then SRC-3b, PL-8 and CR-3.
 6. **As each merges:** GS-2 → GS-3, GS-4, RX-1; ENR-14 → the twelve enrichment plug-ins; NOS-2a → IRC-0; WK-12 → WK-13; X-cmp-egress-api → X-cmp-egress-ui.
-7. **The host calendar:** the v0.5.2 soak if it's still owed, then the owner books CR-AB-ADM; the runner states the next booking in every daily summary and proposes an import pilot for each gap.
+7. **The host calendar:** the v0.5.2 soak if it's still owed, then CR-AB-ADM (no booking needed, §2.68); the runner states the next planned run in every daily summary and proposes an import pilot for each gap.
 8. **Gates as their slices finish:** WK-G, CMP-G, then G-v07-scale and G-v07, then G-v08.
 9. **M8** alongside all of this, the security reviews first; then R-v1-cut and the 1.0 gates.
 10. **The reviews' fixes** (r4.1): B1 and B2 (launched 2026-11-13, owner); then the guards and the Sources restructure in #809; the runner turns Track Q and the UI review into slices (neither X-watch-stall-retry nor X-utp-spurious-rto is in `runner/slices.yaml` yet), sends the held findings' detail to the owner for draft advisories, asks the owner the questions in §0.3 (13 to 21), and decides what comes to `main` from the review branches.

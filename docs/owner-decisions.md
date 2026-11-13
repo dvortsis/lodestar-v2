@@ -593,7 +593,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       A change to any of these is a network change, and the runner re-runs the comparator before the next run. That is stricter than CR-SPEC rule 6.8, which asks for it only before CR-COMB. The box's addresses aren't recorded here (CR-SPEC rule 7.4).
     - **Runner addition: what the results can claim.** Checkpoint 1 projects the rate of one node behind NAT with no port forwarding, measured beside bitmagnet on the same network. It doesn't claim what a forwarded install reaches. Forwarding is one of the options the runner puts to the owner if the projection falls short.
     - **Runner addition: runs never overlap the soaks** on the same box (build-plan §0.7, "The owner's machines"). The runner reads the plan's "not the soak PC" as the Windows PC that ran CR-0.
-    - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold.
+    - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold. *(Superseded for crawler runs by §2.68: no per-run booking.)*
 
 52. **The runner's recommendation on the remaining owner items; no more counsel reminders; package installers after 1.0** (owner, about 2026-11-07T18:00Z, relayed by the dashboard session): "Use runner recommendations for all those. Stop reminding me about counsel review. Yes, I register with winget and other package installers after 1.0."
     - **The X-refetch-private backport:** yes. v0.5.2 is the next v0.5.x patch and is cut from `main` after #576, so it ships the full fix: the refetch skips `flags::PRIVACY` (`PRIVATE | PRIVATE_SOURCE | REMOTE_UNVERIFIED`) and private unverified items. The cut-down `PRIVATE|PRIVATE_SOURCE` mask was only for a backport onto v0.5.1's code, and isn't needed. There's no separate v0.5.1 patch (runner). v0.5.1 has no private sources; its only partial rows come from the bitmagnet importer, whose hashes bitmagnet found on the public DHT. The practical risk until v0.5.2 is low, though it is still a BEP 27 violation (`docs/decisions/2026-11-07-X-refetch-private.md`).
@@ -692,13 +692,13 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **The goal:** use the full $200 by 2026-11-25, on valuable work that offsets plan spend.
     - **Then the owner said:** "The runner can dispatch it and use it for whatever the runner believes is the best use of it."
       - The runner may dispatch operator-apply from `main`. The owner confirmed this directly in the runner session.
-      - **The runner's choice for the remaining ~$40:** independent reviews of security-sensitive PRs, at most $5 each.
+      - **The runner's own share is at most $40 in total:** independent reviews of security-sensitive PRs, at most $5 each.
       - **Any new workflow that reads the key** says so plainly in its PR, and the runner tells the owner before it merges.
     - **Record:** operator-apply was dispatched at 2026-11-13T06:04Z and skipped at its job gate, because the owner's repository variables `OWNER_USER_ID` and `OPERATOR_STOP=false` aren't set yet. $0 spent. Setting them is an owner action in the dashboard's owner queue.
 
 68. **Crawler testing on the Unraid box whenever needed** (owner, 2026-11-13; confirmed directly in the runner session): "OK to run crawler testing on unraid machine whenever needed." and "It can pause backup and parity operations when running tests. Just have it restore them after."
     - **No per-run booking** on the experiment host (§2.51). The owner queue's "book each crawler run" item goes.
-    - **What a test may pause:** Appdata Backup, and a scheduled parity check or sync. Nothing else. Never a rebuild or disk recovery: ask the owner first.
+    - **What a test may pause:** Appdata Backup, and a scheduled parity check (correcting or not). Nothing else. Never a parity sync, a rebuild or a disk recovery: ask the owner first (a sync or rebuild runs while the array isn't fully protected).
     - **Every pause has a restore step that always runs,** on failure or cancel too. Each run logs what it paused and what it restored.
     - **A failed or unconfirmed restore stops all further tests,** and the owner is told at once.
     - **What it doesn't cover:** cancelling a parity check that's running, changing schedules or settings, or touching data. Every other host-safety, network and legal rule stands (§2.51 included).
