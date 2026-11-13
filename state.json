@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T19:06Z",
+  "updated_at": "2026-11-13T19:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8131,6 +8131,16 @@
       "id": "X-filter01-rejudge",
       "what": "one-time core re-judge of stored torrents judged under the old limits, behind a core-version marker; next slice in the X-filter01-fix session after #843",
       "added": "2026-11-13T18:55Z"
+    },
+    {
+      "id": "X-filter-tokenizer-long-runs",
+      "what": "filter tokenizer: split long alphanumeric runs; needs a fixture-hash migration (from #843 review)",
+      "added": "2026-11-13T19:31Z"
+    },
+    {
+      "id": "X-filter01-guard-regression",
+      "what": "post-release: exact-input regression test for the filter core split-reading guard (security README section 5 timing)",
+      "added": "2026-11-13T19:31Z"
     }
   ],
   "main_health": [
@@ -8531,9 +8541,10 @@
       "slice": "X-lease-reconcile-every-session",
       "head": "914c14fb",
       "review": "fresh Opus MERGE, 2 Important (stalled-coordinator spool fallback; local stop waits for Drained) relayed with chaos scenario, one push; runner delta check then merge",
-      "at": "2026-11-13T17:06Z",
+      "at": "2026-11-13T19:31Z",
       "state": "fixes in; Windows companions detect.rs loopback flake (not this PR); one re-run used",
-      "rerun_used": true
+      "rerun_used": true,
+      "status": "ready; Opus delta review running; Windows test running"
     },
     "842": {
       "slice": "X-offline-retry",
@@ -8544,10 +8555,10 @@
     },
     "843": {
       "slice": "X-filter01-fix",
-      "head": "0a6837fe",
+      "head": "ade47428",
       "state": "Opus review + /security-review and an unanchored second read running; CI running",
-      "at": "2026-11-13T18:55Z",
-      "status": "changes relayed (two Opus reads); awaiting fix push"
+      "at": "2026-11-13T19:31Z",
+      "status": "fix round pushed; delta + security review running; CI running"
     }
   },
   "merged_log": [
@@ -9194,7 +9205,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T19:06Z",
+    "updated": "2026-11-13T19:31Z",
     "items": [
       {
         "slot": 1,
@@ -9432,7 +9443,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T19:06Z",
+  "updated": "2026-11-13T19:31Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
