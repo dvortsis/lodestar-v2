@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T09:19Z",
+  "updated_at": "2026-11-13T09:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7983,11 +7983,6 @@
       "status": "2026-11-13T08:15Z: X-filter01-fix has an owner question pending (by id only, detail held, asked in chat). The session holds its push until the runner relays the answer."
     },
     {
-      "id": "ci-filter-fleet-emergency-down",
-      "note": "Next runner PR: INFRA in .github/scripts/ci_changes.py misses .github/workflows/fleet-emergency-down.yml, which infra/fleet/tests/test_emergency_cleanup.py reads (found by X-gluetun-pin-ci-filter self-review). Open a small slice or fold into the next CI-filter change.",
-      "at": "2026-11-13T08:46Z"
-    },
-    {
       "id": "slices-yaml-x-flake-relevance-lock",
       "note": "Next runner PR: add the X-flake-relevance-lock entry to runner/slices.yaml (owns bench/tests/relevance_sets.rs, bench/src/bin/relevance/** if needed, its decisions file).",
       "at": "2026-11-13T08:46Z"
@@ -9040,7 +9035,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T09:19Z",
+    "updated": "2026-11-13T09:21Z",
     "items": [
       {
         "slot": 1,
@@ -9124,12 +9119,12 @@
       },
       {
         "slot": 15,
-        "slice": "X-gluetun-pin-ci-filter",
+        "slice": "X-ci-filter-fleet",
         "role": "other",
         "agent": "claude",
         "status": "active",
-        "since": "2026-11-13T07:31Z",
-        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: #824 one Windows re-run allowed (relevance_sets lock race, not its diff; fix slice X-flake-relevance-lock)",
+        "since": "2026-11-13T09:21Z",
+        "doing": "cloud-testing helper (Sonnet): session_01MMjhnA3MrkeqBJB4f4Rjsq: #824 merged (ff6ddab2); follow-up X-ci-filter-fleet in same session",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9294,7 +9289,7 @@
     }
   ],
   "heartbeat": "2026-11-13T06:40Z",
-  "updated": "2026-11-13T09:19Z",
+  "updated": "2026-11-13T09:21Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9599,6 +9594,12 @@
       "slice": "X-gs2-nits",
       "merged": "a96bb5b7",
       "at": "2026-11-13T08:46Z"
+    },
+    {
+      "pr": 824,
+      "slice": "X-gluetun-pin-ci-filter",
+      "merged": "ff6ddab2",
+      "at": "2026-11-13T09:21Z"
     }
   ]
 }
