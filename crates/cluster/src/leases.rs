@@ -2539,6 +2539,40 @@ mod tests {
         assert_eq!(a.pending(), 1);
     }
 
+    /// With commits forgotten since the store check (a stale
+    /// `checked_at`), every new key is busy, even for a worker at its cap:
+    /// the claim is asked again, not counted as capped.
+    #[test]
+    fn a_stale_check_answers_busy_even_at_the_cap() {
+        let (a, _) = counted();
+        a.serve_remote();
+        a.set_lease_cap(Some(1));
+        let _ = a.claim_batch(A, &[claim(1, 0)], 1, None, None);
+        assert_eq!(a.held_by(A), 1);
+        let stale = a.commit_seq();
+        for n in 0..=RECENT_COMMITS as u32 {
+            let key = InfoHash({
+                let mut k = [0xEE; 20];
+                k[..4].copy_from_slice(&n.to_be_bytes());
+                k
+            });
+            let c = Claim { key, ..claim(2, 0) };
+            let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 1) else {
+                panic!("leased")
+            };
+            assert!(a.commit(WorkerId::LOCAL, &key, t).is_some());
+        }
+        assert_eq!(
+            a.claim_batch(A, &[claim(3, 0)], 1, None, Some(stale))[0],
+            BatchAnswer::Busy
+        );
+        // A fresh check: the cap.
+        assert_eq!(
+            a.claim_batch(A, &[claim(3, 0)], 1, None, Some(a.commit_seq()))[0],
+            BatchAnswer::Capped
+        );
+    }
+
     /// Re-grants pass a target at its cap by and stop at each target's
     /// room; what's left keeps waiting.
     #[test]

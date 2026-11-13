@@ -682,9 +682,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
         let sp = rt.spool().unwrap();
-        // A link of one frame, never read: the first send after the
-        // handshake stalls.
+        // A link of one frame, never read. The handshake leaves its one
+        // slot free: fill it here, so every later frame stalls, whatever
+        // `connected` queues itself.
         let (_coord, session) = session_pair_with(1).await;
+        let filler = lodestar_cluster::proto::ToCoordinator::SnapshotAck(
+            lodestar_cluster::proto::SnapshotAck {
+                kind: lodestar_cluster::proto::SnapshotKind::Filter,
+                version: 1,
+                seq: 0,
+            },
+        );
+        session.handle().send(filler).await.unwrap();
         rt.connected(session.handle());
         let out = rt.test_outbound();
         out.send(sealed(5)).await.unwrap();

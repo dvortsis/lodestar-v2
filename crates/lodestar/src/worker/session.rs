@@ -575,9 +575,9 @@ impl<C: Connect> Worker<C> {
     /// coordinator can ask for. Fetched results go out, unreported
     /// outcomes are reported, and `Drained` hands back every lease left,
     /// for re-grant at once; the coordinator's `Stop(Drained)` confirms
-    /// it. The session's events are read meanwhile, so
-    /// grants and hints queued to it can't stall the connection; they're
-    /// dropped, and `Drained` gives their leases back too.
+    /// it. The session's events are read meanwhile, so grants and hints
+    /// queued to it can't stall the connection; they're dropped, and
+    /// `Drained` gives their leases back too.
     ///
     /// It has [`Settings::stop_deadline`] less [`SPOOL_RESERVE`]. If the
     /// session fails on the way or the time runs out, the work is
