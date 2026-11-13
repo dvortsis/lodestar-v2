@@ -432,6 +432,19 @@ pub(crate) const CUT_ONLY: u64 = u64::MAX / 2;
 /// Units of the core's work budget a file costs, however short its path.
 pub(crate) const FILE_UNITS: u64 = cost::FILE;
 
+/// The least a metered read of one path costs ([`read_whole`]): the file,
+/// each segment, its bytes compared with the folders remembered, and its
+/// name read (a byte costs at least a unit). Its folders may be read
+/// once for many files, so they count only as compared.
+pub(crate) fn least_path_cost(path: &[String]) -> u64 {
+    let bytes: usize = path.iter().map(String::len).sum();
+    let name = path.last().map_or(0, String::len);
+    cost::FILE
+        + path.len() as u64 * cost::SEGMENT
+        + bytes as u64 / cost::COMPARED
+        + name as u64 * cost::BYTE
+}
+
 impl Tokenizer {
     /// A tokenizer that reads [`mark`]s as word breaks: the earlier
     /// reading, kept for texts that hold one ([`splits`]).
@@ -1365,6 +1378,30 @@ mod tests {
         "([a-z0-9]{1,6}|[a-z]|\u{2028}|\u{0605}|\u{FFF9}|\u{200B}|\\PC|[ .]){0,12}";
 
     proptest::proptest! {
+        /// The core's check before reading never counts more than the
+        /// read does, so nothing within the budget is held unread.
+        #[test]
+        fn the_least_cost_is_never_more_than_the_read(
+            name in SEGMENT,
+            folders in proptest::collection::vec(proptest::collection::vec(SEGMENT, 0..4), 1..7),
+            files in proptest::collection::vec((proptest::prelude::any::<proptest::sample::Index>(), SEGMENT), 0..24),
+        ) {
+            let paths: Vec<Vec<String>> = files
+                .into_iter()
+                .map(|(at, own)| {
+                    let mut p = folders[at.index(folders.len())].clone();
+                    if !own.is_empty() || !p.is_empty() {
+                        p.push(own);
+                    }
+                    p
+                })
+                .collect();
+            let least = name.len() as u64 + paths.iter().map(|p| least_path_cost(p)).sum::<u64>();
+            let (mut out, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+            let read = read_whole(&name, paths.iter().map(|p| &p[..]), &mut out, &mut ends, &mut apart);
+            proptest::prop_assert!(least <= read.work.unwrap(), "{} > {:?}", least, read.work);
+        }
+
         /// The read notes a character the earlier reading reads as a word
         /// break exactly where [`splits`] finds one, and the earlier
         /// reading of every path, folders shared, is each path's own.

@@ -549,23 +549,23 @@ pub const BUDGET: u64 = 9_000_000;
 pub const MAX_FILES: usize = (BUDGET / normalize::FILE_UNITS) as usize;
 
 /// Whether `item` is past the budget before any of it is read: more
-/// files than [`MAX_FILES`], or more bytes of text than the budget has
-/// units (a byte costs at least one). Stops counting once past, so a
-/// torrent far past costs no more to check than one just past.
+/// files than [`MAX_FILES`], or more than the least its read can cost (the
+/// name's bytes, and each path's least, [`normalize::least_path_cost`]).
+/// Never more than the metered read would count, so nothing within the
+/// budget is held unread. Stops counting once past, so a torrent far
+/// past costs no more to check than one just past.
 pub(crate) fn past_budget_unread(item: &Item) -> bool {
     if item.files.len() > MAX_FILES {
         return true;
     }
-    let mut bytes = item.name.len() as u64;
+    let mut least = item.name.len() as u64;
     for f in item.files {
-        for segment in &f.path {
-            bytes += segment.len() as u64;
-            if bytes > BUDGET {
-                return true;
-            }
+        least += normalize::least_path_cost(&f.path);
+        if least > BUDGET {
+            return true;
         }
     }
-    bytes > BUDGET
+    false
 }
 
 /// Whether the core holds `item` as too large to judge (CS-0a): past
