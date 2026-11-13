@@ -22,7 +22,7 @@ Verified as stated: §2.62 to §2.65 are now on `main`, so dropping the "not yet
   1. In Track Q and §0.3, name each blocking or important security or content-safety finding by id, severity and surface only. For example: "FILTER-01, FILTER-02, FILTER-03 (content safety, blocking): fixes held under `docs/security/v1/README.md` §5". Keep the group and plan columns, and drop the mechanisms.
   2. Word the owner questions as choices between fixes, without the flaw. For row 13: "FILTER-01: which of the two fixes in the held detail?"
   3. Replace runner step 1 (decisions file line 20) and the matching words in §0.9 item 10. New text: the runner sends the security and content-safety findings' detail to the owner for draft advisories, per §5 of the method. Only what holds no held detail comes to `main`: the polish findings, the area reports with held rows cut, and the UI review.
-  4. Add an owner row. The detail is already public on the branch `claude/happy-hypatia-i314gf` (`4f2ccbd9`). Should that branch be deleted once the advisories exist? Deleting branches is already an owner action in §0.3 ("delete the branch `wip/CMP-0-catalogue`").
+  4. Add an owner row. The detail is already public on the branch the code-review branch (named to the owner directly) (`4f2ccbd9`). Should that branch be deleted once the advisories exist? Deleting branches is already an owner action in §0.3 ("delete the branch `wip/CMP-0-catalogue`").
   5. INFRA-01's mechanism can be read from the public workflow, so row 18 can keep its wording.
 
 ## Important

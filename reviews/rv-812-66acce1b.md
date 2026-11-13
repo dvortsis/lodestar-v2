@@ -17,8 +17,8 @@ None.
 
 **I1. `main` would point to where the held detail is public. My B1 fix 4 asked for this, and I was wrong to.**
 - **Where:**
-  - `docs/build-plan.md:254`, row 20: "delete the code-review branch `claude/happy-hypatia-i314gf`, which already carries that detail publicly";
-  - `:92`: "the review folders stay on their branches (`claude/happy-hypatia-i314gf` for the code review, …)", right after the sentence saying held findings are kept out of this repository.
+  - `docs/build-plan.md:254`, row 20: "delete the code-review branch the code-review branch (named to the owner directly), which already carries that detail publicly";
+  - `:92`: "the review folders stay on their branches (the code-review branch (named to the owner directly) for the code review, …)", right after the sentence saying held findings are kept out of this repository.
 - **Why it matters:** together these tell any reader of `main` which branch holds the unfixed detail. That is the one thing `docs/security/v1/README.md` §5 is there to prevent. The row already says the runner gives the owner the detail directly, so the branch name can go the same way.
 - **Fix:**
   1. Row 20: "Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly)."
