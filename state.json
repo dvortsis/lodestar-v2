@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:11Z",
+  "updated_at": "2026-11-13T00:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7787,6 +7787,11 @@
       "id": "runner-pr-wk18",
       "note": "Next runner PR: drop packaging/wix/join.wxs from WK-18 owns; WK-18w brief must require protected DACL (secure-datadir.ps1), Hidden=yes property, token by file never via cmd/PS string; keep WK-18w on v0.6 tag list.",
       "added": "2026-11-13T00:11Z"
+    },
+    {
+      "id": "ci-main-signal-nits",
+      "note": "After #784: wording 'complete in order'/'per group', exact group-value asserts in test_workflow_concurrency.py, '(#784)' in decisions heading; lint job only runs on rust output so web.yml/e2e.yml-only PRs skip the test; e2e.yml has no push trigger.",
+      "added": "2026-11-13T00:14Z"
     }
   ],
   "main_health": [
@@ -8810,7 +8815,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:09Z",
+    "updated": "2026-11-13T00:14Z",
     "items": [
       {
         "slot": 1,
@@ -8894,9 +8899,9 @@
         "slice": "X-ci-main-signal",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBZQeRoCk9GRPDM6HP: cloud-testing priority: #784 at 07abd0b7 (concurrency test wired into lint job); review on ready",
-        "since": "2026-11-12T22:01:40Z",
-        "status": "active",
+        "doing": "#784 merged (6ffe3745); session archived (\u00a72.64)",
+        "since": "2026-11-13T00:14Z",
+        "status": "idle",
         "cap": "over cap: finish #784 only, then archive (\u00a72.64)"
       },
       {
@@ -9180,7 +9185,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:11Z",
+  "updated": "2026-11-13T00:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
