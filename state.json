@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T23:03Z",
+  "updated_at": "2026-11-13T23:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8110,11 +8110,6 @@
     "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
     "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
     {
-      "id": "X-filter01-rejudge",
-      "what": "one-time core re-judge of stored torrents judged under the old limits, behind a core-version marker; next slice in the X-filter01-fix session after #843",
-      "added": "2026-11-13T18:55Z"
-    },
-    {
       "id": "X-filter-tokenizer-long-runs",
       "what": "filter tokenizer: split long alphanumeric runs; needs a fixture-hash migration (from #843 review)",
       "added": "2026-11-13T19:31Z"
@@ -8137,17 +8132,13 @@
     "slices-yaml-x-gluetun-guard-reboot-nits",
     "slices-yaml-x-flake-companions-loopback",
     "slices-yaml-x-scrub-guard-fields",
-    {
-      "id": "X-filter01-hardening",
-      "note": "next PR in X-filter01-fix session before rejudge: non-blocking review findings from #843 r3 (meter, guard tests, release paths, wording, held-count report). Component level only.",
-      "at": "2026-11-13T21:03Z"
-    },
     "track-q-triage-candidate-from-843-review (held; local note only)",
     "slices-yaml-x-flake-scrape-udp-port",
     "slices-yaml-x-scrub-guard-fields(+nits, copy-off.sh)",
     "slices.yaml entry for x-filter01-hardening (no brief file; worked from runner messages) in next runner PR",
     "owner FYI after #855 merges: FILTER-01 held count 0 of 515 on in-repo corpora (no realistic corpus in repo)",
-    "slices-yaml-x-companions-loopback-nits + x-worker-839-followups entries in next runner PR"
+    "slices-yaml-x-companions-loopback-nits + x-worker-839-followups entries in next runner PR",
+    "slices.yaml entry for x-filter01-rejudge in next runner PR"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8535,12 +8526,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "855": {
-      "slice": "X-filter01-hardening",
-      "head": "b8a39da2",
-      "state": "CI running",
-      "at": "2026-11-13T22:40Z"
     }
   },
   "merged_log": [
@@ -9187,7 +9172,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T23:03Z",
+    "updated": "2026-11-13T23:39Z",
     "items": [
       {
         "slot": 1,
@@ -9357,12 +9342,12 @@
       },
       {
         "slot": 32,
-        "slice": "X-filter01-hardening",
+        "slice": "X-filter01-rejudge",
         "role": "build",
         "agent": "claude",
         "status": "active",
-        "since": "2026-11-13T22:20Z",
-        "doing": "PR #855 open, CI running",
+        "since": "2026-11-13T23:39Z",
+        "doing": "building (brief sent)",
         "cap": "kept build (\u00a72.64 4+4)"
       }
     ]
@@ -9448,7 +9433,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T23:03Z",
+  "updated": "2026-11-13T23:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9945,6 +9930,12 @@
       "slice": "X-companions-loopback-nits",
       "merged": "de4d6161",
       "at": "2026-11-13T23:03Z"
+    },
+    {
+      "pr": 855,
+      "slice": "X-filter01-hardening",
+      "merged": "c4f9710b",
+      "at": "2026-11-13T23:39Z"
     }
   ]
 }
