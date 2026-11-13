@@ -99,7 +99,9 @@ function Quote([string]$a) {
 # One line; a join token is 126 characters. More than 4 KiB is not a token.
 $line = [Console]::In.ReadLine()
 if ($null -eq $line) { $line = '' }
-$script:token = $line.Trim()
+# A byte-order mark (U+FEFF) is not whitespace to Trim(): a writer that sends one must not
+# make a good token look mistyped.
+$script:token = $line.Trim().TrimStart([char]0xFEFF).Trim()
 $line = $null
 if ($script:token.Length -gt 4096) { $script:token = $null; Fail 'The join token is too long. Copy it again from Settings, Workers, Add worker on the main Lodestar.' }
 if ($script:token -eq '') { $script:token = $null; Fail 'No join token was given. Make one in Settings, Workers, Add worker on the main Lodestar, and paste it in.' }

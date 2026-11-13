@@ -85,8 +85,15 @@ namespace Lodestar.Setup {
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
         try {
-          p.StandardInput.Write(token.Trim() + "\n");
-          p.StandardInput.Flush();
+          // Raw ASCII bytes on the pipe itself: the StreamWriter would put a UTF-8
+          // byte-order mark first when the console's encoding is UTF-8.
+          byte[] bytes = Encoding.ASCII.GetBytes(token.Trim() + "\n");
+          try {
+            p.StandardInput.BaseStream.Write(bytes, 0, bytes.Length);
+            p.StandardInput.BaseStream.Flush();
+          } finally {
+            Array.Clear(bytes, 0, bytes.Length);
+          }
         } catch (IOException) {
           // It exited before reading: its own output says why.
         } finally {
