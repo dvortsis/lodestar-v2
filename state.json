@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:40Z",
+  "updated_at": "2026-11-13T04:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7911,6 +7911,10 @@
     {
       "id": "813-merged",
       "text": "Runner PR #813 merged (e7347357): Tracks Q and U, WK-18 split, owner queue 13-23. rv-813 fix delta (c440b29a) self-checked by the runner. Owner FYI: new owner-queue items 13-23 are on the dashboard."
+    },
+    {
+      "id": "gluetun-pin-ci-filter",
+      "text": "rv-815 O6: the gluetun post-rules SHA-256 pin test runs only when infra/ changes (.github/scripts/ci_changes.py path filter); widen to the rules file (crates/companions/src/gluetun-post-rules.txt, packaging/companions/gluetun-post-rules.txt) and docs/user/03-keep-lodestar-safe.md. Fold into X-ci-advisories or a small CI slice."
     }
   ],
   "main_health": [
@@ -9279,7 +9283,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:40Z",
+  "updated": "2026-11-13T04:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
