@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:04Z",
+  "updated_at": "2026-11-13T00:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7762,6 +7762,21 @@
       "id": "owner-632-ultrareview",
       "note": "OWNER FYI (unverified relay via codebase-review -> P-master-plan-r4): Ultrareview of #632 feat/lodestar-secure-pia-bridge, 11 findings. Possible live-fleet blockers: (1) deployment_policy.py:110 rejects any OIDC token with job_workflow_ref (test asserts it); (2) cloud-init limits lodestar sudo but deliver.py/steps/remote.py use sudo -n bash/flock; (3) secrets dir no longer created; (4) PIA regions with underscores never match. OWNER DECISION (5): owner-approval rule on cloud-fleet also gates hourly reaper and pia-release (security vs cost). Others: no cleanup on failed start_vpn (WG key left), mutable v0.5.1 tag, unpinned pip cryptography, no decisions file, two docs with a local zone name (\u00a72.35), action-name comment. Runner leaves #632 alone (standing instruction).",
       "added": "2026-11-12T23:27Z"
+    },
+    {
+      "id": "m8-perf-1b-wip",
+      "note": "M8-PERF-1b unsplit WIP on branch wip/M8-PERF-1b (53afb3b8): after #780 merges, take bench/src/bin/search-bench.rs + its test onto a fresh slice/M8-PERF-1b from main; own decisions file (text in that branch docs/decisions/2026-11-12-M8-PERF-1.md: regex, Insights, RSS, NRT, cold-start).",
+      "added": "2026-11-13T00:07Z"
+    },
+    {
+      "id": "wk18s-win-tests",
+      "note": "#801 WK-18s draft a8d51ef8: needs the cfg(windows) e2e tests (worker service start/stop; --join-only against worker_join.rs coordinator) BEFORE merge (runner call). Resume the WK-18w session (session_01MMjhn9uJBPzSurs8AkipKz, kept idle) when a build slot frees; #802 (9e14a52b) waits on #801.",
+      "added": "2026-11-13T00:07Z"
+    },
+    {
+      "id": "gs2-804",
+      "note": "GS-2 #804 draft ac758308, 495.9 B/torrent (16.1 B headroom left for RX-1 + ENR-11); re-blessed siblings goldens accepted; ~1650 lines with reason; self-review then ready.",
+      "added": "2026-11-13T00:07Z"
     }
   ],
   "main_health": [
@@ -8785,7 +8800,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:04Z",
+    "updated": "2026-11-13T00:07Z",
     "items": [
       {
         "slot": 1,
@@ -8829,7 +8844,7 @@
         "slice": "M8-PERF-1a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCqKPZbudhT8jXbC8k: #780 M8-PERF-1a: 10M bench mode; M8-PERF-1b follows (briefs/M8-PERF-1.md)",
+        "doing": "session_01MMjhnCqKPZbudhT8jXbC8k: #780 c64118eb (rv-780 fixes) CI; finish only; 1b WIP on wip/M8-PERF-1b",
         "since": "2026-11-12T18:52:01Z",
         "status": "active",
         "cap": "over cap: finish #780 only, then archive (\u00a72.64)"
@@ -8849,7 +8864,7 @@
         "slice": "GS-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: launched after #772 GS-1 merged (88a632a0); brief briefs/GS-2.md (includes rv-772 O2 Missing-path tests)",
+        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: GS-2 #804 (draft ac758308) self-review then ready; kept build",
         "since": "2026-11-12T22:33Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
@@ -9080,10 +9095,10 @@
       {
         "slot": 31,
         "slice": "WK-18w",
-        "status": "active",
+        "status": "idle",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UP-1 (#765 merged); brief briefs/WK-18w.md",
+        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: parked at 00:05Z; #801 WK-18s a8d51ef8 (needs win e2e tests) + #802 WK-18w 9e14a52b drafts; resume when a build slot frees",
         "since": "2026-11-12T22:52Z",
         "cap": "over cap: finish #802 only, then archive (\u00a72.64)"
       },
@@ -9156,7 +9171,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:04Z",
+  "updated": "2026-11-13T00:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
