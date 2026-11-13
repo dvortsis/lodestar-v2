@@ -89,11 +89,11 @@ These steps are for WireGuard, the VPN type Lodestar's templates use, and the ru
 
     ```sh
     mkdir -p /mnt/cache/appdata/gluetun
-    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/dbad7937994c786675a65ee3b69e5058fd99e56e/packaging/companions/gluetun-post-rules.txt
+    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt
     sha256sum /mnt/cache/appdata/gluetun/post-rules.txt
     ```
 
-   **Result:** The `sha256sum` line starts with `ca05435e6f16ee2f44e35e79613a6a35d18f4019da1989cf11119deb348d746a`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
+   **Result:** The `sha256sum` line starts with `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
 2. Edit the gluetun container and add a **Path**: container path `/iptables/post-rules.txt`, host path `/mnt/cache/appdata/gluetun/post-rules.txt`, access mode **Read Only**.
 3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`, and gluetun's own default is `tun0`. Without this variable the rules do nothing.
 4. Select **Apply**. Then, in the terminal, check that gluetun loaded the rules:
