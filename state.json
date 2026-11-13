@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:46Z",
+  "updated_at": "2026-11-13T00:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8850,7 +8850,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:46Z",
+    "updated": "2026-11-13T00:49Z",
     "items": [
       {
         "slot": 1,
@@ -8924,9 +8924,9 @@
         "slice": "X-win-soak-attach-proc-hash",
         "role": "build",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9uwcjth652E14uw9Z: launched after #773 merged; Windows soak refuses a running process that is not the hashed file (rv-777 O1)",
-        "since": "2026-11-12T22:27:39Z",
-        "status": "active",
+        "doing": "#792 merged (2815ad5a); session archived; cloud-testing slot free for the next ready cloud-testing slice",
+        "since": "2026-11-13T00:49Z",
+        "status": "idle",
         "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
       {
@@ -9220,7 +9220,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T00:46Z",
+  "updated": "2026-11-13T00:49Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
