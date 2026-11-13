@@ -421,6 +421,8 @@ mod imp {
                 Path::new(crate::companions::CONTAINER_COMPANIONS),
                 &dir,
                 geteuid().as_raw(),
+                &std::fs::read_to_string(crate::companions::post_rules::MOUNTINFO)
+                    .unwrap_or_default(),
             ));
             report.data_dir = Some(dir);
         }
@@ -724,8 +726,12 @@ mod imp {
     /// `dir` must be a real folder (not a link, not `/`), apart from the
     /// data folder `data` (not it by identity, not overlapping its path),
     /// owned by `owner` and writable by no one else (so its `gluetun`
-    /// can't be swapped later), holding nothing but `gluetun`. A mount of a whole share or of the
-    /// data folder is never written to. `gluetun` is created (0755) when
+    /// can't be swapped later), and holding nothing but `gluetun`. It must
+    /// also be a mount of its own, apart on the host from the data folder
+    /// and every other folder mounted here (`mountinfo`, see
+    /// [`crate::companions::post_rules::mounts_apart`]). A mount of a whole
+    /// share or of the data folder is never written to. `gluetun` is
+    /// created (0755) when
     /// it's missing; one that exists must be a real folder owned by `owner`
     /// (root in production). Nothing is chowned, chmodded or deleted that
     /// this didn't create. The file is written only when it doesn't hold
@@ -734,7 +740,12 @@ mod imp {
     ///
     /// Anything else leaves it as it is and says why. It never creates
     /// `dir` and never stops start-up.
-    pub(super) fn save_companions_rules(dir: &Path, data: &Path, owner: u32) -> Line {
+    pub(super) fn save_companions_rules(
+        dir: &Path,
+        data: &Path,
+        owner: u32,
+        mountinfo: &str,
+    ) -> Line {
         use crate::companions::post_rules::{self, Found};
         let left = |kind: &'static str, why: String| Line::Companions {
             dir: dir.to_path_buf(),
@@ -781,6 +792,14 @@ mod imp {
             && (c.starts_with(&d) || d.starts_with(&c))
         {
             return left("data", "it overlaps the data directory".into());
+        }
+        // Apart from the data folder and every other folder mounted here,
+        // on the host: a nested mount can't be seen by path or inode.
+        let names = lodestar_companions::builtin()
+            .map(crate::companions::companion_names)
+            .unwrap_or_default();
+        if let Err((kind, why)) = post_rules::mounts_apart(mountinfo, dir, data, &names) {
+            return left(kind, why);
         }
         // Nothing but `gluetun`.
         let Ok(mut entries) = Dir::read_from(&fd) else {
@@ -1195,6 +1214,15 @@ mod tests {
             std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644))
         }
 
+        /// A mount table in which `dir` and `data` are mounts of their own,
+        /// from sibling folders of one host filesystem.
+        fn mounted(dir: &std::path::Path, data: &std::path::Path) -> String {
+            crate::companions::post_rules::fixture(&[
+                ("8:1", "/srv/lodestar", data, "ext4"),
+                ("8:1", "/srv/lodestar-companions", dir, "ext4"),
+            ])
+        }
+
         fn me() -> u32 {
             rustix::process::geteuid().as_raw()
         }
@@ -1248,7 +1276,7 @@ mod tests {
                 (holding, "foreign", "holds data"),
                 (share, "foreign", "holds qbittorrent"),
             ] {
-                let line = save_companions_rules(&dir, &data, me());
+                let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data));
                 assert_eq!(kind(&line), Some(want), "{}: {line}", dir.display());
                 let text = line.to_string();
                 assert!(
@@ -1264,12 +1292,13 @@ mod tests {
             let open = t.join("open");
             md(&open).unwrap();
             std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
-            let line = save_companions_rules(&open, &data, me());
+            let line = save_companions_rules(&open, &data, me(), &mounted(&open, &data));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert!(!open.join("gluetun").exists());
             let mine = t.join("mine");
             md(&mine).unwrap();
-            let line = save_companions_rules(&mine, &data, me().wrapping_add(1));
+            let line =
+                save_companions_rules(&mine, &data, me().wrapping_add(1), &mounted(&mine, &data));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert!(!mine.join("gluetun").exists());
             let loose = t.join("loose");
@@ -1279,13 +1308,18 @@ mod tests {
                 std::fs::Permissions::from_mode(0o775),
             )
             .unwrap();
-            let line = save_companions_rules(&loose, &data, me());
+            let line = save_companions_rules(&loose, &data, me(), &mounted(&loose, &data));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert_eq!(std::fs::read_dir(loose.join("gluetun")).unwrap().count(), 0);
             // A gluetun folder someone else owns is left, untouched.
             let theirs = t.join("theirs");
             md(theirs.join("gluetun")).unwrap();
-            let line = save_companions_rules(&theirs, &data, me().wrapping_add(1));
+            let line = save_companions_rules(
+                &theirs,
+                &data,
+                me().wrapping_add(1),
+                &mounted(&theirs, &data),
+            );
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert_eq!(
                 std::fs::read_dir(theirs.join("gluetun")).unwrap().count(),
@@ -1308,7 +1342,7 @@ mod tests {
             let file = dir.join("gluetun/post-rules.txt");
             let mode =
                 |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
-            let line = save_companions_rules(&dir, &data, me());
+            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data));
             assert_eq!(kind(&line), None, "{line}");
             assert!(line.to_string().contains("post-rules saved"), "{line}");
             assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
@@ -1316,11 +1350,11 @@ mod tests {
             assert_eq!(mode(&dir.join("gluetun")), 0o755);
             assert_eq!(owner(&file).0, me());
             assert!(crate::companions::post_rules::saved_by(&dir, me()));
-            let again = save_companions_rules(&dir, &data, me()).to_string();
+            let again = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data)).to_string();
             assert!(again.contains("already in place"), "{again}");
             // An upgrade that changes the rules: the old file is replaced.
             wf(&file, "old rules\n").unwrap();
-            let line = save_companions_rules(&dir, &data, me()).to_string();
+            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data)).to_string();
             assert!(line.contains("post-rules saved"), "{line}");
             assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
         }
