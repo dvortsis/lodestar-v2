@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T01:22Z",
+  "updated_at": "2026-11-13T01:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7856,7 +7856,12 @@
     {
       "id": "owner-b1-b2-first",
       "added": "2026-11-13T01:22Z",
-      "note": "OWNER (2026-11-13, via codebase-review -> Remaining work plan session, second-hand): fix B1 and B2 first, ahead of the larger queue. Runner: next free BUILD slot (first of #805/#803/#807/#804 to merge) launches slice X-wizard-labels-signout (Sonnet ok: Svelte, pattern-following; Opus review). B1: web/src/lib/features/wizard/FieldsStep.svelte passes bare config keys (intensity, archive_raw, mmap_mib) to SettingField; use Settings screens' label/help keys; test that no rendered label equals its key. B2: no sign-out; web/src/lib/features/auth/LogoutButton.svelte imported nowhere; add Sign out to overflow menu and Settings > Security > Sessions. Then guards slice X-ui-guards: (a) lint ban ~icons/ph/* without -bold/-fill (124/141 Regular; fix imports); (b) lint ban sm:/md:/lg:/xl:/2xl: (4 uses, P2); (c) axe run on fixture data in CI for key screens (fixture project nightly/opt-in today). Evidence: claude/codebase-review-bugs-x9ff7p 5138adbe docs/review/2026-11-13-ui-ux/ incl. NEW 03-not-done.md; re-commit, never merge 34cbbafb (bad trailer). Record owner priority in next runner PR plan; keep part-4 eight proposals on owner_queue until answered."
+      "note": "OWNER (2026-11-13, via codebase-review -> Remaining work plan session, second-hand): fix B1 and B2 first, ahead of the larger queue. Runner: next free BUILD slot (first of #805/#803/#807/#804 to merge) launches slice X-wizard-labels-signout (Sonnet ok: Svelte, pattern-following; Opus review). B1: web/src/lib/features/wizard/FieldsStep.svelte passes bare config keys (intensity, archive_raw, mmap_mib) to SettingField; use Settings screens' label/help keys; test that no rendered label equals its key. B2: no sign-out; web/src/lib/features/auth/LogoutButton.svelte imported nowhere; add Sign out to overflow menu and Settings > Security > Sessions. Then guards slice X-ui-guards: (a) lint ban ~icons/ph/* without -bold/-fill (124/141 Regular; fix imports); (b) lint ban sm:/md:/lg:/xl:/2xl: (4 uses, P2); (c) axe run on fixture data in CI for key screens (fixture project nightly/opt-in today). Evidence: claude/codebase-review-bugs-x9ff7p 5c3e447a (was 5138adbe) docs/review/2026-11-13-ui-ux/ incl. NEW 03-not-done.md; re-commit, never merge 34cbbafb (bad trailer). Record owner priority in next runner PR plan; keep part-4 eight proposals on owner_queue until answered."
+    },
+    {
+      "id": "uiux-cheap-checks-1113",
+      "added": "2026-11-13T01:44Z",
+      "note": "Codebase-review session finished the owner-requested cheap checks; folder head now claude/codebase-review-bugs-x9ff7p 5c3e447a (supersedes 5138adbe; 34cbbafb bad trailer, re-commit). 03-not-done.md 'Done later the same day' + scripts/check-*.mjs. Triage: L1 IMPORTANT (shell) page opened while server down shows 'Error 500' and never retries after reconnect; fix retry on reconnect + 'Couldn't reach Lodestar'. L2 IMPORTANT (settings form) session expiry with unsaved setting: 'Leave without saving?' with no sign-out notice, 'Save changes' saves nothing, draft lost (s10.10.5); fix sign-out message + keep draft across sign-in. Polish: L3 2560px Search rows 35% width vs toolbar far right; L4 200% zoom no result in first screen (evidence for I2); L5 histogram labels overlap, row facts clip. Still not done list in 03-not-done.md (screen reader, keyboard-only wizard, touch, long language, live day one, etc.)."
     }
   ],
   "main_health": [
@@ -8886,7 +8891,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T01:22Z",
+    "updated": "2026-11-13T01:44Z",
     "items": [
       {
         "slot": 1,
@@ -9168,7 +9173,7 @@
         "status": "active",
         "role": "build",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #800 HELD: VM run 00:30Z TCP leak fixed, ICMP to VPN endpoint still leaks (down/ifdown); runner: fix, not accept; awaiting tester diagnostic (ICMP type/time), then one round + VM re-run with 0 leak-class packets before merge",
+        "doing": "#800 head 87be769b: VM leak test 01:35Z PASS (rc 0, every line ok, 0 captured down phases, host egress 0, independent eth0 capture 0 leak-class; inbound RS only, not judged). Fresh Opus delta review running; merge on MERGE + green CI. Bounded rehearsal crawl started 01:36:48Z (not evidence), ends ~14:37Z; then 3 failure drills. Then X-gluetun-leak-cmp (O3).",
         "since": "2026-11-12T22:52Z",
         "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
       },
@@ -9251,7 +9256,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T01:22Z",
+  "updated": "2026-11-13T01:44Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9507,5 +9512,6 @@
     ],
     "ends": "2026-11-12T23:30:00Z",
     "after": "sessions stop; their PRs or drafts are resumed in normal slots (12 + 4) as those free"
-  }
+  },
+  "evidence": {}
 }
