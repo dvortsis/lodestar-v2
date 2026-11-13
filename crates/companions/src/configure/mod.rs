@@ -7,6 +7,8 @@
 //!   network interface or bind address the egress route names, and, for a
 //!   guided install, the temporary password replaced by the generated one.
 //! - **[`prowlarr`]:** its SOCKS5 proxy, per the egress route.
+//! - **[`pairing`]:** FlareSolverr as Prowlarr's indexer proxy, only once
+//!   you switch it on, and removed when you switch it off (CMP-12, Q21).
 //!
 //! **Plan, then apply.** [`Configure::plan`] reads the companion's state
 //! and lists the settings that differ from what this module wants, writing
@@ -71,8 +73,11 @@ pub const SAVE_PATH_PLATFORM: &str = "save_path_wrong_platform";
 /// The refusal when Lodestar's own settings didn't take the entry.
 pub const SINK_REFUSED: &str = "sink_refused";
 
+pub use crate::flaresolverr::{Switch, pairing};
+
 /// The configuration adapter for a catalogue entry, if there is one.
-/// gluetun has none, and FlareSolverr is CMP-12's (Q21).
+/// gluetun has none. FlareSolverr has no settings of its own: what it
+/// changes is Prowlarr's, through [`pairing`] with your [`Switch`] (Q21).
 pub fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
     match id.as_str() {
         // CMP-11b: on Windows, CMP-8b's adapter behind the pinned-version
@@ -680,5 +685,8 @@ mod tests {
         for other in ["gluetun", "flaresolverr"] {
             assert!(configurator(&CompanionId::parse(other).unwrap()).is_none());
         }
+        let fs = &c.get(crate::flaresolverr::ID).unwrap().id;
+        assert_eq!(pairing(fs, Switch::Off).unwrap().companion(), fs);
+        assert!(pairing(&c.get(prowlarr::ID).unwrap().id, Switch::Off).is_none());
     }
 }
