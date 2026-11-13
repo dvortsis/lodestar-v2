@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/svelte';
 import { flushSync, tick } from 'svelte';
 import { restart } from './restart.svelte';
+import { SETTINGS_SAVED } from './saved';
 import { watchRestart } from './watch.svelte';
 
 const page = vi.hoisted(() => ({ url: new URL('http://x/settings') }));
@@ -129,4 +130,29 @@ it('announces an address waiting to be kept once, in the same region', async () 
 	const stop = watchRestart(vi.fn());
 	await until(() => expect(announce()!.textContent).toMatch(/Lodestar is now at http:\/\/a:2\//));
 	stop();
+});
+
+it('asks again as soon as a Settings save answers, and the read from before it cannot win', async () => {
+	api.get.mockReset();
+	let release!: (s: unknown) => void;
+	// The watch's first read is still out when the save answers (the save click started it).
+	api.get.mockReturnValueOnce(new Promise((done) => (release = done)));
+	api.get.mockResolvedValue(system(['network.dht_port']));
+	const set = vi.fn();
+	const stop = watchRestart(set);
+	flushSync();
+	expect(api.get).toHaveBeenCalledTimes(1);
+	dispatchEvent(new Event(SETTINGS_SAVED));
+	// At once, not at the next 15 s poll.
+	expect(api.get).toHaveBeenCalledTimes(2);
+	await until(() => expect(banner()).not.toBeNull());
+	release(system([]));
+	await until(() => expect(set).toHaveBeenLastCalledWith(true));
+	expect(restart.system?.restart_required).toEqual(['network.dht_port']);
+	stop();
+	await until(() => expect(banner()).toBeNull());
+	// Stopped: a later save asks nothing.
+	const asked = api.get.mock.calls.length;
+	dispatchEvent(new Event(SETTINGS_SAVED));
+	expect(api.get).toHaveBeenCalledTimes(asked);
 });

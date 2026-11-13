@@ -19,8 +19,9 @@
 //!   operational control, not a filter change.
 //! - **Consent (§18.7):** the server refuses to enable a source until its
 //!   class's condition holds (the binary checks it against the store;
-//!   this crate only checks the password). In this build that refuses
-//!   every class but `none` (see `patchSource`).
+//!   this crate only checks the password). In this build `restricted` and
+//!   `overlay` need their consent text accepted exactly and the password,
+//!   and `external` and `account` are refused (see `patchSource`).
 //! - **What a source declares** (`credential_spec`, `config_schema`) is
 //!   read-only and compiled in: it describes fields, never a value.
 //! - **Credentials** (`PATCH /sources/{id}/credentials`) are taken in and
@@ -621,38 +622,39 @@ fn invalid(code: &'static str, field: &'static str, message: &'static str) -> Ap
     ApiError::bad_request(code, message).field(field)
 }
 
+/// Checks a route as a source's settings do, for `/sources/{id}` and
+/// `/companions/{id}/egress` alike: the interface and bind-address routes
+/// are refused (`409 route_unavailable`); a direct route takes no proxy or
+/// DNS choice; a SOCKS5 route needs a usable `host:port`. Errors name the
+/// field, never the value.
+pub(crate) fn check_egress(e: &EgressSetting) -> ApiResult<()> {
+    match e.route {
+        EgressRoute::Interface | EgressRoute::BindAddress => Err(route_unavailable()),
+        EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => Err(invalid(
+            "invalid_egress",
+            if e.proxy.is_some() {
+                "egress.proxy"
+            } else {
+                "egress.dns"
+            },
+            "A direct route takes no proxy or DNS choice.",
+        )),
+        EgressRoute::Direct => Ok(()),
+        EgressRoute::Socks5 if e.proxy.as_deref().and_then(parse_proxy).is_none() => Err(invalid(
+            "invalid_egress",
+            "egress.proxy",
+            "Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or gluetun:1080.",
+        )),
+        EgressRoute::Socks5 => Ok(()),
+    }
+}
+
 /// Checks the settings part of `body` and puts its schedule in canonical
 /// form, so the implementation stores what it was given only once it's
 /// valid.
 fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
     if let Some(e) = &body.egress {
-        match e.route {
-            EgressRoute::Interface | EgressRoute::BindAddress => {
-                return Err(route_unavailable());
-            }
-            EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => {
-                return Err(invalid(
-                    "invalid_egress",
-                    if e.proxy.is_some() {
-                        "egress.proxy"
-                    } else {
-                        "egress.dns"
-                    },
-                    "A direct route takes no proxy or DNS choice.",
-                ));
-            }
-            EgressRoute::Direct => {}
-            EgressRoute::Socks5 => {
-                if e.proxy.as_deref().and_then(parse_proxy).is_none() {
-                    return Err(invalid(
-                        "invalid_egress",
-                        "egress.proxy",
-                        "Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or \
-                         gluetun:1080.",
-                    ));
-                }
-            }
-        }
+        check_egress(e)?;
     }
     if let Some(windows) = &mut body.schedule {
         if windows.len() > MAX_WINDOWS {
@@ -702,16 +704,20 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
 /// Enables or disables a source, or sets its priority. A priority
 /// applies at once; enabling or disabling at the next start.
 ///
-/// This build turns on only a source whose class is `none`. Enabling an
-/// `external`, `account`, `restricted` or `overlay` source is refused with
-/// `400 invalid_setting` on `enabled`, before its consent, acknowledgement
-/// or credentials are looked at, whatever the request sends: this version
-/// can't show the class's consent dialog yet. A `"password"` sent with the
-/// enable is still checked first (`401` when it's wrong). `needs` and
-/// `credential_spec` still say what the source will need once a later
-/// version can turn it on, and credentials can be stored and removed
-/// meanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every
-/// class.
+/// A `none` source is a toggle. A `restricted` or `overlay` source is
+/// turned on only when the request sends `"consent"` naming its class and
+/// the `"consent_version"` `GET /sources` gives for it, exactly, unless an
+/// acceptance of that version is already stored, and the admin
+/// `"password"` every time: otherwise `409 consent_required` or `428
+/// confirm_required`, and nothing is saved. A new consent text or address
+/// list changes the version, and the source asks again. Enabling an
+/// `external` or `account` source is refused with `400 invalid_setting` on
+/// `enabled`, before its consent, acknowledgement or credentials are looked
+/// at, whatever the request sends: this version can't turn it on yet. A
+/// `"password"` sent with the enable is checked first (`401` when it's
+/// wrong). `needs` and `credential_spec` say what the source needs, and
+/// credentials can be stored and removed meanwhile (`PATCH
+/// /sources/{id}/credentials`). Disabling works for every class.
 ///
 /// Agents, egress and the schedule apply at the next start; changing
 /// egress needs the admin `"password"` (`428 confirm_required`), and the

@@ -247,6 +247,10 @@ workstreams:
     phase: ph-polish
     name: Planned follow-ups
     plain: Small known items waiting for a free slot.
+  ws-review-fixes:
+    phase: ph-polish
+    name: Code-review fixes
+    plain: Fixes from the 2026-11-12 code review (Track Q) that belong to no feature area, such as the test net and CI. Security and content-safety findings are named by id only until a release with the fix is out.
   ws-rounds:
     phase: ph-polish
     name: Fix and polish rounds (merged)
@@ -274,6 +278,8 @@ placement:
   - M-auth
   - X-settings-trim
   - X-settings-followups
+  - X-wizard-labels-signout
+  - X-session-draft-keep
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -284,12 +290,15 @@ placement:
   - B17
 - ws: ws-search-ui
   match:
+  - X-results-drawer-adaptive
   - S-search-*
   - S-detail
   - S-compare
   - S-discover
 - ws: ws-insights
   match:
+  - X-insights-funnel-fixture
+  - X-insights-scroll-a11y
   - S-alerts
   - S-insights-*
   - B9
@@ -313,8 +322,12 @@ placement:
   - X-wk-out-set-polish
   - X-wk-fetched-lease
   - X-wk-fetched-lease-nits
+  - X-lease-reconcile-every-session
+  - X-worker-service-log
 - ws: ws-web
   match:
+  - X-ui-guards
+  - X-offline-retry
   - W*
   - C0
   - C1
@@ -506,6 +519,10 @@ placement:
   - SRC-14b
   - SRC-15*
   - X-sources-api-spec
+  - X-sources-restructure
+  - X-consent-gate-lift-r2
+  - X-consent-gate-lift-account
+  - X-consent-gate-lift-external
   - SRC-16
   - SRC-17
   - SRC-17a
@@ -546,6 +563,7 @@ placement:
   - ENR-12
   - UP-2
   - X-watch-env
+  - X-watch-stall-retry
   - /^ENR-[a-z]+$/
 - ws: ws-m7-w5
   match:
@@ -553,6 +571,7 @@ placement:
   - GS-4
   - GS-5
   - ENR-13
+  - ENR-13b
   - X-always-adult-detail-mask
   - X-percolate-promoted-hold
 - ws: ws-m7-w6
@@ -604,6 +623,10 @@ placement:
   - X-cmp-native-handover
   - X-cmp-handover-followups
   - X-cmp-egress-api
+  - X-gluetun-leak
+  - X-gluetun-leak-cmp
+  - X-gluetun-templates
+  - X-gluetun-templates-hostfile
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish
@@ -627,6 +650,7 @@ placement:
   match:
   - X-utp
   - X-utp-backoff
+  - X-utp-spurious-rto
   - X-integrations
   - X-clients
   - X-notify
@@ -680,6 +704,11 @@ placement:
   match:
   - R-v1-cut
   - G-v1*
+- ws: ws-review-fixes
+  match:
+  - X-e2e-orphan-specs
+  - X-ci-advisories
+  - X-fixed-sleep-asserts
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -967,6 +996,38 @@ conditions:
     who: you
     label: You tag and publish v1.0.0
     auto: tag:v1.0.0
+  owner-filter01-choice:
+    met: false
+    who: you
+    label: You choose between the two held fixes for FILTER-01 (the runner gives you the detail directly)
+  owner-apifeat01-choice:
+    met: false
+    who: you
+    label: You choose between the two held options for APIFEAT-01 (the runner gives you the detail directly)
+  owner-filter03-choice:
+    met: false
+    who: you
+    label: You choose between the two held fixes for FILTER-03 (the runner gives you the detail directly)
+  owner-infra01-image-gate:
+    met: false
+    who: you
+    label: You decide whether the image publish waits for the release environment approval (INFRA-01), before the v0.5.2 tag
+  owner-ui-part4:
+    met: false
+    who: you
+    label: You answer the UI review's eight part 4 proposals that change §10 or the glossary
+  owner-v06-tag-scope:
+    met: false
+    who: you
+    label: You say whether the v0.6 tag waits on the crawler gate only, or also on WK-G, CMP-G and G-m6
+  owner-notice-torrent-cache:
+    met: false
+    who: you
+    label: You approve or change the proposed Legal Notice section 2 sentence about the torrent cache
+  owner-notice-account-wording:
+    met: false
+    who: you
+    label: You approve the Legal Notice section 2 sentence for Account sources (Prowlarr/Jackett)
 roadmap:
   steps:
   - id: soak
@@ -993,7 +1054,7 @@ roadmap:
     override: done
   - id: v052
     label: Cut v0.5.2
-    plain: A new release branch from main, now that v0.5.1 is out. The consent gate is in (sources that need consent stay off in v0.5.2); the feature manifest is frozen first, and the release notes are trimmed at the cut.
+    plain: A new release branch from main, now that v0.5.1 is out. The consent gate is in (sources that need consent stay off in v0.5.2); the feature manifest is frozen first, and the release notes are trimmed at the cut. INFRA-01 (the image publish on a version tag) is checked before the tag.
     col: 3
     row: 2
     members:
@@ -1169,6 +1230,8 @@ roadmap:
     - WK-16
     - WK-17
     - WK-18
+    - WK-18s
+    - WK-18w
     - WK-19
     - WK-20
     - WK-G
@@ -1258,6 +1321,7 @@ roadmap:
     - ENR-11
     - ENR-12
     - ENR-13
+    - ENR-13b
     - ENR-14
     - ENR-tmdb
     - ENR-tvdb
@@ -1368,6 +1432,32 @@ roadmap:
     - G-v1-design
     - G-v1-ui
     - G-v1
+  - id: tracku
+    label: 'Track U: UI review fixes'
+    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in.'
+    col: 5
+    row: 4
+    members:
+    - X-wizard-labels-signout
+    - X-sources-restructure
+    - X-ui-guards
+    - X-insights-funnel-fixture
+    - X-results-drawer-adaptive
+    - X-insights-scroll-a11y
+    - X-offline-retry
+    - X-session-draft-keep
+  - id: trackq
+    label: 'Track Q: code-review fixes'
+    plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'
+    col: 6
+    row: 4
+    members:
+    - X-lease-reconcile-every-session
+    - X-watch-stall-retry
+    - X-utp-spurious-rto
+    - X-e2e-orphan-specs
+    - X-ci-advisories
+    - X-fixed-sleep-asserts
   arrows:
   - - soak
     - gluetun
@@ -1435,6 +1525,12 @@ roadmap:
     - m7
   - - m8
     - v1
+  - - trackq
+    - m8
+  - - trackq
+    - v1
+  - - tracku
+    - m8
 owner_queue:
 - n: 1
   type: action
@@ -1495,6 +1591,61 @@ owner_queue:
   type: action
   action: 'Deploy the status connector: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (repository Settings, Actions, or the status-connector-deploy environment) and re-run "Status connector deploy", or run `npx wrangler deploy` from tools/status-connector. Without them the workflow only runs the tests, so #742 is merged but not live'
   unblocks: The dashboard's per-hour activity bars (#742)
+  when: Any time
+- n: 13
+  type: decision
+  action: 'FILTER-01 (blocking, content safety): a choice between held fixes; the runner gives you the detail directly'
+  unblocks: FILTER-01's fix slice (ext:owner-filter01-choice)
+  when: Any time; the fix is held until you choose
+- n: 14
+  type: decision
+  action: 'APIFEAT-01 (blocking, rules): a choice between two held options; the runner gives you the detail directly'
+  unblocks: APIFEAT-01's fix slice (ext:owner-apifeat01-choice)
+  when: Any time; the fix is held until you choose
+- n: 15
+  type: decision
+  action: 'FILTER-03 (blocking, content safety): a choice between held fixes; the runner gives you the detail directly'
+  unblocks: FILTER-03's fix slice (ext:owner-filter03-choice)
+  when: Any time; the fix is held until you choose
+- n: 16
+  type: decision
+  action: 'INFRA-01: should the image publish wait for the same release environment approval as the binaries? For v0.5.2 it needs a release PR to release/v0.5.2 before the tag (ext:owner-infra01-image-gate)'
+  unblocks: The v0.5.2 tag
+  when: Before the v0.5.2 tag
+- n: 17
+  type: decision
+  action: 'The UI review''s eight part 4 proposals that change §10 or the glossary (build-plan §0.3 row 17; ext:owner-ui-part4)'
+  unblocks: 'Track U step 6: part 4''s opportunities, in its order'
+  when: Any time
+- n: 18
+  type: decision
+  action: 'Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer (ext:owner-v06-tag-scope)'
+  unblocks: The v0.6 tag
+  when: Before the v0.6 tag
+- n: 19
+  type: decision
+  action: 'Do Track Q''s hostile-input fixes (PIPE-01, DHT-01, SEARCH-01, STORE-02, PIPE-02) go ahead of ladder rungs 2 and 3? Until you answer, the runner places them as any new fix slice (§2.33), so they don''t wait'
+  unblocks: The ladder order for the hostile-input fixes
+  when: Any time
+- n: 20
+  type: action
+  action: 'Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly)'
+  unblocks: Disclosure records for the held findings, and their detail off the repository
+  when: Any time; the advisories before the fixes ship
+- n: 21
+  type: decision
+  action: 'Approve or change the proposed Legal Notice section 2 sentence about the torrent cache (docs/decisions/2026-11-12-X-consent-gate-lift.md; ext:owner-notice-torrent-cache)'
+  unblocks: X-consent-gate-lift-external
+  when: Any time
+- n: 22
+  type: decision
+  action: 'Approve the Legal Notice section 2 sentence for Account sources (Prowlarr/Jackett) (the runner sent you the proposed sentence on 2026-11-13; ext:owner-notice-account-wording)'
+  unblocks: X-consent-gate-lift-account
+  when: Any time; the flip itself also waits for X-consent-gate-lift-r2
+- n: 23
+  type: review
+  action: 'Runner calls you may want to veto (§2.19): every restore path carries recorded holds and deletions, Windows included (UPDATE-01, UPDATE-05, STORE-01; the rule is already recorded in docs/decisions/2026-11-12-X-win-upd-manual-rollback.md follow-up 1); SRC-02, settled before X-consent-gate-lift-external, the Account round or the first Restricted or Overlay plug-in lets more sources run; TEST-05, the detail drawer''s size budget (28 KB in the gate against 15 KB in the architecture, a §2.26 call)'
+  unblocks: Nothing; these go ahead unless you object
   when: Any time
 
 gates:
@@ -1647,10 +1798,10 @@ gates:
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-security
   name: '1.0: security'
-  plain: The eight security reviews done, a delta review to the RC, no open blocking or important findings.
+  plain: The eight security reviews done, a delta review to the RC, no open blocking or important findings, including the code review's (Track Q).
   slice: G-v1-security
   measure: ''
-  target: runner/standards.md 5
+  target: 'runner/standards.md 5; none of Track Q''s blocking or important findings open at the RC unless held under docs/security/v1/README.md 5 (ids only)'
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-design
   name: '1.0: design review'
@@ -1701,8 +1852,12 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-08'
+  updated: '2026-11-13'
   now:
+  - label: B1 and B2 first (§2.66)
+    text: By your decision, the first-run wizard's raw labels and the missing Sign out went ahead of the larger queue (X-wizard-labels-signout, merged as #811). The Sources restructure is next, then the UI guards.
+  - label: 'Review fixes: Tracks Q and U, held findings named by id only'
+    text: The code review (Track Q) and the UI review (Track U) are sliced beside the ladder. Security and content-safety findings are named only by id, severity and surface until a release with the fix is out (§2.47); their fix slices are added by id later. Track Q's blocking and important findings must be closed, or held, for the 1.0 security gate.
   - label: A cloud screen before experiment-host runs
     text: Before each run on your Unraid box, a candidate first runs a short screen on the two cloud Linodes. The screen can only stop a candidate that clearly fails (a crash, a memory or disk bound, nothing stored). It never counts as evidence of a gain, is never combined with Unraid runs, and never delays a booking. You approved adding this stage; the runner set its rules (P-cloud-test-plan).
   - label: v0.5.1 is published
@@ -1714,9 +1869,11 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Four slots
-    text: 'By your instruction at most eight worker slots run at once from 2026-11-12T06:03Z, filled only when ready work fits the plan (owner-decisions §2.59, replacing §2.56''s twelve). Sessions already running finish their slices first. Four more sessions are shared by the cloud tester and the runner, two each (§2.60). The runner paused on 2026-11-09 at your request and resumed on your command on 2026-11-11. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
+  - label: Four plus four sessions
+    text: 'By your instruction, from 2026-11-13T00:00Z at most four build sessions and four cloud-testing sessions run at once (owner-decisions §2.64, replacing §2.59 to §2.61), filled only when ready work fits the plan. Cloud testing comes first (§2.62). Sessions over the cap finish their open pull request and are then archived (§2.65). The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
+  - label: New decisions from the reviews
+    text: Owner queue items 13 to 22 (build-plan §0.3 rows 13 to 21, plus the Account Notice sentence). The runner gives you the held findings' detail directly, for items 13 to 15 and for the draft security advisories (item 20); item 16 comes before the v0.5.2 tag.
   - label: The comparator run
     text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
   - label: Also for you

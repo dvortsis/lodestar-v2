@@ -1,6 +1,7 @@
 //! The consent gate through the real binary (X-consent-gate-052,
-//! `docs/plan/2026-11-06-v052-feature-manifest.md` §3.4): until an
-//! owner-approved consent text ships (SRC-15b), `PATCH /sources/{id}`
+//! `docs/plan/2026-11-06-v052-feature-manifest.md` §3.4,
+//! X-consent-gate-lift): while the Legal Notice says the torrent cache
+//! can't be turned on in this version, `PATCH /sources/{id}`
 //! refuses, with a clear error, to turn on a source whose class asks for
 //! consent (the torrent cache, External), even when the request names the
 //! class and version `GET /sources` gives. A source that needs no consent

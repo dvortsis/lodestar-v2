@@ -147,7 +147,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -1263,6 +1263,13 @@ const adultSection = ownChunk('src/lib/features/detail/adult/AdultEnrichment.sve
 	...drawerView,
 	...torrentView
 ]);
+// ENR-13: the "Identified as" section loads only when the API sent `identified_as`; own entry, as above.
+const identifiedSection = ownChunk(
+	'src/lib/features/detail/identified/Identified.svelte',
+	[],
+	false,
+	[...drawerView, ...torrentView]
+);
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
@@ -1604,7 +1611,8 @@ export default [
 	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
 	// hashes in its imports moved by a few bytes). Runner to confirm.
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('Detail drawer (own JS + CSS)', drawerView, '28064 B'),
+	// ENR-13: one dynamic import for the identified-as section (§2.26, runner): 28,064 B -> 28,128 B.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28128 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1616,12 +1624,13 @@ export default [
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared clients (measured
 	// 21,795 B, residue 19 B, rounded up to 64 B).
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21904 B'),
+	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21952 B'),
 	entry(
 		'Detail sections (on demand)',
 		[
 			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
-		].filter((f) => !adultSection.includes(f)),
+		].filter((f) => !adultSection.includes(f) && !identifiedSection.includes(f)),
 		'38608 B' // runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
@@ -1630,6 +1639,8 @@ export default [
 	// ENR-8: the adult-enrichment section, loaded on demand and only when the API sent the field.
 	// Measured 1,530 B; limit = measured + 10%, rounded.
 	entry('Detail adult-enrichment section (on demand)', adultSection, '1700 B'),
+	// ENR-13: the "Identified as" section, on demand and only when the API sent the field. Measured 1,830 B; limit = measured + at most 10%, rounded up to 100 B.
+	entry('Detail identified-as section (on demand)', identifiedSection, '2000 B'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	entry(

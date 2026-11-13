@@ -69,6 +69,8 @@ pwsh -File "$Tools\cr0-soak.ps1" -Exe 'C:\Program Files\Lodestar\lodestar.exe' -
   -Commit <rc-commit-sha> -Ui embedded -Bind 127.0.0.1:8090 -ServiceName Lodestar
 ```
 
+The collector refuses to start if the running service isn't the installed `lodestar.exe`, or if `-Exe` isn't that file. After an upgrade, restart the service (`Restart-Service Lodestar` in the elevated PowerShell), or reboot if Windows says a restart is pending, then start it again. Restart after every upgrade even if the check passes.
+
 Leave the window open and the PC awake. To check progress, read `$Run\status.json`. To stop early, create the file `$Run\stop.request`: the run then does not count.
 
 **Result:** the window ends with `reason: baseline_window_complete` in `$Run\result.json`. Don't restart the service, Windows or the PC during the run. A restart ends the run early and the restart check fails; you start again from Phase 3.

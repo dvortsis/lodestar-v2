@@ -81,6 +81,17 @@ class CompanionPins(unittest.TestCase):
             self.assertFalse(ci_changes.COMPANION_PINS.match(f), f)
 
 
+class Unraid(unittest.TestCase):
+    def test_the_templates_and_validator_apply(self):
+        for f in ["packaging/unraid/lodestar.xml", "packaging/unraid/validate.py", "packaging/unraid/test_validate.py"]:
+            self.assertTrue(ci_changes.UNRAID.match(f), f)
+
+    def test_near_misses_dont(self):
+        for f in ["packaging/unraidX/validate.py", "packaging/icons/lodestar-256.png", "packaging/docker/Dockerfile",
+                  "docs/user/02-install-lodestar-on-unraid-and-docker.md"]:
+            self.assertFalse(ci_changes.UNRAID.match(f), f)
+
+
 class EndToEnd(unittest.TestCase):
     def test_docs_only_pr_reports_web_and_e2e_false(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,6 +122,7 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(kv["infra"], "false")
             self.assertEqual(kv["update_manifest"], "false")
             self.assertEqual(kv["companion_pins"], "false")
+            self.assertEqual(kv["unraid"], "false")
 
     def test_crash_exits_nonzero(self):
         # A bad base must fail the script (the workflow step then fails, not an empty output).
@@ -128,6 +140,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("infra=true", out)
         self.assertIn("update_manifest=true", out)
         self.assertIn("companion_pins=true", out)
+        self.assertIn("unraid=true", out)
 
 
 if __name__ == "__main__":

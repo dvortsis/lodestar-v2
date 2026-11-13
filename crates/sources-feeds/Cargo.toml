@@ -10,6 +10,8 @@ repository.workspace = true
 
 [dependencies]
 lodestar-metainfo.workspace = true
+# For the Nostr event id (NOS-0); the workspace's one version, pinned.
+sha2 = "=0.11.0"
 # The workspace's existing pin (crates/integrations); approved for this
 # crate in the SRC-6 brief. No default features: no encodings, no serde,
 # no HTML entities.

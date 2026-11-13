@@ -534,6 +534,18 @@ impl Store {
     /// first. A row whose entry is gone reads as torrent 0, which matches
     /// nothing, so it's still consumed.
     pub fn promoted_due(&self, applied: i64, limit: usize) -> Result<Vec<PromotedDue>> {
+        self.promoted_due_after(0, applied, limit)
+    }
+
+    /// [`Store::promoted_due`] from past the row whose `reindex_log`
+    /// entry is `after` (0: the queue's head), so a reader can step past
+    /// rows it's leaving queued (X-percolate-promoted-hold).
+    pub fn promoted_due_after(
+        &self,
+        after: i64,
+        applied: i64,
+        limit: usize,
+    ) -> Result<Vec<PromotedDue>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT CAST(substr(s.key, ?3) AS INTEGER), coalesce(r.torrent_id, 0),
                     CAST(s.value AS INTEGER)
@@ -541,9 +553,14 @@ impl Store {
                  ON r.seq = CAST(substr(s.key, ?3) AS INTEGER)
              WHERE s.key > ?1 AND s.key <= ?2 ORDER BY s.key LIMIT ?4",
         )?;
+        let from = if after > 0 {
+            promoted_key(after)
+        } else {
+            PROMOTED.to_owned()
+        };
         let rows = stmt.query_map(
             params![
-                PROMOTED,
+                from,
                 promoted_key(applied),
                 PROMOTED.len() as i64 + 1,
                 sql_limit(limit)
@@ -572,21 +589,62 @@ impl Store {
         now: i64,
     ) -> Result<Vec<Alert>> {
         let tx = crate::begin_write(&mut self.conn)?;
-        let mut created = Vec::new();
-        for (r, ast) in results {
-            let current: Option<(bool, String)> = tx
-                .prepare_cached("SELECT paused, ast FROM saved_searches WHERE id = ?1")?
-                .query_row([r.saved_search_id], |row| Ok((row.get(0)?, row.get(1)?)))
-                .optional()?;
-            if current.is_some_and(|(paused, current)| !paused && current == *ast) {
-                insert_alerts(&tx, r, i64::MIN, now, &mut created)?;
-            }
-        }
+        let created = insert_promoted(&tx, results, now)?;
         tx.prepare_cached("DELETE FROM settings WHERE key > ?1 AND key <= ?2")?
             .execute(params![PROMOTED, promoted_key(seq)])?;
         tx.commit()?;
         Ok(created)
     }
+
+    /// [`Store::record_promoted`], dropping exactly the queue rows in
+    /// `seqs` rather than every row up to one: a row a search is still
+    /// held on stays queued while later ones go
+    /// (X-percolate-promoted-hold). Hits for a row left queued are
+    /// recorded too; a replay of them adds nothing (`alerts` is unique
+    /// per search and torrent), so `results` is per search, not per row.
+    ///
+    /// Every seq must name a queued row, each once: otherwise it's
+    /// [`Error::NotFound`] and nothing is written, alerts included.
+    pub fn record_promoted_rows(
+        &mut self,
+        seqs: &[i64],
+        results: &[(SearchHits<'_>, &str)],
+        now: i64,
+    ) -> Result<Vec<Alert>> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        {
+            let mut delete = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
+            for &seq in seqs {
+                if seq <= 0 || delete.execute([promoted_key(seq)])? != 1 {
+                    // Dropping `tx` rolls back the rows already deleted.
+                    return Err(Error::NotFound("queued promotion"));
+                }
+            }
+        }
+        let created = insert_promoted(&tx, results, now)?;
+        tx.commit()?;
+        Ok(created)
+    }
+}
+
+/// A promoted pass's hits as alerts, for searches neither paused nor
+/// edited since they ran.
+fn insert_promoted(
+    tx: &Transaction<'_>,
+    results: &[(SearchHits<'_>, &str)],
+    now: i64,
+) -> Result<Vec<Alert>> {
+    let mut created = Vec::new();
+    for (r, ast) in results {
+        let current: Option<(bool, String)> = tx
+            .prepare_cached("SELECT paused, ast FROM saved_searches WHERE id = ?1")?
+            .query_row([r.saved_search_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        if current.is_some_and(|(paused, current)| !paused && current == *ast) {
+            insert_alerts(tx, r, i64::MIN, now, &mut created)?;
+        }
+    }
+    Ok(created)
 }
 
 fn record_hits(
@@ -710,6 +768,60 @@ mod tests {
         assert_eq!(s.mark_alerts_read(Some(a), top, 3).unwrap(), 4);
         assert_eq!(s.prune_alerts(2).unwrap(), 2);
         assert_eq!(t(s.alerts(a, None, 10).unwrap()), [2, 7]);
+    }
+
+    /// X-percolate-promoted-hold: a reader steps past rows it leaves
+    /// queued, and exactly the rows named are dropped.
+    #[test]
+    fn promoted_rows_can_be_stepped_past_and_dropped_one_by_one() {
+        let mut s = test_store(10);
+        let id = s.create_saved_search(&input("n"), 10, 0).unwrap();
+        for seq in [2, 4, 6, 8] {
+            queue_promoted(&s.conn, seq).unwrap();
+        }
+        let seqs = |v: Vec<PromotedDue>| v.into_iter().map(|r| r.seq).collect::<Vec<_>>();
+        assert_eq!(seqs(s.promoted_due_after(0, 99, 10).unwrap()), [2, 4, 6, 8]);
+        assert_eq!(seqs(s.promoted_due_after(4, 99, 10).unwrap()), [6, 8]);
+        assert_eq!(seqs(s.promoted_due_after(3, 6, 10).unwrap()), [4, 6]);
+        assert_eq!(seqs(s.promoted_due_after(2, 99, 1).unwrap()), [4]);
+        assert!(s.promoted_due_after(8, 99, 10).unwrap().is_empty());
+        // 2 and 6 stay; the hits for any of them are recorded.
+        let created = s
+            .record_promoted_rows(&[4, 8], &[(hits(id, &[3, 5]), AST)], 1)
+            .unwrap();
+        assert_eq!(t_ids(&created), [3, 5]);
+        assert_eq!(seqs(s.promoted_due(99, 10).unwrap()), [2, 6]);
+        // A replay of the same hits makes nothing twice.
+        let again = s
+            .record_promoted_rows(&[2, 6], &[(hits(id, &[3, 5]), AST)], 2)
+            .unwrap();
+        assert!(again.is_empty());
+        assert!(s.promoted_due(99, 10).unwrap().is_empty());
+    }
+
+    /// A seq that names no queued row (unknown, already dropped, or given
+    /// twice) fails the call and rolls all of it back: no row is dropped
+    /// and no alert is made.
+    #[test]
+    fn record_promoted_rows_refuses_an_unknown_row_and_writes_nothing() {
+        let mut s = test_store(10);
+        let id = s.create_saved_search(&input("n"), 10, 0).unwrap();
+        for seq in [2, 4] {
+            queue_promoted(&s.conn, seq).unwrap();
+        }
+        let both = |s: &Store| s.promoted_due(99, 10).unwrap().len();
+        for seqs in [&[3][..], &[2, 3], &[2, 2], &[0], &[4, 2, 9]] {
+            let r = s.record_promoted_rows(seqs, &[(hits(id, &[3]), AST)], 1);
+            assert!(matches!(r, Err(Error::NotFound(_))), "{seqs:?}: {r:?}");
+            assert_eq!(both(&s), 2, "{seqs:?}: nothing dropped");
+            assert!(s.alerts(id, None, 10).unwrap().is_empty(), "{seqs:?}");
+        }
+        // The same call with known rows goes through.
+        let created = s
+            .record_promoted_rows(&[2, 4], &[(hits(id, &[3]), AST)], 1)
+            .unwrap();
+        assert_eq!(t_ids(&created), [3]);
+        assert_eq!(both(&s), 0);
     }
 
     /// As `record_percolation_unchanged`: a search paused or edited after

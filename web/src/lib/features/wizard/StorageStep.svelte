@@ -27,7 +27,8 @@
 
 <!-- Always in the DOM, empty until the warning arrives, so assistive tech hears the change. -->
 <div role="status" class="contents" data-testid="wizard-storage-fs">
-	{#if warning}<Banner kind="warning">{warning} {m.wizard_storage_fs_note()}</Banner>{/if}
+	{#if warning}<Banner kind="warning" live={false}>{warning} {m.wizard_storage_fs_note()}</Banner
+		>{/if}
 </div>
 <FieldsStep
 	bind:this={step}

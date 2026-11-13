@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/svelte';
+import { configure, render, screen, waitFor, within } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 import { HASH, searchHit, torrentDetail } from './fixtures';
 vi.mock('./visibility', () => ({ watchDetailVisibility: vi.fn() }));
+// The lazy chunks (ErrorState, Identified) arrive by dynamic import: wait for them as long as the slowest CI runner needs.
+configure({ asyncUtilTimeout: 10_000 });
 
 vi.mock('$app/paths', () => ({
 	resolve: (route: string, params?: Record<string, string>) =>
@@ -245,5 +247,38 @@ describe('DetailModel', () => {
 		expect(m.detail?.name).toBe('B');
 		expect(m.hash).toBe(B);
 		m.destroy();
+	});
+});
+
+describe('DetailView identified-as', () => {
+	const ready = (extra = {}) =>
+		render(DetailView, {
+			model: model({ detail: torrentDetail(extra), status: 'ready' }),
+			mode: 'page'
+		});
+	it('mounts the section only when the API sent identified_as', async () => {
+		ready({
+			identified_as: {
+				alternatives: [
+					{
+						alt_titles: [],
+						canonical_title: 'Show',
+						chosen: false,
+						confidence: 80,
+						genres: [],
+						ids: [],
+						source: { id: 7, name: 'Wikidata', plugin: 'wikidata' },
+						year: null
+					}
+				],
+				resolved_via: null
+			}
+		});
+		expect(await screen.findByTestId('detail-identified')).toBeTruthy();
+	});
+	it('shows no section without it', async () => {
+		ready();
+		await flush();
+		expect(screen.queryByTestId('detail-identified')).toBeNull();
 	});
 });
