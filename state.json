@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:53Z",
+  "updated_at": "2026-11-13T21:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8167,7 +8167,13 @@
       "id": "X-flake-scrape-udp-port",
       "note": "crates/tracker-scrape/tests/scrape.rs:158-160 drop-then-probe on UDP (from #847); lower risk, accepts timeout",
       "at": "2026-11-13T20:53Z"
-    }
+    },
+    {
+      "id": "X-filter01-hardening",
+      "note": "next PR in X-filter01-fix session before rejudge: non-blocking review findings from #843 r3 (meter, guard tests, release paths, wording, held-count report). Component level only.",
+      "at": "2026-11-13T21:03Z"
+    },
+    "track-q-triage-candidate-from-843-review (held; local note only)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8559,9 +8565,8 @@
     "843": {
       "slice": "X-filter01-fix",
       "head": "ad992dd5",
-      "state": "Opus review + /security-review and an unanchored second read running; CI running",
-      "at": "2026-11-13T20:14Z",
-      "status": "round 3 pushed; CI running; fresh delta review on ready"
+      "state": "delta+security review MERGE; asked to merge main + regenerate schema (generated openapi overlap, 124 behind); then merge",
+      "at": "2026-11-13T21:03Z"
     },
     "844": {
       "slice": "X-offline-retry-nits",
@@ -9220,7 +9225,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:53Z",
+    "updated": "2026-11-13T21:03Z",
     "items": [
       {
         "slot": 1,
@@ -9463,7 +9468,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:53Z",
+  "updated": "2026-11-13T21:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
