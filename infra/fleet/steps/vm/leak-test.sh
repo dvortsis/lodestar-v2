@@ -44,7 +44,11 @@ V6_URL='http://[2606:4700:4700::1111]/'
 NOT_RUN=222  # a probe whose container never ran its command: never counts as blocked
 fails=0
 block=""
-ep_guard=""
+guard_rule=()   # the recreate guard (DOCKER-USER), once the endpoint is known
+host_rule=()    # the host's own guard (INPUT), once the endpoint is known
+guard_set=""
+guard_held=""
+host_set=""
 counter=""
 flow=""
 FLOW=lodestar-leak-flow
@@ -69,8 +73,20 @@ cleanup() {
     for _ in 1 2 3; do iptables -D DOCKER-USER $counter 2>/dev/null || break; done
   fi
   [[ -n $block ]] && iptables -D DOCKER-USER $block 2>/dev/null
-  [[ -n $ep_guard ]] && iptables -D DOCKER-USER $ep_guard 2>/dev/null
+  [[ -n $guard_set ]] && drop_all DOCKER-USER "${guard_rule[@]}"
+  [[ -n $host_set ]] && drop_all INPUT "${host_rule[@]}"
   return 0
+}
+# drop_all chain rule...: remove every copy of a rule (a killed run, or a
+# failed delete, can leave more than one). Fails when a copy is still there.
+drop_all() {
+  local chain=$1 i
+  shift
+  for ((i = 0; i < 5; i++)); do
+    iptables -C "$chain" "$@" 2>/dev/null || return 0
+    iptables -D "$chain" "$@" 2>/dev/null || return 1
+  done
+  ! iptables -C "$chain" "$@" 2>/dev/null
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -109,31 +125,45 @@ read_iface() {  # the VPN interface gluetun's config names; the image's own defa
   printf '%s\n' "${i:-tun0}"
 }
 # tunnel_up: recreate gluetun alone from the committed compose file and the
-# current wg0.conf. A new container answers packets before gluetun has turned
-# its firewall on: the endpoint keeps sending to the address it knew, and the
-# kernel's "port unreachable" goes back out NATed to the host's address. So the
-# endpoint's packets are held at the host (a DOCKER-USER guard) until gluetun's
-# post-rules are in place in both families; only then can anything reach it.
-# Rules that never load lift the guard after the deadline and fail
-# post_rules_before_egress, so the checks below still run and judge.
+# current wg0.conf. Two windows around it can draw a "port unreachable" to the
+# VPN endpoint, which keeps sending the old session for a while:
+#   - the old container shutting down, or a new one before gluetun has turned
+#     its firewall on: the endpoint's packets that still reach it. The
+#     DOCKER-USER guard holds them at the host until gluetun's post-rules are
+#     in place in both families. Rules that never load leave the guard on
+#     (cleanup lifts it) and fail post_rules_before_egress.
+#   - the host itself: Docker flushes the container IP's conntrack entries
+#     when the old container leaves the network and the new one joins, so the
+#     endpoint's leftover packets for the old session go to the host's own
+#     INPUT, never FORWARD, and the host's kernel would answer from its public
+#     address. The host guard (INPUT) drops them, from before the first
+#     recreate until cleanup. It can't touch the tunnel: the new session's
+#     replies are de-NATed and forwarded, never delivered to the host.
 tunnel_up() {
   local rc i ready=""
-  ep_guard="-s $ep_ip/32 -p udp --sport $ep_port -j DROP"
-  iptables -I DOCKER-USER 1 $ep_guard 2>/dev/null || { ep_guard=""; bad recreate_guarded; return 1; }
+  iptables -I DOCKER-USER 1 "${guard_rule[@]}" 2>/dev/null || { bad recreate_guarded; return 1; }
+  guard_set=1
   LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
   rc=$?
   if ((rc == 0)); then
     for ((i = 0; i < 30; i++)); do  # gluetun turns its firewall on within seconds of starting
-      if [[ $(read_iface) =~ ^[a-z][a-z0-9]{0,14}$ ]] && post_rules_on iptables "$(read_iface)" >/dev/null 2>&1 \
-        && post_rules_on ip6tables "$(read_iface)" >/dev/null 2>&1; then
+      if [[ $(read_iface) =~ ^[a-z][a-z0-9]{0,14}$ ]] \
+        && timeout 10 docker exec gluetun sh -c "$POST_RULES_CHECK" rules iptables "$(read_iface)" >/dev/null 2>&1 \
+        && timeout 10 docker exec gluetun sh -c "$POST_RULES_CHECK" rules ip6tables "$(read_iface)" >/dev/null 2>&1; then
         ready=1; break
       fi
       sleep 1
     done
-    [[ -n $ready ]] || bad post_rules_before_egress
   fi
-  iptables -D DOCKER-USER $ep_guard 2>/dev/null && ep_guard=""
+  if ((rc == 0)) && [[ -z $ready ]]; then
+    bad post_rules_before_egress  # the guard stays on: nothing reaches a gluetun without its rules
+    guard_held=1
+  elif drop_all DOCKER-USER "${guard_rule[@]}"; then
+    guard_set="" guard_held=""
+  else
+    bad recreate_guard_lifted
+  fi
   return "$rc"
 }
 # post_rules_on family iface: gluetun loaded its post-rules
@@ -161,7 +191,7 @@ POST_RULES_CHECK='for t in "$1" "$1-nft" "$1-legacy"; do
   [ -n "$acc" ] && [ -n "$mark" ] && [ -n "$drop" ] && [ -n "$icmp" ] || continue
   [ "$mark" -lt "$acc" ] && [ "$drop" -lt "$acc" ] && [ "$icmp" -lt "$acc" ] && exit 0
 done; exit 1'
-post_rules_on() { docker exec gluetun sh -c "$POST_RULES_CHECK" rules "$1" "$2"; }
+post_rules_on() { timeout 10 docker exec gluetun sh -c "$POST_RULES_CHECK" rules "$1" "$2"; }
 # A connection opened through the tunnel that keeps sending through both
 # down phases (an unprivileged ping), so the leak gluetun's post-rules close
 # is exercised every run, not only when gluetun happens to hold one open.
@@ -269,8 +299,7 @@ judge_capture() {  # $1: phase. The capture must have run through every probe, t
     pass "capture_read_$1"
     printf '%s\n' "$parsed"
   else
-    bad "capture_read_$1"
-    echo "count captured_packets_$1 0"
+    bad "capture_read_$1"  # no count line: an unreadable capture is never read as zero
   fi
   if [[ -n $alive && -s $work/cap-$1.pcap && $captured == 0 ]]; then pass "no_egress_captured_$1"; else bad "no_egress_captured_$1"; fi
 }
@@ -312,6 +341,12 @@ if ((rc == 0)); then bad block_running; finish; fi
 
 # The tunnel.
 install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
+guard_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-guard -j DROP)
+host_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-host -j DROP)
+# A killed run can have left either guard behind; neither may outlive its run.
+{ drop_all DOCKER-USER "${guard_rule[@]}" && drop_all INPUT "${host_rule[@]}"; } || { bad recreate_guard_lifted; finish; }
+iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null || { bad host_guarded; finish; }
+host_set=1
 tunnel_up || { bad tunnel_started; finish; }
 wait_healthy; up=$?
 unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so
@@ -348,6 +383,8 @@ rx_zero() {
 no_handshake=""
 if ((up == 0)); then
   pass tunnel_healthy
+elif [[ -n $guard_held ]]; then
+  bad recreate_guard_held  # gluetun never loaded its post-rules, so the endpoint stays held: not a credentials problem
 elif rx_zero; then
   no_handshake=1
   bad wireguard_handshake_never_completed  # check the VPN credentials
