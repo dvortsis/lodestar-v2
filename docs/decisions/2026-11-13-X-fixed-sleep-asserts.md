@@ -1,4 +1,4 @@
-# X-fixed-sleep-asserts decisions
+# X-fixed-sleep-asserts decisions (#835)
 
 Track Q (code review 2026-11-12: TEST-02, DHT-03, LOGSET-04, WEBCORE-05). Tests only; no product code changed. Applies CLAUDE.md "Multi-session work" (owner, `docs/owner-decisions.md` §2.24).
 
