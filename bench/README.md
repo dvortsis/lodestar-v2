@@ -121,7 +121,9 @@ relevance --data-dir /path/to/data --dir /path/to/set --held-out # aggregates on
 - **It opens read-only.** It refuses while Lodestar is running, when the
   store wasn't closed cleanly, and when the store or index is at another
   schema. It never migrates or rebuilds, and the index must be writable
-  (a tantivy reader locks `.tantivy-meta.lock`).
+  (a tantivy reader locks `.tantivy-meta.lock`). A run holds shared locks
+  on the server's lock files, so a Lodestar started during it fails to
+  start, reporting the index as locked.
 - **The baseline** records the judgments' hash, the store's torrent
   count and the index version. `--gate` fails if any of them changed.
 - **`--held-out`** is for judged sets that must stay on the machine. It

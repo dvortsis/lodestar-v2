@@ -617,6 +617,9 @@ struct Set {
     /// left with nothing to find.
     not_in_store: usize,
     skipped: usize,
+    /// Skipped queries that still forbid a stored torrent: searched only
+    /// for the forbidden check, and left out of the means.
+    checks: Vec<Judged>,
     /// The corpus's size; `None` with `--data-dir`.
     corpus: Option<usize>,
     /// What the index lives in: the corpus's temporary directory, or the
@@ -668,6 +671,7 @@ fn corpus_set(a: &Args) -> Result<Set, Fail> {
         store: None,
         not_in_store: 0,
         skipped: 0,
+        checks: Vec::new(),
         corpus: Some(corpus.len()),
         _hold: Box::new(tmp),
     })
@@ -695,6 +699,7 @@ fn data_set(a: &Args, dir: &Path) -> Result<Set, Fail> {
             .any(|g| matches!(g, Grade::Graded(g) if *g > 0))
     };
     let mut kept = Vec::with_capacity(judged.len());
+    let mut checks = Vec::new();
     let mut skipped = 0;
     for mut j in judged {
         let (had, judged_any) = (positive(&j), !j.grades.is_empty());
@@ -703,6 +708,9 @@ fn data_set(a: &Args, dir: &Path) -> Result<Set, Fail> {
         // it would count a 1 that tested nothing.
         if (had && !positive(&j)) || (judged_any && j.grades.is_empty()) {
             skipped += 1;
+            if j.grades.values().any(|g| *g == Grade::Forbidden) {
+                checks.push(j);
+            }
         } else {
             kept.push(j);
         }
@@ -716,6 +724,7 @@ fn data_set(a: &Args, dir: &Path) -> Result<Set, Fail> {
         store: Some((data.torrents, data.index_version.clone())),
         not_in_store: hashes.len() - ids.len(),
         skipped,
+        checks,
         corpus: None,
         _hold: Box::new(data),
     })
@@ -738,7 +747,9 @@ fn run(a: &Args) -> Result<bool, Fail> {
     let cancel = CancelToken::new();
 
     let mut outcomes = Vec::with_capacity(set.judged.len());
-    for j in &set.judged {
+    let mut checked = Vec::with_capacity(set.checks.len());
+    let all = set.judged.iter().map(|j| (j, true));
+    for (j, scored) in all.chain(set.checks.iter().map(|j| (j, false))) {
         let node = parse(&j.query).map_err(|e| query_error(a, j, e))?;
         let lease = Lease::new(
             set.index.clone(),
@@ -773,17 +784,26 @@ fn run(a: &Args) -> Result<bool, Fail> {
             .collect();
         let refs: Vec<&str> = results.iter().map(String::as_str).collect();
         let scores = score(&refs, &j.grades);
-        outcomes.push(Outcome {
+        let o = Outcome {
             judged: j,
             results,
             scores,
-        });
+        };
+        if scored {
+            outcomes.push(o);
+        } else {
+            checked.push(o);
+        }
     }
 
     let ndcg = mean(outcomes.iter().map(|o| o.scores.ndcg));
     let mrr = mean(outcomes.iter().filter_map(|o| o.scores.mrr));
     let recall = mean(outcomes.iter().filter_map(|o| o.scores.recall));
-    let forbidden: Vec<&Outcome<'_>> = outcomes.iter().filter(|o| o.scores.forbidden > 0).collect();
+    let forbidden: Vec<&Outcome<'_>> = outcomes
+        .iter()
+        .chain(&checked)
+        .filter(|o| o.scores.forbidden > 0)
+        .collect();
     let current = Baseline {
         ndcg,
         mrr,

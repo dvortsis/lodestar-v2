@@ -227,6 +227,31 @@ fn scores_match_a_hand_computation() {
     assert!(out.contains(&format!("{}:3", f.hashes["kestrel"])), "{out}");
 }
 
+/// A query skipped because its positive grades aren't stored is still
+/// checked for forbidden torrents that are.
+#[test]
+fn a_skipped_query_still_checks_forbidden_results() {
+    let f = fixture();
+    let set = tempfile::tempdir().unwrap();
+    let judged = format!(
+        "? quillon fen\n= only an unstored copy is right\n3 {MISSING_1}\nx {}\n",
+        f.hashes["quillon"]
+    );
+    std::fs::write(set.path().join("judgments.txt"), judged).unwrap();
+    let o = run_on(&f.data, set.path(), &[]);
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}\n{err}");
+    assert_eq!(figure(&out, "forbidden"), "1 queries", "{out}");
+    assert!(figure(&out, "skipped").starts_with("1 queries"), "{out}");
+    assert!(
+        out.contains("FAIL forbidden result for \"quillon fen\""),
+        "{out}"
+    );
+    // It counts as forbidden, so the gate fails on it.
+    let o = run_on(&f.data, set.path(), &["--gate"]);
+    assert!(!o.status.success());
+}
+
 /// Every path under `dir`, and each file's length and modification time.
 /// A directory is recorded by its presence only: a file created, removed
 /// or renamed in it shows in the paths. Its own mtime is left out because

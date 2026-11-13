@@ -217,8 +217,8 @@ mod tests {
     use super::*;
     use rand::{RngExt, SeedableRng};
 
-    const H1: &str = "00112233445566778899aabbccddeeff00112233";
-    const H2: &str = "ffeeddccbbaa99887766554433221100ffeeddcc";
+    const H1: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d";
+    const H2: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3";
 
     #[test]
     fn corpus_keys_parse_and_validate() {
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(j[0].grades[H2], Grade::Forbidden);
         let bom = format!("\u{feff}{text}");
         assert_eq!(parse(&bom, &Keys::Hash).unwrap(), j);
-        assert_eq!(hash_bytes(H1).unwrap()[..3], [0x00, 0x11, 0x22]);
+        assert_eq!(hash_bytes(H1).unwrap()[..3], [0x0a, 0x1b, 0x2c]);
     }
 
     /// Each malformed case, its line and its message; the redacted form
