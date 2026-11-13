@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:14Z",
+  "updated_at": "2026-11-13T20:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8155,6 +8155,11 @@
       "id": "slices-yaml-x-gluetun-guard-reboot",
       "what": "add entry incl. run.py, copy-off.sh, cloud-fleet-runbook in owns (#845)",
       "added": "2026-11-13T20:14Z"
+    },
+    {
+      "id": "scrub-host-guard-fields",
+      "note": "scrub.py owner adds host_guard_drops and damaged fields (from #845 review N7)",
+      "at": "2026-11-13T20:29Z"
     }
   ],
   "main_health": [
@@ -8562,9 +8567,10 @@
     },
     "845": {
       "slice": "X-gluetun-guard-reboot",
-      "head": "e680bc72",
+      "head": "d22b68b9",
       "status": "open; runner calls sent on run.py timeout, copy-off order, runbook, two owner flags",
-      "at": "2026-11-13T20:14Z"
+      "at": "2026-11-13T20:29Z",
+      "state": "review CHANGES relayed (B1 boot guard early + fail closed, I1 re-hold timing, N1-N6, N8); awaiting one push + ready"
     }
   },
   "merged_log": [
@@ -9211,7 +9217,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:14Z",
+    "updated": "2026-11-13T20:29Z",
     "items": [
       {
         "slot": 1,
@@ -9300,7 +9306,7 @@
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
         "since": "2026-11-13T19:38Z",
-        "doing": "building",
+        "doing": "#845 fix round after review CHANGES",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9454,7 +9460,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:14Z",
+  "updated": "2026-11-13T20:29Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
