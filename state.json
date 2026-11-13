@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:10Z",
+  "updated_at": "2026-11-13T17:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8101,6 +8101,11 @@
       "id": "discovery-to-searchable-p95-over-2h",
       "note": "cloud Main crawl 2026-11-13 (Balanced): discovery_to_searchable p50 ~7.1k s, p95 >7.2k s (top bucket). Likely fetch-pool queue wait at 4.8% fetch success; look under Track C (CR-ADM) before any M2-style change; check the histogram needs buckets above 7200",
       "at": "2026-11-13T17:10Z"
+    },
+    {
+      "id": "ops-md-import-limit-pilot",
+      "note": "docs/operations.md ~line 392 (\"the import is refused\"): mention a --limit pilot sizes the space check to min(rows, limit) (after #840); runner docs PR or user-docs slice",
+      "at": "2026-11-13T17:12Z"
     }
   ],
   "main_health": [
@@ -8507,6 +8512,12 @@
       "head": "3182efc8",
       "review": "fresh Opus + security + concurrency review running; chaos scenario for cap/stop approved (testing.rs graceful per-worker stop, test-only, \u00a72.33) to ride with review fixes in one push; owner FYI: lease cap 2x pool cap (100k default, 2M max), stop deadline 30 s (25 + 5)",
       "at": "2026-11-13T17:06Z"
+    },
+    "840": {
+      "slice": "X-import-pilot-fixes",
+      "head": "08b4677f",
+      "review": "fresh Opus + security review running",
+      "at": "2026-11-13T17:12Z"
     }
   },
   "merged_log": [
@@ -9153,7 +9164,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T17:10Z",
+    "updated": "2026-11-13T17:12Z",
     "items": [
       {
         "slot": 1,
@@ -9234,7 +9245,7 @@
       {
         "slot": 14,
         "status": "active",
-        "doing": "cloud-testing: session_01MMjhnBa3bturH1qvVXJ9a9 (Opus): import --limit space check (blocks pilots), estimate 2048, loopback flag message, smoke.py notice, bitmagnet_check samples, findings counters, runbook duration",
+        "doing": "cloud-testing: session_01MMjhnBa3bturH1qvVXJ9a9 (Opus): #840 open, CI + runner review running",
         "slice": "X-import-pilot-fixes",
         "agent": "claude",
         "role": "build",
@@ -9395,7 +9406,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:10Z",
+  "updated": "2026-11-13T17:12Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
