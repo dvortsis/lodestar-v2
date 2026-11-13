@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T19:55Z",
+  "updated_at": "2026-11-13T20:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8150,6 +8150,11 @@
       "id": "slices-yaml-x-offline-retry-nits",
       "what": "add X-offline-retry-nits entry (web/src/routes/+error.svelte, error.test.ts, ConnectionView.svelte, boot-shell e2e) in next runner PR",
       "added": "2026-11-13T19:51Z"
+    },
+    {
+      "id": "slices-yaml-x-gluetun-guard-reboot",
+      "what": "add entry incl. run.py, copy-off.sh, cloud-fleet-runbook in owns (#845)",
+      "added": "2026-11-13T20:14Z"
     }
   ],
   "main_health": [
@@ -8550,10 +8555,16 @@
     },
     "843": {
       "slice": "X-filter01-fix",
-      "head": "ade47428",
+      "head": "ad992dd5",
       "state": "Opus review + /security-review and an unanchored second read running; CI running",
-      "at": "2026-11-13T19:43Z",
-      "status": "delta+security CHANGES relayed (snapshot scrub, fallback cut, key test, folder charge, held-detail wording); awaiting push"
+      "at": "2026-11-13T20:14Z",
+      "status": "round 3 pushed; CI running; fresh delta review on ready"
+    },
+    "845": {
+      "slice": "X-gluetun-guard-reboot",
+      "head": "e680bc72",
+      "status": "open; runner calls sent on run.py timeout, copy-off order, runbook, two owner flags",
+      "at": "2026-11-13T20:14Z"
     }
   },
   "merged_log": [
@@ -9200,7 +9211,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T19:55Z",
+    "updated": "2026-11-13T20:14Z",
     "items": [
       {
         "slot": 1,
@@ -9443,7 +9454,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T19:55Z",
+  "updated": "2026-11-13T20:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
