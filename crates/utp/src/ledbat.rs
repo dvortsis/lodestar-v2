@@ -16,7 +16,7 @@ const BASE_DELAY_SLOTS: usize = 3;
 const SLOT: Duration = Duration::from_secs(60);
 
 pub(crate) const INITIAL_RTO: Duration = Duration::from_secs(1);
-const MIN_RTO: Duration = Duration::from_millis(500);
+pub(crate) const MIN_RTO: Duration = Duration::from_millis(500);
 pub(crate) const MAX_RTO: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
@@ -138,7 +138,11 @@ impl Rtt {
         }
     }
 
+    /// A round-trip sample. One beyond `MAX_RTO` means nothing more to the
+    /// timer, so it counts as `MAX_RTO`: an outlier can't hold the smoothed
+    /// round trip up for long.
     pub fn sample(&mut self, r: Duration) {
+        let r = r.min(MAX_RTO);
         match self.srtt {
             None => {
                 self.srtt = Some(r);
@@ -171,6 +175,12 @@ impl Rtt {
     /// work, so data starts from the plain timeout (RFC 6298 §5.7).
     pub fn reset_backoff(&mut self) {
         self.backoff = 0;
+    }
+
+    /// Timeouts since the last sample (for tests).
+    #[cfg(test)]
+    pub fn backoff(&self) -> u32 {
+        self.backoff
     }
 
     pub fn back_off(&mut self) {
@@ -269,5 +279,15 @@ mod tests {
         assert_eq!(r.rto(), MAX_RTO);
         r.sample(Duration::from_millis(400));
         assert!(r.rto() < MAX_RTO, "a fresh sample resets the backoff");
+    }
+
+    #[test]
+    fn a_huge_sample_counts_as_the_maximum() {
+        let mut r = Rtt::new();
+        r.sample(Duration::from_secs(3600));
+        assert_eq!(r.srtt(), MAX_RTO);
+        r.sample(Duration::MAX);
+        assert_eq!(r.srtt(), MAX_RTO);
+        assert_eq!(r.rto(), MAX_RTO);
     }
 }
