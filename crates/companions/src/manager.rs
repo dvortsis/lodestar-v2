@@ -1286,6 +1286,18 @@ impl Manager {
         self.0.snapshot.subscribe()
     }
 
+    /// Whether an operation on `id` holds its slot now (an install,
+    /// update, removal, restart or regenerate), so a new one would be
+    /// refused `busy`. Only a moment's answer: the operation itself still
+    /// claims the slot, and is refused if another took it meanwhile.
+    pub fn busy(&self, id: &CompanionId) -> bool {
+        self.0
+            .busy
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(id)
+    }
+
     /// Whether any `integrations.clients` entry exists.
     pub fn set_download_clients(&self, any: bool) {
         self.0

@@ -1353,6 +1353,156 @@
         ]
       }
     },
+    "/companions/{id}/egress": {
+      "put": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Sets its route, then restarts it on the new route. The route is checked\nas a source's is (`direct`, or `socks5` with a usable `host:port`; the\n`interface` and `bind_address` routes, whose lookups would leave outside\nthem, are `409 route_unavailable`), and a SOCKS5 route's kill switch is\nalways on. Like a source's route change it needs the admin `password`\n(`428 confirm_required`). `200` once saved: `restarting` says whether\nits restart on the new route began (its row's `health` shows when it's\nback); when it didn't, `not_restarted` says why, and the route is used\nat its next start.",
+        "operationId": "setCompanionEgress",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionEgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionEgressChanged"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_egress`, with `field`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`bad_password`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`route_unavailable`, `takes_no_route`, `cant_follow_route` (it can't follow that route kind: qBittorrent takes no SOCKS5 proxy), `not_installed`, `busy`, `not_wired`. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`confirm_required`: no password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many password attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/companions/{id}/guided/forget": {
       "post": {
         "tags": [
@@ -12688,6 +12838,7 @@
         "required": [
           "available",
           "credentials",
+          "egress",
           "health",
           "id",
           "installed",
@@ -12695,6 +12846,7 @@
           "name",
           "opt_in",
           "refusal",
+          "runs",
           "templates"
         ],
         "properties": {
@@ -12711,6 +12863,17 @@
               "type": "string"
             },
             "description": "The stored credentials, by field (`webui_password`, `api_key`):\nnames only, never values. What `…/reveal` can show."
+          },
+          "egress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CompanionEgress",
+                "description": "Its route (Q18), read from its saved row as its start reads it.\nNull unless `runs` is `lodestar` (elsewhere whatever runs it sets\nits route), and for a companion that takes no route (gluetun).\nRead-only here: `PUT /companions/{id}/egress` changes it."
+              }
+            ]
           },
           "health": {
             "oneOf": [
@@ -12759,6 +12922,21 @@
             ],
             "description": "Why it can't be installed or updated here, as a stable code\n(`native_in_container`, `awaiting_pin`, `unsupported_platform`,\n`guided_only`, …); null when it can, or when it's up to date."
           },
+          "runs": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Where a companion runs (CMP-9a's \"where it runs\").",
+                "enum": [
+                  "lodestar",
+                  "own_container",
+                  "yours",
+                  "not_here"
+                ]
+              }
+            ],
+            "description": "Where it runs, or would run if it were installed here."
+          },
           "templates": {
             "type": "array",
             "items": {
@@ -12797,6 +12975,84 @@
             "items": {
               "type": "string"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionEgress": {
+        "type": "object",
+        "description": "A companion's route (Q18): the same setting, with the same names, as a\nsource's route. A SOCKS5 route carries no credentials.",
+        "required": [
+          "from",
+          "setting"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "Where a companion's route comes from.",
+            "enum": [
+              "saved",
+              "source"
+            ]
+          },
+          "setting": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EgressSetting",
+                "description": "The route. Null when the saved setting can't be read: the\ncompanion's route then stays down, never direct, until it's set\nagain."
+              }
+            ]
+          }
+        }
+      },
+      "CompanionEgressChanged": {
+        "type": "object",
+        "description": "The route was saved. `restarting` says whether the companion's restart\non it has begun; when it hasn't, the route is saved but not applied yet,\nand it's used at the companion's next start.",
+        "required": [
+          "egress",
+          "id",
+          "not_restarted",
+          "restarting"
+        ],
+        "properties": {
+          "egress": {
+            "$ref": "#/components/schemas/CompanionEgress",
+            "description": "The route as saved now."
+          },
+          "id": {
+            "type": "string"
+          },
+          "not_restarted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't restarting on the new route, as a stable code\n(`not_wired`, `busy`, `restart_failed`, …); null when it is."
+          },
+          "restarting": {
+            "type": "boolean",
+            "description": "True once its restart on the new route has begun. That isn't yet\nrunning on it: the companion's row (its `health`) shows when it's\nback, as after `POST …/restart`. False: saved, not applied yet."
+          }
+        }
+      },
+      "CompanionEgressRequest": {
+        "type": "object",
+        "description": "`PUT /companions/{id}/egress`: the new route, and the admin password\nentered again (a route change always needs it, as a source's does).",
+        "required": [
+          "egress"
+        ],
+        "properties": {
+          "egress": {
+            "$ref": "#/components/schemas/EgressSetting"
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false
@@ -14527,6 +14783,47 @@
           "rtorrent",
           "aria2"
         ]
+      },
+      "EgressSetting": {
+        "type": "object",
+        "description": "A source's egress setting.",
+        "required": [
+          "route"
+        ],
+        "properties": {
+          "dns": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Who resolves names on a SOCKS5 route.",
+                "enum": [
+                  "proxy",
+                  "local"
+                ]
+              }
+            ],
+            "description": "For `socks5`: who resolves names. Left out, it's `proxy` for a\nsource that only reaches its built-in sites, so lookups stay inside\nthe tunnel, and `local` for a source whose sites you enter, so a\npublic name can't reach devices on the proxy's network."
+          },
+          "proxy": {
+            "type": "string",
+            "description": "For `socks5`: the proxy as `host:port` (a name, an IPv4 address or\na bracketed IPv6 address). A name is resolved when the source\nstarts."
+          },
+          "route": {
+            "type": "string",
+            "description": "How a source's traffic leaves (§18.4, §18.7).",
+            "enum": [
+              "direct",
+              "socks5",
+              "interface",
+              "bind_address"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "proxy": "10.8.0.1:1080",
+          "route": "socks5"
+        }
       },
       "EmailDraft": {
         "type": "object",

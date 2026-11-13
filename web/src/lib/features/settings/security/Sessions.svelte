@@ -1,10 +1,11 @@
 <script lang="ts">
-	// Sessions (§10.10.8): this browser, and Sign out other sessions behind the password
+	// Sessions (§10.10.8): this browser with its Sign out, and Sign out other sessions behind the password
 	// confirmation (§10.10.7). `POST /sessions/revoke-others` rotates the session key and sets a new
 	// cookie for this browser, so it stays signed in.
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import LogoutButton from '$lib/features/auth/LogoutButton.svelte';
 	import { confirmWithPassword } from './confirm';
 	import Result from './Result.svelte';
 
@@ -41,6 +42,7 @@
 	<p>{m.settings_security_sessions_current()}</p>
 	<p class="text-muted-text">{m.settings_security_sessions_help()}</p>
 	<div class="flex flex-wrap items-center gap-3">
+		<LogoutButton variant="secondary" testid="security-sign-out" />
 		<Button loading={busy} onclick={revoke} data-testid="security-revoke-others"
 			>{m.settings_security_sessions_revoke()}</Button
 		>

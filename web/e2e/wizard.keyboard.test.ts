@@ -124,15 +124,23 @@ test.describe('first-run wizard', () => {
 		await kbd.tabTo(page.getByRole('button', { name: 'Continue' }));
 		await kbd.press('Enter');
 		await expect(h2(page, 'Crawl intensity')).toBeFocused();
-		await expect(page.getByRole('radio', { name: 'balanced' })).toBeChecked();
+		await expect(page.getByRole('radio', { name: 'Balanced' })).toBeChecked();
+		// Settings' own labels, never the raw key (X-wizard-labels-signout).
+		await expect(page.getByRole('button', { name: 'Options for Crawl intensity' })).toBeVisible();
+		await expect(page.getByText('Choose how much work the crawler schedules.')).toBeVisible();
 		await expectNoA11yViolations(page);
-		await kbd.tabTo(page.getByRole('radio', { name: 'balanced' }));
+		await kbd.tabTo(page.getByRole('radio', { name: 'Balanced' }));
 		await kbd.press('ArrowLeft');
-		await expect(page.getByRole('radio', { name: 'low' })).toBeChecked();
+		await expect(page.getByRole('radio', { name: 'Low' })).toBeChecked();
 		await kbd.tabTo(page.getByRole('button', { name: 'Save and continue' }));
 		await kbd.press('Enter');
 		await expect(h2(page, 'Storage & retention')).toBeFocused();
 		expect(backend.patches).toEqual([{ crawler: { if_revision: 3, intensity: 'low' } }]);
+		await expect(page.getByRole('button', { name: 'Options for Keep raw metadata' })).toBeVisible();
+		await expect(page.getByText('Keep metadata archives for later use.')).toBeVisible();
+		await expect(
+			page.getByRole('button', { name: /Options for (archive_raw|mmap_mib)/ })
+		).toHaveCount(0);
 		await expectNoA11yViolations(page);
 
 		// Skip sends nothing.
