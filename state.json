@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T22:40Z",
+  "updated_at": "2026-11-13T23:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8107,21 +8107,6 @@
       "note": "docs/operations.md ~line 392 (\"the import is refused\"): mention a --limit pilot sizes the space check to min(rows, limit) (after #840); runner docs PR or user-docs slice",
       "at": "2026-11-13T17:12Z"
     },
-    {
-      "id": "lease-per-worker-key-index",
-      "note": "#839 review nit 3: LeaseTable reconcile/evict scan all leases under both locks per handshake; per-worker key index (held -> HashMap<WorkerId,HashSet<InfoHash>>) or a 1 s floor across sessions",
-      "at": "2026-11-13T17:13Z"
-    },
-    {
-      "id": "busy-capped-metrics-export",
-      "note": "#839 review nit 4: busy_capped only in the snapshot; export on /metrics with a docs/metrics.md row; log hitting the cap (rate-limited)",
-      "at": "2026-11-13T17:13Z"
-    },
-    {
-      "id": "regrant-pool-room",
-      "note": "#839 session: re-grants never check the worker pool room; a full pool evicts and reports lost, then re-harvests. Now bounded by the 2x pool-cap lease cap (was unbounded); consider room-aware regrant",
-      "at": "2026-11-13T17:22Z"
-    },
     "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
     "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
     {
@@ -8140,11 +8125,6 @@
       "added": "2026-11-13T19:31Z"
     },
     {
-      "id": "X-worker-drained-read-events",
-      "what": "worker session: read events while drained() waits for its reply, so a full event queue cannot push the stop onto the slow path (pre-existing, from #839 review)",
-      "added": "2026-11-13T19:38Z"
-    },
-    {
       "id": "slices-yaml-x-offline-retry-nits",
       "what": "add X-offline-retry-nits entry (web/src/routes/+error.svelte, error.test.ts, ConnectionView.svelte, boot-shell e2e) in next runner PR",
       "added": "2026-11-13T19:51Z"
@@ -8155,11 +8135,6 @@
       "added": "2026-11-13T20:14Z"
     },
     "slices-yaml-x-gluetun-guard-reboot-nits",
-    {
-      "id": "X-worker-flush-nits",
-      "note": "from #839 delta review: runtime.rs flush on Changed answers done without sending on the new session (comment says otherwise; fix comment or loop to Done within deadline); optional connect+flush same-wake test; leases.rs:2558 panic text \"granted\"",
-      "at": "2026-11-13T20:43Z"
-    },
     "slices-yaml-x-flake-companions-loopback",
     "slices-yaml-x-scrub-guard-fields",
     {
@@ -8171,7 +8146,8 @@
     "slices-yaml-x-flake-scrape-udp-port",
     "slices-yaml-x-scrub-guard-fields(+nits, copy-off.sh)",
     "slices.yaml entry for x-filter01-hardening (no brief file; worked from runner messages) in next runner PR",
-    "owner FYI after #855 merges: FILTER-01 held count 0 of 515 on in-repo corpora (no realistic corpus in repo)"
+    "owner FYI after #855 merges: FILTER-01 held count 0 of 515 on in-repo corpora (no realistic corpus in repo)",
+    "slices-yaml-x-companions-loopback-nits + x-worker-839-followups entries in next runner PR"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9211,7 +9187,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T22:40Z",
+    "updated": "2026-11-13T23:03Z",
     "items": [
       {
         "slot": 1,
@@ -9245,11 +9221,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-companions-loopback-nits",
+        "slice": "X-worker-839-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "building (follow-up to #847)",
-        "since": "2026-11-13T21:53Z",
+        "doing": "building (brief sent)",
+        "since": "2026-11-13T23:03Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
@@ -9472,7 +9448,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T22:40Z",
+  "updated": "2026-11-13T23:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9963,6 +9939,12 @@
       "slice": "X-filter01-fix",
       "merged": "18e9d615",
       "at": "2026-11-13T22:20Z"
+    },
+    {
+      "pr": 853,
+      "slice": "X-companions-loopback-nits",
+      "merged": "de4d6161",
+      "at": "2026-11-13T23:03Z"
     }
   ]
 }
