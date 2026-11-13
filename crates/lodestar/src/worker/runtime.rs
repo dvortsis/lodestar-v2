@@ -799,8 +799,22 @@ impl Work for Runtime {
         }
     }
 
-    /// The leases still held, keys and results out (WK-11b).
+    /// The leases still held, keys and results out (WK-11b). None while
+    /// the spool isn't open yet or still has results to replay
+    /// (CLUSTER-01): their leases
+    /// aren't in `WorkerLeases` until their commit, so a list now would
+    /// give them back and turn each replayed result into a late one. The
+    /// replay draining asks for the comparison, and the new session's list
+    /// goes out then.
     fn holding(&mut self) -> Option<Vec<lodestar_cluster::proto::HeldLease>> {
+        if self
+            .shared
+            .spool
+            .as_ref()
+            .is_some_and(|sp| sp.replay_pending())
+        {
+            return None;
+        }
         let list = self.shared.leases.tokens().into_iter();
         Some(
             list.map(|(key, token)| lodestar_cluster::proto::HeldLease {
@@ -817,12 +831,31 @@ impl Work for Runtime {
         }
     }
 
+    /// A local stop with no session (CLUSTER-05): the stages stop as in a
+    /// drain, and what's fetched and sealed goes to the spool, for the
+    /// next start to send. Outcomes not reported can't be: their leases go
+    /// back by the TTL, or at the next start's reconcile (CLUSTER-01).
+    async fn stop(&mut self) {
+        let started = std::time::Instant::now();
+        self.stop_stages().await;
+        self.flush(started).await;
+    }
+
     async fn drain(&mut self) -> Vec<OutcomeItem> {
         let started = std::time::Instant::now();
         self.stop_stages().await;
         // What's fetched and sealed goes out before `Drained`, within what's
         // left of the deadline: results travel on the same command channel,
         // so the coordinator takes them first (no `Accepted` is awaited).
+        self.flush(started).await;
+        self.take_outcomes().await
+    }
+}
+
+impl Runtime {
+    /// Every result queued goes out on the session, or to the spool with
+    /// none, within what's left of the drain deadline since `started`.
+    async fn flush(&self, started: std::time::Instant) {
         let left = self
             .shared
             .config
@@ -832,7 +865,6 @@ impl Work for Runtime {
         if self.shared.flush.send(done).is_ok() {
             let _ = tokio::time::timeout(left, flushed).await;
         }
-        self.take_outcomes().await
     }
 }
 
@@ -2083,6 +2115,63 @@ async fn send_due(
     }
 }
 
+/// How [`send_due_or_changed`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sending {
+    /// Every due batch went out, or the session refused one.
+    Done,
+    /// The session changed (a disconnect, or a new session) first.
+    Changed,
+    /// The runtime's session watch is gone: the task ends.
+    Gone,
+}
+
+/// [`send_due`], given up as soon as the session changes. A batch whose
+/// send was cut short isn't marked sent, so it goes again or to the spool.
+async fn send_due_or_changed(
+    s: &Shared,
+    session: Option<SessionHandle>,
+    flight: &mut BTreeMap<u64, InFlight>,
+    refused_too: bool,
+    sessions: &mut watch::Receiver<Option<SessionHandle>>,
+) -> Sending {
+    tokio::select! {
+        () = send_due(s, session, flight, refused_too) => Sending::Done,
+        changed = sessions.changed() => match changed {
+            Ok(()) => Sending::Changed,
+            Err(_) => Sending::Gone,
+        },
+    }
+}
+
+/// The current session, marked seen. On a change of generation (a
+/// session came or went, even one missed while busy), whatever wasn't
+/// accepted goes again (a batch id is idempotent, §19.2); replayed batches
+/// are dropped and read again from the spool, past what was accepted.
+///
+/// The session first, then the generation: a connect bumps the generation
+/// before it replaces the session, so a new session is never seen with
+/// the old generation (and reset again after).
+fn observe(
+    s: &Shared,
+    sessions: &mut watch::Receiver<Option<SessionHandle>>,
+    seen: &mut u64,
+    flight: &mut BTreeMap<u64, InFlight>,
+    replay: &mut Replay,
+) -> Option<SessionHandle> {
+    let session = sessions.borrow_and_update().clone();
+    let now_gen = s.generation.load(Ordering::Acquire);
+    if now_gen != *seen {
+        *seen = now_gen;
+        flight.retain(|_, f| f.from.is_none());
+        replay.restart();
+        for f in flight.values_mut() {
+            f.sent = false;
+        }
+    }
+    session
+}
+
 /// The session task: sealed results into `Results` batches, kept until
 /// accepted, sent again on a new session and after a refusal.
 async fn send_results(
@@ -2102,23 +2191,7 @@ async fn send_results(
     }
     let mut seen = s.generation.load(Ordering::Acquire);
     loop {
-        // The session first, then the generation: a connect bumps the
-        // generation before it replaces the session, so a new session is
-        // never seen with the old generation (and reset again after).
-        let session = sessions.borrow_and_update().clone();
-        // A session change, even one missed while busy below: whatever
-        // wasn't accepted goes again (a batch id is idempotent, §19.2).
-        // Replayed batches are dropped here and read again from the
-        // spool, past what was accepted.
-        let now_gen = s.generation.load(Ordering::Acquire);
-        if now_gen != seen {
-            seen = now_gen;
-            flight.retain(|_, f| f.from.is_none());
-            replay.restart();
-            for f in flight.values_mut() {
-                f.sent = false;
-            }
-        }
+        let session = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
         if let Some(sp) = &s.spool {
             // No session: batches go to disk. A session: the spool is
             // replayed, a segment at a time (WK-11).
@@ -2146,7 +2219,14 @@ async fn send_results(
                 s.refresh_spool_pause();
             }
         }
-        send_due(&s, session, &mut flight, false).await;
+        // Given up if the session changes meanwhile: a stalled coordinator
+        // can hold a send for the whole reply timeout, and a stop's spool
+        // fallback (CLUSTER-05) must not wait behind it.
+        match send_due_or_changed(&s, session, &mut flight, false, &mut sessions).await {
+            Sending::Done => {}
+            Sending::Changed => continue,
+            Sending::Gone => return,
+        }
         tokio::select! {
             record = outbound.recv() => {
                 let Some(first) = record else { return };
@@ -2170,8 +2250,35 @@ async fn send_results(
                 batch_up(&s, held, &mut next_batch, &mut flight);
                 // A drain doesn't wait for the retry tick: refused batches
                 // go again too.
-                let session = s.session.borrow().clone();
-                send_due(&s, session, &mut flight, true).await;
+                // Marked seen, so a session that came in the same wake
+                // is sent on here, not taken for a change below.
+                let session = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
+                // With no session they go to the spool, durably, before
+                // the flush is answered: a local stop exits right after
+                // (CLUSTER-05).
+                let offline = |h: &Option<SessionHandle>| h.as_ref().is_none_or(|h| h.is_closed());
+                if let Some(sp) = &s.spool
+                    && offline(&session)
+                {
+                    spool_live(&s, sp, &mut flight).await;
+                }
+                // The session gone while sending: what's left goes to
+                // the spool now, not at the next round.
+                match send_due_or_changed(&s, session, &mut flight, true, &mut sessions).await {
+                    Sending::Done => {}
+                    Sending::Changed => {
+                        let now = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
+                        if let Some(sp) = &s.spool
+                            && offline(&now)
+                        {
+                            spool_live(&s, sp, &mut flight).await;
+                        }
+                    }
+                    Sending::Gone => {
+                        let _ = done.send(());
+                        return;
+                    }
+                }
                 let _ = done.send(());
             }
             Some((batch, ok)) = accepted.recv() => {
@@ -4362,7 +4469,7 @@ pub(crate) mod tests {
 
     /// A session over a link of `capacity` frames: at 1, a coordinator
     /// that never reads stalls it after the handshake.
-    async fn session_pair_with(
+    pub(crate) async fn session_pair_with(
         capacity: usize,
     ) -> (
         lodestar_cluster::CoordinatorLink,

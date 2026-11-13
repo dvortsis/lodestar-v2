@@ -385,7 +385,10 @@ fn summaries_flush_on_the_timer_and_before_app_stop() {
     flood(rt);
     let start = std::time::Instant::now();
     while !file_text(dir.path()).contains("repeated") {
-        assert!(start.elapsed() < Duration::from_secs(5), "no summary");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "no summary within 10 s"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     // Before the stop line, whatever the window.

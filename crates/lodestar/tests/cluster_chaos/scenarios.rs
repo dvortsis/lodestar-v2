@@ -99,6 +99,144 @@ async fn a_worker_killed_mid_lease_has_its_keys_released_after_expiry() {
     h.shutdown().await;
 }
 
+/// CLUSTER-01: a worker killed while it holds leases and started again
+/// well inside the lease TTL, with nothing spooled. Its new session lists
+/// what it holds (nothing), so the coordinator gives back every lease the
+/// old process lost at once, instead of renewing them on the new
+/// session's heartbeats with nobody fetching them. The clock never moves:
+/// no lease waits for its expiry. Each key is stored once and the funnel
+/// reconciles.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_restarted_inside_the_ttl_gets_its_lost_leases_regranted() {
+    let mut h = Harness::start(Options::workers(2)).await;
+    let keys = torrents(&h, "Restarted inside the TTL", 3);
+    h.swarm.hold(0);
+    for &k in &keys {
+        h.find(0, k);
+    }
+    h.wait_fetched(0, &keys).await;
+    let before = h.fleet().reconcile_returned;
+    let authority = h.server().authority().clone();
+    let old: Vec<u64> = keys
+        .iter()
+        .map(|k| authority.get(k).expect("leased").token.0)
+        .collect();
+    h.kill(0).await;
+    // The killed process fetches nothing more: what's fetched from here
+    // on is under the leases given back.
+    h.swarm.handed_back(0);
+    h.wait_reconciled(|f| f.harvested == 3 && f.in_flight == 3)
+        .await;
+    h.swarm.release(0);
+
+    h.restart(0).await;
+    h.wait_connected(0).await;
+    h.wait("the lost leases given back", DEADLINE, || {
+        h.fleet().reconcile_returned >= before + 3
+    })
+    .await;
+    // Given back, then granted again under new tokens: none is left on
+    // record under an old one. The killed process can't use those tokens
+    // any more, so any later fetch is under a lease given back
+    // (`handed_back(0)` above).
+    h.wait_leased(3).await;
+    for &k in &keys {
+        let now = authority.get(&k).map(|l| l.token.0);
+        assert!(
+            now.is_none_or(|t| !old.contains(&t)),
+            "{k:?} still under its old lease\n{}",
+            h.diagnosis()
+        );
+    }
+    h.wait_stored_sighting(&keys, DEADLINE).await;
+    let f = h
+        .wait_reconciled(|f| f.stored == 3 && f.in_flight == 0)
+        .await;
+    assert_eq!(
+        (f.harvested, f.lost, f.late),
+        (3, 0, 0),
+        "{}",
+        h.diagnosis()
+    );
+    assert_eq!(h.fleet().reconcile_refused, 0, "{}", h.diagnosis());
+    assert_eq!(h.fetch_violations(), Vec::<String>::new());
+    assert_eq!(h.starts(0), 2);
+    h.shutdown().await;
+}
+
+/// CLUSTER-05 and CLUSTER-02 end to end. A worker stopped locally while
+/// it holds leases hands them back as it stops, so they're granted again
+/// with no clock movement, long before the TTL. The worker taking them has
+/// a lease cap of 2 (its pool cap of 1, set through the placement): it's
+/// granted two, and the third waits for a re-grant until the cap is
+/// lifted. Each key is stored once, the funnel reconciles, and no key is
+/// fetched by two workers outside a hand-back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stopped_workers_leases_go_back_at_once_within_the_takers_cap() {
+    let mut h = Harness::start(Options::workers(2)).await;
+    let authority = h.server().authority().clone();
+    let taker = h.worker_id(1);
+    let placement = h.coord().placement.clone();
+    let cap = move |pool_cap| {
+        let s = lodestar_cluster::placement::WorkerSettings {
+            pool_cap,
+            ..Default::default()
+        };
+        placement.set_settings(taker, s).unwrap();
+    };
+    cap(1);
+    h.wait("the taker's cap follows its pool cap", DEADLINE, || {
+        authority.lease_cap(taker) == Some(2)
+    })
+    .await;
+
+    let keys = torrents(&h, "Stopped locally", 3);
+    h.swarm.hold(0);
+    for &k in &keys {
+        h.find(0, k);
+    }
+    h.wait_fetched(0, &keys).await;
+    // What the taker says is held while it's granted the keys, so its
+    // pool's evictions (below) can't free cap room before we look.
+    h.partition(1, Cut::ToCoordinator);
+    // From here on worker 0 starts no fetch: its stop hands them back.
+    h.swarm.handed_back(0);
+    assert_eq!(h.stop(0).await, Exit::Shutdown);
+    assert!(
+        h.lines(0)
+            .contains("stopping: handing the current work back")
+    );
+    h.swarm.release(0);
+
+    h.wait("two granted to the taker, one waiting", DEADLINE, || {
+        authority.held_by(taker) == 2 && authority.pending() == 1
+    })
+    .await;
+    let f = h.fleet();
+    assert!(
+        f.workers
+            .iter()
+            .all(|w| w.worker != h.worker_id(0) || !w.connected),
+        "{}",
+        h.diagnosis()
+    );
+
+    h.heal(1);
+    cap(lodestar_cluster::assign::DEFAULT_POOL_CAP);
+    h.wait_stored_sighting(&keys, DEADLINE).await;
+    // The taker's pool keeps its first cap (1) for its stages' run, so a
+    // key granted past it is evicted and lost, then harvested again when
+    // it's sighted: losses here are the pool's, and each is counted once.
+    let f = h
+        .wait_reconciled(|f| f.stored == 3 && f.in_flight == 0)
+        .await;
+    assert_eq!((f.harvested - f.lost, f.late), (3, 0), "{}", h.diagnosis());
+    assert_eq!(h.fetch_violations(), Vec::<String>::new());
+    let fetched_by_taker = h.swarm.fetched_by(1);
+    assert!(keys.iter().all(|k| fetched_by_taker.contains(k)));
+    h.shutdown().await;
+}
+
 /// A worker cut off both ways while it holds leases: they expire and go
 /// to the other workers under new tokens. While those new leases are live
 /// (their holders' fetches are held), the link heals and the cut-off

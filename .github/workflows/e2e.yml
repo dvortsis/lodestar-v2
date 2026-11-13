@@ -533,8 +533,10 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-fixture
+          # Not web/test-results/.auth: the global setup's session cookie is stored there.
           path: |
             web/playwright-report
             web/test-results
+            !web/test-results/.auth
             ${{ runner.temp }}/fixture-server.log
           retention-days: 14

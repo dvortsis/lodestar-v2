@@ -37,8 +37,9 @@
 //! workers are allowed, so a key is never leased twice and a single-machine
 //! install opens no cluster CA. Lock order: the fleet, then the authority.
 //!
-//! **Reconciles** (WK-11b): a worker whose lease count differs from ours
-//! after a spool replay lists the leases it holds ([`Holding`], in parts).
+//! **Reconciles** (WK-11b, CLUSTER-01): a worker lists the leases it holds
+//! on each new session, and again when its lease count differs from ours
+//! after a spool replay ([`Holding`], in parts).
 //! On the last part the leases on record for it that the list left out go
 //! back for re-grant, as after an expiry, except those marked fetched, a
 //! late result's, and those handed to it on the listing session itself
@@ -46,7 +47,9 @@
 //! be ones it lost). A listed lease we don't have on record for it is
 //! counted, never created: the list can only give leases back, and only
 //! its own. A paused (quarantined) or no longer current worker's list is
-//! refused, and so is a second round within one heartbeat interval.
+//! refused, and so is a second round on one session within one heartbeat
+//! interval. A worker lists once on every new session (CLUSTER-01), so a
+//! session's first round is never refused as too soon.
 //!
 //! **Hooks** for the slices that build on the protocol: an
 //! [`InboundSink`] for what workers send (results, counters, outcomes,
@@ -86,6 +89,22 @@ use crate::{
 
 /// The WebSocket path on the cluster port.
 pub const CLUSTER_PATH: &str = "/cluster";
+
+/// A remote worker's lease cap (CLUSTER-02) is this many times the pool
+/// cap of the last assignment sent to it: keys held, which its pool keeps
+/// within the pool cap, plus as many again for results not yet committed
+/// and re-grants. At [`MAX_POOL_CAP`](crate::assign::MAX_POOL_CAP) that's
+/// 2,000,000, within [`MAX_HOLDING`], so a worker under its cap can always
+/// send its whole reconcile list.
+const LEASE_CAP_PER_POOL_KEY: usize = 2;
+
+/// The lease cap for a pool of `pool_cap` keys
+/// ([`ClusterServer::lease_cap_for`]).
+fn lease_cap(pool_cap: u32) -> usize {
+    usize::try_from(pool_cap)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(LEASE_CAP_PER_POOL_KEY)
+}
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -389,6 +408,7 @@ struct Counters {
     check_failures: AtomicU64,
     busy_check_failed: AtomicU64,
     busy_unknown: AtomicU64,
+    busy_capped: AtomicU64,
     reconcile_returned: AtomicU64,
     reconcile_unknown: AtomicU64,
     reconcile_refused: AtomicU64,
@@ -465,6 +485,9 @@ pub struct FleetSnapshot {
     /// Claimed keys denied as busy because the store couldn't read them
     /// (`KeyCheck::Unknown`, #628), per key.
     pub busy_unknown: u64,
+    /// Claimed keys denied as busy because the worker holds its lease cap
+    /// (CLUSTER-02), per key.
+    pub busy_capped: u64,
     /// Leases a worker's reconcile list left out, given back for re-grant
     /// (WK-11b).
     pub reconcile_returned: u64,
@@ -668,6 +691,10 @@ impl ClusterServer {
     ) -> Result<Arc<ClusterServer>, ClusterError> {
         config.lease_ttl_secs = hooks.authority.ttl_secs();
         hooks.authority.serve_remote();
+        // Until its first assignment, a worker's cap is the default pool's.
+        hooks
+            .authority
+            .set_lease_cap(Some(lease_cap(crate::assign::DEFAULT_POOL_CAP)));
         let tls = pki
             .coordinator
             .tls()
@@ -929,6 +956,7 @@ impl ClusterServer {
             check_failures: get(&c.check_failures),
             busy_check_failed: get(&c.busy_check_failed),
             busy_unknown: get(&c.busy_unknown),
+            busy_capped: get(&c.busy_capped),
             reconcile_returned: get(&c.reconcile_returned),
             reconcile_unknown: get(&c.reconcile_unknown),
             reconcile_refused: get(&c.reconcile_refused),
@@ -943,6 +971,12 @@ impl ClusterServer {
     /// The lease authority this server grants from.
     pub fn authority(&self) -> &Arc<LeaseAuthority> {
         &self.leases
+    }
+
+    /// A remote worker's lease cap for an assignment's pool cap
+    /// (CLUSTER-02): twice the pool cap.
+    pub fn lease_cap_for(pool_cap: u32) -> usize {
+        lease_cap(pool_cap)
     }
 
     /// Queues a message to one worker's session without waiting. Messages
@@ -960,7 +994,21 @@ impl ClusterServer {
             .get(&worker)
             .and_then(|s| s.session.as_ref())
             .ok_or(SendError::NotConnected)?;
-        slot.try_send(msg)
+        // The worker's lease cap follows its pool cap (CLUSTER-02), set
+        // as the assignment is queued, under the fleet lock, so no claim
+        // lands between the two. A lowered cap takes no lease back.
+        let cap = match &msg {
+            ToWorker::Assign(a) => crate::assign::Assignment::from_message(a)
+                .ok()
+                .flatten()
+                .map(|a| lease_cap(a.pool_cap)),
+            _ => None,
+        };
+        slot.try_send(msg)?;
+        if let Some(cap) = cap {
+            self.leases.set_worker_cap(worker, Some(cap));
+        }
+        Ok(())
     }
 
     /// Queues a message to every connected worker; returns the workers it
@@ -1331,6 +1379,10 @@ impl ClusterServer {
             // A drain survives a reconnect: it's asked for again below.
             state.last_ack = None;
             state.holding = None;
+            // Each session's first list is carried out (CLUSTER-01): a
+            // worker back within one heartbeat interval of its last list
+            // would otherwise be refused and keep the leases it lost.
+            state.last_round_ms = None;
             state.capabilities = hello.capabilities;
             self.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
             state_draining = fleet.workers.get(&peer.worker).is_some_and(|s| s.draining);
@@ -1510,9 +1562,16 @@ impl ClusterServer {
             }
             ToCoordinator::Drained => {
                 {
-                    let fleet = lock(&self.fleet);
+                    let mut fleet = lock(&self.fleet);
                     if !fleet.is_current(peer) {
                         return Flow::Stop(StopReason::Drained);
+                    }
+                    // Not a re-grant target from here: a worker stopping on
+                    // its own (CLUSTER-05) isn't marked draining, and the
+                    // re-grant below would hand its keys straight back.
+                    if let Some(state) = fleet.workers.get_mut(&w) {
+                        state.session = None;
+                        state.holding = None;
                     }
                     self.leases.evict(w);
                 }
@@ -1795,6 +1854,11 @@ impl ClusterServer {
                     bump(&self.counters.busy);
                     deny(DenyReason::Busy)
                 }
+                // "Claim again later", as for busy: once it holds fewer.
+                BatchAnswer::Capped => {
+                    bump(&self.counters.busy_capped);
+                    deny(DenyReason::Busy)
+                }
                 BatchAnswer::Committed => deny(DenyReason::Stored),
                 BatchAnswer::Claimed {
                     claimed: Claimed::Granted(token),
@@ -1990,6 +2054,7 @@ impl ClusterServer {
         }
         for w in revoked {
             self.leases.evict(w);
+            self.leases.set_worker_cap(w, None);
             // Its certificates are gone, so it can't come back under this
             // id: forget it rather than check it every tick.
             fleet.workers.remove(&w);

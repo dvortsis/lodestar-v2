@@ -23,11 +23,12 @@ pub mod temp_log;
 
 use std::process::ExitCode;
 
-/// `main`'s hook, before its own argument parsing. For a serve command
-/// line (none, `serve`, `--config <path>`) it runs the whole service when
-/// the Service Control Manager started this process, and returns its exit
-/// code; otherwise it starts the [`startup`] checks and returns `None` so
-/// `main` carries on. Any other command, or arguments that don't parse
+/// `main`'s hook, before its own argument parsing. For a service command
+/// line (none, `serve` or plain `worker`, with an optional `--config
+/// <path>`) it runs the whole service when the Service Control Manager
+/// started this process, and returns its exit code. Otherwise, for serve,
+/// it starts the [`startup`] checks; it returns `None` either way so
+/// `main` carries on (an ordinary `worker` run starts as it always did). Any other command, or arguments that don't parse
 /// (`main` reports those), is left alone.
 pub fn hook() -> Option<ExitCode> {
     #[cfg(windows)]
@@ -43,9 +44,15 @@ pub fn hook() -> Option<ExitCode> {
         // Restart now for an ordinary run; a service sets its own method,
         // which never runs this.
         crate::system::Restart::global().set_prepare(Box::new(relaunch::start_successor));
-        let config_path = service::service_command(std::env::args_os())?;
-        if let Some(code) = service::run_if_launched(config_path.clone()) {
+        let command = service::service_command(std::env::args_os())?;
+        let config_path = command.config.clone();
+        let role = command.role;
+        if let Some(code) = service::run_if_launched(command) {
             return Some(code);
+        }
+        // An ordinary `lodestar worker` run starts as it always did.
+        if role == service::Role::Worker {
+            return None;
         }
         // An unreadable config is `main`'s to report.
         if let Ok(config) =

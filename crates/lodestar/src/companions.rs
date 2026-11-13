@@ -31,7 +31,7 @@ use lodestar_api::dto::companions::{
 use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
 use lodestar_companions::catalogue::{Sha256, TemplateId};
 use lodestar_companions::compose::{
-    self, DataFolder, DataFolders, MountRole, Paths, ServiceInput, TemplateError,
+    self, DataFolder, DataFolders, GluetunPaths, MountRole, Paths, ServiceInput, TemplateError,
 };
 use lodestar_companions::configure::{self, InstallReceipt, Socks5Proxy};
 use lodestar_companions::credentials::{self, CredentialKey, Field, SealedRow};
@@ -1288,6 +1288,75 @@ impl Service {
             .map_err(|_| CompanionsError::Internal("sealed"))
     }
 
+    /// Where gluetun's post-rules file is: its companion-files folder on
+    /// the host, checked, and where Lodestar sees that folder. `None`, so
+    /// you save the file yourself:
+    /// - without `companions_dir` (there's no default anywhere);
+    /// - in a container, unless privdrop saved the file at `/companions`
+    ///   (exact and root-owned);
+    /// - on Windows, which can't name a folder on gluetun's Linux host.
+    ///
+    /// Natively the host folder is the named folder itself.
+    fn companion_files(
+        &self,
+        r: &TemplateRequest,
+        input: &ServiceInput,
+    ) -> Result<Option<(GluetunPaths, PathBuf)>, CompanionsError> {
+        self.companion_files_at(r, input, &Container::live())
+    }
+
+    /// [`Self::companion_files`], with the container's side given: where
+    /// the companion-files mount is, the mount table, and who must own the
+    /// saved file. Tests give their own.
+    fn companion_files_at(
+        &self,
+        r: &TemplateRequest,
+        input: &ServiceInput,
+        c: &Container,
+    ) -> Result<Option<(GluetunPaths, PathBuf)>, CompanionsError> {
+        const FIELD: &str = "companions_dir";
+        let given = r
+            .companions_dir
+            .as_deref()
+            .map(HostPath::parse)
+            .transpose()
+            .map_err(bad(FIELD))?;
+        let (host, local) = if self.host.in_container {
+            let Some(host) = given else {
+                return Ok(None);
+            };
+            let local = c.root.clone();
+            match std::fs::symlink_metadata(&local) {
+                Ok(m) if m.file_type().is_dir() => {}
+                _ => return Ok(None),
+            }
+            (host, local)
+        } else if cfg!(windows) {
+            return Ok(None);
+        } else {
+            // Only a folder you name: a default here would name a folder on
+            // this machine in a template that may run on another.
+            let Some(host) = given else {
+                return Ok(None);
+            };
+            let local = PathBuf::from(host.as_str());
+            (host, local)
+        };
+        let paths = GluetunPaths { companions: host };
+        paths
+            .check(self.catalogue, input)
+            .map_err(|e| CompanionsError::BadInput {
+                field: Some(FIELD),
+                code: e.code(),
+            })?;
+        // In a container privdrop saved the file as root at start-up:
+        // point at it only if it holds exactly the rules.
+        if self.host.in_container && !c.saved(&self.data, self.catalogue) {
+            return Ok(None);
+        }
+        Ok(Some((paths, local)))
+    }
+
     fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
         let path = |p: &Option<String>, f: &'static str| {
             p.as_deref()
@@ -1333,6 +1402,8 @@ impl Service {
             publish: Vec::new(),
             data,
             taken: Vec::new(),
+            // Set by `template` for an Unraid template with gluetun.
+            gluetun_paths: None,
         })
     }
 }
@@ -1564,7 +1635,17 @@ impl CompanionsApi for Service {
             let e = self.entry(&id)?;
             let kind = request.kind;
             self.off(move |s| {
-                let input = s.input(&request)?;
+                let mut input = s.input(&request)?;
+                // Unraid's gluetun template mounts the post-rules file
+                // Lodestar saves; compose carries the rules inline.
+                let with_gluetun =
+                    e.id.as_str() == compose::GLUETUN || input.route == compose::Route::Gluetun;
+                let files = if kind == TemplateKind::Unraid && with_gluetun {
+                    s.companion_files(&request, &input)?
+                } else {
+                    None
+                };
+                input.gluetun_paths = files.as_ref().map(|(p, _)| p.clone());
                 let generate = |input: &ServiceInput| -> Result<(Option<String>, Vec<UnraidFile>), TemplateError> {
                     Ok(match kind {
                         TemplateKind::Compose => {
@@ -1588,10 +1669,23 @@ impl CompanionsApi for Service {
                         ),
                     })
                 };
-                let (compose, unraid) = generate(&input).map_err(|err| {
-                    let path = folder_rule(err).then(|| blame(&input, err, generate));
-                    template_error(err, path)
-                })?;
+                let run = |input: &ServiceInput| {
+                    generate(input).map_err(|err| {
+                        let path = folder_rule(err).then(|| blame(input, err, generate));
+                        template_error(err, path)
+                    })
+                };
+                let (mut compose, mut unraid) = run(&input)?;
+                // Natively, only once the template is good: nothing is
+                // written for a refused one. A file holding something else
+                // is left alone, and you save the rules yourself.
+                if let Some((_, local)) = &files
+                    && !s.host.in_container
+                    && !save_native(local, &s.data)?
+                {
+                    input.gluetun_paths = None;
+                    (compose, unraid) = run(&input)?;
+                }
                 Ok(CompanionTemplate {
                     compose,
                     id: e.id.as_str().to_owned(),
@@ -1669,6 +1763,682 @@ fn plan(e: &Entry, rows: &[String], removed: bool) -> RemovalPlan {
         deletes,
         id: e.id.as_str().to_owned(),
         removed,
+    }
+}
+
+// ─── gluetun's post-rules file (X-gluetun-templates-hostfile) ───────────
+
+/// Where a containerised Lodestar sees its companion-files folder.
+pub(crate) const CONTAINER_COMPANIONS: &str = "/companions";
+
+/// Whether privdrop saved the rules in the companion-files folder `root`.
+/// The container's side of the companion-files folder: where it's
+/// mounted, the mount table, and who owns what privdrop saved there.
+struct Container {
+    root: PathBuf,
+    // Read only on Unix, where the mount check runs.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    mountinfo: String,
+    owner: u32,
+}
+
+impl Container {
+    /// This container: `/companions`, its live mount table, and root. An
+    /// unreadable table is empty, which refuses.
+    fn live() -> Container {
+        Container {
+            root: PathBuf::from(CONTAINER_COMPANIONS),
+            #[cfg(unix)]
+            mountinfo: post_rules::read_mountinfo(),
+            #[cfg(not(unix))]
+            mountinfo: String::new(),
+            owner: 0,
+        }
+    }
+
+    /// The rules privdrop saved there can be used: see [`container_saved`].
+    fn saved(&self, data: &Path, catalogue: &Catalogue) -> bool {
+        #[cfg(unix)]
+        return container_saved(
+            &self.root,
+            data,
+            &companion_names(catalogue),
+            &self.mountinfo,
+            self.owner,
+        );
+        #[cfg(not(unix))]
+        {
+            let _ = (data, catalogue, self.owner);
+            false
+        }
+    }
+}
+
+/// The catalogue's companions by their container (and appdata folder)
+/// names.
+#[cfg(unix)]
+pub(crate) fn companion_names(catalogue: &Catalogue) -> Vec<&str> {
+    catalogue
+        .entries()
+        .iter()
+        .filter_map(|e| e.container.as_ref().map(|k| k.name().as_str()))
+        .collect()
+}
+
+/// In a container: the rules privdrop saved in the companion-files folder
+/// `root` can be used: it's a mount apart from the data folder and every
+/// other folder mounted here (`mountinfo`), and the file is exact and
+/// `owner`'s (root in production), in folders only `owner` can write.
+#[cfg(unix)]
+fn container_saved(root: &Path, data: &Path, names: &[&str], mountinfo: &str, owner: u32) -> bool {
+    post_rules::mounts_apart(mountinfo, root, data, names).is_ok()
+        && post_rules::saved_by(root, owner)
+}
+
+/// Natively: saves the rules in the companion-files folder `local`, never
+/// in the data folder `data`. `false` when a file holding something else is
+/// there.
+fn save_native(local: &Path, data: &Path) -> Result<bool, CompanionsError> {
+    #[cfg(unix)]
+    {
+        use post_rules::NativeError;
+        post_rules::save_native(local, data).map_err(|e| CompanionsError::BadInput {
+            field: Some("companions_dir"),
+            code: match e {
+                NativeError::Link => "companions_dir_link",
+                NativeError::Data => "inside_data_folder",
+                NativeError::Shared => "companions_dir_shared",
+                NativeError::Unwritable => "companions_dir_unwritable",
+            },
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (local, data);
+        Ok(false)
+    }
+}
+
+/// gluetun's post-rules in a companion-files folder,
+/// `<folder>/gluetun/post-rules.txt`, read and written through directory
+/// descriptors: every open is `O_NOFOLLOW`, so a link anywhere below the
+/// folder is never followed, and nothing is reached by a path twice.
+///
+/// In a container, privdrop writes the file as root at start-up, in a
+/// root-owned `gluetun` folder, so Lodestar, once it has dropped root, can
+/// only read it: nothing it runs can change what gluetun runs as root.
+/// Natively, Lodestar writes it as its own user, and never over a file
+/// that holds something else.
+#[cfg(unix)]
+pub(crate) mod post_rules {
+    use std::ffi::CStr;
+    use std::io::{Read, Write};
+    use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+    use std::path::Path;
+
+    use lodestar_companions::compose::GLUETUN_POST_RULES as RULES;
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    use rustix::io::Errno;
+
+    pub(crate) const GLUETUN: &CStr = c"gluetun";
+    pub(crate) const FILE: &CStr = c"post-rules.txt";
+    const DIR: OFlags = OFlags::RDONLY
+        .union(OFlags::DIRECTORY)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC);
+    /// The most read of an existing file: a little above the rules.
+    const CAP: u64 = RULES.len() as u64 + 1024;
+
+    /// Whether a folder (or file) with this status can't be changed by
+    /// anyone but `owner`: theirs, with no write bit for group or others.
+    /// Any other user who could write a folder could swap what's in it.
+    pub(crate) fn locked(st: &rustix::fs::Stat, owner: u32) -> bool {
+        st.st_uid == owner && st.st_mode & 0o022 == 0
+    }
+
+    /// What an existing file holds.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Found {
+        /// Exactly the rules, in a regular file.
+        Rules,
+        /// Nothing there.
+        Missing,
+        /// Anything else: other bytes, too large, a link, not a file.
+        Other,
+    }
+
+    /// Opens `path` as a folder, refusing a link at its last component.
+    pub(crate) fn open_dir(path: &Path) -> Result<OwnedFd, Errno> {
+        rustix::fs::open(path, DIR, Mode::empty())
+    }
+
+    /// Opens `name` in `at` as a folder, refusing a link.
+    pub(crate) fn open_dir_at(at: BorrowedFd<'_>, name: &CStr) -> Result<OwnedFd, Errno> {
+        rustix::fs::openat(at, name, DIR, Mode::empty())
+    }
+
+    /// Opens `gluetun` in the companion-files folder `at`, creating it
+    /// (mode 0755) when it's missing. `true` when it was created.
+    pub(crate) fn gluetun_dir(at: BorrowedFd<'_>) -> Result<(OwnedFd, bool), Errno> {
+        match open_dir_at(at, GLUETUN) {
+            Ok(fd) => Ok((fd, false)),
+            Err(Errno::NOENT) => {
+                let created = match rustix::fs::mkdirat(at, GLUETUN, Mode::from_raw_mode(0o755)) {
+                    Ok(()) => true,
+                    // Made by someone else in between: never changed here.
+                    Err(Errno::EXIST) => false,
+                    Err(e) => return Err(e),
+                };
+                let fd = open_dir_at(at, GLUETUN)?;
+                if created {
+                    // Exactly 0755, whatever the umask.
+                    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o755))?;
+                }
+                Ok((fd, created))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// What `post-rules.txt` in the `gluetun` folder `dir` holds.
+    pub(crate) fn found(dir: BorrowedFd<'_>) -> Result<Found, Errno> {
+        let fd = match rustix::fs::openat(
+            dir,
+            FILE,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return Ok(Found::Missing),
+            // A link, or something that can't be opened as a file.
+            Err(Errno::LOOP | Errno::NXIO | Errno::ISDIR) => return Ok(Found::Other),
+            Err(e) => return Err(e),
+        };
+        let st = rustix::fs::fstat(&fd)?;
+        if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile || st.st_size as u64 > CAP {
+            return Ok(Found::Other);
+        }
+        let mut bytes = Vec::with_capacity(RULES.len() + 1);
+        std::fs::File::from(fd)
+            .take(CAP + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| Errno::from_io_error(&e).unwrap_or(Errno::IO))?;
+        Ok(if bytes == RULES.as_bytes() {
+            Found::Rules
+        } else {
+            Found::Other
+        })
+    }
+
+    /// Writes the rules as `post-rules.txt` in the `gluetun` folder `dir`:
+    /// a new temporary file (`O_EXCL | O_NOFOLLOW`), mode 0644 whatever the
+    /// umask, fsync, a rename over the old file (which replaces a link or a
+    /// hard-linked file rather than writing through it), then an fsync of
+    /// the folder. The temporary file is removed if anything fails.
+    pub(crate) fn write(dir: BorrowedFd<'_>) -> Result<(), Errno> {
+        let mut suffix = [0u8; 8];
+        getrandom::fill(&mut suffix).map_err(|_| Errno::IO)?;
+        let hex: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+        let tmp = std::ffi::CString::new(format!(".post-rules.txt.{hex}.tmp"))
+            .map_err(|_| Errno::INVAL)?;
+        let fd = rustix::fs::openat(
+            dir,
+            &tmp,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o644),
+        )?;
+        let result = (|| {
+            rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o644))?;
+            let mut file = std::fs::File::from(fd);
+            file.write_all(RULES.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|e| Errno::from_io_error(&e).unwrap_or(Errno::IO))?;
+            drop(file);
+            rustix::fs::renameat(dir, &tmp, dir, FILE)
+        })();
+        if result.is_err() {
+            let _ = rustix::fs::unlinkat(dir, &tmp, AtFlags::empty());
+        }
+        result?;
+        // Best effort: the file is in place, so an error here would wrongly
+        // say it isn't.
+        let _ = rustix::fs::fsync(dir.as_fd());
+        Ok(())
+    }
+
+    /// The rules are saved in the companion-files folder `root`: real
+    /// folders (no link), the exact rules, and both folders and the file
+    /// owned by `owner` and writable by no one else. Only then can't the
+    /// process that reads it change it, or swap the folder gluetun mounts
+    /// it from.
+    pub(crate) fn saved_by(root: &Path, owner: u32) -> bool {
+        let owned = |fd: BorrowedFd<'_>| rustix::fs::fstat(fd).is_ok_and(|st| locked(&st, owner));
+        let Ok(r) = open_dir(root) else { return false };
+        let Ok(g) = open_dir_at(r.as_fd(), GLUETUN) else {
+            return false;
+        };
+        // Both folders: whoever can write the outer one can swap the inner.
+        if !owned(r.as_fd()) || !owned(g.as_fd()) {
+            return false;
+        }
+        // The file's own status, not a link's target.
+        let Ok(f) = rustix::fs::statat(g.as_fd(), FILE, AtFlags::SYMLINK_NOFOLLOW) else {
+            return false;
+        };
+        locked(&f, owner) && found(g.as_fd()) == Ok(Found::Rules)
+    }
+
+    /// Natively, as Lodestar's own user: saves the rules in the
+    /// companion-files folder `root`, creating it (one level) and its
+    /// `gluetun` folder when missing. `Ok(false)` when a file holding
+    /// something else is there: it's left as it is, and you save the file
+    /// yourself. Refuses a folder reached through a link: its parent must
+    /// resolve to itself before anything is created.
+    pub(crate) fn save_native(root: &Path, data: &Path) -> Result<bool, NativeError> {
+        let parent = root.parent().ok_or(NativeError::Link)?;
+        match std::fs::canonicalize(parent) {
+            Ok(real) if real == parent => {}
+            Ok(_) => return Err(NativeError::Link),
+            Err(_) => return Err(NativeError::Unwritable),
+        }
+        // Never in the data folder, however it's reached: compare where
+        // both really are, before anything is created.
+        let data = std::fs::canonicalize(data).map_err(|_| NativeError::Data)?;
+        if root.starts_with(&data) || data.starts_with(root) || parent.starts_with(&data) {
+            return Err(NativeError::Data);
+        }
+        // The parent opened with no link anywhere on the way, where the
+        // kernel can (openat2): the check above and this open then name the
+        // same folder, and the folder is made and opened in it.
+        let name = root.file_name().ok_or(NativeError::Link)?;
+        let link = |e: Errno| match e {
+            Errno::LOOP | Errno::NOTDIR => NativeError::Link,
+            _ => NativeError::Unwritable,
+        };
+        let at = open_no_links(parent).map_err(link)?;
+        let created = match &at {
+            Some(p) => rustix::fs::mkdirat(p, name, Mode::from_raw_mode(0o755)),
+            None => rustix::fs::mkdir(root, Mode::from_raw_mode(0o755)),
+        };
+        let created = match created {
+            Ok(()) => true,
+            // Yours already, or someone else's: checked below, never changed.
+            Err(Errno::EXIST) => false,
+            Err(_) => return Err(NativeError::Unwritable),
+        };
+        let r = match &at {
+            Some(p) => rustix::fs::openat(p, name, DIR, Mode::empty()),
+            None => open_dir(root),
+        }
+        .map_err(link)?;
+        if created {
+            // Exactly 0755, whatever the umask (002 on many desktops would
+            // leave it group-writable, and then refused below).
+            rustix::fs::fchmod(&r, Mode::from_raw_mode(0o755))
+                .map_err(|_| NativeError::Unwritable)?;
+        }
+        // Both folders yours (or root's) and writable by no one else:
+        // another user who could write them could swap the file gluetun
+        // runs as root. The outer one first, so nothing is made in it.
+        let me = rustix::process::geteuid().as_raw();
+        let safe = |fd: &OwnedFd| {
+            let st = rustix::fs::fstat(fd).map_err(|_| NativeError::Unwritable)?;
+            if locked(&st, me) || locked(&st, 0) {
+                Ok(())
+            } else {
+                Err(NativeError::Shared)
+            }
+        };
+        safe(&r)?;
+        let (g, _) = gluetun_dir(r.as_fd()).map_err(|e| match e {
+            Errno::LOOP | Errno::NOTDIR => NativeError::Link,
+            _ => NativeError::Unwritable,
+        })?;
+        safe(&g)?;
+        match found(g.as_fd()).map_err(|_| NativeError::Unwritable)? {
+            Found::Rules => Ok(true),
+            Found::Other => Ok(false),
+            Found::Missing => write(g.as_fd())
+                .map(|()| true)
+                .map_err(|_| NativeError::Unwritable),
+        }
+    }
+
+    /// Opens the folder `path` with no symbolic link anywhere on the way
+    /// (`openat2` with `RESOLVE_NO_SYMLINKS`). `None` where the kernel or
+    /// the platform has no `openat2`: the caller's own checks then stand
+    /// alone.
+    pub(crate) fn open_no_links(path: &Path) -> Result<Option<OwnedFd>, Errno> {
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::fs::ResolveFlags;
+            match rustix::fs::openat2(
+                rustix::fs::CWD,
+                path,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::NO_SYMLINKS,
+            ) {
+                Ok(fd) => Ok(Some(fd)),
+                // No openat2, or a seccomp filter refusing it: the other
+                // checks stand alone, as on older kernels.
+                Err(Errno::NOSYS | Errno::PERM) => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = path;
+            Ok(None)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum NativeError {
+        /// The folder, or `gluetun` in it, is reached through a link.
+        Link,
+        /// It is, holds or sits in the data folder.
+        Data,
+        /// It, or `gluetun` in it, is another user's or others can write it.
+        Shared,
+        /// It can't be created, opened or written.
+        Unwritable,
+    }
+
+    /// Where the mounts are (`/proc/self/mountinfo`), and how much of it
+    /// is read: a longer table, or a longer line, is refused, not cut.
+    pub(crate) const MOUNTINFO: &str = "/proc/self/mountinfo";
+
+    /// The mount table as text. A name that isn't UTF-8 is replaced, not
+    /// fatal: two different names can only read alike, which refuses. An
+    /// unreadable table is empty, which refuses.
+    pub(crate) fn read_mountinfo() -> String {
+        std::fs::read(MOUNTINFO)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    }
+    const MAX_LINES: usize = 4096;
+    const MAX_LINE: usize = 8192;
+
+    /// One mount: its device, the folder of that filesystem it shows
+    /// (`root`), where it's mounted, and its type.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Mount {
+        pub dev: (u32, u32),
+        pub root: Vec<String>,
+        pub point: Vec<String>,
+        pub fstype: String,
+        /// For ZFS, the pool: its datasets each have a device of their own,
+        /// so the pool says which hold the same files.
+        pub pool: Option<String>,
+    }
+
+    /// Filesystems that never hold a user's folders.
+    const PSEUDO: &[&str] = &[
+        "proc",
+        "sysfs",
+        "tmpfs",
+        "devtmpfs",
+        "devpts",
+        "mqueue",
+        "cgroup",
+        "cgroup2",
+        "securityfs",
+        "debugfs",
+        "tracefs",
+        "pstore",
+        "bpf",
+        "configfs",
+        "fusectl",
+        "hugetlbfs",
+        "binfmt_misc",
+        "autofs",
+        "nsfs",
+        "overlay",
+        "shm",
+        "ramfs",
+    ];
+
+    /// A path's components, `/a/b` → `["a", "b"]`; `None` unless absolute
+    /// and clean (no empty, `.` or `..` component).
+    fn components(p: &str) -> Option<Vec<String>> {
+        let rest = p.strip_prefix('/')?;
+        if rest.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut out = Vec::new();
+        for c in rest.split('/') {
+            if c.is_empty() || c == "." || c == ".." {
+                return None;
+            }
+            out.push(c.to_owned());
+        }
+        Some(out)
+    }
+
+    /// mountinfo's escapes: `\NNN` (three octal digits) for a space, tab,
+    /// newline or backslash. Any other backslash is malformed.
+    fn unescape(field: &str) -> Option<String> {
+        let b = field.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\' {
+                let digits = b.get(i + 1..i + 4)?;
+                if !digits.iter().all(|d| (b'0'..=b'7').contains(d)) {
+                    return None;
+                }
+                let v = u32::from(digits[0] - b'0') * 64
+                    + u32::from(digits[1] - b'0') * 8
+                    + u32::from(digits[2] - b'0');
+                out.push(u8::try_from(v).ok()?);
+                i += 4;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).ok()
+    }
+
+    /// Parses mountinfo strictly: every line must have the ten-plus fields
+    /// of proc(5), optional fields up to `-`, a `major:minor` device and
+    /// clean absolute paths. Anything else refuses the whole table.
+    pub(crate) fn parse_mountinfo(text: &str) -> Result<Vec<Mount>, String> {
+        let mut out = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            if n >= MAX_LINES {
+                return Err(format!("more than {MAX_LINES} mounts"));
+            }
+            if line.len() > MAX_LINE {
+                return Err(format!("line {} is longer than {MAX_LINE} bytes", n + 1));
+            }
+            let bad = || format!("line {} isn't a mountinfo line", n + 1);
+            let f: Vec<&str> = line.split(' ').collect();
+            if f.len() < 10 {
+                return Err(bad());
+            }
+            let sep = f[6..].iter().position(|x| *x == "-").ok_or_else(bad)? + 6;
+            if f.len() < sep + 3 {
+                return Err(bad());
+            }
+            let (major, minor) = f[2].split_once(':').ok_or_else(bad)?;
+            let dev = (
+                major.parse().map_err(|_| bad())?,
+                minor.parse().map_err(|_| bad())?,
+            );
+            let path = |s: &str| unescape(s).as_deref().and_then(components);
+            // An unlinked bind source shows its old path plus `//deleted`.
+            let root_field = f[3].strip_suffix("//deleted").unwrap_or(f[3]);
+            let mut root = path(root_field).ok_or_else(bad)?;
+            let point = path(f[4]).ok_or_else(bad)?;
+            let fstype = unescape(f[sep + 1]).ok_or_else(bad)?;
+            // ZFS shows a root relative to the dataset (`cache/appdata`), not
+            // the pool: put the dataset's path in the pool in front, so roots
+            // compare as paths in the pool, as Unraid's shares show them.
+            let mut pool = None;
+            if fstype == "zfs" {
+                let dataset = unescape(f[sep + 2]).ok_or_else(bad)?;
+                let mut parts = dataset.split('/');
+                pool = parts.next().filter(|p| !p.is_empty()).map(str::to_owned);
+                if pool.is_none() {
+                    return Err(bad());
+                }
+                let inner = components(&format!("/{}", parts.collect::<Vec<_>>().join("/")))
+                    .ok_or_else(bad)?;
+                root = inner.into_iter().chain(root).collect();
+            }
+            out.push(Mount {
+                dev,
+                root,
+                point,
+                fstype,
+                pool,
+            });
+        }
+        if out.is_empty() {
+            return Err("the mount table is empty or couldn't be read".into());
+        }
+        Ok(out)
+    }
+
+    /// The mount `path` is on (the last, as later mounts cover earlier
+    /// ones), and where `path` is in that mount's filesystem.
+    fn locate<'a>(mounts: &'a [Mount], path: &[String]) -> Option<(&'a Mount, Vec<String>)> {
+        // The longest mount point; of equal ones, the last listed (on top).
+        let mut m: Option<&Mount> = None;
+        for x in mounts.iter().filter(|x| path.starts_with(&x.point)) {
+            if m.is_none_or(|m| x.point.len() >= m.point.len()) {
+                m = Some(x);
+            }
+        }
+        let m = m?;
+        let mut at = m.root.clone();
+        at.extend_from_slice(&path[m.point.len()..]);
+        Some((m, at))
+    }
+
+    /// The same files: the same device; two ZFS datasets of one pool
+    /// (each has its own device, and roots are in the pool); or one of them
+    /// an Unraid user share (`fuse.shfs`), which shows every pool and disk
+    /// under the same paths, so its device says nothing.
+    fn same_files(a: &Mount, b: &Mount) -> bool {
+        a.dev == b.dev
+            || (a.pool.is_some() && a.pool == b.pool)
+            || a.fstype == "fuse.shfs"
+            || b.fstype == "fuse.shfs"
+    }
+
+    fn nested(a: &[String], b: &[String]) -> bool {
+        a.starts_with(b) || b.starts_with(a)
+    }
+
+    /// A mount table for tests: the container's root, then one line per
+    /// `(device, root, mount point, type)`.
+    #[cfg(test)]
+    pub(crate) fn fixture(mounts: &[(&str, &str, &Path, &str)]) -> String {
+        let esc = |s: &str| s.replace('\\', "\\134").replace(' ', "\\040");
+        let mut out = String::from("21 1 0:30 / / rw,relatime - overlay overlay rw\n");
+        for (i, (dev, root, point, fstype)) in mounts.iter().enumerate() {
+            out.push_str(&format!(
+                "{} 21 {dev} {} {} rw,relatime shared:1 - {fstype} /dev/x rw\n",
+                30 + i,
+                esc(root),
+                esc(&point.display().to_string())
+            ));
+        }
+        out
+    }
+
+    /// Refuses the companion-files folder `companions` unless it is a
+    /// mount of its own whose folder, on the host's filesystem, is apart
+    /// from every other folder this container mounts: the data folder `data`
+    /// and any other (a companion's), equal or nested either way, with
+    /// nothing mounted inside it. Also refuses one in another companion's
+    /// `appdata/<name>` (`names`) or in Lodestar's own. Anything it can't
+    /// tell refuses: `Err((kind, why))`.
+    pub(crate) fn mounts_apart(
+        mountinfo: &str,
+        companions: &Path,
+        data: &Path,
+        names: &[&str],
+    ) -> Result<(), (&'static str, String)> {
+        let mounts = parse_mountinfo(mountinfo).map_err(|why| ("mounts", why))?;
+        // The configured paths, normalised: `/data/` and `//data` are
+        // `/data`. mountinfo's own fields stay strict.
+        let path = |p: &Path| {
+            use std::path::Component;
+            let bad = || ("mounts", format!("{} isn't a clean path", p.display()));
+            let mut parts = p.components();
+            if parts.next() != Some(Component::RootDir) {
+                return Err(bad());
+            }
+            let mut out = Vec::new();
+            for c in parts {
+                match c {
+                    Component::Normal(n) => out.push(n.to_str().ok_or_else(bad)?.to_owned()),
+                    Component::CurDir => {}
+                    _ => return Err(bad()),
+                }
+            }
+            Ok(out)
+        };
+        let c = path(companions)?;
+        let d = path(data)?;
+        let own = mounts
+            .iter()
+            .rev()
+            .find(|m| m.point == c)
+            .ok_or(("mounts", "it isn't a mount of its own".to_owned()))?;
+        if PSEUDO.contains(&own.fstype.as_str()) {
+            return Err(("mounts", format!("it is a {} mount", own.fstype)));
+        }
+        // Nothing mounted inside it: gluetun's folder must be this one's.
+        if mounts
+            .iter()
+            .any(|m| m.point.len() > c.len() && m.point.starts_with(&c))
+        {
+            return Err(("nested", "another folder is mounted inside it".into()));
+        }
+        let at = &own.root;
+        let in_appdata = at.windows(2).any(|w| {
+            w[0].eq_ignore_ascii_case("appdata")
+                && (names.iter().any(|n| w[1].eq_ignore_ascii_case(n))
+                    || ["lodestar", "lodestar-worker"]
+                        .iter()
+                        .any(|n| w[1].eq_ignore_ascii_case(n)))
+        });
+        if in_appdata {
+            return Err((
+                "nested",
+                "it is inside Lodestar's or another companion's appdata folder".into(),
+            ));
+        }
+        // The data folder, wherever it is mounted.
+        let (dm, data_at) = locate(&mounts, &d)
+            .ok_or(("mounts", "the data folder's mount isn't listed".to_owned()))?;
+        if !PSEUDO.contains(&dm.fstype.as_str()) && same_files(own, dm) && nested(at, &data_at) {
+            return Err((
+                "nested",
+                "it is, holds or sits in the data folder on the host".into(),
+            ));
+        }
+        // Every other folder mounted here: a companion's, or anything else.
+        for m in &mounts {
+            if std::ptr::eq(m, own) || m.point.is_empty() || PSEUDO.contains(&m.fstype.as_str()) {
+                continue;
+            }
+            if same_files(own, m) && nested(at, &m.root) {
+                return Err((
+                    "nested",
+                    format!(
+                        "it is, holds or sits in the folder mounted at /{}",
+                        m.point.join("/").escape_default()
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1772,6 +2542,11 @@ mod tests {
             lodestar_companions::catalogue::Arch::X86_64,
         )),
         in_container: false,
+    };
+
+    const CONTAINER: Host = Host {
+        in_container: true,
+        ..NATIVE
     };
 
     fn integrations() -> watch::Sender<crate::settings::integrations::Integrations> {
@@ -2413,6 +3188,7 @@ mod tests {
             publish: Vec::new(),
             data: DataFolders::none(),
             taken: Vec::new(),
+            gluetun_paths: None,
         };
         let bad_downloads = s_req("/srv/qbittorrent", Some("/srv/.hidden"));
         let e = generate(&bad_downloads).unwrap_err();
@@ -3312,5 +4088,798 @@ mod tests {
                 .restarting
         );
         assert_eq!(live.seen().len(), 2);
+    }
+
+    /// Test setup that doesn't depend on the umask: folders 0755 (and their
+    /// parent), files 0644, as Docker and a default umask would leave them.
+    #[cfg(unix)]
+    fn md(p: impl AsRef<Path>) -> std::io::Result<()> {
+        let p = p.as_ref();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(p)?;
+        for q in [Some(p), p.parent()].into_iter().flatten() {
+            std::fs::set_permissions(q, std::fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn wf(p: impl AsRef<Path>, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+        let p = p.as_ref();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(p, text)?;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644))
+    }
+
+    // ─── companion files (X-gluetun-templates-hostfile) ─────────────────
+
+    /// A native service whose data folder is `<dir>/data`.
+    #[cfg(unix)]
+    fn native_in(dir: &Path) -> Service {
+        let data = dir.join("data");
+        md(&data).unwrap();
+        Service {
+            data,
+            ..service(dir, pinned(), NATIVE, Arc::new(Unwired)).clone_parts()
+        }
+    }
+
+    fn unraid_gluetun(extra: serde_json::Value) -> TemplateRequest {
+        let mut v = serde_json::json!({"kind": "unraid"});
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A temporary folder without a dot in its path, which the folder
+    /// rules refuse.
+    #[cfg(unix)]
+    fn plain_tmp() -> (tempfile::TempDir, PathBuf) {
+        let t = tempfile::Builder::new().prefix("t").tempdir().unwrap();
+        let p = std::fs::canonicalize(t.path()).unwrap();
+        (t, p)
+    }
+
+    #[cfg(unix)]
+    const RULES: &str = lodestar_companions::compose::GLUETUN_POST_RULES;
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_only_a_named_folder_is_used() {
+        let (_t, dir) = plain_tmp();
+        let s = native_in(&dir);
+        // None named: you save the file yourself.
+        let r = unraid_gluetun(serde_json::json!({}));
+        let input = s.input(&r).unwrap();
+        assert_eq!(s.companion_files(&r, &input).unwrap(), None);
+        // Named: saved there.
+        let root = dir.join("cfiles");
+        let r = unraid_gluetun(serde_json::json!({"companions_dir": root.to_str().unwrap()}));
+        let input = s.input(&r).unwrap();
+        let (paths, local) = s.companion_files(&r, &input).unwrap().unwrap();
+        assert_eq!(local, root);
+        assert_eq!(
+            paths.post_rules(),
+            format!("{}/gluetun/post-rules.txt", root.display())
+        );
+        assert!(save_native(&local, &s.data).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.join("gluetun/post-rules.txt")).unwrap(),
+            RULES
+        );
+        // Again: already in place.
+        assert!(save_native(&local, &s.data).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_a_file_holding_something_else_is_left_alone() {
+        let (_t, dir) = plain_tmp();
+        let root = dir.join("companions");
+        md(root.join("gluetun")).unwrap();
+        wf(root.join("gluetun/post-rules.txt"), "mine\n").unwrap();
+        md(dir.join("data")).unwrap();
+        assert_eq!(post_rules::save_native(&root, &dir.join("data")), Ok(false));
+        assert_eq!(
+            std::fs::read_to_string(root.join("gluetun/post-rules.txt")).unwrap(),
+            "mine\n"
+        );
+    }
+
+    /// Whatever the umask: a folder it creates is 0755, so a group-writable
+    /// umask (002, common on desktops) doesn't make it refuse its own. The
+    /// umask is process-wide, so the check runs in a child test process.
+    #[cfg(unix)]
+    #[test]
+    fn natively_new_folders_are_0755_whatever_the_umask() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-c", "umask 002 && exec \"$0\" \"$@\""])
+            .arg(exe)
+            .args([
+                "companions::tests::under_umask_002",
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+    }
+
+    /// Run by the test above, in a process whose umask is 002.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "run by natively_new_folders_are_0755_whatever_the_umask"]
+    fn under_umask_002() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        md(dir.join("data")).unwrap();
+        let probe = dir.join("probe");
+        std::fs::create_dir(&probe).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&probe), 0o775, "the umask is 002 here");
+        let root = dir.join("c");
+        assert_eq!(post_rules::save_native(&root, &dir.join("data")), Ok(true));
+        assert_eq!(mode(&root), 0o755);
+        assert_eq!(mode(&root.join("gluetun")), 0o755);
+        assert_eq!(mode(&root.join("gluetun/post-rules.txt")), 0o644);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_a_folder_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        md(dir.join("data")).unwrap();
+        let root = dir.join("open");
+        md(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            post_rules::save_native(&root, &dir.join("data")),
+            Err(post_rules::NativeError::Shared)
+        );
+        assert!(!root.join("gluetun").exists(), "nothing is made in it");
+    }
+
+    /// A link anywhere in the parent's path is refused by the open itself
+    /// (openat2), not only by the earlier comparison.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn natively_no_link_is_followed_on_the_way() {
+        let (_t, dir) = plain_tmp();
+        md(dir.join("real/inner")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+        assert!(post_rules::open_no_links(&dir.join("real/inner")).is_ok());
+        match post_rules::open_no_links(&dir.join("link/inner")) {
+            // Kernels without openat2 fall back to the other checks.
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("followed a link"),
+            Err(e) => assert_eq!(e, rustix::io::Errno::LOOP),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_the_data_folder_is_never_written_however_its_reached() {
+        let (_t, dir) = plain_tmp();
+        let data = dir.join("real-data");
+        md(&data).unwrap();
+        // Lodestar reaches its data folder through a link.
+        std::os::unix::fs::symlink(&data, dir.join("data-link")).unwrap();
+        let via = dir.join("data-link");
+        for root in [data.join("x"), data.clone(), dir.clone()] {
+            assert_eq!(
+                post_rules::save_native(&root, &via),
+                Err(post_rules::NativeError::Data),
+                "{}",
+                root.display()
+            );
+        }
+        assert!(!data.join("x").exists(), "nothing is created first");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natively_a_folder_reached_through_a_link_is_refused_before_anything_is_made() {
+        let (_t, dir) = plain_tmp();
+        let real = dir.join("real");
+        md(&real).unwrap();
+        std::os::unix::fs::symlink(&real, dir.join("link")).unwrap();
+        let data = dir.join("data");
+        md(&data).unwrap();
+        assert_eq!(
+            post_rules::save_native(&dir.join("link/companions"), &data),
+            Err(post_rules::NativeError::Link)
+        );
+        assert!(!real.join("companions").exists());
+        // The folder itself a link, or its gluetun one.
+        assert_eq!(
+            post_rules::save_native(&dir.join("link"), &data),
+            Err(post_rules::NativeError::Link)
+        );
+        let root = dir.join("c");
+        md(&root).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("gluetun")).unwrap();
+        assert_eq!(
+            post_rules::save_native(&root, &data),
+            Err(post_rules::NativeError::Link)
+        );
+        assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0);
+        // A missing parent can't be created through.
+        assert_eq!(
+            post_rules::save_native(&dir.join("no/such"), &data),
+            Err(post_rules::NativeError::Unwritable)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn companion_files_never_overlap_the_data_folder_or_a_companion() {
+        let (_t, dir) = plain_tmp();
+        let s = native_in(&dir);
+        let data = s.data.to_str().unwrap().to_owned();
+        for (given, code) in [
+            (data.clone(), "inside_data_folder"),
+            (format!("{data}/companions"), "inside_data_folder"),
+            (dir.to_str().unwrap().into(), "inside_data_folder"),
+            (
+                "/mnt/user/appdata/lodestar/companions/x".into(),
+                "inside_data_folder",
+            ),
+            (
+                "/mnt/user/appdata/qbittorrent/x".into(),
+                "inside_other_companion",
+            ),
+        ] {
+            let r = unraid_gluetun(serde_json::json!({"companions_dir": given}));
+            assert_eq!(
+                s.template("gluetun".into(), r).await.err(),
+                Some(CompanionsError::BadInput {
+                    field: Some("companions_dir"),
+                    code
+                }),
+                "{given}"
+            );
+        }
+        // The routed companion's own folders: it could rewrite the rules.
+        let r = unraid_gluetun(serde_json::json!({
+            "route": "gluetun", "config_dir": "/srv/q", "downloads": "/srv/d",
+            "companions_dir": "/srv/q/companions"
+        }));
+        assert_eq!(
+            s.template("qbittorrent".into(), r).await.err(),
+            Some(CompanionsError::BadInput {
+                field: Some("companions_dir"),
+                code: "inside_other_companion"
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refused_template_saves_nothing() {
+        let (_t, dir) = plain_tmp();
+        let s = native_in(&dir);
+        let root = dir.join("cfiles");
+        let at = root.to_str().unwrap();
+        // The compiled-in catalogue isn't pinned, so generation refuses.
+        for (id, extra) in [
+            ("gluetun", serde_json::json!({"companions_dir": at})),
+            (
+                "prowlarr",
+                serde_json::json!({"route": "gluetun", "config_dir": "/srv/p", "companions_dir": at}),
+            ),
+        ] {
+            let got = s.template(id.into(), unraid_gluetun(extra)).await;
+            assert_eq!(got.err(), Some(CompanionsError::Refused("awaiting_pin")));
+        }
+        assert!(!root.exists());
+    }
+
+    /// In a container the template uses the saved file only when the
+    /// companion-files folder is set, mounted apart, and holds the exact,
+    /// owner's rules. Every case runs here, whatever this machine mounts.
+    #[cfg(unix)]
+    #[test]
+    fn in_a_container_only_a_saved_file_apart_from_the_data_folder_is_used() {
+        use std::os::fd::AsFd;
+        let (_t, dir) = plain_tmp();
+        let s = Service {
+            data: dir.join("data"),
+            ..service(&dir, pinned(), CONTAINER, Arc::new(Unwired)).clone_parts()
+        };
+        md(&s.data).unwrap();
+        let root = dir.join("cfiles");
+        md(&root).unwrap();
+        let apart = post_rules::fixture(&[
+            ("8:1", "/srv/lodestar", &s.data, "ext4"),
+            ("8:1", "/srv/lodestar-companions", &root, "ext4"),
+        ]);
+        let at = |mountinfo: &str| Container {
+            root: root.clone(),
+            mountinfo: mountinfo.to_owned(),
+            owner: me(),
+        };
+        let named = unraid_gluetun(serde_json::json!({
+            "companions_dir": "/mnt/user/appdata/lodestar-companions"
+        }));
+        let input = s.input(&named).unwrap();
+        // Not saved yet: you save it yourself.
+        assert_eq!(
+            s.companion_files_at(&named, &input, &at(&apart)).unwrap(),
+            None
+        );
+        let r = post_rules::open_dir(&root).unwrap();
+        let (g, _) = post_rules::gluetun_dir(r.as_fd()).unwrap();
+        post_rules::write(g.as_fd()).unwrap();
+        // Saved, apart: used.
+        let (paths, local) = s
+            .companion_files_at(&named, &input, &at(&apart))
+            .unwrap()
+            .unwrap();
+        assert_eq!(local, root);
+        assert_eq!(
+            paths.post_rules(),
+            "/mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt"
+        );
+        // Not set: never used.
+        let unset = unraid_gluetun(serde_json::json!({}));
+        assert_eq!(
+            s.companion_files_at(&unset, &input, &at(&apart)).unwrap(),
+            None
+        );
+        // Mounted from inside the data folder on the host, or from a table
+        // that can't be read: not used, though the file is there.
+        let nested = post_rules::fixture(&[
+            ("8:1", "/srv/lodestar", &s.data, "ext4"),
+            ("8:1", "/srv/lodestar/companions", &root, "ext4"),
+        ]);
+        for table in [nested.as_str(), "", "garbage"] {
+            assert_eq!(
+                s.companion_files_at(&named, &input, &at(table)).unwrap(),
+                None,
+                "{table}"
+            );
+        }
+        // A bad host path is still refused.
+        let r = unraid_gluetun(serde_json::json!({"companions_dir": "relative"}));
+        assert_eq!(
+            s.companion_files_at(&r, &input, &at(&apart)).err(),
+            Some(CompanionsError::BadInput {
+                field: Some("companions_dir"),
+                code: "bad_template_input"
+            })
+        );
+    }
+
+    /// Without `/companions` there's never a saved file, wherever this
+    /// runs (no folder is set, so nothing is read).
+    #[test]
+    fn in_a_container_without_the_field_nothing_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), CONTAINER, Arc::new(Unwired));
+        let r = unraid_gluetun(serde_json::json!({}));
+        let input = s.input(&r).unwrap();
+        assert_eq!(s.companion_files(&r, &input).unwrap(), None);
+    }
+
+    // ─── mountinfo ──────────────────────────────────────────────────────
+
+    #[cfg(unix)]
+    fn apart(table: &str, c: &str, d: &str) -> Result<(), &'static str> {
+        post_rules::mounts_apart(
+            table,
+            Path::new(c),
+            Path::new(d),
+            &["qbittorrent", "gluetun"],
+        )
+        .map_err(|(k, _)| k)
+    }
+
+    #[cfg(unix)]
+    fn table(lines: &[(&str, &str, &str, &str)]) -> String {
+        let owned: Vec<(&str, &str, PathBuf, &str)> = lines
+            .iter()
+            .map(|(d, r, p, t)| (*d, *r, PathBuf::from(p), *t))
+            .collect();
+        let refs: Vec<(&str, &str, &Path, &str)> = owned
+            .iter()
+            .map(|(d, r, p, t)| (*d, *r, p.as_path(), *t))
+            .collect();
+        post_rules::fixture(&refs)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mounts_nested_either_way_or_equal_are_refused() {
+        let cases = [
+            // (companions root, data root, verdict)
+            ("/srv/lodestar-companions", "/srv/lodestar", Ok(())),
+            ("/srv/lodestar/companions", "/srv/lodestar", Err("nested")),
+            ("/srv/lodestar", "/srv/lodestar", Err("nested")),
+            ("/srv", "/srv/lodestar", Err("nested")),
+            ("/", "/srv/lodestar", Err("nested")),
+        ];
+        for (c, d, want) in cases {
+            let t = table(&[
+                ("8:1", d, "/data", "ext4"),
+                ("8:1", c, "/companions", "ext4"),
+            ]);
+            assert_eq!(apart(&t, "/companions", "/data"), want, "{c} vs {d}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_different_device_is_apart_unless_one_is_an_unraid_share() {
+        let t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:2", "/srv/lodestar/companions", "/companions", "ext4"),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Ok(()));
+        // An Unraid user share shows a pool's files under the same paths.
+        let t = table(&[
+            ("0:52", "/appdata/lodestar", "/data", "btrfs"),
+            (
+                "0:47",
+                "/appdata/lodestar/companions",
+                "/companions",
+                "fuse.shfs",
+            ),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+        let t = table(&[
+            ("0:52", "/appdata/lodestar", "/data", "btrfs"),
+            (
+                "0:47",
+                "/appdata/lodestar-companions",
+                "/companions",
+                "fuse.shfs",
+            ),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Ok(()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bind_of_a_subfolder_and_other_mounts_count() {
+        // The data folder is a subfolder of a bigger mount.
+        let t = table(&[
+            ("8:1", "/srv", "/mnt", "ext4"),
+            ("8:1", "/srv/x/companions", "/companions", "ext4"),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/mnt/x"), Err("nested"));
+        assert_eq!(
+            apart(&t, "/companions", "/mnt/y"),
+            Err("nested"),
+            "inside /mnt's folder"
+        );
+        // Any other folder mounted here (a companion's downloads).
+        let t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/downloads", "/downloads", "ext4"),
+            ("8:1", "/srv/downloads/companions", "/companions", "ext4"),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+        // Pseudo filesystems never count; docker's own files don't nest.
+        let t = format!(
+            "{}{}",
+            table(&[
+                ("8:1", "/srv/lodestar", "/data", "ext4"),
+                ("8:1", "/srv/lodestar-companions", "/companions", "ext4"),
+                (
+                    "8:1",
+                    "/var/lib/docker/containers/abc/hosts",
+                    "/etc/hosts",
+                    "ext4"
+                ),
+            ]),
+            "40 21 0:5 / /proc rw - proc proc rw\n41 21 0:6 / /dev rw - tmpfs tmpfs rw\n"
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Ok(()));
+    }
+
+    /// ZFS (Unraid 6.12+): every dataset has its own device and shows its
+    /// root relative to the dataset, so the dataset's path in the pool is
+    /// put in front and datasets of one pool count as the same files.
+    #[cfg(unix)]
+    #[test]
+    fn zfs_datasets_compare_as_paths_in_their_pool() {
+        let base = "21 1 0:30 / / rw - overlay overlay rw\n";
+        let zfs = |id: u32, dev: &str, root: &str, point: &str, ds: &str| {
+            format!("{id} 21 {dev} {root} {point} rw shared:1 - zfs {ds} rw\n")
+        };
+        // An appdata share of its own: another companion's folder.
+        let t = format!(
+            "{base}{}{}",
+            zfs(30, "0:60", "/lodestar", "/data", "cache/appdata"),
+            zfs(
+                31,
+                "0:60",
+                "/qbittorrent/lodestar",
+                "/companions",
+                "cache/appdata"
+            ),
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+        // A child dataset inside the data folder: another device, one pool.
+        let t = format!(
+            "{base}{}{}",
+            zfs(30, "0:60", "/lodestar", "/data", "cache/appdata"),
+            zfs(31, "0:61", "/", "/companions", "cache/appdata/lodestar/c"),
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+        // The data folder by its pool path, the companion-files folder by
+        // the user share.
+        let t = format!(
+            "{base}{}32 21 0:47 /appdata/lodestar/c /companions rw - fuse.shfs shfs rw\n",
+            zfs(30, "0:60", "/lodestar", "/data", "cache/appdata"),
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+        // Siblings, and another pool, are apart.
+        let t = format!(
+            "{base}{}{}",
+            zfs(30, "0:60", "/lodestar", "/data", "cache/appdata"),
+            zfs(
+                31,
+                "0:60",
+                "/lodestar-companions",
+                "/companions",
+                "cache/appdata"
+            ),
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Ok(()));
+        let t = format!(
+            "{base}{}{}",
+            zfs(30, "0:60", "/lodestar", "/data", "cache/appdata"),
+            zfs(31, "0:70", "/lodestar", "/companions", "fast/other"),
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Ok(()));
+    }
+
+    /// Of two mounts at one point, the one on top (listed last) counts.
+    #[cfg(unix)]
+    #[test]
+    fn a_stacked_data_mount_counts_the_one_on_top() {
+        let t = table(&[
+            ("8:9", "/old", "/data", "ext4"),
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar/c", "/companions", "ext4"),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+        let m = post_rules::parse_mountinfo(&t).unwrap();
+        assert_eq!(m[2].root, ["srv", "lodestar"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_deleted_bind_source_and_a_mount_inside_are_handled() {
+        // A host file replaced by rename shows `//deleted`: still read.
+        let t = format!(
+            "{}50 21 8:1 /var/lib/docker/containers/a/hosts//deleted /etc/hosts rw - ext4 /dev/x rw\n",
+            table(&[
+                ("8:1", "/srv/lodestar", "/data", "ext4"),
+                ("8:1", "/srv/lodestar-companions", "/companions", "ext4"),
+            ])
+        );
+        assert_eq!(apart(&t, "/companions", "/data"), Ok(()));
+        // Something mounted inside it.
+        let t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar-companions", "/companions", "ext4"),
+            ("8:1", "/srv/other", "/companions/gluetun", "ext4"),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Err("nested"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn another_companions_appdata_is_refused() {
+        for root in [
+            "/appdata/qbittorrent/companions",
+            "/appdata/Lodestar/companions",
+            "/appdata/lodestar-worker/x",
+        ] {
+            let t = table(&[
+                ("8:1", "/appdata/lodestar", "/data", "ext4"),
+                ("8:1", root, "/companions", "ext4"),
+            ]);
+            assert_eq!(apart(&t, "/companions", "/data"), Err("nested"), "{root}");
+        }
+    }
+
+    /// The configured paths may end in `/` or repeat it, as Unraid
+    /// templates often write them.
+    #[cfg(unix)]
+    #[test]
+    fn configured_paths_with_trailing_or_repeated_slashes_are_read() {
+        let apart_t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar-companions", "/companions", "ext4"),
+        ]);
+        let nested_t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar/c", "/companions", "ext4"),
+        ]);
+        for (c, d) in [
+            ("/companions/", "/data/"),
+            ("//companions", "/data//"),
+            ("/companions/.", "/./data"),
+        ] {
+            assert_eq!(apart(&apart_t, c, d), Ok(()), "{c} {d}");
+            assert_eq!(apart(&nested_t, c, d), Err("nested"), "{c} {d}");
+        }
+        // A relative or `..` path is still refused.
+        assert_eq!(apart(&apart_t, "companions", "/data"), Err("mounts"));
+        assert_eq!(apart(&apart_t, "/companions", "/x/../data"), Err("mounts"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mount_points_with_escaped_spaces_are_read() {
+        let t = table(&[
+            ("8:1", "/srv/my data", "/data", "ext4"),
+            ("8:1", "/srv/my data/c", "/my companions", "ext4"),
+        ]);
+        assert!(t.contains("\\040"));
+        assert_eq!(apart(&t, "/my companions", "/data"), Err("nested"));
+        let m = post_rules::parse_mountinfo(&t).unwrap();
+        assert_eq!(m[2].point, ["my companions"]);
+        assert_eq!(m[2].root, ["srv", "my data", "c"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_table_that_cant_be_read_refuses() {
+        let good = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar-companions", "/companions", "ext4"),
+        ]);
+        assert_eq!(apart(&good, "/companions", "/data"), Ok(()));
+        let long = format!(
+            "{good}1 2 8:1 /{} /x rw - ext4 /dev/x rw\n",
+            "a".repeat(9000)
+        );
+        let many = good.clone() + &"50 21 8:9 / /m rw - ext4 /dev/x rw\n".repeat(4100);
+        for (what, t) in [
+            ("empty", String::new()),
+            ("too few fields", "1 2 8:1 / /\n".to_owned()),
+            ("no separator", good.replace(" - ", " ")),
+            ("bad device", good.replace("8:1", "8x1")),
+            (
+                "bad escape",
+                good.replace("/srv/lodestar ", "/srv/lo\\9de "),
+            ),
+            (
+                "relative path",
+                good.replace(" /srv/lodestar ", " srv/lodestar "),
+            ),
+            (
+                "dot dot",
+                good.replace("/srv/lodestar-companions", "/srv/../x"),
+            ),
+            ("over-long line", long),
+            ("too many lines", many),
+        ] {
+            assert_eq!(apart(&t, "/companions", "/data"), Err("mounts"), "{what}");
+        }
+        // Not a mount of its own, or a pseudo one.
+        let t = table(&[("8:1", "/srv/lodestar", "/data", "ext4")]);
+        assert_eq!(apart(&t, "/companions", "/data"), Err("mounts"));
+        let t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("0:9", "/", "/companions", "tmpfs"),
+        ]);
+        assert_eq!(apart(&t, "/companions", "/data"), Err("mounts"));
+    }
+
+    // ─── post_rules ─────────────────────────────────────────────────────
+
+    #[cfg(unix)]
+    fn me() -> u32 {
+        rustix::process::geteuid().as_raw()
+    }
+
+    /// What a template reads in a container: exactly the rules, in real
+    /// folders and a regular file, owned by the expected user.
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_file_is_trusted_only_when_exact_and_owned() {
+        use std::os::fd::AsFd;
+        let (_t, dir) = plain_tmp();
+        let root = dir.join("c");
+        md(&root).unwrap();
+        assert!(!post_rules::saved_by(&root, me()), "missing");
+        let r = post_rules::open_dir(&root).unwrap();
+        let (g, created) = post_rules::gluetun_dir(r.as_fd()).unwrap();
+        assert!(created);
+        post_rules::write(g.as_fd()).unwrap();
+        assert!(post_rules::saved_by(&root, me()));
+        // Owned by someone else, or writable by others: not trusted.
+        assert!(!post_rules::saved_by(&root, me().wrapping_add(1)));
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let set = |p: &Path, m| {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+            };
+            for p in [
+                root.clone(),
+                root.join("gluetun"),
+                root.join("gluetun/post-rules.txt"),
+            ] {
+                let was = std::fs::metadata(&p).unwrap().permissions().mode() & 0o7777;
+                set(&p, was | 0o020);
+                assert!(!post_rules::saved_by(&root, me()), "{}", p.display());
+                set(&p, was);
+            }
+            assert!(post_rules::saved_by(&root, me()));
+        }
+        let file = root.join("gluetun/post-rules.txt");
+        // Different bytes, too large, or a link: not trusted.
+        wf(&file, "other\n").unwrap();
+        assert!(!post_rules::saved_by(&root, me()));
+        wf(&file, RULES.repeat(2)).unwrap();
+        assert!(!post_rules::saved_by(&root, me()));
+        let elsewhere = dir.join("rules");
+        wf(&elsewhere, RULES).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+        assert!(!post_rules::saved_by(&root, me()));
+        // A linked gluetun folder or companion-files folder: not trusted.
+        let other = dir.join("other");
+        md(other.join("gluetun")).unwrap();
+        wf(other.join("gluetun/post-rules.txt"), RULES).unwrap();
+        let linked = dir.join("linked");
+        std::os::unix::fs::symlink(&other, &linked).unwrap();
+        assert!(post_rules::saved_by(&other, me()));
+        assert!(!post_rules::saved_by(&linked, me()));
+        let c2 = dir.join("c2");
+        md(&c2).unwrap();
+        std::os::unix::fs::symlink(other.join("gluetun"), c2.join("gluetun")).unwrap();
+        assert!(!post_rules::saved_by(&c2, me()));
+    }
+
+    /// The write: 0644 whatever the umask, a link or a stale file replaced
+    /// rather than written through, no temporary file left.
+    #[cfg(unix)]
+    #[test]
+    fn post_rules_are_written_whole_without_following_a_link() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        let root = dir.join("c");
+        md(&root).unwrap();
+        let r = post_rules::open_dir(&root).unwrap();
+        let (g, _) = post_rules::gluetun_dir(r.as_fd()).unwrap();
+        let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&root.join("gluetun")), 0o755);
+        let file = root.join("gluetun/post-rules.txt");
+        let victim = dir.join("victim");
+        wf(&victim, "keep\n").unwrap();
+        std::os::unix::fs::symlink(&victim, &file).unwrap();
+        post_rules::write(g.as_fd()).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+        assert!(std::fs::symlink_metadata(&file).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), RULES);
+        assert_eq!(mode(&file), 0o644);
+        // A stale file is replaced.
+        wf(&file, "stale\n").unwrap();
+        post_rules::write(g.as_fd()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), RULES);
+        let names: Vec<_> = std::fs::read_dir(root.join("gluetun"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["post-rules.txt"]);
+        // A folder where the file goes (what Docker leaves) isn't replaced.
+        std::fs::remove_file(&file).unwrap();
+        md(&file).unwrap();
+        assert_eq!(post_rules::found(g.as_fd()), Ok(post_rules::Found::Other));
+        assert!(post_rules::write(g.as_fd()).is_err());
+        assert!(file.is_dir());
+        assert_eq!(std::fs::read_dir(root.join("gluetun")).unwrap().count(), 1);
     }
 }

@@ -322,6 +322,7 @@ placement:
   - X-wk-out-set-polish
   - X-wk-fetched-lease
   - X-wk-fetched-lease-nits
+  - X-wk18w-rollback
   - X-lease-reconcile-every-session
   - X-worker-service-log
 - ws: ws-web
@@ -411,6 +412,7 @@ placement:
   - X-flake-email-bcc
   - X-flake-ops-pause
   - X-flake-query-token-style
+  - X-flake-relevance-lock
   - X-flake-utp-lossy
   - X-flake-export-wal
   - X-flake-filter-trails
@@ -420,6 +422,8 @@ placement:
   - X-cloud-infra
   - X-cloud-infra-2
   - X-test-vm
+  - X-gluetun-guard-reboot
+  - X-gluetun-guard-reboot-nits
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
@@ -632,6 +636,9 @@ placement:
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
+  - X-ci-filter-fleet
+  - X-ci-filter-rust-inputs
+  - X-companions-mount-check
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish

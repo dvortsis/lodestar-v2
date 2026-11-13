@@ -89,6 +89,15 @@ pub enum Line {
         /// Why it was left: a kind for the log, and the reason.
         skipped: Option<(&'static str, String)>,
     },
+    /// The companion-files folder (`/companions`, X-gluetun-templates-
+    /// hostfile): gluetun's post-rules saved there as root (`written`, or
+    /// already in place), or why it was left. Never fatal: without it you
+    /// save gluetun's post-rules yourself.
+    Companions {
+        dir: PathBuf,
+        written: bool,
+        skipped: Option<(&'static str, String)>,
+    },
 }
 
 impl std::fmt::Display for Line {
@@ -167,6 +176,25 @@ impl std::fmt::Display for Line {
                 ids.uid,
                 ids.gid
             ),
+            Line::Companions {
+                dir,
+                skipped: Some((_, why)),
+                ..
+            } => write!(
+                f,
+                "companion-files folder {} left as it is: {why}",
+                dir.display()
+            ),
+            Line::Companions { dir, written, .. } => write!(
+                f,
+                "companion-files folder {}: gluetun's post-rules {}",
+                dir.display(),
+                if *written {
+                    "saved"
+                } else {
+                    "already in place"
+                }
+            ),
         }
     }
 }
@@ -232,6 +260,25 @@ impl Line {
                 ..
             } => log_event!(
                 events::SYSTEM_WITNESS_DIR_LEFT,
+                path = LogPath::new(dir),
+                error = lodestar_log::Error::kind(kind)
+            ),
+            Line::Companions {
+                dir,
+                written,
+                skipped: None,
+            } => log_event!(
+                events::SYSTEM_COMPANIONS_DIR,
+                path = LogPath::new(dir),
+                changed = u64::from(*written)
+            ),
+            // The reason can name a path: its kind only.
+            Line::Companions {
+                dir,
+                skipped: Some((kind, _)),
+                ..
+            } => log_event!(
+                events::SYSTEM_COMPANIONS_DIR_LEFT,
                 path = LogPath::new(dir),
                 error = lodestar_log::Error::kind(kind)
             ),
@@ -363,12 +410,24 @@ mod imp {
         if scope == Scope::DataDir {
             let dir = env_data_dir(env);
             report.lines.push(chown_data_dir(&dir, ids)?);
-            report.data_dir = Some(dir);
             // The restart proof's witness, which the image keeps outside
             // the data directory (CR-0d §1.5). Never fatal.
             if let Some(w) = env("LODESTAR_DHT_WITNESS_DIR").filter(|w| !w.is_empty()) {
                 report.lines.push(chown_witness_dir(Path::new(&w), ids));
             }
+            // The companion-files mount: gluetun's post-rules, saved as
+            // root so the dropped process can't change them. Never fatal.
+            report.lines.push(save_companions_rules(
+                Path::new(crate::companions::CONTAINER_COMPANIONS),
+                &dir,
+                geteuid().as_raw(),
+                &crate::companions::post_rules::read_mountinfo(),
+                lodestar_companions::builtin()
+                    .ok()
+                    .map(crate::companions::companion_names)
+                    .as_deref(),
+            ));
+            report.data_dir = Some(dir);
         }
         if ids.uid == 0 {
             report.lines.push(Line::Root { gid: Some(ids.gid) });
@@ -663,6 +722,152 @@ mod imp {
         }
     }
 
+    /// Saves gluetun's post-rules in the companion-files folder `dir`, as
+    /// the current (root) user, so Lodestar, once dropped, can read them
+    /// but not change them: gluetun runs every rule as root.
+    ///
+    /// `dir` must be a real folder (not a link, not `/`), apart from the
+    /// data folder `data` (not it by identity, not overlapping its path),
+    /// owned by `owner` and writable by no one else (so its `gluetun`
+    /// can't be swapped later), and holding nothing but `gluetun`. It must
+    /// also be a mount of its own, apart on the host from the data folder
+    /// and every other folder mounted here (`mountinfo`, see
+    /// [`crate::companions::post_rules::mounts_apart`]). A mount of a whole
+    /// share or of the data folder is never written to. `gluetun` is
+    /// created (0755) when
+    /// it's missing; one that exists must be a real folder owned by `owner`
+    /// (root in production). Nothing is chowned, chmodded or deleted that
+    /// this didn't create. The file is written only when it doesn't hold
+    /// exactly the rules (a new install, or an upgrade that changes them),
+    /// through [`crate::companions::post_rules::write`].
+    ///
+    /// Anything else leaves it as it is and says why. It never creates
+    /// `dir` and never stops start-up.
+    pub(super) fn save_companions_rules(
+        dir: &Path,
+        data: &Path,
+        owner: u32,
+        mountinfo: &str,
+        names: Option<&[&str]>,
+    ) -> Line {
+        use crate::companions::post_rules::{self, Found};
+        let left = |kind: &'static str, why: String| Line::Companions {
+            dir: dir.to_path_buf(),
+            written: false,
+            skipped: Some((kind, why)),
+        };
+        match std::fs::symlink_metadata(dir) {
+            Ok(m) if m.file_type().is_symlink() => return left("link", "it is a symlink".into()),
+            Ok(m) if !m.is_dir() => return left("not_dir", "it is not a directory".into()),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return left("missing", "it isn't mounted".into());
+            }
+            Err(e) => return left("open", e.to_string()),
+        }
+        let Ok(fd) = post_rules::open_dir(dir) else {
+            return left("open", "it can't be opened".into());
+        };
+        let (Ok(st), Ok(root)) = (rustix::fs::fstat(&fd), rustix::fs::stat("/")) else {
+            return left("open", "it can't be examined".into());
+        };
+        if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
+            return left("root", "it is the filesystem root".into());
+        }
+        // Writable by anyone but `owner`, they could swap `gluetun` for
+        // their own after this runs: gluetun would then mount their file.
+        // Docker makes a missing host folder root's, 0755.
+        if !post_rules::locked(&st, owner) {
+            return left(
+                "owner",
+                format!(
+                    "it belongs to uid {} or others can write it, so its contents could be swapped",
+                    st.st_uid
+                ),
+            );
+        }
+        // Apart from the data folder, by identity and by path.
+        if let Ok(d) = rustix::fs::stat(data)
+            && (d.st_dev, d.st_ino) == (st.st_dev, st.st_ino)
+        {
+            return left("data", "it is the data directory".into());
+        }
+        if let (Ok(c), Ok(d)) = (std::fs::canonicalize(dir), std::fs::canonicalize(data))
+            && (c.starts_with(&d) || d.starts_with(&c))
+        {
+            return left("data", "it overlaps the data directory".into());
+        }
+        // Apart from the data folder and every other folder mounted here,
+        // on the host: a nested mount can't be seen by path or inode.
+        // Without the catalogue the companion-folder check can't run:
+        // refuse rather than skip it.
+        let Some(names) = names else {
+            return left(
+                "mounts",
+                "the companion catalogue couldn't be loaded".into(),
+            );
+        };
+        if let Err((kind, why)) = post_rules::mounts_apart(mountinfo, dir, data, names) {
+            return left(kind, why);
+        }
+        // Nothing but `gluetun`.
+        let Ok(mut entries) = Dir::read_from(&fd) else {
+            return left("open", "it can't be read".into());
+        };
+        while let Some(entry) = entries.read() {
+            let Ok(entry) = entry else {
+                return left("open", "it can't be read".into());
+            };
+            let name = entry.file_name().to_bytes();
+            if !matches!(name, b"." | b".." | b"gluetun") {
+                return left(
+                    "foreign",
+                    // Escaped: a name can hold control characters.
+                    format!(
+                        "it holds {}, not only gluetun's post-rules",
+                        name.escape_ascii()
+                    ),
+                );
+            }
+        }
+        let g = match post_rules::gluetun_dir(fd.as_fd()) {
+            Ok((g, _)) => g,
+            Err(rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) => {
+                return left("foreign", "its gluetun entry isn't a folder".into());
+            }
+            Err(e) => return left("write", format!("its gluetun folder: {e}")),
+        };
+        match rustix::fs::fstat(&g) {
+            Ok(gst) if post_rules::locked(&gst, owner) => {}
+            Ok(gst) => {
+                return left(
+                    "owner",
+                    format!(
+                        "its gluetun folder belongs to uid {} or others can write it",
+                        gst.st_uid
+                    ),
+                );
+            }
+            Err(_) => return left("open", "its gluetun folder can't be examined".into()),
+        }
+        match post_rules::found(g.as_fd()) {
+            Ok(Found::Rules) => Line::Companions {
+                dir: dir.to_path_buf(),
+                written: false,
+                skipped: None,
+            },
+            Ok(Found::Missing | Found::Other) => match post_rules::write(g.as_fd()) {
+                Ok(()) => Line::Companions {
+                    dir: dir.to_path_buf(),
+                    written: true,
+                    skipped: None,
+                },
+                Err(e) => left("write", format!("writing the post-rules: {e}")),
+            },
+            Err(e) => left("open", format!("reading the post-rules: {e}")),
+        }
+    }
+
     /// What Lodestar leaves in a data directory; one is enough.
     const MARKERS: [&CStr; 3] = [c"lodestar.db", c"config.toml", c"index"];
 
@@ -918,7 +1123,9 @@ mod tests {
     mod linux {
         use std::os::unix::fs::{MetadataExt, symlink};
 
-        use super::super::imp::{can_drop, check_no_caps, chown_data_dir, chown_witness_dir};
+        use super::super::imp::{
+            can_drop, check_no_caps, chown_data_dir, chown_witness_dir, save_companions_rules,
+        };
         use super::super::*;
 
         #[test]
@@ -993,6 +1200,188 @@ mod tests {
                 line.contains("left as it is") && line.contains("filesystem root"),
                 "{line}"
             );
+        }
+
+        /// Test setup that doesn't depend on the umask: folders 0755 (and their
+        /// parent), files 0644, as Docker and a default umask would leave them.
+        #[cfg(unix)]
+        fn md(p: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+            let p = p.as_ref();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::create_dir_all(p)?;
+            for q in [Some(p), p.parent()].into_iter().flatten() {
+                std::fs::set_permissions(q, std::fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
+        }
+
+        #[cfg(unix)]
+        fn wf(p: impl AsRef<std::path::Path>, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+            let p = p.as_ref();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(p, text)?;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644))
+        }
+
+        /// A mount table in which `dir` and `data` are mounts of their own,
+        /// from sibling folders of one host filesystem.
+        fn mounted(dir: &std::path::Path, data: &std::path::Path) -> String {
+            crate::companions::post_rules::fixture(&[
+                ("8:1", "/srv/lodestar", data, "ext4"),
+                ("8:1", "/srv/lodestar-companions", dir, "ext4"),
+            ])
+        }
+
+        fn me() -> u32 {
+            rustix::process::geteuid().as_raw()
+        }
+
+        fn kind(line: &Line) -> Option<&'static str> {
+            match line {
+                Line::Companions { skipped, .. } => skipped.as_ref().map(|(k, _)| *k),
+                _ => panic!("{line}"),
+            }
+        }
+
+        /// gluetun's post-rules aren't saved, and it says why, when the
+        /// folder isn't mounted, is a link, is the data folder, overlaps
+        /// it, or holds anything but `gluetun`, or `gluetun` is a link, a
+        /// file or someone else's. Nothing is created or changed there.
+        #[test]
+        fn a_companions_dir_that_doesnt_qualify_is_left_alone() {
+            let tmp = tempfile::tempdir().unwrap();
+            let t = tmp.path();
+            let data = t.join("data");
+            md(&data).unwrap();
+            let real = t.join("real");
+            md(&real).unwrap();
+            let link = t.join("link");
+            symlink(&real, &link).unwrap();
+            let linked_gluetun = t.join("linked-gluetun");
+            md(&linked_gluetun).unwrap();
+            symlink(&real, linked_gluetun.join("gluetun")).unwrap();
+            let file_gluetun = t.join("file-gluetun");
+            md(&file_gluetun).unwrap();
+            wf(file_gluetun.join("gluetun"), b"").unwrap();
+            let holding = t.join("holding");
+            md(&holding).unwrap();
+            symlink(&data, holding.join("data")).unwrap();
+            let share = t.join("share");
+            md(share.join("gluetun")).unwrap();
+            md(share.join("qbittorrent")).unwrap();
+            let file = t.join("file");
+            wf(&file, b"").unwrap();
+            let inner = data.join("inner");
+            md(&inner).unwrap();
+            for (dir, want, why) in [
+                (t.join("missing"), "missing", "isn't mounted"),
+                (link, "link", "symlink"),
+                (file, "not_dir", "not a directory"),
+                (data.clone(), "data", "is the data directory"),
+                (inner, "data", "overlaps the data directory"),
+                (t.to_path_buf(), "data", "overlaps the data directory"),
+                (linked_gluetun, "foreign", "isn't a folder"),
+                (file_gluetun, "foreign", "isn't a folder"),
+                (holding, "foreign", "holds data"),
+                (share, "foreign", "holds qbittorrent"),
+            ] {
+                let line =
+                    save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]));
+                assert_eq!(kind(&line), Some(want), "{}: {line}", dir.display());
+                let text = line.to_string();
+                assert!(
+                    text.contains("left as it is") && text.contains(why),
+                    "{text}"
+                );
+            }
+            assert!(!t.join("missing").exists(), "never created");
+            // Without the catalogue, nothing is written.
+            let ok = t.join("ok");
+            md(&ok).unwrap();
+            let line = save_companions_rules(&ok, &data, me(), &mounted(&ok, &data), None);
+            assert_eq!(kind(&line), Some("mounts"), "{line}");
+            assert!(!ok.join("gluetun").exists());
+            assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0);
+            // Writable by others, or someone else's: its gluetun could be
+            // swapped after start-up, so nothing is written.
+            use std::os::unix::fs::PermissionsExt;
+            let open = t.join("open");
+            md(&open).unwrap();
+            std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let line = save_companions_rules(&open, &data, me(), &mounted(&open, &data), Some(&[]));
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert!(!open.join("gluetun").exists());
+            let mine = t.join("mine");
+            md(&mine).unwrap();
+            let line = save_companions_rules(
+                &mine,
+                &data,
+                me().wrapping_add(1),
+                &mounted(&mine, &data),
+                Some(&[]),
+            );
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert!(!mine.join("gluetun").exists());
+            let loose = t.join("loose");
+            md(loose.join("gluetun")).unwrap();
+            std::fs::set_permissions(
+                loose.join("gluetun"),
+                std::fs::Permissions::from_mode(0o775),
+            )
+            .unwrap();
+            let line =
+                save_companions_rules(&loose, &data, me(), &mounted(&loose, &data), Some(&[]));
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert_eq!(std::fs::read_dir(loose.join("gluetun")).unwrap().count(), 0);
+            // A gluetun folder someone else owns is left, untouched.
+            let theirs = t.join("theirs");
+            md(theirs.join("gluetun")).unwrap();
+            let line = save_companions_rules(
+                &theirs,
+                &data,
+                me().wrapping_add(1),
+                &mounted(&theirs, &data),
+                Some(&[]),
+            );
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert_eq!(
+                std::fs::read_dir(theirs.join("gluetun")).unwrap().count(),
+                0
+            );
+        }
+
+        /// A qualifying folder gets a `gluetun` folder (0755) and the rules
+        /// (0644), owned by the user that ran it (root at start-up); an
+        /// exact file is left in place, a stale one replaced.
+        #[test]
+        fn a_qualifying_companions_dir_gets_the_rules() {
+            use std::os::unix::fs::PermissionsExt;
+            let rules = lodestar_companions::compose::GLUETUN_POST_RULES;
+            let tmp = tempfile::tempdir().unwrap();
+            let data = tmp.path().join("data");
+            md(&data).unwrap();
+            let dir = tmp.path().join("companions");
+            md(&dir).unwrap();
+            let file = dir.join("gluetun/post-rules.txt");
+            let mode =
+                |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]));
+            assert_eq!(kind(&line), None, "{line}");
+            assert!(line.to_string().contains("post-rules saved"), "{line}");
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
+            assert_eq!(mode(&file), 0o644);
+            assert_eq!(mode(&dir.join("gluetun")), 0o755);
+            assert_eq!(owner(&file).0, me());
+            assert!(crate::companions::post_rules::saved_by(&dir, me()));
+            let again = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]))
+                .to_string();
+            assert!(again.contains("already in place"), "{again}");
+            // An upgrade that changes the rules: the old file is replaced.
+            wf(&file, "old rules\n").unwrap();
+            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]))
+                .to_string();
+            assert!(line.contains("post-rules saved"), "{line}");
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
         }
 
         fn is_root() -> bool {

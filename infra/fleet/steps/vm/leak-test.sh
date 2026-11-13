@@ -22,7 +22,9 @@
 #     endpoint block, so only the endpoint's own UDP is left out (and dropped).
 #
 # Run as root by the step bootstrap: step.sh <workdir> [stack] [pia-run] [block]
-# (tests and start-block pass the last three); <workdir> holds the committed
+# (tests and start-block pass the last three). start-block adds a fifth,
+# `held`: it already holds the host guard for its block, so the test checks
+# that guard is there and never adds or removes one. <workdir> holds the committed
 # compose.yaml and block-lib.sh. Output is fixed names only (`ok|fail|skip
 # <name>`, `count <name> <int>`); the control side drops anything else. `skip`
 # marks a check that can't be judged (the tunnel-up checks when the WireGuard
@@ -32,20 +34,21 @@ work=${1:?workdir}
 STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstrap never does
 PIA_RUN=${3:-/run/lodestar-pia}
 BLOCK=${4:-/var/lib/lodestar-block}
+HOST_HELD=${5:-}
 CONF=$STACK/secrets/wg0.conf
-IPV4='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 ECHO_URL=http://checkip.amazonaws.com
 V6_URL='http://[2606:4700:4700::1111]/'
 # The probes run from a throwaway container in gluetun's namespace (plan 0d), so
 # they never depend on the kill switch's own image: PROBE_IMAGE, netshoot v0.16
-# by its multi-arch index digest, from block-lib.sh with the block marker.
+# by its multi-arch index digest, from block-lib.sh with the block marker. The
+# endpoint's validation (IPV4, endpoint_read) and the host guard are there too.
 # shellcheck source=block-lib.sh
 . "$work/block-lib.sh"
 NOT_RUN=222  # a probe whose container never ran its command: never counts as blocked
 fails=0
 block=""
 guard_rule=()   # the recreate guard (DOCKER-USER), once the endpoint is known
-host_rule=()    # the host's own guard (INPUT), once the endpoint is known
+host_rule=()    # the host's own guard (INPUT, block-lib.sh), once the endpoint is known
 guard_set=""
 guard_held=""
 released_bad=""
@@ -90,38 +93,6 @@ release_guards() {  # remove both guards, every copy; fails when one won't come 
     if drop_all INPUT "${host_rule[@]}"; then host_set=""; else rc=1; fi
   fi
   return "$rc"
-}
-# drop_all chain rule...: remove every copy of a rule (a failed delete can
-# leave more than one). Only `-C` exit 1 means absent (iptables also uses 1
-# for some generic errors, such as a missing chain); any other exit is an
-# error, never read as "gone". Fails when a copy may still be there.
-drop_all() {
-  local chain=$1 i rc
-  shift
-  for ((i = 0; i < 5; i++)); do
-    iptables -C "$chain" "$@" 2>/dev/null; rc=$?
-    ((rc == 1)) && return 0
-    ((rc == 0)) || return 1
-    iptables -D "$chain" "$@" 2>/dev/null || return 1
-  done
-  iptables -C "$chain" "$@" 2>/dev/null; rc=$?
-  ((rc == 1))
-}
-# clear_tagged chain tag: remove every rule in the chain that carries the
-# leak test's comment tag, whatever endpoint it names (a killed run against an
-# earlier endpoint). Each line of `iptables -S` is turned from -A into -D and
-# run as words, never through a shell.
-clear_tagged() {
-  local chain=$1 tag=$2 i out line words
-  for ((i = 0; i < 10; i++)); do
-    out=$(iptables -S "$chain" 2>/dev/null) || return 1
-    line=$(printf '%s\n' "$out" | grep -m 1 -e "--comment $tag ") || return 0
-    read -ra words <<<"$line"
-    [[ ${words[0]} == -A && ${words[1]} == "$chain" ]] || return 1
-    words[0]=-D
-    iptables "${words[@]}" 2>/dev/null || return 1
-  done
-  return 1
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -353,13 +324,9 @@ iface_up() { probe sh -c 'ip -o link show up dev "$1" | grep -q .' iface "$iface
 for tool in docker iptables tcpdump ip python3; do
   command -v "$tool" >/dev/null 2>&1 || { bad "tool_missing_$tool"; finish; }
 done
+[[ -z $HOST_HELD || $HOST_HELD == held ]] || { bad args_valid; finish; }
 [[ -s $CONF ]] || { bad wg_conf_present; finish; }
-ep_ip=$(sed -n 's/^Endpoint = \([^:]*\):\([0-9]*\)$/\1/p' "$CONF" | head -n 1)
-ep_port=$(sed -n 's/^Endpoint = \([^:]*\):\([0-9]*\)$/\2/p' "$CONF" | head -n 1)
-if ! [[ $ep_ip =~ $IPV4 && $ep_port =~ ^[0-9]{1,5}$ ]] || ((10#$ep_port < 1 || 10#$ep_port > 65535)); then
-  bad endpoint_valid; finish
-fi
-ep_port=$((10#$ep_port))
+endpoint_read "$CONF" || { bad endpoint_valid; finish; }
 pass endpoint_valid
 
 # Never mid-block, and fail closed: a block is recorded (the marker, which
@@ -377,13 +344,20 @@ if ((rc == 0)); then bad block_running; finish; fi
 # The tunnel.
 install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
 guard_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-guard -j DROP)
-host_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-host -j DROP)
-# A killed run can have left a guard behind, for this endpoint or an earlier
-# one: every rule with the leak test's tag goes first.
-{ clear_tagged DOCKER-USER lodestar-leak-guard && clear_tagged INPUT lodestar-leak-host; } \
-  || { bad recreate_guard_lifted; finish; }
-host_set=1  # before the insert: a signal in between still has cleanup look for it
-iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null || { bad host_guarded; finish; }
+host_guard_rule
+# A killed run can have left a recreate guard behind, for this endpoint or an
+# earlier one: every rule with its tag goes first.
+clear_tagged DOCKER-USER lodestar-leak-guard || { bad recreate_guard_lifted; finish; }
+if [[ -n $HOST_HELD ]]; then
+  # start-block's guard for its block, for this same endpoint: checked, never
+  # duplicated, and left in place when the test ends.
+  iptables -C INPUT "${host_rule[@]}" 2>/dev/null || { bad host_guarded; finish; }
+else
+  # On its own, the test holds its own copy for its run. Leftovers (a killed
+  # run's, an earlier endpoint's) come out once the new copy is in.
+  host_set=1  # before the insert: a signal in between still has cleanup look for it
+  host_guard_hold || { bad host_guarded; finish; }
+fi
 tunnel_up || { bad tunnel_started; finish; }
 wait_healthy; up=$?
 unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so

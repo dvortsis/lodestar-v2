@@ -3,10 +3,10 @@
 // unless E2E_FIXTURE_URL is set, and imports @playwright/test directly so no mock is installed. Run
 // it as search-query.fixture.test.ts says.
 import { expect as base, test, type Page } from '@playwright/test';
+import { FIXTURE_STATE } from './support/fixture-session';
 
 const expect = base.configure({ timeout: 10_000 });
 const BASE = process.env.E2E_FIXTURE_URL;
-const PASSWORD = process.env.LODESTAR_FIXTURE_PASSWORD ?? '';
 
 test.skip(!BASE, 'E2E_FIXTURE_URL is not set (fixture backend specs are local only)');
 
@@ -15,10 +15,9 @@ let page: Page;
 test.beforeAll(async ({ browser }) => {
 	const context = await browser.newContext({
 		baseURL: BASE,
-		viewport: { width: 1366, height: 1000 }
+		viewport: { width: 1366, height: 1000 },
+		storageState: FIXTURE_STATE
 	});
-	const res = await context.request.post('/api/v1/login', { data: { password: PASSWORD } });
-	expect(res.ok(), `login: ${res.status()}`).toBe(true);
 	page = await context.newPage();
 });
 test.afterAll(() => page?.context().close());

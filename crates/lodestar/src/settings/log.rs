@@ -311,6 +311,23 @@ mod tests {
         )))
     }
 
+    /// The shortest deadline a wait here has, for the slowest CI runner.
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Waits until the follow task has opened the log file in `dir`.
+    async fn opened(dir: &std::path::Path) -> bool {
+        let deadline = std::time::Instant::now() + WAIT;
+        loop {
+            if dir.join(crate::logging::CURRENT).exists() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     #[tokio::test]
     async fn deadlines_expire_without_a_save() {
         let dir = tempfile::tempdir().unwrap();
@@ -324,13 +341,13 @@ mod tests {
         l.kinds.insert("name".into(), unix_now() + 2);
         let (_tx, rx) = watch::channel(l);
         let task = follow_with(rx, Some(rt), |_| Ok(()));
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert!(rt.applied().file_mask.has(Kind::Name));
+        // The task opens the file just after its first apply.
         assert!(
-            dir.path().join(crate::logging::CURRENT).exists(),
-            "the file opened"
+            opened(dir.path()).await,
+            "the file didn't open within 10 s of the task starting"
         );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        assert!(rt.applied().file_mask.has(Kind::Name));
+        let deadline = std::time::Instant::now() + WAIT;
         while rt.applied().file_mask.has(Kind::Name) && std::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -348,13 +365,25 @@ mod tests {
         };
         let (tx, rx) = watch::channel(l.clone());
         let task = follow_with(rx, Some(rt), |_| Ok(()));
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Not a timed absence: the file opens just after the task's first
+        // apply, so once it's there that apply is done and can be checked.
+        assert!(
+            opened(dir.path()).await,
+            "the file didn't open within 10 s of the task starting"
+        );
         assert!(!rt.applied().file_mask.has(Kind::Hash));
         l.data = super::super::logging::DataPreset::Hashes;
         l.data_until = UNTIL_OFF;
         tx.send(l).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(rt.applied().file_mask.has(Kind::Hash));
+        let deadline = std::time::Instant::now() + WAIT;
+        while !rt.applied().file_mask.has(Kind::Hash) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            rt.applied().file_mask.has(Kind::Hash),
+            "the save didn't apply within 10 s: {:?}",
+            rt.applied().data
+        );
         assert_eq!(rt.applied().data, "hashes");
         task.abort();
     }

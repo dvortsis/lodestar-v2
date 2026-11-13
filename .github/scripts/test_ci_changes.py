@@ -54,6 +54,87 @@ class Infra(unittest.TestCase):
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 
+class FleetEmergencyDown(unittest.TestCase):
+    def test_the_workflow_turns_infra_on_and_near_misses_dont(self):
+        self.assertTrue(ci_changes.INFRA.match(".github/workflows/fleet-emergency-down.yml"))
+        for f in [".github/workflows/fleet-emergency-down.yml.bak", ".github/workflows/fleet-emergency-down-x.yml"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
+class CompanionFiles(unittest.TestCase):
+    def test_the_rules_and_the_docs_quoting_them_turn_infra_on(self):
+        for f in ["packaging/companions/gluetun-post-rules.txt", "docs/user/03-keep-lodestar-safe.md", "docs/operations.md"]:
+            self.assertTrue(ci_changes.INFRA.match(f), f)
+        for f in ["packaging/companions/gluetun-post-rules.txt.bak", "docs/operations.md.bak", "docs/user/03-keep-lodestar-safe.mdx"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+    def test_the_packaging_copy_turns_the_rust_jobs_on(self):
+        for f in ["packaging/companions/gluetun-post-rules.txt", "packaging/companions/compose/gluetun.yml",
+                  "packaging/companions/unraid/gluetun/my-gluetun.xml"]:
+            self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
+        for f in ["packaging/docker/Dockerfile", "packaging/companions-x/a", "packaging/companions/README.md",
+                  "packaging/companions/gluetun-post-rules.txt.bak"]:
+            self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
+
+
+class RustPackagingInputs(unittest.TestCase):
+    def test_the_packaging_files_rust_reads_turn_the_rust_jobs_on(self):
+        for f in ["packaging/windows/main.wxs", "packaging/windows/portable/Start Lodestar.cmd",
+                  "packaging/windows/build-msi.ps1", "packaging/windows/join-ca/x.ps1", "packaging/unraid/x.ps1",
+                  "packaging/keys/lodestar-release.pub", "packaging/keys/lodestar-recovery.pub"]:
+            self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
+
+    def test_near_misses_dont(self):
+        for f in ["packaging/windows/main.wxs.bak", "packaging/windows/join.wxs", "packaging/windows/x.ps1.txt",
+                  "packaging/windows/portable/Start Lodestar.cmd.bak", "packaging/windows/portable/other.cmd",
+                  "packaging/keysx/a.pub", "packaging/keys/README.md", "packaging/keys/sub/a.pub",
+                  "packaging/companions/compose-old/a.yml", "packaging/companions/unraid",
+                  "packaging/companions/composed.yml"]:
+            self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
+
+
+class RustDocsInputs(unittest.TestCase):
+    def test_the_docs_rust_reads_turn_the_rust_jobs_on(self):
+        for f in ["docs/metrics.md", "docs/query-language.md", "docs/legal/legal-notice.md",
+                  "docs/user/03-keep-lodestar-safe.md", "docs/user/images/x.png",
+                  "docs/operations/imports/bitmagnet-restore/reader-role.sql"]:
+            self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
+
+    def test_near_misses_dont(self):
+        for f in ["docs/metrics-old.md", "docs/metrics.md.bak", "docs/query-language.md.bak", "docs/user-notes.md",
+                  "docs/legal/README.md", "docs/legal/legal-notice.md.bak", "docs/operations.md",
+                  "docs/operations/imports/bitmagnet-restore/README.md", "docs/architecture.md"]:
+            self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
+
+
+class ChangedFileList(unittest.TestCase):
+    def test_nul_separated_output_keeps_a_path_with_a_space_whole(self):
+        raw = "crates/a/src/lib.rs\0packaging/windows/portable/Start Lodestar.cmd\0docs/user/x.md\0"
+        changed = ci_changes.parse_changed(raw)
+        self.assertEqual(changed, ["crates/a/src/lib.rs", "packaging/windows/portable/Start Lodestar.cmd",
+                                   "docs/user/x.md"])
+        self.assertTrue(any(ci_changes.RUST_ALSO.match(f) for f in ["packaging/windows/portable/Start Lodestar.cmd"]))
+        self.assertTrue(any(ci_changes.RUST_ALSO.match(f) for f in changed))
+
+    def test_a_launcher_only_change_turns_rust_on_end_to_end(self):
+        # Through the real entry point: a git repo whose only change is the launcher.
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True,
+                               capture_output=True)
+            git("init", "-q", "-b", "main")
+            Path(d, "a.txt").write_text("a")
+            git("add", "-A"); git("commit", "-qm", "base")
+            git("checkout", "-qb", "pr")
+            launcher = Path(d, "packaging/windows/portable/Start Lodestar.cmd")
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("x")
+            git("add", "-A"); git("commit", "-qm", "pr")
+            raw = subprocess.run(["git", "-C", d, "diff", "--no-renames", "--name-only", "-z", "main...pr"],
+                                 check=True, capture_output=True, text=True).stdout
+        self.assertEqual(ci_changes.parse_changed(raw), ["packaging/windows/portable/Start Lodestar.cmd"])
+
+
 class UpdateManifest(unittest.TestCase):
     def test_the_builder_release_yml_and_the_verifier_apply(self):
         for f in [".github/scripts/update_manifest.py", ".github/scripts/test_update_manifest.py",

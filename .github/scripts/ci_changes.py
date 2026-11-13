@@ -6,8 +6,11 @@ request gets:
 
 - the Rust jobs (fmt, clippy, openapi drift, Linux and Windows tests) only if
   it touches Rust: a crate, bench/, fuzz/, a Cargo manifest or lockfile, the
-  toolchain file, this workflow, or web/src/lib/api/openapi.json (the drift
-  job checks it);
+  toolchain file, this workflow, web/src/lib/api/openapi.json (the drift
+  job checks it), or one of the files listed in RUST_ALSO below (the
+  companion templates, the Windows launcher, main.wxs, the packaging
+  PowerShell scripts, the public keys, the docs that Rust tests read, the
+  licence notices and the scripts the Rust jobs run);
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
@@ -18,7 +21,9 @@ request gets:
 - the companion pin tool's tests only if it touches `tools/companion-pins/`, its
   workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
-  fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
+  fmt/validate, PowerShell parse) only if it touches `infra/`, the fleet,
+  fleet-emergency-down and operator workflows, the gluetun post-rules file,
+  `docs/user/03-keep-lodestar-safe.md` or `docs/operations.md` (INFRA below);
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
 - the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
@@ -54,6 +59,22 @@ RUST_ALSO = re.compile(
     r"|^\.github/scripts/(test_)?log_lint\.py$"
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
+    # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.
+    r"|^packaging/companions/(gluetun-post-rules\.txt$|compose/|unraid/)"
+    # Windows packaging that Rust reads: the portable launcher (portable.rs include_str!),
+    # main.wxs and every packaging/**/*.ps1 (legal_facts.rs), and the public keys that
+    # crates/update/src/keys.rs compares with its embedded copies.
+    r"|^packaging/windows/(main\.wxs$|portable/Start Lodestar\.cmd$)"
+    r"|^packaging/.*\.ps1$"
+    r"|^packaging/keys/[^/]+\.pub$"
+    # Docs that Rust tests and includes read: the metrics table (metrics.rs, serve.rs),
+    # the query-language examples (doc_examples.rs), the legal notice (api/src/legal.rs,
+    # legal_facts.rs), the user guide (sources-plugins safety.rs) and the bitmagnet
+    # reader-role SQL (bitmagnet_check.rs).
+    r"|^docs/(metrics|query-language)\.md$"
+    r"|^docs/legal/legal-notice\.md$"
+    r"|^docs/user/"
+    r"|^docs/operations/imports/bitmagnet-restore/reader-role\.sql$"
 )
 
 # Web and E2E applicability. Both workflows run on every pull request; these
@@ -78,7 +99,12 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 # Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
 # The fleet and operator workflows too, whose structure and public-log leak
 # tests live in infra/fleet/tests (OP-1) and infra/operator/tests (OP-4).
-INFRA = re.compile(r"^(infra/|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)")
+# The rules file and the docs that quote it: the fleet tests that read them run in this job.
+INFRA = re.compile(
+    r"^(infra/"
+    r"|packaging/companions/gluetun-post-rules\.txt$|docs/user/03-keep-lodestar-safe\.md$|docs/operations\.md$"
+    r"|\.github/workflows/(fleet|fleet-emergency-down|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
+)
 # The update manifest's builder, the workflow that signs with it, and the
 # verifier it round-trips through.
 UPDATE_MANIFEST = re.compile(
@@ -167,6 +193,11 @@ def fuzz_roots(target: str) -> set[str]:
     return {m.replace("_", "-") for m in re.findall(r"\blodestar_[a-z_]+", source)}
 
 
+def parse_changed(raw: str) -> list[str]:
+    """The changed paths from `git diff --name-only -z`: split on NUL, never on spaces."""
+    return [f for f in raw.split("\0") if f]
+
+
 def main() -> None:
     event, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
     try:
@@ -197,14 +228,17 @@ def main() -> None:
         emit(out)
         return
 
-    changed = subprocess.run(
-        # --no-renames: a file moved out of a crate must list its old path too.
-        ["git", "diff", "--no-renames", "--name-only", f"{base}...{head}"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
+    changed = parse_changed(
+        subprocess.run(
+            # --no-renames: a file moved out of a crate must list its old path too.
+            # -z: NUL-separated and unquoted, so a path with a space stays one path.
+            ["git", "diff", "--no-renames", "--name-only", "-z", f"{base}...{head}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
 
     out["web"] = str(any(WEB.match(f) for f in changed)).lower()
     out["e2e"] = str(any(E2E.match(f) for f in changed)).lower()

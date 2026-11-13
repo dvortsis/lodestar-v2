@@ -9,6 +9,9 @@ use std::time::Duration;
 use lodestar_dht::node::{Config, Deny, Intensity, Node};
 use lodestar_dht::routing::{K, prefix_len};
 
+mod wait;
+use wait::wait_for;
+
 fn config(bootstrap: Vec<String>) -> Config {
     Config {
         bind: vec![SocketAddr::from(([127, 0, 0, 1], 0))],
@@ -33,17 +36,6 @@ fn config(bootstrap: Vec<String>) -> Config {
         shard: None,
         sample_interval_scale: 1,
     }
-}
-
-async fn wait_for(mut cond: impl AsyncFnMut() -> bool, timeout: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + timeout;
-    while tokio::time::Instant::now() < deadline {
-        if cond().await {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -165,9 +157,19 @@ async fn read_only_node_does_not_answer() {
     let ro = Node::start(cfg, None).await.unwrap();
     let ro_addr = ro.local_addrs()[0].to_string();
     let asker = Node::start(config(vec![ro_addr]), None).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert!(ro.stats().queries_in > 0);
-    assert_eq!(ro.stats().packets_out, 0);
+    assert!(
+        wait_for(async || ro.stats().queries_in > 0, wait::DEADLINE).await,
+        "the read-only node received no query within 10 s: {:?}",
+        ro.stats()
+    );
+    // No sleep proves that nothing was sent. The node's actor is one task
+    // that handles a datagram, any reply included, before it serves the
+    // next command, so the snapshot returns only once the query counted
+    // above has been fully handled: had it been answered, `packets_out`
+    // would show it now. The asker only learns a node from its reply, so
+    // with nothing sent its table is still empty.
+    ro.snapshot().await.unwrap();
+    assert_eq!(ro.stats().packets_out, 0, "the read-only node answered");
     assert_eq!(asker.snapshot().await.unwrap().table_sizes[0], 0);
     asker.shutdown().await.unwrap();
     ro.shutdown().await.unwrap();
@@ -181,9 +183,42 @@ async fn denied_addresses_are_never_contacted_or_answered() {
     // Loopback stands in for a blocklisted range.
     cfg.deny = Some(Deny(Arc::new(|ip| ip.is_loopback())));
     let denying = Node::start(cfg, None).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert!(denying.stats().denied > 0);
-    assert_eq!(denying.stats().packets_out, 0);
+    assert!(
+        wait_for(async || denying.stats().denied > 0, wait::DEADLINE).await,
+        "the node refused no send within 10 s: {:?}",
+        denying.stats()
+    );
+    // Absence without a sleep, over the bootstrap and two later ticks.
+    // The actor refuses a send inside the handler that would have made it,
+    // and serves a snapshot only after that handler returns, so the
+    // snapshot below closes the start-up bootstrap.
+    //
+    // Then two more refusals. With an empty table, the node re-bootstraps
+    // at the end of a tick once 30 ticks have passed since the last try
+    // (`REBOOTSTRAP_TICKS`), so each refusal is a different tick that has
+    // already run `rejoin_tick` and the other per-tick sends. The second
+    // snapshot waits for the rest of that tick. (`a_tick_ran` can't be the
+    // signal here: its stranger is on loopback too, so it would be refused.)
+    // With nothing sent, nothing can have reached the seed either.
+    denying.snapshot().await.unwrap();
+    let after_bootstrap = denying.stats().denied;
+    assert!(
+        wait_for(
+            async || denying.stats().denied >= after_bootstrap + 2,
+            // The second re-bootstrap is due 60 ticks (3 s) after start-up:
+            // double the usual deadline.
+            2 * wait::DEADLINE
+        )
+        .await,
+        "the node didn't try to re-bootstrap twice within 20 s: denied {} (from {after_bootstrap})",
+        denying.stats().denied
+    );
+    denying.snapshot().await.unwrap();
+    assert_eq!(
+        denying.stats().packets_out,
+        0,
+        "a denied address was contacted"
+    );
     assert_eq!(seed.stats().packets_in, 0);
     assert_eq!(denying.snapshot().await.unwrap().table_sizes[0], 0);
     denying.shutdown().await.unwrap();

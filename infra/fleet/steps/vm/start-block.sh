@@ -6,9 +6,14 @@
 #
 # In order:
 # 1. Refuse unless no block is recorded or running (fail closed).
-# 2. The leak test, in this same run: it must exit 0 and end `ok leak_test`.
+# 2. The host guard for the VPN endpoint (block-lib.sh), before the leak test
+#    recreates gluetun, held for the whole block: copy-off removes it. A failed
+#    start leaves it in place, which can't touch the tunnel; the next
+#    start-block or copy-off replaces or removes it.
+#    Then the leak test, in this same run: it must exit 0 and end `ok leak_test`.
 #    Anything else is a stop condition, and nothing starts.
-# 3. The durable block marker, before Lodestar or a collector starts.
+# 3. The boot guard (block-lib.sh boot_guard_install), then the durable block
+#    marker, before Lodestar or a collector starts.
 # 4. Stage the tools from the rules commit, start Lodestar on the screen's image
 #    (by digest), accept the Legal Notice version the rules name and set a
 #    random admin password (it stays in a root-only file here), then start
@@ -48,7 +53,7 @@ for k in IMAGE_DIGEST LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT
   [[ -n ${!k:-} ]] || fail args_valid
 done
 echo "ok args_valid"
-for tool in docker systemd-run systemctl; do
+for tool in docker systemctl iptables flock; do
   command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_${tool//-/_}"
 done
 
@@ -65,16 +70,29 @@ block_procs; rc=$?
 if [[ -n $(ls -A -- "$BLOCK/evidence" 2>/dev/null) && ! -e $BLOCK/copied ]]; then fail evidence_copied; fi
 echo "ok no_block"
 
-# 2. The leak test, in this run. Its lines are reported as they are.
-out=$(timeout 600 bash "$work/leak-test.sh" "$work" "$STACK" "$PIA_RUN" "$BLOCK"); rc=$?
+# 2. The host guard, then the leak test, in this run. The endpoint is read and
+# validated as the leak test reads it, and never printed. The leak test is told
+# the guard is held (`held`): it checks it and leaves it in place. Its lines are
+# reported as they are.
+[[ -s $STACK/secrets/wg0.conf ]] || fail wg_conf_present
+endpoint_read "$STACK/secrets/wg0.conf" || fail endpoint_valid
+host_guard_rule
+host_guard_hold || fail host_guarded
+echo "ok host_guarded"
+out=$(timeout 600 bash "$work/leak-test.sh" "$work" "$STACK" "$PIA_RUN" "$BLOCK" held); rc=$?
 printf '%s\n' "$out"
 [[ $rc -eq 0 && $(printf '%s\n' "$out" | tail -n 1) == "ok leak_test" ]] || fail leak_test_passed
 echo "ok leak_test_passed"
 
-# 3. The marker, first. From here on every mid-block check sees a block.
+# 3. The boot guard, then the marker. From here on every mid-block check sees a block.
 # A past block's directory (its evidence) is kept beside the new one, never wiped.
 if [[ -d $BLOCK ]]; then mv -- "$BLOCK" "$BLOCK.$(date -u +%Y%m%dT%H%M%SZ)" || fail block_dir; fi
 mkdir -m 0700 -- "$BLOCK" || fail block_dir
+# The boot guard (X-gluetun-guard-reboot), before the marker: from the moment
+# a block is recorded, a reboot holds the host guard before Docker starts.
+# Failing here leaves no marker, so the next start-block sets this one aside.
+boot_guard_install || fail boot_guard_installed
+echo "ok boot_guard_installed"
 printf 'block=%s\nsegment=1\nstate=starting\n' "$BLOCK_ID" | marker_write || fail marker_written
 echo "ok marker_written"
 {

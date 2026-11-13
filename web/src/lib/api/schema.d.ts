@@ -10422,6 +10422,17 @@ export interface components {
          *     here is stored.
          */
         TemplateRequest: {
+            /**
+             * @description Lodestar's companion-files folder on the host, for an Unraid
+             *     template with gluetun: the template mounts gluetun's post-rules file
+             *     from it. In a container it's the host folder mounted at
+             *     `/companions`, where Lodestar saves the file as root at start-up;
+             *     the template uses it only if that file is exact and root's.
+             *     Natively it's a folder you name, outside the data folder, where
+             *     Lodestar saves the file; there is no default. Unset, or when the
+             *     file can't be used, you save the file yourself.
+             */
+            companions_dir?: string | null;
             /** @description The host folder for its settings. */
             config_dir?: string | null;
             /** @description The host folder it saves downloads in. */

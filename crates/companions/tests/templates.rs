@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use lodestar_companions::catalogue::{Catalogue, NotAvailable, PortName};
 use lodestar_companions::compose::{
-    Bind, DataFolder, DataFolders, Paths, Publish, Route, ServiceInput, TemplateError, compose,
+    Bind, DataFolder, DataFolders, GluetunPaths, Paths, Publish, Route, ServiceInput,
+    TemplateError, compose,
 };
 use lodestar_companions::inputs::{
     CompanionId, ContainerName, HostPath, InputError, NetworkName, Pgid, PortNumber, Puid,
@@ -127,6 +128,7 @@ fn input(companion: &str, route: Route) -> ServiceInput {
         )
         .expect("data folders"),
         taken: Vec::new(),
+        gluetun_paths: None,
     }
 }
 
@@ -919,4 +921,93 @@ fn every_gluetun_template_carries_the_rules_for_its_interface() {
     // Its Unraid template names that container in the start-order note.
     let xml = unraid(&cat, &id("prowlarr"), &existing).expect("unraid");
     assert!(xml[0].xml.contains("put my-vpn above this container"));
+}
+
+// ─── Post-rules Lodestar saved (X-gluetun-templates-hostfile) ───────────
+
+fn saved(companions: &str) -> GluetunPaths {
+    GluetunPaths {
+        companions: path(companions),
+    }
+}
+
+/// With the companion-files folder, Unraid's gluetun mounts the file
+/// Lodestar saved there, read-only, and says so; compose doesn't change.
+#[test]
+fn unraid_gluetun_mounts_the_post_rules_lodestar_saved() {
+    let cat = golden_catalogue();
+    for (companion, route) in [("gluetun", Route::Direct), ("qbittorrent", Route::Gluetun)] {
+        let plain = input(companion, route.clone());
+        let mut inp = plain.clone();
+        inp.gluetun_paths = Some(saved("/mnt/user/appdata/lodestar-companions"));
+        let xml = unraid(&cat, &id(companion), &inp).expect("unraid");
+        let g = &xml[0];
+        assert_eq!(g.file_name, "my-gluetun.xml");
+        assert!(g.xml.contains(
+            "<Config Name=\"Post-rules\" Target=\"/iptables/post-rules.txt\" Default=\"/mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt\" Mode=\"ro\""
+        ), "{companion}");
+        assert!(
+            g.xml
+                .contains("Lodestar saved its post-rules file at the Post-rules path")
+        );
+        assert!(!g.xml.contains("Before you start it, save Lodestar"));
+        // Compose carries the rules inline either way.
+        assert_eq!(
+            compose(&cat, &id(companion), &inp).expect("compose"),
+            compose(&cat, &id(companion), &plain).expect("compose"),
+        );
+    }
+}
+
+/// gluetun mounts a file from the companion-files folder, so the folder
+/// can't hold anything of Lodestar's or another companion's.
+#[test]
+fn the_companion_files_folder_holds_nothing_of_lodestars() {
+    let cat = golden_catalogue();
+    let mut inp = input("gluetun", Route::Direct);
+    inp.data = DataFolders::new("/srv/lodestar", None, None).expect("data");
+    inp.taken = vec![path("/srv/qbittorrent")];
+    for (folder, err) in [
+        ("/srv/lodestar", TemplateError::DataFolder),
+        ("/srv/lodestar/companions", TemplateError::DataFolder),
+        ("/srv", TemplateError::DataFolder),
+        (
+            "/mnt/user/appdata/lodestar/companions/x",
+            TemplateError::DataFolder,
+        ),
+        (
+            "/mnt/cache/appdata/lodestar-worker/companions/x",
+            TemplateError::DataFolder,
+        ),
+        ("/srv/qbittorrent/files", TemplateError::OtherCompanion),
+        ("/srv/.hidden", TemplateError::DotFolder),
+    ] {
+        inp.gluetun_paths = Some(saved(folder));
+        assert_eq!(
+            unraid(&cat, &id("gluetun"), &inp).err(),
+            Some(err),
+            "{folder}"
+        );
+    }
+    // Another catalogue companion's appdata.
+    inp.gluetun_paths = Some(saved("/mnt/user/appdata/qbittorrent/files"));
+    assert_eq!(
+        unraid(&cat, &id("gluetun"), &inp).err(),
+        Some(TemplateError::OtherCompanion)
+    );
+    inp.gluetun_paths = Some(saved("/srv/lodestar-companions"));
+    assert!(unraid(&cat, &id("gluetun"), &inp).is_ok());
+    // The routed companion's own folders: it could rewrite the rules.
+    let mut routed = input("qbittorrent", Route::Gluetun);
+    for folder in [routed.paths.config.clone(), routed.paths.downloads.clone()]
+        .into_iter()
+        .flatten()
+    {
+        routed.gluetun_paths = Some(saved(&format!("{folder}/companions")));
+        assert_eq!(
+            unraid(&cat, &id("qbittorrent"), &routed).err(),
+            Some(TemplateError::OtherCompanion),
+            "{folder}"
+        );
+    }
 }

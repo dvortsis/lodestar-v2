@@ -25374,6 +25374,13 @@
           "kind"
         ],
         "properties": {
+          "companions_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lodestar's companion-files folder on the host, for an Unraid\ntemplate with gluetun: the template mounts gluetun's post-rules file\nfrom it. In a container it's the host folder mounted at\n`/companions`, where Lodestar saves the file as root at start-up;\nthe template uses it only if that file is exact and root's.\nNatively it's a folder you name, outside the data folder, where\nLodestar saves the file; there is no default. Unset, or when the\nfile can't be used, you save the file yourself."
+          },
           "config_dir": {
             "type": [
               "string",

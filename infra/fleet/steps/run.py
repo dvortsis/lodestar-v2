@@ -50,7 +50,9 @@ BUILT = {
     # Up to 15 minutes' wait for the segment to end (WAIT_SECONDS), then the switch.
     "arm-switch": {"files": ("arm-switch.sh", "block-lib.sh", "compose.yaml", "watcher.sh", "docker-proxy.cfg"),
                    "timeout": 2100},
-    "outage-watcher": {"files": ("outage-watcher.sh", "block-lib.sh", "watcher.sh"), "timeout": 60},
+    # The host guard's check (X-gluetun-guard-reboot) at its worst: the lock (15 s),
+    # retries, then keeping gluetun down (update, stop, kill, inspect: 90 s) and the note.
+    "outage-watcher": {"files": ("outage-watcher.sh", "block-lib.sh", "watcher.sh"), "timeout": 180},
     "copy-off": {"files": ("copy-off.sh", "block-lib.sh", "scrub.py"), "timeout": 900},
 }
 # copy-off's scrubbed document comes back on one line of its own, outside the
