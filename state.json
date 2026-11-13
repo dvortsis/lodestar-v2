@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T16:32Z",
+  "updated_at": "2026-11-13T16:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8081,6 +8081,11 @@
       "id": "slices-yaml-x-import-pilot-fixes",
       "note": "Add X-import-pilot-fixes (cloud-testing fix, owns per brief) with placement in the next runner PR.",
       "at": "2026-11-13T16:24Z"
+    },
+    {
+      "id": "slices-yaml-x-utp-spurious-rto-decisions",
+      "note": "X-utp-spurious-rto owns gain docs/decisions/2026-11-13-X-utp-spurious-rto.md in the next runner PR",
+      "at": "2026-11-13T16:33Z"
     }
   ],
   "main_health": [
@@ -9120,7 +9125,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T16:32Z",
+    "updated": "2026-11-13T16:33Z",
     "items": [
       {
         "slot": 1,
@@ -9287,7 +9292,7 @@
         "slice": "X-utp-spurious-rto",
         "role": "build",
         "agent": "claude",
-        "doing": "launching (Opus): uTP spurious-timeout sample + timeouts reset on ACK progress; brief briefs/X-utp-spurious-rto.md",
+        "doing": "session_01MMjhnD9XH3Aji25k7dCfZz (Opus): uTP spurious-timeout sample + timeouts reset on ACK progress; brief briefs/X-utp-spurious-rto.md",
         "since": "2026-11-13T16:32Z",
         "model": "opus"
       },
@@ -9360,7 +9365,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T16:32Z",
+  "updated": "2026-11-13T16:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
