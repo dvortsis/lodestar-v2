@@ -96,7 +96,7 @@ The list lives in `state.json` under `watched_sessions`.
    - at most `max_launches_per_day` new sessions;
    - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
    - **order:** the ladder in `docs/build-plan.md` §0.2 decides between ready slices; within a rung, critical-path core slices first, then the slices that unblock the most others;
-   - **slices that depend on an owner host** (`ext:experiment-host`, `ext:import-host`) launch only against a booking for that run; two never share a booking, whatever their `owns`;
+   - **slices that depend on an owner host** (`ext:experiment-host`, `ext:import-host`) launch only for a run that overlaps no other run on that host: an import-host run against its booking, an experiment-host run under the standing permission of `docs/owner-decisions.md` §2.68 (no booking); two never share a run, whatever their `owns`;
    - **size:** a slice estimated at more than ~3,000 changed lines is split before launch: into sequential slices, or into parallel ones against interfaces fixed first. Each PR then lands between other merges instead of chasing `main` (§2.24). Between ~1,500 and ~3,000 lines, keep the slice whole when splitting would cut through an interface that isn't fixed yet.
 8. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.

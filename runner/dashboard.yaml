@@ -1812,7 +1812,7 @@ notes:
   updated: '2026-11-13'
   now:
   - label: The runner decides the owner queue, except the filters (§2.69)
-    text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto; FILTER-01 and FILTER-03 stay yours. Crawler tests on the Unraid box need no booking now (§2.68), and the API credit is in use (§2.67).'
+    text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68), and the API credit is in use (§2.67).'
   - label: B1 and B2 first (§2.66)
     text: By your decision, the first-run wizard's raw labels and the missing Sign out went ahead of the larger queue (X-wizard-labels-signout, merged as #811). The Sources restructure is next, then the UI guards.
   - label: 'Review fixes: Tracks Q and U, held findings named by id only'
