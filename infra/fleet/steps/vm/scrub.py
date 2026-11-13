@@ -176,8 +176,9 @@ def count_kind(path: Path, kind: str) -> int:
 
 def damaged(block: Path) -> bool:
     """X-gluetun-guard-reboot's damaged mark: whether it exists, never what it
-    says. guard_lost writes `host_guard_lost` to the outages with it, so that
-    line counts too (copy-off mounts the outages, not the mark)."""
+    says (copy-off mounts an empty file in its place). guard_lost also writes
+    `host_guard_lost` to the outages, so that line counts too, in case the
+    mark is missing."""
     try:
         marked = (block / "damaged").exists()
     except OSError:

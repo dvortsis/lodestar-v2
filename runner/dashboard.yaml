@@ -425,6 +425,7 @@ placement:
   - X-gluetun-guard-reboot
   - X-gluetun-guard-reboot-nits
   - X-scrub-guard-fields
+  - X-scrub-guard-fields-nits
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
