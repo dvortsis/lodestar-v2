@@ -1,4 +1,4 @@
-# X-flake-companions-loopback decisions
+# X-flake-companions-loopback decisions (#847)
 
 The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z. Test-only; no architecture section changes.
 
@@ -17,6 +17,7 @@ The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z.
   - A runner without IPv6 loopback holds only IPv4, since the probe can't fall back there.
 - **Tested where CI runs.** `a_closed_port_refuses_and_cant_be_taken` asserts both properties on every CI target (Linux and Windows): a connection is refused (`ConnectionRefused`), and a listener can't be bound on the port while it's held. macOS isn't a CI target; a bound socket with no listener answers with a reset there too.
 - **No skips, early returns or sleeps were added.**
+- **Remaining Windows gap, accepted as negligible:** the held sockets don't set `SO_EXCLUSIVEADDRUSE`. So a foreign process using `SO_REUSEADDR` could still bind the exact port, but only by naming it deliberately; a port-0 bind is never handed a held port.
 
 ## Elsewhere
 - **The other tests in `crates/companions/tests/` keep their listeners open while they probe.** None has the pattern.
@@ -24,3 +25,10 @@ The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z.
   - Another test's socket could take the port meanwhile.
   - It accepts a timeout as well as a refusal, so it fails only if that socket answers as a tracker.
   - The same holding approach would fit.
+
+## Follow-up: X-companions-loopback-nits
+- **A port Windows won't hand out counts as taken.** A `::1` (or 127.0.0.1) bind that fails with `PermissionDenied` is retried like `AddrInUse`, because Windows answers that way for a port in an excluded range (Hyper-V, WinNAT). The bounded retry and the loud panic stay.
+- **The held-port test checks why the second bind fails:** `AddrInUse`, or `PermissionDenied` where Windows refuses it that way.
+- **`loopback_falls_back_to_ipv6` no longer passes without asserting.**
+  - It used to skip if another program held the port on IPv4. Now it holds 127.0.0.1 closed on the server's port itself, so the IPv4 attempt is always refused and the fallback is always asserted.
+  - Without IPv6 loopback, it checks only that a held port is found closed. On CI (`CI` set) the test fails instead, since every CI target has `::1`, so a missing fallback is never counted as a pass.

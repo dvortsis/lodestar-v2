@@ -438,6 +438,7 @@ placement:
   - X-win-clippy
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
+  - X-companions-loopback-nits
   - X-svc-eventcreate-bounded
   - X-win-fs-followups
   - X-flake-portable-restart-3
