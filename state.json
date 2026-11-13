@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:09Z",
+  "updated_at": "2026-11-13T00:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7777,6 +7777,16 @@
       "id": "gs2-804",
       "note": "GS-2 #804 draft ac758308, 495.9 B/torrent (16.1 B headroom left for RX-1 + ENR-11); re-blessed siblings goldens accepted; ~1650 lines with reason; self-review then ready.",
       "added": "2026-11-13T00:07Z"
+    },
+    {
+      "id": "nnp-parity",
+      "note": "rv-797 O4: security_opt no-new-privileges:true for both the main and worker compose services (parity); does not block the binary privilege drop. Small packaging slice.",
+      "added": "2026-11-13T00:11Z"
+    },
+    {
+      "id": "runner-pr-wk18",
+      "note": "Next runner PR: drop packaging/wix/join.wxs from WK-18 owns; WK-18w brief must require protected DACL (secure-datadir.ps1), Hidden=yes property, token by file never via cmd/PS string; keep WK-18w on v0.6 tag list.",
+      "added": "2026-11-13T00:11Z"
     }
   ],
   "main_health": [
@@ -9170,7 +9180,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:09Z",
+  "updated": "2026-11-13T00:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
