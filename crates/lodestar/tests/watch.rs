@@ -1,10 +1,11 @@
 //! The real binary watches a folder (UP-1): a `.torrent` dropped into it
 //! is taken as an upload is and moved to `added/`, a malformed one goes
-//! to `failed/` (once a second read finds it malformed and unchanged),
-//! a copy that stalls and then finishes is taken, and a folder inside the
-//! data directory is never read. The watch polls every 10 s and reads a
-//! file on the second poll that sees it unchanged, so each wait here
-//! allows a minute.
+//! to `failed/` (once it has read malformed and stayed unchanged for
+//! 60 s), a copy that stalls for over 30 s and then finishes is taken,
+//! and a folder inside the data directory is never read. The watch polls
+//! every 10 s and reads a file on the second poll that sees it unchanged,
+//! so each wait here allows a minute, and the wait for `failed/` allows
+//! three.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
@@ -151,13 +152,15 @@ fn set_folder(s: &Server, folder: &Path) -> String {
 
 /// Polls for a minute (standards §2: at least 10 s; the watch takes two
 /// of its 10 s polls).
-fn until(what: &str, mut f: impl FnMut() -> bool) {
+fn until(what: &str, f: impl FnMut() -> bool) {
+    until_within(what, Duration::from_secs(60), f)
+}
+
+/// Polls until `f` holds, failing after `deadline` (at least 10 s).
+fn until_within(what: &str, deadline: Duration, mut f: impl FnMut() -> bool) {
     let start = Instant::now();
     while !f() {
-        assert!(
-            start.elapsed() < Duration::from_secs(60),
-            "timed out waiting for {what}"
-        );
+        assert!(start.elapsed() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(200));
     }
 }
@@ -191,11 +194,22 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
         torrent("Watched Cut 2022 1080p.mkv"),
     )
     .unwrap();
+    let broken = Instant::now();
     std::fs::write(folder.path().join("Zq9Broken.torrent"), b"not bencode").unwrap();
-    until("both files taken", || {
+    until("the good file taken", || {
         names(&folder.path().join("added")) == ["Zq9Good Cut.torrent"]
-            && names(&folder.path().join("failed")) == ["Zq9Broken.malformed.torrent"]
     });
+    // X-watch-stall-retry: a file that stays malformed and unchanged is
+    // failed, but only once it has been so for over 60 s: first sight,
+    // a still poll that reads it, then 60 s of wall-clock time.
+    until_within("the broken file failed", Duration::from_secs(180), || {
+        names(&folder.path().join("failed")) == ["Zq9Broken.malformed.torrent"]
+    });
+    assert!(
+        broken.elapsed() > Duration::from_secs(60),
+        "failed after only {:?}",
+        broken.elapsed()
+    );
     // Stored and found, as an upload is.
     until("search finds it", || {
         exchange(
@@ -219,8 +233,8 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
 }
 
 /// X-watch-stall-retry: a copy that stalls looks complete to the watch,
-/// which reads it as malformed. It's held, not failed, and once the copy
-/// finishes it's taken. A valid file that sorts after it, written just
+/// which reads it as malformed. It's held, not failed, through a stall of
+/// over 30 s, and once the copy finishes it's taken. A valid file that sorts after it, written just
 /// after it, shows when the stalled one has been read: both are read on
 /// the same poll, in name order.
 #[test]
@@ -251,7 +265,14 @@ fn a_stalled_copy_that_finishes_is_taken_not_failed() {
     // still where it was.
     assert!(written.elapsed() >= Duration::from_secs(10));
     assert!(stalled.exists(), "held, not moved");
-    assert!(names(&folder.path().join("failed")).is_empty());
+    // The stall goes on to 50 s: well past 30 s, and past what a span of 20 s or less would allow. This wait is the stall being tested,
+    // not a wait for the watch: every check on the way says the file is
+    // still held.
+    until("a stall of 50 s", || {
+        assert!(stalled.exists(), "held, not moved");
+        assert!(names(&folder.path().join("failed")).is_empty());
+        written.elapsed() > Duration::from_secs(50)
+    });
     // The copy resumes and finishes.
     std::fs::write(&stalled, &whole).unwrap();
     until("the finished copy taken", || {
