@@ -31,7 +31,8 @@
 //!   written, and is judged afresh once it's still. At most
 //!   [`MAX_HOLDS`] holds per file, so one that keeps changing is failed in
 //!   the end; at most [`MAX_HELD`] files are held at once.
-//! - **Never read twice.** A file that can't be moved or deleted yet is
+//! - **Never read twice,** but for a held Malformed verdict (above), the
+//!   one deliberate re-read. A file that can't be moved or deleted yet is
 //!   remembered in a bounded set, never read again, and its move retried
 //!   quietly each poll; when the set is full the watch holds. A name that
 //!   leaves the folder is forgotten once a whole listing shows it gone.
@@ -78,9 +79,9 @@ pub const MAX_SUBMIT: usize = 32;
 pub const MAX_STUCK: usize = if cfg!(test) { 4 } else { 1024 };
 /// Malformed verdicts held per file, at most (a §2.26 number): after
 /// this many, the next malformed read sends the file to `failed/` even if
-/// it changed in between. Each hold lasts at least one poll, so a copy may
-/// stall and resume three times, 30 s or more of stalls, before it's
-/// failed.
+/// it changed in between. So a copy may stall and resume three times
+/// before it's failed. Each single stall must end before the second read:
+/// one under about 20 s always does, one of 30 s or more never does.
 pub const MAX_HOLDS: u8 = 3;
 /// Files whose Malformed verdict is held at once, at most (a §2.26
 /// number). When it's full, a malformed file goes to `failed/` at once,
@@ -231,9 +232,9 @@ pub struct Polled {
     /// Files seen but not put away yet: still changing, held open, past
     /// this poll's [`MAX_SUBMIT`], or read as malformed and held.
     pub waiting: u64,
-    /// Of `waiting`, files read as malformed this poll and held for one
-    /// more read rather than failed.
-    pub held: u64,
+    /// Of `waiting`, files read as malformed this poll and kept for one
+    /// more read rather than failed (not the filter's `held` verdict).
+    pub rechecking: u64,
     /// Why the watch isn't running now, if it isn't: checked again every
     /// poll, so a mount that comes back or a fixed folder resumes it,
     /// except [`Problem::TooManyStuck`], which holds until the setting
@@ -441,7 +442,7 @@ impl Watcher {
             self.cursor = Some(name.clone());
             if cause == Some(Cause::Malformed) && self.hold(&name, shape) {
                 out.waiting += 1;
-                out.held += 1;
+                out.rechecking += 1;
                 continue;
             }
             self.finish(&folder, &name, Some(shape), cause, &mut out)
@@ -1266,11 +1267,11 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed, p.errors, p.held), (1, 3, 1, 1));
+        assert_eq!((p.added, p.failed, p.errors, p.rechecking), (1, 3, 1, 1));
         // Malformed is held for one more read; unchanged, it's failed then.
         assert_eq!(t.top(), ["a.torrent"]);
         let p = w.poll(&f).await;
-        assert_eq!((p.added, p.failed, p.held), (0, 1, 0));
+        assert_eq!((p.added, p.failed, p.rechecking), (0, 1, 0));
         assert_eq!(
             t.names(FAILED),
             [
@@ -1348,10 +1349,10 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.failed, p.held, p.waiting), (0, 1, 1));
+        assert_eq!((p.failed, p.rechecking, p.waiting), (0, 1, 1));
         assert_eq!(t.top(), ["bad.torrent"]);
         let p = w.poll(&f).await;
-        assert_eq!((p.failed, p.held), (1, 0));
+        assert_eq!((p.failed, p.rechecking), (1, 0));
         assert_eq!(t.names(FAILED), ["bad.malformed.torrent"]);
         assert!(w.held.is_empty());
         w.poll(&f).await;
@@ -1367,7 +1368,7 @@ mod tests {
         t.put("slow.torrent", b"MALF");
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
-        assert_eq!(settle(&mut w, &f).await.held, 1);
+        assert_eq!(settle(&mut w, &f).await.rechecking, 1);
         // The copy resumes and finishes (a new size): it waits a poll to
         // be still, as any changing file does, and isn't read meanwhile.
         t.put("slow.torrent", b"d4:infodee");
@@ -1392,12 +1393,12 @@ mod tests {
         let mut w = t.watcher(After::Move);
         for hold in 1..=MAX_HOLDS {
             let p = settle(&mut w, &f).await;
-            assert_eq!((p.failed, p.held), (0, 1), "hold {hold}");
+            assert_eq!((p.failed, p.rechecking), (0, 1), "hold {hold}");
             assert_eq!(w.held[OsStr::new("grow.torrent")].holds, hold);
             append(&t, "grow.torrent", b"+");
         }
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.failed, p.held), (1, 0));
+        assert_eq!((p.failed, p.rechecking), (1, 0));
         assert_eq!(t.names(FAILED), ["grow.malformed.torrent"]);
         assert_eq!(calls(&f), MAX_HOLDS as usize + 1);
         assert!(w.held.is_empty());
@@ -1415,11 +1416,11 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.held, p.failed), (MAX_HELD as u64, 3));
+        assert_eq!((p.rechecking, p.failed), (MAX_HELD as u64, 3));
         assert_eq!(w.held.len(), MAX_HELD);
         assert!(t.names(FAILED).contains(&"z.refused.torrent".to_string()));
         let p = w.poll(&f).await;
-        assert_eq!((p.held, p.failed), (0, MAX_HELD as u64));
+        assert_eq!((p.rechecking, p.failed), (0, MAX_HELD as u64));
         assert!(w.held.is_empty());
     }
 
@@ -1495,7 +1496,7 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Delete);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed, p.held), (1, 0, 1));
+        assert_eq!((p.added, p.failed, p.rechecking), (1, 0, 1));
         assert_eq!(w.poll(&f).await.failed, 1);
         assert!(t.names(ADDED).is_empty());
         assert_eq!(t.names(FAILED), ["bad.malformed.torrent"]);
@@ -1599,6 +1600,20 @@ mod tests {
         // Seen once already: taken on this poll, and deleted now.
         assert_eq!(w.poll(&f).await.added, 1);
         assert!(t.top().is_empty() && t.names(ADDED).is_empty());
+        // A held Malformed verdict survives a change too: the next read
+        // fails the file, with no fresh hold.
+        t.put("b.torrent", b"MALF");
+        assert_eq!(settle(&mut w, &f).await.rechecking, 1);
+        let move_ = Watch {
+            folder: t.dir().to_string_lossy().into_owned(),
+            after: After::Move,
+        };
+        let mut w = apply(&move_, t.data.path(), Some(w), &mut shown)
+            .await
+            .unwrap();
+        assert_eq!(w.poll(&f).await.failed, 1);
+        assert_eq!(t.names(FAILED), ["b.malformed.torrent"]);
+        assert_eq!(calls(&f), 3);
     }
 
     /// rv-765 O5: at most [`MAX_SCAN`] `.torrent` names a poll, and such a
