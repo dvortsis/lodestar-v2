@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T05:22Z",
+  "updated_at": "2026-11-13T05:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7923,6 +7923,10 @@
     {
       "id": "next-runner-pr-1113",
       "text": "Next runner PR: add X-test-vm (owner-started cloud-testing lane, slot 13) to runner/slices.yaml with a placement rule; add X-consent-gate-lift-account note on setupNeed (account-setupneed); widen gluetun pin CI filter (gluetun-pin-ci-filter)."
+    },
+    {
+      "id": "anthropic-credit",
+      "text": "2026-11-13T05:30Z: owner added repo secret ANTHROPIC_API_KEY ($200 credit, use by 2026-11-25). No spending approved. Runner told owner (via dashboard): operator-apply/-injection (manual dispatch) and operator-wake (channel-PR runner comment) already read it via cloud-operator env; recommended moving it to an environment secret (main-only) and deleting the repo secret; proposed uses a) operator runs <=$10/run, b) M8-SEC security pass <=$15/pass, $60 total, c) fuzz crash triage <=$5. Awaiting owner Q1/Q2. Runner spends nothing until then."
     }
   ],
   "main_health": [
@@ -9206,7 +9210,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T05:22Z",
+  "updated": "2026-11-13T05:30Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
