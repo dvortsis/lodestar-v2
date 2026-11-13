@@ -892,7 +892,7 @@ fn log_folder() -> Option<std::path::PathBuf> {
     if let Some(opened) = crate::logging::runtime().and_then(|rt| rt.opened_folder()) {
         return Some(opened);
     }
-    let path = crate::windows::service::service_command(std::env::args_os())?;
+    let path = crate::windows::service::service_command(std::env::args_os())?.config;
     let config = crate::config::Config::load(path.as_deref(), |k| std::env::var(k).ok()).ok()?;
     let logs = config.data_dir.join("logs");
     Some(std::path::absolute(&logs).unwrap_or(logs))

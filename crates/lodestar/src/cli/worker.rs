@@ -2,7 +2,12 @@
 //!
 //! - `lodestar worker --join <url> --token-file <path|->` joins with a
 //!   one-time token, saves the credentials and runs.
-//! - `lodestar worker [--data <dir>]` runs from the saved credentials.
+//! - `lodestar worker --join <url> --token-file <path|-> --join-only` joins
+//!   and exits, without running (the Windows installer's one-shot join,
+//!   WK-18s). It refuses a folder that has already joined.
+//! - `lodestar worker [--data <dir>]` runs from the saved credentials. On
+//!   Windows, plain `lodestar worker` is also a service command line
+//!   (`windows::service`), stopped through [`run_until`]'s `stop`.
 //! - `lodestar worker --rotate-key` (worker stopped) seals the credentials
 //!   under a new secrets key.
 //!
@@ -42,8 +47,12 @@ pub struct WorkerArgs {
     pub data: Option<PathBuf>,
     /// Seal the saved credentials under a new secrets key, then retire the
     /// old key (worker stopped)
-    #[arg(long, conflicts_with_all = ["join", "token_file"])]
+    #[arg(long, conflicts_with_all = ["join", "token_file", "join_only"])]
     pub rotate_key: bool,
+    /// Join, save the credentials and exit without running the worker.
+    /// Refuses if this folder has already joined
+    #[arg(long, requires = "token_file")]
+    pub join_only: bool,
 }
 
 /// What to tell the user to run to join again.
@@ -249,10 +258,60 @@ pub fn prepare(args: &WorkerArgs) -> Result<Option<String>, std::process::ExitCo
 }
 
 pub fn run(config: &Config, args: WorkerArgs) -> Outcome {
-    run_with(config, args, &|k| std::env::var(k).ok())
+    let report: Report = Arc::new(|line: &str| eprintln!("lodestar worker: {line}"));
+    run_with(
+        config,
+        args,
+        &|k| std::env::var(k).ok(),
+        crate::shutdown_signal(),
+        report,
+    )
 }
 
-fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<String>) -> Outcome {
+/// Runs the worker until `stop` resolves (or it ends by itself), with its
+/// progress lines going to `report`: the Windows service's entry, whose
+/// stop is the SCM's Stop or Shutdown (its lines have no log event yet).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn run_until(
+    config: &Config,
+    args: WorkerArgs,
+    stop: impl Future<Output = ()> + Send + 'static,
+    report: Report,
+) -> Outcome {
+    let env = |k: &str| std::env::var(k).ok();
+    run_with(config, args, &|k| never_joins(&env, k), stop, report)
+}
+
+/// The environment as a service sees it: never `LODESTAR_TOKEN`,
+/// `LODESTAR_TOKEN_IGNORED` or `LODESTAR_JOIN`, so a service never joins,
+/// whatever its environment holds. It runs from saved credentials only.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn never_joins(env: &dyn Fn(&str) -> Option<String>, k: &str) -> Option<String> {
+    match k {
+        "LODESTAR_TOKEN" | "LODESTAR_TOKEN_IGNORED" | "LODESTAR_JOIN" => None,
+        _ => env(k),
+    }
+}
+
+/// Why `--join-only` refuses a folder that has already joined. It names
+/// the worker, never a token.
+fn already_joined(name: Option<&str>) -> String {
+    let who = name.map_or_else(String::new, |n| format!(" as worker {n}"));
+    format!(
+        "this folder has already joined a coordinator{who}, so --join-only did nothing. To \
+         keep it, run `lodestar worker`; to join again, remove the worker in Settings → \
+         Workers and start from an empty data folder (on Windows, uninstall with \
+         REMOVE_DATA=1)."
+    )
+}
+
+fn run_with(
+    config: &Config,
+    args: WorkerArgs,
+    env: &dyn Fn(&str) -> Option<String>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    report: Report,
+) -> Outcome {
     let layout = Layout::new(args.data.clone().unwrap_or_else(|| config.data_dir.clone()));
     if layout.is_coordinators() {
         return Err(Failure::Refused(format!(
@@ -281,7 +340,21 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             }
         };
     }
-    let report: Report = Arc::new(|line: &str| eprintln!("lodestar worker: {line}"));
+    let join_only = args.join_only;
+    // Before anything else is read or created: a joined folder is refused
+    // even if its key can't be read. The name is shown only if the key
+    // already exists and opens: `load` would create a missing key.
+    if join_only && layout.is_joined() {
+        let key = layout
+            .data
+            .join(lodestar_integrations::SecretStore::KEY_FILE);
+        let name = key
+            .is_file()
+            .then(|| layout.load().ok().flatten())
+            .flatten()
+            .map(|c| c.name().to_owned());
+        return Err(Failure::Refused(already_joined(name.as_deref())));
+    }
     let joined = layout
         .load()
         .map_err(failed("reading the credentials"))?
@@ -294,6 +367,11 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
         let clock: Arc<dyn lodestar_cluster::Clock> = Arc::new(SystemClock);
         if let Some((url, source)) = plan.join {
             join(&layout, &url, source, joined, clock.clone(), &report).await?;
+        }
+        if join_only {
+            // Saved and done: the service (or the next `lodestar worker`)
+            // runs it from the saved credentials.
+            return Ok(());
         }
         let creds = match layout.load().map_err(failed("reading the credentials"))? {
             Some(c) => c,
@@ -354,7 +432,7 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
         let flag = stage_failed.clone();
         let stop = async move {
             tokio::select! {
-                () = crate::shutdown_signal() => {}
+                () = shutdown => {}
                 () = failed => flag.store(true, std::sync::atomic::Ordering::Relaxed),
             }
         };
@@ -465,12 +543,16 @@ fn finish(exit: Exit, report: &Report) -> Outcome {
 }
 
 fn block_on(f: impl Future<Output = Outcome>) -> Outcome {
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
-        .map_err(failed("starting the runtime"))?
-        .block_on(f)
+        .map_err(failed("starting the runtime"))?;
+    let out = runtime.block_on(f);
+    // A blocking task still running (a stuck file operation) can't hold the
+    // exit, or a service's stop, without limit: `serve` does the same.
+    runtime.shutdown_timeout(crate::services::RUNTIME_GRACE);
+    out
 }
 
 #[cfg(test)]
@@ -495,6 +577,7 @@ mod tests {
                 token_file: Some("-".into()),
                 data: None,
                 rotate_key: false,
+                join_only: false,
             }))
         );
         // No flag takes the token itself.
@@ -509,12 +592,17 @@ mod tests {
         assert!(parse(&["worker", "--data", "/w", "--rotate-key"]).is_ok());
     }
 
+    fn quiet() -> Report {
+        Arc::new(|_: &str| {})
+    }
+
     fn args(join: Option<&str>, token_file: Option<&str>) -> WorkerArgs {
         WorkerArgs {
             join: join.map(Into::into),
             token_file: token_file.map(Into::into),
             data: None,
             rotate_key: false,
+            join_only: false,
         }
     }
 
@@ -603,6 +691,7 @@ mod tests {
             token_file: None,
             data: Some(dir.path().to_path_buf()),
             rotate_key: false,
+            join_only: false,
         });
         let config = crate::cli::load_config(&worker, None, |_| None).unwrap();
         // The folder, and the config.toml read from it.
@@ -655,15 +744,121 @@ mod tests {
             token_file: None,
             data: Some(dir.path().to_path_buf()),
             rotate_key: true,
+            join_only: false,
         };
         assert!(matches!(
-            run_with(&config, rotate(), &|_| None),
+            run_with(
+                &config,
+                rotate(),
+                &|_| None,
+                std::future::pending(),
+                quiet()
+            ),
             Err(Failure::Refused(_))
         ));
         assert!(!dir.path().join("secrets.key").exists(), "nothing rotated");
         drop(held);
-        assert!(run_with(&config, rotate(), &|_| None).is_ok());
+        assert!(
+            run_with(
+                &config,
+                rotate(),
+                &|_| None,
+                std::future::pending(),
+                quiet()
+            )
+            .is_ok()
+        );
         assert!(dir.path().join("secrets.key").exists());
+    }
+
+    #[test]
+    fn join_only_needs_a_token_file_and_never_rotates() {
+        let cli = parse(&[
+            "worker",
+            "--join",
+            "https://c:8091",
+            "--token-file",
+            "t",
+            "--join-only",
+        ])
+        .unwrap();
+        let Some(Command::Worker(a)) = cli.command else {
+            panic!("not a worker command");
+        };
+        assert!(a.join_only && a.token_file.is_some());
+        // Not with LODESTAR_TOKEN alone, not bare, not with a rotation.
+        assert!(parse(&["worker", "--join", "https://c", "--join-only"]).is_err());
+        assert!(parse(&["worker", "--join-only"]).is_err());
+        assert!(parse(&["worker", "--rotate-key", "--join-only"]).is_err());
+    }
+
+    #[test]
+    fn join_only_on_a_joined_folder_says_how_to_go_on() {
+        let m = already_joined(Some("w-1"));
+        assert!(
+            m.contains("w-1") && m.contains("lodestar worker") && !m.contains('\n'),
+            "{m}"
+        );
+        assert!(!m.contains("lsj1"), "{m}");
+        assert!(!already_joined(None).contains("as worker"));
+    }
+
+    #[test]
+    fn join_only_refuses_a_joined_folder_before_reading_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster = dir.path().join("cluster");
+        std::fs::create_dir_all(&cluster).unwrap();
+        // Unreadable credentials still mean joined; the token file is missing.
+        std::fs::write(cluster.join("credentials"), b"not credentials").unwrap();
+        let config = Config::load(None, |_| None).unwrap();
+        let args = WorkerArgs {
+            join: Some("https://c:8091".into()),
+            token_file: Some(dir.path().join("no-such-token")),
+            data: Some(dir.path().to_path_buf()),
+            rotate_key: false,
+            join_only: true,
+        };
+        let Err(Failure::Refused(m)) =
+            run_with(&config, args, &|_| None, std::future::pending(), quiet())
+        else {
+            panic!("not refused");
+        };
+        assert!(
+            m.contains("already joined") && !m.contains("as worker"),
+            "{m}"
+        );
+        // The refusal created nothing: no key where there was none.
+        assert!(!dir.path().join("secrets.key").exists());
+    }
+
+    #[test]
+    fn a_service_never_joins_from_its_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, |_| None).unwrap();
+        let token = "lsj1".to_owned() + &"a".repeat(122);
+        let env = |k: &str| match k {
+            "LODESTAR_TOKEN" => Some(token.clone()),
+            "LODESTAR_JOIN" => Some("https://127.0.0.1:1".to_owned()),
+            _ => None,
+        };
+        let args = WorkerArgs {
+            join: None,
+            token_file: None,
+            data: Some(dir.path().to_path_buf()),
+            rotate_key: false,
+            join_only: false,
+        };
+        let Err(Failure::Failed(m)) = run_with(
+            &config,
+            args,
+            &|k| never_joins(&env, k),
+            std::future::pending(),
+            quiet(),
+        ) else {
+            panic!("joined or ran");
+        };
+        assert!(m.contains("hasn't joined"), "{m}");
+        assert!(!m.contains(&token), "{m}");
     }
 
     #[test]
@@ -689,6 +884,7 @@ mod tests {
             token_file: None,
             data: Some(dir.path().to_path_buf()),
             rotate_key: true,
+            join_only: false,
         };
         assert!(matches!(run(&config, args), Err(Failure::Refused(_))));
         assert!(!dir.path().join("secrets.key").exists());
