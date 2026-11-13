@@ -344,7 +344,7 @@ mod tests {
         // The task opens the file just after its first apply.
         assert!(
             opened(dir.path()).await,
-            "the file opened within 10 s of the task starting"
+            "the file didn't open within 10 s of the task starting"
         );
         assert!(rt.applied().file_mask.has(Kind::Name));
         let deadline = std::time::Instant::now() + WAIT;
@@ -369,7 +369,7 @@ mod tests {
         // apply, so once it's there that apply is done and can be checked.
         assert!(
             opened(dir.path()).await,
-            "the file opened within 10 s of the task starting"
+            "the file didn't open within 10 s of the task starting"
         );
         assert!(!rt.applied().file_mask.has(Kind::Hash));
         l.data = super::super::logging::DataPreset::Hashes;
@@ -381,7 +381,8 @@ mod tests {
         }
         assert!(
             rt.applied().file_mask.has(Kind::Hash),
-            "the save applied within 10 s"
+            "the save didn't apply within 10 s: {:?}",
+            rt.applied().data
         );
         assert_eq!(rt.applied().data, "hashes");
         task.abort();

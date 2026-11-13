@@ -79,7 +79,7 @@ async fn ask(socket: &UdpSocket, to: SocketAddr, msg: &[u8], tid: u16) -> bool {
 ///
 /// The signal: a ping from a stranger that never answers makes the node
 /// ping back to verify it; the node expires that ping a query timeout
-/// later, and expiring is the first thing a tick does. The snapshot then
+/// later, early in a tick and before sampling or lookups start. The snapshot then
 /// waits for the rest of the tick, because the node's actor is one task
 /// that serves a command only between ticks and datagrams.
 async fn a_tick_ran(node: &Node) {
@@ -114,11 +114,12 @@ async fn a_tick_ran(node: &Node) {
     .await;
     assert!(
         pinged_back.is_ok(),
-        "the node pinged the stranger back within 10 s"
+        "the node didn't ping the stranger back within 10 s"
     );
     assert!(
         wait_for(async || node.stats().timeouts > before, wait::DEADLINE).await,
-        "the node expired the unanswered ping within 10 s"
+        "the node expired no query within 10 s: timeouts still {} (from {before})",
+        node.stats().timeouts
     );
     node.snapshot().await.expect("running");
 }
@@ -138,7 +139,8 @@ async fn a_paused_node_answers_but_doesnt_crawl() {
     // Maintenance goes on: A bootstraps from B and answers queries.
     assert!(
         wait_for(async || a.stats().routing_nodes > 0, wait::DEADLINE).await,
-        "the paused node bootstrapped from B within 10 s"
+        "the paused node didn't bootstrap from B within 10 s: {:?}",
+        a.stats()
     );
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     assert!(
@@ -178,7 +180,8 @@ async fn a_paused_node_answers_but_doesnt_crawl() {
     assert!(!a.snapshot().await.unwrap().paused);
     assert!(
         wait_for(async || a.stats().samples_sent > 0, wait::DEADLINE).await,
-        "the resumed node sent a sample within 10 s"
+        "the resumed node sent no sample within 10 s: {:?}",
+        a.stats()
     );
     let got = tokio::time::timeout(wait::DEADLINE, async {
         loop {

@@ -214,18 +214,25 @@ async fn scrape_lookup_estimates_the_swarm() {
     for n in &others {
         swarm.push(n.snapshot().await.unwrap().ids[0]);
     }
-    assert!(
-        wait_for(
-            async || {
-                let s = crawler.snapshot().await.unwrap();
-                swarm.iter().all(|id| s.nodes.iter().any(|n| n.id == *id))
-            },
-            wait::DEADLINE
-        )
-        .await,
-        "the crawler's table held all {} nodes of the swarm within 10 s",
-        swarm.len()
-    );
+    let joined = wait_for(
+        async || {
+            let s = crawler.snapshot().await.unwrap();
+            swarm.iter().all(|id| s.nodes.iter().any(|n| n.id == *id))
+        },
+        wait::DEADLINE,
+    )
+    .await;
+    if !joined {
+        let s = crawler.snapshot().await.unwrap();
+        let held = swarm
+            .iter()
+            .filter(|id| s.nodes.iter().any(|n| n.id == **id))
+            .count();
+        panic!(
+            "the crawler's table didn't hold all {} nodes of the swarm within 10 s: it held {held}",
+            swarm.len()
+        );
+    }
     let handle = crawler.handle();
     let est = tokio::time::timeout(Duration::from_secs(20), handle.scrape(h))
         .await

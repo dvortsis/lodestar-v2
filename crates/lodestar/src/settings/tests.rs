@@ -624,7 +624,7 @@ async fn the_log_filter_follows_live() {
     task.abort();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn the_intensity_reaches_the_running_dht() {
     use lodestar_dht::node::{Config as DhtConfig, Intensity as DhtIntensity, Node};
     let dir = tempfile::tempdir().unwrap();

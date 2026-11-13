@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Waits get the whole deadline a slow CI runner may need.
 configure({ asyncUtilTimeout: 10_000 });
+vi.setConfig({ testTimeout: 20_000 });
 
 const destroy = vi.fn();
 const setSize = vi.fn();

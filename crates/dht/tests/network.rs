@@ -159,7 +159,8 @@ async fn read_only_node_does_not_answer() {
     let asker = Node::start(config(vec![ro_addr]), None).await.unwrap();
     assert!(
         wait_for(async || ro.stats().queries_in > 0, wait::DEADLINE).await,
-        "the read-only node received the asker's bootstrap query within 10 s"
+        "the read-only node received no query within 10 s: {:?}",
+        ro.stats()
     );
     // No sleep proves that nothing was sent. The node's actor is one task
     // that handles a datagram, any reply included, before it serves the
@@ -184,7 +185,8 @@ async fn denied_addresses_are_never_contacted_or_answered() {
     let denying = Node::start(cfg, None).await.unwrap();
     assert!(
         wait_for(async || denying.stats().denied > 0, wait::DEADLINE).await,
-        "the node refused to contact its denied bootstrap node within 10 s"
+        "the node refused no send within 10 s: {:?}",
+        denying.stats()
     );
     // Absence without a sleep: the actor refuses a send inside the same
     // handler that would have sent it, and serves the snapshot only after
