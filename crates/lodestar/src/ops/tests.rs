@@ -970,9 +970,9 @@ const GATED: [(&str, Consent); 5] = [
 ];
 
 /// Asserts a `PATCH /sources/{id}` answer is the consent gate's refusal
-/// (X-consent-gate-052): this build doesn't ship the class's approved
-/// dialog (Account, until X-consent-gate-lift r2), so a source of it isn't
-/// turned on, however it's asked.
+/// (X-consent-gate-052): this build can't turn on a source of its class
+/// (External, until the Legal Notice's new wording; Account, until
+/// X-consent-gate-lift r2), however it's asked.
 #[track_caller]
 fn assert_asks_consent((status, e): (u16, Value), class: &str, what: &str) {
     assert_eq!(
@@ -1292,25 +1292,25 @@ async fn no_class_can_be_enabled_past_its_condition() {
         assert_eq!(sources_keys(), before, "{toml}");
     }
 
-    // External: refused unless the request accepts exactly the class and
-    // version shown (X-consent-gate-lift). A refusal records nothing.
+    // External: refused whatever is sent, its own acknowledgement and the
+    // password included, in this version: the Legal Notice says
+    // the torrent cache can't be turned on (X-consent-gate-052,
+    // X-consent-gate-lift). Nothing is recorded.
     let ext = f.source(&c, "external").await;
     let version = ext["consent_version"].as_str().unwrap().to_string();
-    assert!(version.starts_with("t2 "), "the approved text: {version}");
-    let draft = version.replacen("t2 ", "t1 ", 1);
     assert_eq!(ext["endpoints"], json!(["https://example.org"]));
     for body in [
         json!({ "enabled": true }),
-        json!({ "enabled": true, "password": "correct horse battery" }),
         json!({ "enabled": true, "consent": "external" }),
         json!({ "enabled": true, "consent": "external", "consent_version": "0-0" }),
-        json!({ "enabled": true, "consent": "external", "consent_version": draft }),
         json!({ "enabled": true, "consent": "none", "consent_version": version }),
         json!({ "enabled": true, "consent": "overlay", "consent_version": version }),
+        json!({ "enabled": true, "consent": "external", "consent_version": version }),
+        json!({ "enabled": true, "consent": "external", "consent_version": version,
+                "password": "correct horse battery" }),
     ] {
-        assert_asks_consent(
+        assert_gated(
             f.patch(&c, "external", body.clone()).await,
-            "external",
             &body.to_string(),
         );
     }
@@ -1324,19 +1324,6 @@ async fn no_class_can_be_enabled_past_its_condition() {
             .iter()
             .any(|k| k.starts_with("sources.consent.")),
         "no acknowledgement recorded"
-    );
-    // Accepted: no password asked (External isn't Restricted).
-    let (status, s) = f
-        .patch(
-            &c,
-            "external",
-            json!({ "enabled": true, "consent": "external", "consent_version": version }),
-        )
-        .await;
-    assert_eq!(
-        (status, s["enabled"].clone(), s["needs"].clone()),
-        (200, json!(true), Value::Null),
-        "{s}"
     );
 
     // Account: refused like External, before credentials are looked at,
@@ -1446,18 +1433,14 @@ async fn no_class_can_be_enabled_past_its_condition() {
         let (status, _) = f.patch_from(host, &c, id, json!({ "enabled": true })).await;
         assert_eq!(status, 428, "{id}");
     }
-    // Exactly the three accepted acknowledgements are recorded.
+    // Exactly the two accepted acknowledgements are recorded.
     let keys: Vec<String> = sources_keys()
         .into_iter()
         .filter(|k| k.starts_with("sources.consent."))
         .collect();
     assert_eq!(
         keys,
-        [
-            "sources.consent.external",
-            "sources.consent.overlay",
-            "sources.consent.restricted"
-        ],
+        ["sources.consent.overlay", "sources.consent.restricted"],
         "{keys:?}"
     );
 
@@ -1551,20 +1534,21 @@ async fn a_restart_keeps_an_accepted_acknowledgement_and_a_new_text_asks_again()
     // is kept.
     let f = gated_fixture(dir, plugins.iter().map(|(p, _)| p.clone()).collect()).await;
     eventually("the accepted sources run", String::new, || {
-        ran[0].load(Ordering::SeqCst)
-            && ran[1].load(Ordering::SeqCst)
-            && ran[3].load(Ordering::SeqCst)
+        ran[0].load(Ordering::SeqCst) && ran[3].load(Ordering::SeqCst)
     })
     .await;
+    // External stays behind the gate in this version, so it's switched
+    // off too, its record kept.
     for s in f.pipeline.sources() {
         assert_eq!(
             s.enabled,
-            ["none", "external", "restricted"].contains(&s.plugin.as_str()),
+            ["none", "restricted"].contains(&s.plugin),
             "{}",
             s.plugin
         );
     }
     assert!(!ran[4].load(Ordering::SeqCst), "the draft-text overlay ran");
+    assert!(!ran[1].load(Ordering::SeqCst), "the gated external ran");
     {
         let store = Store::open(&db, StoreConfig::default()).unwrap();
         for (plugin, record) in &records {
@@ -1578,6 +1562,15 @@ async fn a_restart_keeps_an_accepted_acknowledgement_and_a_new_text_asks_again()
     }
     let c = f.session().await;
     let s = f.source(&c, "external").await;
+    assert_eq!(
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(false), Value::Null)
+    );
+    assert_gated(
+        f.patch(&c, "external", json!({ "enabled": true })).await,
+        "external",
+    );
+    let s = f.source(&c, "restricted").await;
     assert_eq!(
         (s["enabled"].clone(), s["needs"].clone()),
         (json!(true), Value::Null)
@@ -1665,12 +1658,13 @@ fn cache_state(dir: &tempfile::TempDir) -> lodestar_store::SourceState {
 }
 
 /// SRC-13c through the real router: `config` is checked by the plugin,
-/// saved and applied at the next start. The cache turns on once the list
-/// it shows is accepted (X-consent-gate-lift), and a list the stored
-/// acknowledgement doesn't cover (a host or a path changed) switches it
-/// off at the next start and asks for it again.
+/// saved and applied at the next start. The cache can't be turned on
+/// until its consent text is approved (X-consent-gate-052), and one an
+/// earlier build turned on is off again at the next start; a list the
+/// stored acknowledgement doesn't cover (a host or a path changed) asks
+/// for it again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_config_written_through_the_api_applies_at_the_next_start_and_a_moved_list_asks_again() {
+async fn a_config_written_through_the_api_applies_at_the_next_start_and_the_cache_stays_off() {
     const ID: &str = crate::torrent_cache::ID;
     let dir = tempfile::tempdir().unwrap();
     let plugins = with_cache(&dir);
@@ -1750,26 +1744,17 @@ async fn a_config_written_through_the_api_applies_at_the_next_start_and_a_moved_
     let version = s["consent_version"].clone();
     assert!(version.as_str().unwrap().ends_with(a), "{version}");
     for body in [
-        json!({ "enabled": true }),
         json!({ "enabled": true, "consent": "external" }),
+        json!({ "enabled": true, "consent": "external", "consent_version": version }),
     ] {
         let (status, e) = f.patch(&c, ID, body.clone()).await;
         assert!(
             !e.to_string().contains("a.example"),
             "the refusal quotes no address: {e}"
         );
-        assert_asks_consent((status, e), "external", &body.to_string());
+        assert_gated((status, e), &body.to_string());
     }
     assert_eq!(cache_state(&f.dir), lodestar_store::SourceState::Disabled);
-    let (status, s) = f
-        .patch(
-            &c,
-            ID,
-            json!({ "enabled": true, "consent": "external", "consent_version": version }),
-        )
-        .await;
-    assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{s}");
-    assert_eq!(cache_state(&f.dir), lodestar_store::SourceState::Enabled);
     // The same list with another path on the same host is another party.
     let moved = "https://a.example/~someone-else/{hash}.torrent";
     let (status, _) = f
@@ -1778,6 +1763,21 @@ async fn a_config_written_through_the_api_applies_at_the_next_start_and_a_moved_
     assert_eq!(status, 200);
     let GatedFixture { pipeline, dir, .. } = f;
     pipeline.shutdown().await.unwrap();
+
+    // A build before the gate acknowledged the list it showed and turned
+    // the cache on.
+    {
+        let mut store = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
+        let id = store
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == ID)
+            .unwrap()
+            .id;
+        let record = format!("external|{}|1", version.as_str().unwrap());
+        store.enable_source(id, Some(&record)).unwrap();
+    }
 
     // The next start: off, and the moved list asks again.
     let plugins = with_cache(&dir);
@@ -1788,26 +1788,15 @@ async fn a_config_written_through_the_api_applies_at_the_next_start_and_a_moved_
     assert_eq!(s["endpoints"], json!([moved]));
     assert_eq!(s["needs"], json!("endpoints_ack"));
     assert_ne!(s["consent_version"], version);
-    let (status, e) = f
-        .patch(
+    assert_gated(
+        f.patch(
             &c,
             ID,
             json!({ "enabled": true, "consent": "external", "consent_version": version }),
         )
-        .await;
-    assert!(!e.to_string().contains("example"), "{e}");
-    assert_asks_consent((status, e), "external", "the old list's version");
-    assert_eq!(cache_state(&f.dir), lodestar_store::SourceState::Disabled);
-    // Accepting the list shown now turns it on.
-    let now = s["consent_version"].clone();
-    let (status, s) = f
-        .patch(
-            &c,
-            ID,
-            json!({ "enabled": true, "consent": "external", "consent_version": now }),
-        )
-        .await;
-    assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{s}");
+        .await,
+        "the old list's version",
+    );
     f.pipeline.shutdown().await.unwrap();
 }
 

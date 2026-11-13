@@ -590,8 +590,11 @@ pub const CONSENT_GATE_REASON: &str = "this source asks for your consent before 
 /// Overlay the admin password on every enable as well.
 ///
 /// - **None:** shows no dialog.
-/// - **External, Restricted and Overlay:** SRC-15b's dialogs show their
-///   approved texts (X-consent-gate-lift).
+/// - **Restricted and Overlay:** SRC-15b's dialogs show their approved
+///   texts (X-consent-gate-lift).
+/// - **External:** refused. The Legal Notice says the torrent cache can't
+///   be turned on in this version; it opens in X-consent-gate-lift-external
+///   once the owner approves the notice's new wording.
 /// - **Account:** refused. Its credentials dialog (SRC-15c) and its
 ///   condition are X-consent-gate-lift r2's
 ///   (`docs/decisions/2026-11-12-X-consent-gate-lift.md`).
@@ -601,8 +604,8 @@ pub const CONSENT_GATE_REASON: &str = "this source asks for your consent before 
 /// ([`Ack::decode`]), so it counts as no acknowledgement.
 pub const fn consent_text_approved(class: Consent) -> bool {
     match class {
-        Consent::None | Consent::External | Consent::Restricted | Consent::Overlay => true,
-        Consent::Account => false,
+        Consent::None | Consent::Restricted | Consent::Overlay => true,
+        Consent::External | Consent::Account => false,
     }
 }
 
@@ -621,7 +624,7 @@ pub const REASON_LAPSED: &str = "consent_lapsed";
 /// from when it held only the class check), and logs `pipeline.source_state_changed` with
 /// the reason:
 /// - [`REASON_TEXT_UNAPPROVED`]: this build doesn't ship its class's
-///   approved dialog ([`consent_text_approved`]: Account today), so one
+///   approved dialog ([`consent_text_approved`]: External and Account today), so one
 ///   turned on by an earlier build (a nightly, or a backup restored from
 ///   one) doesn't run. Its stored acknowledgement is left as it is: once
 ///   the dialog ships, `consent::need_in_with` decides whether it covers
@@ -1364,7 +1367,7 @@ impl Control {
     ///   ([`Control::update_credentials`], [`consent::need_with`]).
     ///
     /// A class whose approved dialog this build doesn't ship
-    /// ([`consent_text_approved`]: Account today) is refused before
+    /// ([`consent_text_approved`]: External and Account today) is refused before
     /// anything else is checked, credentials included, as an invalid
     /// `enabled` naming [`CONSENT_GATE_REASON`].
     pub async fn update_source(
@@ -1823,9 +1826,10 @@ mod tests {
     fn the_gate_passes_none_and_the_three_acknowledged_classes_only() {
         for (class, allowed) in [
             (Consent::None, true),
-            (Consent::External, true),
             (Consent::Restricted, true),
             (Consent::Overlay, true),
+            // The Legal Notice says it can't be turned on yet.
+            (Consent::External, false),
             // Its credentials dialog is r2's (§2.49).
             (Consent::Account, false),
         ] {
@@ -2033,28 +2037,32 @@ mod tests {
         }
         assert_eq!(cases, 5 * 2 * 5 * 5 * 2 * 4 * 2);
         assert!(allowed_count > 0);
-        // With this build's gate, Account is never let through, whatever
-        // is stored or sent.
-        let m = matrix_manifest(Consent::Account);
-        for names in creds {
-            let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
-            let r = enable_decision(
-                consent_text_approved(Consent::Account),
-                false,
-                &m,
-                SPEC,
-                None,
-                &names,
-                &SourceChange {
-                    enabled: Some(true),
-                    password_confirmed: true,
-                    ..SourceChange::default()
-                },
-            );
-            assert!(
-                matches!(&r, Err(SourceError::Invalid { field: "enabled", reason }) if reason == CONSENT_GATE_REASON),
-                "{names:?}: {r:?}"
-            );
+        // With this build's gate, External and Account are never let
+        // through, whatever is stored or sent.
+        for class in [Consent::External, Consent::Account] {
+            let m = matrix_manifest(class);
+            for names in creds {
+                let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+                let r = enable_decision(
+                    consent_text_approved(class),
+                    false,
+                    &m,
+                    SPEC,
+                    Some(&Ack::of(&m)),
+                    &names,
+                    &SourceChange {
+                        enabled: Some(true),
+                        consent: Some(class),
+                        consent_version: Some(consent::version(&m)),
+                        password_confirmed: true,
+                        ..SourceChange::default()
+                    },
+                );
+                assert!(
+                    matches!(&r, Err(SourceError::Invalid { field: "enabled", reason }) if reason == CONSENT_GATE_REASON),
+                    "{class:?} {names:?}: {r:?}"
+                );
+            }
         }
     }
 

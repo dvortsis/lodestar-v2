@@ -134,10 +134,11 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     )
     .await
     .unwrap();
-    // External, Restricted and Overlay open once the user accepts exactly
-    // the current text version and addresses (X-consent-gate-lift), with
-    // the password for Restricted and Overlay. Every other request is
-    // refused, and a refusal writes nothing.
+    // Restricted and Overlay open once the user accepts exactly the
+    // current text version and addresses, with the password
+    // (X-consent-gate-lift). External stays behind the gate in this
+    // version. Every other request is refused, and a refusal writes
+    // nothing.
     let enable = |consent, version: Option<String>, password_confirmed| SourceChange {
         enabled: Some(true),
         consent,
@@ -159,14 +160,46 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
             .find(|v| v.status.id == id)
             .unwrap()
     };
+    let gated = |r: &Result<_, SourceError>| {
+        matches!(
+            r,
+            Err(SourceError::Invalid { field: "enabled", reason })
+                if reason == lodestar_pipeline::control::CONSENT_GATE_REASON
+        )
+    };
+    {
+        let m = probe("held", Consent::External).0.manifest.clone();
+        let version = consent::version(&m);
+        for (c, v) in [
+            (None, None),
+            (Some(Consent::External), Some(version.clone())),
+        ] {
+            for password in [false, true] {
+                let r = control
+                    .update_source(held, enable(c, v.clone(), password))
+                    .await;
+                assert!(gated(&r), "held: {c:?} {v:?} {password}: {r:?}");
+            }
+        }
+        // A stored acknowledgement doesn't open it either.
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        store
+            .enable_source(held, Some(&Ack::of(&m).encode()))
+            .unwrap();
+        store.set_source_state(held, SourceState::Paused).unwrap();
+        drop(store);
+        assert_eq!(view_of(&control, held).need, None);
+        let r = control.update_source(held, enable(None, None, true)).await;
+        assert!(gated(&r), "held with a record: {r:?}");
+        assert_ne!(view_of(&control, held).state, SourceState::Enabled);
+    }
     for (id, plugin, class) in [
         (off, "off", Consent::Restricted),
-        (held, "held", Consent::External),
         (fresh_id, "fresh", Consent::Overlay),
     ] {
         let m = probe(plugin, class).0.manifest.clone();
         let version = consent::version(&m);
-        let stale = version.replacen("t2 ", "t1 ", 1);
+        let stale = version.replacen("t2", "t1", 1);
         assert_ne!(stale, version);
         for (c, v) in [
             (None, None),
@@ -226,8 +259,8 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
         );
     }
     // Turned off, then on again: the stored acknowledgement covers the
-    // text, so only Restricted and Overlay ask again, for the password.
-    for (id, class) in [(off, Consent::Restricted), (held, Consent::External)] {
+    // text, so it asks only for the password.
+    for (id, class) in [(off, Consent::Restricted), (fresh_id, Consent::Overlay)] {
         control
             .update_source(
                 id,
@@ -250,7 +283,12 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
             assert_eq!(r.unwrap().state, SourceState::Enabled);
         }
     }
-    // Disabling needs no consent; an unknown id is refused.
+    // Disabling needs no consent, even for a gated source a build before
+    // this one left on; an unknown id is refused.
+    Store::open(&db, StoreConfig::default())
+        .unwrap()
+        .enable_source(held, None)
+        .unwrap();
     let view = control
         .update_source(
             held,
@@ -378,11 +416,13 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         ("ext_current", Consent::External),
         ("acct_ready", Consent::Account),
         ("draft", Consent::Overlay),
-        ("moved", Consent::External),
+        ("moved", Consent::Restricted),
         ("rereg", Consent::Overlay),
     ];
-    // Kept on: an accepted acknowledgement of exactly what's shown now.
-    let kept_on = ["on", "current", "ext_current", "rereg"];
+    // Kept on: an accepted acknowledgement of exactly what's shown now, of
+    // a class the gate passes. `ext_current` is External, which stays
+    // behind the gate in this version.
+    let kept_on = ["on", "current", "rereg"];
     let acks = {
         // Enabled some other way (an older build, a hand edit, an import
         // that registered it): no record, or a stale one.
@@ -440,7 +480,7 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         // something it didn't when it was accepted.
         let moved = Ack {
             version: format!("t2 {}:https://old.example", "https://old.example".len()),
-            ..ack("moved", Consent::External)
+            ..ack("moved", Consent::Restricted)
         };
         let id = row(&store, "moved");
         store.enable_source(id, Some(&moved.encode())).unwrap();

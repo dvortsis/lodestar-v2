@@ -702,16 +702,20 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
 /// Enables or disables a source, or sets its priority. A priority
 /// applies at once; enabling or disabling at the next start.
 ///
-/// This build turns on only a source whose class is `none`. Enabling an
-/// `external`, `account`, `restricted` or `overlay` source is refused with
-/// `400 invalid_setting` on `enabled`, before its consent, acknowledgement
-/// or credentials are looked at, whatever the request sends: this version
-/// can't show the class's consent dialog yet. A `"password"` sent with the
-/// enable is still checked first (`401` when it's wrong). `needs` and
-/// `credential_spec` still say what the source will need once a later
-/// version can turn it on, and credentials can be stored and removed
-/// meanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every
-/// class.
+/// A `none` source is a toggle. A `restricted` or `overlay` source is
+/// turned on only when the request sends `"consent"` naming its class and
+/// the `"consent_version"` `GET /sources` gives for it, exactly, unless an
+/// acceptance of that version is already stored, and the admin
+/// `"password"` every time: otherwise `409 consent_required` or `428
+/// confirm_required`, and nothing is saved. A new consent text or address
+/// list changes the version, and the source asks again. Enabling an
+/// `external` or `account` source is refused with `400 invalid_setting` on
+/// `enabled`, before its consent, acknowledgement or credentials are looked
+/// at, whatever the request sends: this version can't turn it on yet. A
+/// `"password"` sent with the enable is checked first (`401` when it's
+/// wrong). `needs` and `credential_spec` say what the source needs, and
+/// credentials can be stored and removed meanwhile (`PATCH
+/// /sources/{id}/credentials`). Disabling works for every class.
 ///
 /// Agents, egress and the schedule apply at the next start; changing
 /// egress needs the admin `"password"` (`428 confirm_required`), and the

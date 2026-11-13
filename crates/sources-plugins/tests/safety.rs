@@ -594,13 +594,22 @@ impl SourcePlugin for Probe {
 
 /// Every plugin in the catalogue, with its real consent class: a state
 /// an earlier build or a restored backup left Enabled is switched off at
-/// the start before it runs, and no `PATCH` (any consent, any version,
-/// with or without the password) turns it on, unless its class needs no
-/// consent. Settings import and the config file have no path to a
-/// source's state (`docs/decisions/2026-11-07-SRC-G.md`).
+/// the start before it runs, and no `PATCH` turns it on unless its class
+/// needs no consent, or its class's approved dialog ships in this build
+/// (`consent_text_approved`: Restricted and Overlay) and the request
+/// accepts exactly the current text version and addresses with the admin
+/// password (X-consent-gate-lift). External and Account are refused by the
+/// gate in this version, whatever is sent. No shipped plugin is
+/// Restricted or Overlay yet, so the accepting branch is a guard for the
+/// first one; `control::enable_decision`'s matrix and
+/// `crates/pipeline/tests/control.rs` cover it today. Settings import and the config
+/// file have no path to a source's state
+/// (`docs/decisions/2026-11-07-SRC-G.md`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_enable_path_opens_a_consent_class_in_any_shipped_plugin() {
-    use lodestar_pipeline::control::{CONSENT_GATE_REASON, SourceChange, SourceError};
+    use lodestar_pipeline::control::{
+        CONSENT_GATE_REASON, SourceChange, SourceError, consent_text_approved,
+    };
     use lodestar_pipeline::{Control, Pipeline as P};
     use lodestar_sources::consent;
     use lodestar_store::SourceState;
@@ -681,8 +690,22 @@ async fn no_enable_path_opens_a_consent_class_in_any_shipped_plugin() {
             m.id
         );
         assert!(!flag.load(Ordering::SeqCst), "{} ran", m.id);
+        let current = consent::version(&m);
+        let stale = current.replacen(
+            &format!("t{}", consent::text_version(m.consent)),
+            &format!("t{}", consent::text_version(m.consent).wrapping_sub(1)),
+            1,
+        );
+        // Once accepted, the stored record covers it: then only the
+        // password is asked again.
+        let mut acked = false;
         for class in classes {
-            for version in [None, Some(String::new()), Some(consent::version(&m))] {
+            for version in [
+                None,
+                Some(String::new()),
+                Some(stale.clone()),
+                Some(current.clone()),
+            ] {
                 for password_confirmed in [false, true] {
                     let r = control
                         .update_source(
@@ -696,12 +719,36 @@ async fn no_enable_path_opens_a_consent_class_in_any_shipped_plugin() {
                             },
                         )
                         .await;
-                    assert!(
-                        matches!(&r, Err(SourceError::Invalid { field: "enabled", reason })
-                            if *reason == CONSENT_GATE_REASON),
-                        "{}: {r:?}",
-                        m.id
-                    );
+                    let password_ok = password_confirmed || !consent::needs_password(m.consent);
+                    let exact = (acked
+                        || (class == Some(m.consent)
+                            && version.as_deref() == Some(current.as_str())))
+                        && password_ok;
+                    if !consent_text_approved(m.consent) {
+                        assert!(
+                            matches!(&r, Err(SourceError::Invalid { field: "enabled", reason })
+                                if *reason == CONSENT_GATE_REASON),
+                            "{}: {r:?}",
+                            m.id
+                        );
+                    } else if exact && consent::needs_ack(m.consent) {
+                        // Accepted exactly: on, then off again for the
+                        // next case.
+                        assert_eq!(r.unwrap().state, SourceState::Enabled, "{}", m.id);
+                        acked = true;
+                        control
+                            .update_source(
+                                view.status.id,
+                                SourceChange {
+                                    enabled: Some(false),
+                                    ..SourceChange::default()
+                                },
+                            )
+                            .await
+                            .unwrap();
+                    } else {
+                        assert!(r.is_err(), "{}: {r:?}", m.id);
+                    }
                 }
             }
         }
