@@ -80,5 +80,7 @@
 			</li>
 		{/each}
 	</ol>
-	<p class="mt-2 text-small text-muted-text" data-testid="insights-strip-time">{m.insights_overview_strip_time()}</p>
+	<p class="mt-2 text-small text-muted-text" data-testid="insights-strip-time">
+		{m.insights_overview_strip_time()}
+	</p>
 </nav>
