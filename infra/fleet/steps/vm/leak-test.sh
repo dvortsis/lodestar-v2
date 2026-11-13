@@ -44,6 +44,7 @@ V6_URL='http://[2606:4700:4700::1111]/'
 NOT_RUN=222  # a probe whose container never ran its command: never counts as blocked
 fails=0
 block=""
+ep_guard=""
 counter=""
 flow=""
 FLOW=lodestar-leak-flow
@@ -68,6 +69,7 @@ cleanup() {
     for _ in 1 2 3; do iptables -D DOCKER-USER $counter 2>/dev/null || break; done
   fi
   [[ -n $block ]] && iptables -D DOCKER-USER $block 2>/dev/null
+  [[ -n $ep_guard ]] && iptables -D DOCKER-USER $ep_guard 2>/dev/null
   return 0
 }
 trap cleanup EXIT
@@ -100,11 +102,41 @@ wait_healthy() {
   return 1
 }
 echo_ip() { probe curl -4 -s -m "$1" "$ECHO_URL" 2>/dev/null | tr -d '\r\n' | head -c 64; }
-tunnel_up() {  # recreate gluetun alone from the committed compose file and the current wg0.conf
+read_iface() {  # the VPN interface gluetun's config names; the image's own default is tun0
+  local i
+  i=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' gluetun 2>/dev/null \
+    | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
+  printf '%s\n' "${i:-tun0}"
+}
+# tunnel_up: recreate gluetun alone from the committed compose file and the
+# current wg0.conf. A new container answers packets before gluetun has turned
+# its firewall on: the endpoint keeps sending to the address it knew, and the
+# kernel's "port unreachable" goes back out NATed to the host's address. So the
+# endpoint's packets are held at the host (a DOCKER-USER guard) until gluetun's
+# post-rules are in place in both families; only then can anything reach it.
+# Rules that never load lift the guard after the deadline and fail
+# post_rules_before_egress, so the checks below still run and judge.
+tunnel_up() {
+  local rc i ready=""
+  ep_guard="-s $ep_ip/32 -p udp --sport $ep_port -j DROP"
+  iptables -I DOCKER-USER 1 $ep_guard 2>/dev/null || { ep_guard=""; bad recreate_guarded; return 1; }
   LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
+  rc=$?
+  if ((rc == 0)); then
+    for ((i = 0; i < 30; i++)); do  # gluetun turns its firewall on within seconds of starting
+      if [[ $(read_iface) =~ ^[a-z][a-z0-9]{0,14}$ ]] && post_rules_on iptables "$(read_iface)" >/dev/null 2>&1 \
+        && post_rules_on ip6tables "$(read_iface)" >/dev/null 2>&1; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    [[ -n $ready ]] || bad post_rules_before_egress
+  fi
+  iptables -D DOCKER-USER $ep_guard 2>/dev/null && ep_guard=""
+  return "$rc"
 }
-# post_rules_on family iface proto icmpword: gluetun loaded its post-rules
+# post_rules_on family iface: gluetun loaded its post-rules
 # (compose.yaml) for this interface, and each of the three comes before the
 # first accept in OUTPUT. gluetun skips a missing file without a word, so this
 # is checked, not assumed. Its image has both iptables backends; the rules are
@@ -115,7 +147,11 @@ POST_RULES_CHECK='for t in "$1" "$1-nft" "$1-legacy"; do
   command -v "$t" >/dev/null 2>&1 || continue
   "$t" -C OUTPUT -o "$2" -j CONNMARK --set-xmark 0x800000/0x800000 2>/dev/null || continue
   "$t" -C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP 2>/dev/null || continue
-  "$t" -C OUTPUT ! -o "$2" -p "$3" --"$4"-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP 2>/dev/null || continue
+  if [ "$1" = iptables ]; then
+    "$t" -C OUTPUT ! -o "$2" -p icmp -m addrtype ! --dst-type LOCAL -j DROP 2>/dev/null || continue
+  else
+    "$t" -C OUTPUT ! -o "$2" -p ipv6-icmp ! -d fe80::/10 -m addrtype ! --dst-type LOCAL,MULTICAST -m hl ! --hl-eq 255 -j DROP 2>/dev/null || continue
+  fi
   rules=$("$t" -S OUTPUT 2>/dev/null) || continue
   first() { printf "%s\n" "$rules" | grep -n -m 1 -e "$1" | cut -d: -f1; }
   acc=$(first "-j ACCEPT")
@@ -125,7 +161,7 @@ POST_RULES_CHECK='for t in "$1" "$1-nft" "$1-legacy"; do
   [ -n "$acc" ] && [ -n "$mark" ] && [ -n "$drop" ] && [ -n "$icmp" ] || continue
   [ "$mark" -lt "$acc" ] && [ "$drop" -lt "$acc" ] && [ "$icmp" -lt "$acc" ] && exit 0
 done; exit 1'
-post_rules_on() { docker exec gluetun sh -c "$POST_RULES_CHECK" rules "$1" "$2" "$3" "$4"; }
+post_rules_on() { docker exec gluetun sh -c "$POST_RULES_CHECK" rules "$1" "$2"; }
 # A connection opened through the tunnel that keeps sending through both
 # down phases (an unprivileged ping), so the leak gluetun's post-rules close
 # is exercised every run, not only when gluetun happens to hold one open.
@@ -225,14 +261,12 @@ wait_healthy; up=$?
 unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so
 docker pull "$PROBE_IMAGE" >/dev/null 2>&1 || unhealthy_stop probe_image
 check probe_tools probe sh -c 'command -v curl && command -v nc && command -v dig && command -v ip'
-iface=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' gluetun 2>/dev/null \
-  | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
-iface=${iface:-tun0}  # gluetun's image default; compose.yaml sets wg0, the name the post-rules use
+iface=$(read_iface)  # compose.yaml sets wg0, the name the post-rules use
 [[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || unhealthy_stop vpn_interface
 # The rules name the interface; a name gluetun didn't use would make them inert.
 check vpn_interface_live iface_up
-check post_rules_ipv4 post_rules_on iptables "$iface" icmp icmp
-check post_rules_ipv6 post_rules_on ip6tables "$iface" ipv6-icmp icmpv6
+check post_rules_ipv4 post_rules_on iptables "$iface"
+check post_rules_ipv6 post_rules_on ip6tables "$iface"
 
 # An unhealthy tunnel whose interface has received nothing never completed its
 # WireGuard handshake: an expired or wrong PIA key, or an endpoint that can't be
