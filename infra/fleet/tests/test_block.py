@@ -1046,6 +1046,37 @@ esac
         self.assertEqual(self.copies(), 1)
         self.assertEqual(self.outages(), ["host_guard_dropped", "link_outage"])  # put back before it's noted
 
+    def test_a_dangling_link_mark_counts_and_is_never_written_through(self):
+        """X-damaged-mark-links: the step agrees with copy-off (-e || -L), and
+        guard_lost leaves a link in place rather than writing through it."""
+        for target in ("kept", "missing"):
+            with self.subTest(target=target):
+                self.setUp()
+                self.make_block(segment=2)
+                if target == "kept":
+                    (self.tmp / "kept").write_text("not the mark\n")
+                (self.block / "damaged").symlink_to(self.tmp / target)
+                rc, lines, _ = self.run_script("outage-watcher.sh")  # guard held: only the mark speaks
+                self.assertEqual((rc, lines[:2]), (1, ["ok host_guarded", "fail block_intact"]))
+                (self.stub / "host").write_text("0")
+                self.running("gluetun")
+                rc, lines, _ = self.run_script("outage-watcher.sh", HOST_FAILS=1)  # guard_lost runs
+                self.assertEqual(rc, 1)
+                self.assertTrue((self.block / "damaged").is_symlink())  # left in place
+                if target == "kept":
+                    self.assertEqual((self.tmp / "kept").read_text(), "not the mark\n")
+                else:
+                    self.assertFalse((self.tmp / "missing").exists())  # nothing created through it
+                self.assertTrue((self.stub / "gluetun_stopped").exists())
+
+    def test_guard_lost_writes_a_new_mark_once(self):
+        self.make_block(segment=2)
+        (self.stub / "host").write_text("0")
+        self.running("gluetun")
+        self.run_script("outage-watcher.sh", HOST_FAILS=1)
+        self.assertFalse((self.block / "damaged").is_symlink())
+        self.assertEqual((self.block / "damaged").read_text(), "host_guard_lost\n")
+
     def test_an_iptables_error_is_not_read_as_gone(self):
         self.make_block(segment=2)
         rc, lines, _ = self.run_script("outage-watcher.sh", CHECK_ERRS=2)  # a passing glitch: tried again
@@ -1197,7 +1228,7 @@ class CopyOff(Base):
 
     def test_a_symlinked_mark_is_never_followed(self):
         """A mark that's a link (to a secret, or to nothing) still counts as a
-        mark, and copy-off mounts the empty stand-in, never the link."""
+        mark, and copy-off mounts the /dev/null stand-in, never the link."""
         for target in ("secret", "missing"):
             with self.subTest(target=target):
                 self.setUp()
@@ -1209,8 +1240,20 @@ class CopyOff(Base):
                 self.assertEqual(rc, 0, raw)
                 args = (self.stub / "scrub.args").read_text()
                 self.assertIn("-v /dev/null:/block/damaged:ro", args)
-                self.assertNotIn(str(self.tmp / target), args)
+                if target == "secret":
+                    self.assertNotIn(str(self.tmp / target), args)
                 self.assertNotIn(f"{self.block}/damaged", args)
+                # What the container sees: the mounted files, with an empty stand-in for the mark.
+                seen, out = self.tmp / "seen", self.tmp / "seen-out"
+                seen.mkdir()
+                out.mkdir()
+                for src, dst in re.findall(r"-v (\S+):/block/(\S+):ro", args):
+                    if src == "/dev/null":
+                        (seen / dst).write_text("")
+                    else:
+                        subprocess.run(["cp", "-r", src, str(seen / dst)], check=True)
+                self.assertIs(scrub.collect(seen, out)["damaged"], True)
+                self.assertIs(scrub.damaged(self.block), True)  # the link itself counts too, dangling or not
 
     def test_a_lone_lodestar_is_stopped_first(self):
         self.make_block(segment=2)

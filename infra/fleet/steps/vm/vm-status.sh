@@ -11,6 +11,7 @@ BLOCK=${4:-/var/lib/lodestar-block}
 . "$1/block-lib.sh"
 
 say() { if "$@" >/dev/null 2>&1; then echo "ok $NAME"; else echo "fail $NAME"; fi; }
+intact() { ! damaged_marked; }  # block-lib.sh: a dangling link is a mark too
 digits() { tr -dc '0-9' | head -c 15; }  # counters are bare integers, whatever a tool printed
 
 NAME=docker_up; say docker info --format '{{.ServerVersion}}'
@@ -27,7 +28,7 @@ case $(block_state) in
     echo "ok block_recorded"; seg=$(marker_get segment | digits); echo "count block_segment ${seg:-0}"
     # X-gluetun-guard-reboot: a host guard that couldn't be held mid-block, and
     # how many times one was found gone (the outage watcher puts it back).
-    NAME=block_intact; say test ! -e "$BLOCK/damaged"
+    NAME=block_intact; say intact
     drops=$(guard_drops | digits); echo "count host_guard_drops ${drops:-0}" ;;
   none) echo "skip block_recorded" ;;
   *) echo "fail block_recorded" ;;

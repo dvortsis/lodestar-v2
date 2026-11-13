@@ -124,15 +124,20 @@ guard_resume() {
   exec {fd}>&-
   return 1
 }
+# The damaged mark is there: a file, or a link of any kind, even a dangling
+# one (X-damaged-mark-links). Every check of the mark uses this, as copy-off
+# does, so they all agree.
+damaged_marked() { [[ -e $BLOCK/damaged || -L $BLOCK/damaged ]]; }
 # guard_lost mode dropped: stop gluetun first, then record. The records and
 # the damaged mark are written once, by the first failed check; gluetun is
 # stopped on every one, in case it came back.
 guard_lost() {
   local kinds=()
   [[ $1 == boot ]] || stop_gluetun
-  if [[ ! -e $BLOCK/damaged ]]; then
+  if ! damaged_marked; then
     [[ -n $2 ]] && kinds+=(host_guard_dropped)
-    echo host_guard_lost 2>/dev/null >"$BLOCK/damaged"
+    # noclobber: created new, never written through a link that appeared since.
+    (set -o noclobber; echo host_guard_lost >"$BLOCK/damaged") 2>/dev/null
     kinds+=(host_guard_lost)
   fi
   ((${#kinds[@]})) && block_record "$1" "${kinds[@]}"

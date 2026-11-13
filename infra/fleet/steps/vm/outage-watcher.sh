@@ -30,7 +30,7 @@ case $rc in
   1) echo "fail host_guarded"; failed=1 ;;
   *) echo "fail host_guard_checked"; failed=1 ;;
 esac
-[[ -e $BLOCK/damaged ]] && { echo "fail block_intact"; failed=1; }
+damaged_marked && { echo "fail block_intact"; failed=1; }
 n=$(guard_drops)
 echo "count host_guard_drops ${n:-0}"
 if watcher_active; then
