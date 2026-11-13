@@ -92,16 +92,20 @@ If Lodestar generated your gluetun from its [companion](glossary.md#companion) t
 
 Lodestar's own Unraid template has a **Companion files** path, `/mnt/user/appdata/lodestar-companions` by default. Keep it outside Lodestar's **Data** folder: gluetun reads from it, and the **Data** folder holds Lodestar's secrets. With that path set, Lodestar saves the post-rules file at each start, as `gluetun/post-rules.txt` in that folder, so you can skip step 1:
 
-1. Restart Lodestar, then open the Unraid terminal and check the file:
+1. Restart Lodestar, then open the Unraid terminal and check the file and who owns its folders:
 
     ```sh
     sha256sum /mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt
+    stat -c '%U %a %n' /mnt/user/appdata/lodestar-companions /mnt/user/appdata/lodestar-companions/gluetun
     ```
 
-   **Result:** The line starts with the same `26a485e3…` value as step 1's. If the file is missing, the folder held other files or isn't set: use step 1 instead.
+   **Result:** The `sha256sum` line starts with the same `26a485e3…` value as step 1's, and both `stat` lines start with `root 755`. If the file is missing, use step 1 instead: the folder isn't set, holds other files, or belongs to another user.
 2. Edit gluetun and set its **Post-rules** path to `/mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt`. Then do the check in step 4.
 
-The file and its `gluetun` folder belong to root, and Lodestar can read them but not change them. That's on purpose: nothing Lodestar runs can change the rules gluetun runs as root. Settings → Companions will fill in gluetun's **Post-rules** path for you **(planned)**.
+The file and its folders belong to root. Lodestar can read them but not change them, so nothing it runs can change the rules gluetun runs as root. Settings → Companions will fill in gluetun's **Post-rules** path for you **(planned)**.
+
+> [!IMPORTANT]
+> Let Docker create the **Companion files** folder when you apply Lodestar's template. Don't make it over a network share, and don't run Unraid's **New Permissions** tool on it: Lodestar doesn't use a folder another user can write.
 
 To set the start order on Unraid:
 

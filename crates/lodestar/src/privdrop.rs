@@ -723,7 +723,8 @@ mod imp {
     ///
     /// `dir` must be a real folder (not a link, not `/`), apart from the
     /// data folder `data` (not it by identity, not overlapping its path),
-    /// holding nothing but `gluetun`. A mount of a whole share or of the
+    /// owned by `owner` and writable by no one else (so its `gluetun`
+    /// can't be swapped later), holding nothing but `gluetun`. A mount of a whole share or of the
     /// data folder is never written to. `gluetun` is created (0755) when
     /// it's missing; one that exists must be a real folder owned by `owner`
     /// (root in production). Nothing is chowned, chmodded or deleted that
@@ -757,6 +758,18 @@ mod imp {
         };
         if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
             return left("root", "it is the filesystem root".into());
+        }
+        // Writable by anyone but `owner`, they could swap `gluetun` for
+        // their own after this runs: gluetun would then mount their file.
+        // Docker makes a missing host folder root's, 0755.
+        if !post_rules::locked(&st, owner) {
+            return left(
+                "owner",
+                format!(
+                    "it belongs to uid {} or others can write it, so its contents could be swapped",
+                    st.st_uid
+                ),
+            );
         }
         // Apart from the data folder, by identity and by path.
         if let Ok(d) = rustix::fs::stat(data)
@@ -796,12 +809,12 @@ mod imp {
             Err(e) => return left("write", format!("its gluetun folder: {e}")),
         };
         match rustix::fs::fstat(&g) {
-            Ok(gst) if gst.st_uid == owner => {}
+            Ok(gst) if post_rules::locked(&gst, owner) => {}
             Ok(gst) => {
                 return left(
                     "owner",
                     format!(
-                        "its gluetun folder belongs to uid {}, not {owner}",
+                        "its gluetun folder belongs to uid {} or others can write it",
                         gst.st_uid
                     ),
                 );
@@ -1223,6 +1236,30 @@ mod tests {
             }
             assert!(!t.join("missing").exists(), "never created");
             assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0);
+            // Writable by others, or someone else's: its gluetun could be
+            // swapped after start-up, so nothing is written.
+            use std::os::unix::fs::PermissionsExt;
+            let open = t.join("open");
+            std::fs::create_dir(&open).unwrap();
+            std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let line = save_companions_rules(&open, &data, me());
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert!(!open.join("gluetun").exists());
+            let mine = t.join("mine");
+            std::fs::create_dir(&mine).unwrap();
+            let line = save_companions_rules(&mine, &data, me().wrapping_add(1));
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert!(!mine.join("gluetun").exists());
+            let loose = t.join("loose");
+            std::fs::create_dir_all(loose.join("gluetun")).unwrap();
+            std::fs::set_permissions(
+                loose.join("gluetun"),
+                std::fs::Permissions::from_mode(0o775),
+            )
+            .unwrap();
+            let line = save_companions_rules(&loose, &data, me());
+            assert_eq!(kind(&line), Some("owner"), "{line}");
+            assert_eq!(std::fs::read_dir(loose.join("gluetun")).unwrap().count(), 0);
             // A gluetun folder someone else owns is left, untouched.
             let theirs = t.join("theirs");
             std::fs::create_dir_all(theirs.join("gluetun")).unwrap();

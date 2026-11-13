@@ -18,7 +18,7 @@ Lodestar now saves gluetun's post-rules file itself, in a companion-files folder
   - a dot component.
 - **The API field:** `TemplateRequest.companions_dir`, the host folder. It's read only for an Unraid template that includes gluetun.
   - **The UI field** is the follow-up slice X-gluetun-hostfile-ui (runner).
-  - **The new refusal codes** for that slice to map are `inside_data_folder`, `inside_other_companion`, `dot_folder`, `bad_template_input`, `companions_dir_link` and `companions_dir_unwritable`, all on `companions_dir`.
+  - **The new refusal codes** for that slice to map are `inside_data_folder`, `inside_other_companion`, `dot_folder`, `bad_template_input`, `companions_dir_link`, `companions_dir_shared` and `companions_dir_unwritable`, all on `companions_dir`.
 
 ## privdrop writes post-rules as root (supersedes the chown handover the runner approved)
 The first build handed `/companions` and `/companions/gluetun` to PUID:PGID, and Lodestar wrote the file after dropping root. The security review found that this let the dropped process rewrite `post-rules.txt`. gluetun runs every `iptables` line in it as root with NET_ADMIN on its next start. So code execution inside Lodestar, which parses untrusted DHT, KRPC and metainfo data, would become control of gluetun's firewall: an ACCEPT rule would leak the real IP and defeat the kill switch the file exists to close. Plan A never gave Lodestar that reach.
@@ -29,10 +29,12 @@ The runner chose the stricter design (runner, 2026-11-13, §2.33): nothing the d
 `save_companions_rules` in `crates/lodestar/src/privdrop.rs` writes the fixed embedded rules, root-owned, mode 0644, in a root-owned 0755 `gluetun` folder. It does this only inside a `/companions` that:
 - is a real folder, not a link and not `/`;
 - is apart from `/data`, both by identity (`st_dev`/`st_ino`) and by canonical path in both directions;
+- is owned by root with no group or other write bit;
 - holds nothing but `gluetun`.
 
 A mount of a whole share, or of the data folder, is never written to.
-- **The `gluetun` folder:** it's created with `mkdirat` 0755 only when it's missing. One that exists must be a real folder owned by root; otherwise it's left alone.
+- **Why the owner and mode rule** (second security review F1, F2): a user who can write `/companions` could rename the root-owned `gluetun` folder after start-up and put their own in its place. gluetun names the file by its host path, so it would mount theirs on its next start. Docker creates a missing host folder as root, 0755, so the default passes. A folder made over a share, or one Unraid's New Permissions changed, falls back to plan A, and the guide says so.
+- **The `gluetun` folder:** it's created with `mkdirat` and set to 0755 only when it's missing; one someone else creates in between is never changed. One that exists must be a real folder owned by root with no group or other write; otherwise it's left alone.
 - **The write:**
   - a temp file created with `openat(O_CREAT|O_EXCL|O_NOFOLLOW)`, then `fchmod` 0644 whatever the umask;
   - fsync, then `renameat` over `post-rules.txt`, then an fsync of the folder;
@@ -52,7 +54,7 @@ A mount of a whole share, or of the data folder, is never written to.
 ### At template time (container)
 Lodestar only reads. It points the template at the file only when every one of these holds:
 - `companions_dir` is given;
-- `/companions` and `/companions/gluetun` open as real folders (`O_NOFOLLOW`), and both are owned by root;
+- `/companions` and `/companions/gluetun` open as real folders (`O_NOFOLLOW`), both owned by root with no group or other write;
 - the file is a regular root-owned file within a size cap of the rules plus 1 KiB;
 - the file is byte-equal to the embedded rules.
 
@@ -64,7 +66,9 @@ Anything else falls back to plan A. This also covers a `/companions` mapped onto
   - the folder's parent must resolve to itself;
   - the folder must not be, hold or sit in the data folder, comparing canonical paths (fresh review I2: a data folder reached through a link).
 - **The write:** the folder and `gluetun` are opened `O_NOFOLLOW` and written through descriptors, as above.
+- **Both folders must be Lodestar's user's (or root's), with no group or other write.** Otherwise it refuses with `companions_dir_shared`, and nothing is created in them.
 - **An existing `post-rules.txt` that differs** is left as it is, and the template falls back to plan A. It is never overwritten.
+- **A native install has no root step:** it writes the file as its own user, so there a compromised Lodestar could change it. `docs/operations.md` says so.
 - **When it's written:** only once the template generates, so a refused template writes nothing.
 
 ## Owns added by the runner (2026-11-13, §2.33)

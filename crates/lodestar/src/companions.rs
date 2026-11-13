@@ -1782,6 +1782,7 @@ fn save_native(local: &Path, data: &Path) -> Result<bool, CompanionsError> {
             code: match e {
                 NativeError::Link => "companions_dir_link",
                 NativeError::Data => "inside_data_folder",
+                NativeError::Shared => "companions_dir_shared",
                 NativeError::Unwritable => "companions_dir_unwritable",
             },
         })
@@ -1823,6 +1824,13 @@ pub(crate) mod post_rules {
     /// The most read of an existing file: a little above the rules.
     const CAP: u64 = RULES.len() as u64 + 1024;
 
+    /// Whether a folder (or file) with this status can't be changed by
+    /// anyone but `owner`: theirs, with no write bit for group or others.
+    /// Any other user who could write a folder could swap what's in it.
+    pub(crate) fn locked(st: &rustix::fs::Stat, owner: u32) -> bool {
+        st.st_uid == owner && st.st_mode & 0o022 == 0
+    }
+
     /// What an existing file holds.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum Found {
@@ -1850,14 +1858,18 @@ pub(crate) mod post_rules {
         match open_dir_at(at, GLUETUN) {
             Ok(fd) => Ok((fd, false)),
             Err(Errno::NOENT) => {
-                match rustix::fs::mkdirat(at, GLUETUN, Mode::from_raw_mode(0o755)) {
-                    Ok(()) | Err(Errno::EXIST) => {}
+                let created = match rustix::fs::mkdirat(at, GLUETUN, Mode::from_raw_mode(0o755)) {
+                    Ok(()) => true,
+                    // Made by someone else in between: never changed here.
+                    Err(Errno::EXIST) => false,
                     Err(e) => return Err(e),
-                }
+                };
                 let fd = open_dir_at(at, GLUETUN)?;
-                // Exactly 0755, whatever the umask.
-                rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o755))?;
-                Ok((fd, true))
+                if created {
+                    // Exactly 0755, whatever the umask.
+                    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o755))?;
+                }
+                Ok((fd, created))
             }
             Err(e) => Err(e),
         }
@@ -1937,15 +1949,17 @@ pub(crate) mod post_rules {
         saved_by(root, 0)
     }
 
-    /// [`saved`], with the folder and the file owned by `owner`: only then
-    /// can't the process that reads it change it.
+    /// [`saved`], with both folders and the file owned by `owner` and
+    /// writable by no one else: only then can't the process that reads it
+    /// change it, or swap the folder gluetun mounts it from.
     pub(crate) fn saved_by(root: &Path, owner: u32) -> bool {
+        let owned = |fd: BorrowedFd<'_>| rustix::fs::fstat(fd).is_ok_and(|st| locked(&st, owner));
         let Ok(r) = open_dir(root) else { return false };
         let Ok(g) = open_dir_at(r.as_fd(), GLUETUN) else {
             return false;
         };
-        let owned = |fd: BorrowedFd<'_>| rustix::fs::fstat(fd).is_ok_and(|st| st.st_uid == owner);
-        if !owned(g.as_fd()) {
+        // Both folders: whoever can write the outer one can swap the inner.
+        if !owned(r.as_fd()) || !owned(g.as_fd()) {
             return false;
         }
         let Ok(f) = rustix::fs::openat(
@@ -1987,10 +2001,24 @@ pub(crate) mod post_rules {
             Errno::LOOP | Errno::NOTDIR => NativeError::Link,
             _ => NativeError::Unwritable,
         })?;
+        // Both folders yours (or root's) and writable by no one else:
+        // another user who could write them could swap the file gluetun
+        // runs as root. The outer one first, so nothing is made in it.
+        let me = rustix::process::geteuid().as_raw();
+        let safe = |fd: &OwnedFd| {
+            let st = rustix::fs::fstat(fd).map_err(|_| NativeError::Unwritable)?;
+            if locked(&st, me) || locked(&st, 0) {
+                Ok(())
+            } else {
+                Err(NativeError::Shared)
+            }
+        };
+        safe(&r)?;
         let (g, _) = gluetun_dir(r.as_fd()).map_err(|e| match e {
             Errno::LOOP | Errno::NOTDIR => NativeError::Link,
             _ => NativeError::Unwritable,
         })?;
+        safe(&g)?;
         match found(g.as_fd()).map_err(|_| NativeError::Unwritable)? {
             Found::Rules => Ok(true),
             Found::Other => Ok(false),
@@ -2006,6 +2034,8 @@ pub(crate) mod post_rules {
         Link,
         /// It is, holds or sits in the data folder.
         Data,
+        /// It, or `gluetun` in it, is another user's or others can write it.
+        Shared,
         /// It can't be created, opened or written.
         Unwritable,
     }
@@ -3736,6 +3766,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn natively_a_folder_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, dir) = plain_tmp();
+        std::fs::create_dir(dir.join("data")).unwrap();
+        let root = dir.join("open");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            post_rules::save_native(&root, &dir.join("data")),
+            Err(post_rules::NativeError::Shared)
+        );
+        assert!(!root.join("gluetun").exists(), "nothing is made in it");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn natively_the_data_folder_is_never_written_however_its_reached() {
         let (_t, dir) = plain_tmp();
         let data = dir.join("real-data");
@@ -3901,8 +3947,25 @@ mod tests {
         assert!(created);
         post_rules::write(g.as_fd()).unwrap();
         assert!(post_rules::saved_by(&root, me()));
-        // Owned by someone else: not trusted.
+        // Owned by someone else, or writable by others: not trusted.
         assert!(!post_rules::saved_by(&root, me().wrapping_add(1)));
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let set = |p: &Path, m| {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+            };
+            for p in [
+                root.clone(),
+                root.join("gluetun"),
+                root.join("gluetun/post-rules.txt"),
+            ] {
+                let was = std::fs::metadata(&p).unwrap().permissions().mode() & 0o7777;
+                set(&p, was | 0o020);
+                assert!(!post_rules::saved_by(&root, me()), "{}", p.display());
+                set(&p, was);
+            }
+            assert!(post_rules::saved_by(&root, me()));
+        }
         let file = root.join("gluetun/post-rules.txt");
         // Different bytes, too large, or a link: not trusted.
         std::fs::write(&file, "other\n").unwrap();
