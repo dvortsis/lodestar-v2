@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:29Z",
+  "updated_at": "2026-11-13T20:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8567,10 +8567,16 @@
     },
     "845": {
       "slice": "X-gluetun-guard-reboot",
-      "head": "d22b68b9",
+      "head": "699667ca",
       "status": "open; runner calls sent on run.py timeout, copy-off order, runbook, two owner flags",
-      "at": "2026-11-13T20:29Z",
-      "state": "review CHANGES relayed (B1 boot guard early + fail closed, I1 re-hold timing, N1-N6, N8); awaiting one push + ready"
+      "at": "2026-11-13T20:37Z",
+      "state": "fix round pushed, ready; fresh delta review running"
+    },
+    "844": {
+      "slice": "X-offline-retry-nits",
+      "head": "a5beb5dc",
+      "state": "review CHANGES relayed (title test race, decisions reason, offlineTitle nit); awaiting push + ready",
+      "at": "2026-11-13T20:37Z"
     }
   },
   "merged_log": [
@@ -9217,7 +9223,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:29Z",
+    "updated": "2026-11-13T20:37Z",
     "items": [
       {
         "slot": 1,
@@ -9460,7 +9466,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:29Z",
+  "updated": "2026-11-13T20:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
