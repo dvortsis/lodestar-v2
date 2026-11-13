@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:15Z",
+  "updated_at": "2026-11-13T02:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8901,7 +8901,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:15Z",
+    "updated": "2026-11-13T02:18Z",
     "items": [
       {
         "slot": 1,
@@ -9063,7 +9063,7 @@
         "slice": "NOS-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-0.md",
+        "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: #789 green at 69574396 but conflicts with main in sources-feeds/src/lib.rs (LEM-0, ENR-14); asked to bring main in 2026-11-13T02:18Z; merge on green, then archive",
         "since": "2026-11-12T22:08:33Z",
         "status": "active",
         "cap": "over cap: finish #789 only, then archive (\u00a72.64)"
@@ -9248,7 +9248,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:15Z",
+  "updated": "2026-11-13T02:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
