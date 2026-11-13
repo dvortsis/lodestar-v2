@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:51Z",
+  "updated_at": "2026-11-13T20:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8162,7 +8162,12 @@
       "at": "2026-11-13T20:43Z"
     },
     "slices-yaml-x-flake-companions-loopback",
-    "slices-yaml-x-scrub-guard-fields"
+    "slices-yaml-x-scrub-guard-fields",
+    {
+      "id": "X-flake-scrape-udp-port",
+      "note": "crates/tracker-scrape/tests/scrape.rs:158-160 drop-then-probe on UDP (from #847); lower risk, accepts timeout",
+      "at": "2026-11-13T20:53Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8563,6 +8568,12 @@
       "head": "a5beb5dc",
       "state": "review CHANGES relayed (title test race, decisions reason, offlineTitle nit); awaiting push + ready",
       "at": "2026-11-13T20:37Z"
+    },
+    "847": {
+      "slice": "X-flake-companions-loopback",
+      "head": "f20cb6d9",
+      "state": "open, CI running; awaiting ready",
+      "at": "2026-11-13T20:53Z"
     }
   },
   "merged_log": [
@@ -9209,7 +9220,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:51Z",
+    "updated": "2026-11-13T20:53Z",
     "items": [
       {
         "slot": 1,
@@ -9452,7 +9463,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:51Z",
+  "updated": "2026-11-13T20:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
