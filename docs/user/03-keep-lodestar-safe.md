@@ -83,18 +83,30 @@ gluetun's firewall is its kill switch. When the VPN drops, it blocks every new c
 > [!IMPORTANT]
 > Add the post-rules file to gluetun before you start Lodestar. Without it, a few packets can leave outside the VPN each time the tunnel drops.
 
-1. Open the Unraid terminal (**>_** in the top bar) and save the file:
+These steps are for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
+
+1. Open the Unraid terminal (**>_** in the top bar). Save the file, then check it:
 
     ```sh
     mkdir -p /mnt/cache/appdata/gluetun
-    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://github.com/dvortsis/lodestar-v2/raw/main/packaging/companions/gluetun-post-rules.txt
+    wget -O /mnt/cache/appdata/gluetun/post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/d60760d567e425b6e735a33a56c60672172d2fe4/packaging/companions/gluetun-post-rules.txt
+    sha256sum /mnt/cache/appdata/gluetun/post-rules.txt
     ```
 
+   **Result:** The `sha256sum` line starts with `5d166b2e6c0a356c6ddcbb625243570640b2fcf7c7c13c6d97ec299aff291949`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
 2. Edit the gluetun container and add a **Path**: container path `/iptables/post-rules.txt`, host path `/mnt/cache/appdata/gluetun/post-rules.txt`, access mode **Read Only**.
-3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`, and gluetun's own default is `tun0`. Without this variable the rules do nothing. It works for OpenVPN too, because it only names the tunnel.
-4. Select **Apply**, then open gluetun's log.
-   **Result:** The log shows `[firewall] enabled successfully`.
+3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`, and gluetun's own default is `tun0`. Without this variable the rules do nothing.
+4. Select **Apply**. Then, in the terminal, check that gluetun loaded the rules:
+
+    ```sh
+    docker exec gluetun iptables -S OUTPUT | head -4
+    docker exec gluetun ip link show wg0
+    ```
+
+   **Result:** After the first line (`-P OUTPUT DROP`), the next three lines name `wg0`: one ends in `CONNMARK --set-xmark 0x800000/0x800000` and two end in `-j DROP`. The second command shows the `wg0` link. If either is different, gluetun is running without the rules: check steps 1 to 3. Its log line `[firewall] enabled successfully` alone doesn't prove it, because gluetun skips a missing file without a word.
 5. If Lodestar already runs, restart it now.
+
+With OpenVPN, gluetun names the tunnel `tun0`, and `wg0` isn't a valid OpenVPN device name. Leave `VPN_INTERFACE` unset, and run `sed -i 's/wg0/tun0/g' /mnt/cache/appdata/gluetun/post-rules.txt` after step 1. In step 4, look for `tun0` instead. This variant wasn't tested, so step 4's check is what tells you it works.
 
 If gluetun stops instead:
 

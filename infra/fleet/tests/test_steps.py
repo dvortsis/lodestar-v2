@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -392,6 +393,20 @@ class Compose(unittest.TestCase):
         self.assertEqual(g["configs"], self.svc["gluetun"]["configs"])
         self.assertEqual(doc["configs"], self.doc["configs"])
 
+    def test_the_docs_pin_the_post_rules_they_give(self):
+        """Users run the file's lines as root in gluetun: the guide and operations.md
+        give a commit-pinned download and its SHA-256, which must be this file's."""
+        import hashlib
+        digest = hashlib.sha256((ROOT / "packaging/companions/gluetun-post-rules.txt").read_bytes()).hexdigest()
+        for doc in ("docs/user/03-keep-lodestar-safe.md", "docs/operations.md"):
+            text = (ROOT / doc).read_text()
+            self.assertIn(digest, text, doc)
+            urls = re.findall(r"https://\S*gluetun-post-rules\.txt", text)
+            self.assertTrue(urls, doc)
+            for url in urls:
+                self.assertRegex(url, r"^https://raw\.githubusercontent\.com/dvortsis/lodestar-v2/[0-9a-f]{40}/"
+                                      r"packaging/companions/gluetun-post-rules\.txt$")
+
     def test_only_the_ui_on_the_hosts_loopback(self):
         ports = [p for s in self.svc.values() for p in s.get("ports", [])]
         self.assertEqual(ports, ["127.0.0.1:8090:8090"])
@@ -586,6 +601,62 @@ case "$*" in
   *"-o link"*) printf '7: vethabc123@if6: <BROADCAST> mtu 1500\n2: eth0: <UP>\n' ;;
 esac
 """
+
+
+# What gluetun v3.41.3's OUTPUT chain looks like with the post-rules (iptables -S,
+# read on the pinned image).
+GLUETUN_OUTPUT = """-P OUTPUT DROP
+-A OUTPUT -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+-A OUTPUT ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+-A OUTPUT ! -o wg0 -p icmp -m icmp --icmp-type 3/3 -m addrtype ! --dst-type LOCAL -j DROP
+-A OUTPUT -o lo -j ACCEPT
+-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT
+-A OUTPUT -o wg0 -j ACCEPT
+"""
+
+
+class PostRulesCheck(unittest.TestCase):
+    """leak-test.sh's POST_RULES_CHECK (the script it runs inside gluetun), against a
+    fake iptables: -C answers from FAKE_C, -S prints the fixture."""
+
+    def run_check(self, output, check_rc=0, iface="wg0"):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        (tmp / "out").write_text(output)
+        fake = tmp / "iptables"
+        fake.write_text('#!/bin/sh\ncase "$1" in -C) exit "$FAKE_C" ;; -S) cat "$FIXTURE" ;; esac\n')
+        fake.chmod(0o755)
+        for other in ("iptables-nft", "iptables-legacy"):  # never the host's own
+            (tmp / other).write_text("#!/bin/sh\nexit 1\n")
+            (tmp / other).chmod(0o755)
+        text = (VM / "leak-test.sh").read_text()
+        script = re.search(r"^POST_RULES_CHECK='(.*?)'$", text, re.S | re.M).group(1)
+        r = subprocess.run(["sh", "-c", script, "rules", "iptables", iface, "icmp", "icmp"],
+                           env={"PATH": f"{tmp}:/usr/bin:/bin", "FAKE_C": str(check_rc), "FIXTURE": str(tmp / "out")},
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode
+
+    def test_the_rules_ahead_of_every_accept_pass(self):
+        self.assertEqual(self.run_check(GLUETUN_OUTPUT), 0)
+
+    def test_failures(self):
+        lines = GLUETUN_OUTPUT.splitlines()
+        ours, theirs = lines[1:4], lines[4:]
+        cases = {
+            "a rule missing (-C fails)": (GLUETUN_OUTPUT, 1, "wg0"),
+            "another interface": (GLUETUN_OUTPUT, 0, "tun0"),
+            "an accept on top": ("\n".join([lines[0], "-A OUTPUT -o eth0 -j ACCEPT", *ours, *theirs]) + "\n", 0, "wg0"),
+            # The review's case: two foreign DROPs on top, ours below gluetun's accepts.
+            "ours below the accepts": ("\n".join([lines[0], "-A OUTPUT -d 192.0.2.1/32 -j DROP",
+                                                  "-A OUTPUT -d 192.0.2.2/32 -j DROP", *theirs, *ours]) + "\n", 0, "wg0"),
+            "the ICMP rule below an accept": ("\n".join([lines[0], *ours[:2], theirs[0], ours[2], *theirs[1:]]) + "\n",
+                                               0, "wg0"),
+            "no accept at all (not gluetun's chain)": ("\n".join([lines[0], *ours]) + "\n", 0, "wg0"),
+        }
+        for name, (output, check_rc, iface) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.run_check(output, check_rc, iface), 1)
 
 
 class VMScripts(unittest.TestCase):

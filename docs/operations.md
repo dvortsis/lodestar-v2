@@ -237,10 +237,16 @@ Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
 - **Add Lodestar's post-rules to gluetun.** gluetun's firewall (its kill
   switch) blocks new connections while the VPN is down, but as of v3.41.3 it
   lets packets of connections opened earlier leave through the normal
-  network, with your own address. Mount
-  `packaging/companions/gluetun-post-rules.txt` read-only at
-  `/iptables/post-rules.txt` in gluetun and set `VPN_INTERFACE=wg0` (gluetun's
-  default is `tun0`, which the rules don't name). Then a connection that used
+  network, with your own address. Download the file, pinned to the commit it
+  was checked at, and check it (gluetun runs its lines as root):
+  `https://raw.githubusercontent.com/dvortsis/lodestar-v2/d60760d567e425b6e735a33a56c60672172d2fe4/packaging/companions/gluetun-post-rules.txt`,
+  SHA-256 `5d166b2e6c0a356c6ddcbb625243570640b2fcf7c7c13c6d97ec299aff291949`.
+  Mount it read-only at `/iptables/post-rules.txt` in gluetun and set
+  `VPN_INTERFACE=wg0` (gluetun's default is `tun0`, which the rules don't
+  name; checked with WireGuard). Confirm with
+  `docker exec gluetun iptables -S OUTPUT | head -4`: the three lines after the
+  policy name `wg0`. Gluetun's "enabled successfully" log line alone proves
+  nothing, because a missing file is skipped. Then a connection that used
   the tunnel never leaves another way. Every rule only marks or drops traffic.
   In compose, a `configs:` entry with the file's text copies it in, with no
   host file (`infra/fleet/steps/vm/compose.yaml`). If gluetun then stops with

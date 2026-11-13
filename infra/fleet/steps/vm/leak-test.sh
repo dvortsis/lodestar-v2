@@ -104,19 +104,27 @@ tunnel_up() {  # recreate gluetun alone from the committed compose file and the 
     up -d --force-recreate gluetun >/dev/null 2>&1
 }
 # post_rules_on family iface proto icmpword: gluetun loaded its post-rules
-# (compose.yaml) for this interface, and they head OUTPUT, above every accept
-# gluetun adds. gluetun skips a missing file without a word, so this is
-# checked, not assumed. Its image has both iptables backends; the rules are in
-# whichever it uses.
-post_rules_on() {
-  docker exec gluetun sh -c 'for t in "$1" "$1-nft" "$1-legacy"; do
-    command -v "$t" >/dev/null 2>&1 || continue
-    "$t" -C OUTPUT -o "$2" -j CONNMARK --set-xmark 0x800000/0x800000 2>/dev/null || continue
-    "$t" -C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP 2>/dev/null || continue
-    "$t" -C OUTPUT ! -o "$2" -p "$3" --"$4"-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP 2>/dev/null || continue
-    [ "$("$t" -S OUTPUT 2>/dev/null | sed -n 2,4p | grep -Ec -- "-j (DROP|CONNMARK)")" = 3 ] && exit 0
-  done; exit 1' rules "$1" "$2" "$3" "$4"
-}
+# (compose.yaml) for this interface, and each of the three comes before the
+# first accept in OUTPUT. gluetun skips a missing file without a word, so this
+# is checked, not assumed. Its image has both iptables backends; the rules are
+# in whichever it uses. POST_RULES_CHECK runs inside gluetun (the unit tests
+# run it against a fake iptables).
+# shellcheck disable=SC2016  # expanded by the inner shell
+POST_RULES_CHECK='for t in "$1" "$1-nft" "$1-legacy"; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  "$t" -C OUTPUT -o "$2" -j CONNMARK --set-xmark 0x800000/0x800000 2>/dev/null || continue
+  "$t" -C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP 2>/dev/null || continue
+  "$t" -C OUTPUT ! -o "$2" -p "$3" --"$4"-type port-unreachable -m addrtype ! --dst-type LOCAL -j DROP 2>/dev/null || continue
+  rules=$("$t" -S OUTPUT 2>/dev/null) || continue
+  first() { printf "%s\n" "$rules" | grep -n -m 1 -e "$1" | cut -d: -f1; }
+  acc=$(first "-j ACCEPT")
+  mark=$(first "-o $2 -j CONNMARK --set-xmark 0x800000/0x800000")
+  drop=$(first "! -o $2 -m connmark --mark 0x800000/0x800000 -j DROP")
+  icmp=$(printf "%s\n" "$rules" | grep -n -e "! -o $2 " | grep -e "--dst-type LOCAL" | grep -m 1 -e "-j DROP" | cut -d: -f1)
+  [ -n "$acc" ] && [ -n "$mark" ] && [ -n "$drop" ] && [ -n "$icmp" ] || continue
+  [ "$mark" -lt "$acc" ] && [ "$drop" -lt "$acc" ] && [ "$icmp" -lt "$acc" ] && exit 0
+done; exit 1'
+post_rules_on() { docker exec gluetun sh -c "$POST_RULES_CHECK" rules "$1" "$2" "$3" "$4"; }
 # A connection opened through the tunnel that keeps sending through both
 # down phases (an unprivileged ping), so the leak gluetun's post-rules close
 # is exercised every run, not only when gluetun happens to hold one open.
