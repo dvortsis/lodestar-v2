@@ -799,8 +799,22 @@ impl Work for Runtime {
         }
     }
 
-    /// The leases still held, keys and results out (WK-11b).
+    /// The leases still held, keys and results out (WK-11b). None while
+    /// the spool isn't open yet or still has results to replay
+    /// (CLUSTER-01): their leases
+    /// aren't in `WorkerLeases` until their commit, so a list now would
+    /// give them back and turn each replayed result into a late one. The
+    /// replay draining asks for the comparison, and the new session's list
+    /// goes out then.
     fn holding(&mut self) -> Option<Vec<lodestar_cluster::proto::HeldLease>> {
+        if self
+            .shared
+            .spool
+            .as_ref()
+            .is_some_and(|sp| sp.replay_pending())
+        {
+            return None;
+        }
         let list = self.shared.leases.tokens().into_iter();
         Some(
             list.map(|(key, token)| lodestar_cluster::proto::HeldLease {
@@ -817,12 +831,31 @@ impl Work for Runtime {
         }
     }
 
+    /// A local stop with no session (CLUSTER-05): the stages stop as in a
+    /// drain, and what's fetched and sealed goes to the spool, for the
+    /// next start to send. Outcomes not reported can't be: their leases go
+    /// back by the TTL, or at the next start's reconcile (CLUSTER-01).
+    async fn stop(&mut self) {
+        let started = std::time::Instant::now();
+        self.stop_stages().await;
+        self.flush(started).await;
+    }
+
     async fn drain(&mut self) -> Vec<OutcomeItem> {
         let started = std::time::Instant::now();
         self.stop_stages().await;
         // What's fetched and sealed goes out before `Drained`, within what's
         // left of the deadline: results travel on the same command channel,
         // so the coordinator takes them first (no `Accepted` is awaited).
+        self.flush(started).await;
+        self.take_outcomes().await
+    }
+}
+
+impl Runtime {
+    /// Every result queued goes out on the session, or to the spool with
+    /// none, within what's left of the drain deadline since `started`.
+    async fn flush(&self, started: std::time::Instant) {
         let left = self
             .shared
             .config
@@ -832,7 +865,6 @@ impl Work for Runtime {
         if self.shared.flush.send(done).is_ok() {
             let _ = tokio::time::timeout(left, flushed).await;
         }
-        self.take_outcomes().await
     }
 }
 
@@ -2171,6 +2203,14 @@ async fn send_results(
                 // A drain doesn't wait for the retry tick: refused batches
                 // go again too.
                 let session = s.session.borrow().clone();
+                // With no session they go to the spool, durably, before
+                // the flush is answered: a local stop exits right after
+                // (CLUSTER-05).
+                if let Some(sp) = &s.spool
+                    && session.as_ref().is_none_or(|h| h.is_closed())
+                {
+                    spool_live(&s, sp, &mut flight).await;
+                }
                 send_due(&s, session, &mut flight, true).await;
                 let _ = done.send(());
             }

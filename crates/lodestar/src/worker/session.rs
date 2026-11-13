@@ -102,14 +102,22 @@ pub trait Work: Send {
     /// The coordinator's lease count for this worker.
     fn reconciled(&mut self, _worker: u32, _coordinator: u32) {}
     /// Every lease the work still holds (keys held and results not yet
-    /// committed), asked only when the counts differed (WK-11b): the
-    /// coordinator gives back the ones it has on record that the list
-    /// leaves out. `None`: no list.
+    /// committed), asked once on each new session (CLUSTER-01) and when
+    /// the counts differed after a replay (WK-11b): the coordinator gives
+    /// back the ones it has on record from earlier sessions that the list
+    /// leaves out. `None`: no complete list now (asked again at the next
+    /// upkeep while this session hasn't listed yet).
     fn holding(&mut self) -> Option<Vec<HeldLease>> {
         None
     }
     /// The coordinator's answer to the list.
     fn listed(&mut self, _answer: ReconcileAnswer) {}
+    /// A local stop with no session to hand work back on (CLUSTER-05):
+    /// take no new work, finish what's under way and keep what's fetched
+    /// for the next start (the spool). The session bounds it.
+    fn stop(&mut self) -> impl Future<Output = ()> + Send {
+        std::future::ready(())
+    }
 }
 
 /// The idle runtime: connected, doing no work. The binary runs WK-10's
@@ -225,6 +233,10 @@ pub fn random_jitter() -> u64 {
     getrandom::u64().unwrap_or(0)
 }
 
+/// [`Settings::stop_deadline`] by default: three times the runtime's own
+/// 10 s drain deadline (stages, results, outcomes), to leave the sends room.
+pub const STOP_DEADLINE: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub backoff_base: Duration,
@@ -233,6 +245,10 @@ pub struct Settings {
     pub connect_timeout: Duration,
     /// How often a session checks whether to renew or has expired.
     pub upkeep_every: Duration,
+    /// The most a local stop spends handing work back (CLUSTER-05):
+    /// within the 60 s the Docker and Unraid templates give a stop, with
+    /// room for the DHT to save its state after.
+    pub stop_deadline: Duration,
     /// After a renewal that failed for another reason than "too soon".
     pub renew_retry_secs: i64,
     /// A session that lasts this long resets the back-off.
@@ -247,6 +263,7 @@ impl Default for Settings {
             backoff_cap: Duration::from_secs(120),
             connect_timeout: Duration::from_secs(15),
             upkeep_every: Duration::from_secs(60),
+            stop_deadline: STOP_DEADLINE,
             renew_retry_secs: 600,
             stable_after: Duration::from_secs(60),
             session: WorkerConfig::default(),
@@ -323,7 +340,7 @@ impl<C: Connect> Worker<C> {
                 .await
             };
             let started = tokio::select! {
-                () = shutdown.as_mut() => return Exit::Shutdown,
+                () = shutdown.as_mut() => return self.stop_offline(&mut work).await,
                 r = attempt => r,
             };
             match started {
@@ -362,7 +379,7 @@ impl<C: Connect> Worker<C> {
             let wait = backoff.next((self.jitter)());
             self.say(&format!("connecting again in {:.1} s", wait.as_secs_f64()));
             tokio::select! {
-                () = shutdown.as_mut() => return Exit::Shutdown,
+                () = shutdown.as_mut() => return self.stop_offline(&mut work).await,
                 () = (self.wait)(wait) => {}
             }
         }
@@ -388,6 +405,8 @@ impl<C: Connect> Worker<C> {
     ) -> Ended {
         let mut renew_now = session.welcome().renew_now;
         let mut draining = false;
+        // Every new session lists what the work holds once (CLUSTER-01).
+        let mut listed = false;
         let mut upkeep = tokio::time::interval(self.settings.upkeep_every);
         upkeep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Asks made before this session don't end it.
@@ -397,7 +416,14 @@ impl<C: Connect> Worker<C> {
         }
         loop {
             tokio::select! {
-                () = shutdown.as_mut() => return Ended::Exit(Exit::Shutdown),
+                () = shutdown.as_mut() => {
+                    // A drain the coordinator asked for has already handed
+                    // everything back.
+                    if !draining {
+                        self.stop_drain(&session, work).await;
+                    }
+                    return Ended::Exit(Exit::Shutdown);
+                }
                 () = changed(&mut reconnects), if !draining => return Ended::Reconnect,
                 event = session.next_event() => match event {
                     None | Some(WorkerEvent::Ended(None)) => return Ended::Lost,
@@ -425,7 +451,10 @@ impl<C: Connect> Worker<C> {
                     Some(other) => work.event(other),
                 },
                 _ = upkeep.tick() => {
-                    if let Some(end) = self.upkeep(&session, work, renewing, &mut renew_now).await {
+                    let end = self
+                        .upkeep(&session, work, renewing, &mut renew_now, &mut listed)
+                        .await;
+                    if let Some(end) = end {
                         return end;
                     }
                 }
@@ -440,25 +469,13 @@ impl<C: Connect> Worker<C> {
         work: &mut W,
         renewing: &mut Renewing,
         renew_now: &mut bool,
+        listed: &mut bool,
     ) -> Option<Ended> {
         let now = self.clock.now_secs();
         if self.expired() {
             return Some(Ended::Exit(Exit::Expired));
         }
-        // Lease counts after a replay (WK-11); when they differ, the list
-        // of what's held corrects the coordinator's (WK-11b). An older
-        // coordinator is sent no list.
-        if let Some(mine) = work.reconcile()
-            && let Ok(ack) = session.heartbeat().await
-        {
-            work.reconciled(mine, ack.leases);
-            if mine != ack.leases
-                && let Some(list) = work.holding()
-                && let Ok(Some(answer)) = session.holding(list).await
-            {
-                work.listed(answer);
-            }
-        }
+        self.reconcile(session, work, listed).await;
         if renewing.unsaved {
             self.persist(renewing);
         }
@@ -499,6 +516,78 @@ impl<C: Connect> Worker<C> {
         }
     }
 
+    /// Lease reconciliation (WK-11, WK-11b, CLUSTER-01).
+    ///
+    /// - **Once on every new session:** the work's list goes to the
+    ///   coordinator, whatever the counts say, so a lease handed to an
+    ///   earlier session and lost with it (a dropped connection, a
+    ///   restart inside the lease TTL) goes back for re-grant instead of
+    ///   being renewed by heartbeats until the worker leaves. The work may
+    ///   hold the list back ([`Work::holding`] `None`, a spool not yet
+    ///   replayed); it's asked again at each upkeep until it gives one.
+    /// - **After a spool replay drains** (WK-11): the counts are compared,
+    ///   and a difference sends the list too.
+    ///
+    /// A list the coordinator refused, or an older coordinator that takes
+    /// none, counts as sent; one that got no answer is sent again at the
+    /// next upkeep.
+    async fn reconcile<W: Work>(&self, session: &WorkerSession, work: &mut W, listed: &mut bool) {
+        let compare = work.reconcile();
+        let mut differs = !*listed;
+        if let Some(mine) = compare
+            && let Ok(ack) = session.heartbeat().await
+        {
+            work.reconciled(mine, ack.leases);
+            differs |= mine != ack.leases;
+        }
+        if !differs {
+            return;
+        }
+        let Some(list) = work.holding() else {
+            return;
+        };
+        match session.holding(list).await {
+            Ok(Some(answer)) => {
+                work.listed(answer);
+                *listed = true;
+            }
+            // An older coordinator: no list, as before WK-11b.
+            Ok(None) => *listed = true,
+            Err(_) => {}
+        }
+    }
+
+    /// A local stop with a session (CLUSTER-05): the same drain the
+    /// coordinator can ask for. Fetched results go out, unreported
+    /// outcomes are reported, and `Drained` hands back every lease left,
+    /// for re-grant at once. If the session fails on the way, what's
+    /// fetched goes to the spool instead ([`Work::stop`]). Bounded by
+    /// [`Settings::stop_deadline`]: past it the worker stops anyway, and
+    /// what's left goes back by the lease TTL, or by the reconcile when it
+    /// starts again sooner (CLUSTER-01).
+    async fn stop_drain<W: Work>(&self, session: &WorkerSession, work: &mut W) {
+        self.say("stopping: handing the current work back to the coordinator");
+        let stop = async {
+            if drain(session, work).await.is_err() {
+                work.stop().await;
+            }
+        };
+        if tokio::time::timeout(self.settings.stop_deadline, stop)
+            .await
+            .is_err()
+        {
+            self.say("stopping: the hand-back took too long; the coordinator takes the rest back by itself");
+        }
+    }
+
+    /// A local stop with no session (CLUSTER-05): what's fetched goes to
+    /// the spool ([`Work::stop`]) within [`Settings::stop_deadline`], to be
+    /// sent on the next start.
+    async fn stop_offline<W: Work>(&self, work: &mut W) -> Exit {
+        let _ = tokio::time::timeout(self.settings.stop_deadline, work.stop()).await;
+        Exit::Shutdown
+    }
+
     /// Saves the current credentials; on failure they stay in memory (the
     /// old ones on disk still work until they expire) and the save is
     /// tried again at the next check.
@@ -530,7 +619,7 @@ pub(crate) mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
 
-    use lodestar_cluster::proto::Outcome;
+    use lodestar_cluster::proto::{ClaimItem, DenyReason, GrantItem, Outcome};
     use lodestar_cluster::{
         Claim, ClusterServer, Coordinator, JoinToken, LEAF_LIFETIME_SECS, ManualClock, Pki,
         ServerConfig, WorkerId,
@@ -853,6 +942,263 @@ pub(crate) mod tests {
         );
         assert_eq!(s.coord.server.snapshot().reconcile_returned, 1);
         assert_eq!(running.shutdown().await, Exit::Shutdown);
+    }
+
+    /// Claims `n` keys from `first` for the worker straight on the
+    /// coordinator's authority: leases on record that no session of the
+    /// worker was handed, as if lost with an earlier one.
+    fn lost_leases(s: &Setup, first: u8, n: u8) {
+        let authority = s.coord.server.authority();
+        for i in first..first + n {
+            authority.claim(
+                s.worker,
+                Claim {
+                    key: InfoHash([i; 20]),
+                    source: SourceId::new(0).unwrap(),
+                    strategy: 0,
+                    at: s.clock.now_secs(),
+                },
+                s.clock.now_secs(),
+            );
+        }
+    }
+
+    /// Lists on every new session, never comparing counts; holds its
+    /// list back for its first `defer` asks (a spool not replayed yet).
+    #[derive(Clone, Default)]
+    struct EverySession {
+        defer: u32,
+        asked: Arc<Mutex<u32>>,
+        answers: Arc<Mutex<Vec<ReconcileAnswer>>>,
+    }
+
+    impl Work for EverySession {
+        fn event(&mut self, _: WorkerEvent) {}
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            Vec::new()
+        }
+
+        fn holding(&mut self) -> Option<Vec<HeldLease>> {
+            let mut asked = self.asked.lock().unwrap();
+            *asked += 1;
+            (*asked > self.defer).then(Vec::new)
+        }
+
+        fn listed(&mut self, answer: ReconcileAnswer) {
+            self.answers.lock().unwrap().push(answer);
+        }
+    }
+
+    /// CLUSTER-01: a worker back with nothing held, and no replay to
+    /// trigger WK-11's comparison, lists on its new session anyway, and
+    /// the leases on record from before go back at once. A restart within
+    /// one heartbeat interval of the last list lists again and isn't
+    /// refused as too soon.
+    #[tokio::test]
+    async fn every_new_session_lists_and_gets_the_lost_leases_back() {
+        let s = joined().await;
+        let authority = s.coord.server.authority();
+        lost_leases(&s, 1, 2);
+        let work = EverySession {
+            defer: 2,
+            ..EverySession::default()
+        };
+        let first = s.run(work.clone());
+        let answers = until("answered", || {
+            let a = work.answers.lock().unwrap().clone();
+            (!a.is_empty(), a)
+        })
+        .await;
+        assert!(
+            matches!(answers[..], [ReconcileAnswer::Done { returned: 2, .. }]),
+            "{answers:?}"
+        );
+        // Held back twice, then sent; asked no more on this session.
+        assert_eq!(*work.asked.lock().unwrap(), 3);
+        // Re-granted at once, to the one live worker, under new tokens on
+        // this session: none waits.
+        assert_eq!(authority.pending(), 0);
+        assert_eq!(authority.held_by(s.worker), 2);
+        assert_eq!(first.shutdown().await, Exit::Shutdown);
+
+        // The stop drained: the two went back, waiting for a worker.
+        until("disconnected", || (!s.coord.connected(s.worker), ())).await;
+        assert_eq!((authority.held_by(s.worker), authority.pending()), (0, 2));
+
+        // Back at once, the clock not moved: listed again. The two waiting
+        // are granted on the new session and kept; the three lost with an
+        // earlier one go back.
+        lost_leases(&s, 10, 3);
+        let second = s.run(EverySession {
+            defer: 0,
+            ..work.clone()
+        });
+        let answers = until("answered again", || {
+            let a = work.answers.lock().unwrap().clone();
+            (a.len() == 2, a)
+        })
+        .await;
+        assert!(
+            matches!(answers[1], ReconcileAnswer::Done { returned: 3, .. }),
+            "{answers:?}"
+        );
+        assert_eq!(s.coord.server.snapshot().reconcile_refused, 0);
+        assert_eq!(s.coord.server.snapshot().reconcile_returned, 5);
+        assert_eq!(second.shutdown().await, Exit::Shutdown);
+    }
+
+    /// Keeps its session's handle, to claim from the test.
+    #[derive(Clone, Default)]
+    struct Claiming(Arc<Mutex<Option<SessionHandle>>>);
+
+    impl Work for Claiming {
+        fn connected(&mut self, session: SessionHandle) {
+            *self.0.lock().unwrap() = Some(session);
+        }
+
+        fn event(&mut self, _: WorkerEvent) {}
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            Vec::new()
+        }
+    }
+
+    /// CLUSTER-02: the worker's lease cap follows the pool cap of the
+    /// assignment sent to it. Claims for new keys past it are denied as
+    /// busy (counted apart) and never leased; a claim for a key it holds
+    /// still gets its lease back.
+    #[tokio::test]
+    async fn claims_past_the_lease_cap_are_denied_and_never_leased() {
+        let s = joined().await;
+        let work = Claiming::default();
+        let running = s.run(work.clone());
+        s.until_connected(&s.coord).await;
+        let authority = s.coord.server.authority();
+        assert_eq!(
+            authority.lease_cap(s.worker),
+            Some(ClusterServer::lease_cap_for(
+                lodestar_cluster::assign::DEFAULT_POOL_CAP
+            ))
+        );
+        let mut assignment = crate::worker::runtime::tests::assignment(1, 0, 0);
+        let mut a = lodestar_cluster::assign::Assignment::from_message(&assignment)
+            .unwrap()
+            .unwrap();
+        a.pool_cap = 2;
+        assignment = a.to_message().unwrap();
+        s.coord
+            .server
+            .send(
+                s.worker,
+                lodestar_cluster::proto::ToWorker::Assign(assignment),
+            )
+            .unwrap();
+        assert_eq!(authority.lease_cap(s.worker), Some(4));
+        until("a session", || (work.0.lock().unwrap().is_some(), ())).await;
+        let handle = work.0.lock().unwrap().clone().unwrap();
+        let item = |i: u8| ClaimItem {
+            key: [i; 20],
+            source: 0,
+            strategy: 0,
+            discovered_ms: s.clock.now_ms(),
+            hints: Vec::new(),
+        };
+        let granted = |answers: &[GrantItem]| {
+            answers
+                .iter()
+                .filter(|g| matches!(g, GrantItem::Granted { .. }))
+                .count()
+        };
+        let answers = handle.claim((1..=6).map(item).collect()).await.unwrap();
+        assert_eq!(granted(&answers), 4, "{answers:?}");
+        assert!(
+            answers[4..].iter().all(|g| matches!(
+                g,
+                GrantItem::Denied {
+                    reason: DenyReason::Busy,
+                    ..
+                }
+            )),
+            "{answers:?}"
+        );
+        assert_eq!(authority.held_by(s.worker), 4);
+        assert_eq!(s.coord.server.snapshot().busy_capped, 2);
+        // Its own key again: the lease, not a denial.
+        let again = handle.claim(vec![item(1), item(7)]).await.unwrap();
+        assert!(matches!(again[0], GrantItem::Granted { .. }), "{again:?}");
+        assert!(matches!(again[1], GrantItem::Denied { .. }), "{again:?}");
+        assert_eq!(authority.held_by(s.worker), 4);
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
+    }
+
+    /// Records how a local stop went (CLUSTER-05).
+    #[derive(Clone, Default)]
+    struct Stopping {
+        drained: Arc<Mutex<bool>>,
+        stopped: Arc<Mutex<bool>>,
+    }
+
+    impl Work for Stopping {
+        fn event(&mut self, _: WorkerEvent) {}
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            *self.drained.lock().unwrap() = true;
+            Vec::new()
+        }
+
+        async fn stop(&mut self) {
+            *self.stopped.lock().unwrap() = true;
+        }
+    }
+
+    /// CLUSTER-05: a local stop with a session drains: the work hands its
+    /// results and outcomes over, and `Drained` gives back every lease it
+    /// held, for re-grant now rather than after the TTL.
+    #[tokio::test]
+    async fn a_local_stop_drains_and_hands_the_leases_back() {
+        let s = joined().await;
+        let work = Stopping::default();
+        let running = s.run(work.clone());
+        s.until_connected(&s.coord).await;
+        lost_leases(&s, 1, 4);
+        let authority = s.coord.server.authority();
+        assert_eq!(authority.held_by(s.worker), 4);
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
+        assert!(*work.drained.lock().unwrap());
+        assert!(!*work.stopped.lock().unwrap());
+        until("the leases handed back", || {
+            let held = authority.held_by(s.worker);
+            (held == 0, held)
+        })
+        .await;
+        assert_eq!(authority.pending(), 4);
+        assert!(
+            s.lines
+                .all()
+                .contains("stopping: handing the current work back")
+        );
+    }
+
+    /// CLUSTER-05: a local stop with no session keeps what's fetched
+    /// ([`Work::stop`]) instead of dropping it.
+    #[tokio::test]
+    async fn a_local_stop_without_a_session_keeps_what_is_fetched() {
+        let s = joined().await;
+        // Nothing listens there: every dial fails.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        *s.dial.addr.lock().unwrap() = closed.local_addr().unwrap().to_string();
+        drop(closed);
+        let work = Stopping::default();
+        let running = s.run(work.clone());
+        until("a failed dial", || {
+            let all = s.lines.all();
+            (all.contains("couldn't connect"), all)
+        })
+        .await;
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
+        assert!(*work.stopped.lock().unwrap());
+        assert!(!*work.drained.lock().unwrap());
     }
 
     #[tokio::test]
