@@ -37,6 +37,17 @@
 //! workers are allowed, so a key is never leased twice and a single-machine
 //! install opens no cluster CA. Lock order: the fleet, then the authority.
 //!
+//! **Reconciles** (WK-11b): a worker whose lease count differs from ours
+//! after a spool replay lists the leases it holds ([`Holding`], in parts).
+//! On the last part the leases on record for it that the list left out go
+//! back for re-grant, as after an expiry, except those marked fetched, a
+//! late result's, and those handed to it on the listing session itself
+//! (one may still be on its way, so only leases from earlier sessions can
+//! be ones it lost). A listed lease we don't have on record for it is
+//! counted, never created: the list can only give leases back, and only
+//! its own. A paused (quarantined) or no longer current worker's list is
+//! refused, and so is a second round within one heartbeat interval.
+//!
 //! **Hooks** for the slices that build on the protocol: an
 //! [`InboundSink`] for what workers send (results, counters, outcomes,
 //! snapshot acknowledgements, re-verification replies, hints for the
@@ -45,7 +56,7 @@
 //! outgoing queue is capped by count and by bytes
 //! ([`ServerConfig::session_queue_bytes`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -314,6 +325,24 @@ struct WorkerState {
     capabilities: Capabilities,
     /// The last acknowledgement sent: its sequence number and when.
     last_ack: Option<(u64, i64)>,
+    /// A reconcile's list being gathered, part by part (WK-11b).
+    holding: Option<Gathering>,
+    /// When the worker's last reconcile was carried out: at most one per
+    /// heartbeat interval, since each scans the lease table.
+    last_round_ms: Option<i64>,
+}
+
+/// A [`Holding`] round so far, on one session. `listed` keeps only tokens
+/// the worker holds, so it's no bigger than its share of the lease table.
+struct Gathering {
+    session: u64,
+    round: u64,
+    /// The part expected next; `None` once a part was refused (out of
+    /// order, or the worker no longer stands): the round is answered
+    /// `Refused` at its last part.
+    next: Option<u32>,
+    listed: HashSet<Token>,
+    unknown: u64,
 }
 
 struct Fleet {
@@ -360,6 +389,9 @@ struct Counters {
     check_failures: AtomicU64,
     busy_check_failed: AtomicU64,
     busy_unknown: AtomicU64,
+    reconcile_returned: AtomicU64,
+    reconcile_unknown: AtomicU64,
+    reconcile_refused: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -433,6 +465,15 @@ pub struct FleetSnapshot {
     /// Claimed keys denied as busy because the store couldn't read them
     /// (`KeyCheck::Unknown`, #628), per key.
     pub busy_unknown: u64,
+    /// Leases a worker's reconcile list left out, given back for re-grant
+    /// (WK-11b).
+    pub reconcile_returned: u64,
+    /// Leases a worker listed that weren't on record for it (counted only).
+    pub reconcile_unknown: u64,
+    /// Reconcile rounds refused: a paused or replaced worker, the built-in
+    /// worker, parts out of order, or a second round within one heartbeat
+    /// interval.
+    pub reconcile_refused: u64,
 }
 
 /// Who is on the other end of a session.
@@ -811,6 +852,8 @@ impl ClusterServer {
             stats: Stats::default(),
             capabilities: Capabilities::default(),
             last_ack: None,
+            holding: None,
+            last_round_ms: None,
         });
         state.paused = true;
         true
@@ -886,6 +929,9 @@ impl ClusterServer {
             check_failures: get(&c.check_failures),
             busy_check_failed: get(&c.busy_check_failed),
             busy_unknown: get(&c.busy_unknown),
+            reconcile_returned: get(&c.reconcile_returned),
+            reconcile_unknown: get(&c.reconcile_unknown),
+            reconcile_refused: get(&c.reconcile_refused),
         }
     }
 
@@ -1266,6 +1312,8 @@ impl ClusterServer {
                     stats: Stats::default(),
                     capabilities: Capabilities::default(),
                     last_ack: None,
+                    holding: None,
+                    last_round_ms: None,
                 });
             if let Some(old) = state.session.take() {
                 old.stop(StopReason::Replaced);
@@ -1282,6 +1330,7 @@ impl ClusterServer {
             state.last_seen_ms = now_ms;
             // A drain survives a reconnect: it's asked for again below.
             state.last_ack = None;
+            state.holding = None;
             state.capabilities = hello.capabilities;
             self.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
             state_draining = fleet.workers.get(&peer.worker).is_some_and(|s| s.draining);
@@ -1318,6 +1367,7 @@ impl ClusterServer {
             && state.session.as_ref().is_some_and(|s| s.id == id)
         {
             state.session = None;
+            state.holding = None;
         }
     }
 
@@ -1505,7 +1555,106 @@ impl ClusterServer {
                 }
                 Flow::Continue
             }
+            ToCoordinator::Holding(part) => {
+                let Some(answer) = self.holding(peer, part) else {
+                    return Flow::Continue;
+                };
+                if let ReconcileAnswer::Done { returned, .. } = answer.answer
+                    && returned > 0
+                {
+                    self.regrant().await;
+                }
+                self.reply(link, ToWorker::Reconciled(answer)).await
+            }
         }
+    }
+
+    /// One part of a worker's reconcile list (module docs). The answer
+    /// once the last part is in; `None` before.
+    fn holding(&self, peer: &Peer, part: Holding) -> Option<Reconciled> {
+        let w = peer.worker;
+        let refused = || {
+            bump(&self.counters.reconcile_refused);
+            Some(Reconciled {
+                round: part.round,
+                answer: ReconcileAnswer::Refused,
+            })
+        };
+        let mut fleet = lock(&self.fleet);
+        // A replaced or revoked session's list touches nothing, not even
+        // the current session's round.
+        let state = match fleet.workers.get_mut(&w) {
+            Some(state) if state.session.as_ref().is_some_and(|s| s.id == peer.session) => state,
+            _ => return if part.last { refused() } else { None },
+        };
+        let stands = w != WorkerId::LOCAL && !state.paused;
+        let prior = state.holding.take();
+        let mut g = match prior {
+            _ if part.part == 0 => Gathering {
+                session: peer.session,
+                round: part.round,
+                next: Some(0),
+                listed: HashSet::new(),
+                unknown: 0,
+            },
+            Some(g) if g.session == peer.session && g.round == part.round => g,
+            // A part of a round this session didn't start: refused.
+            _ => Gathering {
+                session: peer.session,
+                round: part.round,
+                next: None,
+                listed: HashSet::new(),
+                unknown: 0,
+            },
+        };
+        if !stands || g.next != Some(part.part) {
+            g.next = None;
+        }
+        if g.next.is_some() {
+            let leases: Vec<(InfoHash, Token)> = part
+                .leases
+                .0
+                .iter()
+                .map(|l| (InfoHash(l.key), Token(l.token)))
+                .collect();
+            let held = self.leases.held_tokens(w, &leases);
+            g.unknown += (leases.len() - held.len()) as u64;
+            g.listed.extend(held);
+            g.next = Some(part.part + 1);
+        }
+        if !part.last {
+            state.holding = Some(g);
+            return None;
+        }
+        let now_ms = self.clock.now_ms();
+        let every = i64::try_from(self.config.heartbeat.as_millis()).unwrap_or(i64::MAX);
+        let too_soon = state
+            .last_round_ms
+            .is_some_and(|at| now_ms.saturating_sub(at) < every);
+        if g.next.is_none() || too_soon {
+            return refused();
+        }
+        state.last_round_ms = Some(now_ms);
+        // Under the fleet lock, so no grant on this session lands between
+        // the list and the return.
+        let returned = self.leases.reconcile(w, peer.session, &g.listed);
+        let leases = self.leases.held_by(w);
+        drop(fleet);
+        self.counters
+            .reconcile_returned
+            .fetch_add(returned as u64, Ordering::Relaxed);
+        self.counters
+            .reconcile_unknown
+            .fetch_add(g.unknown, Ordering::Relaxed);
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Some(Reconciled {
+            round: part.round,
+            answer: ReconcileAnswer::Done {
+                returned: n(returned),
+                unknown: u32::try_from(g.unknown).unwrap_or(u32::MAX),
+                leases: n(leases),
+            },
+        })
     }
 
     async fn accepted(&self, link: &mut CoordinatorLink, batch: u64, accepted: bool) -> Flow {
@@ -1636,6 +1785,8 @@ impl ClusterServer {
             .claim_batch(w, &claims, now, admit_ref, Some(checked_at));
         // Hints per holder, one message each.
         let mut relays: HashMap<WorkerId, Vec<HintItem>> = HashMap::new();
+        // Leases handed to the claimer on this session (WK-11b).
+        let mut delivered: Vec<(InfoHash, Token)> = Vec::new();
         for (&(i, claim), answer) in asks.iter().zip(answers) {
             let key = claim.key.0;
             let deny = |reason| GrantItem::Denied { key, reason };
@@ -1652,6 +1803,7 @@ impl ClusterServer {
                     if harvested {
                         bump(&self.counters.harvested);
                     }
+                    delivered.push((claim.key, token));
                     GrantItem::Granted {
                         key,
                         token: token.0,
@@ -1663,11 +1815,14 @@ impl ClusterServer {
                 BatchAnswer::Claimed {
                     claimed: Claimed::Held { holder, token },
                     ..
-                } if holder == w => GrantItem::Granted {
-                    key,
-                    token: token.0,
-                    ttl_secs,
-                },
+                } if holder == w => {
+                    delivered.push((claim.key, token));
+                    GrantItem::Granted {
+                        key,
+                        token: token.0,
+                        ttl_secs,
+                    }
+                }
                 BatchAnswer::Claimed {
                     claimed: Claimed::Held { holder, token },
                     ..
@@ -1688,6 +1843,7 @@ impl ClusterServer {
                 }
             });
         }
+        self.leases.delivered(w, peer.session, &delivered);
         let local_hints = relays.remove(&WorkerId::LOCAL);
         for (holder, hints) in relays {
             let n = hints.len() as u64;
@@ -1829,6 +1985,7 @@ impl ClusterServer {
             if now_ms.saturating_sub(state.last_seen_ms) > silent_ms {
                 slot.stop(StopReason::HeartbeatTimeout);
                 state.session = None;
+                state.holding = None;
             }
         }
         for w in revoked {
@@ -1892,8 +2049,17 @@ impl ClusterServer {
             }
             // Leased to their targets now, so no other claim or re-grant
             // can take them while the check runs; nothing is sent yet.
-            self.leases
-                .regrant_pending(&targets, MAX_GRANT_BATCH, self.clock.now_secs())
+            let batches =
+                self.leases
+                    .regrant_pending(&targets, MAX_GRANT_BATCH, self.clock.now_secs());
+            // Marked for the target's session already, so its reconcile
+            // meanwhile leaves them (WK-11b).
+            for (w, keys) in &batches {
+                if let Some(slot) = fleet.workers.get(w).and_then(|s| s.session.as_ref()) {
+                    self.leases.delivered(*w, slot.id, keys);
+                }
+            }
+            batches
         };
         if batches.is_empty() {
             return;
@@ -1983,6 +2149,9 @@ impl ClusterServer {
             .collect();
         let n = items.len() as u64;
         let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
+        if let Some(slot) = slot {
+            self.leases.delivered(w, slot.id, &keys);
+        }
         let sent = slot.is_some_and(|slot| {
             slot.try_send(ToWorker::Grants(GrantBatch { batch: 0, items }))
                 .is_ok()
