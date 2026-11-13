@@ -1,4 +1,4 @@
-# X-utp-spurious-rto decisions (PR to follow)
+# X-utp-spurious-rto decisions (#838)
 
 The follow-up named in `2026-11-12-X-utp-backoff.md` ("Known limit") and `2026-11-12-master-plan-r4.md`. Affects `crates/utp` only (the peer-wire transport, architecture §6). No wire-format, setting or owner-set number changes.
 
