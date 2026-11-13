@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T16:54Z",
+  "updated_at": "2026-11-13T16:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8485,6 +8485,12 @@
       "head": "93c00086",
       "review": "fresh Opus MERGE (0 B / 0 I); nits 1-2 (evict re-check, NotFound->Gone) relayed for one round; runner delta check then merge",
       "at": "2026-11-13T16:54Z"
+    },
+    "838": {
+      "slice": "X-utp-spurious-rto",
+      "head": "d23c7f9a",
+      "review": "fresh Opus + security review running; ECHO_HORIZON 2^31 us is a runner \u00a72.26 call (owner FYI after merge)",
+      "at": "2026-11-13T16:56Z"
     }
   },
   "merged_log": [
@@ -9131,7 +9137,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T16:33Z",
+    "updated": "2026-11-13T16:56Z",
     "items": [
       {
         "slot": 1,
@@ -9298,7 +9304,7 @@
         "slice": "X-utp-spurious-rto",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnD9XH3Aji25k7dCfZz (Opus): uTP spurious-timeout sample + timeouts reset on ACK progress; brief briefs/X-utp-spurious-rto.md",
+        "doing": "session_01MMjhnD9XH3Aji25k7dCfZz (Opus): #838 open, CI running, runner review running",
         "since": "2026-11-13T16:32Z",
         "model": "opus"
       },
@@ -9371,7 +9377,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T16:54Z",
+  "updated": "2026-11-13T16:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
