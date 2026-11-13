@@ -35,8 +35,10 @@ namespace Lodestar.Setup {
         Action<string> log, string tempRoot, string extraArgs, int timeoutMs) {
       if (string.IsNullOrWhiteSpace(token)) return FailedPrefix + "No join token was given.";
       address = (address ?? "").Trim();
-      // A join token pasted into the address field: refused without repeating it.
-      if (address.StartsWith("lsj1", StringComparison.OrdinalIgnoreCase)) {
+      // A join token pasted into the address field (also after https://): refused
+      // without repeating it.
+      string host = address.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? address.Substring(8) : address;
+      if (host.StartsWith("lsj1", StringComparison.OrdinalIgnoreCase)) {
         return FailedPrefix + "That looks like the join token, not the main Lodestar's address. The address looks like https://192.168.1.10:8091; the token goes in the field below it.";
       }
       if (!AddressChars.IsMatch(address)) {
@@ -61,6 +63,9 @@ namespace Lodestar.Setup {
         + " -DataDir \"" + dataDir.TrimEnd('\\') + "\""
         + " -WorkDir \"" + workDir + "\""
         + " -TokenDir \"" + tokenDir + "\""
+        // A test's own folder for the work folder; the script pins it to %SystemRoot%\Temp
+        // otherwise.
+        + (tempRoot == null ? "" : " -TestTempRoot \"" + root.TrimEnd('\\') + "\"")
         + (string.IsNullOrEmpty(extraArgs) ? "" : " " + extraArgs);
       psi.UseShellExecute = false;
       psi.CreateNoWindow = true;

@@ -58,6 +58,25 @@
                   Value="ADDRESS=[JOIN_ADDRESS];TOKEN=[JOIN_TOKEN];INSTALLFOLDER=[INSTALLFOLDER]" />
     <CustomAction Id="JoinWorker" BinaryKey="LodestarJoinCA" DllEntry="JoinWorker"
                   Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+
+    <!-- If the install is undone after the join (a later step fails, or the user cancels), the
+         rollback removes the join's files, but only those this setup made: join-worker.ps1
+         marks a join it made (cluster\joined-by-setup), and the commit removes the mark once
+         the install has finished. Scheduled before JoinWorker, so the rollback is in the script
+         also when JoinWorker itself fails after joining (the hand-off to the service, say).
+         Neither carries the token. docs/decisions/2026-11-13-X-wk18w-rollback.md. -->
+    <CustomAction Id="SetJoinWorkerRollback" Property="JoinWorkerRollback"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]join-finish.ps1&quot; -Step rollback -DataDir &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="JoinWorkerRollback" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="rollback" Return="ignore" Impersonate="no" />
+    <!-- First, before the rollback is in the script: a marker an earlier setup left (its commit
+         never ran) goes, so this install's rollback acts only on this install's join. If it
+         can't go, the install stops here, before anything is joined. -->
+    <CustomAction Id="SetJoinWorkerPrepare" Property="JoinWorkerPrepare"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]join-finish.ps1&quot; -Step prepare -DataDir &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="JoinWorkerPrepare" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="SetJoinWorkerCommit" Property="JoinWorkerCommit"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]join-finish.ps1&quot; -Step commit -DataDir &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="JoinWorkerCommit" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="commit" Return="ignore" Impersonate="no" />
     <Binary Id="LodestarJoinCA" SourceFile="$(env.LODESTAR_JOIN_CA)" />
 
     <InstallUISequence>
@@ -72,6 +91,12 @@
       <Custom Action="SetServiceArgsWorker" After="CostFinalize">LODESTAR_MODE = "worker"</Custom>
       <!-- After the data folder is secured (SecureDataFolder and the actions after
            InstallServices in main.wxs), before the service is started. First install only. -->
+      <Custom Action="SetJoinWorkerPrepare" Before="JoinWorkerPrepare">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="JoinWorkerPrepare" Before="SetJoinWorkerCommit">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="SetJoinWorkerCommit" Before="JoinWorkerCommit">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="JoinWorkerCommit" Before="SetJoinWorkerRollback">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="SetJoinWorkerRollback" Before="JoinWorkerRollback">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="JoinWorkerRollback" Before="SetJoinWorker">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
       <Custom Action="SetJoinWorker" Before="JoinWorker">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
       <Custom Action="JoinWorker" Before="StartServices">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
     </InstallExecuteSequence>
@@ -92,6 +117,7 @@
         <Condition>LODESTAR_MODE = "worker"</Condition>
         <File Id="JoinWorkerPs1" Name="join-worker.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\join-worker.ps1" KeyPath="yes" />
         <File Id="JoinTokenFilePs1" Name="join-token-file.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\join-token-file.ps1" />
+        <File Id="JoinFinishPs1" Name="join-finish.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\join-finish.ps1" />
       </Component>
     </DirectoryRef>
   </Fragment>

@@ -81,7 +81,7 @@ uninstalls with `REMOVE_DATA=1`.
 - `main.wxs`: the installer (WiX 3). `cargo-wix` supplies the version and binary folder; `build-msi.ps1` adds the licence text and calls it with `--include main.wxs`, so `Cargo.toml` needs no `[package.metadata.wix]`.
 - `build-msi.ps1`, `build-portable.ps1`: the two packages.
 - `portable/`: files that go into the zip (`README.txt`, `Start Lodestar.cmd`).
-- `join.wxs`, `join-worker.ps1`, `join-token-file.ps1`, `join-ca/`: the "Join an existing Lodestar as a worker" mode (wizard only). The C# custom action hands the join token to `join-worker.ps1` on stdin; the script keeps it in a SYSTEM/Administrators-only temporary file for the one `lodestar worker --join-only` run, then deletes it. `test-join-worker.ps1` tests it with a stub `lodestar.exe`. See `docs/decisions/2026-11-12-WK-18w.md`.
+- `join.wxs`, `join-worker.ps1`, `join-token-file.ps1`, `join-finish.ps1`, `join-ca/`: the "Join an existing Lodestar as a worker" mode (wizard only). `join-finish.ps1` undoes a join when its install rolls back, and clears the join's marker when it finishes (`docs/decisions/2026-11-13-X-wk18w-rollback.md`). The C# custom action hands the join token to `join-worker.ps1` on stdin; the script keeps it in a SYSTEM/Administrators-only temporary file for the one `lodestar worker --join-only` run, then deletes it. `test-join-worker.ps1` tests it with a stub `lodestar.exe`. See `docs/decisions/2026-11-12-WK-18w.md`.
 - `smoke.ps1`: install/run/uninstall checks, and the setup, crawler, import and search flow
   (`../smoke/flow.py`, so it needs Python on the PATH; Windows runners have it). `sign.ps1`: code signing.
 
