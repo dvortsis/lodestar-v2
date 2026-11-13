@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T21:15Z",
+  "updated_at": "2026-11-13T21:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9221,7 +9221,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T21:15Z",
+    "updated": "2026-11-13T21:20Z",
     "items": [
       {
         "slot": 1,
@@ -9306,11 +9306,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-scrub-guard-fields-nits",
+        "slice": "X-damaged-mark-links",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-13T21:12Z",
-        "doing": "empty-mark mount + stale wording",
+        "since": "2026-11-13T21:20Z",
+        "doing": "building (follow-up to #849)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9482,7 +9482,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T21:15Z",
+  "updated": "2026-11-13T21:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9943,6 +9943,12 @@
       "slice": "X-scrub-guard-fields",
       "merged": "e2a38b7f",
       "at": "2026-11-13T21:12Z"
+    },
+    {
+      "pr": 849,
+      "slice": "X-scrub-guard-fields-nits",
+      "merged": "592fd0b8",
+      "at": "2026-11-13T21:20Z"
     }
   ]
 }
