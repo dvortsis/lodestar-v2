@@ -450,3 +450,71 @@ test.describe('the error screen when its chunk cannot load', () => {
 		await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
 	});
 });
+
+test.describe('a page opened while the server is gone', () => {
+	test.afterEach(async ({ page }) => {
+		await page.unrouteAll({ behavior: 'ignoreErrors' });
+	});
+
+	// Nothing answers: not the health check, and not the destination's own code, so the load fails
+	// as it does when the server has gone. `up()` brings it back.
+	async function serverGone(page: Page) {
+		let alive = false;
+		const cut = (route: Route) => (alive ? route.fallback() : route.abort('connectionrefused'));
+		await page.route('**/healthz', cut);
+		await page.route('**/_app/immutable/nodes/*.js', cut);
+		return {
+			up: () => {
+				alive = true;
+			}
+		};
+	}
+
+	test('says it could not reach Lodestar, then opens the same page by itself', async ({
+		page,
+		go,
+		mock
+	}) => {
+		mock.on('listSavedSearches', []);
+		await go('/search');
+		await interact(page);
+		await expect(page.getByTestId('more-button')).toBeAttached();
+		const server = await serverGone(page);
+		await page.getByRole('link', { name: 'Alerts' }).first().click();
+		await expect(page.getByRole('heading', { name: 'Couldn’t reach Lodestar' })).toBeVisible({
+			timeout: 15_000
+		});
+		await expect(page.getByText('Error 500')).toHaveCount(0);
+		await expect(page.getByTestId('offline-status')).not.toBeEmpty();
+		server.up();
+		// The next probe finds it (1 s, then 2 s), with no reload and no click.
+		await expect(page.getByRole('heading', { name: 'Couldn’t reach Lodestar' })).toBeHidden({
+			timeout: 15_000
+		});
+		await expect(page).toHaveURL(/\/alerts/);
+		await expect(page.getByRole('heading', { level: 1, name: 'Alerts' })).toBeVisible({
+			timeout: 15_000
+		});
+		await expect(page.getByRole('heading', { name: 'Something went wrong' })).toHaveCount(0);
+	});
+
+	test('Try again asks at once', async ({ page, go, mock }) => {
+		mock.on('listSavedSearches', []);
+		await go('/search');
+		await interact(page);
+		await expect(page.getByTestId('more-button')).toBeAttached();
+		const server = await serverGone(page);
+		await page.getByRole('link', { name: 'Alerts' }).first().click();
+		const button = page.getByRole('button', { name: 'Try again' });
+		await expect(button).toBeVisible({ timeout: 15_000 });
+		server.up();
+		await button.click();
+		await expect(page.getByRole('heading', { name: 'Couldn’t reach Lodestar' })).toBeHidden({
+			timeout: 15_000
+		});
+		await expect(page).toHaveURL(/\/alerts/);
+		await expect(page.getByRole('heading', { level: 1, name: 'Alerts' })).toBeVisible({
+			timeout: 15_000
+		});
+	});
+});
