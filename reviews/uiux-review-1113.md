@@ -12,3 +12,12 @@ POLISH: P15 edge near-misses / h1 left edges; P16 31 bordered cards on Insights;
 BLIND SPOTS: CI axe on mock; snapshot baselines enshrine clipped rows at 768/1024; no width 1367-1919; en/zh only; Sources list built for ~10 plug-ins.
 UI PLAN for future modules: 5.0 pre-work primitives (I11, I3, I1, I4, I10, I21, I12) before new screens; 5.1 grouping; 5.2 regex; 5.3 upload/watch; 5.4 usenet (after v0.7 Q6); 5.5 enrichment (no posters default, nothing for Adult); 5.6 Stremio; 5.7 workers; 5.8 Sources restructure first; 5.9 1.0 design gate at eight widths incl. 1440.
 SIX DECISIONS: (1) I1 drawer 1366-1463 (touches §10.15 -> owner if spec changes); (2) B4 data bug vs fixture; (3) grouping on by default; (4) usenet visibility Q6; (5) posters in Identified as; (6) restructure Sources before/with next plug-in.
+
+## Owner answers to the six decisions (2026-11-13, owner in the codebase-review session: "Go with your recommendations to all the decisions."; relayed 00:54Z)
+1. Drawer beside results from 1366 px (§10.15); while open the results track may shrink below --results-min-width to a floor of 480 px; drawer opens at --drawer-min-width 480 px until wide enough for its stored width. Do with I3. (Changes how §10.2's 560 px results min applies, only while the drawer is open; owner-approved.)
+2. B4 is a fixture gap, not a decision: bench/src/fixture.rs seeds no FUNNEL_EVENTS; re-rank Important; seed FUNNEL_EVENTS consistent with cohort_hour; UI half stands (label strip time base; empty state).
+3. Group versions ON by default once grouping data is ready, remembered per account, in the URL; ungrouped with reason while not ready; if G-v07-scale shows keyword p95 fails with collapse on, default falls back to off and returns to the owner.
+4. Usenet visibility already decided 2026-11-06 (§2.46/§2.47, owner-v07-q6): nothing to record.
+5. No posters or other third-party images in "Identified as": text, IDs and links only; artwork later = separate off-by-default setting + new owner question.
+6. Restructure Settings -> Sources BEFORE the next plug-in row, as its own small slice (collapsible groups with summary, filter box, one-line expandable rows, consent-class legend; no change to consent dialogs or switch behaviour); before IRC-2, NOS-3, LEM-1 and enrichment plug-in rows.
+To record: decisions 1, 3, 5, 6 in the next runner PR's decisions file (owner-decisions entry); fold 3 into GS-5, 5 into ENR-13 follow-ups, 6 into a new Sources-restructure slice; 1 to the slice taking I1+I3.

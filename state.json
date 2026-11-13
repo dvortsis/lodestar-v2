@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:50Z",
+  "updated_at": "2026-11-13T00:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7832,6 +7832,11 @@
       "id": "rv-792-O4",
       "note": "#792 X-win-soak-attach-proc-hash merged with rv-792 O4 deferred (process start-time / pending-rename check); see reviews/rv-792-*.md. Fold into a later Windows soak tooling slice.",
       "added": "2026-11-13T00:49Z"
+    },
+    {
+      "id": "owner-uiux-decisions-1113",
+      "note": "RECORD in next runner PR (owner-decisions \u00a72.66 + decisions file): owner 2026-11-13 accepted the UI/UX review's recommendations (relayed by session_01MMjhnANbVMd2d1Hh86j1ZP 00:54Z): drawer beside results from 1366 px with 480 px floors; Group versions on by default (fallback off if G-v07-scale p95 fails); no posters/third-party images in Identified as; Sources restructure slice before IRC-2/NOS-3/LEM-1/enrichment rows. B4 re-ranked Important (fixture FUNNEL_EVENTS gap). Details: reviews/uiux-review-1113.md.",
+      "added": "2026-11-13T00:54Z"
     }
   ],
   "main_health": [
@@ -8855,7 +8860,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:50Z",
+    "updated": "2026-11-13T00:54Z",
     "items": [
       {
         "slot": 1,
@@ -9225,7 +9230,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T00:50Z",
+  "updated": "2026-11-13T00:54Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
