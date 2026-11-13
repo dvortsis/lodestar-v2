@@ -23,7 +23,19 @@
 //! - **A file is read once it's complete:** its size and modification
 //!   time the same on two polls in a row, and not held open by another
 //!   program (skipped, never failed).
-//! - **Never read twice.** A file that can't be moved or deleted yet is
+//! - **A Malformed verdict is held for [`MALFORMED_SPAN`]**
+//!   (X-watch-stall-retry): a copy over SMB or NFS that stalls (a disk
+//!   spinning up, Wi-Fi roaming) looks complete and reads as malformed.
+//!   Such a file stays where it is, and isn't read again until it has
+//!   stayed unchanged for 60 s since that read. It goes to `failed/` only
+//!   if it reads as malformed then, with the same size and modification
+//!   time. One that changed is still being written: the span starts again
+//!   from its next read. A file is pending at most [`PENDING_FOR`] from
+//!   its first malformed read, however often it changes, then failed; at
+//!   most [`MAX_HELD`] files are pending at once, and past that the
+//!   oldest is failed.
+//! - **Never read twice,** but for a held Malformed verdict (above), the
+//!   one deliberate re-read. A file that can't be moved or deleted yet is
 //!   remembered in a bounded set, never read again, and its move retried
 //!   quietly each poll; when the set is full the watch holds. A name that
 //!   leaves the folder is forgotten once a whole listing shows it gone.
@@ -39,7 +51,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use lodestar_log::{Count, log_event};
 use lodestar_pipeline::local_torrent::{Closed, MAX_BYTES, Outcome, Uploads};
@@ -68,6 +80,22 @@ pub const MAX_SUBMIT: usize = 32;
 /// read again (a §2.26 number). When it's full the watch stops. Tests use
 /// 4, so filling it takes a few files.
 pub const MAX_STUCK: usize = if cfg!(test) { 4 } else { 1024 };
+/// How long a file read as malformed must stay unchanged before a second
+/// malformed read fails it: 60 s of wall-clock time, whatever the poll
+/// interval (runner, 2026-11-13, a §2.26 number). A single stall under
+/// about 70 s always survives; one over about 90 s doesn't.
+pub const MALFORMED_SPAN: Duration = Duration::from_secs(60);
+/// How long a file may stay pending after its first malformed read, at
+/// most, however often it changes: 10 min of wall-clock time (runner,
+/// 2026-11-13, a §2.26 number). Then it goes to `failed/` as malformed,
+/// without another read. A copy that's slow but still making progress
+/// has that long to finish.
+pub const PENDING_FOR: Duration = Duration::from_secs(600);
+/// Files pending after a malformed read, at most (a §2.26 number, as
+/// [`MAX_STUCK`]). A new one past that sends the oldest pending file to
+/// `failed/` as malformed, counted in `watch.took`'s `pending_full`.
+/// Tests use 4.
+pub const MAX_HELD: usize = if cfg!(test) { 4 } else { 1024 };
 /// Numbered names tried for a clash in `added/` or `failed/`.
 const MAX_SUFFIX: u32 = 1000;
 
@@ -106,14 +134,16 @@ lodestar_log::catalogue! {
         fields: { reason: Label },
     }
     /// One poll took files: how many went to `added/` (or were deleted),
-    /// how many to `failed/`, and of those how many because judging
-    /// failed on Lodestar's side (`errors`), not because of the file.
+    /// how many to `failed/`, of those how many because judging failed on
+    /// Lodestar's side (`errors`), not because of the file, and how many
+    /// because too many files were pending after a malformed read
+    /// (`pending_full`: the oldest pending file was failed to make room).
     WATCH_TOOK {
         id: "watch.took",
         component: Sources,
         level: Info,
         message: "Took .torrent files from the watch folder",
-        fields: { added: Label, failed: Label, errors: Label },
+        fields: { added: Label, failed: Label, errors: Label, pending_full: Label },
     }
     /// A file couldn't be moved or deleted after it was taken (a
     /// read-only folder, say). It won't be read again; `stuck` is how
@@ -210,9 +240,15 @@ pub struct Polled {
     /// Of `failed`, files whose judging panicked (`failed/<stem>.failed`):
     /// a fault on Lodestar's side, so counted apart from a bad file.
     pub errors: u64,
-    /// Files seen but not read yet: still changing, held open, or past
-    /// this poll's [`MAX_SUBMIT`].
+    /// Files seen but not put away yet: still changing, held open, past
+    /// this poll's [`MAX_SUBMIT`], or read as malformed and held.
     pub waiting: u64,
+    /// Of `waiting`, files pending after a malformed read: kept for a
+    /// later read rather than failed (not the filter's `held` verdict).
+    pub rechecking: u64,
+    /// Of `failed`, pending files failed early because [`MAX_HELD`] were
+    /// pending and a new one came: the oldest makes room.
+    pub pending_full: u64,
     /// Why the watch isn't running now, if it isn't: checked again every
     /// poll, so a mount that comes back or a fixed folder resumes it,
     /// except [`Problem::TooManyStuck`], which holds until the setting
@@ -236,6 +272,31 @@ struct Stuck {
     cause: Option<Cause>,
 }
 
+/// A file read as malformed and not failed yet: read again once it has
+/// stayed unchanged for [`MALFORMED_SPAN`], and failed at the latest
+/// [`PENDING_FOR`] after `first`.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    /// Its shape when it was last read as malformed.
+    shape: Shape,
+    /// When it was first read as malformed with this shape.
+    since: Instant,
+    /// When it was first read as malformed at all.
+    first: Instant,
+}
+
+/// What [`Watcher::hold`] decided for a file just read as malformed.
+#[derive(Debug, PartialEq, Eq)]
+enum Hold {
+    /// Fail it now.
+    Fail,
+    /// Keep it pending.
+    Keep,
+    /// Keep it pending, and fail the oldest pending file, named, to make
+    /// room.
+    Evict(OsString, Shape),
+}
+
 /// One watch folder's state between polls.
 #[derive(Debug)]
 pub struct Watcher {
@@ -255,6 +316,12 @@ pub struct Watcher {
     /// holding the watch. At most [`MAX_STUCK`]; past that, one more is
     /// counted again each poll, nothing worse.
     left: HashSet<OsString>,
+    /// Files read as malformed and held for one more read, by name. At
+    /// most [`MAX_HELD`]; in memory only, so a restart judges them afresh.
+    held: HashMap<OsString, Held>,
+    /// How far tests have moved [`Watcher::now`] forward.
+    #[cfg(test)]
+    skew: Duration,
 }
 
 impl Watcher {
@@ -270,6 +337,9 @@ impl Watcher {
             stuck: HashMap::new(),
             halted: false,
             left: HashSet::new(),
+            held: HashMap::new(),
+            #[cfg(test)]
+            skew: Duration::ZERO,
         })
     }
 
@@ -289,6 +359,11 @@ impl Watcher {
             self.stuck = before.stuck;
             self.halted = before.halted;
             self.left = before.left;
+            self.held = before.held;
+            #[cfg(test)]
+            {
+                self.skew = before.skew;
+            }
         }
     }
 
@@ -330,9 +405,13 @@ impl Watcher {
         if let Some(listed) = listed {
             self.stuck.retain(|n, _| listed.contains(n));
             self.left.retain(|n| listed.contains(n));
+            self.held.retain(|n, _| listed.contains(n));
         }
         let mut seen = HashMap::new();
         let mut submitted = 0;
+        // Names an eviction dealt with this poll: what's there now is
+        // judged by a later poll, never by this one's stale listing.
+        let mut evicted: HashSet<OsString> = HashSet::new();
         let mut entries = entries.into_iter();
         for (name, entry) in entries.by_ref() {
             // A problem putting files away (rv-765 B2), or the set full:
@@ -340,6 +419,9 @@ impl Watcher {
             if self.halted || out.problem.is_some() {
                 seen.extend(self.seen.remove_entry(&name));
                 break;
+            }
+            if evicted.contains(&name) {
+                continue;
             }
             if self.retry_stuck(&folder, &name, &entry, &mut out).await {
                 continue;
@@ -352,7 +434,12 @@ impl Watcher {
                 }
             }
             let shape = match entry {
-                Entry::Other => continue,
+                Entry::Other => {
+                    // A held name that's now a folder or other entry is no
+                    // longer pending: it keeps no slot.
+                    self.held.remove(&name);
+                    continue;
+                }
                 Entry::Link => {
                     self.finish(&folder, &name, None, Some(Cause::Link), &mut out)
                         .await;
@@ -367,8 +454,32 @@ impl Watcher {
                 continue;
             }
             seen.insert(name.clone(), shape);
+            if self
+                .held
+                .get(&name)
+                .is_some_and(|h| self.now().duration_since(h.first) >= PENDING_FOR)
+            {
+                // Pending too long, however it changed: failed unread.
+                self.finish(
+                    &folder,
+                    &name,
+                    Some(shape),
+                    Some(Cause::Malformed),
+                    &mut out,
+                )
+                .await;
+                continue;
+            }
+            if self.waits_unread(&name, shape) {
+                out.waiting += 1;
+                out.rechecking += 1;
+                continue;
+            }
             if self.seen.get(&name) != Some(&shape) || submitted == MAX_SUBMIT {
                 out.waiting += 1;
+                if self.held.contains_key(&name) {
+                    out.rechecking += 1;
+                }
                 continue;
             }
             let f = folder.clone();
@@ -402,6 +513,23 @@ impl Watcher {
                 Outcome::Failed => Some(Cause::Failed),
             };
             self.cursor = Some(name.clone());
+            if cause == Some(Cause::Malformed) {
+                match self.hold(&name, shape) {
+                    Hold::Fail => {}
+                    Hold::Keep => {
+                        out.waiting += 1;
+                        out.rechecking += 1;
+                        continue;
+                    }
+                    Hold::Evict(oldest, its) => {
+                        out.waiting += 1;
+                        out.rechecking += 1;
+                        self.evict(&folder, &oldest, its, &mut out).await;
+                        evicted.insert(oldest);
+                        continue;
+                    }
+                }
+            }
             self.finish(&folder, &name, Some(shape), cause, &mut out)
                 .await;
         }
@@ -415,6 +543,70 @@ impl Watcher {
             out.problem = Some(Problem::TooManyStuck);
         }
         out
+    }
+
+    /// The time spans are measured on. Tests move it forward with `skew`,
+    /// so a 60 s span or 10 min limit passes without waiting for it.
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        return Instant::now() + self.skew;
+        #[cfg(not(test))]
+        Instant::now()
+    }
+
+    /// Whether a held file is left unread this poll: unchanged since its
+    /// malformed read, and [`MALFORMED_SPAN`] not over yet.
+    fn waits_unread(&self, name: &OsStr, shape: Shape) -> bool {
+        self.held.get(name).is_some_and(|h| {
+            h.shape == shape && self.now().duration_since(h.since) < MALFORMED_SPAN
+        })
+    }
+
+    /// Whether a file just read as malformed is kept pending or failed.
+    /// Failed when an earlier read found it malformed with this same
+    /// shape [`MALFORMED_SPAN`] or more ago (it isn't changing, so it's
+    /// really malformed), or when it has been pending [`PENDING_FOR`]. A
+    /// new shape starts a new span, not a new pending time. A new pending
+    /// file past [`MAX_HELD`] makes room by failing the oldest.
+    fn hold(&mut self, name: &OsStr, shape: Shape) -> Hold {
+        let now = self.now();
+        let (first, evict) = match self.held.get(name) {
+            Some(h) if now.duration_since(h.first) >= PENDING_FOR => return Hold::Fail,
+            // Reached only through a race: an unchanged file isn't read
+            // while its span runs (`waits_unread`).
+            Some(h) if h.shape == shape => {
+                return if now.duration_since(h.since) < MALFORMED_SPAN {
+                    Hold::Keep
+                } else {
+                    Hold::Fail
+                };
+            }
+            Some(h) => (h.first, None),
+            None if self.held.len() >= MAX_HELD => {
+                let oldest = self
+                    .held
+                    .iter()
+                    .min_by_key(|(_, h)| h.first)
+                    .map(|(n, h)| (n.clone(), h.shape));
+                (now, oldest)
+            }
+            None => (now, None),
+        };
+        if let Some((oldest, _)) = &evict {
+            self.held.remove(oldest);
+        }
+        self.held.insert(
+            name.to_os_string(),
+            Held {
+                shape,
+                since: now,
+                first,
+            },
+        );
+        match evict {
+            Some((oldest, its)) => Hold::Evict(oldest, its),
+            None => Hold::Keep,
+        }
     }
 
     /// For a file taken before but not moved: retries its move quietly
@@ -448,6 +640,9 @@ impl Watcher {
                 self.stuck.remove(name);
             }
             Err(MoveError::Subfolder(p)) => out.problem = Some(p),
+            Err(MoveError::Gone) => {
+                self.stuck.remove(name);
+            }
             Err(_) => {}
         }
         true
@@ -485,6 +680,7 @@ impl Watcher {
         cause: Option<Cause>,
         out: &mut Polled,
     ) {
+        self.held.remove(name);
         match cause {
             None => out.added += 1,
             Some(Cause::Failed) => {
@@ -493,8 +689,47 @@ impl Watcher {
             }
             Some(_) => out.failed += 1,
         }
-        match self.put_away(folder, name, cause).await {
-            Ok(()) => {}
+        let moved = self.put_away(folder, name, cause).await;
+        self.after_move(name, shape, cause, moved, out);
+    }
+
+    /// Fails the oldest pending file to make room in a full held set,
+    /// counted in `failed` and `pending_full`, if a regular file is still
+    /// there by that name. Anything else (gone, a folder, a link) is only
+    /// dropped from the set; a later poll judges what's there as usual.
+    async fn evict(
+        &mut self,
+        folder: &std::sync::Arc<Folder>,
+        name: &OsStr,
+        shape: Shape,
+        out: &mut Polled,
+    ) {
+        let (f, n) = (folder.clone(), name.to_os_string());
+        if !matches!(blocking(move || f.entry(&n)).await, Some(Entry::File(_))) {
+            return;
+        }
+        let cause = Some(Cause::Malformed);
+        let moved = self.put_away(folder, name, cause).await;
+        if !matches!(moved, Err(MoveError::Gone)) {
+            out.failed += 1;
+            out.pending_full += 1;
+        }
+        self.after_move(name, Some(shape), cause, moved, out);
+    }
+
+    /// What a move's result leaves to remember: a file that couldn't be
+    /// moved is never read again, and reported once; when [`MAX_STUCK`]
+    /// are, the watch holds. One that's gone leaves nothing.
+    fn after_move(
+        &mut self,
+        name: &OsStr,
+        shape: Option<Shape>,
+        cause: Option<Cause>,
+        moved: Result<(), MoveError>,
+        out: &mut Polled,
+    ) {
+        match moved {
+            Ok(()) | Err(MoveError::Gone) => {}
             // Checked again next poll; the file stays where it is, and the
             // poll stops (rv-765 B2).
             Err(MoveError::Subfolder(p)) => {
@@ -606,6 +841,9 @@ enum Taken {
 enum MoveError {
     Subfolder(Problem),
     Io,
+    /// Nothing is there by that name any more (removed by hand, say):
+    /// nothing to move, and nothing to remember.
+    Gone,
     /// A link entry that isn't moved (Windows): left where it is.
     #[cfg_attr(not(windows), allow(dead_code))]
     Left,
@@ -753,7 +991,20 @@ impl Folder {
     fn read(&self, name: &OsStr, shape: Shape) -> Taken {
         let file = match self.open_file(name) {
             Ok(f) => f,
-            Err(e) => return open_error(&e),
+            Err(e) => {
+                return match open_error(&e) {
+                    // Swapped for a folder or the like since it was listed
+                    // (on Windows a folder won't open as a file): never
+                    // moved, judged afresh by a later poll. This closes a
+                    // gap from UP-1 (runner, #837).
+                    Taken::Refuse(Cause::Unreadable)
+                        if !matches!(self.entry(name), Some(Entry::File(_))) =>
+                    {
+                        Taken::Wait
+                    }
+                    t => t,
+                };
+            }
         };
         let Ok(meta) = file.metadata() else {
             return Taken::Refuse(Cause::Unreadable);
@@ -828,6 +1079,11 @@ impl Folder {
             match self.rename_no_replace(name, sub, &target) {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                // Gone only if the file itself is: a missing `added/` or
+                // `failed/` leaves it stuck, never read again.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.absent(name) => {
+                    return Err(MoveError::Gone);
+                }
                 Err(_) => return Err(MoveError::Io),
             }
         }
@@ -918,7 +1174,22 @@ impl Folder {
             .map_err(std::io::Error::from);
         #[cfg(windows)]
         let done = std::fs::remove_file(self.path.join(name));
-        done.map_err(|_| MoveError::Io)
+        done.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound if self.absent(name) => MoveError::Gone,
+            _ => MoveError::Io,
+        })
+    }
+
+    /// Whether nothing is in the folder by `name`, read without following
+    /// it (through the folder's handle on Unix).
+    fn absent(&self, name: &OsStr) -> bool {
+        #[cfg(unix)]
+        let found = rustix::fs::statat(&self.fd, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map(drop)
+            .map_err(std::io::Error::from);
+        #[cfg(windows)]
+        let found = std::fs::symlink_metadata(self.path.join(name)).map(drop);
+        found.is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
     }
 }
 
@@ -1024,7 +1295,8 @@ pub fn follow(
                             WATCH_TOOK,
                             added = Count(polled.added),
                             failed = Count(polled.failed),
-                            errors = Count(polled.errors)
+                            errors = Count(polled.errors),
+                            pending_full = Count(polled.pending_full)
                         );
                     }
                     show(polled.problem, &mut shown);
@@ -1164,7 +1436,7 @@ mod tests {
     }
 
     /// Two polls: the first sees each file, the second takes it.
-    async fn settle(w: &mut Watcher, f: &Fake) -> Polled {
+    async fn settle<S: Sink>(w: &mut Watcher, f: &S) -> Polled {
         let first = w.poll(f).await;
         assert_eq!(
             first.added + first.failed,
@@ -1201,7 +1473,12 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed, p.errors), (1, 4, 1));
+        assert_eq!((p.added, p.failed, p.errors, p.rechecking), (1, 3, 1, 1));
+        // Malformed is held; unchanged for MALFORMED_SPAN, it's failed.
+        assert_eq!(t.top(), ["a.torrent"]);
+        age(&mut w);
+        let p = w.poll(&f).await;
+        assert_eq!((p.added, p.failed, p.rechecking), (0, 1, 0));
         assert_eq!(
             t.names(FAILED),
             [
@@ -1258,6 +1535,370 @@ mod tests {
         // Unchanged since: read.
         assert_eq!(w.poll(&f).await.added, 1);
         assert_eq!(f.bodies.lock().unwrap()[0], b"d4:infode");
+    }
+
+    /// Appends to a file in the folder, as a copy that resumes does.
+    fn append(t: &T, name: &str, more: &[u8]) {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(t.dir().join(name))
+            .unwrap();
+        std::io::Write::write_all(&mut file, more).unwrap();
+    }
+
+    /// As if [`MALFORMED_SPAN`] of wall-clock time had passed: the span
+    /// stays 60 s, and the tests control the clock it's measured on.
+    fn age(w: &mut Watcher) {
+        age_by(w, MALFORMED_SPAN);
+    }
+
+    /// Moves the watcher's clock forward by `by`. Moving the clock, not
+    /// the instants back, can't underflow on a machine just booted.
+    fn age_by(w: &mut Watcher, by: Duration) {
+        w.skew += by;
+    }
+
+    /// X-watch-stall-retry: a really malformed file that doesn't change is
+    /// left unread while MALFORMED_SPAN runs, read once more after it,
+    /// failed, and never read again.
+    #[tokio::test]
+    async fn an_unchanged_malformed_file_is_failed_after_the_span() {
+        let t = T::new();
+        t.put("bad.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.failed, p.rechecking, p.waiting), (0, 1, 1));
+        assert_eq!(t.top(), ["bad.torrent"]);
+        // Within the span: not read, not failed, however many polls.
+        for _ in 0..3 {
+            let p = w.poll(&f).await;
+            assert_eq!((p.failed, p.rechecking), (0, 1));
+        }
+        assert_eq!(calls(&f), 1);
+        age(&mut w);
+        let p = w.poll(&f).await;
+        assert_eq!((p.failed, p.rechecking), (1, 0));
+        assert_eq!(t.names(FAILED), ["bad.malformed.torrent"]);
+        assert!(w.held.is_empty());
+        w.poll(&f).await;
+        assert_eq!(calls(&f), 2);
+    }
+
+    /// X-watch-stall-retry: a change resets the span, so a file that
+    /// changed is never failed on the strength of an older read.
+    #[tokio::test]
+    async fn a_change_starts_the_span_again() {
+        let t = T::new();
+        t.put("slow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        let first = w.held[OsStr::new("slow.torrent")].since;
+        age(&mut w);
+        append(&t, "slow.torrent", b"+");
+        // Changed: waits to be still, read, malformed with a new shape,
+        // held again with a fresh span rather than failed.
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.failed, p.rechecking), (0, 1));
+        assert!(w.held[OsStr::new("slow.torrent")].since > first);
+        assert_eq!(w.poll(&f).await.failed, 0);
+    }
+
+    /// X-watch-stall-retry: a copy that stalls looks complete and reads as
+    /// malformed; once it resumes and finishes, it's judged afresh and
+    /// taken, never failed.
+    #[tokio::test]
+    async fn a_stalled_copy_that_resumes_is_taken() {
+        let t = T::new();
+        t.put("slow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        assert_eq!(settle(&mut w, &f).await.rechecking, 1);
+        // The copy resumes and finishes (a new size): it waits a poll to
+        // be still, as any changing file does, and isn't read meanwhile.
+        t.put("slow.torrent", b"d4:infodee");
+        let p = w.poll(&f).await;
+        assert_eq!((p.added, p.failed, p.waiting), (0, 0, 1), "changed: waits");
+        assert_eq!(calls(&f), 1);
+        // Still since: judged afresh, and taken.
+        let p = w.poll(&f).await;
+        assert_eq!((p.added, p.failed), (1, 0));
+        assert_eq!(t.names(ADDED), ["slow.torrent"]);
+        assert!(t.names(FAILED).is_empty() && w.held.is_empty());
+    }
+
+    /// X-watch-stall-retry: a slow copy that changes between each
+    /// malformed read, more often than any small count would allow, stays
+    /// pending and is taken once it's complete.
+    #[tokio::test]
+    async fn a_file_that_keeps_changing_is_taken_once_complete() {
+        let t = T::new();
+        t.put("slow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        for round in 0..8 {
+            let p = settle(&mut w, &f).await;
+            assert_eq!((p.failed, p.rechecking), (0, 1), "round {round}");
+            append(&t, "slow.torrent", b"+");
+        }
+        t.put("slow.torrent", b"d4:infodee");
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.added, p.failed), (1, 0));
+        assert_eq!(t.names(ADDED), ["slow.torrent"]);
+        assert!(w.held.is_empty());
+    }
+
+    /// X-watch-stall-retry: PENDING_FOR after its first malformed read, a
+    /// file goes to `failed/` however it changed since, without another
+    /// read, so one that keeps changing isn't pending for ever.
+    #[tokio::test]
+    async fn a_file_pending_past_the_limit_is_failed() {
+        let t = T::new();
+        t.put("grow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        // Changed since, and a new span started: the pending time doesn't.
+        append(&t, "grow.torrent", b"+");
+        settle(&mut w, &f).await;
+        assert_eq!(calls(&f), 2);
+        age_by(&mut w, PENDING_FOR - MALFORMED_SPAN);
+        append(&t, "grow.torrent", b"+");
+        assert_eq!(w.poll(&f).await.failed, 0, "just within the limit");
+        age_by(&mut w, MALFORMED_SPAN);
+        append(&t, "grow.torrent", b"+");
+        let p = w.poll(&f).await;
+        assert_eq!((p.failed, p.rechecking), (1, 0));
+        assert_eq!(t.names(FAILED), ["grow.malformed.torrent"]);
+        assert_eq!(calls(&f), 2, "failed unread");
+        assert!(w.held.is_empty());
+    }
+
+    /// X-watch-stall-retry: at most MAX_HELD files are pending; a new one
+    /// past that fails the oldest, counted apart, and only Malformed is
+    /// ever held.
+    #[tokio::test]
+    async fn the_held_set_is_bounded_by_failing_the_oldest() {
+        let t = T::new();
+        t.put("m0.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        age_by(&mut w, Duration::from_secs(1));
+        for i in 1..=MAX_HELD {
+            t.put(&format!("m{i}.torrent"), b"MALF");
+        }
+        t.put("z.torrent", b"FLOOR");
+        let p = settle(&mut w, &f).await;
+        assert_eq!(
+            (p.rechecking, p.failed, p.pending_full),
+            (MAX_HELD as u64, 2, 1)
+        );
+        assert_eq!(w.held.len(), MAX_HELD);
+        assert!(!w.held.contains_key(OsStr::new("m0.torrent")));
+        assert_eq!(
+            t.names(FAILED),
+            ["m0.malformed.torrent", "z.refused.torrent"]
+        );
+        age(&mut w);
+        let p = w.poll(&f).await;
+        assert_eq!(
+            (p.rechecking, p.failed, p.pending_full),
+            (0, MAX_HELD as u64, 0)
+        );
+        assert!(w.held.is_empty());
+    }
+
+    /// Evicting a pending file that someone removed meanwhile leaves no
+    /// stuck entry and counts nothing: there was nothing to move.
+    #[tokio::test]
+    async fn evicting_a_file_thats_gone_leaves_nothing_behind() {
+        /// Removes `gone` on the first new file it's sent.
+        struct Remover<'a> {
+            inner: Fake,
+            gone: &'a Path,
+            done: std::sync::atomic::AtomicBool,
+        }
+        impl Sink for Remover<'_> {
+            async fn submit(&self, body: Vec<u8>) -> Result<Outcome, Closed> {
+                if body.ends_with(b"NEW") && !self.done.swap(true, Ordering::SeqCst) {
+                    std::fs::remove_file(self.gone).unwrap();
+                }
+                self.inner.submit(body).await
+            }
+        }
+        let t = T::new();
+        t.put("m0.torrent", b"MALF");
+        let gone = t.dir().join("m0.torrent");
+        let s = Remover {
+            inner: Fake::default(),
+            gone: &gone,
+            done: Default::default(),
+        };
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &s).await;
+        age_by(&mut w, Duration::from_secs(1));
+        for i in 1..=MAX_HELD {
+            t.put(&format!("m{i}.torrent"), b"MALF NEW");
+        }
+        let p = settle(&mut w, &s).await;
+        assert_eq!((p.failed, p.pending_full), (0, 0));
+        assert!(w.stuck.is_empty(), "nothing remembered for a gone file");
+        assert_eq!(w.held.len(), MAX_HELD);
+        assert!(!w.held.contains_key(OsStr::new("m0.torrent")));
+        assert!(t.names(FAILED).is_empty());
+    }
+
+    /// A held name replaced by a folder is never moved by an eviction,
+    /// and a held name that turns into something other than a file keeps
+    /// no slot.
+    #[tokio::test]
+    async fn eviction_moves_only_a_regular_file() {
+        /// Swaps `m0.torrent` for a folder on the first new file it's sent.
+        struct Swapper<'a> {
+            inner: Fake,
+            at: &'a Path,
+            done: std::sync::atomic::AtomicBool,
+        }
+        impl Sink for Swapper<'_> {
+            async fn submit(&self, body: Vec<u8>) -> Result<Outcome, Closed> {
+                if body.ends_with(b"NEW") && !self.done.swap(true, Ordering::SeqCst) {
+                    std::fs::remove_file(self.at).unwrap();
+                    std::fs::create_dir(self.at).unwrap();
+                    std::fs::write(self.at.join("inside"), b"x").unwrap();
+                }
+                self.inner.submit(body).await
+            }
+        }
+        let t = T::new();
+        t.put("m0.torrent", b"MALF");
+        let at = t.dir().join("m0.torrent");
+        let s = Swapper {
+            inner: Fake::default(),
+            at: &at,
+            done: Default::default(),
+        };
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &s).await;
+        age_by(&mut w, Duration::from_secs(1));
+        for i in 1..=MAX_HELD {
+            t.put(&format!("m{i}.torrent"), b"MALF NEW");
+        }
+        let p = settle(&mut w, &s).await;
+        assert_eq!((p.failed, p.pending_full), (0, 0));
+        // Not looked at again this poll from the stale listing: on Windows
+        // that read fails as `unreadable` (rv: CI on #837).
+        assert_eq!(p.waiting, MAX_HELD as u64);
+        assert!(at.join("inside").exists(), "the folder stays where it is");
+        assert!(t.names(FAILED).is_empty());
+        assert!(w.stuck.is_empty() && !w.held.contains_key(OsStr::new("m0.torrent")));
+        // A held name that becomes a folder between polls is dropped too.
+        std::fs::remove_file(t.dir().join("m1.torrent")).unwrap();
+        std::fs::create_dir(t.dir().join("m1.torrent")).unwrap();
+        w.poll(&s.inner).await;
+        assert!(!w.held.contains_key(OsStr::new("m1.torrent")));
+    }
+
+    /// A rename that fails with "not found" because `failed/` went
+    /// missing mid-move is no proof the file is gone: `absent` says it's
+    /// still there, so the move is `Io` (stuck, never read again), not
+    /// `Gone`.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_subfolder_mid_move_is_not_gone() {
+        let t = T::new();
+        t.put("a.torrent", b"FLOOR");
+        let folder = Folder::open(t.dir(), t.data.path()).unwrap();
+        std::fs::remove_dir(t.dir().join(FAILED)).unwrap();
+        let e = folder
+            .rename_no_replace(
+                OsStr::new("a.torrent"),
+                FAILED,
+                OsStr::new("a.refused.torrent"),
+            )
+            .unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        assert!(!folder.absent(OsStr::new("a.torrent")));
+        assert!(folder.absent(OsStr::new("gone.torrent")));
+    }
+
+    /// A listed file swapped for a folder before its read is never moved
+    /// to `failed/`: it waits, and a later poll judges the folder (left
+    /// alone). On Windows the folder won't open as a file, so without the
+    /// second look it was failed as `unreadable`.
+    #[tokio::test]
+    async fn a_file_swapped_for_a_folder_before_its_read_is_left_alone() {
+        /// Swaps `b.torrent` for a folder when `a.torrent` is sent.
+        struct Swapper<'a> {
+            inner: Fake,
+            at: &'a Path,
+        }
+        impl Sink for Swapper<'_> {
+            async fn submit(&self, body: Vec<u8>) -> Result<Outcome, Closed> {
+                if body == b"fine" {
+                    std::fs::remove_file(self.at).unwrap();
+                    std::fs::create_dir(self.at).unwrap();
+                    std::fs::write(self.at.join("inside"), b"x").unwrap();
+                }
+                self.inner.submit(body).await
+            }
+        }
+        let t = T::new();
+        t.put("a.torrent", b"fine");
+        t.put("b.torrent", b"MALF");
+        let at = t.dir().join("b.torrent");
+        let s = Swapper {
+            inner: Fake::default(),
+            at: &at,
+        };
+        let mut w = t.watcher(After::Move);
+        let p = settle(&mut w, &s).await;
+        assert_eq!((p.added, p.failed, p.waiting), (1, 0, 1));
+        assert!(t.names(FAILED).is_empty());
+        assert!(at.join("inside").exists(), "the folder stays where it is");
+        let p = w.poll(&s.inner).await;
+        assert_eq!((p.failed, p.waiting), (0, 0));
+        assert!(t.names(FAILED).is_empty() && w.stuck.is_empty());
+    }
+
+    /// An evicted file that sorts after the one that pushed it out is
+    /// skipped for the rest of the poll: neither read again, nor counted
+    /// again, nor failed twice.
+    #[tokio::test]
+    async fn an_evicted_file_later_in_the_poll_is_not_read() {
+        let t = T::new();
+        t.put("z0.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        age_by(&mut w, Duration::from_secs(1));
+        for i in 1..=MAX_HELD {
+            t.put(&format!("a{i}.torrent"), b"MALF");
+        }
+        let p = settle(&mut w, &f).await;
+        assert_eq!(
+            (p.failed, p.pending_full, p.waiting),
+            (1, 1, MAX_HELD as u64)
+        );
+        assert_eq!(t.names(FAILED), ["z0.malformed.torrent"]);
+        assert_eq!(calls(&f), 1 + MAX_HELD, "z0 read once only");
+        assert!(w.stuck.is_empty());
+    }
+
+    /// A held file removed by hand is forgotten once a whole listing shows
+    /// it gone.
+    #[tokio::test]
+    async fn a_held_file_removed_by_hand_is_forgotten() {
+        let t = T::new();
+        t.put("gone.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        assert_eq!(w.held.len(), 1);
+        std::fs::remove_file(t.dir().join("gone.torrent")).unwrap();
+        w.poll(&f).await;
+        assert!(w.held.is_empty());
     }
 
     #[tokio::test]
@@ -1317,7 +1958,9 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Delete);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed), (1, 1));
+        assert_eq!((p.added, p.failed, p.rechecking), (1, 0, 1));
+        age(&mut w);
+        assert_eq!(w.poll(&f).await.failed, 1);
         assert!(t.names(ADDED).is_empty());
         assert_eq!(t.names(FAILED), ["bad.malformed.torrent"]);
         assert!(t.top().is_empty());
@@ -1420,6 +2063,22 @@ mod tests {
         // Seen once already: taken on this poll, and deleted now.
         assert_eq!(w.poll(&f).await.added, 1);
         assert!(t.top().is_empty() && t.names(ADDED).is_empty());
+        // A held Malformed verdict survives a change too: the next read
+        // fails the file, with no fresh hold.
+        t.put("b.torrent", b"MALF");
+        assert_eq!(settle(&mut w, &f).await.rechecking, 1);
+        let move_ = Watch {
+            folder: t.dir().to_string_lossy().into_owned(),
+            after: After::Move,
+        };
+        let mut w = apply(&move_, t.data.path(), Some(w), &mut shown)
+            .await
+            .unwrap();
+        assert_eq!(w.poll(&f).await.failed, 0, "the span carries over");
+        age(&mut w);
+        assert_eq!(w.poll(&f).await.failed, 1);
+        assert_eq!(t.names(FAILED), ["b.malformed.torrent"]);
+        assert_eq!(calls(&f), 3);
     }
 
     /// rv-765 O5: at most [`MAX_SCAN`] `.torrent` names a poll, and such a
@@ -1626,7 +2285,7 @@ mod tests {
             crate::test_log::install();
             let t = T::new();
             let long = |i: usize| format!("{}{i}.torrent", "q".repeat(240));
-            t.put(&long(0), b"MALF");
+            t.put(&long(0), b"FLOOR");
             let f = Fake::default();
             let mut w = t.watcher(After::Move);
             let p = settle(&mut w, &f).await;
@@ -1637,7 +2296,7 @@ mod tests {
             assert_eq!(calls(&f), 1, "never read again");
             // Fill the set: the watch stops.
             for i in 1..MAX_STUCK {
-                t.put(&long(i), b"MALF");
+                t.put(&long(i), b"FLOOR");
             }
             w.poll(&f).await;
             let p = w.poll(&f).await;
@@ -1677,7 +2336,7 @@ mod tests {
             let t = T::new();
             let outside = tempfile::tempdir().unwrap();
             for i in 0..MAX_STUCK * 3 {
-                t.put(&format!("m{i:02}.torrent"), b"MALF");
+                t.put(&format!("m{i:02}.torrent"), b"FLOOR");
             }
             let s = Swapper {
                 inner: Fake::default(),
@@ -1713,7 +2372,7 @@ mod tests {
         async fn a_stuck_file_removed_by_hand_is_forgotten() {
             let t = T::new();
             let long = format!("{}.torrent", "r".repeat(244));
-            t.put(&long, b"MALF");
+            t.put(&long, b"FLOOR");
             let f = Fake::default();
             let mut w = t.watcher(After::Move);
             settle(&mut w, &f).await;
