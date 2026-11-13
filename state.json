@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T13:32Z",
+  "updated_at": "2026-11-13T13:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9085,7 +9085,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T13:32Z",
+    "updated": "2026-11-13T13:34Z",
     "items": [
       {
         "slot": 1,
@@ -9244,12 +9244,12 @@
       },
       {
         "slot": 30,
-        "slice": null,
-        "status": "idle",
+        "slice": "X-fixed-sleep-asserts",
+        "status": "active",
         "role": "other",
-        "agent": null,
-        "doing": "X-companions-mount-check #831 merged (380e46a6) 2026-11-13T13:32Z after runner delta check; session archived",
-        "since": "2026-11-13T10:26Z",
+        "agent": "claude",
+        "doing": "session_01MMjhn9YivYQVrtLb8466ue (Opus): fixed-sleep asserts to condition waits; exact files sent by message",
+        "since": "2026-11-13T13:34Z",
         "model": "opus"
       },
       {
@@ -9321,7 +9321,7 @@
     }
   ],
   "heartbeat": "2026-11-13T12:39Z",
-  "updated": "2026-11-13T13:32Z",
+  "updated": "2026-11-13T13:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
