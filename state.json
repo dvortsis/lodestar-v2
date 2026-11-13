@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:25Z",
+  "updated_at": "2026-11-13T00:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7820,7 +7820,7 @@
     },
     {
       "id": "code-review-1113-triage",
-      "note": "Runner PR after the drain: Track Q slices from docs/code-review/2026-11-13-full-code-review.md (203 findings, 16 blocking; 19 act-first rows); seven owner decisions to owner_queue (FILTER-01, APIFEAT-01, FILTER-03, UPDATE-01/05, SRC-02, INFRA-01, TEST-05); ask owner where Track Q sits on the ladder. #795 manual rollback wiring must run purge_for_restore (its decisions file says blocking for wiring).",
+      "note": "Runner PR after the drain: Track Q slices from docs/code-review/2026-11-13-full-code-review.md (203 findings, 16 blocking; 19 act-first rows); seven owner decisions to owner_queue (FILTER-01, APIFEAT-01, FILTER-03, UPDATE-01/05, SRC-02, INFRA-01, TEST-05); ask owner where Track Q sits on the ladder. #795 manual rollback wiring must run purge_for_restore (its decisions file says blocking for wiring). Also fold in the owner-requested UI/UX review (reviews/uiux-review-1113.md): B1 wizard raw keys, B2 no sign-out, B3 insights axe; I5 Filters & Safety loosening confirm needs content-safety review; I1 drawer overlap is a runner \u00a72.26 call.",
       "added": "2026-11-13T00:25Z"
     }
   ],
@@ -8845,7 +8845,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:25Z",
+    "updated": "2026-11-13T00:34Z",
     "items": [
       {
         "slot": 1,
@@ -9215,7 +9215,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:25Z",
+  "updated": "2026-11-13T00:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
