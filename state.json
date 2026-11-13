@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:22Z",
+  "updated_at": "2026-11-13T17:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8512,9 +8512,10 @@
     },
     "837": {
       "slice": "X-watch-stall-retry",
-      "head": "93c00086",
+      "head": "ccd0aac7",
       "review": "fresh Opus MERGE (0 B / 0 I); nits 1-2 (evict re-check, NotFound->Gone) relayed for one round; runner delta check then merge",
-      "at": "2026-11-13T16:54Z"
+      "at": "2026-11-13T16:54Z",
+      "state": "nits fixed; runner delta check passed; awaiting green"
     },
     "838": {
       "slice": "X-utp-spurious-rto",
@@ -9179,7 +9180,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T17:12Z",
+    "updated": "2026-11-13T17:26Z",
     "items": [
       {
         "slot": 1,
@@ -9421,7 +9422,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:22Z",
+  "updated": "2026-11-13T17:26Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
