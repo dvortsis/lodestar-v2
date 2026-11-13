@@ -38,12 +38,17 @@ const QUERIES: &[&str] = &[
 
 struct Fixture {
     _tmp: tempfile::TempDir,
+    /// The pristine data directory. The tool never runs on it: each test
+    /// runs on its own [`copy_of`] it. On Windows, `fs::copy`
+    /// (`CopyFileExW`) opens each source file without write sharing, so a
+    /// copy taken while another test's run has `.tantivy-meta.lock` open
+    /// (or opening it) fails one side with os error 32, a sharing
+    /// violation that tantivy doesn't retry.
     data: PathBuf,
     hashes: HashMap<&'static str, String>,
 }
 
-/// One data directory, shared by the tests that only read it; a test
-/// that changes one copies it first.
+/// One data directory, built once and only ever copied.
 fn fixture() -> &'static Fixture {
     static F: OnceLock<Fixture> = OnceLock::new();
     F.get_or_init(|| {
@@ -200,8 +205,9 @@ fn figure(out: &str, name: &str) -> String {
 #[test]
 fn scores_match_a_hand_computation() {
     let f = fixture();
+    let data = copy_of(f);
     let set = judgments(f);
-    let o = run_on(&f.data, set.path(), &["--all"]);
+    let o = run_on(data.path(), set.path(), &["--all"]);
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     // q1: kestrel (3) at rank 1; ideal 3 then quillon's 2.
@@ -232,13 +238,14 @@ fn scores_match_a_hand_computation() {
 #[test]
 fn a_skipped_query_still_checks_forbidden_results() {
     let f = fixture();
+    let data = copy_of(f);
     let set = tempfile::tempdir().unwrap();
     let judged = format!(
         "? quillon fen\n= only an unstored copy is right\n3 {MISSING_1}\nx {}\n",
         f.hashes["quillon"]
     );
     std::fs::write(set.path().join("judgments.txt"), judged).unwrap();
-    let o = run_on(&f.data, set.path(), &[]);
+    let o = run_on(data.path(), set.path(), &[]);
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(figure(&out, "forbidden"), "1 queries", "{out}");
@@ -248,7 +255,7 @@ fn a_skipped_query_still_checks_forbidden_results() {
         "{out}"
     );
     // It counts as forbidden, so the gate fails on it.
-    let o = run_on(&f.data, set.path(), &["--gate"]);
+    let o = run_on(data.path(), set.path(), &["--gate"]);
     assert!(!o.status.success());
 }
 
@@ -279,15 +286,16 @@ fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Option<(u64, SystemTime)>> {
 #[test]
 fn opening_changes_nothing_and_the_baseline_gates() {
     let f = fixture();
+    let data = copy_of(f);
     let set = judgments(f);
-    let before = snapshot(&f.data);
-    let o = run_on(&f.data, set.path(), &["--write-baseline"]);
+    let before = snapshot(data.path());
+    let o = run_on(data.path(), set.path(), &["--write-baseline"]);
     assert!(o.status.success(), "{:?}", text(&o));
-    let o = run_on(&f.data, set.path(), &["--gate"]);
+    let o = run_on(data.path(), set.path(), &["--gate"]);
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert!(out.contains("PASS"), "{out}");
-    assert_eq!(snapshot(&f.data), before);
+    assert_eq!(snapshot(data.path()), before);
     let baseline = std::fs::read_to_string(set.path().join("baseline.txt")).unwrap();
     assert!(baseline.contains("store_torrents 4\n"), "{baseline}");
     assert!(baseline.contains("\nindex v"), "{baseline}");
@@ -296,12 +304,12 @@ fn opening_changes_nothing_and_the_baseline_gates() {
     let j = set.path().join("judgments.txt");
     let changed = std::fs::read_to_string(&j).unwrap() + "# edited\n";
     std::fs::write(&j, changed).unwrap();
-    let o = run_on(&f.data, set.path(), &["--gate"]);
+    let o = run_on(data.path(), set.path(), &["--gate"]);
     assert!(!o.status.success());
     assert!(text(&o).0.contains("judgments changed"));
 }
 
-/// A copy of the fixture's data directory, for a test that changes it.
+/// A test's own copy of the fixture's data directory.
 fn copy_of(f: &Fixture) -> tempfile::TempDir {
     fn copy(from: &Path, to: &Path) {
         std::fs::create_dir_all(to).unwrap();
@@ -330,7 +338,6 @@ fn refused(o: &Output, needle: &str) {
 fn refused_while_a_server_holds_it() {
     let f = fixture();
     let set = judgments(f);
-    // A copy, so the other tests' runs over the fixture aren't refused.
     let data = copy_of(f);
     let root = data.path().join("index");
     let held = server_lock(&root).unwrap();
@@ -397,8 +404,9 @@ fn another_schema_or_an_open_log_is_refused() {
 #[test]
 fn held_out_prints_aggregates_only() {
     let f = fixture();
+    let data = copy_of(f);
     let set = judgments(f);
-    let o = run_on(&f.data, set.path(), &["--held-out"]);
+    let o = run_on(data.path(), set.path(), &["--held-out"]);
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(figure(&out, "queries"), "2 scored", "{out}");
@@ -434,13 +442,14 @@ fn held_out_prints_aggregates_only() {
 #[test]
 fn held_out_errors_name_only_the_line() {
     let f = fixture();
+    let data = copy_of(f);
     let set = tempfile::tempdir().unwrap();
     std::fs::write(
         set.path().join("judgments.txt"),
         "? secret query words\n= secret why\n3 secretnothexhash\n",
     )
     .unwrap();
-    let o = run_on(&f.data, set.path(), &["--held-out"]);
+    let o = run_on(data.path(), set.path(), &["--held-out"]);
     let (out, err) = text(&o);
     assert!(!o.status.success());
     assert_eq!(
@@ -452,7 +461,7 @@ fn held_out_errors_name_only_the_line() {
     // A query that doesn't parse: its error would quote it.
     let bad_query = format!("? kestrel sise:1\n= why\n3 {}\n", f.hashes["kestrel"]);
     std::fs::write(set.path().join("judgments.txt"), bad_query).unwrap();
-    let o = run_on(&f.data, set.path(), &["--held-out"]);
+    let o = run_on(data.path(), set.path(), &["--held-out"]);
     let (out, err) = text(&o);
     assert!(!o.status.success());
     assert_eq!(err.trim(), "error: judgments.txt:1: the query failed");
@@ -461,18 +470,18 @@ fn held_out_errors_name_only_the_line() {
     // Larger than the cap: refused before it's parsed.
     let big = "# padding\n".repeat((16 << 20) / 10 + 1);
     std::fs::write(set.path().join("judgments.txt"), big).unwrap();
-    let o = run_on(&f.data, set.path(), &["--held-out"]);
+    let o = run_on(data.path(), set.path(), &["--held-out"]);
     assert!(text(&o).1.contains("larger than 16 MiB"), "{:?}", text(&o));
 
     for extra in ["--all", "--gate", "--write-baseline"] {
-        let o = run_on(&f.data, set.path(), &["--held-out", extra]);
+        let o = run_on(data.path(), set.path(), &["--held-out", extra]);
         assert_eq!(o.status.code(), Some(2), "{extra}");
     }
-    let o = run_on(&f.data, set.path(), &["--held-out", "--worst", "3"]);
+    let o = run_on(data.path(), set.path(), &["--held-out", "--worst", "3"]);
     assert_eq!(o.status.code(), Some(2));
     // --held-out and --data-dir each need their partner.
     let o = relevance(&["--held-out".as_ref()]);
     assert_eq!(o.status.code(), Some(2));
-    let o = relevance(&["--data-dir".as_ref(), f.data.as_os_str()]);
+    let o = relevance(&["--data-dir".as_ref(), data.path().as_os_str()]);
     assert_eq!(o.status.code(), Some(2));
 }
