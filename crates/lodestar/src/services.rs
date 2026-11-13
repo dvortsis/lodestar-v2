@@ -340,8 +340,8 @@ impl Services {
         let control = Arc::new(Mutex::new(control));
         // Prowlarr / Jackett (SRC-7, X-prowlarr-register): an Account
         // source, registered off. The consent gate keeps it off in this
-        // build (`consent_text_approved` refuses every class but None, as
-        // for the torrent cache), and the Legal Notice says so (section 2).
+        // build (`consent_text_approved` refuses Account and External, so
+        // the torrent cache too), and the Legal Notice says so (section 2).
         // Its saved address and its API key are read here, once, so both
         // apply together at the next start. A store that can't be read
         // fails the start rather than registering it unconfigured.

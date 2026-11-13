@@ -322,10 +322,28 @@ impl std::fmt::Debug for GateCtx<'_> {
 /// then the query in the plugin's form. Every lookup goes through it. The
 /// plugin-wide conditions are read first; while one fails, nothing is
 /// read about the item.
+///
+/// [`check_with`] for a plugin that declares no credentials.
 pub fn check(
     store: &mut Store,
     engine: &Engine,
     ctx: GateCtx<'_>,
+    id: i64,
+    now: i64,
+) -> Result<Result<Candidate, Ineligible>, lodestar_store::Error> {
+    check_with(store, engine, ctx, &[], id, now)
+}
+
+/// [`check`] for a plugin declaring `credentials` (its
+/// `Policy::credentials`): its consent condition is judged against them
+/// ([`lodestar_sources::consent::need_with`]). Consent is one condition
+/// of several: Show adult content, the kill switch, the source's state
+/// and the per-item ones still apply whatever it says.
+pub fn check_with(
+    store: &mut Store,
+    engine: &Engine,
+    ctx: GateCtx<'_>,
+    credentials: &[lodestar_sources::consent::CredentialSpec],
     id: i64,
     now: i64,
 ) -> Result<Result<Candidate, Ineligible>, lodestar_store::Error> {
@@ -339,7 +357,8 @@ pub fn check(
             .sources()?
             .iter()
             .any(|s| s.id == ctx.source && s.state == SourceState::Enabled);
-        g.consent_met = lodestar_sources::consent::need_in(store, ctx.manifest)?.is_none();
+        g.consent_met =
+            lodestar_sources::consent::need_in_with(store, ctx.manifest, credentials)?.is_none();
     }
     let item_wide = Gate {
         stored: true,
@@ -736,6 +755,7 @@ impl AdultEnrichSource {
             let store = self.store.clone();
             let engine = self.filter.current();
             let manifest = self.plugin.manifest().clone();
+            let credentials = self.plugin.policy().credentials;
             let switches = self.switches.clone();
             let gate = (ctx.source, self.plugin.query_form(), self.adult);
             tokio::task::spawn_blocking(move || {
@@ -747,7 +767,7 @@ impl AdultEnrichSource {
                     adult: gate.2,
                     switches: &*switches,
                 };
-                check(&mut store, &engine, ctx, id, now)
+                check_with(&mut store, &engine, ctx, credentials, id, now)
             })
             .await
         };
@@ -1241,6 +1261,112 @@ mod tests {
             finds_private: false,
         };
         let _ = EnrichSources::of([(SourceId::new(2).unwrap(), &m)], &["both"]);
+    }
+
+    /// Consent is one condition of several (X-consent-gate-lift): an
+    /// Overlay source with an accepted acknowledgement of the current text
+    /// still offers nothing adult while Show adult content is off, or while
+    /// its kill switch is tripped. An Account source is judged against its
+    /// declared credentials.
+    #[test]
+    fn consent_never_bypasses_show_adult_or_the_kill_switch() {
+        use lodestar_filter::{Core, CsList, Lists, Switches as FilterSwitches, TermSet};
+        use lodestar_sources::consent::{Ack, CredentialKind, CredentialSpec};
+        use lodestar_sources::{Consent, Endpoint, Kind, Priority, Risk};
+
+        struct Flags(bool, bool);
+        impl Switches for Flags {
+            fn show_adult(&self) -> bool {
+                self.0
+            }
+            fn kill_switch_tripped(&self) -> bool {
+                self.1
+            }
+        }
+        let manifest = |id, consent| Manifest {
+            id,
+            name: id,
+            version: "1",
+            kinds: &[Kind::Enrichment],
+            networks: &[],
+            endpoints: &[Endpoint {
+                protocol: "https",
+                host: "overlay.example",
+            }],
+            risk: Risk::High,
+            consent,
+            default_priority: Priority::Normal,
+            enabled_by_default: false,
+            always_adult: false,
+            finds_private: false,
+        };
+        let overlay = manifest("ovl", Consent::Overlay);
+        let account = manifest("acct", Consent::Account);
+        let engine = Engine::new(Core::new(
+            Lists {
+                sexual: TermSet::of(&["lexa"]),
+                child_roles: TermSet::of(&["rolea"]),
+                codes: TermSet::of(&["codex"]),
+            },
+            CsList::default(),
+            FilterSwitches::default(),
+        ));
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let ovl = store
+            .register_source_as("ovl", "1", SourceState::Disabled, 0)
+            .unwrap();
+        store
+            .enable_source(ovl, Some(&Ack::of(&overlay).encode()))
+            .unwrap();
+        let acct = store
+            .register_source_as("acct", "1", SourceState::Disabled, 0)
+            .unwrap();
+        store
+            .update_source_secrets(acct, &[("other", b"sealed")], &[], None)
+            .unwrap();
+        store.enable_source(acct, None).unwrap();
+        const SPEC: &[CredentialSpec] = &[CredentialSpec {
+            name: "api_key",
+            label: "API key",
+            kind: CredentialKind::Secret,
+            required: true,
+        }];
+        // No torrent 1 is stored: a gate that gets past the plugin-wide
+        // conditions says so, which shows consent held.
+        let mut at = |m: &Manifest, source, spec: &[CredentialSpec], flags: Flags| {
+            let ctx = GateCtx {
+                manifest: m,
+                source,
+                form: QueryForm::Name,
+                adult: AdultSources::default(),
+                switches: &flags,
+            };
+            check_with(&mut store, &engine, ctx, spec, 1, 0)
+                .unwrap()
+                .err()
+        };
+        assert_eq!(
+            at(&overlay, ovl, &[], Flags(false, false)),
+            Some(Ineligible::AdultHidden)
+        );
+        assert_eq!(
+            at(&overlay, ovl, &[], Flags(true, true)),
+            Some(Ineligible::KillSwitch)
+        );
+        assert_eq!(
+            at(&overlay, ovl, &[], Flags(true, false)),
+            Some(Ineligible::NotStored),
+            "consent held"
+        );
+        // An undeclared name stored doesn't meet a declared spec.
+        assert_eq!(
+            at(&account, acct, SPEC, Flags(true, false)),
+            Some(Ineligible::NoConsent)
+        );
+        assert_eq!(
+            at(&account, acct, &[], Flags(false, false)),
+            Some(Ineligible::AdultHidden)
+        );
     }
 
     #[test]
