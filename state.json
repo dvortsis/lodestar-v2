@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T17:12Z",
+  "updated_at": "2026-11-13T17:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8106,6 +8106,16 @@
       "id": "ops-md-import-limit-pilot",
       "note": "docs/operations.md ~line 392 (\"the import is refused\"): mention a --limit pilot sizes the space check to min(rows, limit) (after #840); runner docs PR or user-docs slice",
       "at": "2026-11-13T17:12Z"
+    },
+    {
+      "id": "lease-per-worker-key-index",
+      "note": "#839 review nit 3: LeaseTable reconcile/evict scan all leases under both locks per handshake; per-worker key index (held -> HashMap<WorkerId,HashSet<InfoHash>>) or a 1 s floor across sessions",
+      "at": "2026-11-13T17:13Z"
+    },
+    {
+      "id": "busy-capped-metrics-export",
+      "note": "#839 review nit 4: busy_capped only in the snapshot; export on /metrics with a docs/metrics.md row; log hitting the cap (rate-limited)",
+      "at": "2026-11-13T17:13Z"
     }
   ],
   "main_health": [
@@ -8510,7 +8520,7 @@
     "839": {
       "slice": "X-lease-reconcile-every-session",
       "head": "3182efc8",
-      "review": "fresh Opus + security + concurrency review running; chaos scenario for cap/stop approved (testing.rs graceful per-worker stop, test-only, \u00a72.33) to ride with review fixes in one push; owner FYI: lease cap 2x pool cap (100k default, 2M max), stop deadline 30 s (25 + 5)",
+      "review": "fresh Opus MERGE, 2 Important (stalled-coordinator spool fallback; local stop waits for Drained) relayed with chaos scenario, one push; runner delta check then merge",
       "at": "2026-11-13T17:06Z"
     },
     "840": {
@@ -9406,7 +9416,7 @@
     }
   ],
   "heartbeat": "2026-11-13T15:39Z",
-  "updated": "2026-11-13T17:12Z",
+  "updated": "2026-11-13T17:13Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
