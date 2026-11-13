@@ -8,6 +8,7 @@
 pub mod archive_org;
 mod common;
 pub mod json;
+pub mod lemmy;
 pub mod rss;
 pub mod stashdb;
 pub mod torznab;

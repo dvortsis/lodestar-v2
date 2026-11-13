@@ -199,6 +199,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "lemmy"
+path = "fuzz_targets/lemmy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "json"
 path = "fuzz_targets/json.rs"
 test = false
