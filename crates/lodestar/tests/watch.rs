@@ -234,9 +234,9 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
 
 /// X-watch-stall-retry: a copy that stalls looks complete to the watch,
 /// which reads it as malformed. It's held, not failed, through a stall of
-/// over 30 s, and once the copy finishes it's taken. A valid file that sorts after it, written just
-/// after it, shows when the stalled one has been read: both are read on
-/// the same poll, in name order.
+/// over 30 s, and once the copy finishes it's taken. A valid file that
+/// sorts after it, written just after it, shows when the stalled one has
+/// been read: both are read on the same poll, in name order.
 #[test]
 fn a_stalled_copy_that_finishes_is_taken_not_failed() {
     let s = start();
@@ -265,9 +265,10 @@ fn a_stalled_copy_that_finishes_is_taken_not_failed() {
     // still where it was.
     assert!(written.elapsed() >= Duration::from_secs(10));
     assert!(stalled.exists(), "held, not moved");
-    // The stall goes on to 50 s: well past 30 s, and past what a span of 20 s or less would allow. This wait is the stall being tested,
-    // not a wait for the watch: every check on the way says the file is
-    // still held.
+    // The stall goes on to 50 s: well past 30 s, and past what a 10 s span
+    // would allow (checked). This wait is the stall being tested, not a
+    // wait for the watch: every check on the way says the file is still
+    // held.
     until("a stall of 50 s", || {
         assert!(stalled.exists(), "held, not moved");
         assert!(names(&folder.path().join("failed")).is_empty());
