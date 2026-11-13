@@ -23425,7 +23425,7 @@
           },
           "similar_payload": {
             "$ref": "#/components/schemas/HitGroup",
-            "description": "Torrents with a similar payload: most of the same large files\n(a season with an episode swapped or added, a pack with an extra\ndisc), newest first. Found by a MinHash of the large file sizes\nand confirmed on the stored sizes; identical clones are in\n`identical_payload` instead. Unavailable (`few_major_files`) for\na torrent with fewer than 3 large files."
+            "description": "Torrents with a similar payload: most of the same large files\n(a season with an episode swapped or added, a pack with an extra\ndisc), newest first. Found by a MinHash of the large file sizes\nand confirmed on the stored sizes; identical clones are in\n`identical_payload` instead. Unavailable (`few_major_files`) for\na torrent whose large files have fewer than 3 different sizes."
           },
           "similar_payload_partial": {
             "type": "boolean",

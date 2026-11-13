@@ -6,6 +6,9 @@
 //! of 3; theory `P(candidate) = 1 − (1 − J³)²`):
 //! - unrelated payloads (random sizes): no pair of 3,000 torrents shares
 //!   a band (≈ 4.5M pairs; a chance band match is ~2⁻⁶⁴ per pair);
+//! - unrelated split archives sharing a volume size: never similar (a
+//!   torrent needs 3 distinct major sizes to be signed, and two similar
+//!   ones must share 3);
 //! - Jaccard 0.5: at most 35 % become candidates (theory 23 %), and
 //!   none of them is confirmed ([`similar`] is exact);
 //! - Jaccard 0.8: at least 65 % are found (theory 76 %);
@@ -84,6 +87,33 @@ fn unrelated_payloads_never_share_a_band() {
             if let Some(j) = seen.insert(t, i) {
                 assert_eq!(j, i, "torrents {j} and {i} share a band");
             }
+        }
+    }
+}
+
+/// Split archives share their volume size (scene `.rNN` parts of
+/// 50,000,000 bytes, `.7z.001` volumes): unrelated ones must never be
+/// similar, whatever their part counts.
+#[test]
+fn unrelated_split_archives_are_never_similar() {
+    let mut rng = Rng(8);
+    for volume in [50_000_000u64, 100_000_000, (4 << 30) - 1] {
+        for _ in 0..200 {
+            let archive = |rng: &mut Rng, extra: usize| {
+                let parts = 10 + (rng.next() % 40) as usize;
+                let mut s = vec![volume; parts];
+                // The last part, and up to two other big files (a sample,
+                // a second archive's last part).
+                s.extend((0..=extra).map(|_| volume / 2 + rng.next() % (volume / 3)));
+                s
+            };
+            let (a, b) = (archive(&mut rng, 0), archive(&mut rng, 2));
+            // Two sizes: no signature at all.
+            assert!(band_terms(&a).is_empty());
+            let (ma, mb) = (major_sizes(&a), major_sizes(&b));
+            assert!(!similar(&ma, &mb));
+            let c = archive(&mut rng, 2);
+            assert!(!similar(&mb, &major_sizes(&c)), "{mb:?}");
         }
     }
 }
@@ -190,7 +220,9 @@ proptest! {
     #[test]
     fn below_the_threshold_nothing_matches(p in payload()) {
         let major = major_sizes(&p);
-        if major.len() < MIN_MAJOR_FILES {
+        let mut distinct = major.clone();
+        distinct.dedup();
+        if distinct.len() < MIN_MAJOR_FILES {
             prop_assert!(signature(&p).is_err());
             prop_assert!(band_terms(&p).is_empty());
             prop_assert!(!similar(&major, &major));

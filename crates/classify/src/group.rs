@@ -12,10 +12,13 @@
 //!   least [`MAJOR_MIN_PERCENT`] % of the payload (the non-padding
 //!   sizes), so a torrent has at most 100 major files and the cost is
 //!   bounded whatever its file count;
-//! - only a torrent with at least [`MIN_MAJOR_FILES`] major files is
-//!   signed: with fewer, an overlap of one or two sizes says little,
-//!   and those torrents rely on the exact payload signature
-//!   ([`crate::payload`]);
+//! - only a torrent whose major files have at least [`MIN_MAJOR_FILES`]
+//!   **distinct** sizes is signed: with fewer, an overlap of one or two
+//!   sizes says little, and those torrents rely on the exact payload
+//!   signature ([`crate::payload`]). Distinct, because unrelated split
+//!   archives share their volume size (scene `.rNN` parts of 50,000,000
+//!   bytes, `.7z.001` volumes, 4 GiB FAT32 splits): twenty equal parts
+//!   would otherwise make two different films look alike;
 //! - [`HASHES`] hashes in [`BANDS`] bands of [`ROWS`] (6 in 2 of 3); two
 //!   torrents are candidates when any band agrees;
 //! - two torrents are *similar* when the Jaccard similarity of their
@@ -41,7 +44,8 @@
 pub const MAJOR_MIN_BYTES: u64 = 1 << 20;
 /// A major file's smallest share of the payload, in percent.
 pub const MAJOR_MIN_PERCENT: u64 = 1;
-/// Major files a torrent needs for a signature.
+/// Distinct major sizes a torrent needs for a signature, and two
+/// similar torrents must share.
 pub const MIN_MAJOR_FILES: usize = 3;
 /// MinHash values per signature.
 pub const HASHES: usize = 6;
@@ -59,7 +63,7 @@ const _: () = assert!(HASHES == BANDS * ROWS);
 pub enum Unsigned {
     /// No content files (none, or only padding).
     NoContent,
-    /// Fewer than [`MIN_MAJOR_FILES`] major files.
+    /// Fewer than [`MIN_MAJOR_FILES`] distinct major sizes.
     FewMajorFiles,
 }
 
@@ -101,14 +105,14 @@ pub fn band_terms(content_sizes: &[u64]) -> Vec<u64> {
 
 impl MinHash {
     /// The signature of `major` (sorted major sizes, [`major_sizes`]);
-    /// `None` with fewer than [`MIN_MAJOR_FILES`].
+    /// `None` with fewer than [`MIN_MAJOR_FILES`] distinct sizes.
     ///
     /// A multiset is hashed as the set of `(size, k)`, `k` counting the
     /// earlier copies of the same size, so three equal episodes count
     /// three times and the result doesn't depend on the order.
     pub fn of_major(major: &[u64]) -> Option<MinHash> {
         debug_assert!(major.is_sorted(), "major sizes are sorted");
-        if major.len() < MIN_MAJOR_FILES {
+        if distinct(major) < MIN_MAJOR_FILES {
             return None;
         }
         let mut min = [u64::MAX; HASHES];
@@ -169,16 +173,48 @@ pub fn jaccard(a: &[u64], b: &[u64]) -> (u64, u64) {
 }
 
 /// Whether two torrents' payloads are similar: both signed (at least
-/// [`MIN_MAJOR_FILES`] major files each) and the Jaccard similarity of
-/// their major sizes is at least [`SIMILAR`]. `a` and `b` are sorted
+/// [`MIN_MAJOR_FILES`] distinct major sizes each), sharing at least
+/// [`MIN_MAJOR_FILES`] distinct sizes (so a common volume size alone
+/// never makes two split archives similar), and the Jaccard similarity
+/// of their major sizes, as multisets, is at least [`SIMILAR`]. `a` and `b` are sorted
 /// major sizes ([`major_sizes`]). Exact: this is what confirms a
 /// candidate the band terms found.
 pub fn similar(a: &[u64], b: &[u64]) -> bool {
-    if a.len() < MIN_MAJOR_FILES || b.len() < MIN_MAJOR_FILES {
+    if distinct(a) < MIN_MAJOR_FILES || distinct(b) < MIN_MAJOR_FILES {
+        return false;
+    }
+    if shared_distinct(a, b) < MIN_MAJOR_FILES {
         return false;
     }
     let (both, union) = jaccard(a, b);
     both * SIMILAR.1 >= union * SIMILAR.0
+}
+
+/// The distinct values of a sorted slice.
+fn distinct(sorted: &[u64]) -> usize {
+    sorted.chunk_by(|a, b| a == b).count()
+}
+
+/// The distinct values two sorted multisets share.
+fn shared_distinct(a: &[u64], b: &[u64]) -> usize {
+    let (mut i, mut j, mut n) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                n += 1;
+                let v = a[i];
+                while i < a.len() && a[i] == v {
+                    i += 1;
+                }
+                while j < b.len() && b[j] == v {
+                    j += 1;
+                }
+            }
+        }
+    }
+    n
 }
 
 const ELEMENT_SEED: u64 = 0x6772_6f75_706b_6579; // "groupkey"
@@ -236,7 +272,12 @@ mod tests {
             Err(Unsigned::FewMajorFiles)
         );
         assert!(band_terms(&[1 << 30, 1 << 30]).is_empty());
-        assert!(signature(&[1 << 30, 1 << 30, 1 << 30]).is_ok());
+        // Three major files, one size: a split archive's volumes.
+        assert_eq!(
+            signature(&[1 << 30, 1 << 30, 1 << 30]),
+            Err(Unsigned::FewMajorFiles)
+        );
+        assert!(signature(&[1 << 30, (1 << 30) + 1, 1 << 30, (1 << 30) + 2]).is_ok());
         assert_eq!(band_terms(&[3 << 30, 2 << 30, 1 << 30]).len(), BANDS);
     }
 
@@ -246,8 +287,8 @@ mod tests {
     fn goldens() {
         let cases: [(&[u64], [u64; BANDS]); 3] = [
             (
-                &[MIB, MIB, MIB],
-                [0x376b_4e79_2974_b2b9, 0xf05d_7d03_84e9_1919],
+                &[MIB, MIB + 1, MIB + 2],
+                [0xfcfe_bd3a_19dd_117d, 0xac54_f587_48e7_582b],
             ),
             (
                 &[1_400_000_000, 1_400_000_123, 1_399_999_999, 7 << 20],
@@ -277,5 +318,20 @@ mod tests {
         // even another one like it.
         assert!(!similar(&[1, 2], &[1, 2]));
         assert!(!similar(&[1, 2, 3], &[1, 2]));
+        // Copies count in the Jaccard (5 of 5 shared, 3 distinct)...
+        assert!(similar(&[1, 1, 2, 2, 3], &[1, 1, 2, 2, 3]));
+        assert!(similar(&[1, 1, 2, 2, 3], &[1, 1, 2, 2, 3, 3]));
+        // ...but a shared volume size alone isn't similarity.
+        let mut a = vec![50_000_000; 19];
+        a.extend([23_456_789, 7, 8]);
+        let mut b = vec![50_000_000; 19];
+        b.extend([31_000_000, 9, 10]);
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(jaccard(&a, &b).0, 19);
+        assert!(!similar(&a, &b), "unrelated split archives");
+        assert_eq!(shared_distinct(&a, &b), 1);
+        assert_eq!(shared_distinct(&[1, 1, 2, 4], &[1, 2, 2, 3, 4]), 3);
+        assert_eq!(distinct(&[1, 1, 2, 4, 4]), 3);
     }
 }

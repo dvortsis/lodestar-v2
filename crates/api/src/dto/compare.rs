@@ -46,7 +46,7 @@ pub struct SiblingsResponse {
     /// disc), newest first. Found by a MinHash of the large file sizes
     /// and confirmed on the stored sizes; identical clones are in
     /// `identical_payload` instead. Unavailable (`few_major_files`) for
-    /// a torrent with fewer than 3 large files.
+    /// a torrent whose large files have fewer than 3 different sizes.
     pub similar_payload: HitGroup,
     /// The index is still filling in the similarity terms, so some
     /// torrents may be missing from `similar_payload`.

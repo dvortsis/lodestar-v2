@@ -255,7 +255,8 @@ pub(crate) async fn siblings(
                 HitGroup::unavailable(Unavailable::PayloadNotSpecific),
                 false,
             ),
-            (_, Some(_)) if major.len() < lodestar_classify::group::MIN_MAJOR_FILES => {
+            // The same rule the index signs by (3 distinct major sizes).
+            (_, Some(_)) if lodestar_classify::group::MinHash::of_major(&major).is_none() => {
                 (HitGroup::unavailable(Unavailable::FewMajorFiles), false)
             }
             (None, Some(_)) => (HitGroup::unavailable(Unavailable::SearchDisabled), false),
@@ -470,7 +471,7 @@ fn same_payload(tree: &FileTree, sizes: &[u64]) -> bool {
 /// the index under the request's visibility, each then confirmed on its
 /// stored sizes ([`similar_to`]), so a band shared by chance never
 /// shows. `sizes` and `major` are this torrent's ([`content_sizes`] and
-/// its major sizes, at least the threshold's count). Identical clones
+/// its major sizes, which have a signature). Identical clones
 /// are left out: the identical-payload group lists them. Newest first;
 /// `truncated` when more pass than are listed, or when the list is full
 /// and more candidates matched than were read. Partial (the flag) while
@@ -1721,14 +1722,17 @@ mod tests {
 
     /// A candidate the index offers whose stored files aren't similar (a
     /// forged list, as if the index lagged or a band matched by chance)
-    /// is dropped; the request's token stops the group at the next
-    /// candidate.
+    /// is dropped; a cancelled request stops before the lookup. The
+    /// stored withheld check and the per-candidate cancel are the shared
+    /// [`confirmed`] loop's, tested with forged lists above
+    /// (`a_withheld_candidate_is_dropped_whatever_the_index_says`,
+    /// `a_cancel_during_confirmation_stops_at_the_next`).
     #[test]
     fn similar_candidates_are_confirmed_and_cancellable() {
         let (s, ids, _dir) = corpus(&[entry("Ref"), entry("Other"), entry("Third")], None);
         // Every corpus torrent is one 1 GiB file: pretend the reference
-        // has ten such episodes plus one of its own.
-        let ours: Vec<u64> = std::iter::repeat_n(1u64 << 30, 10).collect();
+        // has ten episodes of about that size, one of them exactly 1 GiB.
+        let ours: Vec<u64> = (0..10).map(|e| (1u64 << 30) + e).collect();
         let major = lodestar_classify::group::major_sizes(&ours);
         let forged = ids[1..].iter().map(|&i| (i, 0.0));
         let g = confirmed(

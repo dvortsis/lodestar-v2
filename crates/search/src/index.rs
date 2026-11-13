@@ -2669,6 +2669,110 @@ mod population_tests {
         );
     }
 
+    /// GS-2's band lookup: torrents sharing a band, under the caller's
+    /// visibility applied before the limit, newest first within it, and
+    /// stoppable.
+    #[test]
+    fn torrents_with_minhash_bands_is_bounded_and_cancellable() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        // Torrent i (id i + 1): payload A (three distinct large sizes) for
+        // even i, payload B for odd; torrent 6 (id 7, payload A) is hidden.
+        let payload = |i: u8| -> [i64; 3] {
+            let base = if i.is_multiple_of(2) {
+                1 << 30
+            } else {
+                3 << 30
+            };
+            [base, base + 7, base + 19]
+        };
+        for i in 0..7u8 {
+            let d = |e: Vec<(&str, OwnedValue)>| {
+                OwnedValue::Dict(
+                    e.into_iter()
+                        .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                        .collect(),
+                )
+            };
+            let b = |v: &[u8]| OwnedValue::Bytes(v.to_vec());
+            let files = payload(i)
+                .iter()
+                .enumerate()
+                .map(|(j, &len)| {
+                    d(vec![
+                        ("length", OwnedValue::Int(len)),
+                        (
+                            "path",
+                            OwnedValue::List(vec![b(format!("f{j}").as_bytes())]),
+                        ),
+                    ])
+                })
+                .collect();
+            let name = format!("Pack.{i}");
+            let raw = to_vec(&d(vec![
+                ("files", OwnedValue::List(files)),
+                ("name", b(name.as_bytes())),
+                ("piece length", OwnedValue::Int(1 << 16)),
+                ("pieces", b(&[0; 20])),
+            ]));
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1_700_000_000,
+                    metadata_at: 1_700_000_001,
+                    extra_flags: if i == 6 {
+                        lodestar_store::flags::HIDDEN
+                    } else {
+                        0
+                    },
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        let bands = |i: u8| {
+            let sizes: Vec<u64> = payload(i).iter().map(|&s| s as u64).collect();
+            lodestar_classify::group::band_terms(&sizes)
+        };
+        let (a, b) = (bands(0), bands(1));
+        assert_eq!(a.len(), lodestar_classify::group::BANDS);
+        let cancel = crate::CancelToken::new();
+        let visible = Node::All.without_hidden();
+        let find = |terms: &[u64], visible: &Node, limit| {
+            index
+                .torrents_with_minhash_bands(terms, visible, limit, &cancel)
+                .unwrap()
+        };
+        // The hidden torrent (id 7) is never found, counted or flagged.
+        assert_eq!(find(&a, &visible, 10), (vec![1, 3, 5], false));
+        assert_eq!(find(&a[..1], &visible, 10), (vec![1, 3, 5], false));
+        let both: Vec<u64> = a.iter().chain(&b).copied().collect();
+        assert_eq!(find(&both, &visible, 10), (vec![1, 2, 3, 4, 5, 6], false));
+        // The newest within the limit, and more said; visibility first,
+        // so the hidden newest never takes a place.
+        assert_eq!(find(&a, &visible, 2), (vec![3, 5], true));
+        assert_eq!(find(&a, &visible, 3), (vec![1, 3, 5], false));
+        assert_eq!(find(&a, &Node::All, 2), (vec![5, 7], true));
+        assert_eq!(find(&[1, 2, 3], &visible, 10), (vec![], false));
+        assert_eq!(find(&[], &visible, 10), (vec![], false));
+        let stopped = crate::CancelToken::new();
+        stopped.cancel();
+        assert!(matches!(
+            index.torrents_with_minhash_bands(&a, &visible, 10, &stopped),
+            Err(Error::Cancelled)
+        ));
+        let spent = crate::CancelToken::new().with_budget(std::time::Duration::ZERO);
+        assert!(matches!(
+            index.torrents_with_minhash_bands(&a, &visible, 10, &spent),
+            Err(Error::OutOfTime)
+        ));
+    }
+
     /// A file index catching up behind the torrent index (recreated):
     /// once its commit is on disk but before its reader reloads, a
     /// search still has the old, empty file snapshot. An extension less
