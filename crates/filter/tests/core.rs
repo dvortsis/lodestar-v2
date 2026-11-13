@@ -93,14 +93,15 @@ fn floor_payload_only_when_specific() {
 }
 
 #[test]
-fn floor_cannot_be_switched_off() {
+fn locked_rules_cannot_be_switched_off() {
     let mut s = Switches::default();
     for r in CoreRule::ALL {
         assert!(s.is_on(r), "{} on by default", r.id());
         assert_eq!(r.floor(), r.action() == Action::Drop);
         assert!(r.action().protective());
         assert_eq!(CoreRule::from_id(r.id()), Some(r));
-        if r.floor() {
+        assert_eq!(r.locked(), r.floor() || r == CoreRule::Cs0a);
+        if r.locked() {
             assert_eq!(s.set(r, false), Err(Locked(r)));
             assert!(s.is_on(r));
         } else {

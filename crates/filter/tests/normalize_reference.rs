@@ -14,8 +14,9 @@ mod reference {
     use lodestar_filter::normalize::Token;
     use lodestar_filter::term_hash;
 
-    /// Tokens kept per text (a name or one file name).
-    pub const MAX_TOKENS: usize = 128;
+    /// Tokens kept per text: the crate's own cap, a bound on memory that
+    /// the texts here don't reach (the reference is verbatim otherwise).
+    pub const MAX_TOKENS: usize = lodestar_filter::normalize::MAX_TOKENS;
     /// Words longer than this (in chars) are kept whole, not split or
     /// re-read: they're hashes or junk.
     const MAX_WORD_CHARS: usize = 32;
@@ -335,7 +336,7 @@ fn theirs(text: &str) -> Vec<Token> {
 
 /// Text built to hit every path: leet digits, `@` and `$`, spelled-out
 /// letters, letter/digit splits, look-alikes, invisible characters, long
-/// words and the token cap.
+/// words and long texts.
 fn texty() -> impl Strategy<Value = String> {
     let piece = prop_oneof![
         "[a-zA-Z]{1,8}",
@@ -357,8 +358,7 @@ fn texty() -> impl Strategy<Value = String> {
 }
 
 /// A path segment: [`texty`], single letters that a spelled-out run
-/// carries over a `/`, a segment long enough to reach the token cap, or
-/// none.
+/// carries over a `/`, a long segment, or none.
 fn segment() -> impl Strategy<Value = String> {
     prop_oneof![
         4 => texty(),
@@ -366,6 +366,22 @@ fn segment() -> impl Strategy<Value = String> {
         1 => "[a-z]{1,3}( [a-z]{1,3}){60,70}",
         1 => Just(String::new()),
     ]
+}
+
+/// Every character, alone and inside a word, reads as the reference
+/// reads it, through one tokenizer whose cached characters keep changing
+/// (a character's slot is shared with others far apart).
+#[test]
+fn every_character_reads_as_the_reference() {
+    let mut ours = Tokenizer::default();
+    let mut theirs = reference::Tokenizer::default();
+    for c in (0x80..=0x10FFFF).filter_map(char::from_u32) {
+        let text = format!("a{c}b {c} x");
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        ours.text(&text, &mut a);
+        theirs.text(&text, &mut b);
+        assert_eq!(a, b, "U+{:04X}", c as u32);
+    }
 }
 
 proptest! {
@@ -407,7 +423,7 @@ proptest! {
     /// Paths read in one pass, each folder once, give every path the
     /// tokens of its joined text: single letters and look-alikes on
     /// either side of a `/`, more folders than are remembered, paths of
-    /// one segment and of none, and texts past the token cap.
+    /// one segment and of none, and long texts.
     #[test]
     fn paths_read_as_their_joined_text(
         folders in prop::collection::vec(prop::collection::vec(segment(), 0..4), 1..8),

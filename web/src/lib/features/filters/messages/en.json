@@ -198,6 +198,7 @@
 	"filters_queue_reveal": "Reveal name",
 	"filters_queue_release": "Release",
 	"filters_queue_release_title": "Release this torrent",
+	"filters_queue_too_large": "Too large to judge",
 	"filters_queue_fp": "False positive",
 	"filters_queue_fp_title": "Mark as a false positive",
 	"filters_queue_confirm": "Confirm as abuse",

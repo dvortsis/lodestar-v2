@@ -626,6 +626,9 @@ impl Engine {
         }
         let clock = Clock::new(now);
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
+        if let Some(v) = self.unreadable(&doc) {
+            return (v, None);
+        }
         let correction = self.class_rules.decide(&doc);
         let as_adult = correction == Some(true) && item.content_type != ContentType::Adult;
         // An always-adult source's find is read as Adult unless detection
@@ -638,7 +641,7 @@ impl Engine {
         let floor_decided = |v: &Verdict| {
             v.decision
                 .as_ref()
-                .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.floor()))
+                .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.locked()))
         };
         let at = AtCommit::default();
         let (v, found, adult) = if adult_next {
@@ -694,6 +697,9 @@ impl Engine {
             return (v, Vec::new());
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
+        if let Some(v) = self.unreadable(&doc) {
+            return (v, Vec::new());
+        }
         self.judge_doc(
             item,
             facts,
@@ -789,6 +795,9 @@ impl Engine {
             return (v, None);
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
+        if let Some(v) = self.unreadable(&doc) {
+            return (v, None);
+        }
         let correction = self.class_rules.decide(&doc);
         let clock = Clock::new(now);
         let v = self
@@ -826,6 +835,9 @@ impl Engine {
         }
         let clock = Clock::new(now);
         let doc = Doc::new(item, Some(facts)).with_near(self.rules.near_terms());
+        if let Some(v) = self.unreadable(&doc) {
+            return v;
+        }
         let correction = self.class_rules.decide(&doc);
         let adult_next =
             (adult || correction == Some(true)) && item.content_type != ContentType::Adult;
@@ -921,6 +933,17 @@ impl Engine {
         stricter(v, as_adult)
     }
 
+    /// CS-0a's verdict, final as the floor's is, where the core can't read
+    /// the torrent within its budget: decided before any entry, rule or
+    /// pack reads it. Reads the name and paths once, metered; the core
+    /// and keyword entries reuse that read.
+    fn unreadable(&self, doc: &Doc) -> Option<Verdict> {
+        doc.too_large().then(|| Verdict {
+            decision: Some(self.core.too_large_hit().into()),
+            shadow: Vec::new(),
+        })
+    }
+
     /// The torrent read as Adult, for a judgment that reads it so after
     /// the reading as found, on `doc`: its floor, judged as
     /// [`Engine::judge`] judges it first, and where that doesn't decide, a
@@ -977,6 +1000,9 @@ impl Engine {
             .zip(adult_class.as_ref())
             .map(|(f, class)| Facts { class, ..*f });
         let doc = Doc::new(&adult_item, adult_facts.as_ref()).with_near(self.rules.near_terms());
+        if let Some(v) = self.unreadable(&doc) {
+            return v;
+        }
         self.judge_doc(
             &adult_item,
             adult_facts.as_ref(),
@@ -1861,12 +1887,7 @@ mod tests {
         now: i64,
     ) -> (bool, Vec<(u64, String)>, Vec<u32>) {
         let texts: Vec<Vec<crate::normalize::Token>> = std::iter::once(item.name.to_owned())
-            .chain(
-                item.files
-                    .iter()
-                    .take(crate::MAX_FILES)
-                    .map(|f| f.path.join("/")),
-            )
+            .chain(item.files.iter().map(|f| f.path.join("/")))
             .map(|t| {
                 let mut out = Vec::new();
                 crate::normalize::Tokenizer::default().text(&t, &mut out);

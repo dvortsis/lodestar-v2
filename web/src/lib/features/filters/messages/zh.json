@@ -108,6 +108,7 @@
 	"filters_queue_reveal": "显示名称",
 	"filters_queue_release": "放行",
 	"filters_queue_release_title": "放行此种子",
+	"filters_queue_too_large": "过大，无法判断",
 	"filters_queue_fp": "误报",
 	"filters_queue_fp_title": "标记为误报",
 	"filters_queue_confirm": "确认为虐待内容",

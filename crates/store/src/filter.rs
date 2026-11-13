@@ -784,6 +784,19 @@ impl Store {
         Ok(out)
     }
 
+    /// The rule `hash` is quarantined under, as stored (an adult hold's
+    /// with its suffix), if it's quarantined.
+    pub fn quarantine_rule(&self, hash: &[u8; 20]) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT rule FROM quarantine WHERE hash = ?1",
+                [&hash[..]],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     /// Whether `hash` is held (quarantined or tombstoned) as an adult hold.
     pub fn adult_hold(&self, hash: &[u8; 20]) -> Result<bool> {
         Ok(self

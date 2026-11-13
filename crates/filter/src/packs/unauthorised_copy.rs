@@ -262,7 +262,7 @@ impl Ctx<'_> {
     /// An Internet Archive item: its `<id>_meta.xml` and `<id>_files.xml`,
     /// with the same id, at any depth.
     ///
-    /// Linear in the files (at most [`crate::MAX_FILES`]): a torrent of
+    /// Linear in the files (at most [`crate::MATCH_FILES`]): a torrent of
     /// many `_meta.xml` names costs one pass and one set, never a pass
     /// per name, and only a name with one of the two endings is copied.
     fn internet_archive(&self) -> bool {

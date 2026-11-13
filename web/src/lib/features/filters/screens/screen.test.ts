@@ -286,3 +286,23 @@ describe('adding a rule', () => {
 		expect(screen.queryByTestId('change-password')).toBeNull();
 	});
 });
+
+describe('too large to judge', () => {
+	const HL = 'c'.repeat(40);
+	const held = { hash: HL, rule: 'CS-0a', at: 1, expires_at: 2, sealed: true, adult_hold: false };
+	it('says so, and is released only with the warning and the password', async () => {
+		setup();
+		net.on('GET /filters/queue', {
+			body: { ...queue, quarantine: [held, ...queue.quarantine] }
+		});
+		const label = await screen.findByTestId(`queue-too-large-${HL}`);
+		expect(label.textContent).toBe('Too large to judge');
+		expect(screen.queryByTestId(`queue-fp-${HL}`)).toBeNull();
+		expect(screen.getByTestId(`queue-fp-${H}`)).toBeTruthy();
+		expect(screen.queryByTestId(`queue-too-large-${H}`)).toBeNull();
+		job(weakening());
+		await fireEvent.click(screen.getByTestId(`queue-release-${HL}`));
+		await screen.findByTestId('change-password');
+		expect(net.to('/filters/apply')).toHaveLength(0);
+	});
+});

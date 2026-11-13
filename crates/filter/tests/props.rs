@@ -2450,3 +2450,246 @@ mod reuse {
         );
     }
 }
+
+/// The runner's speed against the reference, as [`budget`] reads it: the
+/// fastest of seven [`calibrate`] passes over the budget's set, per
+/// torrent, ÷ [`CALIB_REF_NS`].
+fn runner_speed() -> f64 {
+    use std::hash::BuildHasher;
+    let set = torrents(512);
+    let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+    let common: Vec<u64> = COMMON.iter().map(|w| hasher.hash_one(*w)).collect();
+    let mut fastest = f64::MAX;
+    for _ in 0..7 {
+        let t = Instant::now();
+        for (name, files) in &set {
+            std::hint::black_box(calibrate(name, files, &common));
+        }
+        fastest = fastest.min(t.elapsed().as_nanos() as f64 / set.len() as f64);
+    }
+    fastest / CALIB_REF_NS
+}
+
+/// The core's worst case at its work budget (§20.8, CS-0a): for each of
+/// the costliest inputs found, the largest torrent the core still judges
+/// whole, judged. Every one takes at most [`WORST_CASE_MS`] on the
+/// reference runner (3-10 ms measured on the build VM). The whole
+/// engine's time on the
+/// same torrents is reported, not held: the packs and your rules read at
+/// most [`lodestar_filter::MATCH_FILES`] files.
+///
+/// The shapes: ASCII that tokenizes densely or into words each read anew;
+/// spelled-out letters; long words; characters that miss the tokenizer's
+/// cache (a script's distinct characters, characters sharing a slot);
+/// characters that decompose into many; marks, invisible and combining
+/// characters; many tiny files, deep paths, long or alternating folders;
+/// and typical Latin, CJK and Arabic seasons for scale.
+#[test]
+#[ignore]
+fn budget_worst_case() {
+    use lodestar_filter::{BUDGET, Engine, PackSwitches, read_cost};
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    fn words(set: &[char], len: usize, bytes: usize, seed: u64, sep: &str) -> String {
+        let mut r = Rng(seed | 1);
+        let mut s = String::new();
+        while s.len() < bytes {
+            for _ in 0..len {
+                s.push(set[r.next() as usize % set.len()]);
+            }
+            s.push_str(sep);
+        }
+        s
+    }
+    fn each(n: usize, f: impl Fn(usize) -> Vec<String>) -> Vec<FileInfo> {
+        (0..n).map(|i| FileInfo::new(f(i), 1 << 20)).collect()
+    }
+    type Shape = Box<dyn Fn(usize) -> Vec<FileInfo>>;
+    let ascii: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+    let cjk: Vec<char> = ('\u{4E00}'..='\u{9FA5}').collect();
+    let arabic: Vec<char> = ('\u{0627}'..='\u{064A}').collect();
+    // Characters 2,048 apart share a slot of the tokenizer's cache.
+    let shared: Vec<char> = (0..64)
+        .filter_map(|k| char::from_u32(0x4E00 + k * 2048))
+        .filter(|c| c.is_alphabetic())
+        .collect();
+    let expanding: Vec<char> = [0xFDFA, 0xFDFA + 2048, 0xFDFA + 4096, 0xFDFA - 2048]
+        .into_iter()
+        .filter_map(char::from_u32)
+        .collect();
+    let words_of = |set: Vec<char>, len: usize, sep: &'static str| -> Shape {
+        Box::new(move |n| each(n, |i| vec![words(&set, len, 4_000, i as u64 + 7, sep)]))
+    };
+    let shapes: Vec<(&str, Shape)> = vec![
+        (
+            "dense ASCII",
+            Box::new(|n| each(n, |_| vec!["a1 ".repeat(1_300)])),
+        ),
+        ("ASCII words read anew", words_of(ascii.clone(), 2, " ")),
+        (
+            "longer ASCII words read anew",
+            words_of(ascii.clone(), 4, " "),
+        ),
+        ("long words", words_of(ascii, 70, " ")),
+        (
+            "spelled out",
+            Box::new(|n| each(n, |_| vec!["a b c d 1 ".repeat(400)])),
+        ),
+        ("distinct CJK", words_of(cjk, 1, " ")),
+        ("characters sharing a slot", words_of(shared, 3, " ")),
+        ("distinct Arabic", words_of(arabic, 2, " ")),
+        (
+            "expanding",
+            Box::new(|n| each(n, |_| vec!["\u{FDFA}".repeat(1_300)])),
+        ),
+        ("expanding, sharing a slot", words_of(expanding, 1, "")),
+        (
+            "marks",
+            Box::new(|n| each(n, |_| vec!["a\u{0600}b\u{0600}".repeat(500)])),
+        ),
+        (
+            "invisible",
+            Box::new(|n| each(n, |_| vec!["a\u{200B}".repeat(1_000)])),
+        ),
+        (
+            "combining",
+            Box::new(|n| each(n, |_| vec![format!("a{}", "\u{0301}".repeat(1_999))])),
+        ),
+        (
+            "tiny files",
+            Box::new(|n| each(n, |i| vec![format!("{}", i % 10)])),
+        ),
+        (
+            "deep paths",
+            Box::new(|n| each(n, |i| (0..64).map(|j| format!("{}", (i + j) % 7)).collect())),
+        ),
+        (
+            "long folder",
+            Box::new(|n| each(n, |i| vec!["folder word ".repeat(330), format!("{i}")])),
+        ),
+        (
+            "alternating folders",
+            Box::new(|n| each(n, |i| vec![format!("dir {} word", i % 5), format!("{i}")])),
+        ),
+        (
+            "typical Latin",
+            Box::new(|n| {
+                each(n, |i| {
+                    vec![
+                        "Show Name Season 1 1080p WEB-DL".into(),
+                        format!(
+                            "Show.Name.S01E{i:04}.Episode.Title.1080p.WEB-DL.DDP5.1.x264-GRP.mkv"
+                        ),
+                    ]
+                })
+            }),
+        ),
+        (
+            "typical CJK",
+            Box::new(|n| {
+                each(n, |i| {
+                    vec![
+                        "日本語 映画 第一話".into(),
+                        format!("東京 物語 第{i}話 中文 字幕 高清 版本 日本語.mkv"),
+                    ]
+                })
+            }),
+        ),
+        (
+            "typical Arabic",
+            Box::new(|n| {
+                each(n, |i| {
+                    vec![
+                        "مرحبا بالعالم الموسم".into(),
+                        format!("الحلقة {i} فيلم ترجمة عربية كاملة مرحبا.mkv"),
+                    ]
+                })
+            }),
+        ),
+    ];
+    let speed = runner_speed();
+    println!("calibration: {speed:.2}× the reference's time");
+    let core = Core::new(
+        Lists::shipped().unwrap(),
+        CsList::default(),
+        Switches::default(),
+    );
+    let mut engine = Engine::new(core.clone());
+    engine.packs = PackSwitches::all();
+    let item = |files: &[FileInfo]| -> (String, Vec<FileInfo>) { ("Title".into(), files.to_vec()) };
+    let mut over = Vec::new();
+    let mut worst = 0f64;
+    for (label, shape) in &shapes {
+        // The largest torrent of this shape the core still reads whole.
+        let fits = |n: usize| {
+            let files = shape(n);
+            read_cost(&Item {
+                hashes: &[],
+                name: "Title",
+                files: &files,
+                content_type: ContentType::Video,
+            })
+            .is_some()
+        };
+        let (mut lo, mut hi) = (1usize, 2usize);
+        while fits(hi) {
+            lo = hi;
+            hi *= 2;
+        }
+        while hi - lo > (lo / 64).max(1) {
+            let mid = (lo + hi) / 2;
+            if fits(mid) { lo = mid } else { hi = mid }
+        }
+        let (name, files) = item(&shape(lo));
+        let it = Item {
+            hashes: &[],
+            name: &name,
+            files: &files,
+            content_type: ContentType::Video,
+        };
+        let units = read_cost(&it).expect("within the budget");
+        let time = |f: &dyn Fn()| {
+            f();
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let t = Instant::now();
+                f();
+                best = best.min(t.elapsed().as_secs_f64() * 1e3);
+            }
+            best
+        };
+        let core_ms = time(&|| assert!(std::hint::black_box(core.verdict(&it)).is_none()));
+        let engine_ms = time(&|| {
+            std::hint::black_box(engine.judge(&it, None, 0));
+        });
+        let scaled = core_ms / speed;
+        worst = worst.max(scaled);
+        println!(
+            "{label}: {} files, {:.2}M of {:.2}M units; core {core_ms:.2} ms ({scaled:.2} ms on the reference runner), engine {engine_ms:.2} ms",
+            files.len(),
+            units as f64 / 1e6,
+            BUDGET as f64 / 1e6,
+        );
+        if scaled > WORST_CASE_MS {
+            over.push(format!("{label}: {scaled:.2} ms"));
+        }
+    }
+    println!("worst: {worst:.2} ms on the reference runner");
+    assert!(
+        over.is_empty(),
+        "over {WORST_CASE_MS} ms on the reference runner at the budget: {over:?}"
+    );
+}
+
+/// [`budget_worst_case`]'s bound, generous of what was measured (about
+/// 9 ms on the build VM at worst) so that a noisy runner passes, and a
+/// cost the meter stops counting fails.
+const WORST_CASE_MS: f64 = 15.0;

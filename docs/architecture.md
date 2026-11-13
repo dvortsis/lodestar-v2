@@ -3460,6 +3460,7 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 | **CS-7a** | Sequential image/video sets + any CS-2/CS-4 signal at half threshold | quarantine | medium | |
 | **CS-8a** | Same payload signature as an item in your CS-1 list (catches renamed reposts). It applies only when the payload is specific: ≥ 50 MB, or ≥ 2 files of distinctive sizes | drop | ~none | 🔒 |
 | **CS-9a** | New items from a publisher or source behind a CS-1 item → quarantined for review | quarantine | low | |
+| **CS-0a** | The torrent is too large to judge within the core's work budget (§20.8) | quarantine | ~none | |
 
 **As built (first slice, `crates/filter`):**
 - **Implemented:** CS-1a/1b, CS-8a, CS-2a, CS-3a/3b, CS-4a and CS-5a/5b, plus CSX-2 (name evidence only, outside Adult), CSX-3 and CSX-4.

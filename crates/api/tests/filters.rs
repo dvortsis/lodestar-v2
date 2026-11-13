@@ -299,6 +299,48 @@ async fn the_floor_is_locked() {
     assert!(body["assessment"]["neutralize"].is_object());
 }
 
+/// CS-0a, a torrent too large to judge, is locked like the floor: on
+/// always, no exception, shown as locked; releasing what it holds needs
+/// the warning and the password, and says it's held again when next seen.
+#[tokio::test]
+async fn too_large_to_judge_is_locked() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let change = json!({ "op": "core_switch", "rule": "CS-0a", "on": false });
+    let (status, body) = apply(&f, &c, change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "add_exception", "rule": "CS-0a", "hashes": ["aa".repeat(20)] }),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let o = overview(&f, &c).await;
+    let row = o["core"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "CS-0a")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (&row["on"], &row["floor"], &row["action"]),
+        (&json!(true), &json!(true), &json!("quarantine"))
+    );
+    // Releasing a held one.
+    let hash = [0x5a; 20];
+    hold(&f, hash, "CS-0a", Held::Quarantine, 1_000);
+    let release = json!({ "op": "release", "hash": "5a".repeat(20) });
+    let (status, body) = apply(&f, &c, release.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    let w = body["assessment"]["warning"].as_str().unwrap();
+    assert!(w.contains("too large") && w.contains("held again"), "{w}");
+    let (status, body) = apply(&f, &c, release, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 /// Stored filter text never uses `..<`: a binary one release back can't
 /// parse it and would skip the rule, loosening filtering (FX-6-I9).
 #[tokio::test]

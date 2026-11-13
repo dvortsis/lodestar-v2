@@ -37,13 +37,13 @@ pub mod strictness;
 mod work;
 
 pub use crate::core::{
-    Action, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked, MAX_FILES,
-    Origin, Switches,
+    Action, BUDGET, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked,
+    MAX_FILES, Origin, Switches, read_cost, too_large,
 };
 pub use engine::{Decision, Engine, Handle, ListLayer, RuleRef, Trail, Verdict};
 pub use hash::{TermSet, TermSetError, term_hash};
 pub use held::{HeldSet, Pending};
-pub use matcher::{Doc, Facts};
+pub use matcher::{Doc, Facts, MATCH_FILES};
 pub use packs::{Pack, PackRule, PackSwitches};
 pub use payload::{PayloadSig, SPECIFIC_BYTES, SPECIFIC_FILES, payload_sig};
 pub use prefilter::RuleList;
