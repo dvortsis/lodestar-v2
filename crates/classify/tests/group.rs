@@ -12,6 +12,10 @@
 //! - unrelated scene releases (volumes, a last part, a sample): the
 //!   volume size is never signed, so at most 1 % of pairs share a band
 //!   and no band term is carried by more than 1 % of them;
+//! - split archives with exactly two volumes (the known limit): at most
+//!   0.5 % of pairs and 6 % of the class on one term for 50 MB volumes,
+//!   2.5 % and 15 % for 4 GiB FAT32 parts (measured 0.22 % / 4.4 % and
+//!   1.2 % / 11 % on fixed seeds);
 //! - Jaccard 0.5: at most 35 % become candidates (theory 23 %), and
 //!   none of them is confirmed ([`similar`] is exact);
 //! - Jaccard 0.8: at least 65 % are found (theory 76 %);
@@ -175,6 +179,55 @@ fn unrelated_scene_releases_rarely_share_a_band() {
     );
     let most = by_term.values().copied().max().unwrap_or(0);
     assert!(most <= n / 100, "one band term is carried by {most} of {n}");
+}
+
+/// Shares of unrelated pairs sharing a band, and of releases on the
+/// most common band term, for `n` releases built by `release`.
+fn band_crowding(n: usize, mut release: impl FnMut(&mut Rng) -> Vec<u64>, seed: u64) -> (f64, f64) {
+    let mut rng = Rng(seed);
+    let mut by_term: HashMap<u64, usize> = HashMap::new();
+    let releases: Vec<Vec<u64>> = (0..n)
+        .map(|_| {
+            let terms = band_terms(&release(&mut rng));
+            assert_eq!(terms.len(), BANDS, "signed");
+            for t in &terms {
+                *by_term.entry(*t).or_default() += 1;
+            }
+            terms
+        })
+        .collect();
+    let (mut pairs, mut shared) = (0usize, 0usize);
+    for i in 0..n {
+        for j in i + 1..n {
+            pairs += 1;
+            shared += usize::from(releases[i].iter().any(|t| releases[j].contains(t)));
+        }
+    }
+    let most = by_term.values().copied().max().unwrap_or(0);
+    (shared as f64 / pairs as f64, most as f64 / n as f64)
+}
+
+/// The known limit (the runner's review of #804, O1): a size kept with
+/// at most `MAX_COPIES` copies is still one MinHash element the whole
+/// class shares, so exactly-two-volume split archives can still gather
+/// on one band term. A general MinHash property of a frequent element
+/// in small sets, not B1's every-release case; when it fills a window,
+/// Siblings says `truncated`. These bounds record it, so a change that
+/// makes it worse shows.
+#[test]
+fn two_volume_split_archives_crowd_one_term_within_a_recorded_bound() {
+    let volume = |v: u64| {
+        move |rng: &mut Rng| {
+            let mut s = vec![v, v];
+            s.push(v / 4 + rng.next() % (v / 2)); // the last part
+            s.push(v / 8 + rng.next() % (v / 4)); // a sample or extra
+            s
+        }
+    };
+    let (pairs, top) = band_crowding(2_000, volume(50_000_000), 10);
+    assert!(pairs <= 0.005 && top <= 0.06, "50 MB: {pairs} {top}");
+    let (pairs, top) = band_crowding(2_000, volume((4 << 30) - 1), 11);
+    assert!(pairs <= 0.025 && top <= 0.15, "FAT32: {pairs} {top}");
 }
 
 #[test]

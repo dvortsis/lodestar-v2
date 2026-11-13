@@ -2793,6 +2793,10 @@ mod population_tests {
         assert_eq!(except(&a, sig(0), 10), (vec![], false));
         assert_eq!(except(&both, sig(0), 1), (vec![6], true));
         assert_eq!(except(&a, sig(1), 10), (vec![1, 3, 5], false));
+        // Before the limit, not after: the window holds exactly the rest
+        // (a filter after it would give ([4, 6], true) and ([], true)).
+        assert_eq!(except(&both, sig(0), 3), (vec![2, 4, 6], false));
+        assert_eq!(except(&both, sig(1), 1), (vec![5], true));
         let stopped = crate::CancelToken::new();
         stopped.cancel();
         assert!(matches!(
