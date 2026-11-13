@@ -180,7 +180,13 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   2. Runs the analyzer and the allow-list scrubber over the block's evidence, in a container with no network.
   3. The control plane scrubs the result again, and stores it only in the private evidence bucket, as `fleet/<run id>/copy-off-<vm>.json`.
   4. Ends the block: the watcher stops first, then the host guard, the marker and the Docker proxy go.
-- **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket; host guard held`. If the line ends with `not clean: damaged, the host guard couldn't be held`, the block isn't clean. A `host_guard_drops <n>` means the guard went missing and was put back. `host guard not reported` means the evidence is from before the guard fields existed.
+- **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket; host guard held`.
+- **The host guard's state** ends the line, in this order. Any part can be missing.
+  1. `not clean: damaged, the host guard couldn't be held`, or `damaged not reported`. The first means the block isn't clean.
+  2. `host_guard_drops <n>`: the guard went missing <n> times and was put back. `host_guard_drops not reported` means that count didn't come back.
+  - Instead of these parts, the line ends with `host guard held` when both say nothing went wrong.
+  - It ends with `host guard not reported` when the evidence is from before the guard fields existed.
+  - Anything "not reported" is never a clean block. Treat it as unknown.
 - **Fails:**
   - **`failed: block_running, copy_off`:** a collector is still running, so the segment isn't over.
   - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again.
@@ -293,7 +299,7 @@ For Worker, use `"worker"` in place of `"main"`. Check the address against Cloud
    - `sudo cat /var/lib/lodestar-block/notes` gains a line with the segment number. That note went into the segment's evidence: one per 30-second burst.
 5. **End the segment and the block:** `sudo docker stop -t 120 lodestar-collector-<segment>`.
    - The collector finishes with reason `operator_stop`, and stops Lodestar first. That takes up to a minute; `-t 120` gives it the time, where Docker's default of 10 s would kill it part-way.
-   - Then log out, and ask for `run copy-off <vm>`. It should answer `done; <n> ok; segments_copied <k>; evidence stored in the private bucket`.
+   - Then log out, and ask for `run copy-off <vm>`. It should answer `done; <n> ok; segments_copied <k>; evidence stored in the private bucket; host guard held`. Any other guard state reads as in §3.7.
    - A `vm-status` afterwards shows no `block_segment`. The stopped segment's verdict is in the evidence bucket copy.
    - Tell the runner it can resume that VM's commands.
 6. **Afterwards:** gluetun stays stopped.
