@@ -26,7 +26,7 @@ This closes the gap that #825 recorded (`2026-11-13-X-gluetun-templates-hostfile
   - a child dataset inside the data folder;
   - a data folder mapped by its pool path, with the companion-files folder mapped by the share (fresh review).
 - **Mounts:**
-  - of two at one point, the one listed last (on top) counts;
+  - of two at one point, the one listed last (on top) counts. That follows the table's order, not mount and parent ids, which is enough here: Docker refuses two mounts at one target, so `docker run` can't reach this case;
   - anything mounted *inside* `/companions` refuses (`nested`);
   - a root ending in `//deleted` (an unlinked bind source, such as a replaced `resolv.conf`) is read without the suffix;
   - names that aren't UTF-8 are read with replacement characters. Two different names can only read alike, which refuses, never the reverse.
@@ -39,6 +39,8 @@ This closes the gap that #825 recorded (`2026-11-13-X-gluetun-templates-hostfile
   - a path isn't absolute and clean (no empty, `.` or `..` component).
 
   The same kind covers a `/companions` that isn't a mount of its own, or is a pseudo one, and a data folder whose mount isn't listed. It never assumes safe.
+- **The configured paths** (`/companions`, the data folder) are normalised first, so `/data/` and `//data` read as `/data`, as Unraid templates often write them. A relative path or `..` still refuses. mountinfo's own fields stay strict.
+- **Without the built-in catalogue,** privdrop can't run the companion-folder part, so it refuses with `mounts` and writes nothing.
 - **The log:** both kinds go to the existing `system.companions_dir_left` event, which records the kind only. No new event, code or message was added. The guide tells the user to read that line.
 
 ## What's still not detected

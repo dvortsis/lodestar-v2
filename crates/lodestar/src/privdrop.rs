@@ -422,6 +422,10 @@ mod imp {
                 &dir,
                 geteuid().as_raw(),
                 &crate::companions::post_rules::read_mountinfo(),
+                lodestar_companions::builtin()
+                    .ok()
+                    .map(crate::companions::companion_names)
+                    .as_deref(),
             ));
             report.data_dir = Some(dir);
         }
@@ -744,6 +748,7 @@ mod imp {
         data: &Path,
         owner: u32,
         mountinfo: &str,
+        names: Option<&[&str]>,
     ) -> Line {
         use crate::companions::post_rules::{self, Found};
         let left = |kind: &'static str, why: String| Line::Companions {
@@ -794,10 +799,15 @@ mod imp {
         }
         // Apart from the data folder and every other folder mounted here,
         // on the host: a nested mount can't be seen by path or inode.
-        let names = lodestar_companions::builtin()
-            .map(crate::companions::companion_names)
-            .unwrap_or_default();
-        if let Err((kind, why)) = post_rules::mounts_apart(mountinfo, dir, data, &names) {
+        // Without the catalogue the companion-folder check can't run:
+        // refuse rather than skip it.
+        let Some(names) = names else {
+            return left(
+                "mounts",
+                "the companion catalogue couldn't be loaded".into(),
+            );
+        };
+        if let Err((kind, why)) = post_rules::mounts_apart(mountinfo, dir, data, names) {
             return left(kind, why);
         }
         // Nothing but `gluetun`.
@@ -1275,7 +1285,8 @@ mod tests {
                 (holding, "foreign", "holds data"),
                 (share, "foreign", "holds qbittorrent"),
             ] {
-                let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data));
+                let line =
+                    save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]));
                 assert_eq!(kind(&line), Some(want), "{}: {line}", dir.display());
                 let text = line.to_string();
                 assert!(
@@ -1284,6 +1295,12 @@ mod tests {
                 );
             }
             assert!(!t.join("missing").exists(), "never created");
+            // Without the catalogue, nothing is written.
+            let ok = t.join("ok");
+            md(&ok).unwrap();
+            let line = save_companions_rules(&ok, &data, me(), &mounted(&ok, &data), None);
+            assert_eq!(kind(&line), Some("mounts"), "{line}");
+            assert!(!ok.join("gluetun").exists());
             assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0);
             // Writable by others, or someone else's: its gluetun could be
             // swapped after start-up, so nothing is written.
@@ -1291,13 +1308,18 @@ mod tests {
             let open = t.join("open");
             md(&open).unwrap();
             std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
-            let line = save_companions_rules(&open, &data, me(), &mounted(&open, &data));
+            let line = save_companions_rules(&open, &data, me(), &mounted(&open, &data), Some(&[]));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert!(!open.join("gluetun").exists());
             let mine = t.join("mine");
             md(&mine).unwrap();
-            let line =
-                save_companions_rules(&mine, &data, me().wrapping_add(1), &mounted(&mine, &data));
+            let line = save_companions_rules(
+                &mine,
+                &data,
+                me().wrapping_add(1),
+                &mounted(&mine, &data),
+                Some(&[]),
+            );
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert!(!mine.join("gluetun").exists());
             let loose = t.join("loose");
@@ -1307,7 +1329,8 @@ mod tests {
                 std::fs::Permissions::from_mode(0o775),
             )
             .unwrap();
-            let line = save_companions_rules(&loose, &data, me(), &mounted(&loose, &data));
+            let line =
+                save_companions_rules(&loose, &data, me(), &mounted(&loose, &data), Some(&[]));
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert_eq!(std::fs::read_dir(loose.join("gluetun")).unwrap().count(), 0);
             // A gluetun folder someone else owns is left, untouched.
@@ -1318,6 +1341,7 @@ mod tests {
                 &data,
                 me().wrapping_add(1),
                 &mounted(&theirs, &data),
+                Some(&[]),
             );
             assert_eq!(kind(&line), Some("owner"), "{line}");
             assert_eq!(
@@ -1341,7 +1365,7 @@ mod tests {
             let file = dir.join("gluetun/post-rules.txt");
             let mode =
                 |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
-            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data));
+            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]));
             assert_eq!(kind(&line), None, "{line}");
             assert!(line.to_string().contains("post-rules saved"), "{line}");
             assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
@@ -1349,11 +1373,13 @@ mod tests {
             assert_eq!(mode(&dir.join("gluetun")), 0o755);
             assert_eq!(owner(&file).0, me());
             assert!(crate::companions::post_rules::saved_by(&dir, me()));
-            let again = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data)).to_string();
+            let again = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]))
+                .to_string();
             assert!(again.contains("already in place"), "{again}");
             // An upgrade that changes the rules: the old file is replaced.
             wf(&file, "old rules\n").unwrap();
-            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data)).to_string();
+            let line = save_companions_rules(&dir, &data, me(), &mounted(&dir, &data), Some(&[]))
+                .to_string();
             assert!(line.contains("post-rules saved"), "{line}");
             assert_eq!(std::fs::read_to_string(&file).unwrap(), rules);
         }

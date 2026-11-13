@@ -2364,10 +2364,24 @@ pub(crate) mod post_rules {
         names: &[&str],
     ) -> Result<(), (&'static str, String)> {
         let mounts = parse_mountinfo(mountinfo).map_err(|why| ("mounts", why))?;
+        // The configured paths, normalised: `/data/` and `//data` are
+        // `/data`. mountinfo's own fields stay strict.
         let path = |p: &Path| {
-            p.to_str()
-                .and_then(components)
-                .ok_or(("mounts", format!("{} isn't a clean path", p.display())))
+            use std::path::Component;
+            let bad = || ("mounts", format!("{} isn't a clean path", p.display()));
+            let mut parts = p.components();
+            if parts.next() != Some(Component::RootDir) {
+                return Err(bad());
+            }
+            let mut out = Vec::new();
+            for c in parts {
+                match c {
+                    Component::Normal(n) => out.push(n.to_str().ok_or_else(bad)?.to_owned()),
+                    Component::CurDir => {}
+                    _ => return Err(bad()),
+                }
+            }
+            Ok(out)
         };
         let c = path(companions)?;
         let d = path(data)?;
@@ -4675,6 +4689,32 @@ mod tests {
             ]);
             assert_eq!(apart(&t, "/companions", "/data"), Err("nested"), "{root}");
         }
+    }
+
+    /// The configured paths may end in `/` or repeat it, as Unraid
+    /// templates often write them.
+    #[cfg(unix)]
+    #[test]
+    fn configured_paths_with_trailing_or_repeated_slashes_are_read() {
+        let apart_t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar-companions", "/companions", "ext4"),
+        ]);
+        let nested_t = table(&[
+            ("8:1", "/srv/lodestar", "/data", "ext4"),
+            ("8:1", "/srv/lodestar/c", "/companions", "ext4"),
+        ]);
+        for (c, d) in [
+            ("/companions/", "/data/"),
+            ("//companions", "/data//"),
+            ("/companions/.", "/./data"),
+        ] {
+            assert_eq!(apart(&apart_t, c, d), Ok(()), "{c} {d}");
+            assert_eq!(apart(&nested_t, c, d), Err("nested"), "{c} {d}");
+        }
+        // A relative or `..` path is still refused.
+        assert_eq!(apart(&apart_t, "companions", "/data"), Err("mounts"));
+        assert_eq!(apart(&apart_t, "/companions", "/x/../data"), Err("mounts"));
     }
 
     #[cfg(unix)]
