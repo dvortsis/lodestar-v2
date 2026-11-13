@@ -7827,6 +7827,11 @@
       "id": "X-route-change-audit",
       "note": "rv-805 I1: one small slice adding a route-change audit log event (id and route kind only) for sources and companions together; touches five shared files.",
       "added": "2026-11-13T00:46Z"
+    },
+    {
+      "id": "rv-792-O4",
+      "note": "#792 X-win-soak-attach-proc-hash merged with rv-792 O4 deferred (process start-time / pending-rename check); see reviews/rv-792-*.md. Fold into a later Windows soak tooling slice.",
+      "added": "2026-11-13T00:49Z"
     }
   ],
   "main_health": [
