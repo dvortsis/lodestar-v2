@@ -183,13 +183,13 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
 - **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket; host guard held`.
 - **The host guard's state** ends the line, in this order. Any part can be missing.
   1. `not clean: damaged, the host guard couldn't be held`, or `damaged not reported`. The first means the block isn't clean.
-  2. `host_guard_drops <n>`: the guard went missing <n> times and was put back. `host_guard_drops not reported` means that count didn't come back.
+  2. `host_guard_drops <n>`: the guard went missing <n> times and was put back. Any <n> above 0 means the block isn't clean either, as in §3.6. `host_guard_drops not reported` means that count didn't come back.
   - Instead of these parts, the line ends with `host guard held` when both say nothing went wrong.
   - It ends with `host guard not reported` when the evidence is from before the guard fields existed.
   - Anything "not reported" is never a clean block. Treat it as unknown.
 - **Fails:**
   - **`failed: block_running, copy_off`:** a collector is still running, so the segment isn't over.
-  - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again.
+  - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again. This line also ends with the host guard's state, which reads as above.
 - **Raw logs, databases, executables and the password never leave the VM.** They're destroyed with it.
 
 ### 3.8 Owner cleanup (`/fleet down` is dry-run only)

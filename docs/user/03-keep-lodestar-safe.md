@@ -159,9 +159,9 @@ To undo it, remove the Path and the Variable from gluetun, select **Apply**, and
 
 With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends to the internet goes around the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network.
 
-**When gluetun stops or restarts,** the VPN server can keep sending packets for the old connection for a short while. They now reach your server itself, not gluetun. Your server may answer each with an ICMP message, "port unreachable". ICMP is the kind of network message `ping` uses. These answers leave your home connection directly, outside the VPN.
-- **What they reveal:** only that the old connection has gone. They go to the VPN server, which already knows your home address because the tunnel came from it. Nothing from Lodestar or from your own traffic is in them.
-- **The safe choice is to leave this alone.** You don't need extra firewall rules on your server for it. Many NAS and desktop firewalls already drop such packets. A wrong rule on the server's own firewall can cut you off from it.
+**When gluetun stops or restarts,** the VPN server can keep sending packets for the old connection for a short while. They now reach your server itself, not gluetun. Your server may answer them with an ICMP message, "port unreachable". ICMP is the kind of network message `ping` uses. These answers leave your home connection directly, outside the VPN.
+- **What they reveal:** that your server is on and that the old connection has gone. They go to the VPN server, which already knows your home address because the tunnel came from it. Your internet provider sees only traffic to the VPN server, which it already sees. Nothing readable is in them: only the start of the VPN server's own encrypted packet, sent back to it.
+- **The safe choice is to leave this alone.** You don't need extra firewall rules on your server for it. Many NAS and desktop firewalls already drop such packets. Unraid has no host firewall by default, and the advice is the same there. A wrong rule on the server's own firewall can cut you off from it.
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 
