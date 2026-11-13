@@ -52,6 +52,7 @@ jobs:
       mmap_retention: ${{ steps.c.outputs.mmap_retention }}
       fuzz: ${{ steps.c.outputs.fuzz }}
       soak_tools: ${{ steps.c.outputs.soak_tools }}
+      unraid: ${{ steps.c.outputs.unraid }}
       companion_pins: ${{ steps.c.outputs.companion_pins }}
       infra: ${{ steps.c.outputs.infra }}
       update_manifest: ${{ steps.c.outputs.update_manifest }}
@@ -453,6 +454,21 @@ jobs:
             python -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
           fi
 
+  # The Unraid templates are what users install; a broken one ships unseen
+  # unless the validator and its tests run. Standard library only.
+  unraid-templates:
+    name: unraid templates
+    needs: changes
+    if: needs.changes.outputs.unraid == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python packaging/unraid/validate.py
+      - run: python -m unittest discover -s packaging/unraid -p 'test_*.py' -v
+
   # CMP-13's pin tool decides what a companion pin trusts, so its offline
   # tests (fixture keys made with the runner's gpg, an in-memory network)
   # gate like any other code. Standard library only.
@@ -654,7 +670,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, companion-pins, update-manifest, infra]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, unraid-templates, companion-pins, update-manifest, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:

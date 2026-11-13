@@ -14,6 +14,7 @@ request gets:
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
 - the soak tools' Python tests only if it touches `docs/soak/tools/`;
+- the Unraid template checks only if it touches `packaging/unraid/` (UNRAID below);
 - the companion pin tool's tests only if it touches `tools/companion-pins/`, its
   workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
@@ -86,6 +87,10 @@ COMPANION_PINS = re.compile(
     r"^(tools/companion-pins/|\.github/workflows/companion-pins\.yml$|crates/companions/data/catalogue\.json$"
     r"|crates/companions/src/catalogue\.rs$|crates/lodestar/src/update/check\.rs$)"
 )
+
+# The Unraid templates and their validator. The validator and its tests live beside
+# the templates, so one prefix covers all of them.
+UNRAID = re.compile(r"^packaging/unraid/")
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"
@@ -172,6 +177,7 @@ def main() -> None:
             soak_tools="true",
             companion_pins="true",
             infra="true",
+            unraid="true",
             update_manifest="true",
             web="true",
             e2e="true",
@@ -221,6 +227,7 @@ def main() -> None:
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
     out["companion_pins"] = str(everything or any(COMPANION_PINS.match(f) for f in changed)).lower()
+    out["unraid"] = str(everything or any(UNRAID.match(f) for f in changed)).lower()
     out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     out["update_manifest"] = str(everything or any(UPDATE_MANIFEST.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate
