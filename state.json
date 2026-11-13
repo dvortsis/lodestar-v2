@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T11:59Z",
+  "updated_at": "2026-11-13T12:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8434,6 +8434,11 @@
       "slice": "X-ci-filter-rust-inputs",
       "head": "600cf4be",
       "note": "fresh Opus CHANGES: B1 whitespace split drops paths with spaces (use -z); scope widened (runner) to docs inputs Rust reads; runner delta check then merge"
+    },
+    "831": {
+      "slice": "X-companions-mount-check",
+      "head": "b840d27d",
+      "note": "ready; fresh Opus + security review running; new kinds nested/mounts on system.companions_dir_left go to X-gluetun-hostfile-ui after merge"
     }
   },
   "merged_log": [
@@ -9080,7 +9085,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T11:59Z",
+    "updated": "2026-11-13T12:27Z",
     "items": [
       {
         "slot": 1,
@@ -9317,7 +9322,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T11:59Z",
+  "updated": "2026-11-13T12:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
