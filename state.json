@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:21Z",
+  "updated_at": "2026-11-13T02:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8906,7 +8906,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:20Z",
+    "updated": "2026-11-13T02:25Z",
     "items": [
       {
         "slot": 1,
@@ -9097,13 +9097,11 @@
       },
       {
         "slot": 22,
-        "slice": "X-win-upd-manual-rollback",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnA7MTzJty5dGrxtPTC: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-win-upd-manual-rollback.md",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #795 only, then archive (\u00a72.64)"
+        "slice": "",
+        "role": "",
+        "agent": "",
+        "doing": "X-win-upd-manual-rollback #795 merged (0db056f9) 2026-11-13T02:25Z after runner delta check; session archived (\u00a72.65 drain)",
+        "status": "idle"
       },
       {
         "slot": 23,
@@ -9251,7 +9249,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:21Z",
+  "updated": "2026-11-13T02:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
