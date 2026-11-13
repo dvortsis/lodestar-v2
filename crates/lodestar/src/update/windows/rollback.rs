@@ -543,6 +543,9 @@ fn keep_installed(ctx: &Context, j: &Journal) {
 /// Reads staging and lists the store's folder; writes nothing. Fails
 /// closed: a record it can't read, a version that doesn't parse or isn't
 /// older, a missing or mismatched MSI and a missing snapshot all refuse.
+// Not wired yet: the service's availability check (the follow-up slice)
+// calls it; only tests do now.
+#[cfg_attr(all(windows, not(test)), allow(dead_code))]
 pub fn manual_plan(ctx: &Context, running: &Version) -> Result<ManualPlan, ManualRefusal> {
     plan_with_record(ctx, running).map(|(plan, _)| plan)
 }
