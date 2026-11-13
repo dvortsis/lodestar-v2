@@ -11,6 +11,9 @@ use lodestar_metainfo::InfoHash;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+mod wait;
+use wait::wait_for;
+
 fn config(bootstrap: Vec<String>) -> Config {
     Config {
         bind: vec![SocketAddr::from(([127, 0, 0, 1], 0))],
@@ -73,11 +76,10 @@ impl Client {
         self.socket.send_to(&msg.encode(), to).await.unwrap();
         let mut buf = vec![0u8; 2048];
         loop {
-            let (n, from) =
-                tokio::time::timeout(Duration::from_secs(2), self.socket.recv_from(&mut buf))
-                    .await
-                    .expect("reply in time")
-                    .unwrap();
+            let (n, from) = tokio::time::timeout(wait::DEADLINE, self.socket.recv_from(&mut buf))
+                .await
+                .expect("reply in time")
+                .unwrap();
             let reply = buf[..n].to_vec();
             let parsed = krpc::parse(&reply).unwrap();
             // Skip the node's own queries (e.g. verification pings).
@@ -287,8 +289,24 @@ async fn get_peers_lookup_finds_announced_peers() {
     cfg.harvest.sample = false;
     let (tx, mut rx) = mpsc::channel(16);
     let crawler = Node::start(cfg, Some(tx)).await.unwrap();
-    // Let it join, then ask.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Ask once it has joined: its table holds every node of the swarm, so
+    // the lookup can reach them all.
+    let mut swarm = Vec::new();
+    for n in &others {
+        swarm.push(n.snapshot().await.unwrap().ids[0]);
+    }
+    assert!(
+        wait_for(
+            async || {
+                let s = crawler.snapshot().await.unwrap();
+                swarm.iter().all(|id| s.nodes.iter().any(|n| n.id == *id))
+            },
+            wait::DEADLINE
+        )
+        .await,
+        "the crawler's table held all {} nodes of the swarm within 10 s",
+        swarm.len()
+    );
     assert!(crawler.get_peers(h));
     let found = loop {
         let harvest = next_harvest(&mut rx).await;

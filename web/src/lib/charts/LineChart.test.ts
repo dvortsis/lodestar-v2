@@ -1,5 +1,8 @@
-import { render, waitFor } from '@testing-library/svelte';
+import { configure, render, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Waits get the whole deadline a slow CI runner may need.
+configure({ asyncUtilTimeout: 10_000 });
 
 const destroy = vi.fn();
 const setSize = vi.fn();
@@ -94,9 +97,17 @@ describe('LineChart', () => {
 	});
 	it('does not create a chart if unmounted before uPlot loads', async () => {
 		const { default: LineChart } = await import('./LineChart.svelte');
-		const { unmount } = render(LineChart, props);
+		const onerror = vi.fn();
+		const { unmount } = render(LineChart, { ...props, onerror });
 		unmount();
-		await new Promise((r) => setTimeout(r, 20));
+		// Not a timed absence. Once the test's own import of the same modules
+		// has settled, the chart's has too, and the rest of its load is a
+		// chain of promise reactions; a zero-delay macrotask runs only after
+		// every pending reaction, so by then the chart has had its chance to
+		// build and didn't (nor did it fail, which would also skip the build).
+		await Promise.all([import('uplot'), import('uplot/dist/uPlot.min.css')]);
+		await new Promise((r) => setTimeout(r, 0));
 		expect(ctor).not.toHaveBeenCalled();
+		expect(onerror).not.toHaveBeenCalled();
 	});
 });
