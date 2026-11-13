@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T05:38Z",
+  "updated_at": "2026-11-13T06:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7929,6 +7929,16 @@
       "text": "2026-11-13T05:30Z: owner added repo secret ANTHROPIC_API_KEY ($200 credit, use by 2026-11-25). No spending approved. Runner told owner (via dashboard): operator-apply/-injection (manual dispatch) and operator-wake (channel-PR runner comment) already read it via cloud-operator env; recommended moving it to an environment secret (main-only) and deleting the repo secret; proposed uses a) operator runs <=$10/run, b) M8-SEC security pass <=$15/pass, $60 total, c) fuzz crash triage <=$5. Awaiting owner Q1/Q2. Runner spends nothing until then.",
       "status": "answered",
       "note": "Owner 2026-11-13 (via dashboard): Q1 done - ANTHROPIC_API_KEY is a cloud-operator environment secret, repo secret to be deleted, Console workspace limit $200. Q2: all three uses approved at caps (a) operator runs <=$10/run, (b) M8-SEC pass <=$15/pass $60 total, (c) fuzz triage <=$5 each. Goal: use the full $200 by 2026-11-25 on valuable work offsetting plan spend; propose the rest before spending past caps. Record as an owner decision in the next runner PR. Spent so far: $0 (operator-apply and operator-injection never ran; all operator-wake runs skipped before the environment)."
+    },
+    {
+      "id": "0600-merges",
+      "status": "done",
+      "note": "#804 cf3d2975, #814 0cceec88, #815 5e24a99d, #816 667479cb merged 06:00Z. Owner flags due: GS-2 Q9 distinct-size; NOS-0 NIP-01 escaping + i-tag split; #816 four UX choices + size raises (runner-accepted, 2.26); #815 five defaults; #814 consent text v2 + stricter Account rule."
+    },
+    {
+      "id": "next-runner-pr-0600",
+      "status": "open",
+      "note": "Add slices.yaml entries X-sources-nits and X-gs2-nits; owner decision 2026-11-13: API credit Q1/Q2 + runner may dispatch operator-apply and choose use of remaining ~$40 (confirmed directly by owner in runner chat)."
     }
   ],
   "main_health": [
@@ -8963,7 +8973,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T05:38Z",
+    "updated": "2026-11-13T06:04Z",
     "items": [
       {
         "slot": 1,
@@ -8997,11 +9007,11 @@
       },
       {
         "slot": 7,
-        "slice": "GS-2",
+        "slice": "X-gs2-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "#804 fix round: rv-804 B1 (sign distinct major sizes), O1, O2",
-        "since": "2026-11-12T22:33Z",
+        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: #804 GS-2 merged cf3d2975 (06:00Z); same session now X-gs2-nits (rv-804 O1-O5)",
+        "since": "2026-11-13T06:04Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       },
@@ -9117,22 +9127,22 @@
       },
       {
         "slot": 29,
-        "slice": "X-sources-restructure",
+        "slice": "X-sources-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #811 X-wizard-labels-signout merged 3ac32bd0 (2026-11-13T04:26Z); same session now X-sources-restructure (brief briefs/X-sources-restructure.md) + rv-811 I1 testTimeout one-liner",
-        "since": "2026-11-13T04:26Z",
+        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #816 merged 667479cb (06:00Z); now X-sources-nits, then X-insights-funnel-fixture, then X-insights-scroll-a11y (briefs on runner-state)",
+        "since": "2026-11-13T06:04Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
         "status": "active"
       },
       {
         "slot": 30,
-        "slice": "X-gluetun-templates",
+        "slice": "X-gluetun-templates-hostfile",
         "status": "active",
         "role": "other",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: X-gluetun-templates (brief briefs/X-gluetun-templates.md); #799 and #809 merged; told to bring main in and push; #808 merged 400cc479",
-        "since": "2026-11-13T03:50Z"
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: #815 merged 5e24a99d (06:00Z); now X-gluetun-templates-hostfile (brief briefs/X-gluetun-templates-hostfile.md)",
+        "since": "2026-11-13T06:04Z"
       },
       {
         "slot": 31,
@@ -9145,12 +9155,12 @@
       },
       {
         "slot": 32,
-        "slice": "X-consent-gate-lift-r2",
+        "slice": "X-ci-advisories",
         "role": "build",
         "status": "active",
         "agent": "claude",
-        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: X-consent-gate-lift-r2 option (b), the non-gate tightening; Account stays closed until the owner approves the Notice wording",
-        "since": "2026-11-13T03:38Z",
+        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: #814 merged 0cceec88 (06:00Z); consent-gate slices wait on owner Notice wording; now X-ci-advisories (Track Q, INFRA-09)",
+        "since": "2026-11-13T06:04Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       }
     ]
@@ -9212,7 +9222,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T05:38Z",
+  "updated": "2026-11-13T06:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
