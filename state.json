@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:16Z",
+  "updated_at": "2026-11-13T04:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7902,6 +7902,11 @@
       "id": "runner-pr-tracks-qu",
       "added": "2026-11-13T04:16Z",
       "text": "Runner records PR (Tracks Q and U, WK-18 split, owner rows 13-22, new externals, G-v1-security scope) being prepared by a runner helper in scratchpad rq-wt; runner reviews and pushes on claude/busy-allen-aptli2."
+    },
+    {
+      "id": "811-merged",
+      "added": "2026-11-13T04:26Z",
+      "text": "#811 merged 3ac32bd0 (owner B1/B2 done). rv-811 I1 (SettingsForm.keys.test.ts testTimeout) folded into X-sources-restructure. O1/O2 (sign-out after nav failure, in-flight feedback) left as polish for Track U step 5."
     }
   ],
   "main_health": [
@@ -8936,7 +8941,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T04:16Z",
+    "updated": "2026-11-13T04:26Z",
     "items": [
       {
         "slot": 1,
@@ -9174,11 +9179,11 @@
       },
       {
         "slot": 29,
-        "slice": "X-wizard-labels-signout",
+        "slice": "X-sources-restructure",
         "role": "build",
-        "agent": "session_01MMjhnCEzeKKeEySq9nj8Be",
-        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #811 (f19548bd) ready; runner fresh review running (owner priority B1/B2)",
-        "since": "2026-11-13T03:15Z",
+        "agent": "claude",
+        "doing": "session_01MMjhnCEzeKKeEySq9nj8Be: #811 X-wizard-labels-signout merged 3ac32bd0 (2026-11-13T04:26Z); same session now X-sources-restructure (brief briefs/X-sources-restructure.md) + rv-811 I1 testTimeout one-liner",
+        "since": "2026-11-13T04:26Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)",
         "status": "active"
       },
@@ -9270,7 +9275,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:16Z",
+  "updated": "2026-11-13T04:26Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
