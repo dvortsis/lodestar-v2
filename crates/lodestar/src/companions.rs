@@ -1962,15 +1962,11 @@ pub(crate) mod post_rules {
         if !owned(r.as_fd()) || !owned(g.as_fd()) {
             return false;
         }
-        let Ok(f) = rustix::fs::openat(
-            g.as_fd(),
-            FILE,
-            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) else {
+        // The file's own status, not a link's target.
+        let Ok(f) = rustix::fs::statat(g.as_fd(), FILE, AtFlags::SYMLINK_NOFOLLOW) else {
             return false;
         };
-        owned(f.as_fd()) && found(g.as_fd()) == Ok(Found::Rules)
+        locked(&f, owner) && found(g.as_fd()) == Ok(Found::Rules)
     }
 
     /// Natively, as Lodestar's own user: saves the rules in the
@@ -3719,6 +3715,7 @@ mod tests {
         (t, p)
     }
 
+    #[cfg(unix)]
     const RULES: &str = lodestar_companions::compose::GLUETUN_POST_RULES;
 
     #[cfg(unix)]
