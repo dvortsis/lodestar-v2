@@ -52,7 +52,7 @@ for k in IMAGE_DIGEST LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT
   [[ -n ${!k:-} ]] || fail args_valid
 done
 echo "ok args_valid"
-for tool in docker systemd-run systemctl iptables; do
+for tool in docker systemctl iptables flock; do
   command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_${tool//-/_}"
 done
 

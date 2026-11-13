@@ -23,7 +23,12 @@ NAME=run_clean; say test ! -e "$PIA_RUN"
 
 # The block marker (OP-3b): a recorded block, and its segment.
 case $(block_state) in
-  block) echo "ok block_recorded"; seg=$(marker_get segment | digits); echo "count block_segment ${seg:-0}" ;;
+  block)
+    echo "ok block_recorded"; seg=$(marker_get segment | digits); echo "count block_segment ${seg:-0}"
+    # X-gluetun-guard-reboot: a host guard that couldn't be held mid-block, and
+    # how many times one was found gone (the outage watcher puts it back).
+    NAME=block_intact; say test ! -e "$BLOCK/damaged"
+    drops=$(guard_drops | digits); echo "count host_guard_drops ${drops:-0}" ;;
   none) echo "skip block_recorded" ;;
   *) echo "fail block_recorded" ;;
 esac

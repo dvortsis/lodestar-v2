@@ -1011,11 +1011,23 @@ class VMScripts(unittest.TestCase):
     def test_vm_status_reports_the_block(self):
         _, lines, _ = self.run_script("vm-status.sh")
         self.assertIn("skip block_recorded", lines)
+        self.assertNotIn("count host_guard_drops 0", lines)  # only for a recorded block
         self.block.mkdir()
         (self.block / "marker").write_text("block=1-1\nsegment=3\n")
         _, lines, _ = self.run_script("vm-status.sh")
         self.assertIn("ok block_recorded", lines)
         self.assertIn("count block_segment 3", lines)
+        self.assertIn("ok block_intact", lines)
+        self.assertIn("count host_guard_drops 0", lines)
+        # X-gluetun-guard-reboot: guards found gone and put back, and one that couldn't be held.
+        (self.block / "outages").write_text("1 link_outage\n2 host_guard_dropped\n3 host_guard_endpoint_changed\n"
+                                            "4 host_guard_lost\n")
+        (self.block / "damaged").write_text("host_guard_lost\n")
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("fail block_intact", lines)
+        self.assertIn("count host_guard_drops 2", lines)
+        for name in ("outages", "damaged"):
+            (self.block / name).unlink()
         (self.block / "marker").unlink()
         self.block.rmdir()
         self.block.write_text("")
