@@ -9,8 +9,8 @@ const url = process.env.E2E_FIXTURE_URL;
 
 test.skip(!url, 'set E2E_FIXTURE_URL to run against serve --fixture');
 
-// One sign-in for the file: the server rate-limits logins (a burst of 5 per address), and the
-// fixture files together sign in 5 times, so a second sign-in here would be refused.
+// The project's global setup signs in once (the server limits logins to a burst of 5 per
+// address), so this file reuses that session rather than signing in again.
 test.describe.configure({ mode: 'serial' });
 let page: Page;
 test.beforeAll(async ({ browser }) => {

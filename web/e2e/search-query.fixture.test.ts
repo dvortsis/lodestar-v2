@@ -11,7 +11,7 @@ const BASE = process.env.E2E_FIXTURE_URL;
 
 test.skip(!BASE, 'E2E_FIXTURE_URL is not set (fixture backend specs are local only)');
 
-// One sign-in for the file: the server rate-limits logins, and the tests share the session.
+// The project's global setup signs in once; the tests in this file share the session.
 test.describe.configure({ mode: 'serial' });
 let page: Page;
 test.beforeAll(async ({ browser }) => {
