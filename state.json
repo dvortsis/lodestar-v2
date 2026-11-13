@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T20:37Z",
+  "updated_at": "2026-11-13T20:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8160,7 +8160,8 @@
       "id": "scrub-host-guard-fields",
       "note": "scrub.py owner adds host_guard_drops and damaged fields (from #845 review N7)",
       "at": "2026-11-13T20:29Z"
-    }
+    },
+    "slices-yaml-x-gluetun-guard-reboot-nits"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8551,12 +8552,9 @@
     },
     "839": {
       "slice": "X-lease-reconcile-every-session",
-      "head": "914c14fb",
-      "review": "fresh Opus MERGE, 2 Important (stalled-coordinator spool fallback; local stop waits for Drained) relayed with chaos scenario, one push; runner delta check then merge",
-      "at": "2026-11-13T19:38Z",
-      "state": "fixes in; Windows companions detect.rs loopback flake (not this PR); one re-run used",
-      "rerun_used": true,
-      "status": "MERGE verdict; one more small round asked (test race, flush version, Err return, leases test)"
+      "head": "1ac1f9f0",
+      "state": "ready; fresh Opus delta review running",
+      "at": "2026-11-13T20:41Z"
     },
     "843": {
       "slice": "X-filter01-fix",
@@ -8564,13 +8562,6 @@
       "state": "Opus review + /security-review and an unanchored second read running; CI running",
       "at": "2026-11-13T20:14Z",
       "status": "round 3 pushed; CI running; fresh delta review on ready"
-    },
-    "845": {
-      "slice": "X-gluetun-guard-reboot",
-      "head": "699667ca",
-      "status": "open; runner calls sent on run.py timeout, copy-off order, runbook, two owner flags",
-      "at": "2026-11-13T20:37Z",
-      "state": "fix round pushed, ready; fresh delta review running"
     },
     "844": {
       "slice": "X-offline-retry-nits",
@@ -9223,7 +9214,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T20:37Z",
+    "updated": "2026-11-13T20:41Z",
     "items": [
       {
         "slot": 1,
@@ -9308,11 +9299,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-gluetun-guard-reboot",
+        "slice": "X-gluetun-guard-reboot-nits",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-13T19:38Z",
-        "doing": "#845 fix round after review CHANGES",
+        "since": "2026-11-13T20:41Z",
+        "doing": "comment and decisions wording follow-up to #845",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9466,7 +9457,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T20:37Z",
+  "updated": "2026-11-13T20:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9897,6 +9888,12 @@
       "slice": "X-offline-retry",
       "merged": "c64482de",
       "at": "2026-11-13T19:51Z"
+    },
+    {
+      "pr": 845,
+      "slice": "X-gluetun-guard-reboot",
+      "merged": "73d9b636",
+      "at": "2026-11-13T20:41Z"
     }
   ]
 }
