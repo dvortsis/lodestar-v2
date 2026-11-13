@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T02:00Z",
+  "updated_at": "2026-11-13T02:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8653,6 +8653,11 @@
       "sha": "010a11e3",
       "at": "2026-11-13T01:15Z",
       "note": "P-master-plan-r4 merged; steps 2-9 into next runner PR"
+    },
+    {
+      "pr": 806,
+      "at": "2026-11-13T02:05Z",
+      "note": "runner PR: \u00a72.64/\u00a72.65 4+4 cap, phase_total 4"
     }
   ],
   "active_sessions": {
@@ -8891,7 +8896,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T02:00Z",
+    "updated": "2026-11-13T02:05Z",
     "items": [
       {
         "slot": 1,
@@ -9062,13 +9067,8 @@
       },
       {
         "slot": 19,
-        "slice": "LEM-0",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnAT9qFMjMJiH91VUfM: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/LEM-0.md",
-        "since": "2026-11-12T22:08:33Z",
-        "status": "active",
-        "cap": "over cap: finish #787 only, then archive (\u00a72.64)"
+        "status": "idle",
+        "doing": "LEM-0 #787 merged (304fbd8e) 2026-11-13T02:05Z; session archived (\u00a72.65 drain)"
       },
       {
         "slot": 20,
@@ -9246,7 +9246,7 @@
     }
   ],
   "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T02:00Z",
+  "updated": "2026-11-13T02:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
