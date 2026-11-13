@@ -30,9 +30,10 @@
 //!   stayed unchanged for 60 s since that read. It goes to `failed/` only
 //!   if it reads as malformed then, with the same size and modification
 //!   time. One that changed is still being written: the span starts again
-//!   from its next read. At most [`MAX_HOLDS`] holds per file, so one that
-//!   keeps changing is failed in the end; at most [`MAX_HELD`] files are
-//!   held at once.
+//!   from its next read. A file is pending at most [`PENDING_FOR`] from
+//!   its first malformed read, however often it changes, then failed; at
+//!   most [`MAX_HELD`] files are pending at once, and past that the
+//!   oldest is failed.
 //! - **Never read twice,** but for a held Malformed verdict (above), the
 //!   one deliberate re-read. A file that can't be moved or deleted yet is
 //!   remembered in a bounded set, never read again, and its move retried
@@ -84,15 +85,16 @@ pub const MAX_STUCK: usize = if cfg!(test) { 4 } else { 1024 };
 /// interval (runner, 2026-11-13, a §2.26 number). A single stall under
 /// about 70 s always survives; one over about 90 s doesn't.
 pub const MALFORMED_SPAN: Duration = Duration::from_secs(60);
-/// Malformed verdicts held per file, at most (a §2.26 number): each
-/// malformed read with a new size or modification time starts a new hold;
-/// after this many, the next malformed read sends the file to `failed/`
-/// at once, however it changed. So a copy may stall and resume three times
-/// before it's failed.
-pub const MAX_HOLDS: u8 = 3;
-/// Files whose Malformed verdict is held at once, at most (a §2.26
-/// number). When it's full, a malformed file goes to `failed/` at once,
-/// as before holds. Tests use 4.
+/// How long a file may stay pending after its first malformed read, at
+/// most, however often it changes: 10 min of wall-clock time (runner,
+/// 2026-11-13, a §2.26 number). Then it goes to `failed/` as malformed,
+/// without another read. A copy that's slow but still making progress
+/// has that long to finish.
+pub const PENDING_FOR: Duration = Duration::from_secs(600);
+/// Files pending after a malformed read, at most (a §2.26 number, as
+/// [`MAX_STUCK`]). A new one past that sends the oldest pending file to
+/// `failed/` as malformed, counted in `watch.took`'s `pending_full`.
+/// Tests use 4.
 pub const MAX_HELD: usize = if cfg!(test) { 4 } else { 1024 };
 /// Numbered names tried for a clash in `added/` or `failed/`.
 const MAX_SUFFIX: u32 = 1000;
@@ -132,14 +134,16 @@ lodestar_log::catalogue! {
         fields: { reason: Label },
     }
     /// One poll took files: how many went to `added/` (or were deleted),
-    /// how many to `failed/`, and of those how many because judging
-    /// failed on Lodestar's side (`errors`), not because of the file.
+    /// how many to `failed/`, of those how many because judging failed on
+    /// Lodestar's side (`errors`), not because of the file, and how many
+    /// because too many files were pending after a malformed read
+    /// (`pending_full`: the oldest pending file was failed to make room).
     WATCH_TOOK {
         id: "watch.took",
         component: Sources,
         level: Info,
         message: "Took .torrent files from the watch folder",
-        fields: { added: Label, failed: Label, errors: Label },
+        fields: { added: Label, failed: Label, errors: Label, pending_full: Label },
     }
     /// A file couldn't be moved or deleted after it was taken (a
     /// read-only folder, say). It won't be read again; `stuck` is how
@@ -242,6 +246,9 @@ pub struct Polled {
     /// Of `waiting`, files read as malformed and kept for a later read
     /// rather than failed (not the filter's `held` verdict).
     pub rechecking: u64,
+    /// Of `failed`, pending files failed early because [`MAX_HELD`] were
+    /// pending and a new one came: the oldest makes room.
+    pub pending_full: u64,
     /// Why the watch isn't running now, if it isn't: checked again every
     /// poll, so a mount that comes back or a fixed folder resumes it,
     /// except [`Problem::TooManyStuck`], which holds until the setting
@@ -266,15 +273,28 @@ struct Stuck {
 }
 
 /// A file read as malformed and not failed yet: read again once it has
-/// stayed unchanged for [`MALFORMED_SPAN`].
+/// stayed unchanged for [`MALFORMED_SPAN`], and failed at the latest
+/// [`PENDING_FOR`] after `first`.
 #[derive(Debug, Clone, Copy)]
 struct Held {
     /// Its shape when it was last read as malformed.
     shape: Shape,
     /// When it was first read as malformed with this shape.
     since: Instant,
-    /// Malformed verdicts held so far, at most [`MAX_HOLDS`].
-    holds: u8,
+    /// When it was first read as malformed at all.
+    first: Instant,
+}
+
+/// What [`Watcher::hold`] decided for a file just read as malformed.
+#[derive(Debug, PartialEq, Eq)]
+enum Hold {
+    /// Fail it now.
+    Fail,
+    /// Keep it pending.
+    Keep,
+    /// Keep it pending, and fail the oldest pending file, named, to make
+    /// room.
+    Evict(OsString, Shape),
 }
 
 /// One watch folder's state between polls.
@@ -414,6 +434,22 @@ impl Watcher {
                 continue;
             }
             seen.insert(name.clone(), shape);
+            if self
+                .held
+                .get(&name)
+                .is_some_and(|h| h.first.elapsed() >= PENDING_FOR)
+            {
+                // Pending too long, however it changed: failed unread.
+                self.finish(
+                    &folder,
+                    &name,
+                    Some(shape),
+                    Some(Cause::Malformed),
+                    &mut out,
+                )
+                .await;
+                continue;
+            }
             if self.waits_unread(&name, shape) {
                 out.waiting += 1;
                 out.rechecking += 1;
@@ -454,10 +490,29 @@ impl Watcher {
                 Outcome::Failed => Some(Cause::Failed),
             };
             self.cursor = Some(name.clone());
-            if cause == Some(Cause::Malformed) && self.hold(&name, shape) {
-                out.waiting += 1;
-                out.rechecking += 1;
-                continue;
+            if cause == Some(Cause::Malformed) {
+                match self.hold(&name, shape) {
+                    Hold::Fail => {}
+                    Hold::Keep => {
+                        out.waiting += 1;
+                        out.rechecking += 1;
+                        continue;
+                    }
+                    Hold::Evict(oldest, its) => {
+                        out.waiting += 1;
+                        out.rechecking += 1;
+                        out.pending_full += 1;
+                        self.finish(
+                            &folder,
+                            &oldest,
+                            Some(its),
+                            Some(Cause::Malformed),
+                            &mut out,
+                        )
+                        .await;
+                        continue;
+                    }
+                }
             }
             self.finish(&folder, &name, Some(shape), cause, &mut out)
                 .await;
@@ -482,28 +537,49 @@ impl Watcher {
             .is_some_and(|h| h.shape == shape && h.since.elapsed() < MALFORMED_SPAN)
     }
 
-    /// Whether a file just read as malformed is held rather than failed.
-    /// Not when an earlier read found it malformed with this same shape
-    /// [`MALFORMED_SPAN`] or more ago (it isn't changing, so it's really
-    /// malformed), when it has been held [`MAX_HOLDS`] times already, or
-    /// when [`MAX_HELD`] files are held. A new shape starts a new span.
-    fn hold(&mut self, name: &OsStr, shape: Shape) -> bool {
-        let holds = match self.held.get(name) {
-            Some(h) if h.shape == shape => return h.since.elapsed() < MALFORMED_SPAN,
-            Some(h) if h.holds >= MAX_HOLDS => return false,
-            Some(h) => h.holds,
-            None if self.held.len() >= MAX_HELD => return false,
-            None => 0,
+    /// Whether a file just read as malformed is kept pending or failed.
+    /// Failed when an earlier read found it malformed with this same
+    /// shape [`MALFORMED_SPAN`] or more ago (it isn't changing, so it's
+    /// really malformed), or when it has been pending [`PENDING_FOR`]. A
+    /// new shape starts a new span, not a new pending time. A new pending
+    /// file past [`MAX_HELD`] makes room by failing the oldest.
+    fn hold(&mut self, name: &OsStr, shape: Shape) -> Hold {
+        let now = Instant::now();
+        let (first, evict) = match self.held.get(name) {
+            Some(h) if now.duration_since(h.first) >= PENDING_FOR => return Hold::Fail,
+            Some(h) if h.shape == shape => {
+                return if now.duration_since(h.since) < MALFORMED_SPAN {
+                    Hold::Keep
+                } else {
+                    Hold::Fail
+                };
+            }
+            Some(h) => (h.first, None),
+            None if self.held.len() >= MAX_HELD => {
+                let oldest = self
+                    .held
+                    .iter()
+                    .min_by_key(|(_, h)| h.first)
+                    .map(|(n, h)| (n.clone(), h.shape));
+                (now, oldest)
+            }
+            None => (now, None),
         };
+        if let Some((oldest, _)) = &evict {
+            self.held.remove(oldest);
+        }
         self.held.insert(
             name.to_os_string(),
             Held {
                 shape,
-                since: Instant::now(),
-                holds: holds + 1,
+                since: now,
+                first,
             },
         );
-        true
+        match evict {
+            Some((oldest, its)) => Hold::Evict(oldest, its),
+            None => Hold::Keep,
+        }
     }
 
     /// For a file taken before but not moved: retries its move quietly
@@ -1114,7 +1190,8 @@ pub fn follow(
                             WATCH_TOOK,
                             added = Count(polled.added),
                             failed = Count(polled.failed),
-                            errors = Count(polled.errors)
+                            errors = Count(polled.errors),
+                            pending_full = Count(polled.pending_full)
                         );
                     }
                     show(polled.problem, &mut shown);
@@ -1368,11 +1445,14 @@ mod tests {
     /// as if that much wall-clock time had passed: the span stays 60 s,
     /// and the tests control the clock it's measured on.
     fn age(w: &mut Watcher) {
+        age_by(w, MALFORMED_SPAN);
+    }
+
+    /// Moves every held file's reads back by `by`.
+    fn age_by(w: &mut Watcher, by: Duration) {
         for h in w.held.values_mut() {
-            h.since = h
-                .since
-                .checked_sub(MALFORMED_SPAN)
-                .expect("an instant 60 s back");
+            h.since = h.since.checked_sub(by).expect("an instant that far back");
+            h.first = h.first.checked_sub(by).expect("an instant that far back");
         }
     }
 
@@ -1446,46 +1526,85 @@ mod tests {
         assert!(t.names(FAILED).is_empty() && w.held.is_empty());
     }
 
-    /// X-watch-stall-retry: each malformed read with a new shape is held,
-    /// up to MAX_HOLDS; the next malformed read fails the file at once,
-    /// within its span, so one that keeps changing isn't held for ever.
+    /// X-watch-stall-retry: a slow copy that changes between each
+    /// malformed read, more often than any small count would allow, stays
+    /// pending and is taken once it's complete.
     #[tokio::test]
-    async fn a_file_that_keeps_changing_is_failed_after_max_holds() {
+    async fn a_file_that_keeps_changing_is_taken_once_complete() {
+        let t = T::new();
+        t.put("slow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        for round in 0..8 {
+            let p = settle(&mut w, &f).await;
+            assert_eq!((p.failed, p.rechecking), (0, 1), "round {round}");
+            append(&t, "slow.torrent", b"+");
+        }
+        t.put("slow.torrent", b"d4:infodee");
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.added, p.failed), (1, 0));
+        assert_eq!(t.names(ADDED), ["slow.torrent"]);
+        assert!(w.held.is_empty());
+    }
+
+    /// X-watch-stall-retry: PENDING_FOR after its first malformed read, a
+    /// file goes to `failed/` however it changed since, without another
+    /// read, so one that keeps changing isn't pending for ever.
+    #[tokio::test]
+    async fn a_file_pending_past_the_limit_is_failed() {
         let t = T::new();
         t.put("grow.torrent", b"MALF");
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
-        for hold in 1..=MAX_HOLDS {
-            let p = settle(&mut w, &f).await;
-            assert_eq!((p.failed, p.rechecking), (0, 1), "hold {hold}");
-            assert_eq!(w.held[OsStr::new("grow.torrent")].holds, hold);
-            append(&t, "grow.torrent", b"+");
-        }
-        let p = settle(&mut w, &f).await;
+        settle(&mut w, &f).await;
+        // Changed since, and a new span started: the pending time doesn't.
+        append(&t, "grow.torrent", b"+");
+        settle(&mut w, &f).await;
+        assert_eq!(calls(&f), 2);
+        age_by(&mut w, PENDING_FOR - MALFORMED_SPAN);
+        append(&t, "grow.torrent", b"+");
+        assert_eq!(w.poll(&f).await.failed, 0, "just within the limit");
+        age_by(&mut w, MALFORMED_SPAN);
+        append(&t, "grow.torrent", b"+");
+        let p = w.poll(&f).await;
         assert_eq!((p.failed, p.rechecking), (1, 0));
         assert_eq!(t.names(FAILED), ["grow.malformed.torrent"]);
-        assert_eq!(calls(&f), MAX_HOLDS as usize + 1);
+        assert_eq!(calls(&f), 2, "failed unread");
         assert!(w.held.is_empty());
     }
 
-    /// X-watch-stall-retry: at most MAX_HELD files are held; past that a
-    /// malformed file is failed at once, and only Malformed is held.
+    /// X-watch-stall-retry: at most MAX_HELD files are pending; a new one
+    /// past that fails the oldest, counted apart, and only Malformed is
+    /// ever held.
     #[tokio::test]
-    async fn the_held_set_is_bounded() {
+    async fn the_held_set_is_bounded_by_failing_the_oldest() {
         let t = T::new();
-        for i in 0..MAX_HELD + 2 {
+        t.put("m0.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        age_by(&mut w, Duration::from_secs(1));
+        for i in 1..=MAX_HELD {
             t.put(&format!("m{i}.torrent"), b"MALF");
         }
         t.put("z.torrent", b"FLOOR");
-        let f = Fake::default();
-        let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.rechecking, p.failed), (MAX_HELD as u64, 3));
+        assert_eq!(
+            (p.rechecking, p.failed, p.pending_full),
+            (MAX_HELD as u64, 2, 1)
+        );
         assert_eq!(w.held.len(), MAX_HELD);
-        assert!(t.names(FAILED).contains(&"z.refused.torrent".to_string()));
+        assert!(!w.held.contains_key(OsStr::new("m0.torrent")));
+        assert_eq!(
+            t.names(FAILED),
+            ["m0.malformed.torrent", "z.refused.torrent"]
+        );
         age(&mut w);
         let p = w.poll(&f).await;
-        assert_eq!((p.rechecking, p.failed), (0, MAX_HELD as u64));
+        assert_eq!(
+            (p.rechecking, p.failed, p.pending_full),
+            (0, MAX_HELD as u64, 0)
+        );
         assert!(w.held.is_empty());
     }
 
