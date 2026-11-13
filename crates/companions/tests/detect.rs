@@ -71,7 +71,10 @@ impl Server {
     }
 
     async fn on(ip: IpAddr, handler: Handler) -> io::Result<Server> {
-        let listener = TcpListener::bind((ip, 0)).await?;
+        Server::serve(TcpListener::bind((ip, 0)).await?, handler)
+    }
+
+    fn serve(listener: TcpListener, handler: Handler) -> io::Result<Server> {
         let addr = listener.local_addr()?;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&seen);
@@ -373,6 +376,15 @@ fn no_ipv6(e: &io::Error) -> bool {
     ) || e.raw_os_error() == Some(EAFNOSUPPORT)
 }
 
+/// Whether a bind failed because the port can't be had: taken, or on
+/// Windows reserved (an excluded range answers `PermissionDenied`).
+fn in_use(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+    )
+}
+
 /// A loopback port that nothing listens on, held closed for as long as
 /// this lives: bound on 127.0.0.1, and on ::1 where the runner has it,
 /// but never listening. A connection to it is refused, and no other
@@ -406,7 +418,9 @@ impl ClosedPort {
                         _v6: Some(v6),
                     };
                 }
-                Err(e) if e.kind() == io::ErrorKind::AddrInUse => continue,
+                // Taken, or on Windows in an excluded port range (Hyper-V,
+                // WinNAT: WSAEACCES): another pair. Nothing is left unheld.
+                Err(e) if in_use(&e) => continue,
                 // No IPv6 loopback here: the probe can't fall back to it.
                 Err(e) if no_ipv6(&e) => {
                     return ClosedPort {
@@ -438,7 +452,10 @@ async fn a_closed_port_refuses_and_cant_be_taken() {
         io::ErrorKind::ConnectionRefused,
         "{refused}"
     );
-    assert!(TcpListener::bind(closed.v4()).await.is_err());
+    // Taken: `AddrInUse`. `PermissionDenied` is accepted too, as Windows'
+    // answer for an exclusive or excluded port.
+    let taken = TcpListener::bind(closed.v4()).await.unwrap_err();
+    assert!(in_use(&taken), "{taken}");
 }
 
 #[tokio::test]
@@ -481,39 +498,73 @@ async fn nothing_on_a_loopback_port_is_not_found() {
     }
 }
 
-/// Skips, passing, on a runner without IPv6 loopback or when another
-/// program holds the same port on IPv4.
+/// A loopback probe whose IPv4 attempt is refused answers from ::1. On a
+/// machine without IPv6 loopback only the refusal is checked, and on CI
+/// that machine fails the test: the fallback is never passed untested.
 #[tokio::test]
 async fn loopback_falls_back_to_ipv6() {
     let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
-    // A runner without IPv6 loopback can't run this.
-    let Ok(server) = Server::on("::1".parse().unwrap(), version).await else {
-        eprintln!("skipped: ::1 can't be bound on this runner");
+    let limits = |secs| Limits::new(Duration::from_secs(secs), 1024).unwrap();
+    let version_path = || RequestPath::parse("/api/v2/app/version").unwrap();
+    let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
+        // CI runners have IPv6 loopback: there, this is a failure, never a
+        // pass of the fallback.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "::1 can't be bound here, so the IPv6 fallback is untested"
+        );
+        // Without ::1 a held port can only be found closed: check that.
+        let closed = ClosedPort::new();
+        let target = Target::Loopback(PortNumber::new(closed.port).unwrap());
+        let got = http()
+            .send(ProbeRequest::new(&target, version_path(), limits(15)))
+            .await;
+        assert!(
+            matches!(got, Err(AdapterError::Unreachable)),
+            "{:?}",
+            got.map(|r| r.status())
+        );
+        eprintln!("::1 unavailable here: the IPv6 fallback wasn't exercised");
         return;
     };
     // The IPv4 attempt is refused first (about 2 s on Windows), so this
     // uses a 15 s deadline rather than the probe's 5 s.
-    let limits = Limits::new(Duration::from_secs(15), 1024).unwrap();
-    let target = server.loopback();
     let got = http()
         .send(ProbeRequest::new(
-            &target,
-            RequestPath::parse("/api/v2/app/version").unwrap(),
-            limits,
+            &server.loopback(),
+            version_path(),
+            limits(15),
         ))
         .await;
-    // Something else may hold the same port on IPv4; only then is the
-    // answer not ours.
-    if TcpStream::connect(("127.0.0.1", server.addr.port()))
-        .await
-        .is_err()
-    {
-        let r = got.unwrap();
-        assert_eq!((r.status(), r.body()), (200, &b"v5.0.3"[..]));
-        assert_eq!(server.paths(), ["/api/v2/app/version"]);
-    } else {
-        eprintln!("skipped: the IPv4 port is held by another program");
+    let r = got.unwrap();
+    assert_eq!((r.status(), r.body()), (200, &b"v5.0.3"[..]));
+    assert_eq!(server.paths(), ["/api/v2/app/version"]);
+}
+
+/// A server on ::1, with 127.0.0.1 held closed on its port, so the probe's
+/// IPv4 attempt is always refused and never answered by another program.
+/// The port is picked on IPv4 first, as `ClosedPort` does. `None` where
+/// ::1 can't be bound.
+async fn ipv6_with_ipv4_closed(handler: Handler) -> Option<(Server, TcpSocket)> {
+    for _ in 0..64 {
+        let v4 = TcpSocket::new_v4().unwrap();
+        v4.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let port = v4.local_addr().unwrap().port();
+        let v6 = TcpSocket::new_v6().and_then(|s| {
+            s.bind((Ipv6Addr::LOCALHOST, port).into())?;
+            s.listen(16)
+        });
+        match v6 {
+            Ok(listener) => {
+                let server = Server::serve(listener, Arc::clone(&handler)).unwrap();
+                return Some((server, v4));
+            }
+            Err(e) if in_use(&e) => continue,
+            Err(e) if no_ipv6(&e) => return None,
+            Err(e) => panic!("listening on [::1]:{port}: {e}"),
+        }
     }
+    panic!("no port free on both 127.0.0.1 and ::1");
 }
 
 #[tokio::test]
