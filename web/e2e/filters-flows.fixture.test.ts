@@ -4,6 +4,7 @@
 // directly: no OpenAPI mock, every answer is the server's. One wrong password in all, well under
 // the login bucket's burst of 5.
 import { expect, test, type Page } from '@playwright/test';
+import { fixtureCookies } from './support/fixture-session';
 
 const URL = process.env.E2E_FIXTURE_URL;
 const PASSWORD = process.env.E2E_FIXTURE_PASSWORD;
@@ -30,11 +31,17 @@ const call = (page: Page, method: string, path: string, body: unknown) =>
 		[method, path, body] as const
 	);
 
-async function signIn(page: Page) {
-	await page.goto('/login');
-	await page.getByLabel('Password').fill(PASSWORD!);
-	await page.getByRole('button', { name: 'Sign in' }).click();
-	await page.waitForURL((u) => !u.pathname.startsWith('/login'));
+// `viaUi` signs in through the login form (the one real-login check in this project, spent once
+// because the server limits logins); the others reuse the session the global setup stored.
+async function signIn(page: Page, viaUi = false) {
+	if (viaUi) {
+		await page.goto('/login');
+		await page.getByLabel('Password').fill(PASSWORD!);
+		await page.getByRole('button', { name: 'Sign in' }).click();
+		await page.waitForURL((u) => !u.pathname.startsWith('/login'));
+	} else {
+		await page.context().addCookies(fixtureCookies());
+	}
 	await page.goto('/dev/filters-flows');
 	await expect(page.getByRole('heading', { name: 'Filter change flows' })).toBeVisible();
 }
@@ -42,7 +49,7 @@ async function signIn(page: Page) {
 test('switching off a non-floor core rule: warning, 428, 401, apply; on again asks nothing', async ({
 	page
 }) => {
-	await signIn(page);
+	await signIn(page, true);
 	const off = { op: 'core_switch', rule: 'CS-4a', on: false };
 	expect((await call(page, 'POST', '/filters/apply', { change: off })).status).toBe(428);
 

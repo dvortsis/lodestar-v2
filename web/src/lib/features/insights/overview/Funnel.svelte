@@ -6,6 +6,7 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import { FOCUS_RING } from '$lib/ui/classes';
 	import ChartPanel from './ChartPanel.svelte';
 	import { resolve } from '$app/paths';
 	import type { Route } from './href';
@@ -214,7 +215,16 @@
 	{#if cohorts.length === 0}
 		<p>{m.insights_overview_cohorts_none()}</p>
 	{:else}
-		<div class="ins-cohorts">
+		<!-- A scroller of plain bars: it takes focus itself, so a keyboard can scroll it (WCAG 2.1.1,
+		     axe scrollable-region-focusable; UI review 2026-11-13, B3). -->
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<div
+			class="ins-cohorts rounded-box {FOCUS_RING}"
+			role="region"
+			tabindex="0"
+			aria-label={m.insights_overview_cohorts_title()}
+			data-testid="insights-cohorts-scroller"
+		>
 			<LinkedBars
 				items={cohorts}
 				max={cohortScale}

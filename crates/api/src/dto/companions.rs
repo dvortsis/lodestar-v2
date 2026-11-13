@@ -265,6 +265,16 @@ fn default_id() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateRequest {
+    /// Lodestar's companion-files folder on the host, for an Unraid
+    /// template with gluetun: the template mounts gluetun's post-rules file
+    /// from it. In a container it's the host folder mounted at
+    /// `/companions`, where Lodestar saves the file as root at start-up;
+    /// the template uses it only if that file is exact and root's.
+    /// Natively it's a folder you name, outside the data folder, where
+    /// Lodestar saves the file; there is no default. Unset, or when the
+    /// file can't be used, you save the file yourself.
+    #[serde(default)]
+    pub companions_dir: Option<String>,
     /// The host folder for its settings.
     #[serde(default)]
     pub config_dir: Option<String>,

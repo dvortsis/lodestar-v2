@@ -522,7 +522,7 @@
 							/>
 						{:else}
 							<p class="ins-muted" data-testid="insights-bars-{b.id}-empty">
-								{m.insights_stage_nothing()}
+								{b.empty ?? m.insights_stage_nothing()}
 							</p>
 						{/if}
 					</div>

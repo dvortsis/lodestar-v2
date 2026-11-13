@@ -252,6 +252,20 @@ Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
   host file (`infra/fleet/steps/vm/compose.yaml`). If gluetun then stops with
   `ip6tables is required`, the kernel has no IPv6 firewall: remove the
   `ip6tables` lines. Restart Lodestar after gluetun.
+- **Or let Lodestar save the file.** Mount a folder outside `/data` at
+  `/companions` in Lodestar (Unraid: the template's **Companion files** path,
+  `/mnt/user/appdata/lodestar-companions`). At each start, while still root,
+  Lodestar writes `gluetun/post-rules.txt` there, only if the folder holds
+  nothing else, isn't `/data`, and is root's with no group or other write
+  (let Docker create it; don't make it over a share or run New Permissions
+  on it). Then mount
+  `<that folder>/gluetun/post-rules.txt` in gluetun as above; the step 4
+  check still applies. The `gluetun` folder and the file belong to root and
+  Lodestar can only read them, on purpose: nothing Lodestar runs can change
+  what gluetun runs as root. To remove them on a host other than Unraid,
+  whose terminal is already root, run `sudo rm -r <that folder>/gluetun`.
+  A native install has no root step: it writes the file as its own user,
+  so there the Lodestar process could change it.
 
 ### 4.4 IPv6
 `dht.bind` accepts at most one IPv4 and one IPv6 address in `config.toml`

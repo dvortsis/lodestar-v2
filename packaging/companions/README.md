@@ -26,7 +26,7 @@ These files show what Lodestar generates for its companions on Docker and Unraid
 ## On Unraid
 Unraid can't open a template that's already filled in from a link. Instead:
 
-1. Save the template file to `/boot/config/plugins/dockerMan/templates-user/` on your flash drive. With gluetun there are two: set up gluetun's first. Before you apply gluetun's, save `gluetun-post-rules.txt` at its **Post-rules** path, as the user guide's chapter 3 shows. Without that file, gluetun won't start.
+1. Save the template file to `/boot/config/plugins/dockerMan/templates-user/` on your flash drive. With gluetun there are two: set up gluetun's first. Before you apply gluetun's, save `gluetun-post-rules.txt` at its **Post-rules** path, as the user guide's chapter 3 shows. Without that file, gluetun won't start. When Lodestar saved the file in its companion-files folder, the **Post-rules** path already points at it.
 2. Open **Docker → Add Container** and pick the template under **Template**.
 3. Check the values, then select **Apply**.
 
