@@ -36,14 +36,8 @@
 </script>
 
 <p class="text-body">{lead}</p>
-<!-- Keys resolve to Settings' own specs (`GET /settings`, the index the Settings screens read)
-     only after the form starts loading, and `SettingsForm` picks the label, help and option maps
-     to load from the specs it mounts with. Mounting it again when the specs arrive loads the same
-     maps Settings uses, so a field never shows its raw key (X-wizard-labels-signout). -->
-{#key form.specs}
-	<SettingsForm {form} saveBar={false} leaveGuard={false} shortcut={false}>
-		{#each form.specs as spec (spec.key)}
-			<SettingField {form} key={spec.key} />
-		{/each}
-	</SettingsForm>
-{/key}
+<SettingsForm {form} saveBar={false} leaveGuard={false} shortcut={false}>
+	{#each form.specs as spec (spec.key)}
+		<SettingField {form} key={spec.key} />
+	{/each}
+</SettingsForm>
