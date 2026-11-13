@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,7 +20,7 @@ use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::Resolve;
 use lodestar_integrations::secret::Secret;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
 // ─── A local server ─────────────────────────────────────────────────────
 
@@ -357,11 +357,94 @@ async fn recorded_answers() {
     }
 }
 
+/// Whether `e` means the runner has no IPv6 loopback: no such address,
+/// or no IPv6 sockets at all (EAFNOSUPPORT).
+fn no_ipv6(e: &io::Error) -> bool {
+    const EAFNOSUPPORT: i32 = if cfg!(windows) {
+        10047
+    } else if cfg!(target_os = "linux") {
+        97
+    } else {
+        47 // macOS and the BSDs
+    };
+    matches!(
+        e.kind(),
+        io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
+    ) || e.raw_os_error() == Some(EAFNOSUPPORT)
+}
+
+/// A loopback port that nothing listens on, held closed for as long as
+/// this lives: bound on 127.0.0.1, and on ::1 where the runner has it,
+/// but never listening. A connection to it is refused, and no other
+/// socket (another test in this binary, say) can take the port meanwhile.
+/// Dropping a listener and probing its port instead leaves a window in
+/// which another test's listener can be handed the same port.
+struct ClosedPort {
+    port: u16,
+    _v4: TcpSocket,
+    _v6: Option<TcpSocket>,
+}
+
+impl ClosedPort {
+    fn new() -> ClosedPort {
+        // A port free on 127.0.0.1 may be taken on ::1 (the loopback
+        // probe falls back to it): then another pair is chosen. Both are
+        // held from the moment they're bound, so nothing is left to race.
+        for _ in 0..64 {
+            let v4 = TcpSocket::new_v4().unwrap();
+            v4.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+            let port = v4.local_addr().unwrap().port();
+            let v6 = TcpSocket::new_v6().and_then(|s| {
+                s.bind((Ipv6Addr::LOCALHOST, port).into())?;
+                Ok(s)
+            });
+            match v6 {
+                Ok(v6) => {
+                    return ClosedPort {
+                        port,
+                        _v4: v4,
+                        _v6: Some(v6),
+                    };
+                }
+                Err(e) if e.kind() == io::ErrorKind::AddrInUse => continue,
+                // No IPv6 loopback here: the probe can't fall back to it.
+                Err(e) if no_ipv6(&e) => {
+                    return ClosedPort {
+                        port,
+                        _v4: v4,
+                        _v6: None,
+                    };
+                }
+                // Anything else would leave ::1 unheld: say so.
+                Err(e) => panic!("holding [::1]:{port}: {e}"),
+            }
+        }
+        panic!("no loopback port free on both 127.0.0.1 and ::1");
+    }
+
+    fn v4(&self) -> SocketAddr {
+        (Ipv4Addr::LOCALHOST, self.port).into()
+    }
+}
+
+/// What the two tests below rely on: a held port refuses connections, and
+/// no listener can be bound on it while it's held.
+#[tokio::test]
+async fn a_closed_port_refuses_and_cant_be_taken() {
+    let closed = ClosedPort::new();
+    let refused = TcpStream::connect(closed.v4()).await.unwrap_err();
+    assert_eq!(
+        refused.kind(),
+        io::ErrorKind::ConnectionRefused,
+        "{refused}"
+    );
+    assert!(TcpListener::bind(closed.v4()).await.is_err());
+}
+
 #[tokio::test]
 async fn nothing_listening_is_not_found_and_unreachable() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let closed = ClosedPort::new();
+    let addr = closed.v4();
     let target = Target::Entered(EnteredUrl::parse(&format!("http://{addr}")).unwrap());
     let http = http();
     for c in ["qbittorrent", "prowlarr", "gluetun"] {
@@ -386,9 +469,8 @@ async fn nothing_listening_is_not_found_and_unreachable() {
 
 #[tokio::test]
 async fn nothing_on_a_loopback_port_is_not_found() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = PortNumber::new(listener.local_addr().unwrap().port()).unwrap();
-    drop(listener);
+    let closed = ClosedPort::new();
+    let port = PortNumber::new(closed.port).unwrap();
     let http = http();
     for c in ["qbittorrent", "prowlarr", "gluetun"] {
         let got = detect::detector(&id(c))
