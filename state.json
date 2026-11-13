@@ -8922,7 +8922,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T03:50Z",
+    "updated": "2026-11-13T03:55Z",
     "items": [
       {
         "slot": 1,
@@ -9035,7 +9035,7 @@
         "slice": "X-test-vm",
         "role": "other",
         "agent": "claude",
-        "doing": "cloud-testing (owner-started): session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy. Owner authorized AWS setup (06:49Z/06:52Z, verified). Owner 2026-11-12 (\u00a72.61, to record): 12 build slots + up to 4 for cloud testing; the tester and its lanes use the 4 (see cloud_tester).",
+        "doing": "cloud-testing (owner-started): session_01MMjhnBD1KHxsn7QRHHmpeM: X-test-vm coordinator. Owner 03:40Z: 3 of 4 shared tester slots on its lanes (Linux lane; Windows phase 3 session_01MMjhnA7rUxSNpacLYEdDvK, about 10-14 h; an owner-started import lane on a temporary Linode, real Bitmagnet/Magnetico dumps plus synthetic 200k and 1M). Slot 30 is the 4th. Findings reach the runner as numbers only.",
         "since": "2026-11-12T06:37:34Z",
         "status": "active",
         "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
