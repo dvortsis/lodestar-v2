@@ -49,5 +49,6 @@ cargo-deny reported three.
   - Lodestar's own database is written only by Lodestar.
   - The one database Lodestar opens that someone else may have written is a Magnetico import, and the importer refuses a source with a non-empty `-wal` or a `-journal` (`quiescent`, `crates/sources-importers/src/magnetico.rs`). The attack needs a WAL with content.
   - The Bitmagnet importer reads PostgreSQL, not SQLite.
-- **Not closed:** this lowers the exposure; it doesn't remove it. That's why the review date is short.
+- **Not closed:** this lowers the exposure; it doesn't remove it. The refusal is a stat before the open and before each batch, not atomic with what SQLite reads. Someone who can write to the source folder while the import runs could still place a crafted `-wal` between the check and the read. That's why the review date is short.
+- **The date isn't enforced by a check.** Nothing fails on 2026-12-13 by itself, and cargo-deny only warns about an ignore that no longer matches. The runner tracks the date through X-rusqlite-041. A CI check that fails on a passed review date is a possible follow-up.
 - **The ignore** is in `deny.toml` with its reason, "review by 2026-12-13; fix: X-rusqlite-041". That's 30 days, inside the brief's 90. When X-rusqlite-041 lands, the entry is deleted. If it's still there on 2026-12-13, whoever reviews it decides again.

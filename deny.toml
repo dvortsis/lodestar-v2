@@ -31,7 +31,9 @@ ignore = [
     # importers. Lodestar's own database is written only by Lodestar. The one
     # database it opens that someone else may have written is a Magnetico
     # import, and the importer refuses a non-empty -wal or a -journal
-    # (crates/sources-importers/src/magnetico.rs, `quiescent`).
+    # (crates/sources-importers/src/magnetico.rs, `quiescent`), checked before
+    # it opens the file and before each batch. The check is a stat, not atomic
+    # with SQLite's read, so it narrows the exposure; it doesn't close it.
     # Review by 2026-12-13 (30 days); fix: X-rusqlite-041.
-    { id = "RUSTSEC-2026-0459", reason = "mitigated: Lodestar writes its own database, and the Magnetico importer refuses a non-empty -wal or a -journal; review by 2026-12-13; fix: X-rusqlite-041" },
+    { id = "RUSTSEC-2026-0459", reason = "narrowed, not closed: Lodestar writes its own database, and the Magnetico importer refuses a non-empty -wal or a -journal before opening and before each batch (a stat, not atomic); review by 2026-12-13; fix: X-rusqlite-041" },
 ]
