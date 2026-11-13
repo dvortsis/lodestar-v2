@@ -1,4 +1,4 @@
-# Runner: owner-queue decisions (#PR)
+# Runner: owner-queue decisions (#819)
 
 On 2026-11-13 the owner gave the runner owner-queue items 4, 10, 14, 16, 17, 18, 19, 21 and 22: "Decisions: Everything except filters - Approve Agent Runner making the best decisions." (`docs/owner-decisions.md` §2.69). Items 13 (FILTER-01) and 15 (FILTER-03) stay with the owner.
 
