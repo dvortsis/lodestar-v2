@@ -538,8 +538,9 @@ const ADULT_WINDOW: u32 = 12;
 /// path costs, as the tokenizer meters it while it reads (bytes, words,
 /// characters, and how much each costs the first time). A torrent past it
 /// is held as too large to judge (CS-0a); every torrent within it is read
-/// whole. Judging one at the budget, whatever its text, takes about ten
-/// milliseconds at most on the build VM (`budget_worst_case` in
+/// whole. The core's time to judge one at the budget, whatever its
+/// text, is held under 15 ms on the reference runner, with 2-12 ms
+/// measured across every input shape (`budget_worst_case` in
 /// `tests/props.rs`).
 pub const BUDGET: u64 = 9_000_000;
 

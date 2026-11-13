@@ -104,6 +104,15 @@ pub(crate) fn kept_hold_sql(col: &str) -> String {
     )
 }
 
+/// Whether a stored rule is one of [`KEPT_RULES`], with or without a
+/// suffix: [`kept_hold_sql`] in Rust. Only [`Store::release`] lifts such a
+/// hold, never a release by rule or a batch.
+pub fn is_kept_hold(rule: &str) -> bool {
+    KEPT_RULES
+        .iter()
+        .any(|k| rule == *k || rule.strip_prefix(k).is_some_and(|r| r.starts_with('+')))
+}
+
 /// The stored rule of a floor drop a remote worker reported (WK-10d),
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
 /// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
@@ -545,8 +554,11 @@ impl Store {
         let mut total = 0;
         let mut deleted_any = false;
         // A worker's floor report isn't released by rule here: only WK-13's
-        // purge-by-worker removes it.
-        for rule in rules.iter().filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX)) {
+        // purge-by-worker removes it. Nor is a kept hold: only `release`.
+        for rule in rules
+            .iter()
+            .filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX) && !is_kept_hold(r))
+        {
             for table in ["quarantine", "tombstones"] {
                 loop {
                     let tx = self.conn.transaction()?;
@@ -624,8 +636,8 @@ impl Store {
         mut released: impl FnMut(&[[u8; 20]]),
     ) -> Result<usize> {
         // As `release_rules`: a worker's floor report isn't released by
-        // rule here.
-        if rule.starts_with(WORKER_FLOOR_PREFIX) {
+        // rule here, nor a kept hold.
+        if rule.starts_with(WORKER_FLOOR_PREFIX) || is_kept_hold(rule) {
             return Ok(0);
         }
         let adult = held_rule(rule, true);
@@ -925,8 +937,10 @@ impl Store {
     }
 
     /// Releases these quarantine rows if each is still as read: a row a
-    /// writer has replaced since (another rule, a newer time) stays. One
-    /// transaction. Returns the hashes nothing holds any more, for intake.
+    /// writer has replaced since (another rule, a newer time) stays, and
+    /// so does a kept hold ([`KEPT_RULES`]), which only `release` lifts.
+    /// One transaction. Returns the hashes nothing holds any more, for
+    /// intake.
     pub fn release_rows(&mut self, rows: &[HoldRow]) -> Result<Vec<[u8; 20]>> {
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -934,9 +948,10 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut free = Vec::new();
         {
-            let mut del = tx.prepare_cached(
-                "DELETE FROM quarantine WHERE hash = ?1 AND rule = ?2 AND at = ?3",
-            )?;
+            let mut del = tx.prepare_cached(&format!(
+                "DELETE FROM quarantine WHERE hash = ?1 AND rule = ?2 AND at = ?3 AND NOT {}",
+                kept_hold_sql("rule")
+            ))?;
             let mut held = tx.prepare_cached("SELECT 1 FROM tombstones WHERE hash = ?1")?;
             for r in rows {
                 if del.execute(params![&r.hash[..], r.rule, r.at])? > 0
@@ -1250,6 +1265,116 @@ mod tests {
         );
         assert!(s.release(&[1; 20]).unwrap());
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+    }
+
+    /// A store with kept holds (plain and adult) on hashes 1 and 2 and a
+    /// hold by `other` on hash 3, all quarantined at 10.
+    fn with_kept_holds(other: &str) -> Store {
+        let s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        let adult = format!("{kept}+adult");
+        for (h, rule) in [(1u8, kept), (2, adult.as_str()), (3, other)] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        s
+    }
+
+    const KEPT_AND_OTHER: [[u8; 20]; 3] = [[1; 20], [2; 20], [3; 20]];
+
+    /// A release by rule leaves a kept hold, its adult one too; the other
+    /// rule's is released.
+    #[test]
+    fn a_release_by_rule_leaves_a_kept_hold() {
+        let mut s = with_kept_holds("U-1");
+        let [kept] = KEPT_RULES;
+        let mut freed = Vec::new();
+        let rules = [kept.to_owned(), format!("{kept}+adult"), "U-1".to_owned()];
+        let n = s
+            .release_rules(&rules, |h| freed.extend_from_slice(h))
+            .unwrap();
+        assert_eq!((n, freed), (1, vec![[3; 20]]));
+        assert_eq!(
+            s.held_among(&KEPT_AND_OTHER).unwrap(),
+            vec![true, true, false]
+        );
+    }
+
+    /// A release of some of a rule's hashes leaves a kept hold; the other
+    /// rule's is released.
+    #[test]
+    fn a_release_of_a_rules_hashes_leaves_a_kept_hold() {
+        let mut s = with_kept_holds("L-1");
+        let [kept] = KEPT_RULES;
+        for rule in [kept, "CS-0a+adult"] {
+            assert_eq!(
+                s.release_rule_hashes(rule, &KEPT_AND_OTHER, |_| {})
+                    .unwrap(),
+                0
+            );
+        }
+        assert_eq!(
+            s.release_rule_hashes("L-1", &KEPT_AND_OTHER, |_| {})
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.held_among(&KEPT_AND_OTHER).unwrap(),
+            vec![true, true, false]
+        );
+    }
+
+    /// A release of rows as read leaves a kept hold's rows; the other
+    /// rule's is released.
+    #[test]
+    fn a_release_of_rows_leaves_a_kept_hold() {
+        let mut s = with_kept_holds("U-2");
+        let [kept] = KEPT_RULES;
+        let row = |h: u8, rule: &str| HoldRow {
+            hash: [h; 20],
+            rule: rule.to_owned(),
+            at: 10,
+            sealed: None,
+        };
+        let rows = [
+            row(1, kept),
+            row(2, &format!("{kept}+adult")),
+            row(3, "U-2"),
+        ];
+        assert_eq!(s.release_rows(&rows).unwrap(), vec![[3; 20]]);
+        assert_eq!(
+            s.held_among(&KEPT_AND_OTHER).unwrap(),
+            vec![true, true, false]
+        );
+    }
+
+    /// The Rust and SQL tests for a kept hold agree.
+    #[test]
+    fn kept_hold_tests_agree() {
+        let s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for rule in [
+            "CS-0a",
+            "CS-0a+adult",
+            "CS-0ab",
+            "CS-0",
+            "cs-0a",
+            "CS-3",
+            "",
+            "+adult",
+        ] {
+            let sql: bool = s
+                .conn
+                .query_row(&format!("SELECT {}", kept_hold_sql("?1")), [rule], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(is_kept_hold(rule), sql, "{rule:?}");
+        }
     }
 
     /// A hold under a kept rule survives the purge, however long past its
