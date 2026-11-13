@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T00:19Z",
+  "updated_at": "2026-11-13T00:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7802,6 +7802,16 @@
       "id": "metrics-match-confidence",
       "note": "rv-793 O4: add docs/metrics.md row for match confidence (0-100, formatPercent, no decimals) beside parser confidence.",
       "added": "2026-11-13T00:18Z"
+    },
+    {
+      "id": "cmp12-screen-notes",
+      "note": "rv-799 for CMP-13 and the companion screen slice: opt-in row carries flaresolverr_site_terms and sits under Prowlarr before the pin (I1); indexer_proxy_duplicate code (O3); template risk text 'some sites terms forbid it; never published on your network' (O5).",
+      "added": "2026-11-13T00:21Z"
+    },
+    {
+      "id": "rv-781-optional",
+      "note": "#781 merged with five optional review findings deferred (rv-781-11d2d193.md); fold into a later Unraid/packaging slice.",
+      "added": "2026-11-13T00:21Z"
     }
   ],
   "main_health": [
@@ -8825,7 +8835,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T00:19Z",
+    "updated": "2026-11-13T00:21Z",
     "items": [
       {
         "slot": 1,
@@ -9195,7 +9205,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-13T00:19Z",
+  "updated": "2026-11-13T00:21Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
