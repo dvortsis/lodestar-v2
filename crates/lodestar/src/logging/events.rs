@@ -291,20 +291,22 @@ lodestar_log::catalogue! {
         message: "The restart witness directory was left as it is: if the restart check is on, restarts wait out the sampling delay",
         fields: { path: Path, error: Error },
     }
-    /// The companion-files folder (`/companions`) at start-up as root,
-    /// handed to the target account (`changed` folders) so Lodestar can
-    /// save gluetun's post-rules there.
+    /// The companion-files folder (`/companions`) at start-up as root:
+    /// gluetun's post-rules saved there, root-owned, so Lodestar can read
+    /// them but not change them (`changed` is 1 when written, 0 when
+    /// already in place).
     SYSTEM_COMPANIONS_DIR {
         id: "system.companions_dir",
         component: System,
         level: Info,
-        message: "The companion-files folder was handed to the target account",
-        fields: { path: Path, uid: Label, gid: Label, changed: Size },
+        message: "gluetun's post-rules are in place in the companion-files folder",
+        fields: { path: Path, changed: Size },
     }
-    /// The companion-files folder wasn't handed over: not mounted (the
-    /// usual case without it), a link, not a folder, the data folder or
-    /// overlapping it, or holding other files. You then save gluetun's
-    /// post-rules yourself.
+    /// gluetun's post-rules weren't saved in the companion-files folder:
+    /// not mounted (the usual case without it), a link, not a folder, the
+    /// data folder or overlapping it, holding other files, or a `gluetun`
+    /// folder that isn't root's. You then save gluetun's post-rules
+    /// yourself.
     SYSTEM_COMPANIONS_DIR_LEFT {
         id: "system.companions_dir_left",
         component: System,

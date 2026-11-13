@@ -388,7 +388,7 @@ impl GluetunPaths {
     /// container can't see), or another companion's folder, or has a dot
     /// component. gluetun mounts a file from it, so it must hold nothing of
     /// Lodestar's.
-    pub fn check(&self, input: &ServiceInput) -> Result<(), TemplateError> {
+    pub fn check(&self, catalogue: &Catalogue, input: &ServiceInput) -> Result<(), TemplateError> {
         let c = components(&self.companions);
         if c.iter().any(|x| x.starts_with('.')) {
             return Err(TemplateError::DotFolder);
@@ -399,7 +399,25 @@ impl GluetunPaths {
         if lodestar_appdata || input.data.0.iter().any(|d| overlaps(&c, &d.0)) {
             return Err(TemplateError::DataFolder);
         }
-        if input.taken.iter().any(|t| overlaps(&c, &components(t))) {
+        // A companion that can write it could change what gluetun runs as
+        // root: not the routed companion's own folders, not another's.
+        let own = [&input.paths.config, &input.paths.downloads];
+        if own
+            .into_iter()
+            .flatten()
+            .chain(&input.taken)
+            .any(|t| overlaps(&c, &components(t)))
+        {
+            return Err(TemplateError::OtherCompanion);
+        }
+        let companions: Vec<&str> = catalogue
+            .entries()
+            .iter()
+            .filter_map(|e| e.container.as_ref().map(|k| k.name().as_str()))
+            .collect();
+        if c.windows(2)
+            .any(|w| w[0] == "appdata" && companions.contains(&w[1].as_str()))
+        {
             return Err(TemplateError::OtherCompanion);
         }
         Ok(())

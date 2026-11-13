@@ -74,7 +74,7 @@ pub fn unraid(
 ) -> Result<Vec<UnraidTemplate>, TemplateError> {
     let (main, vpn) = check_pair(catalogue, id, input, TemplateId::UnraidTemplate)?;
     if let Some(g) = &input.gluetun_paths {
-        g.check(input)?;
+        g.check(catalogue, input)?;
     }
     let saved = input.gluetun_paths.as_ref();
     let net = input.network.as_str();

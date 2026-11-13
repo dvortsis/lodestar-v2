@@ -989,6 +989,25 @@ fn the_companion_files_folder_holds_nothing_of_lodestars() {
             "{folder}"
         );
     }
+    // Another catalogue companion's appdata.
+    inp.gluetun_paths = Some(saved("/mnt/user/appdata/qbittorrent/files"));
+    assert_eq!(
+        unraid(&cat, &id("gluetun"), &inp).err(),
+        Some(TemplateError::OtherCompanion)
+    );
     inp.gluetun_paths = Some(saved("/srv/lodestar-companions"));
     assert!(unraid(&cat, &id("gluetun"), &inp).is_ok());
+    // The routed companion's own folders: it could rewrite the rules.
+    let mut routed = input("qbittorrent", Route::Gluetun);
+    for folder in [routed.paths.config.clone(), routed.paths.downloads.clone()]
+        .into_iter()
+        .flatten()
+    {
+        routed.gluetun_paths = Some(saved(&format!("{folder}/companions")));
+        assert_eq!(
+            unraid(&cat, &id("qbittorrent"), &routed).err(),
+            Some(TemplateError::OtherCompanion),
+            "{folder}"
+        );
+    }
 }

@@ -90,7 +90,18 @@ If Lodestar generated your gluetun from its [companion](glossary.md#companion) t
 | Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Use Docker Compose 2.23.1 or later: run `docker compose version` to see yours. Older versions refuse the file. Then check the rules: run step 4's commands with `docker compose exec` in place of `docker exec`. Don't skip it: a Compose tool that ignores the built-in rules starts gluetun without them, and without an error. |
 | Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. If you changed the **Post-rules** path in the form, use your path in step 1's commands. Then set the start order (below). |
 
-Lodestar's own Unraid template has a **Companion files** path, `/mnt/user/appdata/lodestar-companions` by default. Keep it outside Lodestar's **Data** folder: gluetun reads from it, and the **Data** folder holds Lodestar's secrets. Lodestar will save the post-rules file there itself and fill in gluetun's **Post-rules** path, so you won't do step 1 **(planned)**. Until then, save the file yourself.
+Lodestar's own Unraid template has a **Companion files** path, `/mnt/user/appdata/lodestar-companions` by default. Keep it outside Lodestar's **Data** folder: gluetun reads from it, and the **Data** folder holds Lodestar's secrets. With that path set, Lodestar saves the post-rules file at each start, as `gluetun/post-rules.txt` in that folder, so you can skip step 1:
+
+1. Restart Lodestar, then open the Unraid terminal and check the file:
+
+    ```sh
+    sha256sum /mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt
+    ```
+
+   **Result:** The line starts with the same `26a485e3…` value as step 1's. If the file is missing, the folder held other files or isn't set: use step 1 instead.
+2. Edit gluetun and set its **Post-rules** path to `/mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt`. Then do the check in step 4.
+
+The file and its `gluetun` folder belong to root, and Lodestar can read them but not change them. That's on purpose: nothing Lodestar runs can change the rules gluetun runs as root. Settings → Companions will fill in gluetun's **Post-rules** path for you **(planned)**.
 
 To set the start order on Unraid:
 
