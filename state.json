@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T03:38Z",
+  "updated_at": "2026-11-13T03:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-13T00:38Z",
+  "last_heartbeat": "2026-11-13T03:41Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8911,7 +8911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T03:38Z",
+    "updated": "2026-11-13T03:41Z",
     "items": [
       {
         "slot": 1,
@@ -9181,11 +9181,11 @@
       },
       {
         "slot": 32,
-        "slice": "X-consent-gate-lift",
+        "slice": "X-consent-gate-lift-r2",
         "role": "build",
         "status": "active",
         "agent": "claude",
-        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: #807 merged (559c1755) 2026-11-13T03:38Z; now X-consent-gate-lift r2 (Account) on slice/X-consent-gate-lift-r2; External waits for owner (X-consent-gate-lift-external); kept build slot",
+        "doing": "session_01MMjhn9jUpmXebS4BaDhn2o: X-consent-gate-lift-r2 option (b), the non-gate tightening; Account stays closed until the owner approves the Notice wording",
         "since": "2026-11-13T03:38Z",
         "cap": "kept build (\u00a72.64 4+4 from 00:00Z)"
       }
@@ -9247,8 +9247,8 @@
       "words": "go with the runner's recommendation"
     }
   ],
-  "heartbeat": "2026-11-13T00:38Z",
-  "updated": "2026-11-13T03:38Z",
+  "heartbeat": "2026-11-13T03:41Z",
+  "updated": "2026-11-13T03:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9280,6 +9280,12 @@
       "sent": "2026-11-11",
       "ask": "Approve Legal Notice v5 \u00a72 wording for registering Prowlarr/Jackett (runner-state briefs/X-prowlarr-register-notice-draft.md); gates X-prowlarr-register",
       "relayed": "2026-11-11 via dashboard session"
+    },
+    {
+      "id": "notice-account-wording",
+      "asked": "2026-11-13T03:41Z",
+      "via": "dashboard session",
+      "text": "Legal Notice \u00a72: replace the two Prowlarr/Jackett sentences with \"Prowlarr or Jackett stays off until you turn it on in Settings \u2192 Sources, accept what an Account source does, and enter its API key; you confirm with your admin password.\" Unblocks X-consent-gate-lift-account (the gate flip)."
     }
   ],
   "review_queue": [
