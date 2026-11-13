@@ -33,6 +33,11 @@ case $(block_state) in
   *) echo "fail block_recorded" ;;
 esac
 NAME=outage_watcher_running; say watcher_active
+# The boot guard (X-gluetun-guard-reboot) couldn't hold the host guard at
+# boot, so Docker, which requires it, stays down on purpose: a fail here
+# explains a fail of docker_up.
+boot_guard_ok() { ! systemctl is-failed --quiet "$GUARD_UNIT"; }
+NAME=boot_guard_held; say boot_guard_ok
 
 collectors=$(docker ps --filter 'name=^lodestar-collector' --format '{{.ID}}' 2>/dev/null | grep -c . | digits)
 echo "count collectors_running ${collectors:-0}"

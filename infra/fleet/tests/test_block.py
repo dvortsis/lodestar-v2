@@ -1140,6 +1140,16 @@ class CopyOff(Base):
         rc, lines, _ = self.run_script("copy-off.sh")
         self.assertEqual(lines, ["fail evidence_present", "fail copy_off"])
 
+    def test_the_watcher_stops_before_the_guard_comes_off(self):
+        """X-gluetun-guard-reboot: a watcher check in between would put the guard back."""
+        self.make_block(segment=4)
+        (self.stub / "watcher_active").write_text("")
+        rc, lines, raw = self.run_script("copy-off.sh")
+        self.assertEqual(rc, 0, raw)
+        log = self.log()
+        self.assertLess(log.index("systemctl disable --now lodestar-outage-watcher"), log.index("iptables -S INPUT"))
+        self.assertEqual((self.stub / "host").read_text().strip(), "0")
+
     def test_with_no_marker_copy_off_still_releases_a_leftover_guard(self):
         """state=none: the block already ended (or a start failed after staging),
         and a leftover guard is still removed."""

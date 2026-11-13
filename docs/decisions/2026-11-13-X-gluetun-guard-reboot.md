@@ -1,4 +1,4 @@
-# X-gluetun-guard-reboot decisions (#PR)
+# X-gluetun-guard-reboot decisions (#845)
 
 This closes the gap that `2026-11-13-X-gluetun-host-guard.md` (#841) lists under "A reboot or an iptables flush mid-block". Either one drops the host guard while the marker still records a running block, and Docker restarts gluetun by itself (`restart: unless-stopped`). Before this change, nothing re-held the guard until the next start-block.
 
@@ -48,12 +48,20 @@ This closes the gap that `2026-11-13-X-gluetun-host-guard.md` (#841) lists under
   - the watcher after a reboot (it checks first), after a flush mid-block (a later check), when it can't hold the guard, and with a guard already held.
 - **No fixed sleeps.** The flush test lets the watcher's own 1 s read timeout come round, under the test's 60 s deadline. `sleep` is stubbed as before, which also covers the retry pause.
 - **Existing tests:** the systemd stubs now check the units, the drop-in, `daemon-reload`, `enable --now` and `disable --now`.
-- **`test_steps.py`:** vm-status's new lines.
+- **`test_steps.py`:** vm-status's new lines, including `fail boot_guard_held` beside `fail docker_up`, and the step's 180 s timeout.
+- **`test_block.py`, `CopyOff`:** the watcher stops before the guard comes off.
+
+## The runner's calls on the outside-owns items (2026-11-13)
+The runner approved all four for this PR (§2.26, §2.33):
+1. **`infra/fleet/steps/run.py`:** the `outage-watcher` step's timeout goes from 60 s to 180 s. In the worst case, `guard_resume` takes about 15 s for the lock, 4 s of retries, then 15 + 30 + 15 + 30 s to keep gluetun down (update, stop, kill, inspect) and 15 s for the note. A test pins the value.
+2. **`copy-off.sh`:** the watcher now stops before the guard is released. A watcher check can no longer put a guard back after copy-off has removed it. A test checks the order.
+3. **`docs/operations/cloud-fleet-runbook.md` §3.5–§3.7:** now names the new lines and what to do about each.
+4. **Both §2.19 flags were accepted.** The runner passes them to the owner at merge:
+   - **(a) The watcher is an enabled unit, not transient.** This supersedes the transient-unit choice in `2026-11-11-OP-3b.md`. The reason: a transient unit is gone after a reboot. Mid-block, nothing then watched gluetun or re-held the guard until someone ran the step by hand. An enabled unit with `ConditionPathExists=<block>/marker` starts again by itself and does nothing once the block has ended.
+   - **(b) The boot guard that Docker requires.** If the guard can't be held at boot, Docker stays down on that VM, which fails closed. vm-status reports it as `fail boot_guard_held` (from `systemctl is-failed`), so a tester sees why `docker_up` fails.
 
 ## Left as it is (for the runner)
 - **The boot window is closed, apart from boot itself.** From power-on until the boot guard runs, the host has no guard, and the endpoint's leftover UDP for the old session can be answered then. That happens before the network is configured, and the first check records it as a drop, so the block doesn't read as clean.
-- **copy-off's order.** copy-off releases the guard before it stops the watcher. A watcher check that lands in that gap of milliseconds puts a guard back and records a drop after the evidence was taken. The leftover guard can't touch the tunnel, and the next start-block or copy-off removes it. Stopping the watcher before the release, in copy-off (outside this slice's paths), would close that gap.
-- **The step's timeout.** `run.py` gives `outage-watcher` 60 s. In the worst case, `guard_resume` takes about 15 s for the lock, 4 s of retries, then 15 + 30 + 15 + 30 s to keep gluetun down (update, stop, kill, inspect) and 15 s for the note. That can exceed 60 s, and the control side would then see a timeout instead of `fail host_guarded`; the check itself still finishes on the VM. Raising the timeout to 180 s in `run.py` (outside this slice) would fix it.
-- **The runbook** (`docs/operations/cloud-fleet-runbook.md` §3.6 and §3.5, outside this slice's paths) should name the new lines. The step's "works" result becomes `done; 3 ok; host_guard_drops <n>, outages_seen <n>`. `ok host_guard_reheld` means a guard was put back and the block isn't clean. `fail host_guarded` with `fail block_intact` means gluetun was stopped and the block is damaged: run copy-off. After a failed boot guard, Docker is down on that VM until the guard can be held, so copy-off can't run there either. That VM's block is lost.
+- **After a failed boot guard,** Docker is down on that VM until the guard can be held, so copy-off can't run there either. That VM's block is lost; the runbook says to tear the fleet down.
 
-This changes a slice decision (OP-3b's transient unit), not an owner decision. It's a runner §2.19 flag to the owner.
+This changes a slice decision (OP-3b's transient unit), not an owner decision. The runner accepted it as a §2.19 flag to the owner.

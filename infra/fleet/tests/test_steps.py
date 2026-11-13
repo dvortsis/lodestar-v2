@@ -1008,6 +1008,24 @@ class VMScripts(unittest.TestCase):
         self.assertEqual((rc, lines[-2:]), (1, ["fail block_check", "fail leak_test"]))
         self.assertNotIn("compose", self.log())
 
+    def test_vm_status_says_why_docker_is_down(self):
+        """X-gluetun-guard-reboot: a boot guard that couldn't hold the host guard
+        keeps Docker down on purpose, and vm-status says so."""
+        (self.stub / "bin" / "systemctl").write_text(
+            '#!/bin/sh\ncase "$*" in\n  "is-failed --quiet lodestar-block-guard") [ -n "$BOOT_FAILED" ] ;;\n'
+            '  "is-active --quiet lodestar-outage-watcher") exit 1 ;;\n  *) echo "$*" >> "$STUB/badargs"; exit 1 ;;\nesac\n')
+        (self.stub / "bin" / "systemctl").chmod(0o755)
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("ok boot_guard_held", lines)
+        _, lines, _ = self.run_script("vm-status.sh", BOOT_FAILED=1, NO_DOCKER=1)
+        self.assertIn("fail boot_guard_held", lines)
+        self.assertIn("fail docker_up", lines)
+        self.assertFalse((self.stub / "badargs").exists())
+
+    def test_the_outage_watcher_step_has_time_for_the_guard_check(self):
+        # The lock (15 s), the retries and keeping gluetun down (about 90 s) fit, with room.
+        self.assertEqual(steps.BUILT["outage-watcher"]["timeout"], 180)
+
     def test_vm_status_reports_the_block(self):
         _, lines, _ = self.run_script("vm-status.sh")
         self.assertIn("skip block_recorded", lines)

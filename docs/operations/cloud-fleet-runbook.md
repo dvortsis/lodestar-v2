@@ -155,19 +155,31 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
 - **Works:** counters only, for example `done; <n> ok; block_segment <n>, collectors_running 1, disk_free_gib <n>, mem_available_mib <n>, uptime_hours <n>`.
   - A `failed:` list names what isn't so; `lodestar_running` between segments is normal.
   - No `block_segment` means no block is recorded.
+  - **During a block** it also reports `block_intact` and `host_guard_drops <n>`:
+    - `host_guard_drops` above 0 means the host guard (the rule that keeps the host from answering the VPN server outside the tunnel) went missing, after a reboot or a firewall flush, and was put back. The block isn't clean.
+    - `failed: block_intact` means the guard couldn't be put back. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
+  - **`failed: boot_guard_held`** means the VM rebooted mid-block and the guard couldn't be held at boot. Docker is kept down on purpose, so `docker_up` fails too and nothing on the VM can reach the internet. That VM's block is lost: tear the fleet down.
 
 ### 3.6 `/fleet run outage-watcher <vm>`, if needed
 - **What the watcher does:** it follows gluetun's container events and log. On a VPN restart or tunnel-down line it counts an outage, and writes a `link_outage` note into the running segment's evidence at once.
   - It never stops the crawl; the analyzer judges the segment.
-  - This step restarts it if it has stopped. It needs a recorded block.
-- **Works:** `done; 2 ok; outages_seen <n>` when it started the watcher, or `done; 1 ok; outages_seen <n>` when it was already running.
+  - **It also keeps the host guard.** It checks it when it starts and every 30 seconds. A missing guard is put back and counted as an outage. If it can't be put back, the watcher stops gluetun and marks the block damaged.
+  - It starts again by itself after a reboot.
+- **What this step does:** it checks the host guard, then restarts the watcher if it has stopped. It needs a recorded block.
+- **Works:**
+  - `done; 3 ok; host_guard_drops <n>, outages_seen <n>` when it started the watcher;
+  - `done; 2 ok; host_guard_drops <n>, outages_seen <n>` when the watcher was already running.
+  - `host_guard_reheld` among the ok lines means the guard was missing and is back. The block isn't clean.
+- **Fails:**
+  - **`failed: host_guarded, block_intact, outage_watcher`:** the guard couldn't be held. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
+  - **`failed: host_guard_checked, outage_watcher`:** another check was running at the same moment. Run it again.
 
 ### 3.7 `/fleet run copy-off <vm>`
 - **What it does:**
   1. Refuses while a collector runs, and stops a Lodestar left running alone.
   2. Runs the analyzer and the allow-list scrubber over the block's evidence, in a container with no network.
   3. The control plane scrubs the result again, and stores it only in the private evidence bucket, as `fleet/<run id>/copy-off-<vm>.json`.
-  4. Ends the block: the marker, the watcher and the Docker proxy go.
+  4. Ends the block: the watcher stops first, then the host guard, the marker and the Docker proxy go.
 - **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket`.
 - **Fails:**
   - **`failed: block_running, copy_off`:** a collector is still running, so the segment isn't over.
