@@ -8,7 +8,8 @@
 	import StateScreen from './StateScreen.svelte';
 
 	// `offline`: the page itself could not load because nothing answered (+error.svelte). It retries on
-	// its own; `status` is the live line saying when, and Try again asks now.
+	// its own; `status` is the live line saying when, and Try again asks now. +error.svelte sets the
+	// tab title (and puts it back), so this view doesn't.
 	let {
 		kind,
 		status = '',
@@ -19,10 +20,6 @@
 		onretry?: () => void;
 	} = $props();
 </script>
-
-<svelte:head>
-	{#if kind === 'offline'}<title>{m.shell_state_offline_title()}</title>{/if}
-</svelte:head>
 
 {#if kind === 'offline'}
 	<StateScreen
