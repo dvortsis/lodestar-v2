@@ -34,8 +34,15 @@ Answers to the questions at the end of each chapter, in the same order.
 3. Regenerating stops the old key at once, and Prowlarr still has it. Paste the new key into **API Key** in Prowlarr and test again.
 4. Delete it and select **Download export** again. A failed export ends partway, and nothing inside the file says so.
 
+## Chapter 8: Add companions
+
+1. Starting a container needs the Docker socket, which gives control of every container on the host, the same as root. Lodestar shows the file and you apply it.
+2. No. Never forward a companion's web page port. Reach it over a VPN instead.
+3. qBittorrent, because Lodestar sets it up most fully. You confirm each install so that nothing is downloaded, and nothing runs, unless you've seen it and its SHA-256 matches.
+4. Choose qBittorrent under **Companion** in **Companions you already run**, type its **Address**, such as `http://192.168.1.20:8080`, and select **Add**.
+
 <!-- nav:start -->
 ---
 
-[← Chapter 7: Connect other apps](07-connect-other-apps.md) · [Contents](README.md#contents) · [Appendix B: Settings reference →](appendix-b-settings-reference.md)
+[← Chapter 8: Add companions](08-add-companions.md) · [Contents](README.md#contents) · [Appendix B: Settings reference →](appendix-b-settings-reference.md)
 <!-- nav:end -->

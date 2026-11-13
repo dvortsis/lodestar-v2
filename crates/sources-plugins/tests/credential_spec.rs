@@ -241,13 +241,20 @@ fn plugins_without_a_credential_store_declare_none() {
         own(&nyaa::Sukebei::new()),
         own(&cache),
     ];
+    let mut plugins = plugins;
+    // Wikidata (ENR-14) is an identifier with no credential store.
+    let w = lodestar_sources_plugins::wikidata::Wikidata::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&w).clone(),
+        *lodestar_sources::identify::Identifier::policy(&w),
+    ));
     for (m, policy) in plugins {
         assert!(policy.credentials.is_empty(), "{}", m.id);
         check(&m, &policy, &Recording::default());
     }
 }
 
-/// The three above and these eight are every plugin in the catalogue, so
+/// The three above and these nine are every plugin in the catalogue, so
 /// a new one has to be added here.
 #[test]
 fn every_catalogued_plugin_is_checked() {
@@ -263,6 +270,7 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::ID,
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
+        lodestar_sources_plugins::wikidata::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
     assert_eq!(listed, BTreeSet::from(checked));
