@@ -786,7 +786,8 @@ class VMScripts(unittest.TestCase):
     def run_script(self, name, fixtures=None, **flags):
         self.run_script_fixtures(fixtures, **flags)
         env = self.env(**flags)
-        r = subprocess.run(self.argv(name), env=env, capture_output=True, text=True, timeout=120)
+        argv = self.argv(name) + ([flags["ARGV5"]] if "ARGV5" in flags else [])
+        r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
         # Every docker and tcpdump call had exactly the arguments the guards need.
         bad = self.stub / "badargs"
         self.assertFalse(bad.exists(), bad.read_text() if bad.exists() else "")
@@ -970,6 +971,8 @@ class VMScripts(unittest.TestCase):
                            "port zero": "Endpoint = 192.0.2.77:0\n",
                            "leading-zero port out of range": "Endpoint = 192.0.2.77:099999\n",
                            "hostname": "Endpoint = vpn.example:1337\n",
+                           "octet out of range": "Endpoint = 192.0.2.777:1337\n",
+                           "IPv6": "Endpoint = [2001:db8::1]:1337\n",
                            "no endpoint": "[Peer]\n"}.items():
             with self.subTest(name):
                 self.setUp()
@@ -1121,7 +1124,12 @@ class VMScripts(unittest.TestCase):
         rc, lines, raw = self.run_script("leak-test.sh")
         self.assertEqual(rc, 0, raw)
         self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
-        self.assertLess(self.log().index("-D INPUT"), self.log().index("-I INPUT 1"))
+        log = self.log()
+        self.assertLess(log.index("-D DOCKER-USER"), log.index("-I DOCKER-USER 1 -s"))
+        # The host guard's leftover comes out once the new copy is in (block-lib's
+        # host_guard_hold), so the host is never without one; one copy is held.
+        self.assertLess(log.index("-I INPUT 1"), log.index("-D INPUT"))
+        self.assertLess(log.index("-D INPUT"), log.index(" up -d --force-recreate gluetun"))
 
     def test_leftovers_for_an_earlier_endpoint_are_cleared_by_tag(self):
         (self.stub / "oldguard").write_text("1")  # a killed run against another PIA endpoint
@@ -1129,7 +1137,35 @@ class VMScripts(unittest.TestCase):
         rc, lines, raw = self.run_script("leak-test.sh")
         self.assertEqual(rc, 0, raw)
         self.assertEqual((self.copies("oldguard"), self.copies("oldhost")), (0, 0))
-        self.assertLess(self.log().index("iptables -S INPUT"), self.log().index("-I INPUT 1"))
+        log = self.log()
+        self.assertLess(log.index("iptables -S DOCKER-USER"), log.index("-I DOCKER-USER 1 -s"))
+        self.assertLess(log.index("iptables -S INPUT"), log.index(" up -d --force-recreate gluetun"))
+
+    def test_under_start_block_the_held_host_guard_is_kept(self):
+        """X-gluetun-host-guard: start-block holds the guard for its block and
+        passes `held`. The test checks it, adds no copy and leaves it on exit."""
+        (self.stub / "host").write_text("1")
+        rc, lines, raw = self.run_script("leak-test.sh", ARGV5="held")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual(lines[-1], "ok leak_test")
+        log = self.log()
+        self.assertNotIn("-I INPUT", log)
+        self.assertNotIn("-D INPUT", log)
+        self.assertNotIn("-S INPUT", log)
+        self.assertLess(log.index("-C INPUT"), log.index(" up -d --force-recreate gluetun"))
+        self.assertEqual(self.copies("host"), 1)  # still held for the block
+        self.assertEqual(self.copies("guard"), 0)  # the recreate guard is still the test's own
+
+    def test_under_start_block_a_missing_host_guard_stops_the_test(self):
+        rc, lines, _ = self.run_script("leak-test.sh", ARGV5="held")
+        self.assertEqual((rc, lines[-2:]), (1, ["fail host_guarded", "fail leak_test"]))
+        self.assertNotIn(" up -d --force-recreate gluetun", self.log())
+        self.assertEqual(self.copies("host"), 0)  # never added here
+
+    def test_an_unknown_fifth_argument_is_refused(self):
+        rc, lines, _ = self.run_script("leak-test.sh", ARGV5="keep")
+        self.assertEqual((rc, lines), (1, ["fail args_valid", "fail leak_test"]))
+        self.assertNotIn("iptables", self.log())
 
     def test_a_transient_check_error_is_never_read_as_gone(self):
         """O2 of the review of 87be769b: `-C` exiting 4 with the guard in place."""
@@ -1151,7 +1187,8 @@ class VMScripts(unittest.TestCase):
         """Run the leak test until the stub writes `marker`, send TERM to its process
         group, and return (exit code, stdout)."""
         self.run_script_fixtures()
-        proc = subprocess.Popen(self.argv("leak-test.sh"), env=self.env(**flags),
+        argv = self.argv("leak-test.sh") + ([flags["ARGV5"]] if "ARGV5" in flags else [])
+        proc = subprocess.Popen(argv, env=self.env(**flags),
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         try:
             deadline = time.monotonic() + 30
@@ -1174,6 +1211,16 @@ class VMScripts(unittest.TestCase):
         rc, out = self.signal_at("composing", BLOCK_COMPOSE=1)
         self.assertEqual(rc, 143)
         self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
+        self.assertNotIn("fail guards_released", out)
+
+    def test_a_signal_under_start_block_keeps_the_held_guard(self):
+        """X-gluetun-host-guard: TERM mid-recreate in a `held` run; cleanup lifts the
+        recreate guard but leaves start-block's host guard for the block."""
+        (self.stub / "host").write_text("1")
+        rc, out = self.signal_at("composing", BLOCK_COMPOSE=1, ARGV5="held")
+        self.assertEqual(rc, 143)
+        self.assertEqual((self.copies("guard"), self.copies("host")), (0, 1))
+        self.assertNotIn("-D INPUT", self.log())
         self.assertNotIn("fail guards_released", out)
 
     def test_a_signal_inside_the_insert_leaves_no_guard(self):

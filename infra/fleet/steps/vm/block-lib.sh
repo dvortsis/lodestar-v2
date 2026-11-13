@@ -18,6 +18,79 @@ API=http://127.0.0.1:8090  # Lodestar on gluetun's loopback, which the throwaway
 DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}  # read for its group only; only the proxy mounts it
 HEX64='^[0-9a-f]{64}$'
 
+# The host guard (X-gluetun-host-guard): an INPUT DROP for the VPN endpoint's
+# UDP, tagged lodestar-leak-host. When gluetun stops or is recreated, Docker
+# flushes the container's conntrack entries, so the endpoint's leftover UDP for
+# the old session goes to the host's own INPUT and the host's kernel would
+# answer it ("port unreachable") from its public address, outside the tunnel.
+# The guard can't touch the tunnel: a live session's replies are de-NATed and
+# forwarded, never delivered to the host. start-block holds it for the whole
+# block (from before the leak test recreates gluetun), copy-off removes it; a
+# leak test run on its own holds its own copy for its run.
+HOST_TAG=lodestar-leak-host
+IPV4='^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$'
+# endpoint_read conf: the WireGuard endpoint from the root-only wg0.conf, into
+# ep_ip and ep_port, validated before it reaches iptables: IPv4 only (the guards
+# are IPv4 rules) and a port of 1-65535. It never leaves this VM or is printed.
+endpoint_read() {
+  local ip port
+  ep_ip="" ep_port=""
+  ip=$(sed -n 's/^Endpoint = \([^:]*\):\([0-9]*\)$/\1/p' "$1" 2>/dev/null | head -n 1)
+  port=$(sed -n 's/^Endpoint = \([^:]*\):\([0-9]*\)$/\2/p' "$1" 2>/dev/null | head -n 1)
+  [[ $ip =~ $IPV4 && $port =~ ^[0-9]{1,5}$ ]] || return 1
+  ((10#$port >= 1 && 10#$port <= 65535)) || return 1
+  ep_ip=$ip ep_port=$((10#$port))
+}
+host_guard_rule() {  # sets host_rule, for the endpoint endpoint_read read
+  host_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment "$HOST_TAG" -j DROP)
+}
+# host_guard_hold: exactly one host guard, this endpoint's. The new copy goes
+# in at the top of INPUT first and the rest (a stuck copy, a duplicate, or an
+# earlier endpoint's) come out after, so there's never a moment without one.
+# Re-running it leaves the same single rule. (With an identical copy already
+# there, deleting by spec removes the new one, so the old copy keeps its place;
+# nothing else on the VM adds INPUT rules above it.)
+host_guard_hold() {
+  iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null || return 1
+  clear_tagged INPUT "$HOST_TAG" 1 || return 1
+  iptables -C INPUT "${host_rule[@]}" 2>/dev/null
+}
+host_guard_release() { clear_tagged INPUT "$HOST_TAG"; }  # every copy, whatever endpoint it names
+# drop_all chain rule...: remove every copy of a rule (a failed delete can
+# leave more than one). Only `-C` exit 1 means absent (iptables also uses 1
+# for some generic errors, such as a missing chain); any other exit is an
+# error, never read as "gone". Fails when a copy may still be there.
+drop_all() {
+  local chain=$1 i rc
+  shift
+  for ((i = 0; i < 5; i++)); do
+    iptables -C "$chain" "$@" 2>/dev/null; rc=$?
+    ((rc == 1)) && return 0
+    ((rc == 0)) || return 1
+    iptables -D "$chain" "$@" 2>/dev/null || return 1
+  done
+  iptables -C "$chain" "$@" 2>/dev/null; rc=$?
+  ((rc == 1))
+}
+# clear_tagged chain tag [keep]: remove every rule in the chain that carries
+# the comment tag, whatever endpoint it names, but the first `keep` (default
+# 0). Each line of `iptables -S` is turned from -A into -D and run as words,
+# never through a shell. Deleting by a duplicate's spec removes the first
+# identical copy, which leaves the same rule in place.
+clear_tagged() {
+  local chain=$1 tag=$2 keep=${3:-0} i out line words
+  for ((i = 0; i < 10; i++)); do
+    out=$(iptables -S "$chain" 2>/dev/null) || return 1
+    line=$(printf '%s\n' "$out" | grep -e "--comment $tag " | sed -n "$((keep + 1))p")
+    [[ -z $line ]] && return 0
+    read -ra words <<<"$line"
+    [[ ${words[0]} == -A && ${words[1]} == "$chain" ]] || return 1
+    words[0]=-D
+    iptables "${words[@]}" 2>/dev/null || return 1
+  done
+  return 1
+}
+
 # none | block | unknown
 block_state() {
   local list
