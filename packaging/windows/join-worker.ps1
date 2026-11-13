@@ -96,17 +96,41 @@ function Quote([string]$a) {
 }
 
 # ---- 1. the token, from stdin ----
-# One line; a join token is 126 characters. More than 4 KiB is not a token.
-$line = [Console]::In.ReadLine()
-if ($null -eq $line) { $line = '' }
-# A byte-order mark (U+FEFF) is not whitespace to Trim(): a writer that sends one must not
-# make a good token look mistyped.
-$script:token = $line.Trim().TrimStart([char]0xFEFF).Trim()
-$line = $null
-if ($script:token.Length -gt 4096) { $script:token = $null; Fail 'The join token is too long. Copy it again from Settings, Workers, Add worker on the main Lodestar.' }
+# Read as bytes from the pipe itself, never through PowerShell's console input (its encoding
+# and buffering differ between hosts), then decoded as ASCII: a token is ASCII. One line; a
+# join token is 126 characters, so more than 4 KiB is not a token.
+$stdin = [Console]::OpenStandardInput()
+$buffer = New-Object byte[] 4097
+$got = 0
+while ($got -lt $buffer.Length) {
+  $n = $stdin.Read($buffer, $got, $buffer.Length - $got)
+  if ($n -le 0) { break }
+  $got += $n
+  if ([Array]::IndexOf($buffer, [byte]10, 0, $got) -ge 0) { break }
+}
+$text = [Text.Encoding]::ASCII.GetString($buffer, 0, $got)
+[Array]::Clear($buffer, 0, $buffer.Length)
+if ($got -gt 4096) { $text = $null; Fail 'The join token is too long. Copy it again from Settings, Workers, Add worker on the main Lodestar.' }
+# The first line, without the line break, spaces, or a byte-order mark (read as ASCII, its
+# three bytes become '???'), which some writers put first.
+$first = ($text -split "`n", 2)[0]
+$text = $null
+$script:token = $first.Trim().TrimStart([char]0xFEFF)
+if ($script:token.StartsWith('???')) { $script:token = $script:token.Substring(3) }
+$script:token = $script:token.Trim()
+$first = $null
 if ($script:token -eq '') { $script:token = $null; Fail 'No join token was given. Make one in Settings, Workers, Add worker on the main Lodestar, and paste it in.' }
 if ($script:token -notmatch '\A(?i:lsj1)[A-Za-z2-7]{122}\z') {
+  # What was wrong, for the log, without any of the token: its length, its start, and the
+  # code of the first character that can't be in a token (so isn't part of one).
+  $bad = -1
+  for ($i = 0; $i -lt $script:token.Length; $i++) {
+    if ($script:token[$i] -notmatch '[A-Za-z0-9]') { $bad = $i; break }
+  }
+  $what = "got $($script:token.Length) characters; starts with lsj1: $($script:token -match '\A(?i:lsj1)')"
+  if ($bad -ge 0) { $what += "; character $bad is U+$('{0:X4}' -f [int]$script:token[$bad])" }
   $script:token = $null
+  Write-Host "lodestar join: the token was refused ($what)"
   Fail 'That is not a join token: it starts with lsj1 and is 126 letters and digits long. Copy it again from Settings, Workers, Add worker on the main Lodestar (it works once, for 15 minutes).'
 }
 

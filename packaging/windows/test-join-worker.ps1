@@ -149,7 +149,7 @@ function Assert-PrivateSddl([string]$sddl, [string]$what) {
 
 # ---- a join that works ----
 $r = Invoke-Join 'ok'
-Assert ($null -eq $r.Result) "ok: the join was reported as failed: $($r.Result)"
+Assert ($null -eq $r.Result) "ok: the join was reported as failed: $($r.Result)`n$(@($r.Log) -join "`n")"
 Assert ($r.Seen.token -eq 'match') 'ok: lodestar did not read the token from the file'
 Assert ($r.Seen.joinonly -eq 'True') 'ok: lodestar was not run with --join-only'
 Assert ($r.Seen.join -eq 'https://192.168.1.10:8091') "ok: lodestar got the address $($r.Seen.join)"
