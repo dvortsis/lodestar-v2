@@ -38,8 +38,10 @@ const HANDSHAKE_TIMEOUT: Duration = INITIAL_RTO.saturating_mul(8);
 const DUP_ACK_THRESHOLD: u32 = 3;
 /// How old a transmission may be for an echoed timestamp to be matched
 /// against it. Our 32-bit microsecond clock wraps every ~71 minutes; half
-/// that keeps the wrapping comparison in `echoed_sample` unambiguous, far
-/// beyond the ~7 minutes `MAX_TIMEOUTS` backed-off timeouts can take.
+/// that keeps the wrapping comparison in `echoed_sample` unambiguous.
+/// Timeouts that count give up within about 7 minutes, but probing a
+/// closed window doesn't count, so a packet can stay unacknowledged for
+/// longer than this: past it, Karn's rule applies and there's no sample.
 const ECHO_HORIZON: Duration = Duration::from_micros(1 << 31);
 
 #[derive(Debug, Clone, Copy)]
@@ -531,6 +533,9 @@ impl Connection {
         let cumulative = if upto <= len { upto } else { 0 };
         let mut acked_bytes = 0;
         let mut newest_sample = None;
+        // Only used when no first transmission gives a sample: that one is
+        // exact, an echoed one at worst an overestimate.
+        let mut echoed = None;
         // Our timestamp on the last packet the peer received, plus however
         // long it held this reply: its timestamp minus the delay it
         // measured (BEP 29). Untrusted. A zero delay means the peer had
@@ -557,7 +562,7 @@ impl Connection {
                 // (Not a SYN: the accepting side doesn't refresh its echo
                 // for a repeated SYN, so the echo there is stale, and the
                 // handshake drops the backoff anyway.)
-                newest_sample = Some(r);
+                echoed = Some(r);
             }
         };
         for s in self.inflight.iter_mut().take(cumulative) {
@@ -575,7 +580,7 @@ impl Connection {
                 }
             }
         }
-        if let Some(r) = newest_sample {
+        if let Some(r) = newest_sample.or(echoed) {
             self.rtt.sample(r);
         }
         // Progress is our oldest packet being acknowledged, by any means.

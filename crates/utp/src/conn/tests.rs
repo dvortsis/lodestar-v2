@@ -729,10 +729,9 @@ fn a_round_trip_jump_costs_few_retransmissions() {
     // is kept until an ACK gives a sample: a first transmission that
     // outlasts the round trip, or a resent one whose ACK echoes the copy
     // it answers (the timeout was spurious). The messages after that
-    // aren't resent. Resetting the
-    // backoff on any progress resends every message about twice, and
-    // capping its growth across progress traps it below twice the round
-    // trip, so every message is resent for good.
+    // aren't resent. Resetting the backoff on any progress resends every
+    // message about twice, and capping its growth across progress traps it
+    // below twice the round trip, so every message is resent for good.
     for ms in [1_800, 2_500, 5_000, 10_000] {
         let rtt = Duration::from_millis(ms);
         let resends = resends_after_a_round_trip_jump(rtt, 20);
@@ -839,7 +838,7 @@ fn a_live_peer_with_a_closed_window_is_probed_not_given_up_on() {
 }
 
 /// `packet` re-encoded with its timestamp and timestamp difference
-/// replaced, so that it echoes `echo` (or nothing, for `diff` 0).
+/// replaced: it then echoes `timestamp_us - diff` (nothing, for `diff` 0).
 fn with_timestamps(packet: &[u8], timestamp_us: u32, diff: u32) -> Vec<u8> {
     let p = parse(packet).unwrap();
     let mut h = p.header;
@@ -912,33 +911,63 @@ fn an_ack_of_the_resend_samples_the_resend() {
     assert_eq!(a.rtt.backoff(), 0);
 }
 
+/// A forged ACK: its timestamp, its delay, and when it reaches A, from
+/// our clock (`us`), the first copy's send time, the resend's and the
+/// ACK's honest arrival.
+type Forge = fn(&dyn Fn(Instant) -> u32, Instant, Instant, Instant) -> (u32, u32, Instant);
+
 #[test]
 fn an_echo_that_matches_no_transmission_gives_no_sample() {
-    for (case, forge) in [
-        ("no echo", (12_345u32, 0u32)),
-        ("before the first copy", (1, 1_000_000)),
-        ("in the future", (u32::MAX, 1)),
-    ] {
+    let cases: [(&str, Forge); 4] = [
+        // It would match the first copy, but with no delay measured the
+        // peer had nothing to echo.
+        ("no echo", |us, sent, _, at| (us(sent) + 1, 0, at)),
+        ("before the first copy", |us, sent, _, at| (us(sent), 1, at)),
+        ("in the future", |us, _, _, at| {
+            (us(at).wrapping_add(10_000_000), 1, at)
+        }),
+        // Echoing the resend the instant it went out: a zero round trip.
+        ("a zero round trip", |us, _, resent, _| {
+            (us(resent) + 1, 1, resent)
+        }),
+    ];
+    for (case, forge) in cases {
         let (mut a, mut b, first, _resend, sent, resent) = resent_once(22);
         let srtt = a.rtt.srtt();
         let backed_off = a.rtt.rto();
         let at = resent + Duration::from_millis(300);
         deliver(&mut b, &[first], at);
         let ack = drain(&mut b, at);
-        let us = |t: Instant| t.saturating_duration_since(a.epoch).as_micros() as u32;
-        // Shift the forged echo relative to the first copy's send time.
-        let (ts, diff) = match case {
-            "no echo" => forge,
-            "before the first copy" => (us(sent), 1),
-            _ => (us(at).wrapping_add(10_000_000), 1),
-        };
-        let forged = with_timestamps(&ack[0], ts, diff);
-        deliver(&mut a, &[forged], at);
+        let epoch = a.epoch;
+        let us = move |t: Instant| t.saturating_duration_since(epoch).as_micros() as u32;
+        let (ts, diff, arrive) = forge(&us, sent, resent, at);
+        deliver(&mut a, &[with_timestamps(&ack[0], ts, diff)], arrive);
         assert!(a.inflight.is_empty(), "{case}: still acknowledged");
         assert_eq!(a.rtt.srtt(), srtt, "{case}: Karn holds");
         assert_eq!(a.rtt.rto(), backed_off, "{case}: still backed off");
         assert_eq!(a.rtt.backoff(), 1, "{case}");
     }
+}
+
+#[test]
+fn a_transmission_past_the_echo_horizon_gives_no_sample() {
+    // A packet unacknowledged for longer than the horizon (closed-window
+    // probing doesn't count towards giving up): even an echo that matches
+    // its latest copy gives nothing, since the wrapping clock can no
+    // longer order our transmissions.
+    let epoch = Instant::now();
+    let mut s = sent_at(epoch, 0, [0, 0]);
+    s.sent_at = epoch + ECHO_HORIZON;
+    let now = s.sent_at + Duration::from_millis(100);
+    let us = |t: Instant| t.duration_since(epoch).as_micros() as u32;
+    assert_eq!(echoed_sample(&s, us(s.sent_at), epoch, now), None);
+    // Just inside it, the same echo matches.
+    s.sent_at = epoch + ECHO_HORIZON - Duration::from_millis(200);
+    let now = s.sent_at + Duration::from_millis(100);
+    assert_eq!(
+        echoed_sample(&s, us(s.sent_at), epoch, now),
+        Some(Duration::from_millis(100))
+    );
 }
 
 #[test]
@@ -1072,7 +1101,8 @@ proptest! {
     fn an_echoed_sample_comes_from_our_own_transmissions(
         first_us in prop_oneof![0u64..1 << 33, ((1u64 << 32) - 10_000_000)..(1 << 32)],
         gaps in [0u64..120_000_000, 0u64..120_000_000],
-        wait in 0u64..120_000_000,
+        // Some waits run past the echo horizon.
+        wait in prop_oneof![0u64..120_000_000, 2_000_000_000u64..5_000_000_000],
         echo in prop_oneof![
             any::<u32>(),
             (0u64..400_000_000).prop_map(|o| o as u32),
