@@ -104,7 +104,6 @@
 			<button
 				type="button"
 				class="flex items-center gap-2 rounded-field text-start {FOCUS_RING} {TARGET_MIN}"
-				aria-label={m.sources_details_name({ name: s.name })}
 				aria-expanded={open}
 				aria-controls="{id}-detail"
 				onclick={() => (open = !open)}

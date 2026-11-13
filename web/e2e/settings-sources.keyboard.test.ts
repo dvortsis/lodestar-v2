@@ -55,7 +55,7 @@ test.describe('keyboard: Settings → Sources', () => {
 		await go('/settings/sources');
 		// Priority sits in the row's detail: open it first (X-sources-restructure).
 		const expand = page.getByTestId('source-0-expand');
-		await expect(expand).toHaveAccessibleName('Mainline DHT, details');
+		await expect(expand).toHaveAccessibleName('Mainline DHT');
 		await kbd.tabTo(expand, 40);
 		await kbd.press('Enter');
 		await expect(expand).toHaveAttribute('aria-expanded', 'true');

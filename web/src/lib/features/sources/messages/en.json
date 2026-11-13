@@ -161,8 +161,7 @@
 	"sources_consent_open": "Open",
 	"sources_legend_open": "No badge. Turns on with its switch.",
 	"sources_legend_external": "Contacts public web services. You see the addresses it contacts before it turns on.",
-	"sources_legend_account": "Signs in to a service of yours. It asks for your credentials, which are stored encrypted, and its results stay on this server.",
+	"sources_legend_account": "Uses your account or API key with another service. It asks for your credentials, which are stored encrypted, and its results stay on this server.",
 	"sources_legend_restricted": "Carries more legal risk. It asks for your consent first. A VPN is strongly advised.",
-	"sources_legend_overlay": "Joins another network, such as I2P or IPFS. It asks for your consent first, a VPN is advised, and what it found can be purged in one step.",
-	"sources_details_name": "{name}, details"
+	"sources_legend_overlay": "Joins another network, such as I2P or IPFS. It asks for your consent first, a VPN is advised, and what it found can be purged in one step."
 }

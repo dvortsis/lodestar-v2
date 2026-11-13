@@ -1,7 +1,7 @@
 // Settings → Sources' layout (X-sources-restructure, owner §2.66): the filter box and its empty
 // state, the groups' summary lines and collapse, rows that expand, and the consent legend.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { configure, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { mockFetch } from '../filters/flows/testing/fetch';
 import SourcesScreen from './SourcesScreen.svelte';
 import { darknet, dht, lime, nyaa, prowlarr, sourceList } from './fixtures';
@@ -19,7 +19,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 const filter = () => screen.getByRole('searchbox', { name: 'Filter sources' });
 const rowNames = () =>
-	screen.queryAllByRole('button', { name: /, details$/ }).map((b) => b.textContent?.trim());
+	[...document.querySelectorAll<HTMLElement>('[data-testid$="-expand"]')]
+		.filter((b) => !b.closest('[hidden]'))
+		.map((b) => b.textContent?.trim());
 const writes = () => net.sent.filter((s) => s.method !== 'GET');
 
 describe('Sources layout', () => {
@@ -49,6 +51,8 @@ describe('Sources layout', () => {
 		await fireEvent.click(within(empty).getByRole('button', { name: 'Clear filter' }));
 		expect(rowNames()).toHaveLength(5);
 		expect((filter() as HTMLInputElement).value).toBe('');
+		// The button left with the empty state: the keyboard is back in the filter.
+		await waitFor(() => expect(document.activeElement).toBe(filter()));
 		expect(screen.queryByTestId('sources-filter-empty')).toBeNull();
 	});
 
@@ -88,7 +92,7 @@ describe('Sources layout', () => {
 	it('shows each row as one line that expands to its detail', async () => {
 		setup();
 		await screen.findByTestId('source-0');
-		const expand = screen.getByRole('button', { name: 'Mainline DHT, details' });
+		const expand = screen.getByRole('button', { name: 'Mainline DHT' });
 		const detail = screen.getByTestId('source-0-detail');
 		expect(expand.getAttribute('aria-expanded')).toBe('false');
 		expect(expand.getAttribute('aria-controls')).toBe(detail.id);

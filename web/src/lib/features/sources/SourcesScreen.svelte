@@ -6,7 +6,7 @@
 	// consent classes)
 	// (SRC-15b), loaded on first use. Until a dialog's chunk arrives the screen simply stays as it is. This screen shows the server's last answer and replaces a row
 	// with the PATCH's reply.
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconCaret from '~icons/ph/caret-right-bold';
@@ -196,6 +196,7 @@
 				<Input
 					type="search"
 					class="max-w-md"
+					id="sources-filter"
 					aria-label={m.sources_filter_label()}
 					placeholder={m.sources_filter_placeholder()}
 					value={query}
@@ -218,6 +219,8 @@
 							onclick={() => {
 								query = '';
 								closed = [];
+								// The button goes with the empty state: put the keyboard back in the filter.
+								void tick().then(() => document.getElementById('sources-filter')?.focus());
 							}}
 							data-testid="sources-filter-clear">{m.sources_filter_clear()}</Button
 						>

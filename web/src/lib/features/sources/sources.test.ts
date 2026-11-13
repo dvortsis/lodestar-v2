@@ -87,6 +87,7 @@ describe('filter, attention and summary (X-sources-restructure)', () => {
 		expect(needsAttention(nyaa)).toBe(false); // off, needs setup: not attention
 		expect(needsAttention(prowlarr)).toBe(true); // error and restart
 		expect(needsAttention(source({ id: 5, name: 'R', restart_required: true }))).toBe(true);
+		expect(needsAttention(source({ id: 7, name: 'P', purge_pending: true }))).toBe(true);
 		const waiting = source({
 			id: 6,
 			name: 'W',

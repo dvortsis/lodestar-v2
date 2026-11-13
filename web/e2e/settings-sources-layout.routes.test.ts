@@ -41,7 +41,7 @@ test.describe('Settings → Sources layout', () => {
 			await expect(page.getByTestId('source-0')).toHaveCount(0);
 
 			// The row is one line; its detail opens from the name.
-			const expand = page.getByRole('button', { name: 'Nyaa, details' });
+			const expand = page.getByRole('button', { name: 'Nyaa', exact: true });
 			await expect(expand).toHaveAttribute('aria-expanded', 'false');
 			await expect(page.getByTestId('source-1-detail')).toBeHidden();
 			await expand.click();
@@ -79,7 +79,7 @@ test.describe('Settings → Sources layout', () => {
 			await expect(page.getByTestId('sources-legend')).toBeVisible();
 			await page.getByTestId('sources-group-network-toggle').click();
 			await expect(page.getByTestId('sources-group-network')).toBeHidden();
-			await page.getByRole('button', { name: 'Mainline DHT, details' }).click();
+			await page.getByRole('button', { name: 'Mainline DHT', exact: true }).click();
 			await expect(page.getByTestId('source-0-detail')).toBeVisible();
 			await expectNoA11yViolations(page);
 		});

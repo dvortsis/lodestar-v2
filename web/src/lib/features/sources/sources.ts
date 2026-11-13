@@ -165,12 +165,17 @@ export function matches(s: Source, query: string): boolean {
 }
 
 /**
- * Whether a source needs the person's attention: it failed, it waits for a restart, or it's on
- * and waits for a companion. A source that is simply off, or still needs setup before it can be
+ * Whether a source needs the person's attention: it failed, it waits for a restart, a purge
+ * didn't finish, or it's on and waits for a companion. A source that is simply off, or still needs setup before it can be
  * turned on, doesn't.
  */
 export function needsAttention(s: Source): boolean {
-	return statusOf(s) === 'error' || s.restart_required || (s.enabled && s.companion_need !== null);
+	return (
+		statusOf(s) === 'error' ||
+		s.restart_required ||
+		s.purge_pending ||
+		(s.enabled && s.companion_need !== null)
+	);
 }
 
 /** A group's one-line summary: how many of its sources are on, and how many need attention. */
