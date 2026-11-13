@@ -656,19 +656,14 @@ fn installed(ctx: &Context, running: &Version) -> Result<Installed, ManualRefusa
 /// [`manual_plan`]: `from` the recorded previous version, `to` the
 /// running one. Its `snapshots_before` is every snapshot there now but the
 /// recorded one, so step 2's [`choose`] finds exactly that one (or none,
-/// when the store is kept). `request` names the request it came from: 1 to
-/// 32 lowercase hex digits.
+/// when the store is kept). `request` names the request it came from, an
+/// id as the helper's requests have ([`msi::valid_id`]).
 pub fn manual_journal(
     ctx: &Context,
     running: &Version,
     request: &str,
 ) -> Result<Journal, ManualRefusal> {
-    if request.is_empty()
-        || request.len() > 32
-        || !request
-            .bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    {
+    if !msi::valid_id(request) {
         return Err(ManualRefusal::Io("the request's id is invalid".into()));
     }
     let (plan, rec) = plan_with_record(ctx, running)?;
@@ -1137,7 +1132,15 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         if is_manual(j) {
             // Checked again with the service stopped: its retention purge
             // can't delete the snapshot after this.
-            manual_snapshot(ctx, j).map_err(Stop::Undo)?;
+            // Undone only while nothing was changed: a run that wrote the
+            // marker (and the skip) and crashed before saving step 1 halts.
+            manual_snapshot(ctx, j).map_err(|why| {
+                if std::fs::symlink_metadata(ctx.data_dir.join("bin").join(MARKER)).is_ok() {
+                    Stop::Halt(why)
+                } else {
+                    Stop::Undo(why)
+                }
+            })?;
         }
         let bin = halt_on(
             Bin::existing(&ctx.data_dir)
@@ -1575,6 +1578,8 @@ mod tests {
 
     const OLD_MSI: &[u8] = b"the 0.6.0 msi";
     const SNAP: &str = "lodestar.pre-v8.db";
+    /// A request id, as the helper's requests have (`msi::valid_id`).
+    const ID: &str = "0123456789abcdef";
 
     /// A Windows that does what it's asked: every call is recorded.
     struct Fake {
@@ -1749,7 +1754,7 @@ mod tests {
         assert_eq!(record(&env).unwrap().snapshot, None);
         let plan = manual_plan(&env.ctx, &v("0.7.0")).unwrap();
         assert_eq!(plan.snapshot, None);
-        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
         assert_eq!(choose(&env.ctx, &j.snapshots_before).unwrap(), None);
     }
 
@@ -1856,18 +1861,20 @@ mod tests {
         // Snapshots taken since, older and newer, aren't the one.
         std::fs::write(env.ctx.data_dir.join("lodestar.pre-v3.db"), b"x").unwrap();
         std::fs::write(env.ctx.data_dir.join("lodestar.pre-v9.db"), b"y").unwrap();
-        let j = manual_journal(&env.ctx, &v("0.7.0"), "0123456789abcdef").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
         assert!(is_manual(&j));
         assert_eq!(j.id, "manual-0123456789abcdef");
         assert_eq!((j.from.as_str(), j.to.as_str()), ("0.6.0", "0.7.0"));
         let chosen = choose(&env.ctx, &j.snapshots_before).unwrap().unwrap();
         assert_eq!(chosen.name, SNAP);
+        let long = "a".repeat(65);
         for bad in [
             "",
-            "ABC",
-            "0123456789abcdef0123456789abcdef0",
-            "../x",
-            "12 3",
+            "ab",
+            "0123456789ABCDEF",
+            long.as_str(),
+            "../0123456789abcdef",
+            "0123456789abcde 0",
         ] {
             assert_eq!(
                 manual_journal(&env.ctx, &v("0.7.0"), bad)
@@ -1884,7 +1891,7 @@ mod tests {
         let env = env();
         installed_and_passed(&env);
         let fake = Fake::new(Start::Manual);
-        let out = manual(&env.ctx, &fake, &v("0.7.0"), "0123abcd").unwrap();
+        let out = manual(&env.ctx, &fake, &v("0.7.0"), ID).unwrap();
         assert_eq!(
             out,
             Outcome::RolledBack {
@@ -1931,7 +1938,7 @@ mod tests {
     fn a_snapshot_purged_before_the_service_stopped_undoes_the_rollback() {
         let env = env();
         installed_and_passed(&env);
-        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
         write(&env.ctx, &j).unwrap();
         // The service's retention purge, between the plan and the stop.
         std::fs::remove_file(env.ctx.data_dir.join(SNAP)).unwrap();
@@ -1966,7 +1973,7 @@ mod tests {
     fn a_manual_rollback_without_its_msi_changes_nothing() {
         let env = env();
         installed_and_passed(&env);
-        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
         write(&env.ctx, &j).unwrap();
         std::fs::remove_dir_all(env.ctx.staging.previous()).unwrap();
         let fake = Fake::new(Start::Manual);
@@ -1990,13 +1997,72 @@ mod tests {
             .unwrap()
     }
 
+    /// Step 2 restores only the recorded snapshot: one found that isn't it
+    /// (an earlier migration's, not listed before) halts before the store
+    /// is touched.
+    #[test]
+    fn step_2_halts_on_a_snapshot_that_isnt_the_recorded_one() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        write(&env.ctx, &j).unwrap();
+        std::fs::write(env.ctx.data_dir.join("lodestar.pre-v6.db"), b"planted").unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = roll_back(&env.ctx, &fake, j);
+        let Outcome::RollbackHalted { why, .. } = out else {
+            panic!("{out:?}");
+        };
+        assert!(why.contains("isn't the one the update took"), "{why}");
+        assert_eq!(
+            std::fs::read(env.ctx.data_dir.join(STORE)).unwrap(),
+            b"new store"
+        );
+        let calls = fake.calls();
+        assert!(!calls.iter().any(|c| c.starts_with("msiexec")), "{calls:?}");
+    }
+
+    /// A run that wrote the marker and crashed before saving step 1, then
+    /// finds the snapshot gone: the marker is in place, so it halts (the
+    /// service stays stopped and disabled) rather than undo and say
+    /// nothing was changed.
+    #[test]
+    fn a_missing_snapshot_after_the_marker_halts_instead_of_undoing() {
+        let env = env();
+        installed_and_passed(&env);
+        let mut j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        j.touched = true;
+        write(&env.ctx, &j).unwrap();
+        Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .write(MARKER, &serde_json::json!({ "windows_rollback": "0.7.0" }))
+            .unwrap();
+        std::fs::remove_file(env.ctx.data_dir.join(SNAP)).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = resume(&env.ctx, &fake, &v("0.7.0")).unwrap().unwrap();
+        let Outcome::RollbackHalted { recovery, .. } = out else {
+            panic!("{out:?}");
+        };
+        assert!(recovery.contains("stopped after step 1 of 5"), "{recovery}");
+        assert!(env.ctx.data_dir.join("bin").join(MARKER).exists());
+        assert!(matches!(
+            read(&env.ctx).unwrap().unwrap().state,
+            State::Halted { .. }
+        ));
+        let calls = fake.calls();
+        assert_eq!(
+            calls.iter().rfind(|c| c.starts_with("set_start")).unwrap(),
+            "set_start Disabled"
+        );
+        assert!(!calls.contains(&"start".to_string()), "{calls:?}");
+    }
+
     /// A crash or restart after the journal was written and before step 1
     /// ran: the next run's `resume` finishes it as a manual one.
     #[test]
     fn a_manual_journal_written_before_a_crash_is_finished_by_resume() {
         let env = env();
         installed_and_passed(&env);
-        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
         write(&env.ctx, &j).unwrap();
         let fake = Fake::new(Start::Manual);
         let out = resume(&env.ctx, &fake, &v("0.7.0")).unwrap().unwrap();
@@ -2018,7 +2084,7 @@ mod tests {
         for done in [2u8, 4] {
             let env = env();
             installed_and_passed(&env);
-            let mut j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+            let mut j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
             let snap = choose(&env.ctx, &j.snapshots_before).unwrap();
             assert_eq!(snap.as_ref().map(|s| s.name.as_str()), Some(SNAP));
             j.touched = true;
@@ -2091,7 +2157,9 @@ mod tests {
     }
 
     /// A record that can't be written leaves none behind: a stale one from
-    /// an earlier install mustn't stay and match later.
+    /// an earlier install mustn't stay and match later. (The failed write
+    /// here is a folder in the record's place, which isn't a file to
+    /// remove: this covers the refusal, not removing a stale file.)
     #[test]
     fn a_record_that_cant_be_written_leaves_none() {
         let env = env();
@@ -2131,7 +2199,7 @@ mod tests {
     fn a_manual_rollbacks_halt_says_it_was_manual() {
         let env = env();
         installed_and_passed(&env);
-        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
         let event = recovery_event(&j, 2, Cause::Step);
         assert!(
             event.starts_with(
