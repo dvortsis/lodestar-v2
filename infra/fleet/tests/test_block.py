@@ -1168,15 +1168,17 @@ class CopyOff(Base):
 
     def test_copy_off_mounts_the_mark_and_the_scrubber_sees_it(self):
         """The mark alone, with no host_guard_lost line (a reboot between
-        guard_lost's two writes): copy-off mounts it, read-only, and the
-        scrubber reports the block damaged from what the container sees."""
+        guard_lost's two writes): copy-off mounts an empty stand-in for it,
+        read-only, and the scrubber reports the block damaged from what the
+        container sees."""
         self.make_block(segment=2)
         (self.block / "outages").write_text("1 host_guard_dropped\n")
         (self.block / "damaged").write_text("host_guard_lost\n")
         rc, lines, raw = self.run_script("copy-off.sh")
         self.assertEqual(rc, 0, raw)
         args = (self.stub / "scrub.args").read_text()
-        self.assertIn(f"{self.block}/damaged:/block/damaged:ro", args)
+        self.assertIn("-v /dev/null:/block/damaged:ro", args)  # an empty stand-in
+        self.assertNotIn(f"{self.block}/damaged", args)  # the mark's own path is never mounted
         # The container's /block, as copy-off mounts it: only the mounted files.
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
@@ -1184,10 +1186,31 @@ class CopyOff(Base):
         seen.mkdir()
         out.mkdir()
         for src, dst in re.findall(r"-v (\S+):/block/(\S+):ro", args):
-            subprocess.run(["cp", "-r", src, str(seen / dst)], check=True)
+            if src == "/dev/null":
+                (seen / dst).write_text("")  # what the container sees: an empty file
+            else:
+                subprocess.run(["cp", "-r", src, str(seen / dst)], check=True)
         self.assertFalse((seen / "password").exists())
         doc = scrub.collect(seen, out)
         self.assertEqual((doc["host_guard_drops"], doc["damaged"]), (1, True))
+        self.assertEqual((seen / "damaged").read_text(), "")  # the mark's text never reaches the container
+
+    def test_a_symlinked_mark_is_never_followed(self):
+        """A mark that's a link (to a secret, or to nothing) still counts as a
+        mark, and copy-off mounts the empty stand-in, never the link."""
+        for target in ("secret", "missing"):
+            with self.subTest(target=target):
+                self.setUp()
+                self.make_block(segment=2)
+                if target == "secret":
+                    (self.tmp / "secret").write_text(PRIVATE[7] + "\n")
+                (self.block / "damaged").symlink_to(self.tmp / target)
+                rc, lines, raw = self.run_script("copy-off.sh")
+                self.assertEqual(rc, 0, raw)
+                args = (self.stub / "scrub.args").read_text()
+                self.assertIn("-v /dev/null:/block/damaged:ro", args)
+                self.assertNotIn(str(self.tmp / target), args)
+                self.assertNotIn(f"{self.block}/damaged", args)
 
     def test_a_lone_lodestar_is_stopped_first(self):
         self.make_block(segment=2)
@@ -1393,7 +1416,7 @@ class ScrubGuardFields(unittest.TestCase):
         self.assertEqual((doc["outages"], doc["host_guard_drops"], doc["damaged"]), (0, 0, False))
 
     def test_the_lost_line_marks_it_damaged_without_the_mark(self):
-        """copy-off mounts the outages, not the mark: guard_lost writes both."""
+        """guard_lost writes both; either one is enough."""
         doc, _, _ = self.block("1 host_guard_dropped\n2 host_guard_lost\n")
         self.assertEqual((doc["host_guard_drops"], doc["damaged"]), (1, True))
 

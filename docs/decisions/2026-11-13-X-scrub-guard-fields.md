@@ -10,6 +10,7 @@
   - **True when** the `damaged` mark exists, or the outages hold a `host_guard_lost` line.
   - **The mark is only tested for existence, never read.** Its text is not evidence and can't pass.
   - **copy-off mounts the mark,** read-only, beside the outages and only when it exists. A block without one copies off as before. (The runner added `copy-off.sh` to this slice's owns for this one change.)
+  - **What it mounts is an empty stand-in** (`/dev/null` at `/block/damaged`), never the mark itself (X-scrub-guard-fields-nits). The scrubber only needs to know the mark exists, so the container never holds the mark's text, even when the mark is a symlink. A dangling link still counts as a mark.
   - **Why the outages line counts too:** `guard_lost` is the only writer of either, and it writes both once: the mark first, then the line. Either one is enough.
   - **No false negative is left.** A reboot between the two writes, or a failed append to the outages (a full disk, say; both writes are silenced), leaves the mark without the line. The mark is mounted, so the evidence still says `damaged: true`, as vm-status's `fail block_intact` does. A test runs copy-off with the mark and no `host_guard_lost` line, then scrubs exactly the files it mounted.
 - **A new shape, `count`, for `host_guard_drops`.** It's a whole number from 0 up, narrower than `num`, which also allows negatives and floats. `damaged` uses the existing `boolean`. Both go through `clean()`, so the control plane's `scrub(doc)` drops a value of the wrong shape, as it does for every other field.
