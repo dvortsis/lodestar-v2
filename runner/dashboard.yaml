@@ -631,6 +631,7 @@ placement:
   - X-gluetun-templates
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
+  - X-gluetun-pin-ci-filter
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish
@@ -714,6 +715,9 @@ placement:
   - X-ci-advisories
   - X-fixed-sleep-asserts
   - X-rusqlite-041
+  - X-filter01-fix
+  - X-filter03-fix
+  - X-apifeat01-fix
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -1475,6 +1479,9 @@ roadmap:
     - X-e2e-orphan-specs
     - X-ci-advisories
     - X-fixed-sleep-asserts
+    - X-filter01-fix
+    - X-apifeat01-fix
+    - X-filter03-fix
   arrows:
   - - soak
     - gluetun
