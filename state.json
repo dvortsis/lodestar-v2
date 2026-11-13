@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T19:38Z",
+  "updated_at": "2026-11-13T19:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8554,8 +8554,8 @@
       "slice": "X-filter01-fix",
       "head": "ade47428",
       "state": "Opus review + /security-review and an unanchored second read running; CI running",
-      "at": "2026-11-13T19:31Z",
-      "status": "fix round pushed; delta + security review running; CI running"
+      "at": "2026-11-13T19:43Z",
+      "status": "delta+security CHANGES relayed (snapshot scrub, fallback cut, key test, folder charge, held-detail wording); awaiting push"
     }
   },
   "merged_log": [
@@ -9202,7 +9202,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T19:38Z",
+    "updated": "2026-11-13T19:43Z",
     "items": [
       {
         "slot": 1,
@@ -9439,7 +9439,7 @@
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T19:38Z",
+  "updated": "2026-11-13T19:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
