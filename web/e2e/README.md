@@ -44,6 +44,8 @@ E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
 
 **In CI** the `fixture` job in `e2e.yml` runs nightly and on manual dispatch (Actions → E2E → Run workflow, on any branch; leave `update_snapshots` off). It is not a pull-request check and not part of `ci-ok`. A `fixture-build` job builds the release binary (UI embedded) on `ubuntu-latest`; the Playwright container downloads it, starts it on `127.0.0.1:8291`, waits up to 120 s for `/healthz`, and runs this project with `E2E_FIXTURE=1` set (the workers need it to find the project). A failure uploads `playwright-report-fixture` with the server log.
 
+The project's `globalSetup` (`support/fixture-session.ts`) signs in once, because the server limits logins to a burst of 5; specs reuse that session (`FIXTURE_STATE`, `fixtureCookies()`) and must not log in themselves, except the one real login through the form in `filters-flows.fixture.test.ts`. The session file lives in `test-results/.auth/` (gitignored).
+
 Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on the port is reused); the fixture specs never use it.
 
 **Rotating sample.** `sampleThemes(seed)` (`support/themes.ts`) takes the 46 non-Riverstone themes, permutes them with a coprime stride and returns a 6-wide window that moves by 6 each run. The seed is `GITHUB_RUN_NUMBER`, or the day number locally. Eight consecutive runs cover every theme.

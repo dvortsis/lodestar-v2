@@ -110,6 +110,8 @@ checkSpecsHaveProjects();
 
 export default defineConfig<Appearance>({
 	testDir: 'e2e',
+	// The fixture project signs in once here; see e2e/support/fixture-session.ts.
+	...(fixture ? { globalSetup: './e2e/support/fixture-session.ts' } : {}),
 	// Pass --update-snapshots to regenerate Linux baselines; never commit macOS/Windows ones.
 	forbidOnly: !!process.env.CI,
 	retries: 0,

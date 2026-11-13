@@ -8,6 +8,7 @@
 // against `LODESTAR_FIXTURE_PASSWORD=<pw> LODESTAR_HTTP_BIND=127.0.0.1:18092 \
 //   target/debug/lodestar serve --fixture <dir>`, built after `VITE_DEV_ROUTES=1 npm run build`.
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { FIXTURE_STATE } from './support/fixture-session';
 
 const URL_ = process.env.E2E_FIXTURE_URL ?? '';
 const PASSWORD = process.env.E2E_FIXTURE_PASSWORD ?? '';
@@ -17,11 +18,9 @@ test.use({ baseURL: URL_ });
 const PAGE = '/dev/settings-form?sections=crawler,network&id=fixture';
 
 async function signedIn(browser: Browser): Promise<Page> {
-	const context = await browser.newContext({ baseURL: URL_ });
-	const page = await context.newPage();
-	const res = await page.request.post('/api/v1/login', { data: { password: PASSWORD } });
-	expect(res.ok(), `login: ${res.status()}`).toBe(true);
-	return page;
+	// Two contexts with one session: the global setup signed in once (the server limits logins).
+	const context = await browser.newContext({ baseURL: URL_, storageState: FIXTURE_STATE });
+	return context.newPage();
 }
 
 /** Removes the values these tests save, so each run starts from the fixture's own. */

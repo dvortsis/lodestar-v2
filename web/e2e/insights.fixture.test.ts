@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { fixtureCookies } from './support/fixture-session';
 import type { components } from '../src/lib/api/schema';
 
 type Overview = components['schemas']['OverviewResponse'];
@@ -25,9 +26,9 @@ const manifest = () =>
 			})
 		: undefined;
 
+// The project's global setup signed in once; this puts its session on the page.
 async function signIn(page: Page) {
-	const res = await page.request.post(`${url}/api/v1/login`, { data: { password } });
-	expect(res.ok()).toBe(true);
+	await page.context().addCookies(fixtureCookies());
 }
 async function overview(page: Page, query: string): Promise<Overview> {
 	const res = await page.request.get(`${url}/api/v1/insights/overview?${query}`);
