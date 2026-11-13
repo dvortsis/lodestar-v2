@@ -23,6 +23,14 @@
 //! - **A file is read once it's complete:** its size and modification
 //!   time the same on two polls in a row, and not held open by another
 //!   program (skipped, never failed).
+//! - **A Malformed verdict is held for one more read** (X-watch-stall-retry):
+//!   a copy over SMB or NFS that stalls for a poll or two looks complete
+//!   and reads as malformed. Such a file stays where it is; it goes to
+//!   `failed/` only when the next read finds it malformed again with the
+//!   same size and modification time. One that changed is still being
+//!   written, and is judged afresh once it's still. At most
+//!   [`MAX_HOLDS`] holds per file, so one that keeps changing is failed in
+//!   the end; at most [`MAX_HELD`] files are held at once.
 //! - **Never read twice.** A file that can't be moved or deleted yet is
 //!   remembered in a bounded set, never read again, and its move retried
 //!   quietly each poll; when the set is full the watch holds. A name that
@@ -68,6 +76,16 @@ pub const MAX_SUBMIT: usize = 32;
 /// read again (a §2.26 number). When it's full the watch stops. Tests use
 /// 4, so filling it takes a few files.
 pub const MAX_STUCK: usize = if cfg!(test) { 4 } else { 1024 };
+/// Malformed verdicts held per file, at most (a §2.26 number): after
+/// this many, the next malformed read sends the file to `failed/` even if
+/// it changed in between. Each hold lasts at least one poll, so a copy may
+/// stall and resume three times, 30 s or more of stalls, before it's
+/// failed.
+pub const MAX_HOLDS: u8 = 3;
+/// Files whose Malformed verdict is held at once, at most (a §2.26
+/// number). When it's full, a malformed file goes to `failed/` at once,
+/// as before holds. Tests use 4.
+pub const MAX_HELD: usize = if cfg!(test) { 4 } else { 1024 };
 /// Numbered names tried for a clash in `added/` or `failed/`.
 const MAX_SUFFIX: u32 = 1000;
 
@@ -210,9 +228,12 @@ pub struct Polled {
     /// Of `failed`, files whose judging panicked (`failed/<stem>.failed`):
     /// a fault on Lodestar's side, so counted apart from a bad file.
     pub errors: u64,
-    /// Files seen but not read yet: still changing, held open, or past
-    /// this poll's [`MAX_SUBMIT`].
+    /// Files seen but not put away yet: still changing, held open, past
+    /// this poll's [`MAX_SUBMIT`], or read as malformed and held.
     pub waiting: u64,
+    /// Of `waiting`, files read as malformed this poll and held for one
+    /// more read rather than failed.
+    pub held: u64,
     /// Why the watch isn't running now, if it isn't: checked again every
     /// poll, so a mount that comes back or a fixed folder resumes it,
     /// except [`Problem::TooManyStuck`], which holds until the setting
@@ -236,6 +257,16 @@ struct Stuck {
     cause: Option<Cause>,
 }
 
+/// A file read as malformed and not failed yet: read once more before
+/// it's failed.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    /// Its shape when it was last read as malformed.
+    shape: Shape,
+    /// Malformed verdicts held so far, at most [`MAX_HOLDS`].
+    holds: u8,
+}
+
 /// One watch folder's state between polls.
 #[derive(Debug)]
 pub struct Watcher {
@@ -255,6 +286,9 @@ pub struct Watcher {
     /// holding the watch. At most [`MAX_STUCK`]; past that, one more is
     /// counted again each poll, nothing worse.
     left: HashSet<OsString>,
+    /// Files read as malformed and held for one more read, by name. At
+    /// most [`MAX_HELD`]; in memory only, so a restart judges them afresh.
+    held: HashMap<OsString, Held>,
 }
 
 impl Watcher {
@@ -270,6 +304,7 @@ impl Watcher {
             stuck: HashMap::new(),
             halted: false,
             left: HashSet::new(),
+            held: HashMap::new(),
         })
     }
 
@@ -289,6 +324,7 @@ impl Watcher {
             self.stuck = before.stuck;
             self.halted = before.halted;
             self.left = before.left;
+            self.held = before.held;
         }
     }
 
@@ -330,6 +366,7 @@ impl Watcher {
         if let Some(listed) = listed {
             self.stuck.retain(|n, _| listed.contains(n));
             self.left.retain(|n| listed.contains(n));
+            self.held.retain(|n, _| listed.contains(n));
         }
         let mut seen = HashMap::new();
         let mut submitted = 0;
@@ -402,6 +439,11 @@ impl Watcher {
                 Outcome::Failed => Some(Cause::Failed),
             };
             self.cursor = Some(name.clone());
+            if cause == Some(Cause::Malformed) && self.hold(&name, shape) {
+                out.waiting += 1;
+                out.held += 1;
+                continue;
+            }
             self.finish(&folder, &name, Some(shape), cause, &mut out)
                 .await;
         }
@@ -415,6 +457,28 @@ impl Watcher {
             out.problem = Some(Problem::TooManyStuck);
         }
         out
+    }
+
+    /// Whether a file just read as malformed is held for one more read
+    /// rather than failed: not when the last read found it malformed with
+    /// this same shape (it isn't changing, so it's really malformed), when
+    /// it has been held [`MAX_HOLDS`] times already, or when [`MAX_HELD`]
+    /// files are held.
+    fn hold(&mut self, name: &OsStr, shape: Shape) -> bool {
+        let holds = match self.held.get(name) {
+            Some(h) if h.shape == shape || h.holds >= MAX_HOLDS => return false,
+            Some(h) => h.holds,
+            None if self.held.len() >= MAX_HELD => return false,
+            None => 0,
+        };
+        self.held.insert(
+            name.to_os_string(),
+            Held {
+                shape,
+                holds: holds + 1,
+            },
+        );
+        true
     }
 
     /// For a file taken before but not moved: retries its move quietly
@@ -485,6 +549,7 @@ impl Watcher {
         cause: Option<Cause>,
         out: &mut Polled,
     ) {
+        self.held.remove(name);
         match cause {
             None => out.added += 1,
             Some(Cause::Failed) => {
@@ -1201,7 +1266,11 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed, p.errors), (1, 4, 1));
+        assert_eq!((p.added, p.failed, p.errors, p.held), (1, 3, 1, 1));
+        // Malformed is held for one more read; unchanged, it's failed then.
+        assert_eq!(t.top(), ["a.torrent"]);
+        let p = w.poll(&f).await;
+        assert_eq!((p.added, p.failed, p.held), (0, 1, 0));
         assert_eq!(
             t.names(FAILED),
             [
@@ -1258,6 +1327,115 @@ mod tests {
         // Unchanged since: read.
         assert_eq!(w.poll(&f).await.added, 1);
         assert_eq!(f.bodies.lock().unwrap()[0], b"d4:infode");
+    }
+
+    /// Appends to a file in the folder, as a copy that resumes does.
+    fn append(t: &T, name: &str, more: &[u8]) {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(t.dir().join(name))
+            .unwrap();
+        std::io::Write::write_all(&mut file, more).unwrap();
+    }
+
+    /// X-watch-stall-retry: a really malformed file that doesn't change is
+    /// read twice, then failed on the poll after the first malformed
+    /// verdict, and never read again.
+    #[tokio::test]
+    async fn an_unchanged_malformed_file_is_failed_on_its_second_read() {
+        let t = T::new();
+        t.put("bad.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.failed, p.held, p.waiting), (0, 1, 1));
+        assert_eq!(t.top(), ["bad.torrent"]);
+        let p = w.poll(&f).await;
+        assert_eq!((p.failed, p.held), (1, 0));
+        assert_eq!(t.names(FAILED), ["bad.malformed.torrent"]);
+        assert!(w.held.is_empty());
+        w.poll(&f).await;
+        assert_eq!(calls(&f), 2);
+    }
+
+    /// X-watch-stall-retry: a copy that stalls looks complete and reads as
+    /// malformed; once it resumes and finishes, it's judged afresh and
+    /// taken, never failed.
+    #[tokio::test]
+    async fn a_stalled_copy_that_resumes_is_taken() {
+        let t = T::new();
+        t.put("slow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        assert_eq!(settle(&mut w, &f).await.held, 1);
+        // The copy resumes and finishes (a new size): it waits a poll to
+        // be still, as any changing file does, and isn't read meanwhile.
+        t.put("slow.torrent", b"d4:infodee");
+        let p = w.poll(&f).await;
+        assert_eq!((p.added, p.failed, p.waiting), (0, 0, 1), "changed: waits");
+        assert_eq!(calls(&f), 1);
+        // Still since: judged afresh, and taken.
+        let p = w.poll(&f).await;
+        assert_eq!((p.added, p.failed), (1, 0));
+        assert_eq!(t.names(ADDED), ["slow.torrent"]);
+        assert!(t.names(FAILED).is_empty() && w.held.is_empty());
+    }
+
+    /// X-watch-stall-retry: each malformed read with a new shape is held,
+    /// up to MAX_HOLDS; the next malformed read fails the file however it
+    /// changed, so one that keeps changing isn't held for ever.
+    #[tokio::test]
+    async fn a_file_that_keeps_changing_is_failed_after_max_holds() {
+        let t = T::new();
+        t.put("grow.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        for hold in 1..=MAX_HOLDS {
+            let p = settle(&mut w, &f).await;
+            assert_eq!((p.failed, p.held), (0, 1), "hold {hold}");
+            assert_eq!(w.held[OsStr::new("grow.torrent")].holds, hold);
+            append(&t, "grow.torrent", b"+");
+        }
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.failed, p.held), (1, 0));
+        assert_eq!(t.names(FAILED), ["grow.malformed.torrent"]);
+        assert_eq!(calls(&f), MAX_HOLDS as usize + 1);
+        assert!(w.held.is_empty());
+    }
+
+    /// X-watch-stall-retry: at most MAX_HELD files are held; past that a
+    /// malformed file is failed at once, and only Malformed is held.
+    #[tokio::test]
+    async fn the_held_set_is_bounded() {
+        let t = T::new();
+        for i in 0..MAX_HELD + 2 {
+            t.put(&format!("m{i}.torrent"), b"MALF");
+        }
+        t.put("z.torrent", b"FLOOR");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        let p = settle(&mut w, &f).await;
+        assert_eq!((p.held, p.failed), (MAX_HELD as u64, 3));
+        assert_eq!(w.held.len(), MAX_HELD);
+        assert!(t.names(FAILED).contains(&"z.refused.torrent".to_string()));
+        let p = w.poll(&f).await;
+        assert_eq!((p.held, p.failed), (0, MAX_HELD as u64));
+        assert!(w.held.is_empty());
+    }
+
+    /// A held file removed by hand is forgotten once a whole listing shows
+    /// it gone.
+    #[tokio::test]
+    async fn a_held_file_removed_by_hand_is_forgotten() {
+        let t = T::new();
+        t.put("gone.torrent", b"MALF");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        settle(&mut w, &f).await;
+        assert_eq!(w.held.len(), 1);
+        std::fs::remove_file(t.dir().join("gone.torrent")).unwrap();
+        w.poll(&f).await;
+        assert!(w.held.is_empty());
     }
 
     #[tokio::test]
@@ -1317,7 +1495,8 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Delete);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed), (1, 1));
+        assert_eq!((p.added, p.failed, p.held), (1, 0, 1));
+        assert_eq!(w.poll(&f).await.failed, 1);
         assert!(t.names(ADDED).is_empty());
         assert_eq!(t.names(FAILED), ["bad.malformed.torrent"]);
         assert!(t.top().is_empty());
@@ -1626,7 +1805,7 @@ mod tests {
             crate::test_log::install();
             let t = T::new();
             let long = |i: usize| format!("{}{i}.torrent", "q".repeat(240));
-            t.put(&long(0), b"MALF");
+            t.put(&long(0), b"FLOOR");
             let f = Fake::default();
             let mut w = t.watcher(After::Move);
             let p = settle(&mut w, &f).await;
@@ -1637,7 +1816,7 @@ mod tests {
             assert_eq!(calls(&f), 1, "never read again");
             // Fill the set: the watch stops.
             for i in 1..MAX_STUCK {
-                t.put(&long(i), b"MALF");
+                t.put(&long(i), b"FLOOR");
             }
             w.poll(&f).await;
             let p = w.poll(&f).await;
@@ -1677,7 +1856,7 @@ mod tests {
             let t = T::new();
             let outside = tempfile::tempdir().unwrap();
             for i in 0..MAX_STUCK * 3 {
-                t.put(&format!("m{i:02}.torrent"), b"MALF");
+                t.put(&format!("m{i:02}.torrent"), b"FLOOR");
             }
             let s = Swapper {
                 inner: Fake::default(),
@@ -1713,7 +1892,7 @@ mod tests {
         async fn a_stuck_file_removed_by_hand_is_forgotten() {
             let t = T::new();
             let long = format!("{}.torrent", "r".repeat(244));
-            t.put(&long, b"MALF");
+            t.put(&long, b"FLOOR");
             let f = Fake::default();
             let mut w = t.watcher(After::Move);
             settle(&mut w, &f).await;
