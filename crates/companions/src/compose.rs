@@ -617,8 +617,9 @@ fn check_publish(
             return Err(TemplateError::P2pLoopback);
         }
         // gluetun's control server reports the public address and can
-        // change the VPN's state: never on your network.
-        if profile.id == GLUETUN && p.bind == Bind::Lan {
+        // change the VPN's state; FlareSolverr's API fetches any URL it's
+        // given, with no sign-in (CMP-12): neither on your network.
+        if matches!(profile.id, GLUETUN | crate::flaresolverr::ID) && p.bind == Bind::Lan {
             return Err(TemplateError::LanRefused);
         }
         // A port the image is told about (qBittorrent's `WEBUI_PORT`) must
