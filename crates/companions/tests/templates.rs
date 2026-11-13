@@ -868,7 +868,8 @@ fn every_gluetun_template_carries_the_rules_for_its_interface() {
             "{companion}"
         );
         assert_eq!(
-            yaml.matches("\"VPN_INTERFACE\": \"wg0\"").count(),
+            yaml.matches(&format!("\"VPN_INTERFACE\": \"{GLUETUN_INTERFACE}\""))
+                .count(),
             1,
             "{companion}"
         );
@@ -883,11 +884,16 @@ fn every_gluetun_template_carries_the_rules_for_its_interface() {
             "<Config Name=\"Post-rules\" Target=\"/iptables/post-rules.txt\" Default=\"/mnt/cache/appdata/gluetun/post-rules.txt\" Mode=\"ro\""
         ));
         assert!(
-            g.xml.contains(
-                "<Config Name=\"VPN_INTERFACE\" Target=\"VPN_INTERFACE\" Default=\"wg0\""
-            )
+            g.xml.contains(&format!(
+                "<Config Name=\"VPN_INTERFACE\" Target=\"VPN_INTERFACE\" Default=\"{GLUETUN_INTERFACE}\""
+            ))
         );
         assert!(!g.xml.contains("blocks all traffic"), "the old overclaim");
+        assert!(
+            g.xml
+                .contains("save Lodestar&apos;s post-rules file at the Post-rules path"),
+            "gluetun's Overview says to save the file first"
+        );
         if companion != "gluetun" {
             // The routed companion is told to start after gluetun's firewall.
             assert!(xml[1].xml.contains("put gluetun above this container"));
@@ -903,4 +909,7 @@ fn every_gluetun_template_carries_the_rules_for_its_interface() {
         !yaml.contains("\"configs\""),
         "an existing gluetun is yours to configure"
     );
+    // Its Unraid template names that container in the start-order note.
+    let xml = unraid(&cat, &id("prowlarr"), &existing).expect("unraid");
+    assert!(xml[0].xml.contains("put my-vpn above this container"));
 }

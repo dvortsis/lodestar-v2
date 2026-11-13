@@ -17,7 +17,7 @@
     "devices":
       - "/dev/net/tun:/dev/net/tun"
     # Lodestar's post-rules (configs, at the end): gluetun reads them when it
-    # turns its firewall on. Compose copies them in read-only (mode 0444).
+    # turns its firewall on. Compose copies them in read-only (mode 0444 by default).
     "configs":
       - "source": "gluetun-post-rules"
         "target": "/iptables/post-rules.txt"

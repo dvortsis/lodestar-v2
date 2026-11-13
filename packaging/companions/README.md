@@ -20,7 +20,7 @@ These files show what Lodestar generates for its companions on Docker and Unraid
 - **No Docker socket, no privileged mode and no host networking.** gluetun is the only one with an extra capability (`NET_ADMIN`) and a device (`/dev/net/tun`). It needs both to run the VPN tunnel and its firewall.
 - **You fill in gluetun's VPN settings yourself.** Lodestar never asks for or stores a VPN key. gluetun won't start until they're real values, so nothing is sent outside the VPN in the meantime.
 - **Mount real folders, never a link.** Each companion gets its own folder. Lodestar refuses a folder that overlaps its own data folder or another companion's folder it knows about.
-- **gluetun gets Lodestar's post-rules and `VPN_INTERFACE=wg0`,** the tunnel name the rules use. A companion routed through gluetun starts only once gluetun is healthy (compose), or after it in Unraid's autostart order.
+- **gluetun gets Lodestar's post-rules and `VPN_INTERFACE=wg0`,** the tunnel name the rules use. A companion routed through gluetun starts only once gluetun is healthy (compose), or after it in Unraid's autostart order. The compose files carry the rules inline, which needs Docker Compose 2.23.1 or later.
 - **Already running gluetun?** Lodestar can route a companion through it by name instead of generating a new one, so your VPN settings stay as they are.
 
 ## On Unraid

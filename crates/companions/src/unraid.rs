@@ -156,7 +156,13 @@ const PATH_NOTE: &str = "Mount real folders only, never a link to somewhere else
 const REPLACE_NOTE: &str = "Applying it replaces a container or template you already have with the same name: check first.";
 const NETWORK_NOTE: &str = "Create the Docker network first: Unraid starts a container on a network it doesn't know with none.";
 const POST_RULES_NOTE: &str = "Before you start it, save Lodestar's post-rules file at the Post-rules path, as the Lodestar user guide shows (chapter 3, \"Close gluetun's gap when the VPN drops\"). Without the file, gluetun won't start.";
-const START_NOTE: &str = "Start gluetun first. In Unraid's Docker autostart list, put gluetun above this container and set gluetun's wait to at least 30 seconds, so its firewall is on before this one starts.";
+/// The start-order note for a container routed through gluetun container
+/// `vpn` (a closed ContainerName, so the text stays fixed plus a name).
+fn start_note(vpn: &str) -> String {
+    format!(
+        "Start {vpn} first. In Unraid's Docker autostart list, put {vpn} above this container and set {vpn}'s wait to at least 30 seconds, so its VPN firewall is on before this one starts."
+    )
+}
 const VPN_NOTE: &str =
     "You fill this in, from your VPN provider. Lodestar never asks for or stores it.";
 
@@ -254,9 +260,12 @@ fn render(
     }
     // Routed through a gluetun container: this one must start after
     // gluetun's firewall is on (Unraid has no health condition to wait on).
-    if extra.iter().any(|a| a.starts_with("--network=container:")) {
+    if let Some(vpn) = extra
+        .iter()
+        .find_map(|a| a.strip_prefix("--network=container:"))
+    {
         overview.push(' ');
-        overview.push_str(START_NOTE);
+        overview.push_str(&start_note(vpn));
     }
     if !c.mounts.is_empty() {
         overview.push(' ');

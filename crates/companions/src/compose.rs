@@ -904,7 +904,15 @@ fn emit_value(out: &mut String, value: &Y, indent: usize) -> Result<(), Template
 /// content too) or a tab, and the first must not start with a space (its
 /// indent sets the block's).
 fn emit_block(out: &mut String, text: &str, indent: usize) -> Result<(), TemplateError> {
-    if !text.ends_with('\n') || text.starts_with(' ') || text.contains('$') || text.contains('\t') {
+    // YAML reads a literal block back unchanged only if it ends in exactly one
+    // newline (clip chomping) and its first non-empty line takes the indent.
+    let first = text.lines().find(|l| !l.is_empty()).unwrap_or("");
+    if !text.ends_with('\n')
+        || text.ends_with("\n\n")
+        || first.is_empty()
+        || first.starts_with(' ')
+        || text.contains(['$', '\t', '\r'])
+    {
         return Err(TemplateError::Encode);
     }
     let pad = " ".repeat(indent);
@@ -1070,7 +1078,7 @@ fn gluetun_own() -> Vec<(Option<&'static str>, String, Y)> {
         ),
         (
             Some(
-                "Lodestar's post-rules (configs, at the end): gluetun reads them when it\nturns its firewall on. Compose copies them in read-only (mode 0444).",
+                "Lodestar's post-rules (configs, at the end): gluetun reads them when it\nturns its firewall on. Compose copies them in read-only (mode 0444 by default).",
             ),
             "configs".to_owned(),
             Y::Seq(vec![map(vec![
@@ -1124,7 +1132,17 @@ mod tests {
         let mut out = String::new();
         assert!(emit_block(&mut out, "a\n\nb c\n", 4).is_ok());
         assert_eq!(out, " |\n    a\n\n    b c\n");
-        for bad in ["no newline", " leading\n", "a $X\n", "a\tb\n", "a\u{1}\n"] {
+        for bad in [
+            "no newline",
+            " leading\n",
+            "a $X\n",
+            "a\tb\n",
+            "a\u{1}\n",
+            "a\r\n",
+            "a\n\n",
+            "\n",
+            "\n  x\n",
+        ] {
             assert!(emit_block(&mut String::new(), bad, 2).is_err(), "{bad:?}");
         }
         assert!(emit_block(&mut String::new(), GLUETUN_POST_RULES, 6).is_ok());

@@ -87,8 +87,16 @@ If Lodestar generated your gluetun from its [companion](glossary.md#companion) t
 
 | Template | What it already has | What you do |
 |---|---|---|
-| Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Nothing more. |
-| Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. In Unraid's Docker autostart list, put gluetun above the companion and set gluetun's wait to at least 30 seconds. |
+| Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Use Docker Compose 2.23.1 or later: run `docker compose version` to see yours. Older versions refuse the file. To check the rules, run step 4's commands with `docker compose exec` in place of `docker exec`. |
+| Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. If you changed the **Post-rules** path in the form, use your path in step 1's commands. Then set the start order (below). |
+
+To set the start order on Unraid:
+
+1. Open the **Docker** tab and switch it to **Advanced View** (top right).
+2. Select the lock icon above the container list to unlock it, then drag gluetun above the companion. Select the lock again.
+3. Turn on **Autostart** for both, and in gluetun's row set **wait** to `30`.
+
+   **Result:** After each restart, Unraid starts gluetun, waits 30 seconds for its firewall, then starts the companion.
 
 The steps below are for a gluetun you set up yourself. They're for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
 
