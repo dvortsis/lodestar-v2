@@ -22,10 +22,16 @@ use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use crate::catalogue::{Catalogue, Proto, TemplateId};
 use crate::compose::{
-    Bind, Checked, GLUETUN, GLUETUN_CAP, Route, ServiceInput, TemplateError, check_pair, printable,
-    proto_name,
+    Bind, Checked, GLUETUN, GLUETUN_CAP, GLUETUN_POST_RULES_TARGET, Route, ServiceInput,
+    TemplateError, check_pair, printable, proto_name,
 };
 use crate::inputs::CompanionId;
+
+/// Where gluetun's post-rules file is on your server, by default: the path
+/// the user guide's download step saves it to. You can change it in the
+/// form. A missing file fails closed: Docker makes a folder there, and
+/// gluetun stops with "is a directory" before its VPN starts.
+pub const POST_RULES_HOST: &str = "/mnt/cache/appdata/gluetun/post-rules.txt";
 
 /// Where Unraid keeps your own templates, on the flash drive.
 pub const TEMPLATES_USER: &str = "/boot/config/plugins/dockerMan/templates-user";
@@ -149,6 +155,8 @@ fn config(w: &mut W, c: &Config<'_>) -> Result<(), TemplateError> {
 const PATH_NOTE: &str = "Mount real folders only, never a link to somewhere else.";
 const REPLACE_NOTE: &str = "Applying it replaces a container or template you already have with the same name: check first.";
 const NETWORK_NOTE: &str = "Create the Docker network first: Unraid starts a container on a network it doesn't know with none.";
+const POST_RULES_NOTE: &str = "Before you start it, save Lodestar's post-rules file at the Post-rules path, as the Lodestar user guide shows (chapter 3, \"Close gluetun's gap when the VPN drops\"). Without the file, gluetun won't start.";
+const START_NOTE: &str = "Start gluetun first. In Unraid's Docker autostart list, put gluetun above this container and set gluetun's wait to at least 30 seconds, so its firewall is on before this one starts.";
 const VPN_NOTE: &str =
     "You fill this in, from your VPN provider. Lodestar never asks for or stores it.";
 
@@ -170,6 +178,19 @@ fn render(
             value: path.as_str().to_owned(),
             mode: "rw",
             help: m.help,
+            kind: "Path",
+            required: true,
+            fill: false,
+            mask: false,
+        });
+    }
+    if c.profile.id == GLUETUN {
+        configs.push(Config {
+            name: "Post-rules",
+            target: GLUETUN_POST_RULES_TARGET.to_owned(),
+            value: POST_RULES_HOST.to_owned(),
+            mode: "ro",
+            help: "Lodestar's post-rules file, read-only. Save it here before you start gluetun.",
             kind: "Path",
             required: true,
             fill: false,
@@ -227,6 +248,16 @@ fn render(
     }
     let homepage = c.entry.homepage.as_str();
     let mut overview = c.profile.overview.to_owned();
+    if c.profile.id == GLUETUN {
+        overview.push(' ');
+        overview.push_str(POST_RULES_NOTE);
+    }
+    // Routed through a gluetun container: this one must start after
+    // gluetun's firewall is on (Unraid has no health condition to wait on).
+    if extra.iter().any(|a| a.starts_with("--network=container:")) {
+        overview.push(' ');
+        overview.push_str(START_NOTE);
+    }
     if !c.mounts.is_empty() {
         overview.push(' ');
         overview.push_str(PATH_NOTE);

@@ -83,7 +83,14 @@ gluetun's firewall is its kill switch. When the VPN drops, it blocks every new c
 > [!IMPORTANT]
 > Add the post-rules file to gluetun before you start Lodestar. Without it, a few packets can leave outside the VPN each time the tunnel drops.
 
-These steps are for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
+If Lodestar generated your gluetun from its [companion](glossary.md#companion) templates, most of this is done:
+
+| Template | What it already has | What you do |
+|---|---|---|
+| Compose file | The rules, built in, and `VPN_INTERFACE=wg0`. The companion starts only once gluetun is healthy. | Nothing more. |
+| Unraid template | A read-only **Post-rules** path (`/mnt/cache/appdata/gluetun/post-rules.txt`) and `VPN_INTERFACE=wg0`. | Step 1 below, then the check in step 4. In Unraid's Docker autostart list, put gluetun above the companion and set gluetun's wait to at least 30 seconds. |
+
+The steps below are for a gluetun you set up yourself. They're for WireGuard, the VPN type Lodestar's templates use, and the rules were checked with it.
 
 1. Open the Unraid terminal (**>_** in the top bar). Save the file, then check it:
 
@@ -117,7 +124,7 @@ If gluetun stops instead:
 
 To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
 
-With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends to the internet goes around the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network. The [companion](glossary.md#companion) templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
+With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends to the internet goes around the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network.
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 

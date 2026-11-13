@@ -102,3 +102,20 @@ From the runner's review of #800 at 87be769b, and O3 of its review of e46cb683. 
 - **The rules file's comment** now says what the IPv6 exemptions match: link-local destinations, multicast destinations of any scope, and hop limit 255. None of them can carry a flow off the tunnel, because rule 2 and gluetun's own policy still apply. Only the comment changed, but the file's SHA-256 changed with it, so the docs' pin moved too. The pin test now also checks, where history has the pinned commit, that the commit serves this file.
 - **Not done:** `tcpdump -Q in` (old O7). It would drop the inbound evidence (`captured_inbound_*`) that showed run 3's router solicitation and DAD frames for what they were. The MAC check and the host counter already cover what `-Q in` would add.
 
+
+## X-gluetun-templates
+The generated gluetun companion templates now carry the post-rules (the runner's brief `briefs/X-gluetun-templates.md`). The defaults below are a runner §2.19 flag to the owner.
+- **Compose:** gluetun's service gets a `configs:` entry, and the document a top-level `configs:` whose inline `content:` is the rules file. Compose copies it in read-only (0444), as on the fleet VMs.
+  - The text is written as a YAML literal block by a new writer node, which refuses `$`, tabs, control characters, a leading space and an unterminated last line.
+  - The routed companion already waited for `service_healthy`, which covers O3 for compose.
+  - Checked on the pinned gluetun image: the generated file passes `docker compose config`, gluetun loads all three rules in both families, and the copied file equals the shipped one byte for byte.
+- **The rules text is embedded at build time from a crate-local copy,** `crates/companions/src/gluetun-post-rules.txt`. The image build copies only `crates/` and `bench/` (`packaging/docker/Dockerfile`), so an `include_str!` of `packaging/` would break `docker build`. A test keeps the copy equal to `packaging/companions/gluetun-post-rules.txt` byte for byte.
+- **`VPN_INTERFACE`:** `wg0`, a fixed variable in every gluetun template. The templates are WireGuard only (`VPN_TYPE=wireguard`), so the OpenVPN case (`tun0`) never arises. A test checks that every interface the rules name equals the template's `VPN_INTERFACE`.
+- **Unraid:**
+  - **The Path:** a read-only Path **Post-rules**, defaulting to `/mnt/cache/appdata/gluetun/post-rules.txt` on the host (the path the guide's download step uses), mapped to `/iptables/post-rules.txt`. The user can change it in the form.
+  - **Who writes the file: the user,** with the guide's pinned download and SHA-256 check, and the template's Overview says so. A missing file fails closed: Docker makes a folder there, and gluetun stops with "is a directory" before its VPN starts.
+  - **Having Lodestar write the file** would need a gluetun host-folder input on `ServiceInput`, whose callers are in `crates/lodestar`, and a writer next to `manager.rs`, which #805 has open. That's proposed to the runner as its own slice.
+- **Unraid start order:** Unraid has no health condition. So the routed companion's Overview (for a generated gluetun, or one you run) says to put gluetun above the companion in the Docker autostart list and give gluetun a wait of at least 30 seconds, so its firewall is on before the companion starts. That number is a default chosen here.
+- **No IPv4-only variant.** Lodestar emits one rules file for every host. A kernel without an IPv6 firewall makes gluetun stop with `ip6tables is required` before its VPN starts, which fails closed. The guide's troubleshooting row says to delete the three `ip6tables` lines. A second variant would double what users must check, and their SHA-256s.
+- **The Overview no longer overclaims.** It now reads: "While the VPN is down, its firewall blocks new connections, and Lodestar's post-rules stop connections that were already open from leaving outside the VPN."
+- **Out of scope:** a gluetun you already run, which Lodestar routes through by name. Lodestar can't change its settings, so the guide's manual steps stay for it.

@@ -796,3 +796,111 @@ proptest! {
         }
     }
 }
+
+// ─── gluetun's post-rules (X-gluetun-templates) ─────────────────────────
+
+/// The crate's embedded copy is `packaging/companions/gluetun-post-rules.txt`
+/// byte for byte: the file users download, pinned by SHA-256 in the docs.
+#[test]
+fn embedded_post_rules_are_the_packaging_file() {
+    let shipped =
+        std::fs::read_to_string(here("../../packaging/companions/gluetun-post-rules.txt"))
+            .expect("packaging rules file");
+    assert_eq!(lodestar_companions::compose::GLUETUN_POST_RULES, shipped);
+}
+
+/// The interfaces a rules text names (`-o X` and `! -o X`), from its rule lines.
+fn rule_interfaces(rules: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in rules
+        .lines()
+        .filter(|l| l.starts_with("iptables ") || l.starts_with("ip6tables "))
+    {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for w in words.windows(2) {
+            if w[0] == "-o" {
+                out.push(w[1].to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// The literal block under `"content": |` in a compose document, unindented.
+fn config_content(yaml: &str) -> Option<String> {
+    let mut lines = yaml
+        .lines()
+        .skip_while(|l| !l.trim_end().ends_with("\"content\": |"));
+    let head = lines.next()?;
+    let pad = head.len() - head.trim_start().len() + 2;
+    let mut out = String::new();
+    for l in lines {
+        if !l.is_empty() && !l.starts_with(&" ".repeat(pad)) {
+            break;
+        }
+        out.push_str(l.get(pad..).unwrap_or(""));
+        out.push('\n');
+    }
+    Some(out)
+}
+
+/// Every template with gluetun carries the rules (compose: inline, exactly
+/// the embedded text; Unraid: a read-only Path at gluetun's post-rules
+/// location), and sets VPN_INTERFACE to the one interface the rules name.
+#[test]
+fn every_gluetun_template_carries_the_rules_for_its_interface() {
+    use lodestar_companions::compose::{GLUETUN_INTERFACE, GLUETUN_POST_RULES};
+    let names = rule_interfaces(GLUETUN_POST_RULES);
+    assert_eq!(names.len(), 6, "three rules per family name the tunnel");
+    assert!(names.iter().all(|n| n == GLUETUN_INTERFACE), "{names:?}");
+    let cat = golden_catalogue();
+    for (companion, route) in [
+        ("gluetun", Route::Direct),
+        ("qbittorrent", Route::Gluetun),
+        ("prowlarr", Route::Gluetun),
+        ("flaresolverr", Route::Gluetun),
+    ] {
+        let inp = input(companion, route);
+        let yaml = compose(&cat, &id(companion), &inp).expect("compose");
+        assert_eq!(
+            config_content(&yaml).as_deref(),
+            Some(GLUETUN_POST_RULES),
+            "{companion}"
+        );
+        assert_eq!(
+            yaml.matches("\"VPN_INTERFACE\": \"wg0\"").count(),
+            1,
+            "{companion}"
+        );
+        assert!(
+            yaml.contains("\"target\": \"/iptables/post-rules.txt\""),
+            "{companion}"
+        );
+        let xml = unraid(&cat, &id(companion), &inp).expect("unraid");
+        let g = &xml[0];
+        assert_eq!(g.file_name, "my-gluetun.xml");
+        assert!(g.xml.contains(
+            "<Config Name=\"Post-rules\" Target=\"/iptables/post-rules.txt\" Default=\"/mnt/cache/appdata/gluetun/post-rules.txt\" Mode=\"ro\""
+        ));
+        assert!(
+            g.xml.contains(
+                "<Config Name=\"VPN_INTERFACE\" Target=\"VPN_INTERFACE\" Default=\"wg0\""
+            )
+        );
+        assert!(!g.xml.contains("blocks all traffic"), "the old overclaim");
+        if companion != "gluetun" {
+            // The routed companion is told to start after gluetun's firewall.
+            assert!(xml[1].xml.contains("put gluetun above this container"));
+        }
+    }
+    // Without gluetun there are no rules.
+    let yaml = compose(&cat, &id("prowlarr"), &input("prowlarr", Route::Direct)).expect("compose");
+    assert!(!yaml.contains("\"configs\""));
+    let mut existing = input("prowlarr", Route::ExistingGluetun(name("my-vpn")));
+    existing.publish.clear();
+    let yaml = compose(&cat, &id("prowlarr"), &existing).expect("compose");
+    assert!(
+        !yaml.contains("\"configs\""),
+        "an existing gluetun is yours to configure"
+    );
+}
