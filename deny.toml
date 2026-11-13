@@ -25,4 +25,13 @@ all-features = true
 unmaintained = "all"
 yanked = "deny"
 ignore = [
+    # libsqlite3-sys 0.38.2 bundles SQLite 3.53.2: a crafted -wal with another
+    # page size can make queries return uninitialized page-cache memory. The
+    # fix (0.39) needs rusqlite 0.41, a semver-major bump in the store and the
+    # importers. Lodestar's own database is written only by Lodestar. The one
+    # database it opens that someone else may have written is a Magnetico
+    # import, and the importer refuses a non-empty -wal or a -journal
+    # (crates/sources-importers/src/magnetico.rs, `quiescent`).
+    # Review by 2026-12-13 (30 days); fix: X-rusqlite-041.
+    { id = "RUSTSEC-2026-0459", reason = "mitigated: Lodestar writes its own database, and the Magnetico importer refuses a non-empty -wal or a -journal; review by 2026-12-13; fix: X-rusqlite-041" },
 ]

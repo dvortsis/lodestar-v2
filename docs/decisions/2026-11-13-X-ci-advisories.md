@@ -35,6 +35,19 @@ cargo-deny reported three.
 - **The advisory:** non-constant-time mask generation and `u128` comparisons. It reaches Lodestar through `digest` → `hmac`, `argon2`, `sha1` and `pbkdf2`.
 - **Fixed:** `cargo update -p ctutils` moves it to 0.4.8, the latest patch, MSRV 1.87. Nothing else in `Cargo.lock` moves.
 
-### RUSTSEC-2026-0486: `rustix` 1.1.5: (pending the runner's decision)
+### RUSTSEC-2026-0486: `rustix` 1.1.5: upgraded (runner, 2026-11-13T06:13Z)
+- **The advisory:** the xattr functions mark unwritten bytes as initialized when given a zero-length buffer. Lodestar never calls them: it uses `fs::OFlags`, `statvfs`, `process` and `thread`.
+- **Fixed:** `crates/companions/Cargo.toml` pinned it exactly, at `=1.1.5`. It's now `=1.1.6`, and `Cargo.lock` moves only `rustix`.
+- **The pin stays exact.** It comes from CMP-1 (`docs/decisions/2026-11-08-CMP-1.md`), which pins this crate's network and OS dependencies to the lockfile versions, as with `reqwest` `=0.13.5`. It names no audited surface of its own.
+- **1.1.6 is the patch release** that carries the advisory's fix (its announcement commit). The point of moving is that soundness fix, not a new feature. `crates/lodestar/Cargo.toml` asks for `rustix` `1.1.5` as a caret requirement, which 1.1.6 meets.
+- **The runner added** that one `crates/companions/Cargo.toml` line, and its `Cargo.lock` lines, to this slice's owns. The companions crate's tests and clippy pass on 1.1.6.
 
-### RUSTSEC-2026-0459: `libsqlite3-sys` 0.38.2: (pending the runner's decision)
+### RUSTSEC-2026-0459: `libsqlite3-sys` 0.38.2: ignored until 2026-12-13 (runner, 2026-11-13T06:13Z)
+- **The advisory:** the bundled SQLite before 3.54.0 can return uninitialized page-cache memory when a process opens a database file together with a crafted `-wal` whose page size differs. 0.38.2 bundles SQLite 3.53.2.
+- **No compatible fix:** 0.39 (SQLite 3.54) comes only with `rusqlite` 0.41. That's a semver-major bump in `crates/store` and `crates/sources-importers`, a core storage change that doesn't belong in a CI slice. The runner opens **X-rusqlite-041** for it (Opus, with the full test run).
+- **Why the exposure is narrow:**
+  - Lodestar's own database is written only by Lodestar.
+  - The one database Lodestar opens that someone else may have written is a Magnetico import, and the importer refuses a source with a non-empty `-wal` or a `-journal` (`quiescent`, `crates/sources-importers/src/magnetico.rs`). The attack needs a WAL with content.
+  - The Bitmagnet importer reads PostgreSQL, not SQLite.
+- **Not closed:** this lowers the exposure; it doesn't remove it. That's why the review date is short.
+- **The ignore** is in `deny.toml` with its reason, "review by 2026-12-13; fix: X-rusqlite-041". That's 30 days, inside the brief's 90. When X-rusqlite-041 lands, the entry is deleted. If it's still there on 2026-12-13, whoever reviews it decides again.
