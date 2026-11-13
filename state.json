@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T21:53Z",
+  "updated_at": "2026-11-13T22:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8123,7 +8123,6 @@
       "at": "2026-11-13T17:22Z"
     },
     "gluetun-guard-vpn-renewal-endpoint-move (pia-bridge slice: endpoint may change mid-block)",
-    "docs-host-icmp-note-user-setup (gluetun guide: host ICMP in a user own setup)",
     "tester: drill-3 + leak re-test on a fresh VM after #841 (relay via dashboard; tester unreachable by message)",
     {
       "id": "X-filter01-rejudge",
@@ -9210,7 +9209,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T21:53Z",
+    "updated": "2026-11-13T22:02Z",
     "items": [
       {
         "slot": 1,
@@ -9295,11 +9294,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-scrub-fields-readers",
+        "slice": "X-fleet-guard-docs",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-13T21:36Z",
-        "doing": "building (follow-up to #848/#851)",
+        "since": "2026-11-13T22:02Z",
+        "doing": "building (docs follow-up to #852)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)"
       },
       {
@@ -9471,7 +9470,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T21:53Z",
+  "updated": "2026-11-13T22:02Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9950,6 +9949,12 @@
       "slice": "X-flake-companions-loopback",
       "merged": "1b4fd47a",
       "at": "2026-11-13T21:53Z"
+    },
+    {
+      "pr": 852,
+      "slice": "X-scrub-fields-readers",
+      "merged": "6b7932cf",
+      "at": "2026-11-13T22:02Z"
     }
   ]
 }
