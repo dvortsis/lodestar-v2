@@ -1,5 +1,11 @@
 # Review log
 
+## 2026-11-13
+
+- [Full code review](2026-11-13-full-code-review.md): twenty read-only area reviews of `main` at `55e155a9`, with a second read of the top findings and a dependency sweep. 203 findings (16 rated blocking, 100 important, 87 polish), 153 of them not tracked anywhere. The first five concern content safety: the child-safety core's truncated read, CS-8a never firing, no re-evaluation of stored torrents, and update rollbacks that drop holds. Area reports are in [`2026-11-13-full-code-review/`](2026-11-13-full-code-review/). Nothing was built or run.
+
+These are review records, not completed fixes.
+
 ## 2026-10-29 to 2026-11-04
 
 - [Soak memory and performance review](2026-11-04-soak-memory-review.md): read-only review of the r1–r4 soak evidence and the rc.3 source. Where the memory sits (the 185 MiB fetch-pool step, the corpus-proportional plateau), the residual slope candidates after the mmap-cache fix (one commit per torrent and the whole-index merge regime, the unmeasured C heap under musl's allocator), r4 watch items, and the changes that can precede the next frozen soak, split into metrics-only and class A.
