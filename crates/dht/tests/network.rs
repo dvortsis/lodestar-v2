@@ -188,11 +188,31 @@ async fn denied_addresses_are_never_contacted_or_answered() {
         "the node refused no send within 10 s: {:?}",
         denying.stats()
     );
-    // Absence without a sleep: the actor refuses a send inside the same
-    // handler that would have sent it, and serves the snapshot only after
-    // that handler returns, so every send attempted up to the refusal
-    // counted above is in the stats by now. With nothing sent, nothing can
-    // have reached the seed either.
+    // Absence without a sleep, over the bootstrap and two later ticks.
+    // The actor refuses a send inside the handler that would have made it,
+    // and serves a snapshot only after that handler returns, so the
+    // snapshot below closes the start-up bootstrap.
+    //
+    // Then two more refusals. With an empty table, the node re-bootstraps
+    // at the end of a tick once 30 ticks have passed since the last try
+    // (`REBOOTSTRAP_TICKS`), so each refusal is a different tick that has
+    // already run `rejoin_tick` and the other per-tick sends. The second
+    // snapshot waits for the rest of that tick. (`a_tick_ran` can't be the
+    // signal here: its stranger is on loopback too, so it would be refused.)
+    // With nothing sent, nothing can have reached the seed either.
+    denying.snapshot().await.unwrap();
+    let after_bootstrap = denying.stats().denied;
+    assert!(
+        wait_for(
+            async || denying.stats().denied >= after_bootstrap + 2,
+            // Two re-bootstraps are at least 2 × 30 ticks (3 s) apart from
+            // the start: double the usual deadline.
+            2 * wait::DEADLINE
+        )
+        .await,
+        "the node didn't try to re-bootstrap twice within 20 s: denied {} (from {after_bootstrap})",
+        denying.stats().denied
+    );
     denying.snapshot().await.unwrap();
     assert_eq!(
         denying.stats().packets_out,

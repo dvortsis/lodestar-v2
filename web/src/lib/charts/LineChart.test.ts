@@ -101,12 +101,14 @@ describe('LineChart', () => {
 		const onerror = vi.fn();
 		const { unmount } = render(LineChart, { ...props, onerror });
 		unmount();
-		// Not a timed absence. Once the test's own import of the same modules
-		// has settled, the chart's has too, and the rest of its load is a
-		// chain of promise reactions; a zero-delay macrotask runs only after
-		// every pending reaction, so by then the chart has had its chance to
-		// build and didn't (nor did it fail, which would also skip the build).
-		await Promise.all([import('uplot'), import('uplot/dist/uPlot.min.css')]);
+		// Not a timed absence. `dynamicImportSettled` waits for every dynamic
+		// import in flight, the chart's own included, whatever order the
+		// module runner settles them in. The rest of the chart's load is a
+		// chain of promise reactions, and a zero-delay macrotask runs only
+		// after every pending reaction. So by then the chart has had its
+		// chance to build and didn't (nor did it fail, which would also skip
+		// the build).
+		await vi.dynamicImportSettled();
 		await new Promise((r) => setTimeout(r, 0));
 		expect(ctor).not.toHaveBeenCalled();
 		expect(onerror).not.toHaveBeenCalled();
