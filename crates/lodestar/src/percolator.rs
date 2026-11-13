@@ -96,6 +96,11 @@ impl Default for PercolatorConfig {
 /// saved search, so a batch stays well inside the budget.
 pub const PROMOTED_BATCH: usize = 256;
 
+/// Held rows [`Seen::held`] remembers at most. A row past it isn't
+/// remembered, so its retry reruns every due search, which alerts'
+/// uniqueness makes safe; it only costs those searches again.
+const HELD_CAP: usize = 16 * PROMOTED_BATCH;
+
 /// What the commit hook hands the task.
 #[derive(Debug, Default)]
 struct Wake {
@@ -151,8 +156,22 @@ pub struct Seen {
     promoted_after: i64,
     /// Queued promotions left waiting on held searches, by
     /// `reindex_log` seq: the searches to retry them with (the others
-    /// already ran). Lost on a restart, when every search reruns.
+    /// already ran). Lost on a restart, when every search reruns. At most
+    /// [`HELD_CAP`] rows.
     held: HashMap<i64, Vec<i64>>,
+}
+
+impl Seen {
+    /// Remembers `held` rows' held searches, while there's room (see
+    /// [`HELD_CAP`]). A row already remembered is always updated: its
+    /// held set only shrinks.
+    fn hold(&mut self, held: Vec<(i64, Vec<i64>)>) {
+        for (seq, searches) in held {
+            if self.held.len() < HELD_CAP || self.held.contains_key(&seq) {
+                self.held.insert(seq, searches);
+            }
+        }
+    }
 }
 
 /// One run up to `through` (see the module docs). `hub` gets the
@@ -384,7 +403,7 @@ fn run_promoted(
     run.more |= stopped || (whole && rows.len() == PROMOTED_BATCH && !done.is_empty());
     if done.is_empty() && hits.is_empty() {
         seen.promoted_after = after;
-        seen.held.extend(held);
+        seen.hold(held);
         return Ok(());
     }
     let asts: HashMap<i64, &str> = parsed.iter().map(|p| (p.0, p.2)).collect();
@@ -408,7 +427,7 @@ fn run_promoted(
     for seq in &done {
         seen.held.remove(seq);
     }
-    seen.held.extend(held);
+    seen.hold(held);
     Ok(())
 }
 
@@ -1548,6 +1567,26 @@ mod tests {
         assert_eq!(alert_ids(&s.store, promo), items);
     }
 
+    /// `Seen::held` stops growing at `HELD_CAP`; a row it already holds
+    /// is still updated, and a row it can't take just reruns every
+    /// search on its retry.
+    #[test]
+    fn the_held_map_is_capped() {
+        let mut seen = Seen::default();
+        let rows = |from: i64, to: i64| (from..to).map(|seq| (seq, vec![7, 8])).collect();
+        seen.hold(rows(1, HELD_CAP as i64 + 100));
+        assert_eq!(seen.held.len(), HELD_CAP);
+        assert!(!seen.held.contains_key(&(HELD_CAP as i64 + 1)));
+        seen.hold(vec![(1, vec![8]), (HELD_CAP as i64 + 1, vec![8])]);
+        assert_eq!(seen.held.len(), HELD_CAP);
+        assert_eq!(seen.held[&1], [8]);
+        assert!(!seen.held.contains_key(&(HELD_CAP as i64 + 1)));
+        // Room again once rows are done.
+        seen.held.remove(&2);
+        seen.hold(rows(HELD_CAP as i64 + 1, HELD_CAP as i64 + 2));
+        assert!(seen.held.contains_key(&(HELD_CAP as i64 + 1)));
+    }
+
     /// A store and an on-disk index (so it can be reopened mid-backfill)
     /// with an unverified item `Promo.Even` (id 1) below 20 indexed
     /// torrents. Every fixture torrent is one 2 GB file, so all share one
@@ -1774,8 +1813,14 @@ mod tests {
         assert_eq!((r.promoted, r.promoted_held), (1, 0));
         assert_eq!(alert_ids(&s.store, promo), [item, free[0], free[1]]);
         assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
-        // From the head again: still held.
-        assert_eq!(counts(&go(&mut s)), (0, 1, false));
+        // From the head again, every run: still held, nothing alerted,
+        // and no run straight away.
+        for _ in 0..3 {
+            let r = go(&mut s);
+            assert_eq!(counts(&r), (0, 1, false));
+            assert_eq!(r.alerts, 0);
+        }
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
         finish_backfill(&mut s);
         let r = go(&mut s);
         assert_eq!(r.promoted, 1);

@@ -770,9 +770,6 @@ mod tests {
         assert_eq!(t(s.alerts(a, None, 10).unwrap()), [2, 7]);
     }
 
-    /// As `record_percolation_unchanged`: a search paused or edited after
-    /// the match gets nothing, and the rows are consumed all the same. An
-    /// Adult torrent's alert is recorded and withheld when it's read.
     /// X-percolate-promoted-hold: a reader steps past rows it leaves
     /// queued, and exactly the rows named are dropped.
     #[test]
@@ -827,6 +824,9 @@ mod tests {
         assert_eq!(both(&s), 0);
     }
 
+    /// As `record_percolation_unchanged`: a search paused or edited after
+    /// the match gets nothing, and the rows are consumed all the same. An
+    /// Adult torrent's alert is recorded and withheld when it's read.
     #[test]
     fn record_promoted_skips_a_search_paused_or_edited_meanwhile() {
         let mut s = test_store(10);

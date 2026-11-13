@@ -19,6 +19,8 @@ Spec: the runner's brief `briefs/X-percolate-promoted-hold.md`. It closes rv-754
   - **The cursor moves only once the batch's write commits.** After a failed write, the same batch is taken again.
   - **The cursor goes back to the head** when a batch reaches the queue's end or a row the index hasn't applied. The run after that retries the held rows, so each held row is retried at least once per cycle through the queue: every run when the queue holds fewer than `PROMOTED_BATCH` rows.
   - **Retries are cheap.** `Seen::held` keeps, for each held row, the searches still held on it. A retry runs only those, so a row's other searches don't run twice in one process. While the field stays partial, a held search is passed over before it's compiled.
+  - **`Seen::held` is capped at 4,096 rows** (`HELD_CAP`, 16 × `PROMOTED_BATCH`), from the runner's review. A held row the map can't take is still retried. Its retry reruns every due search, as after a restart, and alerts' uniqueness makes that safe. A row the map already holds is always updated, because its held set only shrinks.
+  - **Trade-off: a held backlog delays the rows behind it.** With H held rows ahead, a new row waits about H/256 runs (commits, or idle polls every 10 s) before the cursor reaches it. For example, 25,000 held rows on idle polls is about 16 minutes. This keeps a run of held rows to the batch read, as the brief asks, rather than reading past the batch to find new rows first.
   - **Nothing spins.** `more` is set only when the budget stopped the batch, or when a full batch percolated at least one row. A run whose rows are all held writes nothing and waits for the next commit or the idle poll (`promoted_poll`, 10 s).
 - **After a restart** the in-memory state is gone. The cursor starts at the head, and every search due on a held row runs again. Alerts are unique per search and torrent (`ON CONFLICT DO NOTHING`), so a search that already alerted on the row adds nothing.
   - **Known limit (accepted by the runner):** if pruning removed that alert between the first pass and the replay, the replay adds it again as new. It's rare because three things have to coincide: a restart while the row is held, at least 1,000 newer alerts for the same search in that window (`keep`), and an hourly prune between them that drops the alert. We accept it rather than store per-search progress in the queue row.
@@ -28,7 +30,8 @@ Spec: the runner's brief `briefs/X-percolate-promoted-hold.md`. It closes rv-754
   - an unrelated search on the same row alerts at once;
   - under a spent budget, the cursor steps past a held row, so the rows behind it go one per run;
   - a full batch of held rows doesn't stall the rows after it, doesn't spin, and retries only the held search;
-  - repeated runs over an all-held queue only read: no alert, no write, no `more`;
+  - repeated runs over an all-held queue, with and without a spent budget, alert nothing and set no `more`. No write is shown structurally: that run returns before `record_promoted_rows`. lodestar's tests have no SQLite handle of their own to read `PRAGMA data_version` with;
+  - the held map's cap;
   - the held set is exactly what `percolate` holds;
   - a restart while a row is held keeps it queued, and it runs once after Ready with no duplicate alert.
 
