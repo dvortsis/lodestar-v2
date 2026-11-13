@@ -44,6 +44,9 @@ pub const ATYP_V6: u8 = 0x04;
 /// The longest reply to `CONNECT`: head (4), length byte (1), a 255-byte
 /// name and the port (2).
 pub const MAX_REPLY: usize = 4 + 1 + 255 + 2;
+/// The shortest reply to `CONNECT`: head (4), length byte (1), a one-byte
+/// name and the port (2).
+pub const MIN_REPLY: usize = 4 + 1 + 1 + 2;
 /// How many bytes [`reply_len`] needs to know a reply's full length.
 pub const REPLY_PREFIX: usize = 5;
 
@@ -393,6 +396,15 @@ mod tests {
     }
 
     #[test]
+    fn the_shortest_reply_is_a_one_byte_name() {
+        // Found by the fuzzer: 8 bytes, shorter than an IPv4 reply.
+        let reply = [5, 0, 0, ATYP_DOMAIN, 1, b'a', 0, 1];
+        let prefix = reply.first_chunk::<REPLY_PREFIX>().unwrap();
+        assert_eq!(reply_len(*prefix), Ok(MIN_REPLY));
+        assert_eq!(parse_reply(&reply), Ok(Bound::Name("a".into(), 1)));
+    }
+
+    #[test]
     fn failure_codes_are_named_without_proxy_bytes() {
         let msg = SocksError::Refused(0x05).to_string();
         assert!(msg.contains("connection refused"), "{msg}");
@@ -414,7 +426,7 @@ mod tests {
             if let Some(p) = bytes.first_chunk::<REPLY_PREFIX>()
                 && let Ok(n) = reply_len(*p)
             {
-                prop_assert!((10..=MAX_REPLY).contains(&n));
+                prop_assert!((MIN_REPLY..=MAX_REPLY).contains(&n));
             }
         }
 

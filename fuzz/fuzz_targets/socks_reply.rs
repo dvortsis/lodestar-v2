@@ -1,5 +1,5 @@
 //! A SOCKS5 proxy's replies (NOS-2a) never panic, and what they yield is
-//! bounded: `reply_len` asks for 10 to `MAX_REPLY` bytes, `parse_reply`
+//! bounded: `reply_len` asks for `MIN_REPLY` to `MAX_REPLY` bytes, `parse_reply`
 //! accepts only exactly that many, and a bound name is 1 to 255 bytes of
 //! printable ASCII.
 //!
@@ -9,7 +9,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use lodestar_integrations::net::socks::{
-    Bound, MAX_REPLY, REPLY_PREFIX, parse_auth, parse_method, parse_reply, reply_len,
+    Bound, MAX_REPLY, MIN_REPLY, REPLY_PREFIX, parse_auth, parse_method, parse_reply, reply_len,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
         .first_chunk::<REPLY_PREFIX>()
         .and_then(|p| reply_len(*p).ok());
     if let Some(n) = want {
-        assert!((10..=MAX_REPLY).contains(&n));
+        assert!((MIN_REPLY..=MAX_REPLY).contains(&n));
     }
     match parse_reply(reply) {
         Ok(bound) => {
