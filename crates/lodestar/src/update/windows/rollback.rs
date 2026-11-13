@@ -426,6 +426,312 @@ pub fn installing(
     })
 }
 
+/// In staging: what the last install that passed probation leaves for a
+/// manual Roll back ([`Installed`]).
+pub const INSTALLED: &str = "installed.json";
+/// The `skipped` reason a manual Roll back gives the version it leaves:
+/// like `failed`, one the user can't undo (`check::refusing`).
+pub const SKIP_MANUAL: &str = "manual";
+/// A manual Roll back's journal id starts with this, so its wording and
+/// skip reason are a manual one's. An older helper that resumes it only
+/// words it as a failed probation's.
+pub const MANUAL_ID: &str = "manual-";
+
+/// What a manual Roll back needs from the install that passed probation:
+/// its versions, its start type before, and the snapshot it took
+/// (by name). Kept in staging, which only SYSTEM and Administrators can
+/// write, so nothing in the data folder decides a rollback. Replaced by
+/// the next install that passes, removed by a finished rollback; one whose
+/// `to` isn't the running version is never used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Installed {
+    pub format: u32,
+    pub from: String,
+    pub to: String,
+    /// The earliest pre-migration snapshot `to` took ([`choose`]'s rule),
+    /// named while it was certainly there; `None` when it took none (it
+    /// didn't migrate the store, so a rollback keeps it).
+    #[serde(default)]
+    pub snapshot: Option<String>,
+    #[serde(default)]
+    pub start_before: Option<Start>,
+}
+
+/// Why a manual Roll back can't run, as the API's `rollback_unavailable`
+/// reasons name it ([`ManualRefusal::code`]).
+// Not wired to a request yet (the helper's request and the API are
+// X-win-upd-manual-rollback's follow-up): only tests call it.
+#[cfg_attr(all(windows, not(test)), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManualRefusal {
+    /// A journal is in place: an install, its probation or a rollback.
+    Busy,
+    /// No install that passed probation is recorded for the running
+    /// version, or its previous MSI isn't kept (or doesn't match its pins).
+    NoPreviousVersion(String),
+    /// The snapshot the install took is gone: restoring nothing would
+    /// leave the previous version a store it can't read.
+    SnapshotMissing(String),
+    /// Staging or the store's folder couldn't be read or written.
+    Io(String),
+}
+
+impl ManualRefusal {
+    #[cfg_attr(all(windows, not(test)), allow(dead_code))]
+    pub fn code(&self) -> &'static str {
+        match self {
+            ManualRefusal::Busy => "busy",
+            ManualRefusal::NoPreviousVersion(_) => "no_previous_version",
+            ManualRefusal::SnapshotMissing(_) => "snapshot_missing",
+            ManualRefusal::Io(_) => "io",
+        }
+    }
+}
+
+/// What a manual Roll back would do, read without writing anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualPlan {
+    /// The version reinstalled.
+    pub from: String,
+    /// The running version, rolled back.
+    pub to: String,
+    /// The snapshot restored over the store (by name), or `None` when the
+    /// store is kept.
+    pub snapshot: Option<String>,
+}
+
+/// Whether the journal is a manual Roll back's.
+pub fn is_manual(j: &Journal) -> bool {
+    j.id.starts_with(MANUAL_ID)
+}
+
+/// Best effort, on a passed probation: a failure only means no manual
+/// Roll back is offered for this install, never that it's wrong.
+fn keep_installed(ctx: &Context, j: &Journal) {
+    let snapshot = match choose_name(ctx, &j.snapshots_before) {
+        Ok(s) => s,
+        Err(e) => {
+            // Without knowing whether it migrated the store, no manual
+            // Roll back: a stale record mustn't stay either.
+            eprintln!(
+                "lodestar update-helper: no manual rollback for {}: {e}",
+                j.to
+            );
+            let _ = std::fs::remove_file(ctx.staging.dir.join(INSTALLED));
+            return;
+        }
+    };
+    let rec = Installed {
+        format: FORMAT,
+        from: j.from.clone(),
+        to: j.to.clone(),
+        snapshot,
+        start_before: j.start_before,
+    };
+    let written = serde_json::to_vec_pretty(&rec)
+        .map_err(|e| e.to_string())
+        .and_then(|b| {
+            layout::write_atomic(&ctx.staging.dir, INSTALLED, &b).map_err(|e| e.to_string())
+        });
+    if let Err(e) = written {
+        eprintln!("lodestar update-helper: {INSTALLED}: {e}");
+        let _ = std::fs::remove_file(ctx.staging.dir.join(INSTALLED));
+    }
+}
+
+/// What a manual Roll back of `running` would do, or why it can't run.
+/// Reads staging and lists the store's folder; writes nothing. Fails
+/// closed: a record it can't read, a version that doesn't parse or isn't
+/// older, a missing or mismatched MSI and a missing snapshot all refuse.
+// Not wired yet: the service's availability check (the follow-up slice)
+// calls it; only tests do now.
+#[cfg_attr(all(windows, not(test)), allow(dead_code))]
+pub fn manual_plan(ctx: &Context, running: &Version) -> Result<ManualPlan, ManualRefusal> {
+    plan_with_record(ctx, running).map(|(plan, _)| plan)
+}
+
+/// [`manual_plan`], with the record it came from.
+fn plan_with_record(
+    ctx: &Context,
+    running: &Version,
+) -> Result<(ManualPlan, Installed), ManualRefusal> {
+    if read(ctx)
+        .map_err(|e| ManualRefusal::Io(e.to_string()))?
+        .is_some()
+    {
+        return Err(ManualRefusal::Busy);
+    }
+    let rec = installed(ctx, running)?;
+    previous_msi(ctx, &rec.from).map_err(ManualRefusal::NoPreviousVersion)?;
+    if let Some(name) = &rec.snapshot {
+        let all = snapshots::list(&ctx.data_dir.join(STORE))
+            .map_err(|e| ManualRefusal::Io(format!("the store's snapshots: {e}")))?;
+        if !all.iter().any(|s| &s.name == name) {
+            return Err(ManualRefusal::SnapshotMissing(format!(
+                "the snapshot {name} that {} took is gone",
+                rec.to
+            )));
+        }
+    }
+    let plan = ManualPlan {
+        from: rec.from.clone(),
+        to: rec.to.clone(),
+        snapshot: rec.snapshot.clone(),
+    };
+    Ok((plan, rec))
+}
+
+/// Run once the service has stopped, so nothing deletes a snapshot after
+/// it: the snapshot a manual Roll back restores, still as the record names
+/// it (the service's retention purge may have deleted it since the plan).
+fn manual_snapshot(ctx: &Context, j: &Journal) -> Result<Option<String>, String> {
+    let rec: Installed = layout::read_json(&ctx.staging.dir.join(INSTALLED))
+        .map_err(|e| format!("{INSTALLED}: {e}"))?
+        .ok_or_else(|| format!("{INSTALLED} is gone"))?;
+    if rec.from != j.from || rec.to != j.to {
+        return Err(format!("{INSTALLED} is for another update"));
+    }
+    if let Some(name) = &rec.snapshot {
+        let all = snapshots::list(&ctx.data_dir.join(STORE))
+            .map_err(|e| format!("the store's snapshots: {e}"))?;
+        if !all.iter().any(|s| &s.name == name) {
+            return Err(format!("the snapshot {name} that {} took is gone", rec.to));
+        }
+    }
+    Ok(rec.snapshot)
+}
+
+/// The record for `running`, checked.
+fn installed(ctx: &Context, running: &Version) -> Result<Installed, ManualRefusal> {
+    let none = |why: &str| ManualRefusal::NoPreviousVersion(why.to_string());
+    let rec: Installed = match layout::read_json(&ctx.staging.dir.join(INSTALLED)) {
+        Ok(Some(r)) => r,
+        Ok(None) => return Err(none("no update installed by the helper is recorded")),
+        Err(e) => return Err(ManualRefusal::Io(format!("{INSTALLED}: {e}"))),
+    };
+    if rec.format != FORMAT {
+        return Err(ManualRefusal::Io(format!(
+            "{INSTALLED} has an unknown format"
+        )));
+    }
+    let (Some(from), Some(to)) = (
+        layout::parse_version(&rec.from),
+        layout::parse_version(&rec.to),
+    ) else {
+        return Err(ManualRefusal::Io(format!(
+            "{INSTALLED}'s versions are invalid"
+        )));
+    };
+    if &to != running {
+        return Err(none("the running version wasn't installed by the helper"));
+    }
+    if from >= to {
+        return Err(none("the recorded previous version isn't older"));
+    }
+    // Tied to what the helper itself keeps: the install leaves `to`'s MSI
+    // as `current\`. A record a hand install or an older helper left
+    // stale doesn't match it.
+    let current = layout::read_json::<Pins>(&ctx.staging.current().join(PINS))
+        .ok()
+        .flatten();
+    if current.is_none_or(|p| p.version != rec.to) {
+        return Err(none("the helper didn't install the running version"));
+    }
+    // Names beside the store, nothing else: `restore` checks again.
+    if let Some(n) = &rec.snapshot
+        && (n.contains(['/', '\\'])
+            || !matches!(
+                snapshots::parse_name(STEM, n),
+                Some(SnapKind::PreMigration { .. })
+            ))
+    {
+        return Err(ManualRefusal::Io(format!(
+            "{INSTALLED}'s snapshot isn't one beside the store"
+        )));
+    }
+    Ok(rec)
+}
+
+/// The journal a manual Roll back of `running` begins with, from
+/// [`manual_plan`]: `from` the recorded previous version, `to` the
+/// running one. Its `snapshots_before` is every snapshot there now but the
+/// recorded one, so step 2's [`choose`] finds exactly that one (or none,
+/// when the store is kept). `request` names the request it came from, an
+/// id as the helper's requests have ([`msi::valid_id`]).
+pub fn manual_journal(
+    ctx: &Context,
+    running: &Version,
+    request: &str,
+) -> Result<Journal, ManualRefusal> {
+    if !msi::valid_id(request) {
+        return Err(ManualRefusal::Io("the request's id is invalid".into()));
+    }
+    let (plan, rec) = plan_with_record(ctx, running)?;
+    let all = snapshots::list(&ctx.data_dir.join(STORE))
+        .map_err(|e| ManualRefusal::Io(format!("the store's snapshots: {e}")))?;
+    let before = all
+        .into_iter()
+        .map(|s| s.name)
+        .filter(|n| Some(n) != plan.snapshot.as_ref())
+        .collect();
+    Ok(Journal {
+        format: FORMAT,
+        id: format!("{MANUAL_ID}{request}"),
+        from: plan.from,
+        to: plan.to,
+        snapshots_before: before,
+        restart: false,
+        start_before: rec.start_before,
+        msi: None,
+        answer: None,
+        copies: 0,
+        reinstall_restart: false,
+        restart_boot: None,
+        restarts: 0,
+        blocked: 0,
+        touched: false,
+        state: State::RollingBack {
+            snapshot: None,
+            done: 0,
+        },
+    })
+}
+
+/// A manual Roll back of `running` (architecture §12.2: "Roll back in
+/// Settings → Updates, the previous version, while its snapshot is
+/// kept"), run by the helper for a request, after [`resume`]. The journal
+/// is written first, then the same five steps a failed probation's
+/// rollback takes, so a crash or restart is finished the same way. The
+/// start type it puts back is the one now (`start_before` when it can't
+/// be read or is disabled).
+// Not wired to a request yet (the helper's request and the API are
+// X-win-upd-manual-rollback's follow-up): only tests call it.
+#[cfg_attr(all(windows, not(test)), allow(dead_code))]
+pub fn manual(
+    ctx: &Context,
+    sys: &dyn System,
+    running: &Version,
+    request: &str,
+) -> Result<Outcome, ManualRefusal> {
+    let mut j = manual_journal(ctx, running, request)?;
+    if let Ok(start) = sys.start_type()
+        && start != Start::Disabled
+    {
+        j.start_before = Some(start);
+    }
+    write(ctx, &j).map_err(|e| ManualRefusal::Io(e.to_string()))?;
+    Ok(roll_back(ctx, sys, j))
+}
+
+/// The opening of a halt's text: what was rolled back, and why.
+fn opening(j: &Journal, to: &str, from: &str) -> String {
+    if is_manual(j) {
+        format!("Lodestar's manual rollback from {to} to {from}")
+    } else {
+        format!("Lodestar {to} failed its health check, and the rollback to {from}")
+    }
+}
+
 /// Probation for an installed version, then a rollback if it fails. The
 /// journal is in place (`Installing`).
 pub fn probation(ctx: &Context, sys: &dyn System, mut journal: Journal, restart: bool) -> Outcome {
@@ -456,6 +762,8 @@ pub fn probation(ctx: &Context, sys: &dyn System, mut journal: Journal, restart:
         if let Some(start) = journal.start_before.filter(|s| *s != Start::Auto) {
             let _ = sys.set_start(start);
         }
+        // What a manual Roll back needs later, before the journal goes.
+        keep_installed(ctx, &journal);
         clear(ctx);
         return Outcome::Installed {
             version: to,
@@ -576,6 +884,10 @@ enum Stop {
     /// The reinstall was handed to the helper's copy; the run that
     /// follows it finishes.
     HandedOff,
+    /// A manual Roll back found, with the service stopped, that it can't
+    /// go on: before the marker or the skip, so the service is started
+    /// again and nothing was changed.
+    Undo(String),
 }
 
 fn halt_on<T>(r: Result<T, String>) -> Result<T, Stop> {
@@ -588,6 +900,9 @@ fn roll_back(ctx: &Context, sys: &dyn System, mut j: Journal) -> Outcome {
         Ok(()) => {
             let healthy = sys.healthy();
             clear(ctx);
+            // `previous\` no longer holds the record's `from`: nothing is
+            // left to roll back by hand.
+            let _ = std::fs::remove_file(ctx.staging.dir.join(INSTALLED));
             Outcome::RolledBack {
                 failed: j.to.clone(),
                 to: j.from.clone(),
@@ -596,6 +911,12 @@ fn roll_back(ctx: &Context, sys: &dyn System, mut j: Journal) -> Outcome {
         }
         Err(Stop::Retry(why)) => Outcome::RollbackPending { why },
         Err(Stop::HandedOff) => Outcome::HandedOff,
+        Err(Stop::Undo(why)) => {
+            let _ = sys.set_start(j.start_before.unwrap_or(Start::Auto));
+            sys.start_service();
+            j.touched = false;
+            halt(ctx, sys, j, 0, why, Cause::Step)
+        }
         Err(Stop::Halt(why)) => {
             let done = done_of(&j);
             halt(ctx, sys, j, done, why, Cause::Step)
@@ -639,7 +960,8 @@ fn halt(
     // nothing was changed.
     // A journal without the field (an earlier build) counts any rollback
     // state as touched, as before the field existed.
-    let touched = j.touched || matches!(j.state, State::RollingBack { .. });
+    // A manual one starts rolling back at step 0, and always has the field.
+    let touched = j.touched || (!is_manual(&j) && matches!(j.state, State::RollingBack { .. }));
     let step = if touched { done.max(1) } else { 0 };
     let recovery = recovery(ctx, &j, step, &why, cause);
     // The Event Log gets the same steps with fixed text: every local user
@@ -719,18 +1041,17 @@ pub fn recovery_event(j: &Journal, done: u8, cause: Cause) -> String {
         // Nothing was touched, so the journal is cleared (`halt`): the
         // reason is in the answer the helper leaves, `updates\result.json`.
         return format!(
-            "Lodestar {to} failed its health check, and the rollback to {from} couldn't start. \
-             Nothing was changed: {to} keeps running. The reason is in {updates}\\{result} in \
+            "{opening} couldn't start. Nothing was changed: {to} keeps running. The reason is in {updates}\\{result} in \
              Lodestar's data folder. To go back to {from}, an administrator installs the {from} \
              MSI by hand.",
             updates = msi::UPDATES,
             result = msi::RESULT,
+            opening = opening(j, &to, &from),
         );
     }
     let marker = format!("bin\\{MARKER} in Lodestar's data folder");
     format!(
-        "Lodestar {to} failed its health check, and the rollback to {from} stopped after step \
-         {done} of 5. The Lodestar service is stopped and disabled, so neither version opens \
+        "{opening} stopped after step {done} of 5. The Lodestar service is stopped and disabled, so neither version opens \
          the store. {store} {marker} stays until the rollback finishes, so every store opener \
          refuses while it exists. To recover, an administrator: 1. reads {journal} (it has the \
          reason) and the msiexec logs beside it; 2. installs the {from} MSI by hand (the service \
@@ -741,6 +1062,7 @@ pub fn recovery_event(j: &Journal, done: u8, cause: Cause) -> String {
          clears both files at the next restart (the helper's run at boot). Neither file starts \
          anything.",
         store = store_state(j, done, cause),
+        opening = opening(j, &to, &from),
     )
 }
 
@@ -753,9 +1075,9 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -
     let journal = ctx.staging.dir.join(JOURNAL);
     if done == 0 {
         return format!(
-            "Lodestar {to} failed its health check, and the rollback to {from} couldn't start: \
-             {why}. Nothing was changed: {to} keeps running. To go back to {from}, an \
-             administrator installs the {from} MSI by hand."
+            "{opening} couldn't start: {why}. Nothing was changed: {to} keeps running. To go \
+             back to {from}, an administrator installs the {from} MSI by hand.",
+            opening = opening(j, to, from),
         );
     }
     let marker = ctx.data_dir.join("bin").join(MARKER);
@@ -766,8 +1088,7 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -
         marker.display()
     );
     format!(
-        "Lodestar {to} failed its health check, and the rollback to {from} stopped after step \
-         {done} of 5: {why}. The Lodestar service is stopped and disabled, so neither version \
+        "{opening} stopped after step {done} of 5: {why}. The Lodestar service is stopped and disabled, so neither version \
          opens the store. {store} To recover, an administrator: 1. reads {journal} and the \
          msiexec logs beside it; 2. installs the {from} MSI by hand (the service it starts stays idle \
          while the marker exists, so the install completes), or restores a backup of \
@@ -779,6 +1100,7 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -
         journal = journal.display(),
         data = ctx.data_dir.display(),
         marker = marker.display(),
+        opening = opening(j, to, from),
     )
 }
 
@@ -807,6 +1129,19 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
             save(j, &snapshot, done)?;
         }
         stopped(sys)?;
+        if is_manual(j) {
+            // Checked again with the service stopped: its retention purge
+            // can't delete the snapshot after this.
+            // Undone only while nothing was changed: a run that wrote the
+            // marker (and the skip) and crashed before saving step 1 halts.
+            manual_snapshot(ctx, j).map_err(|why| {
+                if std::fs::symlink_metadata(ctx.data_dir.join("bin").join(MARKER)).is_ok() {
+                    Stop::Halt(why)
+                } else {
+                    Stop::Undo(why)
+                }
+            })?;
+        }
         let bin = halt_on(
             Bin::existing(&ctx.data_dir)
                 .map_err(|e| format!("bin: {e}"))
@@ -820,13 +1155,28 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         )?;
         // Best effort, as `mark_failed`: an unreadable `skipped` mustn't
         // stop the rollback (the next check offers the version again).
-        let _ = super::check::add_skip(&bin, &j.to, super::check::SKIP_FAILED);
+        let reason = if is_manual(j) {
+            SKIP_MANUAL
+        } else {
+            super::check::SKIP_FAILED
+        };
+        let _ = super::check::add_skip(&bin, &j.to, reason);
         drop(lock);
         done = 1;
         save(j, &snapshot, done)?;
     }
     if done < 2 {
         snapshot = halt_on(choose(ctx, &j.snapshots_before))?;
+        if is_manual(j) {
+            // Exactly the recorded one, or the store would be kept (or the
+            // wrong one restored) under a version that can't read it.
+            let want = halt_on(manual_snapshot(ctx, j))?;
+            if snapshot.as_ref().map(|s| &s.name) != want.as_ref() {
+                return Err(Stop::Halt(
+                    "the snapshot found isn't the one the update took".into(),
+                ));
+            }
+        }
         sys.copied("chosen");
         done = 2;
         save(j, &snapshot, done)?;
@@ -1091,18 +1441,7 @@ fn previous_msi(ctx: &Context, from: &str) -> Result<(PathBuf, Pins), String> {
 /// nothing (the service account can write the store itself, and the old
 /// version checks it when it opens it).
 fn choose(ctx: &Context, before: &[String]) -> Result<Option<SnapshotRef>, String> {
-    let all = snapshots::list(&ctx.data_dir.join(STORE))
-        .map_err(|e| format!("the store's snapshots can't be listed: {e}"))?;
-    let Some(s) = all
-        .into_iter()
-        .filter(|s| !before.contains(&s.name))
-        .filter_map(|s| match s.kind {
-            SnapKind::PreMigration { version, repeat } => Some(((version, repeat), s)),
-            SnapKind::BeforeRollback => None,
-        })
-        .min_by_key(|(k, _)| *k)
-        .map(|(_, s)| s)
-    else {
+    let Some(s) = earliest_new(ctx, before)? else {
         return Ok(None);
     };
     let (sha, _) = hash(&s.path).map_err(|e| format!("{}: {e}", s.name))?;
@@ -1110,6 +1449,26 @@ fn choose(ctx: &Context, before: &[String]) -> Result<Option<SnapshotRef>, Strin
         name: s.name,
         sha256: sha.to_hex(),
     }))
+}
+
+/// [`choose`]'s snapshot, by name only (nothing hashed).
+fn choose_name(ctx: &Context, before: &[String]) -> Result<Option<String>, String> {
+    Ok(earliest_new(ctx, before)?.map(|s| s.name))
+}
+
+/// The earliest pre-migration snapshot not in `before`.
+fn earliest_new(ctx: &Context, before: &[String]) -> Result<Option<snapshots::Snapshot>, String> {
+    let all = snapshots::list(&ctx.data_dir.join(STORE))
+        .map_err(|e| format!("the store's snapshots can't be listed: {e}"))?;
+    Ok(all
+        .into_iter()
+        .filter(|s| !before.contains(&s.name))
+        .filter_map(|s| match s.kind {
+            SnapKind::PreMigration { version, repeat } => Some(((version, repeat), s)),
+            SnapKind::BeforeRollback => None,
+        })
+        .min_by_key(|(k, _)| *k)
+        .map(|(_, s)| s))
 }
 
 /// Step 3: the snapshot over the store, beneath the pinned data folder.
@@ -1201,4 +1560,665 @@ pub(super) fn hash(path: &Path) -> std::io::Result<(Sha256, u64)> {
         size += n as u64;
     }
     Ok((Sha256(h.finalize().into()), size))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::io;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use lodestar_update::Channel;
+    use lodestar_update::doc::Target;
+    use lodestar_update::testing::TestTrust;
+
+    use super::*;
+    use crate::update::windows::msi::Staging;
+
+    const OLD_MSI: &[u8] = b"the 0.6.0 msi";
+    const SNAP: &str = "lodestar.pre-v8.db";
+    /// A request id, as the helper's requests have (`msi::valid_id`).
+    const ID: &str = "0123456789abcdef";
+
+    /// A Windows that does what it's asked: every call is recorded.
+    struct Fake {
+        start: Start,
+        unhealthy: bool,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl Fake {
+        fn new(start: Start) -> Fake {
+            Fake {
+                start,
+                unhealthy: false,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+        fn note(&self, s: impl Into<String>) {
+            self.calls.lock().unwrap().push(s.into());
+        }
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl System for Fake {
+        fn check_data(&self, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn secure_staging(&self, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn authenticode(&self, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn stop_service(&self) -> io::Result<()> {
+            self.note("stop");
+            Ok(())
+        }
+        fn start_service(&self) {
+            self.note("start");
+        }
+        fn msiexec(&self, _: &[OsString]) -> io::Result<i32> {
+            unreachable!("msiexec runs through run_msiexec")
+        }
+        fn run_msiexec(&self, _: &Path, args: &[OsString], _: &str) -> Result<helper::Ran, String> {
+            let msi = args
+                .iter()
+                .any(|a| a.to_string_lossy().ends_with("lodestar-0.6.0.msi"));
+            self.note(format!("msiexec 0.6.0={msi}"));
+            Ok(helper::Ran::Code(0))
+        }
+        fn healthy(&self) -> bool {
+            !self.unhealthy
+        }
+        fn set_start(&self, start: Start) -> io::Result<()> {
+            self.note(format!("set_start {start:?}"));
+            Ok(())
+        }
+        fn start_type(&self) -> io::Result<Start> {
+            Ok(self.start)
+        }
+        fn event_log(&self, message: &str) {
+            self.note(format!("event {message}"));
+        }
+        fn service_processes(&self) -> io::Result<usize> {
+            Ok(0)
+        }
+        fn boot_time(&self) -> io::Result<u64> {
+            Ok(0)
+        }
+        fn installer_idle(&self, _: Duration) -> bool {
+            true
+        }
+    }
+
+    struct Env {
+        _tmp: tempfile::TempDir,
+        ctx: Context,
+    }
+
+    fn v(s: &str) -> Version {
+        Version::parse(s).unwrap()
+    }
+
+    /// 0.7.0 running, installed by the helper from 0.6.0, which took
+    /// `SNAP` before migrating; 0.6.0's MSI kept in `previous\`.
+    fn env() -> Env {
+        let tmp = tempfile::tempdir().unwrap();
+        let trust = TestTrust::default();
+        let ctx = Context {
+            data_dir: tmp.path().join("data"),
+            staging: Staging::of(&tmp.path().join("Program Files").join("Lodestar")),
+            running: Some(v("0.7.0")),
+            target: Some(Target::X86_64WindowsMsvc),
+            now: 1_800_000_000,
+            embedded: trust.embedded(vec![]),
+            lock_wait: Duration::from_millis(300),
+        };
+        std::fs::create_dir_all(&ctx.data_dir).unwrap();
+        std::fs::create_dir_all(&ctx.staging.dir).unwrap();
+        drop(Bin::open(&ctx.data_dir).unwrap());
+        std::fs::write(ctx.data_dir.join(STORE), b"old store").unwrap();
+        std::fs::write(ctx.data_dir.join("lodestar.pre-v5.db"), b"an older one").unwrap();
+        keep_previous(&ctx, OLD_MSI);
+        // The helper keeps the installed 0.7.0 MSI as `current\`.
+        let current = ctx.staging.current();
+        std::fs::create_dir_all(&current).unwrap();
+        let pins = Pins {
+            version: "0.7.0".into(),
+            channel: Channel::Stable,
+            sha256: Sha256::of(b"new").to_hex(),
+            size: 3,
+        };
+        std::fs::write(current.join(PINS), serde_json::to_vec(&pins).unwrap()).unwrap();
+        Env { _tmp: tmp, ctx }
+    }
+
+    fn keep_previous(ctx: &Context, msi: &[u8]) {
+        let previous = ctx.staging.previous();
+        std::fs::create_dir_all(&previous).unwrap();
+        std::fs::write(previous.join("lodestar-0.6.0.msi"), OLD_MSI).unwrap();
+        let pins = Pins {
+            version: "0.6.0".into(),
+            channel: Channel::Stable,
+            sha256: Sha256::of(msi).to_hex(),
+            size: msi.len() as u64,
+        };
+        std::fs::write(previous.join(PINS), serde_json::to_vec(&pins).unwrap()).unwrap();
+    }
+
+    /// The install of 0.7.0 from 0.6.0, its migration and a passed
+    /// probation: what leaves the record.
+    fn installed_and_passed(env: &Env) {
+        let j = installing(&env.ctx, "0123abcd", &v("0.6.0"), &v("0.7.0")).unwrap();
+        write(&env.ctx, &j).unwrap();
+        // 0.7.0 migrates: the snapshot, then a changed store.
+        std::fs::write(env.ctx.data_dir.join(SNAP), b"old store").unwrap();
+        std::fs::write(env.ctx.data_dir.join(STORE), b"new store").unwrap();
+        let fake = Fake::new(Start::Auto);
+        let out = probation(&env.ctx, &fake, j, false);
+        assert!(matches!(out, Outcome::Installed { .. }), "{out:?}");
+    }
+
+    fn record(env: &Env) -> Option<Installed> {
+        layout::read_json(&env.ctx.staging.dir.join(INSTALLED)).unwrap()
+    }
+
+    #[test]
+    fn a_passed_probation_records_the_install_and_its_snapshot() {
+        let env = env();
+        installed_and_passed(&env);
+        let rec = record(&env).unwrap();
+        assert_eq!((rec.from.as_str(), rec.to.as_str()), ("0.6.0", "0.7.0"));
+        assert_eq!(rec.snapshot.as_deref(), Some(SNAP));
+        assert!(read(&env.ctx).unwrap().is_none(), "the journal went");
+        assert_eq!(
+            manual_plan(&env.ctx, &v("0.7.0")).unwrap(),
+            ManualPlan {
+                from: "0.6.0".into(),
+                to: "0.7.0".into(),
+                snapshot: Some(SNAP.into()),
+            }
+        );
+    }
+
+    #[test]
+    fn an_install_that_took_no_snapshot_keeps_the_store() {
+        let env = env();
+        let j = installing(&env.ctx, "0123abcd", &v("0.6.0"), &v("0.7.0")).unwrap();
+        write(&env.ctx, &j).unwrap();
+        probation(&env.ctx, &Fake::new(Start::Auto), j, false);
+        assert_eq!(record(&env).unwrap().snapshot, None);
+        let plan = manual_plan(&env.ctx, &v("0.7.0")).unwrap();
+        assert_eq!(plan.snapshot, None);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        assert_eq!(choose(&env.ctx, &j.snapshots_before).unwrap(), None);
+    }
+
+    #[test]
+    fn manual_rollback_refuses_what_it_cant_do_safely() {
+        let env = env();
+        let ctx = &env.ctx;
+        let code = |r: Result<ManualPlan, ManualRefusal>| r.unwrap_err().code();
+        // Nothing recorded.
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        installed_and_passed(&env);
+        // Another version runs (installed by hand since).
+        assert_eq!(code(manual_plan(ctx, &v("0.7.1"))), "no_previous_version");
+        // A journal is in place.
+        let j = installing(ctx, "ffff", &v("0.7.0"), &v("0.8.0")).unwrap();
+        write(ctx, &j).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "busy");
+        clear(ctx);
+        // The snapshot the install took is gone: restoring nothing would
+        // hand 0.6.0 a store it can't read.
+        let snap = ctx.data_dir.join(SNAP);
+        std::fs::rename(&snap, ctx.data_dir.join("aside")).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "snapshot_missing");
+        std::fs::rename(ctx.data_dir.join("aside"), &snap).unwrap();
+        // The MSI changed since it was pinned.
+        std::fs::write(
+            ctx.staging.previous().join("lodestar-0.6.0.msi"),
+            b"changed",
+        )
+        .unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        // Gone.
+        std::fs::remove_dir_all(ctx.staging.previous()).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        keep_previous(ctx, OLD_MSI);
+        // `current\` isn't the running version: the record is stale.
+        let current = ctx.staging.current().join(PINS);
+        let kept = std::fs::read(&current).unwrap();
+        std::fs::remove_file(&current).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        std::fs::write(&current, kept).unwrap();
+        std::fs::remove_dir_all(ctx.staging.previous()).unwrap();
+        assert_eq!(code(manual_plan(ctx, &v("0.7.0"))), "no_previous_version");
+        keep_previous(ctx, OLD_MSI);
+        assert!(manual_plan(ctx, &v("0.7.0")).is_ok());
+    }
+
+    #[test]
+    fn a_damaged_record_refuses() {
+        let env = env();
+        keep_previous(&env.ctx, OLD_MSI);
+        let path = env.ctx.staging.dir.join(INSTALLED);
+        let good = Installed {
+            format: FORMAT,
+            from: "0.6.0".into(),
+            to: "0.7.0".into(),
+            snapshot: None,
+            start_before: None,
+        };
+        let bad = [
+            Installed {
+                format: FORMAT + 1,
+                ..good.clone()
+            },
+            Installed {
+                from: "0.7.0".into(),
+                ..good.clone()
+            },
+            Installed {
+                from: "0.8.0".into(),
+                ..good.clone()
+            },
+            Installed {
+                from: "not a version".into(),
+                ..good.clone()
+            },
+            Installed {
+                snapshot: Some("../lodestar.pre-v8.db".into()),
+                ..good.clone()
+            },
+            Installed {
+                snapshot: Some("lodestar.db".into()),
+                ..good.clone()
+            },
+            Installed {
+                snapshot: Some("lodestar.before-rollback-20261112-101010.db".into()),
+                ..good.clone()
+            },
+        ];
+        for rec in bad {
+            std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+            assert!(manual_plan(&env.ctx, &v("0.7.0")).is_err(), "{rec:?}");
+        }
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(manual_plan(&env.ctx, &v("0.7.0")).unwrap_err().code(), "io");
+        std::fs::write(&path, serde_json::to_vec(&good).unwrap()).unwrap();
+        assert!(manual_plan(&env.ctx, &v("0.7.0")).is_ok());
+    }
+
+    #[test]
+    fn the_manual_journal_restores_exactly_the_recorded_snapshot() {
+        let env = env();
+        installed_and_passed(&env);
+        // Snapshots taken since, older and newer, aren't the one.
+        std::fs::write(env.ctx.data_dir.join("lodestar.pre-v3.db"), b"x").unwrap();
+        std::fs::write(env.ctx.data_dir.join("lodestar.pre-v9.db"), b"y").unwrap();
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        assert!(is_manual(&j));
+        assert_eq!(j.id, "manual-0123456789abcdef");
+        assert_eq!((j.from.as_str(), j.to.as_str()), ("0.6.0", "0.7.0"));
+        let chosen = choose(&env.ctx, &j.snapshots_before).unwrap().unwrap();
+        assert_eq!(chosen.name, SNAP);
+        let long = "a".repeat(65);
+        for bad in [
+            "",
+            "ab",
+            "0123456789ABCDEF",
+            long.as_str(),
+            "../0123456789abcdef",
+            "0123456789abcde 0",
+        ] {
+            assert_eq!(
+                manual_journal(&env.ctx, &v("0.7.0"), bad)
+                    .unwrap_err()
+                    .code(),
+                "io",
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_manual_rollback_restores_the_store_and_reinstalls_the_previous_msi() {
+        let env = env();
+        installed_and_passed(&env);
+        let fake = Fake::new(Start::Manual);
+        let out = manual(&env.ctx, &fake, &v("0.7.0"), ID).unwrap();
+        assert_eq!(
+            out,
+            Outcome::RolledBack {
+                failed: "0.7.0".into(),
+                to: "0.6.0".into(),
+                healthy: true,
+            }
+        );
+        let calls = fake.calls();
+        assert!(
+            calls.contains(&"msiexec 0.6.0=true".to_string()),
+            "{calls:?}"
+        );
+        // The start type now is what goes back, after the disabled steps.
+        assert_eq!(
+            calls.iter().rfind(|c| c.starts_with("set_start")).unwrap(),
+            "set_start Manual"
+        );
+        assert_eq!(calls.last().unwrap(), "start");
+        assert!(!calls.iter().any(|c| c.starts_with("event")), "{calls:?}");
+        let store = std::fs::read(env.ctx.data_dir.join(STORE)).unwrap();
+        assert_eq!(store, b"old store");
+        assert!(!env.ctx.data_dir.join(SNAP).exists());
+        assert!(!env.ctx.data_dir.join("bin").join(MARKER).exists());
+        assert!(read(&env.ctx).unwrap().is_none(), "the journal went");
+        assert!(record(&env).is_none(), "nothing left to roll back by hand");
+        let skipped: serde_json::Value = Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .read(super::super::check::SKIPPED_FILE)
+            .unwrap()
+            .unwrap();
+        assert_eq!(skipped[0]["version"], "0.7.0", "{skipped}");
+        assert_eq!(skipped[0]["reason"], SKIP_MANUAL, "{skipped}");
+        // The reinstalled MSI is current again.
+        let pins: Pins = layout::read_json(&env.ctx.staging.current().join(PINS))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pins.version, "0.6.0");
+        // Once 0.6.0 runs, there's nothing to roll back.
+        assert!(manual_plan(&env.ctx, &v("0.6.0")).is_err());
+    }
+
+    #[test]
+    fn a_snapshot_purged_before_the_service_stopped_undoes_the_rollback() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        write(&env.ctx, &j).unwrap();
+        // The service's retention purge, between the plan and the stop.
+        std::fs::remove_file(env.ctx.data_dir.join(SNAP)).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = roll_back(&env.ctx, &fake, j);
+        let Outcome::RollbackHalted { why, recovery } = out else {
+            panic!("{out:?}");
+        };
+        assert!(why.contains("is gone"), "{why}");
+        assert!(recovery.contains("couldn't start"), "{recovery}");
+        // Nothing was changed: the store, no marker, no skip, no journal,
+        // and the service started again as it was.
+        let store = std::fs::read(env.ctx.data_dir.join(STORE)).unwrap();
+        assert_eq!(store, b"new store");
+        assert!(!env.ctx.data_dir.join("bin").join(MARKER).exists());
+        let skipped: Option<serde_json::Value> = Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .read(super::super::check::SKIPPED_FILE)
+            .unwrap();
+        assert!(skipped.is_none(), "{skipped:?}");
+        assert!(read(&env.ctx).unwrap().is_none());
+        let calls = fake.calls();
+        assert!(!calls.iter().any(|c| c.starts_with("msiexec")), "{calls:?}");
+        assert_eq!(
+            calls[..4],
+            ["set_start Disabled", "stop", "set_start Auto", "start"],
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_manual_rollback_without_its_msi_changes_nothing() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        write(&env.ctx, &j).unwrap();
+        std::fs::remove_dir_all(env.ctx.staging.previous()).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = roll_back(&env.ctx, &fake, j);
+        assert!(matches!(out, Outcome::RollbackHalted { .. }), "{out:?}");
+        // Not touched: the journal goes and the service was never stopped.
+        assert!(read(&env.ctx).unwrap().is_none());
+        let calls = fake.calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c == "stop" || c.starts_with("set_start")),
+            "{calls:?}"
+        );
+    }
+
+    fn skipped(env: &Env) -> Option<serde_json::Value> {
+        Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .read(super::super::check::SKIPPED_FILE)
+            .unwrap()
+    }
+
+    /// Step 2 restores only the recorded snapshot: one found that isn't it
+    /// (an earlier migration's, not listed before) halts before the store
+    /// is touched.
+    #[test]
+    fn step_2_halts_on_a_snapshot_that_isnt_the_recorded_one() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        write(&env.ctx, &j).unwrap();
+        std::fs::write(env.ctx.data_dir.join("lodestar.pre-v6.db"), b"planted").unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = roll_back(&env.ctx, &fake, j);
+        let Outcome::RollbackHalted { why, .. } = out else {
+            panic!("{out:?}");
+        };
+        assert!(why.contains("isn't the one the update took"), "{why}");
+        assert_eq!(
+            std::fs::read(env.ctx.data_dir.join(STORE)).unwrap(),
+            b"new store"
+        );
+        let calls = fake.calls();
+        assert!(!calls.iter().any(|c| c.starts_with("msiexec")), "{calls:?}");
+    }
+
+    /// A run that wrote the marker and crashed before saving step 1, then
+    /// finds the snapshot gone: the marker is in place, so it halts (the
+    /// service stays stopped and disabled) rather than undo and say
+    /// nothing was changed.
+    #[test]
+    fn a_missing_snapshot_after_the_marker_halts_instead_of_undoing() {
+        let env = env();
+        installed_and_passed(&env);
+        let mut j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        j.touched = true;
+        write(&env.ctx, &j).unwrap();
+        Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .write(MARKER, &serde_json::json!({ "windows_rollback": "0.7.0" }))
+            .unwrap();
+        std::fs::remove_file(env.ctx.data_dir.join(SNAP)).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = resume(&env.ctx, &fake, &v("0.7.0")).unwrap().unwrap();
+        let Outcome::RollbackHalted { recovery, .. } = out else {
+            panic!("{out:?}");
+        };
+        assert!(recovery.contains("stopped after step 1 of 5"), "{recovery}");
+        assert!(env.ctx.data_dir.join("bin").join(MARKER).exists());
+        assert!(matches!(
+            read(&env.ctx).unwrap().unwrap().state,
+            State::Halted { .. }
+        ));
+        let calls = fake.calls();
+        assert_eq!(
+            calls.iter().rfind(|c| c.starts_with("set_start")).unwrap(),
+            "set_start Disabled"
+        );
+        assert!(!calls.contains(&"start".to_string()), "{calls:?}");
+    }
+
+    /// A crash or restart after the journal was written and before step 1
+    /// ran: the next run's `resume` finishes it as a manual one.
+    #[test]
+    fn a_manual_journal_written_before_a_crash_is_finished_by_resume() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        write(&env.ctx, &j).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = resume(&env.ctx, &fake, &v("0.7.0")).unwrap().unwrap();
+        assert!(matches!(out, Outcome::RolledBack { .. }), "{out:?}");
+        assert_eq!(
+            std::fs::read(env.ctx.data_dir.join(STORE)).unwrap(),
+            b"old store"
+        );
+        assert_eq!(skipped(&env).unwrap()[0]["reason"], SKIP_MANUAL);
+        assert!(read(&env.ctx).unwrap().is_none());
+        assert!(record(&env).is_none());
+    }
+
+    /// Resumed after step 2 (the snapshot chosen) and after step 4 (the
+    /// store restored, the MSI reinstalled): each finishes, from where it
+    /// stood.
+    #[test]
+    fn a_manual_rollback_resumes_after_steps_2_and_4() {
+        for done in [2u8, 4] {
+            let env = env();
+            installed_and_passed(&env);
+            let mut j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+            let snap = choose(&env.ctx, &j.snapshots_before).unwrap();
+            assert_eq!(snap.as_ref().map(|s| s.name.as_str()), Some(SNAP));
+            j.touched = true;
+            j.state = State::RollingBack {
+                snapshot: snap,
+                done,
+            };
+            // What step 1 left.
+            Bin::open(&env.ctx.data_dir)
+                .unwrap()
+                .write(MARKER, &serde_json::json!({ "windows_rollback": "0.7.0" }))
+                .unwrap();
+            if done == 4 {
+                // Step 3's restore, and step 4's reinstall of 0.6.0.
+                std::fs::rename(env.ctx.data_dir.join(SNAP), env.ctx.data_dir.join(STORE)).unwrap();
+            }
+            write(&env.ctx, &j).unwrap();
+            let running = if done == 4 { "0.6.0" } else { "0.7.0" };
+            let fake = Fake::new(Start::Manual);
+            let out = resume(&env.ctx, &fake, &v(running)).unwrap().unwrap();
+            assert!(matches!(out, Outcome::RolledBack { .. }), "{done}: {out:?}");
+            let ran = fake.calls().iter().any(|c| c.starts_with("msiexec"));
+            assert_eq!(ran, done < 4, "{done}: {:?}", fake.calls());
+            assert_eq!(
+                std::fs::read(env.ctx.data_dir.join(STORE)).unwrap(),
+                b"old store",
+                "{done}"
+            );
+            assert!(
+                !env.ctx.data_dir.join("bin").join(MARKER).exists(),
+                "{done}"
+            );
+            assert!(read(&env.ctx).unwrap().is_none(), "{done}");
+            assert!(record(&env).is_none(), "{done}");
+        }
+    }
+
+    /// The next install that passes replaces the record.
+    #[test]
+    fn a_later_install_that_passes_replaces_the_record() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = installing(&env.ctx, "0123abce", &v("0.7.0"), &v("0.8.0")).unwrap();
+        write(&env.ctx, &j).unwrap();
+        probation(&env.ctx, &Fake::new(Start::Auto), j, false);
+        let rec = record(&env).unwrap();
+        assert_eq!((rec.from.as_str(), rec.to.as_str()), ("0.7.0", "0.8.0"));
+        // It took no snapshot: the 0.7.0 one is an older install's.
+        assert_eq!(rec.snapshot, None);
+    }
+
+    /// A newer install that fails probation is rolled back automatically:
+    /// the record goes with it, since `previous\` no longer holds its MSI.
+    #[test]
+    fn an_automatic_rollback_removes_the_record() {
+        let env = env();
+        installed_and_passed(&env);
+        // The helper kept 0.7.0's MSI as `current\` (its pins are `env`'s).
+        std::fs::write(env.ctx.staging.current().join("lodestar-0.7.0.msi"), b"new").unwrap();
+        let j = installing(&env.ctx, "0123abce", &v("0.7.0"), &v("0.8.0")).unwrap();
+        write(&env.ctx, &j).unwrap();
+        let fake = Fake {
+            unhealthy: true,
+            ..Fake::new(Start::Auto)
+        };
+        let out = probation(&env.ctx, &fake, j, false);
+        assert!(matches!(out, Outcome::RolledBack { .. }), "{out:?}");
+        assert!(record(&env).is_none());
+        assert_eq!(skipped(&env).unwrap()[0]["reason"], "failed");
+    }
+
+    /// A record that can't be written leaves none behind: a stale one from
+    /// an earlier install mustn't stay and match later. (The failed write
+    /// here is a folder in the record's place, which isn't a file to
+    /// remove: this covers the refusal, not removing a stale file.)
+    #[test]
+    fn a_record_that_cant_be_written_leaves_none() {
+        let env = env();
+        installed_and_passed(&env);
+        assert!(record(&env).is_some());
+        // A folder where the record's temporary file goes makes the write
+        // fail; then `keep_installed` removes the record it can.
+        let j = installing(&env.ctx, "0123abce", &v("0.7.0"), &v("0.8.0")).unwrap();
+        let path = env.ctx.staging.dir.join(INSTALLED);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        keep_installed(&env.ctx, &j);
+        // The folder stays (it isn't a file to remove), and a record that
+        // can't be read refuses.
+        assert_eq!(manual_plan(&env.ctx, &v("0.8.0")).unwrap_err().code(), "io");
+        std::fs::remove_dir(&path).unwrap();
+        // An older record, and a listing that fails: removed.
+        installed_and_passed_again(&env);
+    }
+
+    fn installed_and_passed_again(env: &Env) {
+        let j = installing(&env.ctx, "0123abcf", &v("0.6.0"), &v("0.7.0")).unwrap();
+        keep_installed(&env.ctx, &j);
+        assert!(record(env).is_some());
+        // The store's folder can't be listed: no record.
+        let data = env.ctx.data_dir.clone();
+        let aside = data.with_extension("aside");
+        std::fs::rename(&data, &aside).unwrap();
+        std::fs::write(&data, b"not a folder").unwrap();
+        keep_installed(&env.ctx, &j);
+        assert!(record(env).is_none());
+        std::fs::remove_file(&data).unwrap();
+        std::fs::rename(&aside, &data).unwrap();
+    }
+
+    #[test]
+    fn a_manual_rollbacks_halt_says_it_was_manual() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), ID).unwrap();
+        let event = recovery_event(&j, 2, Cause::Step);
+        assert!(
+            event.starts_with(
+                "Lodestar's manual rollback from 0.7.0 to 0.6.0 stopped after step 2 of 5."
+            ),
+            "{event}"
+        );
+        assert!(!event.contains("health check"), "{event}");
+        let text = recovery(&env.ctx, &j, 0, "why", Cause::Step);
+        assert!(
+            text.starts_with("Lodestar's manual rollback from 0.7.0 to 0.6.0 couldn't start: why."),
+            "{text}"
+        );
+        let failed = Journal {
+            id: "ab".into(),
+            ..j
+        };
+        assert!(recovery_event(&failed, 2, Cause::Step).starts_with(
+            "Lodestar 0.7.0 failed its health check, and the rollback to 0.6.0 stopped after step 2 of 5."
+        ));
+    }
 }
