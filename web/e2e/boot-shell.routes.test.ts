@@ -487,7 +487,7 @@ test.describe('a page opened while the server is gone', () => {
 		await expect(page.getByText('Error 500')).toHaveCount(0);
 		await expect(page.getByTestId('offline-status')).not.toBeEmpty();
 		server.up();
-		// The next probe finds it (1 s, then 2 s), with no reload and no click.
+		// The next probe finds it (1 s, then 2 s), with no click (one reload at the same URL).
 		await expect(page.getByRole('heading', { name: 'Couldn’t reach Lodestar' })).toBeHidden({
 			timeout: 15_000
 		});
@@ -509,6 +509,8 @@ test.describe('a page opened while the server is gone', () => {
 		await expect(button).toBeVisible({ timeout: 15_000 });
 		server.up();
 		await button.click();
+		// Immediately: a probe goes out now, not at the next backoff.
+		await expect(page.getByTestId('offline-status')).toHaveText('Checking…', { timeout: 10_000 });
 		await expect(page.getByRole('heading', { name: 'Couldn’t reach Lodestar' })).toBeHidden({
 			timeout: 15_000
 		});

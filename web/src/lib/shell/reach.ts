@@ -11,14 +11,21 @@ export function backoffMs(attempt: number): number {
 	return Math.min(FIRST_MS * 2 ** attempt, CAP_MS);
 }
 
-/** True when the server answered at all; false when the request itself failed. */
+export const PROBE_MS = 5_000;
+
+/** True when the server answered; false when the request failed, timed out, or a reverse proxy in
+ *  front of a stopped server said so (502, 503, 504). Any other HTTP answer, even a 500, is the
+ *  server's own. */
 export async function serverAnswers(
 	fetcher: typeof fetch = (input, init) => fetch(input, init),
 	signal?: AbortSignal
 ): Promise<boolean> {
 	try {
-		await fetcher('/healthz', { cache: 'no-store', signal });
-		return true;
+		const res = await fetcher('/healthz', {
+			cache: 'no-store',
+			signal: signal ?? AbortSignal.timeout(PROBE_MS)
+		});
+		return ![502, 503, 504].includes(res.status);
 	} catch {
 		return false;
 	}

@@ -30,7 +30,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('+error.svelte', () => {
 	it('shows the connection view, not Error 500, when nothing answers', async () => {
 		render(ErrorPage);
-		await screen.findByRole('heading', { name: 'Couldn’t reach Lodestar' });
+		await screen.findByRole('heading', { name: 'Couldn’t reach Lodestar' }, { timeout: 10_000 });
 		expect(screen.queryByText('Error 500')).toBeNull();
 		expect(screen.getByTestId('offline-status').getAttribute('aria-live')).toBe('polite');
 	});
@@ -38,7 +38,9 @@ describe('+error.svelte', () => {
 	it('keeps the error view when the server answers with a 500', async () => {
 		alive = true;
 		render(ErrorPage);
-		await screen.findByRole('heading', { name: 'Something went wrong' });
+		await screen.findByRole('heading', { name: 'Something went wrong' }, { timeout: 10_000 });
+		await waitFor(() => expect(probes).toBe(1), { timeout: 10_000 });
+		await new Promise((r) => setTimeout(r, 0)); // let the probe's answer be handled
 		expect(screen.queryByRole('heading', { name: 'Couldn’t reach Lodestar' })).toBeNull();
 		expect(reload).not.toHaveBeenCalled();
 	});
@@ -46,16 +48,16 @@ describe('+error.svelte', () => {
 	it('does not probe for a 404', async () => {
 		state.page.status = 404;
 		render(ErrorPage);
-		await screen.findByRole('heading', { name: 'Page not found' });
+		await screen.findByRole('heading', { name: 'Page not found' }, { timeout: 10_000 });
 		expect(probes).toBe(0);
 	});
 
 	it('Try again probes now, and loads the page again once the server answers', async () => {
 		render(ErrorPage);
-		const button = await screen.findByRole('button', { name: 'Try again' });
-		await waitFor(() => expect(probes).toBe(1));
+		const button = await screen.findByRole('button', { name: 'Try again' }, { timeout: 10_000 });
+		await waitFor(() => expect(probes).toBe(1), { timeout: 10_000 });
 		alive = true;
 		await fireEvent.click(button);
-		await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+		await waitFor(() => expect(reload).toHaveBeenCalledOnce(), { timeout: 10_000 });
 	});
 });

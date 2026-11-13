@@ -34,7 +34,10 @@
 			void serverAnswers().then((up) => {
 				if (gone || up) return;
 				offline = true;
-				void import('$lib/shell/ConnectionView.svelte').then((mod) => (Connection = mod.default));
+				void import('$lib/shell/ConnectionView.svelte').then(
+					(mod) => (Connection = mod.default),
+					() => {} // the plain markup below stands in
+				);
 				watch = watchServer({
 					probe: () => serverAnswers(),
 					onUp: () => {

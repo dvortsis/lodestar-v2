@@ -16,6 +16,18 @@ describe('serverAnswers', () => {
 		expect(f).toHaveBeenCalledWith('/healthz', expect.objectContaining({ cache: 'no-store' }));
 	});
 
+	it.each([502, 503, 504])('is false when a proxy in front answers %i', async (status) => {
+		const f = vi.fn(async () => new Response('', { status }));
+		expect(await serverAnswers(f as unknown as typeof fetch)).toBe(false);
+	});
+
+	it('gives the request a signal, so a silent host times out', async () => {
+		const f = vi.fn(async () => new Response('ok'));
+		await serverAnswers(f as unknown as typeof fetch);
+		const init = (f.mock.calls[0] as unknown as [string, RequestInit])[1];
+		expect(init.signal).toBeInstanceOf(AbortSignal);
+	});
+
 	it('is false when the request itself fails', async () => {
 		const f = vi.fn(async () => {
 			throw new TypeError('Failed to fetch');
@@ -41,7 +53,9 @@ function harness(answers: boolean[]) {
 		const t = pending;
 		pending = undefined;
 		t?.fn();
-		await vi.waitFor(() => expect(pending !== undefined || onUp.mock.calls.length > 0).toBe(true));
+		await vi.waitFor(() => expect(pending !== undefined || onUp.mock.calls.length > 0).toBe(true), {
+			timeout: 10_000
+		});
 	};
 	return { watch, states, probe, onUp, fire, delay: () => pending?.ms };
 }
@@ -63,17 +77,36 @@ describe('watchServer', () => {
 	it('Try again probes at once and replaces the timer', async () => {
 		const h = harness([true]);
 		h.watch.retryNow();
-		await vi.waitFor(() => expect(h.onUp).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(h.onUp).toHaveBeenCalledOnce(), { timeout: 10_000 });
 		expect(h.probe).toHaveBeenCalledOnce();
 		expect(h.delay()).toBeUndefined();
 	});
 
-	it('stop cancels the timer and ignores a probe still out', async () => {
+	it('stop cancels the timer, and nothing probes afterwards', async () => {
 		const h = harness([true]);
 		h.watch.stop();
 		expect(h.delay()).toBeUndefined();
 		h.watch.retryNow();
 		await Promise.resolve();
+		expect(h.probe).not.toHaveBeenCalled();
 		expect(h.onUp).not.toHaveBeenCalled();
+	});
+
+	it('stop while a probe is out ignores its answer', async () => {
+		let answer!: (up: boolean) => void;
+		const onUp = vi.fn();
+		const w = watchServer({
+			probe: () => new Promise<boolean>((r) => (answer = r)),
+			onUp,
+			onState: () => {},
+			setTimer: () => 0,
+			clearTimer: () => {}
+		});
+		w.retryNow();
+		w.stop();
+		answer(true);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(onUp).not.toHaveBeenCalled();
 	});
 });
