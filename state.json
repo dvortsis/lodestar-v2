@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T10:07Z",
+  "updated_at": "2026-11-13T10:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9050,7 +9050,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T10:07Z",
+    "updated": "2026-11-13T10:09Z",
     "items": [
       {
         "slot": 1,
@@ -9084,13 +9084,14 @@
       },
       {
         "slot": 7,
-        "slice": "X-flake-relevance-lock",
+        "slice": "X-lease-reconcile-every-session",
         "role": "build",
         "agent": "claude",
-        "doing": "merged #826; slot free",
-        "since": "2026-11-13T10:07Z",
-        "status": "idle",
-        "cap": "kept build (\u00a72.64 4+4)"
+        "doing": "session_01MMjhnCVaVQgTXvM11UK7nv: launched; finding detail sent by message (ids only in files)",
+        "since": "2026-11-13T10:09Z",
+        "status": "active",
+        "cap": "kept build (\u00a72.64 4+4)",
+        "model": "opus"
       },
       {
         "slot": 8,
@@ -9304,7 +9305,7 @@
     }
   ],
   "heartbeat": "2026-11-13T09:38Z",
-  "updated": "2026-11-13T10:07Z",
+  "updated": "2026-11-13T10:09Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
