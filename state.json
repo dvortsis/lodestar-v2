@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:06Z",
+  "updated_at": "2026-11-13T04:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7893,6 +7893,10 @@
       "id": "notify-after-805",
       "added": "2026-11-13T04:03Z",
       "text": "When #805 merges: tell slot 32 (session_01MMjhn9jUpmXebS4BaDhn2o, X-consent-gate-lift-r2) to bring main in, regenerate openapi/schema, push. Approved outside owns: companion_wiring.rs tests, api dto/ops.rs + ops.rs docs, generated openapi.json + schema.d.ts."
+    },
+    {
+      "id": "805-812-merged",
+      "note": "#805 X-cmp-egress-api merged c6b7511a; #812 P-master-plan-r4 merged 0a56245c (2026-11-13T04:11Z). Slot 32 told to bring main in, regenerate openapi/schema and push r2. #789 new head ac35b355 (fuzz/README row only, delta OK) awaiting CI."
     }
   ],
   "main_health": [
@@ -8927,7 +8931,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T04:06Z",
+    "updated": "2026-11-13T04:11Z",
     "items": [
       {
         "slot": 1,
@@ -9262,7 +9266,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:06Z",
+  "updated": "2026-11-13T04:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
