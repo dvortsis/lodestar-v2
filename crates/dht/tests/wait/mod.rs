@@ -28,17 +28,16 @@ pub async fn wait_for(mut cond: impl AsyncFnMut() -> bool, timeout: Duration) ->
     }
 }
 
-/// Waits until `node` has run a maintenance tick that started after this
-/// call, then until that tick has finished. A positive event stands in
-/// for a fixed wait before a check that something did *not* happen:
-/// sampling and held lookups start only in a tick, so a tick that ran
-/// while paused, and did nothing, is what the check needs.
+/// Waits until `node` has run a whole maintenance tick that started after
+/// this call. A positive event stands in for a fixed wait before a check
+/// that a tick did *not* do something.
 ///
 /// The signal: a ping from a stranger that never answers makes the node
-/// ping back to verify it; the node expires that ping a query timeout
-/// later, early in a tick and before sampling or lookups start. The snapshot then
-/// waits for the rest of the tick, because the node's actor is one task
-/// that serves a command only between ticks and datagrams.
+/// ping back to verify it. The node expires that ping a query timeout
+/// later, early in a tick. The snapshot then waits for the rest of the
+/// tick, because the node's actor is one task that serves a command only
+/// between ticks and datagrams. The stranger is on 127.0.0.1, so this
+/// can't be used with a node that denies loopback.
 #[allow(dead_code)] // Not every test binary that includes this module uses it.
 pub async fn a_tick_ran(node: &Node) {
     let stranger = UdpSocket::bind("127.0.0.1:0").await.unwrap();

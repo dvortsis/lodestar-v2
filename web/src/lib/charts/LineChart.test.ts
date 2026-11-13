@@ -99,6 +99,9 @@ describe('LineChart', () => {
 	it('does not create a chart if unmounted before uPlot loads', async () => {
 		const { default: LineChart } = await import('./LineChart.svelte');
 		const onerror = vi.fn();
+		// A build reads the host's styles first, so an unguarded build is seen
+		// here even though, unmounted, it throws before reaching uPlot.
+		const styles = vi.spyOn(window, 'getComputedStyle');
 		const { unmount } = render(LineChart, { ...props, onerror });
 		unmount();
 		// Not a timed absence. `dynamicImportSettled` waits for every dynamic
@@ -110,6 +113,9 @@ describe('LineChart', () => {
 		// the build).
 		await vi.dynamicImportSettled();
 		await new Promise((r) => setTimeout(r, 0));
+		const builds = styles.mock.calls.length;
+		styles.mockRestore();
+		expect(builds, 'an unmounted chart started a build').toBe(0);
 		expect(ctor).not.toHaveBeenCalled();
 		expect(onerror).not.toHaveBeenCalled();
 	});

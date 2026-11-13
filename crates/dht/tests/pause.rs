@@ -115,6 +115,8 @@ async fn a_paused_node_answers_but_doesnt_crawl() {
     // The scrape's answer also orders the queued lookup (an earlier command)
     // before the tick that `a_tick_ran` waits for.
     assert_eq!(handle.scrape(key).await, None, "no scrape while paused");
+    // Sampling and held lookups start only in a tick, so a whole tick that
+    // ran while paused, and did nothing, is what the checks below need.
     a_tick_ran(&a).await;
     let s = a.stats();
     assert_eq!(s.samples_sent, 0);

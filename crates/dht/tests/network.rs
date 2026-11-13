@@ -205,8 +205,8 @@ async fn denied_addresses_are_never_contacted_or_answered() {
     assert!(
         wait_for(
             async || denying.stats().denied >= after_bootstrap + 2,
-            // Two re-bootstraps are at least 2 × 30 ticks (3 s) apart from
-            // the start: double the usual deadline.
+            // The second re-bootstrap is due 60 ticks (3 s) after start-up:
+            // double the usual deadline.
             2 * wait::DEADLINE
         )
         .await,
