@@ -127,8 +127,10 @@ STUB_SYSTEMCTL = r"""#!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$STUB/log"
 case "$*" in
   "is-active --quiet lodestar-outage-watcher") [ -e "$STUB/watcher_active" ] ;;
-  "daemon-reload") [ -s "$UNIT_DIR/lodestar-outage-watcher.service" ] || { echo "reload without the unit" >> "$STUB/badargs"; exit 1; }
-                   cp "$UNIT_DIR/lodestar-outage-watcher.service" "$STUB/unit" ;;
+  "daemon-reload") [ -s "$UNIT_DIR/lodestar-block-guard.service" ] || { echo "reload without the boot guard" >> "$STUB/badargs"; exit 1; }
+                   echo x >> "$STUB/reloads"
+                   [ -s "$UNIT_DIR/lodestar-outage-watcher.service" ] && cp "$UNIT_DIR/lodestar-outage-watcher.service" "$STUB/unit"
+                   exit 0 ;;
   "enable --now lodestar-outage-watcher")
     [ -n "$WATCHER_FAIL" ] && exit 1
     : > "$STUB/watcher_enabled"
@@ -147,6 +149,8 @@ exec /bin/ls "$@"
 # iptables for the host guard (block-lib.sh): a copy count per rule, so
 # duplicates, stuck copies and an earlier endpoint's leftovers are real.
 STUB_IPTABLES = r"""#!/usr/bin/env bash
+# The guard checks wait for the xtables lock (-w 5); every call is the same rule after it.
+[ "$1 $2" = "-w 5" ] && { shift 2; echo "$*" >> "$STUB/waited"; }
 printf 'iptables %s\n' "$*" >> "$STUB/log"
 host="-s 192.0.2.77/32 -p udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
 host_s="-s 192.0.2.77/32 -p udp -m udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
@@ -445,6 +449,11 @@ class StartBlock(Base):
         self.assertIn("Before=network-pre.target docker.service", guard)
         self.assertIn("DefaultDependencies=no", guard)
         self.assertIn("Type=oneshot", guard)
+        # It runs for any block with a marker or evidence, so a missing script fails it (Docker stays down)
+        # rather than skipping it (a skipped unit satisfies Requires=).
+        self.assertEqual([ln for ln in guard if ln.startswith("Condition")],
+                         [f"ConditionPathExists=|{self.block}/marker", f"ConditionPathExists=|{self.block}/evidence"])
+        self.assertIn("After=local-fs.target netfilter-persistent.service ufw.service firewalld.service", guard)
         self.assertIn(f"ExecStart=/bin/bash {self.block}/tools/watcher.sh {self.block} {self.stack} boot", guard)
         self.assertEqual((self.units / "docker.service.d" / "lodestar-block-guard.conf").read_text().splitlines(),
                          ["[Unit]", "Requires=lodestar-block-guard.service", "After=lodestar-block-guard.service"])
@@ -903,7 +912,7 @@ class GuardResume(Base):
                 rc, lines, _ = self.run_script("outage-watcher.sh", **flags)  # again: stopped again, recorded once
                 self.assertEqual(rc, 1)
                 self.assertEqual(self.outages().count("host_guard_lost"), 1)
-                self.assertEqual(len(self.outages()), len(before) + (1 if conf is None else 0))
+                self.assertEqual(self.outages(), before)  # recorded by the first failed check only
 
     def test_no_marker_nothing_is_held(self):
         self.make_block(segment=4)
@@ -989,6 +998,52 @@ esac
         self.assertEqual(self.outages(), [])
         self.assertNotIn("iptables -I", self.log())
 
+
+    def test_start_block_installs_the_boot_guard_before_anything_starts(self):
+        self.args()
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertLess(lines.index("ok boot_guard_installed"), lines.index("ok marker_written"))
+        log = self.log()
+        self.assertLess(log.index("systemctl daemon-reload"), log.index("docker compose"))  # in place before compose
+        self.assertTrue((self.units / "lodestar-block-guard.service").exists())
+        self.assertTrue((self.units / "docker.service.d" / "lodestar-block-guard.conf").exists())
+        self.assertTrue((self.block / "tools" / "watcher.sh").exists())
+
+    def test_a_boot_guard_that_wont_install_stops_start_block(self):
+        self.args()
+        (self.tmp / "not-a-dir").write_text("")
+        rc, lines, raw = self.run_script("start-block.sh", UNIT_DIR=self.tmp / "not-a-dir" / "units")
+        self.assertEqual((rc, lines[-2:]), (1, ["fail boot_guard_installed", "fail start_block"]), raw)
+        self.assertFalse((self.block / "marker").exists())  # no block recorded: the next start-block sets it aside
+        self.assertNotIn("compose", self.log())
+
+    def test_the_guard_checks_wait_for_the_xtables_lock(self):
+        self.make_block(segment=2)
+        (self.stub / "host").write_text("0")
+        self.run_script("outage-watcher.sh")
+        waited = (self.stub / "waited").read_text().splitlines()
+        self.assertEqual([w.split()[0] for w in waited], ["-C", "-S", "-I", "-C"])
+
+    def test_the_watcher_checks_at_once_on_an_outage(self):
+        """A gluetun stop is when a missing guard matters: the check doesn't wait for the interval."""
+        self.make_block(segment=2)
+        docker = r"""#!/usr/bin/env bash
+printf 'docker %s\n' "$*" >> "$STUB/log"
+case "$1" in
+  events)
+    if [ ! -e "$STUB/flushed" ]; then : > "$STUB/flushed"; echo 0 > "$STUB/host"; echo "event die"; exit 0; fi
+    [ "$(cat "$STUB/host")" -gt 0 ] && rm -f "$STUB_BLOCK/marker"
+    exit 0 ;;
+  logs) exit 0 ;;
+  exec) exit 1 ;;
+  *) echo "$*" >> "$STUB/badargs"; exit 1 ;;
+esac
+"""
+        (self.stub / "bin" / "docker").write_text(docker)
+        self.assertEqual(self.watch(GUARD_EVERY=3600), 0)  # no interval check in the test's time
+        self.assertEqual(self.copies(), 1)
+        self.assertEqual(self.outages(), ["host_guard_dropped", "link_outage"])  # put back before it's noted
 
     def test_an_iptables_error_is_not_read_as_gone(self):
         self.make_block(segment=2)

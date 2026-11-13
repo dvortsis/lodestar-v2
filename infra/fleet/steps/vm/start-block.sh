@@ -12,7 +12,8 @@
 #    start-block or copy-off replaces or removes it.
 #    Then the leak test, in this same run: it must exit 0 and end `ok leak_test`.
 #    Anything else is a stop condition, and nothing starts.
-# 3. The durable block marker, before Lodestar or a collector starts.
+# 3. The boot guard (block-lib.sh boot_guard_install), then the durable block
+#    marker, before Lodestar or a collector starts.
 # 4. Stage the tools from the rules commit, start Lodestar on the screen's image
 #    (by digest), accept the Legal Notice version the rules name and set a
 #    random admin password (it stays in a root-only file here), then start
@@ -87,6 +88,11 @@ echo "ok leak_test_passed"
 # A past block's directory (its evidence) is kept beside the new one, never wiped.
 if [[ -d $BLOCK ]]; then mv -- "$BLOCK" "$BLOCK.$(date -u +%Y%m%dT%H%M%SZ)" || fail block_dir; fi
 mkdir -m 0700 -- "$BLOCK" || fail block_dir
+# The boot guard (X-gluetun-guard-reboot), before the marker: from the moment
+# a block is recorded, a reboot holds the host guard before Docker starts.
+# Failing here leaves no marker, so the next start-block sets this one aside.
+boot_guard_install || fail boot_guard_installed
+echo "ok boot_guard_installed"
 printf 'block=%s\nsegment=1\nstate=starting\n' "$BLOCK_ID" | marker_write || fail marker_written
 echo "ok marker_written"
 {

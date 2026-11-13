@@ -100,17 +100,19 @@ guard_resume() {
   if endpoint_read "$conf"; then
     host_guard_rule
     # Only exit 1 means gone (as in drop_all). Any other exit (the xtables
-    # lock, say) is tried again, and fails closed if it persists.
+    # lock held past -w's 5 s, say) is tried again, and fails closed if it
+    # persists.
     for ((i = 0; i < 3; i++)); do
-      iptables -C INPUT "${host_rule[@]}" 2>/dev/null; rc=$?
+      iptables -w 5 -C INPUT "${host_rule[@]}" 2>/dev/null; rc=$?
       ((rc <= 1)) && break
       sleep 2
     done
     if ((rc == 0)); then exec {fd}>&-; return 0; fi
     if ((rc == 1)); then
-      tagged=$(iptables -S INPUT 2>/dev/null | grep -c -e "--comment $HOST_TAG ")
+      tagged=$(iptables -w 5 -S INPUT 2>/dev/null | grep -c -e "--comment $HOST_TAG ")
       ((${tagged:-0} > 0)) || dropped=1
-      if iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null && iptables -C INPUT "${host_rule[@]}" 2>/dev/null; then
+      if iptables -w 5 -I INPUT 1 "${host_rule[@]}" 2>/dev/null \
+        && iptables -w 5 -C INPUT "${host_rule[@]}" 2>/dev/null; then
         exec {fd}>&-
         [[ -n $dropped ]] || return 0
         block_record "$mode" host_guard_dropped
@@ -122,14 +124,14 @@ guard_resume() {
   exec {fd}>&-
   return 1
 }
-# guard_lost mode dropped: stop gluetun first, then record. host_guard_lost
-# and the damaged mark are written once; gluetun is stopped on every failed
-# check, in case it came back.
+# guard_lost mode dropped: stop gluetun first, then record. The records and
+# the damaged mark are written once, by the first failed check; gluetun is
+# stopped on every one, in case it came back.
 guard_lost() {
   local kinds=()
   [[ $1 == boot ]] || stop_gluetun
-  [[ -n $2 ]] && kinds+=(host_guard_dropped)
   if [[ ! -e $BLOCK/damaged ]]; then
+    [[ -n $2 ]] && kinds+=(host_guard_dropped)
     echo host_guard_lost 2>/dev/null >"$BLOCK/damaged"
     kinds+=(host_guard_lost)
   fi
@@ -151,7 +153,7 @@ segment_note() {  # 0 noted, 1 not (no collector, no segment, or the bound reach
   ((${notes:-0} >= ${MAX_NOTES:-500})) && return 1
   seg=$(marker_get segment)
   [[ $seg =~ ^[1-4]$ ]] || return 1
-  timeout 15 docker exec "lodestar-collector-$seg" python3 /tools/linux/collect.py note \
+  timeout 30 docker exec "lodestar-collector-$seg" python3 /tools/linux/collect.py note \
     --root "/evidence/seg-$seg" --category link_outage >/dev/null 2>&1 || return 1
   echo "$(date -u +%s) $seg" >>"$BLOCK/notes"
 }
@@ -352,13 +354,15 @@ load_block_env() {
   esac
 }
 watcher_active() { systemctl is-active --quiet "$WATCHER_UNIT" 2>/dev/null; }
-# The outage watcher, as an enabled unit bounded by RuntimeMaxSec, so it starts
-# again after a reboot mid-block; with no marker it doesn't start. stop_watcher
-# disables it at the block's end. Beside it, the boot guard: a oneshot that
-# Docker requires (a drop-in), run before the network and Docker come up, which
-# holds the host guard while one is expected (guard_resume boot) and does
-# nothing otherwise. Both run from $BLOCK/tools with their own copy of this
-# library.
+# The boot guard: a oneshot that Docker requires (a drop-in), run before the
+# network and Docker come up, which holds the host guard while one is expected
+# (guard_resume boot) and does nothing otherwise. boot_guard_install stages
+# watcher.sh and this library into $BLOCK/tools and writes both; start-block
+# calls it before the marker, so the guard is in place for the whole block.
+# The unit runs whenever the block has a marker or evidence (trigger
+# conditions): a block whose script is missing then fails the unit and keeps
+# Docker down, rather than being skipped (a skipped unit satisfies Requires=).
+# It's ordered after the usual host firewalls, which may load rules at boot.
 UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
 GUARD_UNIT=lodestar-block-guard
 UNIT_PATH='^/[A-Za-z0-9._/-]+$'  # the units' paths are written into them unquoted
@@ -367,18 +371,28 @@ unit_write() {  # path, then its lines
   shift
   printf '%s\n' "$@" >"$f.tmp" && mv -f -- "$f.tmp" "$f"
 }
-start_watcher() {
-  watcher_active && return 0
+boot_guard_install() {
   [[ $BLOCK =~ $UNIT_PATH && $STACK =~ $UNIT_PATH ]] || return 1
-  install -m 0700 -- "$work/watcher.sh" "$BLOCK/tools/watcher.sh" \
-    && install -m 0600 -- "$work/block-lib.sh" "$BLOCK/tools/block-lib.sh" || return 1
-  mkdir -p -- "$UNIT_DIR/docker.service.d" || return 1
+  mkdir -p -m 0700 -- "$BLOCK/tools" \
+    && install -m 0700 -- "$work/watcher.sh" "$BLOCK/tools/watcher.sh" \
+    && install -m 0600 -- "$work/block-lib.sh" "$BLOCK/tools/block-lib.sh" \
+    && mkdir -p -- "$UNIT_DIR/docker.service.d" || return 1
   unit_write "$UNIT_DIR/$GUARD_UNIT.service" "[Unit]" "Description=Lodestar block host guard, before Docker" \
-    "DefaultDependencies=no" "After=local-fs.target" "Before=network-pre.target docker.service" \
-    "Wants=network-pre.target" "ConditionPathExists=$BLOCK/tools/watcher.sh" \
+    "DefaultDependencies=no" "After=local-fs.target netfilter-persistent.service ufw.service firewalld.service" \
+    "Before=network-pre.target docker.service" "Wants=network-pre.target" \
+    "ConditionPathExists=|$BLOCK/marker" "ConditionPathExists=|$BLOCK/evidence" \
     "[Service]" "Type=oneshot" "ExecStart=/bin/bash $BLOCK/tools/watcher.sh $BLOCK $STACK boot" || return 1
   unit_write "$UNIT_DIR/docker.service.d/$GUARD_UNIT.conf" "[Unit]" "Requires=$GUARD_UNIT.service" \
     "After=$GUARD_UNIT.service" || return 1
+  systemctl daemon-reload >/dev/null 2>&1
+}
+# The outage watcher, as an enabled unit bounded by RuntimeMaxSec, so it starts
+# again after a reboot mid-block; with no marker it doesn't start. stop_watcher
+# disables it at the block's end. It runs from $BLOCK/tools with its own copy
+# of this library; starting it re-installs the boot guard too.
+start_watcher() {
+  watcher_active && return 0
+  boot_guard_install || return 1
   unit_write "$UNIT_DIR/$WATCHER_UNIT.service" "[Unit]" "Description=Lodestar block outage watcher and host guard" \
     "Wants=docker.service" "After=docker.service" "ConditionPathExists=$BLOCK/marker" \
     "[Service]" "ExecStart=/bin/bash $BLOCK/tools/watcher.sh $BLOCK $STACK" "RuntimeMaxSec=44h" \

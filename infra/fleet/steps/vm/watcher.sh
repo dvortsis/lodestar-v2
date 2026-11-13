@@ -72,8 +72,11 @@ trap 'kill $(jobs -p) 2>/dev/null' EXIT
 last=0
 { events & logs & wait; } | while :; do
   ((SECONDS - checked >= GUARD_EVERY)) && guard
-  if IFS= read -r -t "$GUARD_EVERY" line; then
+  wait_for=$((GUARD_EVERY - (SECONDS - checked)))  # the rest of the interval, so a busy log can't push the check back
+  ((wait_for >= 1)) || wait_for=1
+  if IFS= read -r -t "$wait_for" line; then
     if outage "$line"; then
+      guard  # a stop or a restart is when a missing guard matters: check at once, before noting it
       now=$(date -u +%s)
       if ((now - last >= GAP)); then note; last=$now; else echo "$now link_outage" >>"$BLOCK/outages"; fi
     fi

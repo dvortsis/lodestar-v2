@@ -158,7 +158,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **During a block** it also reports `block_intact` and `host_guard_drops <n>`:
     - `host_guard_drops` above 0 means the host guard (the rule that keeps the host from answering the VPN server outside the tunnel) went missing, after a reboot or a firewall flush, and was put back. The block isn't clean.
     - `failed: block_intact` means the guard couldn't be put back. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
-  - **`failed: boot_guard_held`** means the VM rebooted mid-block and the guard couldn't be held at boot. Docker is kept down on purpose, so `docker_up` fails too and nothing on the VM can reach the internet. That VM's block is lost: tear the fleet down.
+  - **`failed: boot_guard_held`** means the VM rebooted mid-block and the guard couldn't be held at boot. Docker is kept down on purpose, so `docker_up` fails too and no container runs, gluetun and Lodestar included. The VM itself is still on the internet (that's how this step reaches it). Anything that starts Docker again runs the same check first. That VM's block and its evidence are lost, because copy-off needs Docker: tear the fleet down.
 
 ### 3.6 `/fleet run outage-watcher <vm>`, if needed
 - **What the watcher does:** it follows gluetun's container events and log. On a VPN restart or tunnel-down line it counts an outage, and writes a `link_outage` note into the running segment's evidence at once.
