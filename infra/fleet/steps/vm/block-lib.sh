@@ -60,7 +60,7 @@ host_guard_release() { clear_tagged INPUT "$HOST_TAG"; }  # every copy, whatever
 # A guard dropped mid-block (X-gluetun-guard-reboot): a reboot or an iptables
 # flush removes it while the marker still records a block, and gluetun, which
 # Docker restarts by itself, would then run unguarded. Three places check:
-# - at boot, before Docker starts: the boot unit (start_watcher), which Docker
+# - at boot, before Docker starts: the boot unit (boot_guard_install), which Docker
 #   requires, so a guard that can't be held at boot keeps Docker down;
 # - the outage watcher, at its start and every GUARD_EVERY seconds;
 # - the outage-watcher step.

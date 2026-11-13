@@ -27,7 +27,7 @@ GUARD_EVERY=${GUARD_EVERY:-30}
 . "${BASH_SOURCE[0]%/*}/block-lib.sh"
 
 # watcher.sh <block> <stack> boot: the boot guard's one check, before Docker
-# starts (block-lib.sh start_watcher). Any failure fails the unit, which keeps
+# starts (block-lib.sh boot_guard_install). Any failure fails the unit, which keeps
 # Docker, and so gluetun, down.
 if [[ ${3:-} == boot ]]; then
   guard_resume "$STACK/secrets/wg0.conf" boot; rc=$?
