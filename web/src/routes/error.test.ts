@@ -44,10 +44,21 @@ describe('+error.svelte', () => {
 		expect(urls).toEqual(['/_app/version.json']);
 	});
 
-	it('keeps the error view when the server answers, and shows nothing before it has', async () => {
+	it('shows nothing while the first probe is out, even once the error view has loaded', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => new Promise<Response>(() => {}))
+		);
+		render(ErrorPage);
+		await import('$lib/shell/ErrorView.svelte');
+		await tick();
+		await tick();
+		expect(screen.queryByRole('heading')).toBeNull();
+	});
+
+	it('keeps the error view when the server answers', async () => {
 		alive = true;
 		render(ErrorPage);
-		expect(screen.queryByRole('heading')).toBeNull();
 		await screen.findByRole('heading', { name: 'Something went wrong' }, WAIT);
 		expect(screen.queryByRole('heading', { name: 'Can’t reach Lodestar' })).toBeNull();
 		expect(reload).not.toHaveBeenCalled();
@@ -61,6 +72,7 @@ describe('+error.svelte', () => {
 	});
 
 	it('probes again when a later error is a 5xx, and drops the offline state for a 404', async () => {
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		render(ErrorPage);
 		await unreachable();
 		setPage(404, '/nope');
@@ -68,6 +80,9 @@ describe('+error.svelte', () => {
 		await screen.findByRole('heading', { name: 'Page not found' }, WAIT);
 		expect(screen.queryByRole('heading', { name: 'Can’t reach Lodestar' })).toBeNull();
 		const before = urls.length;
+		// The retry timer that was pending is gone: the 404 stopped the watch.
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(urls.length).toBe(before);
 		setPage(500, '/alerts');
 		await tick();
 		await waitFor(() => expect(urls.length).toBe(before + 1), WAIT);
@@ -83,6 +98,26 @@ describe('+error.svelte', () => {
 		alive = true;
 		await fireEvent.click(button);
 		await waitFor(() => expect(reload).toHaveBeenCalledOnce(), WAIT);
+	});
+
+	it('sets the tab title while offline, and puts the page title back', async () => {
+		document.title = 'Alerts';
+		const { unmount } = render(ErrorPage);
+		await unreachable();
+		expect(document.title).toBe('Can’t reach Lodestar');
+		setPage(404, '/nope');
+		await tick();
+		await waitFor(() => expect(document.title).toBe('Alerts'), WAIT);
+		unmount();
+	});
+
+	it('leaves a title the next page set alone', async () => {
+		document.title = 'Alerts';
+		const { unmount } = render(ErrorPage);
+		await unreachable();
+		document.title = 'Discover';
+		unmount();
+		expect(document.title).toBe('Discover');
 	});
 
 	it('probes at once when the browser comes back online', async () => {

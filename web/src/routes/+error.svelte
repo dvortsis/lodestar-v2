@@ -28,6 +28,8 @@
 	let line = $state('');
 	let Connection = $state<typeof import('$lib/shell/ConnectionView.svelte').default>();
 	let watch: Watch | undefined;
+	// The tab title while offline; the page's own title comes back when this error is replaced.
+	let savedTitle: string | undefined;
 
 	const seconds = (ms: number) =>
 		new Intl.NumberFormat(currentLocale(), {
@@ -51,7 +53,8 @@
 				return;
 			}
 			phase = 'offline';
-			document.title = m.shell_state_offline_title();
+			savedTitle = document.title;
+			document.title = m.shell_fallback_offline_title();
 			void import('$lib/shell/ConnectionView.svelte').then(
 				(mod) => (Connection = mod.default),
 				() => {} // the plain markup below stands in
@@ -75,6 +78,10 @@
 			gone = true;
 			watch?.stop();
 			watch = undefined;
+			// Only if nothing has set a title since (the next page sets its own).
+			if (savedTitle !== undefined && document.title === m.shell_fallback_offline_title())
+				document.title = savedTitle;
+			savedTitle = undefined;
 			removeEventListener('online', online);
 		};
 	});
