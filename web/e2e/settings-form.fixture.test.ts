@@ -3,7 +3,7 @@
 // restoring the previous source. Skipped unless both variables are set:
 //
 //   E2E_FIXTURE_URL=http://127.0.0.1:18092 E2E_FIXTURE_PASSWORD=<pw> \
-//     npx playwright test e2e/settings-form.fixture.routes.test.ts --project=core
+//     npx playwright test e2e/settings-form.fixture.test.ts --project=fixture
 //
 // against `LODESTAR_FIXTURE_PASSWORD=<pw> LODESTAR_HTTP_BIND=127.0.0.1:18092 \
 //   target/debug/lodestar serve --fixture <dir>`, built after `VITE_DEV_ROUTES=1 npm run build`.

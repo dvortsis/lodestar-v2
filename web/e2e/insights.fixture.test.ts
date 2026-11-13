@@ -5,7 +5,7 @@
 //   LODESTAR_FIXTURE_PASSWORD=<pw> LODESTAR_HTTP_BIND=127.0.0.1:18091 \
 //     target/debug/lodestar serve --fixture <dir>
 //   E2E_FIXTURE_URL=http://127.0.0.1:18091 E2E_FIXTURE_PASSWORD=<pw> E2E_FIXTURE_DIR=<dir> \
-//     npx playwright test insights.fixture --project=core
+//     npx playwright test insights.fixture --project=fixture
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';

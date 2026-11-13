@@ -29,7 +29,9 @@ Filter with `--project=<name>` (globs work). Every project starts the web server
 
 `npx playwright test` runs everything except `all-themes` and `fixture`.
 
-**Running `fixture` locally.** The specs skip unless `E2E_FIXTURE_URL` is set. Start the fixture backend (bench/README.md "Fixture backend") on a private port, then point the specs at it:
+**Every spec must match a project.** `playwright.config.ts` fails at load when a `*.test.ts` under `e2e/` matches none (matrix, `core`, `reduced-motion`, `keyboard-only`, `fixture`, `all-themes`), and when a spec that reads `E2E_FIXTURE_URL` is not named `*.fixture.test.ts`. Do not name a real-server spec `*.fixture.routes.test.ts`: it would match `core`, skip silently and never run. Specs that mock the API with a "fixture" module (such as `settings-smoke-fixture.routes.test.ts`) are mock specs and belong in `core`.
+
+**Running `fixture` locally.** The specs skip unless `E2E_FIXTURE_URL` is set (and, for most, `E2E_FIXTURE_PASSWORD`). Start the fixture backend (bench/README.md "Fixture backend") on a private port, then point the specs at it:
 
 ```sh
 npm run build

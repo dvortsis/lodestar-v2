@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Project } from '@playwright/test';
 import type { Appearance } from './e2e/support/test';
 import { BREAKPOINTS, DENSITIES, DESKTOP } from './e2e/support/matrix';
@@ -36,6 +39,13 @@ const matrixSpecs = [smoke, /states\.test\.ts$/];
 // The theme set's baselines (key screens × 46 non-Riverstone themes, at 1366) are shared by the
 // rotating `sample-*` projects and the nightly `all-themes` project: no project name in the path.
 const themeSnapshots = '{snapshotDir}/{testFileDir}/theme-snapshots/{arg}{-snapshotSuffix}{ext}';
+// Names of the real-server specs: `fixture` runs these, so a file that reads E2E_FIXTURE_URL must
+// carry the suffix (a name ending `.fixture.routes.test.ts` matches `core`, skips silently, never runs).
+const fixtureSpec = /\.fixture\.test\.ts$/;
+const coreSpecs = /(routes|tokens|harness|theme-gate|coverage)\.test\.ts$/;
+const keyboardSpecs = /\.keyboard\.test\.ts$/;
+const reducedMotionSpecs = /reduced-motion\.test\.ts$/;
+const allThemesSpecs = /all-themes\.test\.ts$/;
 const desktop = { viewport: { width: DESKTOP.width, height: DESKTOP.height } };
 
 const matrix: Project<Appearance>[] = BREAKPOINTS.flatMap((bp) =>
@@ -61,6 +71,43 @@ const sample: Project<Appearance>[] = sampleThemes(rotationSeed()).map((theme) =
 	use: { ...desktop, themeId: theme.id, colorMode: theme.mode, shots: 'themes' }
 }));
 
+// Guard: every `*.test.ts` under e2e/ must match a project (the opt-in ones count), and a spec that
+// talks to a real server must be named so the `fixture` project picks it up. A spec that matches
+// nothing never runs, and nothing says so.
+function checkSpecsHaveProjects() {
+	const root = fileURLToPath(new URL('./e2e', import.meta.url));
+	const matchers = [
+		...matrixSpecs,
+		coreSpecs,
+		reducedMotionSpecs,
+		keyboardSpecs,
+		fixtureSpec,
+		allThemesSpecs
+	];
+	const problems: string[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name !== 'node_modules') walk(path);
+			} else if (entry.name.endsWith('.test.ts')) {
+				if (!matchers.some((m) => m.test(entry.name)))
+					problems.push(`${path}: matches no Playwright project, so it never runs`);
+				else if (
+					!fixtureSpec.test(entry.name) &&
+					/process\.env\.E2E_FIXTURE_URL/.test(readFileSync(path, 'utf8'))
+				)
+					problems.push(
+						`${path}: reads E2E_FIXTURE_URL, so name it *.fixture.test.ts (project "fixture")`
+					);
+			}
+		}
+	};
+	walk(root);
+	if (problems.length) throw new Error('e2e spec/project mismatch:\n' + problems.join('\n'));
+}
+checkSpecsHaveProjects();
+
 export default defineConfig<Appearance>({
 	testDir: 'e2e',
 	// Pass --update-snapshots to regenerate Linux baselines; never commit macOS/Windows ones.
@@ -83,7 +130,7 @@ export default defineConfig<Appearance>({
 	projects: [
 		{
 			name: 'core',
-			testMatch: /(routes|tokens|harness|theme-gate|coverage)\.test\.ts$/,
+			testMatch: coreSpecs,
 			// Keep the baselines committed before the harness existed (`tokens-dark-linux.png`).
 			snapshotPathTemplate:
 				'{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-snapshotSuffix}{ext}'
@@ -92,13 +139,13 @@ export default defineConfig<Appearance>({
 		...sample,
 		{
 			name: 'reduced-motion',
-			testMatch: [smoke, /reduced-motion\.test\.ts$/],
+			testMatch: [smoke, reducedMotionSpecs],
 			// Motion tokens + axe; its pixels equal riverstone-light's, so no baselines.
 			use: { ...desktop, contextOptions: { reducedMotion: 'reduce' }, motion: 'reduce' }
 		},
-		{ name: 'keyboard-only', testMatch: /\.keyboard\.test\.ts$/, use: desktop },
+		{ name: 'keyboard-only', testMatch: keyboardSpecs, use: desktop },
 		// Specs that need the real server: only when asked for (see e2e/README.md).
-		...(fixture ? [{ name: 'fixture', testMatch: /\.fixture\.test\.ts$/, use: desktop }] : []),
+		...(fixture ? [{ name: 'fixture', testMatch: fixtureSpec, use: desktop }] : []),
 		// Documentation screenshots: only when asked for (`npm run docs:shots`); CI never runs them.
 		...(docs
 			? [
@@ -114,7 +161,7 @@ export default defineConfig<Appearance>({
 			? [
 					{
 						name: 'all-themes',
-						testMatch: /all-themes\.test\.ts$/,
+						testMatch: allThemesSpecs,
 						snapshotPathTemplate: themeSnapshots,
 						use: desktop
 					}
