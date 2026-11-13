@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T19:51Z",
+  "updated_at": "2026-11-13T19:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9200,7 +9200,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T19:51Z",
+    "updated": "2026-11-13T19:55Z",
     "items": [
       {
         "slot": 1,
@@ -9438,11 +9438,12 @@
     {
       "id": "windows-test-instance-terminated",
       "at": "2026-11-13T19:44Z",
-      "answer": "owner terminated the stopped Windows test instance by hand; reports no volumes left (owner report, unverified; Elastic IPs and other regions not checked). Cost item closed on owner report; tester to confirm with its own connector."
+      "answer": "owner terminated the stopped Windows test instance by hand; reports no volumes left (owner report, unverified; Elastic IPs and other regions not checked). Cost item closed on owner report; tester to confirm with its own connector. Update: owner console screenshots show the instance Terminated, no public IPv4 or Elastic IP; Global view storage 0 and the only instance count is the terminated one. Closed on owner evidence.",
+      "updated": "2026-11-13T19:55Z"
     }
   ],
   "heartbeat": "2026-11-13T18:39Z",
-  "updated": "2026-11-13T19:51Z",
+  "updated": "2026-11-13T19:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
