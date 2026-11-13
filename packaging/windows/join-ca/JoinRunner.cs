@@ -96,7 +96,13 @@ namespace Lodestar.Setup {
         if (!finished) KillTree(p);
         // The rest of the output, with a deadline: a child that kept the pipes open
         // can't hold the install.
-        WaitHandle.WaitAll(new WaitHandle[] { outDone, errDone }, 30000);
+        // One handle at a time against one deadline: WaitAll on several handles
+        // throws on a single-threaded-apartment thread, such as PowerShell's.
+        DateTime outputDeadline = DateTime.UtcNow.AddSeconds(30);
+        foreach (ManualResetEvent done in new[] { outDone, errDone }) {
+          TimeSpan left = outputDeadline - DateTime.UtcNow;
+          done.WaitOne(left > TimeSpan.Zero ? left : TimeSpan.Zero);
+        }
         // Stopped, the script's own finally never ran: delete the token folder here.
         string leftover = null;
         if (!finished && !RemoveFolder(tokenDir)) leftover = tokenDir;
