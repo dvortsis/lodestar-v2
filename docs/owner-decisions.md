@@ -683,6 +683,30 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     5. **Fix the review's B1 and B2 first**, ahead of the larger queue: the first-run wizard's raw config keys as labels, and the missing Sign out.
     - Not decisions: B4 (Fetch 0 against the funnel's 413) is a fixture gap, re-ranked Important; Usenet visibility was already decided (§2.46, §2.47).
 
+67. **The API credit: the key's home, three approved uses and the runner's choice for the rest** (owner, 2026-11-13, relayed by the dashboard session; dispatching from main confirmed directly in the runner session):
+    - **Q1, done:** `ANTHROPIC_API_KEY` is an environment secret in `cloud-operator`, and the repository secret was to be deleted. The Console workspace limit is $200, and it's the hard stop.
+    - **Q2, all three uses approved, at these caps:**
+      - (a) operator runs: at most $10 a run;
+      - (b) the M8-SEC independent security pass: at most $15 a pass and $60 in total;
+      - (c) fuzz-corpus triage: at most $5 a job.
+    - **The goal:** use the full $200 by 2026-11-25, on valuable work that offsets plan spend.
+    - **Then the owner said:** "The runner can dispatch it and use it for whatever the runner believes is the best use of it."
+      - The runner may dispatch operator-apply from `main`. The owner confirmed this directly in the runner session.
+      - **The runner's choice for the remaining ~$40:** independent reviews of security-sensitive PRs, at most $5 each.
+      - **Any new workflow that reads the key** says so plainly in its PR, and the runner tells the owner before it merges.
+    - **Record:** operator-apply was dispatched at 2026-11-13T06:04Z and skipped at its job gate, because the owner's repository variables `OWNER_USER_ID` and `OPERATOR_STOP=false` aren't set yet. $0 spent. Setting them is an owner action in the dashboard's owner queue.
+
+68. **Crawler testing on the Unraid box whenever needed** (owner, 2026-11-13; confirmed directly in the runner session): "OK to run crawler testing on unraid machine whenever needed." and "It can pause backup and parity operations when running tests. Just have it restore them after."
+    - **No per-run booking** on the experiment host (§2.51). The owner queue's "book each crawler run" item goes.
+    - **What a test may pause:** Appdata Backup, and a scheduled parity check or sync. Nothing else. Never a rebuild or disk recovery: ask the owner first.
+    - **Every pause has a restore step that always runs,** on failure or cancel too. Each run logs what it paused and what it restored.
+    - **A failed or unconfirmed restore stops all further tests,** and the owner is told at once.
+    - **What it doesn't cover:** cancelling a parity check that's running, changing schedules or settings, or touching data. Every other host-safety, network and legal rule stands (§2.51 included).
+
+69. **The runner decides the owner queue, except the two filter choices** (owner, 2026-11-13, relayed; confirmed directly in the runner session for items 14, 21 and 22): "Decisions: Everything except filters - Approve Agent Runner making the best decisions. For the filters, please give me more detail."
+    - **To the runner, within CLAUDE.md's limits:** owner-queue items 4, 10, 14, 16, 17, 18, 19, 21 and 22. The runner's answers are in `docs/decisions/2026-11-13-runner-owner-queue.md`.
+    - **Still the owner's:** items 13 (FILTER-01) and 15 (FILTER-03). The runner gives the owner the detail directly.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

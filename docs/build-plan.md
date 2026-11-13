@@ -220,11 +220,11 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 
 | # | Action | Unblocks |
 |---|---|---|
-| 1 | Book the next crawler run on the experiment host (CR-AB-ADM), and keep the runs back to back (`ext:experiment-host`) | Track C and the v0.6 tag |
+| 1 | No booking needed now: the runner runs crawler tests on the experiment host whenever needed, back to back (§2.68; `ext:experiment-host`) | Track C and the v0.6 tag |
 | 2 | Do the M6 manual Unraid and MSI installs and approve the rc's signing (`ext:owner-m6-manual`) | G-m6 |
 | 3 | Tag and publish v0.5.2 once its gate passes | A current release; `ext:release-after-parser` (i9-stage2) |
 | 4 | Book each import pilot on the import host and restore the Bitmagnet dump (`ext:import-host`) | The 1M, 10M and 50M gates |
-| 5 | **Checkpoint 1**: re-decide the crawler gate if the projection falls short (`ext:owner-checkpoint-1`) | CR-AB-1, CR-5, CR-COMB |
+| 5 | **Checkpoint 1**: delegated to the runner (§2.69): Track C fixes and a new measurement first; lowering the gate is a §2.26 call (`ext:owner-checkpoint-1` holds) | CR-AB-1, CR-5, CR-COMB |
 | 6 | Register the dedicated benchmark runner (`ext:bench-runner`) | G-v1-10m |
 | 7 | Approve the per-worker consent wording (`ext:owner-v08-q3`) | PL-7b |
 | 8 | Complete the cloud operator setup (`ext:owner-operator-setup`) | OP-G |
@@ -233,31 +233,31 @@ What only the owner can do, ordered by what each unblocks. The live list, with t
 | 11 | Provide a code-signing certificate (`ext:owner-signing-cert`) | Signed Windows artifacts |
 | 12 | Tag the 1.0 release candidate, then v1.0.0 (`ext:owner-v1-rc`, `ext:v1-tagged`) | The release |
 
-**Any time:** add `web-ok` and `e2e-ok` to the main ruleset's required checks (§2.37); replace the published v0.5.1 release text; add the Cloudflare secrets so the status connector deploys (#742); delete the branch `wip/CMP-0-catalogue`; say whether a whole-index Wikidata backfill counts as "bulk" (`docs/decisions/2026-11-12-runner-notes.md`, ENR-14); the runner calls open to a veto (§2.19) listed in the dashboard's owner queue.
+**Any time:** add `web-ok` and `e2e-ok` to the main ruleset's required checks (§2.37); replace the published v0.5.1 release text; set `OWNER_USER_ID` and `OPERATOR_STOP=false` so operator-apply can run (§2.67); delete the branch `wip/CMP-0-catalogue`; say whether a whole-index Wikidata backfill counts as "bulk" (`docs/decisions/2026-11-12-runner-notes.md`, ENR-14); the runner calls open to a veto (§2.19) listed in the dashboard's owner queue.
 
-**Only if the Nightly channel is offered:** the nightly signing key (§2.52) and the host for nightly update manifests (`ext:owner-pk-nightly-host`).
+**Only if the Nightly channel is offered:** the nightly signing key (§2.52). The host for nightly update manifests is approved (§2.69; `ext:owner-pk-nightly-host` holds).
 
 **After 1.0:** the Unraid Community Apps submission (§2.37) and winget and other package installers (§2.52).
 
-**Questions the reviews and the plan raise (2026-11-13).** The owner's answers to the UI review are recorded (§2.66, runner PR #809); what is still open:
+**Questions the reviews and the plan raise (2026-11-13).** The owner's answers to the UI review are recorded (§2.66, runner PR #809). On 2026-11-13 the owner gave rows 14, 16 to 19 and 21 (and the Account sentence) to the runner (§2.69; `docs/decisions/2026-11-13-runner-owner-queue.md`); rows 13, 15 and 20 are still open:
 
 | # | Question | From |
 |---|---|---|
 | 13 | FILTER-01 (content safety): the review offers two fixes; which one? The detail is held (`docs/security/v1/README.md` §5) and the runner gives it to you directly | Code review |
-| 14 | APIFEAT-01 (rules): which of the review's two options for how your own rules rank against packs and lists? Detail held as above | Code review |
+| 14 | APIFEAT-01 (blocking, rules): **delegated to the runner (§2.69)**; the fix slice's brief carries the choice | Code review |
 | 15 | FILTER-03 (content safety): which of the review's two fixes? Detail held as above | Code review |
-| 16 | INFRA-01: should the image publish wait for the same `release` environment approval as the binaries? For the v0.5.2 tag it needs a release PR to `release/v0.5.2` before the tag | Code review |
-| 17 | Eight proposals that change §10 or the glossary (UI review part 4, section 8): name the app's intended reader in §10.0; reorder Search around words and clicks, with new default facets and row facts; a plain health summary ahead of the Insights story; three required setup steps and a checklist in place of nine inline steps; lead the network step with safety, not port forwarding; accept GB as typed, or a units preference; "alert" as the single noun; a first-use prompt, or default off, for single-key actions that launch another program | UI review part 4 |
-| 18 | Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer | Plan r4 |
-| 19 | Do Track Q's fixes for the hostile-input group go ahead of ladder rungs 2 and 3? Until you answer, the runner places them as it places any new fix slice (§2.33), so they don't wait; the question is only whether they go ahead of those rungs | This plan |
+| 16 | **Delegated (§2.69): yes.** INFRA-01: should the image publish wait for the same `release` environment approval as the binaries? For the v0.5.2 tag it needs a release PR to `release/v0.5.2` before the tag | Code review |
+| 17 | **Delegated (§2.69): seven accepted, the setup checklist not** (it conflicts with §2.9, §2.13 and §2.39). Eight proposals that change §10 or the glossary (UI review part 4, section 8): name the app's intended reader in §10.0; reorder Search around words and clicks, with new default facets and row facts; a plain health summary ahead of the Insights story; three required setup steps and a checklist in place of nine inline steps; lead the network step with safety, not port forwarding; accept GB as typed, or a units preference; "alert" as the single noun; a first-use prompt, or default off, for single-key actions that launch another program | UI review part 4 |
+| 18 | **Delegated (§2.69): the crawler gate only.** Does the v0.6 tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? The plan follows P4 until you answer | Plan r4 |
+| 19 | **Delegated (§2.69): yes.** Do Track Q's fixes for the hostile-input group go ahead of ladder rungs 2 and 3? Until you answer, the runner places them as it places any new fix slice (§2.33), so they don't wait; the question is only whether they go ahead of those rungs | This plan |
 | 20 | Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly) | Code review |
-| 21 | Approve or change the proposed replacement sentence about the torrent cache in the Legal Notice (§2), which gates X-consent-gate-lift-external, not yet in `runner/slices.yaml` (`docs/decisions/2026-11-12-X-consent-gate-lift.md`) | Runner PR #807 |
+| 21 | **Delegated (§2.69): approved as proposed.** Approve or change the proposed replacement sentence about the torrent cache in the Legal Notice (§2), which gates X-consent-gate-lift-external, not yet in `runner/slices.yaml` (`docs/decisions/2026-11-12-X-consent-gate-lift.md`) | Runner PR #807 |
 
 **Runner calls open to your veto (§2.19):** every restore path carries recorded holds and deletions, Windows included (UPDATE-01, UPDATE-05, STORE-01; the rule is already recorded in `docs/decisions/2026-11-12-X-win-upd-manual-rollback.md` follow-up 1); SRC-02, the recorded decision in `docs/decisions/2026-11-02-SRC-2.md`, to be settled before X-consent-gate-lift-external (not yet in `runner/slices.yaml`), the Account r2 or the first Restricted or Overlay plug-in lets more sources run; and TEST-05, the detail drawer's size budget (28 KB in the gate against 15 KB in the architecture, a §2.26 call).
 
 **A choice worth making:** the import pilots share the Unraid box with the crawler runs (§2.52). Running them elsewhere would remove the largest calendar conflict. It changes an owner decision, so it's the owner's to make; until then imports fill the gaps between crawler runs (§0.7).
 
-Every question the earlier plans raised was answered, except those in rows 13 to 21 above and the older open points below: §2.28 and §2.37 (Sources, rule packs, required checks, the server-import surface, the upload exception), and the v0.7, companions, workers, M6, v0.8 and M8 questions recorded as met conditions in `runner/dashboard.yaml`. `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
+Every question the earlier plans raised was answered, except rows 13, 15 and 20 above and the older open points below: §2.28 and §2.37 (Sources, rule packs, required checks, the server-import surface, the upload exception), and the v0.7, companions, workers, M6, v0.8 and M8 questions recorded as met conditions in `runner/dashboard.yaml`. `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
 
 ### 0.4 v0.5.1 gate (and v0.5.2)
 **v0.5.1** (G-v051), from the 2026-10-30 plan. **Passed: v0.5.1 was published on 2026-11-07** (`docs/decisions/2026-11-07-v051-release-verdict.md`).
