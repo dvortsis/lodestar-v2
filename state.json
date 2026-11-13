@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T04:38Z",
+  "updated_at": "2026-11-13T04:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7907,6 +7907,10 @@
       "id": "811-merged",
       "added": "2026-11-13T04:26Z",
       "text": "#811 merged 3ac32bd0 (owner B1/B2 done). rv-811 I1 (SettingsForm.keys.test.ts testTimeout) folded into X-sources-restructure. O1/O2 (sign-out after nav failure, in-flight feedback) left as polish for Track U step 5."
+    },
+    {
+      "id": "813-merged",
+      "text": "Runner PR #813 merged (e7347357): Tracks Q and U, WK-18 split, owner queue 13-23. rv-813 fix delta (c440b29a) self-checked by the runner. Owner FYI: new owner-queue items 13-23 are on the dashboard."
     }
   ],
   "main_health": [
@@ -8941,7 +8945,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T04:38Z",
+    "updated": "2026-11-13T04:40Z",
     "items": [
       {
         "slot": 1,
@@ -9275,7 +9279,7 @@
     }
   ],
   "heartbeat": "2026-11-13T03:41Z",
-  "updated": "2026-11-13T04:38Z",
+  "updated": "2026-11-13T04:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
