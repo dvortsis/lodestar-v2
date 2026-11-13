@@ -10,7 +10,7 @@ limits:
   max_launches_per_day: 60 # backstop against runaway loops, not a budget (owner raised from 40, 2026-10-23)
   review_rounds_before_escalation: 2
   phase_total: 4           # owner §2.64 (2026-11-12T22:30Z): from 2026-11-13T00:00Z at most 4 build slices at once, replacing §2.59 to §2.61; sessions over the cap finish their open PR only (§2.65). Filling them all isn't required; a slot stays empty rather than overlap owns. Remove when the owner lifts it (runner/README.md step 7)
-  extra_shared: 4          # owner §2.64: four cloud-testing sessions beyond phase_total (the cloud tester X-test-vm and the runner's cloud-testing slices, §2.62). Tracked in runner-state `slots` (cap field) and `cloud_tester`
+  extra_shared: 4          # owner §2.64: four cloud-testing sessions beyond phase_total (the cloud tester X-test-vm and the runner's cloud-testing slices, §2.62). Tracked in runner-state `cloud_tester` and `extra`, not in `slots` (§2.60)
 
 external:
   m4-schema-settled:

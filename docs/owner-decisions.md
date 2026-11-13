@@ -666,7 +666,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 61. **Twelve build sessions plus up to four for cloud testing** (owner, in the runner session, 2026-11-12): twelve build slots, and up to four more for cloud testing, which the cloud tester and its lanes use.
     - This replaced §2.59's eight plus §2.60's four shared sessions for the rest of 2026-11-12. §2.64 replaced it in turn.
 62. **Cloud testing first** (owner, in the runner session, 2026-11-12 at about 18:56Z): "Have Agent Runner prioritize anything needed for cloud testing."
-    - **The runner's rule (§2.19):** cloud-testing PRs are reviewed and merged first. Cloud-testing fix slices take a cloud-testing slot at once, and the next free build slot ahead of features. Build-plan §0.2 puts this above the ladder.
+    - **The runner's rule (§2.19):** cloud-testing PRs are reviewed and merged first. Cloud-testing fix slices take a cloud-testing slot at once, and the next free build slot ahead of features. Plan r4 (#798) puts this above the ladder in build-plan §0.2.
 63. **A window of up to ten more sessions** (owner, in the runner session, 2026-11-12T22:05Z): up to ten sessions on top of §2.61's, until 2026-11-12T23:30Z (end time confirmed by the owner). §2.64 extended it.
 64. **The window runs to 2026-11-13T00:00Z, then four build plus four cloud-testing sessions** (owner, in the runner session, 2026-11-12T22:30Z; the owner's message gave the end in local time, recorded here in UTC):
     - **Until 2026-11-13T00:00Z:** keep the ten window sessions building while work is available, and open a replacement session when one's PR is ready to merge. At 22:41Z: "Keep opening slices if there is work available."
