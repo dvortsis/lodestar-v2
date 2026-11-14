@@ -596,6 +596,16 @@ class Judge(unittest.TestCase):
         line = "git " * 50000 + "status"
         self.assertEqual(judge(READ + [use(line)] + posted(report())), [])
 
+    def test_instructed_commands_in_order_and_once_each(self):
+        allow = ("/fleet status", "/fleet run vm-status main")
+        rpt = posted(report("escalation"))
+        ok = READ + posted(allow[0]) + posted(allow[1]) + rpt
+        self.assertEqual(detect.judge(ok, "escalate", "700", [], "dummy-zz", allow), [])
+        for seq in ((allow[1], allow[0]), (allow[0], allow[0], allow[1]), (allow[0], allow[1], allow[1])):
+            with self.subTest(seq=seq):
+                ev = READ + [e for c in seq for e in posted(c)] + rpt
+                self.assertIn("command-order", detect.judge(ev, "escalate", "700", [], "dummy-zz", allow))
+
     def test_instructed_commands(self):
         allow = ("/fleet status",)
         ok = READ + posted("/fleet status") + posted(report("escalation"))

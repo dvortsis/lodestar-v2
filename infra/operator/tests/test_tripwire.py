@@ -357,7 +357,9 @@ class Deadline(unittest.TestCase):
         root = Path(tripwire.__file__).resolve().parents[2] / ".github" / "workflows"
         for name, job in (("operator-tripwire.yml", "sweep"), ("operator-wake.yml", "sweep")):
             wf = yaml.safe_load((root / name).read_text())
-            self.assertLessEqual(tripwire.SWEEP_DEADLINE_SECONDS + 120, wf["jobs"][job]["timeout-minutes"] * 60, name)
+            # The sweep's deadline, then the session check's, then one slow request, the post and the disable.
+            self.assertLessEqual(tripwire.SWEEP_DEADLINE_SECONDS + tripwire.SESSION_DEADLINE_SECONDS + 120,
+                                 wf["jobs"][job]["timeout-minutes"] * 60, name)
 
 
 class Unreadable(unittest.TestCase):
@@ -465,7 +467,7 @@ class ManyActivePRs(unittest.TestCase):
         self.assertIn("the operator's bot opened #1", body)
         self.assertIn("the sweep is incomplete", body)
 
-    def test_an_unreadable_summary_escalates_without_disabling(self):
+    def test_an_unreadable_summary_is_logged_and_the_rest_read_decides(self):
         for bad in (None, {"errors": [{"message": "x"}]}, {"data": {"repository": {}}},
                     {"data": {"repository": {"p1": {"reviews": {"totalCount": "3", "nodes": []}}}}}):
             with self.subTest(bad=bad):
@@ -473,8 +475,11 @@ class ManyActivePRs(unittest.TestCase):
 
                 def call(method, path, body, bad=bad):
                     return bad if path == "/graphql" else gh(method, path, body)
-                run(["sweep"], env(), call)
-                self.assertIn("the sweep is incomplete: a reviews summary wasn't readable; check by hand", self.bodies(gh)[0])
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    tripwire.main(["sweep"], env=env(), transport=call, clock=lambda: NOW)
+                self.assertIn("tripwire: a reviews summary wasn't readable; every PR took the REST read", out.getvalue())
+                self.assertEqual(self.bodies(gh), [])  # the REST read was complete: nothing to escalate
                 self.assertFalse(self.disabled(gh))
 
     def test_the_summary_query_carries_only_digits(self):
@@ -537,7 +542,7 @@ class StagesStandAlone(unittest.TestCase):
         run(["sweep"], env(), gh)
         body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
         self.assertIn("the operator's bot reviewed #12", body)
-        self.assertIn("a reviews summary wasn't readable", body)
+        self.assertNotIn("incomplete", body)  # the REST read was complete
         self.assertTrue(any(m == "PUT" for m, _, _ in posts))
 
 
@@ -572,7 +577,7 @@ class FailedRequests(unittest.TestCase):
         body, disabled = self.run_failing(lambda m, p: p == "/graphql")
         self.assertTrue(disabled)
         self.assertIn("the operator's bot: issue event `closed` on #9", body)
-        self.assertIn("the sweep is incomplete: a reviews summary request failed; check by hand", body)
+        self.assertNotIn("incomplete", body)  # the REST read was complete
 
     def test_a_failed_list_after_a_bot_hit_still_disables(self):
         body, disabled = self.run_failing(lambda m, p: m == "GET" and p.startswith("/repos/o/r/pulls"))
@@ -754,3 +759,106 @@ class IncompleteRule(unittest.TestCase):
         self.assertEqual(bodies, [])
         self.assertFalse(disabled)
         self.assertFalse(any(p.startswith(self.RUNS) for p in seen))
+
+
+class SessionCheck(unittest.TestCase):
+    """_wake_session: which operator-wake.yml runs count as a session in the lookback.
+    The run and job fields follow GitHub's Actions API. Real operator-wake.yml runs on
+    this repository show both shapes the check relies on: a run whose jobs were all
+    skipped reports conclusion "skipped", and a wake job waiting for the
+    cloud-operator approval reports status "waiting" with no completed_at (and a
+    started_at that is only its creation time, so it isn't read)."""
+
+    def check(self, runs, jobs=None, mono=None):
+        seen = []
+
+        def gh(method, path, body):
+            seen.append(path)
+            if "/actions/workflows/operator-wake.yml/runs" in path:
+                page = int(path.rsplit("page=", 1)[1])
+                chunk = runs[(page - 1) * 100:page * 100]
+                return {"total_count": len(runs), "workflow_runs": chunk}
+            rid = path.split("/actions/runs/")[1].split("/")[0]
+            js = (jobs or {}).get(rid, [])
+            return {"total_count": len(js), "jobs": js}
+        why = tripwire._wake_session(env(), gh, NOW, mono or (lambda: 0.0))
+        return why, seen
+
+    @staticmethod
+    def wake(conclusion="success", completed=timedelta(minutes=5)):
+        return [{"name": "gate", "conclusion": "success", "completed_at": ISO(timedelta(hours=9))},
+                {"name": "wake", "conclusion": conclusion, "completed_at": None if completed is None else ISO(completed)}]
+
+    def test_a_late_approval_still_counts(self):
+        # Created nine hours ago, approved late: its wake job finished 5 minutes ago.
+        runs = [{"id": 1, "status": "completed", "conclusion": "success", "created_at": ISO(timedelta(hours=9)),
+                 "updated_at": ISO(timedelta(minutes=4))}]
+        self.assertEqual(self.check(runs, {"1": self.wake()})[0], tripwire.SESSION_RAN)
+
+    def test_a_job_waiting_for_approval_or_running_counts(self):
+        runs = [{"id": 1, "status": "waiting", "conclusion": None, "updated_at": ISO(timedelta(hours=4))}]
+        self.assertEqual(self.check(runs, {"1": self.wake(None, completed=None)})[0], tripwire.SESSION_RAN)
+
+    def test_a_wake_job_that_completed_before_the_lookback_doesnt_count(self):
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 1)
+        runs = [{"id": 1, "status": "completed", "conclusion": "success", "updated_at": ISO(timedelta(minutes=1))}]
+        self.assertIsNone(self.check(runs, {"1": self.wake(completed=old)})[0])
+
+    def test_runs_passed_over_without_reading_their_jobs(self):
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 1)
+        runs = [{"id": 1, "status": "completed", "conclusion": "skipped", "updated_at": ISO(timedelta(minutes=1))},
+                {"id": 2, "status": "completed", "conclusion": "success", "updated_at": ISO(old)}]
+        why, seen = self.check(runs, {"1": self.wake(), "2": self.wake()})
+        self.assertIsNone(why)
+        self.assertFalse(any("/actions/runs/" in p for p in seen))
+
+    def test_runs_are_read_page_by_page(self):
+        runs = [{"id": i, "status": "completed", "conclusion": "skipped"} for i in range(1, 251)]
+        why, seen = self.check(runs)
+        self.assertIsNone(why)
+        self.assertEqual(len(seen), 3)
+        self.assertTrue(all("created=%3E%3D" in p for p in seen))
+
+    def test_more_runs_than_the_pages_hold_counts_as_a_session(self):
+        runs = [{"id": i, "status": "completed", "conclusion": "skipped"} for i in range(1, tripwire.SESSION_PAGES * 100 + 2)]
+        why, seen = self.check(runs)
+        self.assertEqual(why, tripwire.SESSION_UNKNOWN)
+        self.assertEqual(len(seen), tripwire.SESSION_PAGES)
+
+    def test_the_check_stops_at_its_own_deadline(self):
+        tick = [0.0]
+
+        def mono():
+            tick[0] += 10.0  # every request seems to take 10 s
+            return tick[0]
+        runs = [{"id": i, "status": "completed", "conclusion": "success", "updated_at": ISO(timedelta(minutes=1))}
+                for i in range(1, 501)]
+        why, seen = self.check(runs, {str(i): self.wake(completed=timedelta(hours=9)) for i in range(1, 501)}, mono)
+        self.assertEqual(why, tripwire.SESSION_UNKNOWN)
+        self.assertLessEqual(len(seen), tripwire.SESSION_DEADLINE_SECONDS // 10)
+
+    def test_a_slow_check_still_escalates_inside_the_job_timeout(self):
+        tick, posts = [0.0], []
+
+        def mono():
+            tick[0] += 7.0
+            return tick[0]
+        noise = {"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}
+
+        def gh(method, path, body):
+            if "/actions/workflows/operator-wake.yml/runs" in path:
+                return {"total_count": 5000, "workflow_runs": [{"id": 1, "status": "in_progress"}] * 100}
+            if "/actions/runs/" in path:
+                return {"total_count": 1, "jobs": [{"name": "gate", "conclusion": "success"}]}
+            if method == "GET":
+                return [noise] * 100 if path.startswith("/repos/o/r/issues/events") else []
+            posts.append((method, path, body, tick[0]))
+        with redirect_stdout(io.StringIO()):
+            tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
+        body = next(b["body"] for _, _, b, _ in posts if isinstance(b, dict) and "body" in b)
+        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", body)
+        self.assertIn(DISABLE, [(m, p) for m, p, _, _ in posts])
+        # Every request is counted on the clock: the post and the disable come before the
+        # two deadlines plus one more request.
+        self.assertLessEqual(max(t for *_, t in posts),
+                             tripwire.SWEEP_DEADLINE_SECONDS + tripwire.SESSION_DEADLINE_SECONDS + 3 * 7.0)

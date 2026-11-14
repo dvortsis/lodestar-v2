@@ -24,10 +24,29 @@ CONTROL_PLANE_USER_ID = "41898282"
 REPORT = "operator-report v1"
 MAX_BODY = 16000
 _FIELD = re.compile(r"(id|in-reply-to|kind): ([a-z0-9][a-z0-9-]{0,39})")
-# A /fleet command's words, as infra/fleet/command.py reads them: lower-case
-# words of letters, digits and hyphens, or a full commit; one space between.
-_WORD = re.compile(r"[a-z0-9-]{1,32}|[0-9a-f]{40}")
-MAX_WORDS = 4  # `run <step> <vm> <commit>`, the longest command
+# A /fleet command in infra/fleet/command.py's grammar: `status`, `down`,
+# `up <preset>`, `run <step> <vm> [<commit>]`. Presets and steps come from
+# fleet.yml's own config, so here they're words of command.py's token shape;
+# the verbs and VMs are command.py's own (test_gates_reader pins both). This
+# file is fetched alone into the operator's sandbox, so it can't import it.
+_WORD = re.compile(r"[a-z0-9-]{1,32}")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+FLEET_VERBS = ("status", "down", "up", "run")
+FLEET_VMS = ("main", "worker")
+
+
+def _fleet_shape(words: list[str]) -> bool:
+    if not words or not all(_WORD.fullmatch(w) or _COMMIT.fullmatch(w) for w in words):
+        return False
+    verb, rest = words[0], words[1:]
+    if verb in ("status", "down"):
+        return not rest
+    if verb == "up":
+        return len(rest) == 1 and bool(_WORD.fullmatch(rest[0]))
+    if verb == "run":
+        return (len(rest) in (2, 3) and bool(_WORD.fullmatch(rest[0])) and rest[1] in FLEET_VMS
+                and (len(rest) == 2 or bool(_COMMIT.fullmatch(rest[2]))))
+    return False
 
 
 def channel_shape(body) -> bool:
@@ -39,8 +58,7 @@ def channel_shape(body) -> bool:
         return False
     text = body.strip()
     if text.startswith("/fleet "):
-        words = text[len("/fleet "):].split(" ")
-        return text.isascii() and 1 <= len(words) <= MAX_WORDS and all(_WORD.fullmatch(w) for w in words)
+        return text.isascii() and _fleet_shape(text[len("/fleet "):].split(" "))
     lines = text.replace("\r\n", "\n").split("\n")
     if lines[0] != REPORT:
         return False

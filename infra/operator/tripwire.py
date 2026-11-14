@@ -49,11 +49,14 @@ REVIEW_PAGE_BUDGET = 60  # 7 sweeps x (60 + 42 other requests) = 714, leaving ~2
 # escalates the unfinished run.
 SWEEP_DEADLINE_SECONDS = 360
 # An incomplete sweep disables only when a wake session ran inside its lookback
-# (the owner's decision, 2026-11-14). A wake job can run 45 minutes, so runs
-# created that much before the lookback still count. Past SESSION_RUNS runs in
-# that window, or on any unreadable answer, a session counts as having run.
-WAKE_JOB_MINUTES = 45
-SESSION_RUNS = 100
+# (the owner's decision, 2026-11-14; _wake_session). A job can wait up to 30
+# days for an environment's approval, so runs created that far back are read.
+# The check has its own deadline, so the job's 10-minute timeout can't cancel
+# it before the escalation is posted. Past SESSION_PAGES pages, past the
+# deadline, or on any unreadable answer, a session counts as having run.
+APPROVAL_WAIT_DAYS = 30
+SESSION_PAGES = 10
+SESSION_DEADLINE_SECONDS = 90
 SESSION_RAN = "a wake session ran inside the sweep's lookback"
 SESSION_UNKNOWN = "whether a wake session ran inside the sweep's lookback couldn't be read"
 END_OF_WAKE = "this is the end-of-wake sweep"
@@ -301,13 +304,19 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
         active.append(n)
     each(listed(f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc"), pull)
+    # No summary: every PR takes the REST read, under the budget. That read
+    # records its own stops, so a summary that can't be used isn't one itself:
+    # it's logged for the job's log (first-run check). The deadline still is.
     try:
         summaries = _review_summaries(transport, repo, active) if active else {}
-    except Incomplete as e:  # no summary: every PR takes the REST read, under the budget
-        stops.append(e)
+    except Incomplete as e:
+        if e.args[:1] == ("deadline",):
+            stops.append(e)
+        else:
+            print(f"tripwire: {SUMMARY_UNREADABLE}; every PR took the REST read")
         summaries = {}
-    except Exception:  # noqa: BLE001 - see STAGE_FAILED
-        stops.append(Incomplete("unreadable", SUMMARY_FAILED))
+    except Exception:  # noqa: BLE001
+        print(f"tripwire: {SUMMARY_FAILED}; every PR took the REST read")
         summaries = {}
 
     def reviews_of(n):
@@ -351,49 +360,76 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
     return sorted(set(bot_hits)) + sorted(set(other)) + notes, bool(bot_hits)
 
 
-def _wake_session(env, transport, now: datetime) -> str | None:
+def _wake_session(env, transport, now: datetime, monotonic=time.monotonic) -> str | None:
     """Why an incomplete sweep counts a wake session as having run, or None.
 
     Read from the Actions API with the job's own token: the runs of
-    operator-wake.yml in the window, and whether any run's `wake` job wasn't
-    skipped (a comment alone creates only gate runs, whose `wake` job is
-    skipped). Fails closed: any error or unexpected answer counts as a session.
+    operator-wake.yml created in the last APPROVAL_WAIT_DAYS, and in each the
+    `wake` job. A session counts when a `wake` job wasn't skipped and hadn't
+    completed before the lookback: so a job still waiting for approval, queued
+    or running counts, and so does one that was refused or cancelled after it
+    started (stricter than the rule's wording). A run is passed over without
+    reading its jobs when its own conclusion is `skipped` (every job skipped:
+    a comment alone makes such a run) or it completed before the lookback.
+    Fails closed: any error, an unexpected answer, more than SESSION_PAGES
+    pages of runs, or SESSION_DEADLINE_SECONDS passing counts as a session.
     The end-of-wake sweep in operator-wake.yml always counts."""
     if f"/.github/workflows/{WAKE_WORKFLOW}@" in str(env.get("GITHUB_WORKFLOW_REF", "")):
         return END_OF_WAKE
+    call = with_deadline(transport, monotonic, SESSION_DEADLINE_SECONDS)
+    since = now - timedelta(minutes=LOOKBACK_MINUTES)
     try:
         repo = env["GITHUB_REPOSITORY"]
-        since = (now - timedelta(minutes=LOOKBACK_MINUTES + WAKE_JOB_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = transport("GET", f"/repos/{repo}/actions/workflows/{WAKE_WORKFLOW}/runs"
-                             f"?created=%3E%3D{since}&per_page={SESSION_RUNS}", None)
-        runs, total = (r or {}).get("workflow_runs"), (r or {}).get("total_count")
-        if not isinstance(runs, list) or not isinstance(total, int) or isinstance(total, bool) \
-                or total > len(runs) or len(runs) > SESSION_RUNS:
+        oldest = (now - timedelta(days=APPROVAL_WAIT_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        runs: list = []
+        for page in range(1, SESSION_PAGES + 1):
+            r = call("GET", f"/repos/{repo}/actions/workflows/{WAKE_WORKFLOW}/runs"
+                            f"?created=%3E%3D{oldest}&per_page=100&page={page}", None)
+            items, total = (r or {}).get("workflow_runs"), (r or {}).get("total_count")
+            if not isinstance(items, list) or not isinstance(total, int) or isinstance(total, bool):
+                return SESSION_UNKNOWN
+            runs += items
+            if len(items) < 100 or len(runs) >= total:
+                break
+        else:
+            return SESSION_UNKNOWN  # more runs than SESSION_PAGES pages
+        if len(runs) < total:
             return SESSION_UNKNOWN
         for run in runs:
-            rid = _digits((run or {}).get("id")) if isinstance(run, dict) else None
+            if not isinstance(run, dict):
+                return SESSION_UNKNOWN
+            rid = _digits(run.get("id"))
             if rid is None:
                 return SESSION_UNKNOWN
-            j = transport("GET", f"/repos/{repo}/actions/runs/{rid}/jobs?filter=all&per_page=100", None)
+            if run.get("conclusion") == "skipped":
+                continue
+            updated = _when(run.get("updated_at"))
+            if run.get("status") == "completed" and updated is not None and updated < since:
+                continue  # a run's update time is at or after its jobs' completion
+            j = call("GET", f"/repos/{repo}/actions/runs/{rid}/jobs?filter=all&per_page=100", None)
             jobs, count = (j or {}).get("jobs"), (j or {}).get("total_count")
             if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool) or count > len(jobs):
                 return SESSION_UNKNOWN
             for job in jobs:
                 if not isinstance(job, dict):
                     return SESSION_UNKNOWN
-                if job.get("name") == "wake" and job.get("conclusion") != "skipped":
+                if job.get("name") != "wake" or job.get("conclusion") == "skipped":
+                    continue
+                done = _when(job.get("completed_at"))
+                if job.get("completed_at") is None or done is None or done >= since:
                     return SESSION_RAN
         return None
-    except Exception:  # noqa: BLE001 - fail closed: an unreadable answer counts as a session
+    except Exception:  # noqa: BLE001 - fail closed (the deadline raises Incomplete, an Exception)
         return SESSION_UNKNOWN
 
 
-def _incomplete_rule(env, transport, now, findings: list[str], disable: bool) -> tuple[list[str], bool]:
+def _incomplete_rule(env, transport, now, findings: list[str], disable: bool,
+                     monotonic=time.monotonic) -> tuple[list[str], bool]:
     """The owner's rule (2026-11-14) for an incomplete sweep without a bot
     finding: disable only when a wake session ran inside the lookback."""
     if disable:
         return findings, True
-    why = _wake_session(env, transport, now)
+    why = _wake_session(env, transport, now, monotonic)
     if why is None:
         return findings, False
     return findings + [f"{why}, so an incomplete sweep disables"], True
@@ -438,19 +474,19 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
     # A sweep that can't finish escalates, so it's checked by hand. A bot finding
     # disables; otherwise it disables only when a wake session ran inside the
     # lookback (the owner's decision, 2026-11-14; _incomplete_rule). The session
-    # check uses the plain transport: the sweep's deadline doesn't cut it short.
+    # check has its own deadline, after the sweep's: both fit the job's timeout.
     try:
         findings, disable = sweep(env, with_deadline(transport, monotonic), now, found)
         if found.get("incomplete"):
-            findings, disable = _incomplete_rule(env, transport, now, findings, disable)
+            findings, disable = _incomplete_rule(env, transport, now, findings, disable, monotonic)
     except Incomplete as e:  # the sweep records its own stops; this is the backstop for any it doesn't
         findings, disable = _incomplete_rule(env, transport, now, sorted(set(found["bot"])) + sorted(set(found["other"]))
-                                             + [describe(e)], bool(found["bot"]))
+                                             + [describe(e)], bool(found["bot"]), monotonic)
     except Exception as e:  # noqa: BLE001 - say so (best effort), keep what was found, then fail the job
         # Findings made before the failure still count: a bot finding still disables.
         failed = f"the sweep failed ({type(e).__name__}) before it finished; check by hand"
         findings, disable = _incomplete_rule(env, transport, now, sorted(set(found["bot"])) + sorted(set(found["other"]))
-                                             + [failed], bool(found["bot"]))
+                                             + [failed], bool(found["bot"]), monotonic)
         act(env, transport, findings, disable)
         raise SystemExit("tripwire: the sweep failed") from None
     if findings:

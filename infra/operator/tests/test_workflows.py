@@ -43,6 +43,13 @@ class Workflows(unittest.TestCase):
     def setUpClass(cls):
         cls.wfs = {n: load(n) for n in NAMES}
 
+    def test_the_tripwire_finds_the_wake_job_by_its_name(self):
+        """tripwire._wake_session matches the API's job name "wake": the job's id,
+        with no `name:` to change it."""
+        job = self.wfs["operator-wake.yml"]["jobs"]["wake"]
+        self.assertNotIn("name", job)
+        self.assertEqual(job["environment"], "cloud-operator")
+
     def jobs(self):
         for n, wf in self.wfs.items():
             for j, job in wf["jobs"].items():

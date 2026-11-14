@@ -98,6 +98,30 @@ class Reader(unittest.TestCase):
         self.assertEqual([x["id"] for x in trusted([c(200, cid=1)], ok, 200)], [])
         self.assertEqual([x["id"] for x in trusted([c(100, cid=1)], ok, "200")], [1])
 
+    def test_the_fleet_shape_follows_the_command_grammar(self):
+        import command
+        import reader
+        self.assertEqual(reader.FLEET_VMS, command.VMS)
+        # Every verb command.py accepts, and no other.
+        for verb in reader.FLEET_VERBS:
+            with self.subTest(verb=verb):
+                with self.assertRaises(Refused) as cm:
+                    command.parse(f"/fleet {verb} x y z w", {}, {})
+                self.assertNotEqual(cm.exception.reason, "unknown verb")
+        with self.assertRaises(Refused) as cm:
+            command.parse("/fleet reboot", {}, {})
+        self.assertEqual(cm.exception.reason, "unknown verb")
+        commit = "a" * 40
+        for body in ("/fleet status", "/fleet down", "/fleet up screen", "/fleet run copy-off main",
+                     "/fleet run start-block worker " + commit):
+            with self.subTest(body=body):
+                self.assertTrue(reader.channel_shape(body))
+        for body in ("/fleet reboot", "/fleet status now", "/fleet down x", "/fleet up", "/fleet up a b",
+                     "/fleet run copy-off", "/fleet run copy-off elsewhere", "/fleet run copy-off main xyz",
+                     "/fleet run a b c d", "/fleet " + commit, "/fleet up " + commit + "0"):
+            with self.subTest(body=body):
+                self.assertFalse(reader.channel_shape(body))
+
 
 if __name__ == "__main__":
     unittest.main()
