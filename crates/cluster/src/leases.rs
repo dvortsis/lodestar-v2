@@ -455,6 +455,50 @@ pub const RECENT_COMMITS: usize = 16_384;
 /// a re-grant reports it for a key the store check found held.
 pub(crate) const LOSS_BLOCKED: u8 = 7;
 
+/// `funnel::Loss::Evicted`: a key handed back that no longer fits
+/// the queue of keys waiting for a re-grant (past a worker's allowance, or
+/// past [`MAX_PENDING`]). It isn't granted again; a source finds it anew.
+pub(crate) const LOSS_EVICTED: u8 = 8;
+
+/// The most keys that wait for a re-grant at once. A key handed back past
+/// it is dropped ([`LOSS_EVICTED`]).
+pub const MAX_PENDING: usize = 262_144;
+
+/// While this many keys wait for a re-grant, no remote claim gets a lease
+/// for a key that isn't in flight already: the waiting keys go out first.
+/// Half of [`MAX_PENDING`], leaving room for leases already out to come
+/// back.
+pub const PENDING_HIGH_WATER: usize = MAX_PENDING / 2;
+
+/// The most of the waiting queue one remote worker's keys may take: an
+/// eighth of [`PENDING_HIGH_WATER`]. Past it, keys it hands back are
+/// dropped, so no one worker can bring on the backlog alone.
+pub const MAX_PENDING_PER_WORKER: usize = PENDING_HIGH_WATER / 8;
+
+/// The window a worker's return allowance counts over: it starts at the
+/// first hand-back after the last one ended (a fixed window, not a rolling
+/// one, so up to twice the allowance can land around its edge).
+pub const RETURN_WINDOW_SECS: i64 = 3600;
+
+/// A remote worker may hand back (expired, evicted, reconciled away or
+/// drained, marked fetched or not) this share of its lease cap per [`RETURN_WINDOW_SECS`]
+/// for a re-grant, and at least [`MIN_RETURN_ALLOWANCE`] (never more than
+/// the cap, nor [`MAX_PENDING_PER_WORKER`]). Past that its keys are dropped
+/// and it rests for a lease TTL.
+const RETURN_SHARE: usize = 8;
+pub const MIN_RETURN_ALLOWANCE: usize = 1_024;
+
+/// Places `order` may hold past twice the queue before it's compacted.
+const ORDER_SLACK: usize = 1_024;
+
+/// Keys one re-grant looks at, per key it may grant: a bound on the work
+/// done under the authority's lock.
+const REGRANT_LOOK: usize = 4;
+
+/// How long a worker that stopped on its own (`Drained`) gets no new or
+/// re-granted keys ([`LeaseAuthority::rest`]).
+pub const REST_AFTER_DRAIN_SECS: i64 = 120;
+
 /// What [`LeaseAuthority::fetched`] made of a `Fetched` report, decided
 /// under one lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,6 +533,16 @@ pub enum BatchAnswer {
 
 /// Keys granted again to one worker, with their new tokens.
 pub type Regranted = Vec<(InfoHash, Token)>;
+
+/// One re-grant target while [`LeaseAuthority::regrant_pending`] runs.
+struct Load {
+    held: usize,
+    worker: WorkerId,
+    got: Regranted,
+    /// New keys it may still take under its cap.
+    room: usize,
+    resting: bool,
+}
 
 /// No accounting (a cluster server running on its own, and tests).
 #[derive(Debug, Clone, Copy, Default)]
@@ -526,6 +580,26 @@ struct AuthorityState {
     /// no cap. The built-in worker is never capped.
     cap: Option<usize>,
     caps: HashMap<WorkerId, usize>,
+    /// How many of `pending`'s keys each remote worker held last (its
+    /// `Lease::holder` there). They count against its cap until they're
+    /// granted again, so handing keys back never frees room. A worker with
+    /// none has no entry.
+    parked: HashMap<WorkerId, usize>,
+    /// Each remote worker's hand-backs in the current window, and its rest.
+    returns: HashMap<WorkerId, Returns>,
+    /// The latest time (Unix seconds) any call gave: the clock for the
+    /// calls that take none ([`LeaseAuthority::evict`],
+    /// [`LeaseAuthority::reconcile`]).
+    latest: i64,
+}
+
+/// A remote worker's keys handed back unfetched in the window that began at
+/// `since`, and until when it rests (no new or re-granted keys).
+#[derive(Debug, Clone, Copy, Default)]
+struct Returns {
+    since: i64,
+    count: usize,
+    rest_until: i64,
 }
 
 impl AuthorityState {
@@ -541,17 +615,118 @@ impl AuthorityState {
         self.caps.get(&worker).copied().or(self.cap)
     }
 
-    /// New leases `worker` may still be given under its cap.
-    fn room(&self, worker: WorkerId) -> usize {
+    /// Whether `worker` rests at `now`: no new or re-granted keys.
+    fn resting(&self, worker: WorkerId, now: i64) -> bool {
+        worker != WorkerId::LOCAL
+            && self
+                .returns
+                .get(&worker)
+                .is_some_and(|r| now < r.rest_until)
+    }
+
+    fn parked_by(&self, worker: WorkerId) -> usize {
+        self.parked.get(&worker).copied().unwrap_or(0)
+    }
+
+    /// New leases `worker` may still be given under its cap at `now`: none
+    /// while it rests, and its keys waiting for a re-grant count as held.
+    fn room(&self, worker: WorkerId, now: i64) -> usize {
+        if self.resting(worker, now) {
+            return 0;
+        }
         self.cap_of(worker).map_or(usize::MAX, |cap| {
-            cap.saturating_sub(self.table.held_by(worker))
+            cap.saturating_sub(self.table.held_by(worker) + self.parked_by(worker))
         })
     }
 
-    fn park(&mut self, key: InfoHash, lease: Lease) {
-        if self.pending.insert(key, lease).is_none() {
-            self.order.push_back(key);
+    /// Keys `worker` may hand back per window for a re-grant.
+    fn allowance(&self, worker: WorkerId) -> usize {
+        self.cap_of(worker).map_or(usize::MAX, |cap| {
+            (cap / RETURN_SHARE)
+                .max(MIN_RETURN_ALLOWANCE)
+                .min(cap)
+                .min(MAX_PENDING_PER_WORKER)
+        })
+    }
+
+    fn count_parked(&mut self, worker: WorkerId) {
+        if worker != WorkerId::LOCAL {
+            *self.parked.entry(worker).or_default() += 1;
         }
+    }
+
+    fn uncount_parked(&mut self, worker: WorkerId) {
+        if let Some(n) = self.parked.get_mut(&worker) {
+            *n -= 1;
+            if *n == 0 {
+                self.parked.remove(&worker);
+            }
+        }
+    }
+
+    /// Puts a key in the waiting queue, at the front or the back. A key
+    /// that doesn't fit ([`MAX_PENDING`]) comes back, to be reported lost.
+    #[must_use]
+    fn park(&mut self, key: InfoHash, lease: Lease, front: bool) -> Option<(InfoHash, Lease)> {
+        match self.pending.get(&key).map(|l| l.holder) {
+            Some(old) => self.uncount_parked(old),
+            None if self.pending.len() >= MAX_PENDING => return Some((key, lease)),
+            None if front => self.order.push_front(key),
+            None => self.order.push_back(key),
+        }
+        self.count_parked(lease.holder);
+        self.pending.insert(key, lease);
+        None
+    }
+
+    /// Takes a key out of the waiting queue.
+    fn unpark(&mut self, key: &InfoHash) -> Option<Lease> {
+        let lease = self.pending.remove(key)?;
+        if self.pending.is_empty() {
+            self.order.clear();
+        } else if self.order.len() > 2 * self.pending.len() + ORDER_SLACK {
+            // Keys taken out leave their place behind: drop those places
+            // once they're half of `order`, so it stays within twice the
+            // queue.
+            let pending = &self.pending;
+            self.order.retain(|k| pending.contains_key(k));
+        }
+        self.uncount_parked(lease.holder);
+        Some(lease)
+    }
+
+    /// Parks leases that ended without an outcome. A remote worker's count
+    /// against its allowance for the window, marked fetched or not (a mark
+    /// is the worker's own word): past it the key is dropped and the
+    /// worker rests for a lease TTL. The built-in worker's always wait
+    /// (room permitting). Returns the keys dropped.
+    fn take_back_ended(
+        &mut self,
+        ended: Vec<(InfoHash, Lease)>,
+        now: i64,
+    ) -> Vec<(InfoHash, Lease)> {
+        let ttl = self.table.ttl_secs();
+        let mut dropped = Vec::new();
+        for (key, lease) in ended {
+            let w = lease.holder;
+            if w != WorkerId::LOCAL {
+                let allowance = self.allowance(w);
+                let full = self.parked_by(w) >= MAX_PENDING_PER_WORKER;
+                let r = self.returns.entry(w).or_default();
+                if now.saturating_sub(r.since) >= RETURN_WINDOW_SECS {
+                    r.since = now;
+                    r.count = 0;
+                }
+                if full || r.count >= allowance {
+                    r.rest_until = r.rest_until.max(now.saturating_add(ttl));
+                    dropped.push((key, lease));
+                    continue;
+                }
+                r.count += 1;
+            }
+            dropped.extend(self.park(key, lease, false));
+        }
+        dropped
     }
 
     /// Whether a claim for `key` would make a new lease (not one held).
@@ -590,10 +765,7 @@ impl AuthorityState {
     /// A claim by any worker but the key's finder clears
     /// [`Lease::finder`], held or waiting.
     fn claim(&mut self, worker: WorkerId, c: Claim, now: i64) -> (Claimed, Option<Lease>) {
-        if let Some(mut lease) = self.pending.remove(&c.key) {
-            if self.pending.is_empty() {
-                self.order.clear();
-            }
+        if let Some(mut lease) = self.unpark(&c.key) {
             lease.sources |= 1u64 << c.source.get();
             if lease.finder != Some(worker) {
                 lease.finder = None;
@@ -645,6 +817,9 @@ impl LeaseAuthority {
                 commits: 0,
                 cap: None,
                 caps: HashMap::new(),
+                parked: HashMap::new(),
+                returns: HashMap::new(),
+                latest: 0,
             }),
             events,
         }
@@ -704,8 +879,23 @@ impl LeaseAuthority {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The lock, noting `now` as the latest time seen.
+    fn lock_at(&self, now: i64) -> MutexGuard<'_, AuthorityState> {
+        let mut s = self.lock();
+        s.latest = s.latest.max(now);
+        s
+    }
+
     fn gauge(&self, s: &AuthorityState) {
         self.events.outstanding(s.in_flight());
+    }
+
+    /// Reports keys dropped from the waiting queue as lost
+    /// ([`LOSS_EVICTED`]), once each. Call it after the lock is released.
+    fn dropped(&self, dropped: &[(InfoHash, Lease)]) {
+        for (key, lease) in dropped {
+            self.events.lost(key, lease, LOSS_EVICTED);
+        }
     }
 
     /// Claims a newly found key for `worker`. A key waiting for a re-grant
@@ -715,7 +905,7 @@ impl LeaseAuthority {
     /// For the built-in worker. A remote worker's claims go through
     /// [`claim_batch`](Self::claim_batch).
     pub fn claim(&self, worker: WorkerId, c: Claim, now: i64) -> Claimed {
-        let mut s = self.lock();
+        let mut s = self.lock_at(now);
         let (claimed, fresh) = s.claim(worker, c, now);
         self.gauge(&s);
         drop(s);
@@ -742,9 +932,12 @@ impl LeaseAuthority {
         admit: Option<&dyn Fn(usize) -> usize>,
         checked_at: Option<u64>,
     ) -> Vec<BatchAnswer> {
-        let mut s = self.lock();
+        let mut s = self.lock_at(now);
         let forgotten =
             checked_at.is_some_and(|seq| s.commits.saturating_sub(seq) > RECENT_COMMITS as u64);
+        // Too many keys wait for a re-grant: a key not in flight yet gets
+        // no lease (the remote claims of waiting keys still take them).
+        let backlog = worker != WorkerId::LOCAL && s.pending.len() >= PENDING_HIGH_WATER;
         let mut allowed = match admit {
             _ if forgotten => 0,
             Some(admit) => {
@@ -753,13 +946,13 @@ impl LeaseAuthority {
                     .iter()
                     .filter(|c| s.would_lease(&c.key) && !s.committed_recently(worker, &c.key))
                     .count()
-                    .min(s.room(worker));
+                    .min(s.room(worker, now));
                 if new == 0 { 0 } else { admit(new).min(new) }
             }
             None => usize::MAX,
         };
         // The worker's own cap (CLUSTER-02), on top of the admission.
-        let mut room = s.room(worker);
+        let mut room = s.room(worker, now);
         let mut fresh_leases = Vec::new();
         let answers: Vec<BatchAnswer> = claims
             .iter()
@@ -780,7 +973,7 @@ impl LeaseAuthority {
                     if room == 0 && !forgotten {
                         return BatchAnswer::Capped;
                     }
-                    if allowed == 0 {
+                    if allowed == 0 || (backlog && !s.pending.contains_key(&c.key)) {
                         return BatchAnswer::Busy;
                     }
                     allowed -= 1;
@@ -812,8 +1005,8 @@ impl LeaseAuthority {
         lease: RestoredLease,
         now: i64,
     ) -> Token {
-        let mut s = self.lock();
-        s.pending.remove(&key);
+        let mut s = self.lock_at(now);
+        s.unpark(&key);
         let token = s.table.restore(worker, key, lease, now);
         self.gauge(&s);
         token
@@ -837,7 +1030,7 @@ impl LeaseAuthority {
         now: i64,
         checked_at: u64,
     ) -> Option<Token> {
-        let mut s = self.lock();
+        let mut s = self.lock_at(now);
         let forgotten = s.commits.saturating_sub(checked_at) > RECENT_COMMITS as u64;
         let committed = forgotten
             || s.recent
@@ -855,7 +1048,7 @@ impl LeaseAuthority {
     }
 
     pub fn heartbeat(&self, worker: WorkerId, now: i64) {
-        self.lock().table.heartbeat(worker, now);
+        self.lock_at(now).table.heartbeat(worker, now);
     }
 
     /// The key's lease, if `token` is still current.
@@ -930,7 +1123,7 @@ impl LeaseAuthority {
         token: Token,
         now: i64,
     ) -> FetchedReport {
-        let mut s = self.lock();
+        let mut s = self.lock_at(now);
         if let Some(lease) = s.table.mark_fetched(worker, key, token, now) {
             return FetchedReport::Marked(lease);
         }
@@ -1008,80 +1201,147 @@ impl LeaseAuthority {
     /// Ends the leases of workers silent past the TTL, and leases marked
     /// fetched longer than the TTL ago; their keys wait for a re-grant.
     /// Returns how many. The built-in worker never expires.
+    ///
+    /// A key handed back unfetched counts against its holder's allowance
+    /// (a share of its cap per [`RETURN_WINDOW_SECS`]); past it, or past
+    /// [`MAX_PENDING`], the key is dropped, reported lost as evicted, and
+    /// the holder rests for a lease TTL. The same holds for
+    /// [`evict`](Self::evict) and [`reconcile`](Self::reconcile).
     pub fn expire(&self, now: i64) -> usize {
-        let mut s = self.lock();
+        let mut s = self.lock_at(now);
         s.table.heartbeat(WorkerId::LOCAL, now);
         let expired = s.table.expire(now);
         let n = expired.len();
-        for (key, lease) in expired {
-            s.park(key, lease);
-        }
+        let dropped = s.take_back_ended(expired, now);
         self.gauge(&s);
         drop(s);
         if n > 0 {
             self.events.expired(n);
         }
+        self.dropped(&dropped);
         n
     }
 
     /// Ends every lease `worker` holds (revoked or drained); the keys wait
-    /// for a re-grant and its late reports are stale. Returns how many.
+    /// for a re-grant, within its allowance ([`expire`](Self::expire), at
+    /// the latest time the authority was given), and its late reports are
+    /// stale. Returns how many leases ended.
     pub fn evict(&self, worker: WorkerId) -> usize {
         let mut s = self.lock();
+        let now = s.latest;
         let evicted = s.table.evict(worker);
         let n = evicted.len();
-        for (key, lease) in evicted {
-            s.park(key, lease);
-        }
+        let dropped = s.take_back_ended(evicted, now);
         self.gauge(&s);
+        drop(s);
+        self.dropped(&dropped);
         n
+    }
+
+    /// `worker` gets no new or re-granted keys until `until` (Unix
+    /// seconds), or longer if it rests already: a worker that says
+    /// `Drained` rests ([`REST_AFTER_DRAIN_SECS`]) before it gets keys
+    /// again. The built-in worker never rests.
+    pub fn rest(&self, worker: WorkerId, until: i64) {
+        if worker == WorkerId::LOCAL {
+            return;
+        }
+        let mut s = self.lock();
+        let r = s.returns.entry(worker).or_default();
+        r.rest_until = r.rest_until.max(until);
+    }
+
+    /// Whether `worker` rests at `now` ([`rest`](Self::rest), or past its
+    /// allowance).
+    pub fn resting(&self, worker: WorkerId, now: i64) -> bool {
+        self.lock().resting(worker, now)
     }
 
     /// Grants waiting keys, in waiting order (oldest first, except keys
     /// whose check couldn't answer, which wait at the back), to `targets`,
     /// each time to the one
     /// holding the fewest leases, at most `per_target` keys each and never
-    /// past a target's lease cap (CLUSTER-02). Keys left over keep
-    /// waiting. Not a harvest.
+    /// past a target's lease cap (CLUSTER-02); a key's last holder may take
+    /// it back even at its cap, unless it rests. Keys left over keep
+    /// waiting, and one no target could take goes to the back. Not a
+    /// harvest.
     pub fn regrant_pending(
         &self,
         targets: &[WorkerId],
         per_target: usize,
         now: i64,
     ) -> Vec<(WorkerId, Regranted)> {
-        let mut s = self.lock();
+        let mut s = self.lock_at(now);
         if s.pending.is_empty() || targets.is_empty() || per_target == 0 {
             return Vec::new();
         }
         // Each target's leases and how many more it may take: at most
         // `per_target` now, and never past its cap (CLUSTER-02).
-        let mut load: Vec<(usize, WorkerId, Regranted, usize)> = targets
+        // A key may go back to the worker that held it even with no room
+        // left, unless it rests: its waiting keys already count against its
+        // cap, so that changes nothing.
+        let mut load: Vec<Load> = targets
             .iter()
-            .map(|&w| (s.table.held_by(w), w, Vec::new(), s.room(w).min(per_target)))
+            .map(|&w| Load {
+                held: s.table.held_by(w),
+                worker: w,
+                got: Vec::new(),
+                room: s.room(w, now),
+                resting: s.resting(w, now),
+            })
             .collect();
-        while let Some(key) = s.order.pop_front() {
-            let Some(target) = load
-                .iter_mut()
-                .filter(|(_, _, got, most)| got.len() < *most)
-                .min_by_key(|(held, w, _, _)| (*held, *w))
-            else {
-                s.order.push_front(key);
+        // A key no target can take now goes to the back, so it never holds
+        // up the keys behind it. Each key is looked at once per call, and
+        // at most `REGRANT_LOOK` per key the targets may take.
+        let mut skipped = Vec::new();
+        let mut left = targets
+            .len()
+            .saturating_mul(per_target)
+            .saturating_mul(REGRANT_LOOK)
+            .min(s.pending.len());
+        while left > 0 {
+            // Done once no target can take any key at all.
+            if load.iter().all(|t| {
+                t.got.len() >= per_target
+                    || (t.room == 0 && (t.resting || s.parked_by(t.worker) == 0))
+            }) {
+                break;
+            }
+            let Some(key) = s.order.pop_front() else {
                 break;
             };
-            let Some(lease) = s.pending.remove(&key) else {
+            // A place a key left behind costs nothing against the bound.
+            let Some(last) = s.pending.get(&key).map(|l| l.holder) else {
                 continue;
             };
-            if s.pending.is_empty() {
-                s.order.clear();
+            left -= 1;
+            let Some(target) = load
+                .iter_mut()
+                .filter(|t| {
+                    t.got.len() < per_target && (t.room > 0 || (t.worker == last && !t.resting))
+                })
+                .min_by_key(|t| (t.held, t.worker))
+            else {
+                skipped.push(key);
+                continue;
+            };
+            let Some(lease) = s.unpark(&key) else {
+                continue;
+            };
+            let token = s.table.regrant(target.worker, key, lease, now);
+            target.held += 1;
+            if target.worker != last {
+                target.room = target.room.saturating_sub(1);
             }
-            let token = s.table.regrant(target.1, key, lease, now);
-            target.0 += 1;
-            target.2.push((key, token));
+            target.got.push((key, token));
+        }
+        if !s.pending.is_empty() {
+            s.order.extend(skipped);
         }
         self.gauge(&s);
         load.into_iter()
-            .filter(|(_, _, got, _)| !got.is_empty())
-            .map(|(_, w, got, _)| (w, got))
+            .filter(|t| !t.got.is_empty())
+            .map(|t| (t.worker, t.got))
             .collect()
     }
 
@@ -1104,14 +1364,10 @@ impl LeaseAuthority {
         let Some(lease) = s.table.release(key, token) else {
             return false;
         };
-        if s.pending.insert(*key, lease).is_none() {
-            if front {
-                s.order.push_front(*key);
-            } else {
-                s.order.push_back(*key);
-            }
-        }
+        let dropped = s.park(*key, lease, front);
         self.gauge(&s);
+        drop(s);
+        self.dropped(dropped.as_slice());
         true
     }
 
@@ -1154,6 +1410,10 @@ impl LeaseAuthority {
     /// `session` itself (it may still be on its way), and a late result's.
     /// Returns how many went back. The built-in worker is never
     /// reconciled.
+    ///
+    /// The keys count against the worker's allowance, as an expiry's do
+    /// ([`expire`](Self::expire)), at the latest time the authority was
+    /// given.
     pub fn reconcile(
         &self,
         worker: WorkerId,
@@ -1164,12 +1424,13 @@ impl LeaseAuthority {
             return 0;
         }
         let mut s = self.lock();
+        let now = s.latest;
         let returned = s.table.reconcile(worker, session, listed);
         let n = returned.len();
-        for (key, lease) in returned {
-            s.park(key, lease);
-        }
+        let dropped = s.take_back_ended(returned, now);
         self.gauge(&s);
+        drop(s);
+        self.dropped(&dropped);
         n
     }
 
@@ -1369,6 +1630,8 @@ mod tests {
     struct Counted {
         harvested: std::sync::atomic::AtomicUsize,
         lost: std::sync::atomic::AtomicUsize,
+        /// Losses reported as evicted (dropped from the waiting queue).
+        evicted: std::sync::atomic::AtomicUsize,
         outstanding: std::sync::atomic::AtomicUsize,
         serving: std::sync::atomic::AtomicUsize,
     }
@@ -1382,8 +1645,12 @@ mod tests {
             self.harvested
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        fn lost(&self, _: &InfoHash, _: &Lease, _: u8) {
+        fn lost(&self, _: &InfoHash, _: &Lease, reason: u8) {
             self.lost.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if reason == LOSS_EVICTED {
+                self.evicted
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         fn outstanding(&self, n: usize) {
             self.outstanding
@@ -2624,6 +2891,383 @@ mod tests {
         assert_eq!(
             crate::server::ClusterServer::lease_cap_for(crate::assign::DEFAULT_POOL_CAP),
             100_000
+        );
+    }
+
+    /// A key built from a number, for tests that need more than 256.
+    fn wide(i: u32) -> Claim {
+        let mut key = [0xA5; 20];
+        key[..4].copy_from_slice(&i.to_le_bytes());
+        Claim {
+            key: InfoHash(key),
+            source: src(0),
+            strategy: 1,
+            at: 7_205,
+        }
+    }
+
+    fn granted_all(answers: &[BatchAnswer]) -> bool {
+        answers
+            .iter()
+            .all(|x| matches!(x, BatchAnswer::Claimed { .. }))
+    }
+
+    fn capped_all(answers: &[BatchAnswer]) -> bool {
+        answers.iter().all(|x| matches!(x, BatchAnswer::Capped))
+    }
+
+    #[test]
+    fn waiting_keys_count_against_their_last_holders_cap() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        let first: Vec<Claim> = (1..=4).map(|n| claim(n, 0)).collect();
+        assert!(granted_all(&a.claim_batch(A, &first, 1, None, None)));
+        assert_eq!(a.evict(A), 4);
+        assert_eq!((a.held_by(A), a.pending()), (0, 4));
+        // Handing them back freed no room: a new key is capped.
+        assert!(capped_all(&a.claim_batch(A, &[claim(9, 0)], 2, None, None)));
+        // Once another worker takes two, there's room for two.
+        let out = a.regrant_pending(&[B], 2, 3);
+        assert_eq!(out[0].1.len(), 2);
+        let answers = a.claim_batch(A, &[claim(9, 0), claim(10, 0), claim(11, 0)], 3, None, None);
+        assert!(
+            matches!(
+                answers[..],
+                [
+                    BatchAnswer::Claimed { .. },
+                    BatchAnswer::Claimed { .. },
+                    BatchAnswer::Capped
+                ]
+            ),
+            "{answers:?}"
+        );
+        // A waiting key its last holder claims is a re-grant, not a harvest.
+        assert!(matches!(
+            a.claim_batch(B, &[claim(3, 0)], 4, None, None)[0],
+            BatchAnswer::Claimed {
+                harvested: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_full_worker_can_take_its_own_waiting_keys_back() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        let first: Vec<Claim> = (1..=4).map(|n| claim(n, 0)).collect();
+        assert!(granted_all(&a.claim_batch(A, &first, 1, None, None)));
+        a.heartbeat(A, 1);
+        assert_eq!(a.reconcile(A, 2, &HashSet::new()), 4);
+        let out = a.regrant_pending(&[A], 10, 2);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].0, out[0].1.len()), (A, 4));
+        assert_eq!((a.held_by(A), a.pending()), (4, 0));
+    }
+
+    #[test]
+    fn keys_handed_back_past_the_allowance_are_dropped_and_the_worker_rests() {
+        let (a, ev) = counted();
+        // A cap under the minimum allowance: the allowance is the cap.
+        a.set_lease_cap(Some(4));
+        let take = |n0: u8, at: i64| {
+            let c: Vec<Claim> = (n0..n0 + 4).map(|n| claim(n, 0)).collect();
+            assert!(granted_all(&a.claim_batch(A, &c, at, None, None)));
+        };
+        take(1, 10);
+        assert_eq!(a.evict(A), 4);
+        assert_eq!((a.pending(), get(&ev.evicted)), (4, 0), "within it");
+        // Another worker takes them, so A has room again.
+        assert_eq!(a.regrant_pending(&[B], 4, 11)[0].1.len(), 4);
+        take(11, 12);
+        assert_eq!(a.evict(A), 4);
+        // Past it: dropped, reported lost once each, never waiting.
+        assert_eq!((a.pending(), get(&ev.evicted)), (0, 4));
+        for n in 11..15 {
+            assert!(!a.in_flight(&InfoHash([n; 20])));
+        }
+        // And A rests: no claim and no re-grant for a lease TTL.
+        assert!(a.resting(A, 12));
+        assert!(capped_all(&a.claim_batch(
+            A,
+            &[claim(30, 0)],
+            600,
+            None,
+            None
+        )));
+        a.claim(WorkerId::LOCAL, claim(31, 0), 13);
+        a.evict(WorkerId::LOCAL);
+        assert!(a.regrant_pending(&[A], 4, 600).is_empty());
+        assert_eq!(a.pending(), 1);
+        // After the rest, in the same window: it may claim again, but what
+        // it hands back is still past its allowance.
+        assert!(!a.resting(A, 12 + 600));
+        assert!(granted_all(&a.claim_batch(
+            A,
+            &[claim(40, 0)],
+            613,
+            None,
+            None
+        )));
+        a.evict(A);
+        assert_eq!(get(&ev.evicted), 5);
+        // In a new window it starts again.
+        let later = 12 + RETURN_WINDOW_SECS + 600;
+        assert!(granted_all(&a.claim_batch(
+            A,
+            &[claim(50, 0)],
+            later,
+            None,
+            None
+        )));
+        a.evict(A);
+        assert_eq!(get(&ev.evicted), 5);
+        assert!(a.in_flight(&InfoHash([50; 20])));
+    }
+
+    #[test]
+    fn the_allowance_is_a_share_of_the_cap_with_a_floor() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(100_000));
+        let s = a.lock();
+        assert_eq!(s.allowance(A), 100_000 / RETURN_SHARE);
+        drop(s);
+        a.set_lease_cap(Some(2_000));
+        assert_eq!(a.lock().allowance(A), MIN_RETURN_ALLOWANCE);
+        a.set_lease_cap(Some(10));
+        assert_eq!(a.lock().allowance(A), 10);
+        assert_eq!(a.lock().allowance(WorkerId::LOCAL), usize::MAX);
+    }
+
+    #[test]
+    fn leases_marked_fetched_count_as_handed_back_too() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(4));
+        let mark_all = |n0: u8, at: i64| {
+            let c: Vec<Claim> = (n0..n0 + 4).map(|n| claim(n, 0)).collect();
+            for (c, x) in c.iter().zip(a.claim_batch(A, &c, at, None, None)) {
+                let BatchAnswer::Claimed {
+                    claimed: Claimed::Granted(t),
+                    ..
+                } = x
+                else {
+                    panic!("{x:?}");
+                };
+                assert!(matches!(
+                    a.fetched(A, &c.key, t, at),
+                    FetchedReport::Marked(_)
+                ));
+            }
+        };
+        mark_all(1, 1);
+        a.evict(A);
+        assert_eq!(a.regrant_pending(&[B], 4, 2)[0].1.len(), 4);
+        // Marked again, then left a TTL past the mark: the expiry counts.
+        mark_all(11, 3);
+        a.heartbeat(A, 700);
+        a.heartbeat(B, 700);
+        assert_eq!(a.expire(700), 4);
+        assert_eq!((a.pending(), get(&ev.evicted)), (0, 4));
+        assert!(a.resting(A, 700));
+    }
+
+    #[test]
+    fn a_key_no_target_can_take_never_holds_up_the_rest() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        let c = WorkerId(3);
+        // C's key waits first, then A's four.
+        assert!(granted_all(&a.claim_batch(
+            c,
+            &[claim(1, 0)],
+            1,
+            None,
+            None
+        )));
+        a.evict(c);
+        let mine: Vec<Claim> = (2..=5).map(|n| claim(n, 0)).collect();
+        assert!(granted_all(&a.claim_batch(A, &mine, 1, None, None)));
+        a.evict(A);
+        // A is full (its four wait) and C is gone: A still gets its own.
+        let out = a.regrant_pending(&[A], 10, 2);
+        assert_eq!(out[0].1.len(), 4);
+        assert_eq!(a.pending(), 1);
+        // C's key now waits at the back, and goes once there's room.
+        assert_eq!(
+            a.regrant_pending(&[B], 10, 3)[0].1,
+            vec![(InfoHash([1; 20]), a.get(&InfoHash([1; 20])).unwrap().token)]
+        );
+    }
+
+    #[test]
+    fn a_rest_holds_back_claims_and_regrants_until_it_ends() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(10));
+        a.rest(A, 100);
+        a.rest(A, 50); // never shortened
+        assert!(capped_all(&a.claim_batch(
+            A,
+            &[claim(1, 0)],
+            99,
+            None,
+            None
+        )));
+        a.claim(WorkerId::LOCAL, claim(2, 0), 1);
+        a.evict(WorkerId::LOCAL);
+        assert!(a.regrant_pending(&[A], 4, 99).is_empty());
+        assert_eq!(a.regrant_pending(&[A], 4, 100)[0].1.len(), 1);
+        assert!(granted_all(&a.claim_batch(
+            A,
+            &[claim(1, 0)],
+            100,
+            None,
+            None
+        )));
+        // The built-in worker never rests.
+        a.rest(WorkerId::LOCAL, 1_000);
+        assert!(!a.resting(WorkerId::LOCAL, 200));
+    }
+
+    #[test]
+    fn the_waiting_queue_is_bounded_and_a_backlog_holds_back_new_keys() {
+        let (a, ev) = counted();
+        let n = u32::try_from(PENDING_HIGH_WATER).unwrap();
+        for i in 0..n {
+            a.claim(WorkerId::LOCAL, wide(i), 1);
+        }
+        a.evict(WorkerId::LOCAL);
+        assert_eq!(a.pending(), PENDING_HIGH_WATER);
+        // A remote claim for a key not in flight waits; one for a waiting
+        // key takes it.
+        let answers = a.claim_batch(A, &[wide(n + 1), wide(0)], 2, None, None);
+        assert!(
+            matches!(
+                answers[..],
+                [
+                    BatchAnswer::Busy,
+                    BatchAnswer::Claimed {
+                        claimed: Claimed::Granted(_),
+                        harvested: false
+                    }
+                ]
+            ),
+            "{answers:?}"
+        );
+        // The built-in worker isn't held back.
+        assert!(matches!(
+            a.claim(WorkerId::LOCAL, wide(n + 2), 2),
+            Claimed::Granted(_)
+        ));
+        // Past the queue's bound, keys handed back are dropped.
+        let more = u32::try_from(MAX_PENDING).unwrap() + 10 - (n - 1);
+        for i in 0..more {
+            a.claim(WorkerId::LOCAL, wide(n + 10 + i), 3);
+        }
+        a.evict(WorkerId::LOCAL);
+        assert_eq!(a.pending(), MAX_PENDING);
+        assert_eq!(get(&ev.evicted), 11);
+    }
+
+    #[test]
+    fn one_worker_never_takes_more_than_its_share_of_the_queue() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(2_000_000));
+        assert_eq!(a.lock().allowance(A), MAX_PENDING_PER_WORKER);
+        let n = u32::try_from(MAX_PENDING_PER_WORKER).unwrap() + 100;
+        let claims: Vec<Claim> = (0..n).map(wide).collect();
+        assert!(granted_all(&a.claim_batch(A, &claims, 1, None, None)));
+        a.evict(A);
+        assert_eq!(a.pending(), MAX_PENDING_PER_WORKER);
+        assert_eq!(get(&ev.evicted), 100);
+        assert!(a.resting(A, 2));
+        // Another window: still no more than its share waits.
+        let later = 1 + RETURN_WINDOW_SECS + 600;
+        let more: Vec<Claim> = (n..n + 10).map(wide).collect();
+        a.set_lease_cap(None);
+        assert!(granted_all(&a.claim_batch(A, &more, later, None, None)));
+        a.evict(A);
+        assert_eq!(a.pending(), MAX_PENDING_PER_WORKER);
+        assert_eq!(get(&ev.evicted), 110);
+    }
+
+    #[test]
+    fn a_reconcile_counts_against_the_allowance() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(4));
+        let take = |n0: u8, at: i64| {
+            let c: Vec<Claim> = (n0..n0 + 4).map(|n| claim(n, 0)).collect();
+            assert!(granted_all(&a.claim_batch(A, &c, at, None, None)));
+        };
+        take(1, 10);
+        a.heartbeat(A, 10);
+        assert_eq!(a.reconcile(A, 1, &HashSet::new()), 4);
+        assert_eq!(a.regrant_pending(&[B], 4, 11)[0].1.len(), 4);
+        take(11, 12);
+        assert_eq!(a.reconcile(A, 1, &HashSet::new()), 4);
+        assert_eq!((a.pending(), get(&ev.evicted)), (0, 4));
+        assert!(a.resting(A, 12));
+    }
+
+    #[test]
+    fn a_requeued_key_counts_against_its_new_holder() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        assert!(granted_all(&a.claim_batch(
+            A,
+            &[claim(1, 0)],
+            1,
+            None,
+            None
+        )));
+        a.evict(A);
+        assert_eq!(a.lock().parked_by(A), 1);
+        let out = a.regrant_pending(&[B], 4, 2);
+        let (key, token) = out[0].1[0];
+        let parked = || {
+            let s = a.lock();
+            (s.parked_by(A), s.parked_by(B))
+        };
+        assert_eq!(parked(), (0, 0));
+        assert!(a.requeue(&key, token));
+        assert_eq!(parked(), (0, 1));
+    }
+
+    #[test]
+    fn a_regrant_looks_at_a_bounded_number_of_keys() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        // Many keys no remote target may take, then A's own.
+        for i in 0..1_000 {
+            a.claim(WorkerId::LOCAL, wide(i), 1);
+        }
+        a.evict(WorkerId::LOCAL);
+        // A is full of its own waiting keys, so only they could go to it.
+        let mine: Vec<Claim> = (2..=5).map(|n| claim(n, 0)).collect();
+        assert!(granted_all(&a.claim_batch(A, &mine, 1, None, None)));
+        a.evict(A);
+        let before = a.lock().order.len();
+        assert!(a.regrant_pending(&[A], 1, 2).is_empty());
+        // At most REGRANT_LOOK keys were looked at, and all wait still.
+        assert_eq!(a.pending(), 1_004);
+        assert_eq!(a.lock().order.len(), before);
+    }
+
+    #[test]
+    fn the_waiting_order_is_compacted_as_keys_leave() {
+        let (a, _) = counted();
+        for i in 0..5_000 {
+            a.claim(WorkerId::LOCAL, wide(i), 1);
+        }
+        a.evict(WorkerId::LOCAL);
+        for i in 0..4_000 {
+            a.claim(WorkerId::LOCAL, wide(i), 2);
+        }
+        let s = a.lock();
+        assert_eq!(s.pending.len(), 1_000);
+        assert!(
+            s.order.len() <= 2 * s.pending.len() + ORDER_SLACK,
+            "{}",
+            s.order.len()
         );
     }
 }

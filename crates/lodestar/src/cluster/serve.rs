@@ -494,16 +494,16 @@ impl FloorReports {
         let mut store = Store::open(db, config)?;
         let mut by_worker: BTreeMap<(u32, i64), Vec<[u8; 20]>> = BTreeMap::new();
         for (k, r) in &batch {
+            // A key stored already was judged by the coordinator's own
+            // filter when it was written (every remote result is judged
+            // again there): a worker's report never deletes it, nor holds
+            // it. The report only stops the key being granted again.
+            if store.find(&InfoHash(*k))?.is_some() {
+                continue;
+            }
             by_worker.entry((r.worker, r.at)).or_default().push(*k);
         }
         for ((w, at), keys) in &by_worker {
-            // Nothing stays stored under a held hash (as `hold_claims`): a
-            // key stored after this worker's grant (another worker's
-            // result, or the built-in worker's) goes, and the indexer drops
-            // it. First, so a crash between the two leaves the report to
-            // come again (the crash window), never a torrent stored under
-            // a hold.
-            store.delete_torrents(keys)?;
             // A key already tombstoned (by its rule or an earlier report)
             // keeps its row; either way it's held now.
             store.tombstone_from_worker(keys, *w, *at)?;
@@ -3042,11 +3042,12 @@ mod tests {
         assert_eq!(rule.as_deref(), Some("worker-floor:7"));
     }
 
-    /// A key stored after its grant (another worker's result) and then
-    /// reported as a floor drop doesn't stay stored: nothing is left under
-    /// a held hash, as `hold_claims` keeps it (#604's review, N8).
+    /// A key stored after its grant (another worker's result, judged by
+    /// the coordinator's own filter as it was written) and then reported
+    /// as a floor drop stays stored and isn't held: a worker's report alone
+    /// never removes a stored torrent. The report still leaves the map.
     #[test]
-    fn a_floor_report_deletes_what_was_stored_under_it() {
+    fn a_floor_report_never_removes_or_holds_a_stored_torrent() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("lodestar.db");
         let raw = b"d6:lengthi1048576e4:name9:floor.bin12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae".to_vec();
@@ -3067,10 +3068,16 @@ mod tests {
         drop(store);
         let floor = FloorReports::new(None);
         floor.report(WorkerId(4), &key, 2, Instant::now());
-        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        // Another key, not stored: held as before.
+        floor.report(WorkerId(4), &key_n(1), 2, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 2);
+        assert_eq!(floor.len(), 0);
         let store = Store::open(&db, StoreConfig::default()).unwrap();
-        assert!(store.find(&key).unwrap().is_none(), "deleted");
-        assert_eq!(store.held_among(&[key.0]).unwrap(), vec![true]);
+        assert!(store.find(&key).unwrap().is_some(), "still stored");
+        assert_eq!(
+            store.held_among(&[key.0, key_n(1).0]).unwrap(),
+            vec![false, true]
+        );
     }
 
     fn key_n(i: usize) -> InfoHash {

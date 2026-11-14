@@ -78,7 +78,7 @@ use zeroize::Zeroizing;
 
 use crate::clock::{Clock, ClockTime};
 use crate::frame::{self, MAX_JOIN_REQUEST};
-use crate::leases::LOSS_BLOCKED;
+use crate::leases::{LOSS_BLOCKED, REST_AFTER_DRAIN_SECS};
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
@@ -774,7 +774,8 @@ impl ClusterServer {
 
     /// [`revoke`](Self::revoke), saying what it did: `(certificates,
     /// leases)`, the certificates refused from now on and the leases taken
-    /// back for other workers (WK-14's Danger zone result). The connection is stopped here, before this returns, so a
+    /// back (to wait for other workers, or dropped past the worker's
+    /// allowance, `LeaseAuthority::expire`) (WK-14's Danger zone result). The connection is stopped here, before this returns, so a
     /// snapshot taken afterwards no longer lists the worker.
     pub async fn revoke_worker(&self, worker: WorkerId) -> Result<(usize, usize), ClusterError> {
         let certificates = self
@@ -1573,7 +1574,11 @@ impl ClusterServer {
                         state.session = None;
                         state.holding = None;
                     }
+                    // And it rests before it gets keys again.
+                    let now = self.clock.now_secs();
                     self.leases.evict(w);
+                    self.leases
+                        .rest(w, now.saturating_add(REST_AFTER_DRAIN_SECS));
                 }
                 self.regrant().await;
                 Flow::Stop(StopReason::Drained)
