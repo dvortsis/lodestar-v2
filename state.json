@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T09:48Z",
+  "updated_at": "2026-11-14T09:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8987,7 +8987,7 @@
     "869": {
       "slice": "X-sec-S8-01",
       "head": "a8aa48c2",
-      "status": "fix round in, CI green; fresh delta review running",
+      "status": "delta review MERGE at a8aa48c2 (+2 Important: link-case guide step, supervisor ordering test); small round requested, then runner self-check; flag fchmod-on-upgrade to owner at merge",
       "at": "2026-11-14T09:48Z"
     }
   },
@@ -9904,7 +9904,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T09:48Z",
+  "updated": "2026-11-14T09:49Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
