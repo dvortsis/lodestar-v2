@@ -300,45 +300,124 @@ def allows(rule, user, argv):
     return False
 
 
-def privileged_commands():
-    """Every sudo use in the scanned files, as (where, argv). Arguments built at
-    run time stand as <...>. A use of sudo the test can't read fails."""
+class Unreadable(Exception):
+    pass
+
+
+def code_lines(p, text):
+    """The file's lines with comments cut: Python's by its tokenizer (a # in a
+    string stays), shell's and PowerShell's at a # that starts a word outside
+    quotes and ${...}."""
+    lines = text.splitlines()
+    if p.suffix == ".py":
+        import io, tokenize
+        cut = {}
+        try:
+            for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                if tok.type == tokenize.COMMENT:
+                    cut[tok.start[0]] = tok.start[1]
+        except (tokenize.TokenError, SyntaxError) as e:
+            raise Unreadable(f"{p}: can't tokenize: {e}")
+        return [l[:cut[i]] if i in cut else l for i, l in enumerate(lines, 1)]
+    out = []
+    for l in lines:
+        q, brace, end = None, 0, len(l)
+        for i, ch in enumerate(l):
+            if q:
+                if ch == q:
+                    q = None
+            elif ch in "'\"":
+                q = ch
+            elif ch == "{" and i and l[i - 1] == "$":
+                brace += 1
+            elif ch == "}" and brace:
+                brace -= 1
+            elif ch == "#" and not brace and (i == 0 or l[i - 1].isspace()):
+                end = i
+                break
+        out.append(l[:end])
+    return out
+
+
+def py_constants(text):
+    """Module-level NAME = "string" assignments, to resolve {NAME} in f-strings."""
+    import ast
+    consts = {}
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    consts[t.id] = node.value.value
+    return consts
+
+
+def sudo_argv(where, s, consts):
+    """argv after `sudo -n` in a command string. {NAME} resolves to a module
+    constant; any other {...} stands as <arg>."""
+    m = re.match(r"sudo(\s+-n)?\s+(.*)$", s, re.S)
+    if not m:
+        raise Unreadable(f"{where}: sudo with no command: {s!r}")
+    if not m.group(1):
+        raise Unreadable(f"{where}: sudo without -n (a prompt would hang the step)")
+    rest = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda x: consts.get(x.group(1), x.group(0)), m.group(2))
+    rest = re.sub(r"\{[^}]*\}", "<arg>", rest).strip()
+    try:
+        argv = shlex.split(rest)
+    except ValueError:
+        raise Unreadable(f"{where}: can't split {rest!r}")
+    if not argv:
+        raise Unreadable(f"{where}: sudo with no command")
+    if argv[0].startswith("-"):
+        raise Unreadable(f"{where}: sudo option {argv[0]} (the tie test reads -n only)")
+    return argv
+
+
+def scan_file(p, rel):
+    """Every privileged command in one file, as (where, argv). A string literal
+    that starts with `sudo` is a command; in shell, so is a sudo command word.
+    Elsewhere, `sudo` followed by an option is a command the test can't read
+    (it fails); other mentions (prose in messages) are not commands."""
+    try:
+        text = p.read_text()
+    except UnicodeDecodeError:
+        return []
+    shell = p.suffix in (".sh", "")
+    consts = py_constants(text) if p.suffix == ".py" else {}
     found = []
-    for top in SCAN:
+    for n, code in enumerate(code_lines(p, text), 1):
+        where = f"{rel}:{n}"
+        for m in re.finditer(r"\bsudo\b", code):
+            i = m.start()
+            before = code[i - 1] if i else ""
+            if before in "'\"":
+                close = code.find(before, i)
+                if close < 0:
+                    raise Unreadable(f"{where}: a sudo literal the test can't read: {code.strip()}")
+                found.append((where, sudo_argv(where, code[i:close], consts)))
+            elif shell and (i == 0 or before.isspace() or before in ";|&(") and re.match(r"sudo\s", code[i:]):
+                found.append((where, sudo_argv(where, re.split(r"[;&|)]", code[i:])[0], consts)))
+            elif re.match(r"sudo\s+-", code[i:]) or code[i:i + 5] == "sudo\"" or code[i:i + 5] == "sudo'":
+                raise Unreadable(f"{where}: a sudo use the tie test can't read: {code.strip()}")
+    return found
+
+
+def privileged_commands(tops):
+    found = []
+    for top in tops:
         if not top.exists():
             continue
         for p in sorted(top.rglob("*")):
             if not p.is_file() or "tests" in p.relative_to(top).parts or p.suffix not in (".py", ".sh", ".ps1", ""):
                 continue
-            try:
-                lines = p.read_text().splitlines()
-            except UnicodeDecodeError:
-                continue
-            for n, line in enumerate(lines, 1):
-                code = line.split("#", 1)[0] if p.suffix in (".py", ".sh", "") else line
-                if not re.search(r"\bsudo\b", code):
-                    continue
-                where = f"{p.relative_to(ROOT)}:{n}"
-                m = re.search(r"""f?["']sudo (-n )?([^"']*)["']""", code)
-                if not m:
-                    fail(f"{where}: a sudo use the tie test can't read: {line.strip()}")
-                if not m.group(1):
-                    fail(f"{where}: sudo without -n (a prompt would hang the step)")
-                rest = re.sub(r"\{[^}]*\}", "<arg>", m.group(2)).strip()
-                try:
-                    argv = shlex.split(rest)
-                except ValueError:
-                    fail(f"{where}: can't split {rest!r}")
-                if not argv:
-                    fail(f"{where}: sudo with no command in the literal")
-                if argv[0].startswith("-"):
-                    fail(f"{where}: sudo option {argv[0]} (the tie test reads -n only)")
-                found.append((where, argv))
+            found += scan_file(p, p.relative_to(ROOT) if p.is_relative_to(ROOT) else p)
     return found
 
 
 rules = [parse_rule(l) for l in sudoers_lines]
-cmds = privileged_commands()
+try:
+    cmds = privileged_commands(SCAN)
+except Unreadable as e:
+    fail(str(e))
 names = sorted({a[0] for _, a in cmds})
 if not cmds or "bash" not in names or "flock" not in names:
     fail(f"the tie test found too few privileged commands ({names}); its scan is broken")
@@ -358,6 +437,38 @@ if not allows(narrow[0], "lodestar", [HELPER, "preflight"]) or allows(narrow[0],
 if allows(parse_rule("lodestar ALL=(ALL) ALL"), "lodestar", ["bash"]):
     fail("tie self-check: a rule that needs a password was taken for sudo -n")
 ok(f"tie self-check: with the helper rule alone, {len(uncovered)} commands are uncovered, as they must be")
+
+# Scanner self-check: comments that hide nothing, constants that resolve, prose
+# that isn't a command, and forms it must refuse.
+sc = WORK / "scan"
+sc.mkdir()
+cases = {
+    "hash_in_string.py": ('X = "echo #"; Y = "sudo -n rm -f /x"\n', [["rm", "-f", "/x"]]),
+    "param_expansion.sh": ('x="${a#b}"; sudo -n iptables -F\n', [["iptables", "-F"]]),
+    "comment_only.sh": ("  # sudo -n reboot\n", []),
+    "helper_const.py": (f'HELPER = "{HELPER}"\ncmd = f"sudo -n {{HELPER}} preflight"\n', [[HELPER, "preflight"]]),
+    "prose.py": ('msg = f"Verify {user} has sudo access to the helper"\n', []),
+}
+for name, (body, want) in cases.items():
+    (sc / name).write_text(body)
+    try:
+        got = [a for _, a in scan_file(sc / name, name)]
+    except Unreadable as e:
+        fail(f"scanner self-check {name}: {e}")
+    if got != want:
+        fail(f"scanner self-check {name}: found {got}, want {want}")
+for name, body in {"list.py": 'X = ["sudo", "-n", "id"]\n', "no_n.py": 'X = "sudo id"\n',
+                   "option.py": 'X = "sudo -n -u root id"\n', "embedded.py": 'X = "true && sudo -n id"\n',
+                   "no_n.sh": "sudo reboot\n"}.items():
+    (sc / name).write_text(body)
+    try:
+        scan_file(sc / name, name)
+    except Unreadable:
+        continue
+    fail(f"scanner self-check {name}: an unreadable sudo use was accepted")
+if not allows(narrow[0], "lodestar", cases["helper_const.py"][1][0]):
+    fail("scanner self-check: a helper call doesn't tie to the helper rule")
+ok("scanner self-check: comments, constants and prose handled; list, option, embedded and passworded forms refused")
 
 if shutil.which("visudo"):
     r = subprocess.run(["visudo", "-c", "-q", "-f", str(WORK / "sudoers")], capture_output=True, text=True)
@@ -404,7 +515,8 @@ if g["image"] != f"qmcgaw/gluetun@{digest}" or fdoc["services"]["gluetun"]["imag
     fail(f"gluetun's digest differs: helper {digest}, compose {g['image']}, fleet {fdoc['services']['gluetun']['image']}")
 if cdoc.get("name") != helper_var("COMPOSE_PROJECT") or g.get("container_name") != "gluetun":
     fail("compose.vpn.yaml's project or container name isn't the helper's")
-if f"{helper_var('CONFIG_FILE')}:/gluetun/wireguard/wg0.conf:ro" not in g["volumes"]:
+if {"type": "bind", "source": helper_var("CONFIG_FILE"), "target": "/gluetun/wireguard/wg0.conf", "read_only": True,
+    "bind": {"create_host_path": False}} not in g["volumes"]:
     fail("compose.vpn.yaml doesn't mount the helper's wg0.conf read-only")
 if helper_var("COMPOSE_FILE") not in files or helper_var("PIA_CA_FILE") not in files:
     fail("the helper's compose or CA path isn't where cloud-init writes it")
@@ -456,16 +568,21 @@ wg_conf() {  # endpoint, then extra lines for [Peer]
     "$K1" "$K2" "$1" "${2:-}"
 }
 
-# Rules as gluetun v3.41.3 lists them with Lodestar's post-rules (iptables -S OUTPUT).
-GOOD_RULES='-P OUTPUT DROP
--A OUTPUT ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP
--A OUTPUT ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
--A OUTPUT -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
--A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+# Rules as iptables -S OUTPUT lists them: Lodestar's post-rules (inserted at 1,
+# 2 and 3, so first and in order), then gluetun's own.
+POST1='-A OUTPUT -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000'
+POST2='-A OUTPUT ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP'
+POST3='-A OUTPUT ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP'
+GLUETUN_RULES='-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 -A OUTPUT -o lo -j ACCEPT
 -A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT
 -A OUTPUT -d 203.0.113.10/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT
 -A OUTPUT -o wg0 -j ACCEPT'
+GOOD_RULES="-P OUTPUT DROP
+$POST1
+$POST2
+$POST3
+$GLUETUN_RULES"
 
 for AWK_BIN in "${AWKS[@]}"; do
   shim="$WORK/shim-$(basename "$AWK_BIN")"
@@ -511,10 +628,18 @@ for AWK_BIN in "${AWKS[@]}"; do
              '-A OUTPUT -d 203.0.113.10/32 -o eth0 -p udp -m udp --dport 9999 -j ACCEPT' \
              '-A OUTPUT -d 198.51.100.1/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT' \
              '-A OUTPUT -j ACCEPT' '-A OUTPUT -j custom_chain' '-A OUTPUT -o eth0 -j CONNMARK --set-xmark 0x1/0x1' \
-             '-A OUTPUT -o eth0 -j RETURN'; do
+             '-A OUTPUT -o eth0 -j RETURN' '-A OUTPUT -o eth0 -m comment --comment "-j DROP " -j ACCEPT' \
+             '-A OUTPUT -o eth0 -m comment --comment x -j DROP' '-A OUTPUT -o eth0 -g custom_chain' \
+             '-A OUTPUT -o eth0 -j REJECT --reject-with x -j ACCEPT' "$POST1"; do
     if rc "$GOOD_RULES"$'\n'"$bad"; then fail "[$AWK_BIN] an unauthorized rule passed: $bad"; fi
   done
-  pass "[$(basename "$AWK_BIN")] firewall rule check: the expected set passes; broad, wrong-port, wrong-subnet, custom-chain and RETURN rules fail"
+  for bad_set in "-P OUTPUT DROP"$'\n'"$POST2"$'\n'"$POST1"$'\n'"$POST3"$'\n'"$GLUETUN_RULES" \
+                 "-P OUTPUT DROP"$'\n'"$POST1"$'\n'"$POST2"$'\n'"$GLUETUN_RULES" \
+                 "-P OUTPUT DROP"$'\n'"$GLUETUN_RULES"$'\n'"$POST1"$'\n'"$POST2"$'\n'"$POST3" \
+                 "-P OUTPUT DROP"$'\n'"$POST1"$'\n'"$POST2"; do
+    if rc "$bad_set"; then fail "[$AWK_BIN] post-rules out of order or missing passed: $(echo "$bad_set" | head -4 | tr '\n' '|')"; fi
+  done
+  pass "[$(basename "$AWK_BIN")] firewall rule check: the expected set passes; reordered or missing post-rules, broad, wrong-port, wrong-subnet, custom-chain, goto, RETURN and comment-disguised rules fail"
 done
 
 if [[ "$MODE" == "offline" ]]; then
@@ -549,7 +674,7 @@ RUN_DIR="/run/lodestar/vpn"
 TEST_NETNS="ns-ls-$TEST_PID"
 BACKUP="$WORK/backup"
 mkdir -p "$BACKUP"
-STATE_USER=0 STATE_SUDOERS=0 STATE_NETNS=0 STATE_COMPOSE_DIR=0 STATE_RUN_DIR=0 STATE_RUN_PARENT=0
+STATE_USER=0 STATE_SUDOERS=0 STATE_NETNS=0 STATE_COMPOSE_DIR=0 STATE_RUN_DIR=0 STATE_RUN_PARENT=0 STATE_LOCK=0
 
 for f in "$HELPER_BIN" "$COMPOSE_FILE" "$PIA_CA_FILE"; do
   if [[ -e "$f" || -L "$f" ]]; then cp -a "$f" "$BACKUP/$(basename "$f")"; fi
@@ -557,6 +682,7 @@ done
 [[ -d "$COMPOSE_DIR" ]] && STATE_COMPOSE_DIR=1
 [[ -e "$RUN_DIR" ]] && STATE_RUN_DIR=1
 [[ -e "$(dirname "$RUN_DIR")" ]] && STATE_RUN_PARENT=1
+[[ -e /run/lodestar-pia.lock ]] && STATE_LOCK=1
 
 restore() {
   local rc=$?
@@ -574,6 +700,7 @@ restore() {
   [[ "$STATE_COMPOSE_DIR" -eq 0 ]] && rmdir "$COMPOSE_DIR" /etc/lodestar 2>/dev/null
   [[ "$STATE_RUN_DIR" -eq 0 ]] && rm -rf -- "$RUN_DIR"
   [[ "$STATE_RUN_PARENT" -eq 0 ]] && rmdir "$(dirname "$RUN_DIR")" 2>/dev/null
+  [[ "$STATE_LOCK" -eq 0 ]] && rm -f /run/lodestar-pia.lock
   rm -rf -- "$WORK"
   if [[ $rc -eq 0 ]]; then echo "ALL LINUX PRIVILEGE BOUNDARY TESTS PASSED."; else echo "LINUX PRIVILEGE BOUNDARY TEST FAILED (exit $rc)" >&2; fi
   exit "$rc"
@@ -665,7 +792,14 @@ if wg_conf 203.0.113.10:1337 | PATH="$MOCK:$PATH" "$HELPER_BIN" write-config >/d
 ln -s "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
 if wg_conf 203.0.113.10:1337 | PATH="$MOCK:$PATH" "$HELPER_BIN" write-config >/dev/null 2>&1; then fail "write-config passed with a symlinked CA"; fi
 rm -f "$PIA_CA_FILE"; mv "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
-pass "write-config: a valid config is written root-only; an unlisted endpoint, a missing or symlinked CA fail"
+cp -a "$RUN_DIR/wg0.conf" "$WORK/wg0.conf.keep"
+rm -f "$RUN_DIR/wg0.conf"
+mkdir "$RUN_DIR/wg0.conf"  # what Docker's short bind syntax leaves after a reboot
+out="$(wg_conf 203.0.113.10:1337 | PATH="$MOCK:$PATH" "$HELPER_BIN" write-config 2>&1 || true)"
+rmdir "$RUN_DIR/wg0.conf"
+cp -a "$WORK/wg0.conf.keep" "$RUN_DIR/wg0.conf"
+grep -q "exists and is not a file; run cleanup first" <<<"$out" || fail "write-config over a directory: $out"
+pass "write-config: a valid config is written root-only; an unlisted endpoint, a missing or symlinked CA, or a directory in its place fail"
 
 ip netns add "$TEST_NETNS"; STATE_NETNS=1
 ip -n "$TEST_NETNS" link set lo up
@@ -686,6 +820,7 @@ nsx iptables -A OUTPUT -d 203.0.113.10/32 -o eth0 -p udp -m udp --dport 1337 -j 
 nsx iptables -A OUTPUT -o wg0 -j ACCEPT
 nsx iptables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
 nsx iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+nsx iptables -I OUTPUT 3 ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP
 out="$(PATH="$MOCK:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
 grep -q DNS_FIREWALL_OK <<<"$out" || fail "verify-dns-firewall refused the expected rules: $out"
 nsx iptables -D OUTPUT 2

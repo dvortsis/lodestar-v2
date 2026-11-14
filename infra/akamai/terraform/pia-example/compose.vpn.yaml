@@ -34,8 +34,15 @@ services:
       WIREGUARD_IMPLEMENTATION: kernelspace
       FIREWALL_VPN_INPUT_PORTS: ""
       TZ: Etc/UTC
+    # Long syntax, so Docker never creates the file as a directory when it is
+    # missing (after a reboot /run is empty): gluetun fails to start instead.
     volumes:
-      - /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro
+      - type: bind
+        source: /run/lodestar/vpn/wg0.conf
+        target: /gluetun/wireguard/wg0.conf
+        read_only: true
+        bind:
+          create_host_path: false
     # Without these rules, gluetun lets connections opened through the tunnel
     # leave by the host's network once the tunnel drops. Compose copies them
     # in as a 0444 file (docs/decisions/2026-11-12-X-gluetun-leak.md).

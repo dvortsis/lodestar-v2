@@ -226,9 +226,9 @@ write_files:
         '
       }
 
-      # Every OUTPUT rule in gluetun must be one of the allowed shapes; anything else
-      # fails closed. DROP and REJECT rules only narrow egress. The CONNMARK rule is
-      # Lodestar's own post-rule 1 (compose.yaml), which marks and changes no verdict.
+      # gluetun's OUTPUT chain: Lodestar's three post-rules first, in order
+      # (compose.yaml), then only allowed shapes; anything else fails closed. A
+      # rule counts as DROP or REJECT by its final target alone.
       check_output_rules() {
         local rules="$${1:-}" vpn_ip="$${2:-}" vpn_port="$${3:-}" non_vpn_if="$${4:-}" container_ip="$${5:-}" bridge_subnet="$${6:-}"
         printf '%s\n' "$rules" | awk \
@@ -237,12 +237,33 @@ write_files:
           -v non_vpn_if="$non_vpn_if" \
           -v container_ip="$container_ip" \
           -v bridge_subnet="$bridge_subnet" '
+          BEGIN {
+            # The post-rules of Lodestar, inserted at 1, 2 and 3: they must lead the
+            # chain, in this order, or an established flow can still leave by eth0.
+            post[1] = "-A OUTPUT -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000"
+            post[2] = "-A OUTPUT ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP"
+            post[3] = "-A OUTPUT ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP"
+            n = 0
+          }
           {
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
             if ($0 == "" || $0 == "-P OUTPUT DROP") next
-            if ($0 ~ /-j (DROP|REJECT)([[:space:]]|$)/) next
-            if ($0 == "-A OUTPUT -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000") next
-            if ($0 ~ /-j ACCEPT([[:space:]]|$)/) {
+            if ($0 ~ /^-A OUTPUT /) n++
+            if (n >= 1 && n <= 3) {
+              if ($0 != post[n]) {
+                print "ERROR: Lodestar'\''s gluetun post-rules are missing or out of order (rule " n " is: " $0 ")" > "/dev/stderr"
+                failed = 1; exit 1
+              }
+              next
+            }
+            # A comment or a goto could disguise a rule'\''s real target.
+            if ($0 ~ /(^| )(--comment|-g|--goto) /) {
+              print "ERROR: Unexpected or insecure firewall directive in OUTPUT chain: " $0 > "/dev/stderr"
+              failed = 1; exit 1
+            }
+            # Judged by the final target only: these narrow egress.
+            if ($0 ~ /^-A OUTPUT .* -j DROP$/ || $0 ~ /^-A OUTPUT .* -j REJECT( --reject-with [a-z0-9-]+)?$/) next
+            if ($0 ~ /-j ACCEPT$/) {
               if ($0 == "-A OUTPUT -o lo -j ACCEPT") next
               if ($0 == "-A OUTPUT -o wg0 -j ACCEPT") next
               if ($0 ~ /^-A OUTPUT -m (conntrack --ctstate|state --state) (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT$/) next
@@ -258,10 +279,16 @@ write_files:
                 if ($0 == "-A OUTPUT -s " container_ip "/32 -d " bridge_subnet " -o " non_vpn_if " -j ACCEPT") next
               }
               print "ERROR: Unauthorized egress rule in Gluetun firewall: " $0 > "/dev/stderr"
-              exit 1
+              failed = 1; exit 1
             }
             print "ERROR: Unexpected or insecure firewall directive in OUTPUT chain: " $0 > "/dev/stderr"
-            exit 1
+            failed = 1; exit 1
+          }
+          END {
+            if (!failed && n < 3) {
+              print "ERROR: Lodestar'\''s gluetun post-rules are missing (" n " of 3 rules in OUTPUT)" > "/dev/stderr"
+              exit 1
+            }
           }
         '
       }
@@ -435,7 +462,11 @@ write_files:
         if [ "$(printf '%s\n' "$host_ip" | awk "$AWK_IPV4"'{ print is_ipv4($0) }')" != "1" ]; then
           host_ip="$(ip -4 route get 192.0.2.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true)"
         fi
-        if [ -n "$host_ip" ] && [ "$vpn_ip" = "$host_ip" ]; then
+        if [ -z "$host_ip" ]; then
+          echo "ERROR: Host IP unavailable; cannot rule out an egress leak" >&2
+          return 1
+        fi
+        if [ "$vpn_ip" = "$host_ip" ]; then
           echo "ERROR: CRITICAL LEAK: VPN egress IP ($vpn_ip) matches host IP ($host_ip)" >&2
           return 1
         fi
@@ -507,13 +538,6 @@ write_files:
           echo "ERROR: WireGuard egress rule (-o wg0 -j ACCEPT) missing" >&2
           return 1
         fi
-        # Lodestar's post-rules must be in place (compose.yaml): without rule 2 an
-        # established flow leaves by eth0 when the tunnel drops.
-        if ! printf '%s\n' "$fw_rules" | grep -q -x -- '-A OUTPUT -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000' \
-           || ! printf '%s\n' "$fw_rules" | grep -q -x -- '-A OUTPUT ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP'; then
-          echo "ERROR: Lodestar's gluetun post-rules (CONNMARK and its DROP) are missing" >&2
-          return 1
-        fi
         if [ -f "$CONFIG_FILE" ] && [ ! -L "$CONFIG_FILE" ]; then
           raw_ep_full="$(extract_cfg_value "Endpoint" "$CONFIG_FILE")"
         fi
@@ -570,6 +594,11 @@ write_files:
           rm -f "$tmp_cfg"
           return 1
         fi
+        if [ -e "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE" ] && [ ! -L "$CONFIG_FILE" ]; then
+          rm -f "$tmp_cfg"
+          echo "ERROR: $CONFIG_FILE exists and is not a file; run cleanup first" >&2
+          return 1
+        fi
         mv -f -T "$tmp_cfg" "$CONFIG_FILE"
         echo "CONFIG_OK"
       }
@@ -594,8 +623,26 @@ write_files:
         fi
       }
 
+      # One remote action per VM at a time: the lock the fleet steps and
+      # deliver-pia hold (infra/fleet/steps/remote.py, VM_LOCK).
+      VM_LOCK="/run/lodestar-pia.lock"
+      take_vm_lock() {
+        if [ -L "$VM_LOCK" ]; then
+          echo "ERROR: $VM_LOCK is a symlink" >&2
+          return 1
+        fi
+        exec 9>"$VM_LOCK"
+        if ! flock -w 30 9; then
+          echo "ERROR: another action holds $VM_LOCK (vm_busy)" >&2
+          return 1
+        fi
+      }
+
       main() {
         local cmd="$${1:-}"
+        case "$cmd" in
+          write-config|start-vpn|start-crawler|stop-vpn|cleanup) take_vm_lock || exit 1 ;;
+        esac
         case "$cmd" in
           preflight)
             docker info >/dev/null 2>&1
