@@ -386,9 +386,10 @@ pub fn is_kept_hold(rule: &str) -> bool {
 
 /// The stored rule of a floor drop a remote worker reported (WK-10d),
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
-/// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
-/// replaces it, a rollback keeps it over a weaker hold, and no release
-/// removes it. It goes only when it expires
+/// hold ([`is_floor_hold`]) that no release removes, but it gives way to
+/// any other hold written over it (a filter rule, an expired adult hold),
+/// so the key stays held past its expiry. Otherwise it goes only when it
+/// expires
 /// ([`Store::expire_worker_floor`]) or its worker is revoked
 /// ([`Store::purge_worker_floor`]).
 pub const WORKER_FLOOR_PREFIX: &str = "worker-floor:";
@@ -504,18 +505,12 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
     let mut hit = tx.prepare_cached(
         "INSERT INTO filter_hits (hash, rule, action, at, evidence) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    // As before, a later hold replaces an earlier one (and the insert
-    // triggers fire), except over a worker's floor report, which only a
-    // local floor rule may take over (#604's review): otherwise a weaker
-    // rule there could later be released and free the hash.
-    let mut tomb = tx.prepare_cached(&format!(
-        "INSERT OR REPLACE INTO tombstones (hash, rule, at)
-         SELECT ?1, ?2, ?3 WHERE {} OR NOT EXISTS (
-             SELECT 1 FROM tombstones WHERE hash = ?1 AND {}
-         )",
-        local_floor_sql("?2"),
-        worker_floor_sql("rule")
-    ))?;
+    // A later hold replaces an earlier one (and the insert triggers
+    // fire). A worker's floor report gives way to any rule here: it lasts
+    // only its hold time, so the key stays held under a rule that doesn't
+    // expire (X-sec-S6-02-03 part 2b).
+    let mut tomb = tx
+        .prepare_cached("INSERT OR REPLACE INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)")?;
     // A later quarantine replaces an earlier one, except over a floor
     // hold, which only another floor hold takes over, or a kept hold
     // (`KEPT_RULES`), which only a floor or kept hold does: otherwise a
@@ -860,7 +855,8 @@ impl Store {
             }
             // The adult mark is the one hold filtering can't rebuild (the
             // correction went with the torrent), so it replaces another
-            // rule's tombstone, except a floor hold, which stays.
+            // rule's tombstone, a worker's floor report included (that
+            // lasts only its hold time); a local floor row stays.
             tx.execute(
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
@@ -869,7 +865,7 @@ impl Store {
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
                     kept_hold_sql("rule"),
-                    floor_hold_sql("tombstones.rule")
+                    local_floor_sql("tombstones.rule")
                 ),
                 params![now, adult],
             )?;
@@ -2241,7 +2237,8 @@ mod tests {
             vec![true, false]
         );
 
-        // An adult hold expiring over [3] doesn't replace the report.
+        // An adult hold expiring over [3] replaces the report: the key
+        // stays held under the mark filtering can't rebuild.
         let tx = s.conn.transaction().unwrap();
         let adult = [[3u8; 20]];
         write(
@@ -2267,10 +2264,11 @@ mod tests {
             .into_iter()
             .find(|t| t.hash == [3; 20])
             .unwrap();
-        assert_eq!(t3.rule, "worker-floor:7");
+        assert_eq!(t3.rule, "CS-5a");
 
         // A later hold under another rule (ingest, refile, hold_claims)
-        // doesn't take the row over; a local floor rule may (below).
+        // takes the row over too, so the key stays held past the report's
+        // expiry.
         let weaker = [[2u8; 20]];
         let hold = |s: &mut Store, rule: &'static str, at: i64| {
             let tx = s.conn.transaction().unwrap();
@@ -2299,7 +2297,9 @@ mod tests {
                 .find(|t| t.hash == h)
                 .map(|t| t.rule)
         };
-        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("worker-floor:7"));
+        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("SRC-2"));
+        // A report for the checks below.
+        assert_eq!(s.tombstone_from_worker(&[[9; 20]], 7, 30).unwrap(), 1);
         // The prefix is exact: another case is a different rule.
         assert_eq!(s.tombstone_from_worker(&[[8; 20]], 1, 1).unwrap(), 1);
         s.conn
@@ -2311,22 +2311,19 @@ mod tests {
         assert!(s.release(&[8; 20]).unwrap(), "not a worker's report");
 
         // No release removes a report: by hash, many, or by its rule.
-        assert!(!s.release(&[2; 20]).unwrap());
-        assert_eq!(
-            s.release_many(&[[2; 20], [3; 20]]).unwrap(),
-            vec![false, false]
-        );
+        assert!(!s.release(&[9; 20]).unwrap());
+        assert_eq!(s.release_many(&[[9; 20]]).unwrap(), vec![false]);
         assert_eq!(
             s.release_rules(&["worker-floor:7".into()], |_| {}).unwrap(),
             0
         );
         assert_eq!(
-            s.release_rule_hashes("worker-floor:7", &[[2; 20]], |_| {})
+            s.release_rule_hashes("worker-floor:7", &[[9; 20]], |_| {})
                 .unwrap(),
             0
         );
-        assert_eq!(s.held_among(&[[2; 20], [3; 20]]).unwrap(), vec![true, true]);
-        // A local floor rule may take over a report.
+        assert_eq!(s.held_among(&[[9; 20], [3; 20]]).unwrap(), vec![true, true]);
+        // A local floor rule takes over as well.
         hold(&mut s, "CS-8a", 40);
         assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("CS-8a"));
         // The locked floor's own rows are released as before.
