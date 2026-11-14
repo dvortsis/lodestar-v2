@@ -1,4 +1,4 @@
-# X-gluetun-guard-stop decisions (#PR)
+# X-gluetun-guard-stop decisions (#881)
 
 The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 2026-11-14) found ICMP to the VPN endpoint leaving the host's egress interface from its public address. The host guard from #841 was held and never matched. This slice closes that window and fixes four problems the same run hit in the VM scripts (`infra/fleet/steps/vm`).
 
