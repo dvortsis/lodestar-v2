@@ -600,6 +600,12 @@ impl SessionHandle {
         self.ask(|tx| Command::Committed(leases, tx)).await
     }
 
+    /// As [`WorkerSession::drained`]: from the handle, the session's events
+    /// can be read while it waits.
+    pub async fn drained(&self) -> Result<(), ClientError> {
+        self.ask(Command::Drained).await
+    }
+
     /// As [`WorkerSession::set_stats`].
     pub async fn set_stats(&self, stats: Stats) -> Result<(), ClientError> {
         self.commands
