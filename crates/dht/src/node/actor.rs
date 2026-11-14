@@ -173,6 +173,11 @@ impl TokenBucket {
         }
     }
 
+    /// Gives back a token taken for something that then wasn't sent.
+    fn refund(&mut self) {
+        self.tokens = (self.tokens + 1.0).min(self.burst);
+    }
+
     fn try_take(&mut self, now: Instant) -> bool {
         let elapsed = now.duration_since(self.last).as_secs_f64();
         self.last = now;
@@ -1256,11 +1261,10 @@ impl Actor {
     }
 
     /// Pings a querier, within the share of the query rate and of the
-    /// outstanding cap that such pings may use. Whoever sends us queries
-    /// chooses how many of these are wanted and where they'd go, so they
-    /// have a budget of their own, taken before the shared one: past it the
-    /// querier just isn't verified this time, and lookups and sampling keep
-    /// the rest.
+    /// outstanding cap that such pings may use. These pings answer inbound
+    /// traffic, so they have a budget of their own, taken before the shared
+    /// one: past it the querier just isn't verified this time, and lookups
+    /// and sampling keep the rest.
     fn verify_querier(
         &mut self,
         sockets: &[SendSocket],
@@ -1278,10 +1282,13 @@ impl Actor {
             Stats::inc(&self.stats.throttled);
             return;
         }
-        if let Ok(tid) =
-            self.dispatch_query(sockets, family, to, Some(id), Method::Ping, Purpose::Ping)
-        {
-            self.verify_tids.insert(tid);
+        match self.dispatch_query(sockets, family, to, Some(id), Method::Ping, Purpose::Ping) {
+            Ok(tid) => {
+                self.verify_tids.insert(tid);
+            }
+            // Nothing left the host, so the share isn't spent: with the
+            // query rate in use elsewhere it would drain for nothing.
+            Err(_) => self.verify_rate.refund(),
         }
     }
 

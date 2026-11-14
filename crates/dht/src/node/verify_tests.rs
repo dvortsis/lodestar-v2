@@ -7,7 +7,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use super::tests::fixture;
 use super::*;
 
-/// A ping query from `from`, under a node id the table would take.
+/// A ping query from the `n`th querier, under a node id the table would
+/// take; returns its address.
 fn querier(a: &mut Actor, sockets: &[SendSocket], n: u32) -> SocketAddr {
     let [b, c, d] = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
     let from = SocketAddr::from((Ipv4Addr::new(127, b.max(1), c, d), 6881));
@@ -42,7 +43,9 @@ fn queriers_spend_only_their_share_of_the_query_rate() {
         share >= 1.0 && share < full / 2.0,
         "a share, not the budget"
     );
-    // Far more queriers than the whole query rate, all at once.
+    // Only what the bucket holds: no refill, however long the loop takes
+    // on a loaded runner.
+    a.verify_rate.rate = 0.0;
     let n = a.cfg.intensity.queries_per_sec() * 20;
     for i in 0..n {
         querier(&mut a, &sockets, i + 1);
@@ -103,13 +106,44 @@ fn queriers_hold_only_their_share_of_the_outstanding_cap() {
 }
 
 #[test]
+fn an_unsent_ping_keeps_its_token() {
+    let (mut a, sockets) = fixture();
+    // The shared rate is used up, as it is while sampling runs.
+    a.query_rate.tokens = 0.0;
+    a.query_rate.rate = 0.0;
+    a.verify_rate.rate = 0.0;
+    let held = a.verify_rate.tokens;
+    for i in 0..100 {
+        querier(&mut a, &sockets, i + 1);
+    }
+    let s = a.stats.snapshot();
+    assert_eq!(s.queries_out + s.send_errors, 0);
+    assert!((a.verify_rate.tokens - held).abs() < 1e-9);
+    assert!(a.verify_tids.is_empty() && a.pending.is_empty());
+}
+
+#[test]
+fn a_ping_that_times_out_gives_its_place_back() {
+    let (mut a, sockets) = fixture();
+    for i in 0..8 {
+        querier(&mut a, &sockets, i + 1);
+    }
+    assert!(!a.verify_tids.is_empty());
+    a.cfg.query_timeout = Duration::ZERO;
+    a.maintain(&sockets);
+    assert!(a.verify_tids.is_empty());
+}
+
+#[test]
 fn the_share_follows_the_intensity() {
     let (mut a, _sockets) = fixture();
-    for intensity in [Intensity::Low, Intensity::Balanced, Intensity::Aggressive] {
-        let b = verify_bucket(intensity, Instant::now());
+    a.verify_rate.tokens = 0.0;
+    for intensity in [Intensity::Low, Intensity::Aggressive, Intensity::Balanced] {
+        a.on_command(Command::SetIntensity(intensity));
         let qps = f64::from(intensity.queries_per_sec());
-        assert!((b.rate - qps * VERIFY_SHARE).abs() < 1e-9 && b.burst >= 1.0);
-        a.cfg.intensity = intensity;
-        assert!(a.cfg.intensity.max_outstanding() / VERIFY_OUTSTANDING_DIV >= 1);
+        let b = &a.verify_rate;
+        assert!((b.rate - qps * VERIFY_SHARE).abs() < 1e-9);
+        assert!(b.burst >= 1.0 && (b.tokens - b.burst).abs() < 1e-9, "full");
+        assert!(intensity.max_outstanding() / VERIFY_OUTSTANDING_DIV >= 1);
     }
 }
