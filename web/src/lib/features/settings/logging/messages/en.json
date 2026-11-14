@@ -227,6 +227,8 @@
 	"settings_logging_ev_system_dropped_root_h": "Lodestar gave up root rights after starting.",
 	"settings_logging_ev_system_data_dir_mismatch_n": "Data folder owner mismatch",
 	"settings_logging_ev_system_data_dir_mismatch_h": "The data folder belongs to a different user than Lodestar runs as.",
+	"settings_logging_ev_system_data_dir_open_n": "Data folder readable by others",
+	"settings_logging_ev_system_data_dir_open_h": "Other users on this computer can read the data folder. Make it owner-only (chmod 700).",
 	"settings_logging_ev_system_data_dir_user_share_n": "Data folder on a user share",
 	"settings_logging_ev_system_data_dir_user_share_h": "The data folder is on an Unraid user share, which can be slow.",
 	"settings_logging_ev_system_data_dir_fuse_n": "Data folder on FUSE",

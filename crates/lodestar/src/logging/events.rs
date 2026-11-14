@@ -338,6 +338,14 @@ lodestar_log::catalogue! {
         message: "The data directory from the config file isn't the one PUID/PGID ownership was checked on; set LODESTAR_DATA_DIR so both agree",
         fields: { path: Path, checked: Path },
     }
+    /// The data directory can be read by its group or others (S8-01).
+    SYSTEM_DATA_DIR_OPEN {
+        id: "system.data_dir_open",
+        component: System,
+        level: Warn,
+        message: "The data folder can be read by other users on this computer. Make it owner-only (chmod 700) so only Lodestar's user can read it; Lodestar never changes an existing folder's permissions.",
+        fields: { path: Path },
+    }
     /// The data directory is on Unraid's user share.
     SYSTEM_DATA_DIR_USER_SHARE {
         id: "system.data_dir_user_share",

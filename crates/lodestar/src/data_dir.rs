@@ -59,13 +59,10 @@ pub fn open_mode(dir: &Path) -> Option<u32> {
 /// Logs one warning when the data folder is open to its group or others.
 /// It never changes the folder.
 pub fn warn_if_open(dir: &Path) {
-    if let Some(mode) = open_mode(dir) {
-        tracing::warn!(
-            path = %dir.display(),
-            mode = format_args!("{mode:o}"),
-            "the data folder can be read by other users on this computer; \
-             make it owner-only (chmod 700) so only Lodestar's user can read it"
-        );
+    if open_mode(dir).is_some() {
+        use crate::logging::events;
+        use lodestar_log::{Path as LogPath, log_event};
+        log_event!(events::SYSTEM_DATA_DIR_OPEN, path = LogPath::new(dir));
     }
 }
 

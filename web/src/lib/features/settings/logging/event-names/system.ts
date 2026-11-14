@@ -124,6 +124,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_system_data_dir_mismatch_n,
 		m.settings_logging_ev_system_data_dir_mismatch_h
 	],
+	'system.data_dir_open': [
+		m.settings_logging_ev_system_data_dir_open_n,
+		m.settings_logging_ev_system_data_dir_open_h
+	],
 	'system.data_dir_user_share': [
 		m.settings_logging_ev_system_data_dir_user_share_n,
 		m.settings_logging_ev_system_data_dir_user_share_h
