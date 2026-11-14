@@ -41,11 +41,11 @@ MAX_PAGES = 10
 REVIEW_MAX_PAGES = 50
 # Review pages across the whole sweep: the job's token has a per-hour request
 # budget, so many PRs full of old reviews can't use it up and turn a trip into
-# an API error (which disables nothing). Past it, the sweep is incomplete: a trip.
+# an API error. Past it, the sweep is incomplete: escalated for a check by hand.
 REVIEW_PAGE_BUDGET = 60  # 7 sweeps x (60 + 42 other requests) = 714, leaving ~250 of ~1,000 (decisions file)
 # The sweep's own deadline, under the jobs' 10-minute timeout: a job cancelled
 # for time can neither escalate nor disable, so the sweep stops itself first and
-# counts the unfinished run as a trip.
+# escalates the unfinished run.
 SWEEP_DEADLINE_SECONDS = 360
 
 
@@ -111,7 +111,13 @@ def cmd_trip(env, transport) -> int:
 
 class Incomplete(Exception):
     """A list ran past its page limit (MAX_PAGES, or the reviews' own limits) before
-    the lookback: a finding, never a silent pass. args: (list name, page limit)."""
+    the lookback, or couldn't be read: a finding, never a silent pass.
+    args: (list name, page limit or reason). `partial`: the items read before the
+    stop, which the sweep still checks."""
+
+    def __init__(self, *args, partial=None):
+        super().__init__(*args)
+        self.partial = [i for i in (partial or []) if isinstance(i, dict)]
 
 
 def _list(transport, path: str, stop_before: datetime | None = None, key: str = "updated_at",
@@ -123,12 +129,13 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
         if items is None:
             items = []
         if not isinstance(items, list):  # an unreadable page can't end a list as complete
-            raise Incomplete("unreadable", f"a page of {path.split('?')[0].rsplit('/', 1)[-1]} wasn't a list")
+            raise Incomplete("unreadable", f"a page of {path.split('?')[0].rsplit('/', 1)[-1]} wasn't a list",
+                             partial=out)
         items = [i for i in items if isinstance(i, dict)]
         out += items
         if len(items) < 100 or (stop_before and items and (_when(items[-1].get(key)) or stop_before) < stop_before):
             return out
-    raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1], max_pages)
+    raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1], max_pages, partial=out)
 
 
 # Review summaries (X-operator-hardening): one GraphQL request covers up to
@@ -183,16 +190,18 @@ def _recent_reviews(transport, repo: str, number: str, since: datetime, budget: 
     created pending is submitted later, so no page can be skipped by its
     position: every page is read and each review is kept by its own
     `submitted_at`. A missing or unzoned time counts as recent (fail closed).
-    Trips (Incomplete): REVIEW_MAX_PAGES on one PR, more than MAX_PAGES * 100
-    reviews in the window, or the sweep's REVIEW_PAGE_BUDGET spent."""
-    pages = min(REVIEW_MAX_PAGES, budget[0])  # none left: _list reads nothing and raises, a budget trip
+    Incomplete (with the reviews read so far): REVIEW_MAX_PAGES on one PR, more
+    than MAX_PAGES * 100 reviews in the window, or the sweep's REVIEW_PAGE_BUDGET
+    spent."""
+    pages = min(REVIEW_MAX_PAGES, budget[0])  # none left: _list reads nothing and raises
     try:
         items = _list(transport, f"/repos/{repo}/pulls/{number}/reviews", max_pages=pages)
     except Incomplete as e:
+        budget[0] = max(0, budget[0] - (len(e.partial) // 100 + 1))
         # Only a page-limit stop on this list means the budget ran out; a deadline
         # or an unreadable page passes through as itself.
         if e.args == ("reviews", pages) and pages < REVIEW_MAX_PAGES:
-            raise Incomplete("reviews", REVIEW_PAGE_BUDGET) from None
+            raise Incomplete("reviews", REVIEW_PAGE_BUDGET, partial=e.partial) from None
         raise
     budget[0] -= len(items) // 100 + 1
     out = []
@@ -200,15 +209,17 @@ def _recent_reviews(transport, repo: str, number: str, since: datetime, budget: 
         when = _when(r.get("submitted_at"))
         if when is None or when >= since:
             out.append(r)
-    if len(out) > MAX_PAGES * 100:  # as for every other list: more than 1,000 in the window is a trip
-        raise Incomplete("reviews", MAX_PAGES)
+    if len(out) > MAX_PAGES * 100:  # as for every other list: more than 1,000 in the window is incomplete
+        raise Incomplete("reviews", MAX_PAGES, partial=out)
     return out
 
 
 def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[list[str], bool]:
-    """The findings and whether to disable. `found` (optional) collects them as
-    they're made, so a sweep that stops part way still reports, and still
-    disables on, any bot finding it made before the stop."""
+    """The findings and whether to disable. Each stage runs on its own: a list
+    that stops part way is recorded as incomplete, the items it read are still
+    checked, and the stages after it still run. So a stop anywhere can't hide a
+    bot finding elsewhere. `found` (optional) collects the findings as they're
+    made, for a caller that sees the sweep raise."""
     repo, bot = env["GITHUB_REPOSITORY"], _digits(env.get("OPERATOR_BOT_USER_ID"))
     if not bot:  # defence in depth: cmd_sweep escalates on this first; keep it for direct callers
         raise SystemExit("tripwire: OPERATOR_BOT_USER_ID isn't set")
@@ -218,8 +229,16 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
     recent = lambda i, k="created_at": (_when(i.get(k)) or now) >= since  # noqa: E731 - unparseable counts as recent
     found = {"bot": [], "other": []} if found is None else found
     bot_hits, other = found["bot"], found["other"]
+    stops = found.setdefault("incomplete", [])
 
-    for e in _list(transport, f"/repos/{repo}/issues/events", since, "created_at"):
+    def listed(path, key="updated_at"):
+        try:
+            return _list(transport, path, since, key)
+        except Incomplete as e:
+            stops.append(e)
+            return e.partial
+
+    for e in listed(f"/repos/{repo}/issues/events", "created_at"):
         if not recent(e):
             continue
         n = _digits((e.get("issue") or {}).get("number")) or "?"
@@ -231,34 +250,42 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             other.append(f"base branch changed on #{n}")
 
     review_budget = [REVIEW_PAGE_BUDGET]
-    pulls = _list(transport, f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc", since)
     active = []
-    for p in pulls:
+    for p in listed(f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc"):
         if not recent(p, "updated_at"):
             continue
         n = _digits(p.get("number"))
         if n is None:  # its reviews can't be read: never skip them silently
-            raise Incomplete("unreadable", "a PR in the pulls list had no readable number")
+            stops.append(Incomplete("unreadable", "a PR in the pulls list had no readable number"))
+            continue
         if _uid(p) == bot:
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
         active.append(n)
-    summaries = _review_summaries(transport, repo, active) if active else {}
+    try:
+        summaries = _review_summaries(transport, repo, active) if active else {}
+    except Incomplete as e:  # no summary: every PR takes the REST read, under the budget
+        stops.append(e)
+        summaries = {}
     for n in active:
         reviews = summaries.get(n)
         if reviews is None:  # more reviews than the summary holds: the REST read, under the budget
-            reviews = _recent_reviews(transport, repo, n, since, review_budget)
+            try:
+                reviews = _recent_reviews(transport, repo, n, since, review_budget)
+            except Incomplete as e:
+                stops.append(e)
+                reviews = e.partial
         for r in reviews:
             if _uid(r) == bot and recent(r, "submitted_at"):
                 bot_hits.append(f"the operator's bot reviewed #{n}")
 
-    for c in _list(transport, f"/repos/{repo}/pulls/comments?sort=updated&direction=desc&since={iso}", since):
+    for c in listed(f"/repos/{repo}/pulls/comments?sort=updated&direction=desc&since={iso}"):
         n = _digits(str(c.get("pull_request_url", "")).rsplit("/", 1)[-1]) or "?"
         if _uid(c) == bot:
             bot_hits.append(f"the operator's bot wrote a review comment on #{n}")
         elif c.get("updated_at") != c.get("created_at") and recent(c, "updated_at"):
             other.append(f"a review comment on #{n} was edited")
 
-    for c in _list(transport, f"/repos/{repo}/issues/comments?sort=updated&direction=desc&since={iso}", since):
+    for c in listed(f"/repos/{repo}/issues/comments?sort=updated&direction=desc&since={iso}"):
         n = _digits(str(c.get("issue_url", "")).rsplit("/", 1)[-1]) or "?"
         if _uid(c) != bot:
             continue
@@ -268,9 +295,10 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             bot_hits.append("the operator's bot edited a comment on the channel PR")
         elif not recent(c) or thread.channel_shape(c.get("body")):
             continue
-        else:  # posted around the helper: no report or /fleet shape (its text is never echoed)
+        else:  # its text is never echoed
             bot_hits.append("the operator's bot posted a channel comment of no allowed shape")
-    return sorted(set(bot_hits)) + sorted(set(other)), bool(bot_hits)
+    notes = list(dict.fromkeys(describe(e) for e in stops))  # one line per kind of stop, in order
+    return sorted(set(bot_hits)) + sorted(set(other)) + notes, bool(bot_hits)
 
 
 def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
@@ -309,10 +337,9 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
     found = {"bot": [], "other": []}
     try:
         findings, disable = sweep(env, with_deadline(transport, monotonic), now, found)
-    except Incomplete as e:
-        # A sweep that can't finish escalates, so it's checked by hand; it disables only
-        # on a bot finding made before it stopped (X-operator-hardening, superseding the
-        # runner's 2026-11-11 "an unfinished sweep is a trip": anyone could cause one).
+    except Incomplete as e:  # the sweep records its own stops; this is the backstop for any it doesn't
+        # A sweep that can't finish escalates, so it's checked by hand; only a bot
+        # finding disables (X-operator-hardening).
         findings = sorted(set(found["bot"])) + sorted(set(found["other"])) + [describe(e)]
         disable = bool(found["bot"])
     except Exception as e:  # noqa: BLE001 - an API error: say so (best effort), then fail the job

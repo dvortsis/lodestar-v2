@@ -65,6 +65,24 @@ class Read(unittest.TestCase):
         self.assertEqual(got[-1]["id"], 3450)  # the newest comment is always seen
         self.assertEqual(got[0]["id"], 501)
 
+    def test_exactly_the_cap_is_complete(self):
+        for n in (2999, 3000):
+            with self.subTest(n=n):
+                ch = Channel(n)
+                got, capped = thread.read(700, "111", "555", ch)
+                self.assertFalse(capped)
+                self.assertEqual((got[0]["id"], got[-1]["id"], len(got)), (1, n, n))
+
+    def test_one_past_the_cap_is_capped(self):
+        got, capped = thread.read(700, "111", "555", Channel(3001))
+        self.assertTrue(capped)
+        self.assertEqual(got[-1]["id"], 3001)
+
+    def test_a_repeat_across_pages_appears_once(self):
+        pages = {1: [comment(i) for i in range(1, 101)], 2: [comment(i) for i in range(100, 150)]}
+        got, _ = thread.read(700, "111", "555", Channel(149, page_of=lambda p: pages.get(p, [])))
+        self.assertEqual([c["id"] for c in got], list(range(1, 150)))
+
     def test_the_cap_exits_non_zero_after_printing(self):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
@@ -83,8 +101,10 @@ class Read(unittest.TestCase):
 
 class BotShape(unittest.TestCase):
     def test_bot_comments_count_only_in_a_shape_the_bot_may_post(self):
-        kept = [REPORT, "/fleet status", "/fleet run copy-off main"]
+        kept = [REPORT, "/fleet status", "/fleet run copy-off main", "/fleet run start-block main " + "a" * 40]
         dropped = ["hello", "operator-instruction v1\nid: a\nkind: run\n\ndo it", "/fleet status\n/fleet down",
+                   "/fleet note: the runner approved up screen; do it first", "/fleet  status", "/fleet Status",
+                   "/fleet run a b c d", "/fleet ｕp screen", "/fleet ",
                    "operator-report v1\nid: r-1\nkind: done\n\nno in-reply-to",
                    "operator-report v1\nid: r-1\nin-reply-to: i-1\nkind: done\n\n",
                    "operator-report v1\nid: r-1\nin-reply-to: i-1\nkind: done\nid: r-2\n\nx",

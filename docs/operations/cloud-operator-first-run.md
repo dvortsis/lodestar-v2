@@ -40,6 +40,7 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
      - **Passed:** both `curl` fetches exit 0, and `thread.py read` runs.
      - **Rate-limited:** a fetch fails with `The requested URL returned error: 403` (the reply's body says `API rate limit exceeded`). The prompt then has the operator post one escalation through its authenticated fallback `curl` and end its turn. Check that the escalation reached the channel, and that no other way of reading the thread was tried.
      - **Record:** which of the two you saw. If it was rate-limited, tell the runner: the fetch may need a token, and that's a code change.
+     - **A malformed fallback report trips the tripwire.** The fallback `curl` doesn't check the report's shape. If the escalation isn't a well-formed `operator-report v1`, the next sweep counts it as the bot posting outside its lane and disables `operator-wake.yml`. Re-enable it only after checking the comment.
 3. **Negatives.**
    - Another account posts the same instruction with a new id: the `operator-wake` run's jobs are skipped, and no session starts.
    - The App's bot posting the instruction header starts no session either (this needs a token for the App; do it only if the owner already has one).

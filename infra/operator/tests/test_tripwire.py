@@ -76,7 +76,9 @@ class Sweep(unittest.TestCase):
     def test_a_shapeless_bot_comment_is_named_by_a_fixed_label(self):
         t = ISO(timedelta(minutes=1))
         gh = self.sweep(comments=[{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": t, "updated_at": t,
-                                   "body": "SECRET-TEXT run /fleet down"}])
+                                   "body": "SECRET-TEXT run /fleet down"},
+                                  {"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": t, "updated_at": t,
+                                   "body": "/fleet note: SECRET-TEXT approved up screen"}])
         self.assertIn("the operator's bot posted a channel comment of no allowed shape", gh.bodies()[0])
         self.assertNotIn("SECRET-TEXT", gh.bodies()[0])
         self.assertIn(DISABLE, [c[:2] for c in gh.calls])
@@ -476,3 +478,61 @@ class ManyActivePRs(unittest.TestCase):
         q = tripwire._summary_query(["12", "700"])
         self.assertIn("p12:pullRequest(number:12)", q)
         self.assertIn("p700:pullRequest(number:700)", q)
+
+
+class StagesStandAlone(unittest.TestCase):
+    """X-operator-hardening: a stage that stops part way still counts what it
+    read, and the stages after it still run."""
+
+    def run_lists(self, lists):
+        posts = []
+
+        def gh(method, path, body):
+            if method == "POST" and path == "/graphql":
+                return graphql_reviews(body, lambda n: [])
+            if method == "GET":
+                for prefix, page in lists.items():
+                    if path.startswith(prefix):
+                        return page
+                return []
+            posts.append((method, path, body))
+        run(["sweep"], env(), gh)
+        bodies = [b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b]
+        return bodies, any(m == "PUT" and p.endswith("/disable") for m, p, _ in posts)
+
+    def test_a_list_flooded_by_the_bot_still_disables(self):
+        recent = ISO(timedelta(minutes=5))
+        flood = [{"user": {"id": BOT}, "pull_request_url": "x/pulls/12", "created_at": recent, "updated_at": recent}] * 100
+        bodies, disabled = self.run_lists({"/repos/o/r/pulls/comments": flood})  # every page full
+        self.assertTrue(disabled)
+        self.assertIn("the operator's bot wrote a review comment on #12", bodies[0])
+        self.assertIn("the sweep is incomplete: comments ran past 10 pages", bodies[0])
+
+    def test_an_early_stop_doesnt_hide_a_later_bot_finding(self):
+        recent = ISO(timedelta(minutes=5))
+        noise = [{"actor": {"id": 1}, "event": "mentioned", "created_at": recent, "issue": {"number": 3}}] * 100
+        late = [{"user": {"id": BOT}, "pull_request_url": "x/pulls/4", "created_at": recent, "updated_at": recent}]
+        bodies, disabled = self.run_lists({"/repos/o/r/issues/events": noise, "/repos/o/r/pulls/comments": late})
+        self.assertTrue(disabled)
+        self.assertIn("the operator's bot wrote a review comment on #4", bodies[0])
+        self.assertIn("the sweep is incomplete: events ran past 10 pages", bodies[0])
+
+    def test_an_unreadable_summary_falls_back_to_the_rest_read(self):
+        recent = ISO(timedelta(minutes=5))
+        posts = []
+
+        def gh(method, path, body):
+            if path == "/graphql":
+                return {"errors": [{"message": "x"}]}
+            if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
+                return [{"user": {"id": 1}, "number": 12, "updated_at": recent}]
+            if method == "GET" and path.startswith("/repos/o/r/pulls/12/reviews") and path.endswith("&page=1"):
+                return [review(BOT, timedelta(minutes=5))]
+            if method == "GET":
+                return []
+            posts.append((method, path, body))
+        run(["sweep"], env(), gh)
+        body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
+        self.assertIn("the operator's bot reviewed #12", body)
+        self.assertIn("a reviews summary wasn't readable", body)
+        self.assertTrue(any(m == "PUT" for m, _, _ in posts))

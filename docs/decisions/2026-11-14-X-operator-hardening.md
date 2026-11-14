@@ -17,11 +17,13 @@ OPERATOR-05 is the runner's own handling of the channel; the runner fixed it out
 ## OPERATOR-01: the tripwire sweep
 - **A sweep that can't finish escalates without disabling.** It still posts an escalation naming why it stopped, so it's checked by hand.
   - **Why:** an incomplete sweep is no evidence that the operator's bot did anything, so it no longer disables `operator-wake.yml`. This supersedes the runner's 2026-11-11 call that an unfinished sweep counts as a trip (`2026-11-11-OP-4.md`).
-  - **What still disables:** only a finding attributed to the bot, including one the sweep made before it stopped. A sweep that stops part way reports and acts on everything it found up to then.
+  - **What still disables:** only a finding attributed to the bot.
+  - **Each stage stands alone.** A list that stops part way (its page limit, an unreadable page, the deadline) is recorded as incomplete. The items it read are still checked, and every later stage still runs. So a stop in one list can't hide a bot finding in another, and a list filled by the bot's own actions still disables on what was read. One escalation names every stop, once each.
 - **PRs with few reviews cost no review pages.**
   - **The summary:** one GraphQL request covers up to 50 PRs updated in the lookback, each with its last 50 reviews and their total. A PR whose reviews all fit in that is decided from the summary.
   - **The fallback:** only a PR with more reviews than the summary holds falls back to the REST read under `REVIEW_PAGE_BUDGET`. That read is unchanged, so every page is still read and each review is kept by its own `submitted_at`.
-  - **Fail closed:** anything the summary can't vouch for is an incomplete sweep (an `errors` key, a missing PR, a total that isn't a count). The query carries only PR numbers, which are digits checked first.
+  - **Fail closed:** anything the summary can't vouch for is recorded as incomplete (an `errors` key, a missing PR, a total that isn't a count). Every PR then takes the REST read under the budget. The query carries only PR numbers, which are digits checked first.
+  - **To check on the first run:** that the sweep job's token gets GraphQL data back without errors. If it doesn't, every sweep escalates "a reviews summary wasn't readable" and falls back to the REST read.
 - **The request budget.** The summary requests count against GraphQL's own points budget, not the REST one. They cost at most 20 a sweep (the pulls list's 1,000 PRs at 50 a request). The REST arithmetic in `test_the_budget_leaves_room_for_the_other_workflows` still holds.
 
 ## OPERATOR-02: the channel thread reader
@@ -32,13 +34,15 @@ OPERATOR-05 is the runner's own handling of the channel; the runner fixed it out
 - **An unreadable answer exits non-zero:** a count that isn't a count, or a page that isn't a list.
 
 ## OPERATOR-03: bot-authored comments
-- **One rule for what the bot may post: `thread.channel_shape`.** It accepts an `operator-report v1` with exactly its three header fields and a body, or a one-line `/fleet` command.
+- **One rule for what the bot may post: `thread.channel_shape`.** It accepts an `operator-report v1` with exactly its three header fields and a body, or a one-line `/fleet` command. The command must be in the command parser's words: ASCII, single spaces, at most four lower-case words of letters, digits and hyphens or a full commit. Never free text.
   - **Where it applies:**
     - `check_post` refuses anything else;
     - `thread.read` drops any bot comment that doesn't match it;
     - the sweep flags a channel comment by the bot that doesn't match it, as a bot finding, with the fixed label "the operator's bot posted a channel comment of no allowed shape". Its text is never echoed.
   - **`check_post` is stricter than before.** It used to accept anything that started with the report header.
-- **The filter lives in the operator's helper, `infra/operator/thread.py`, not in `infra/fleet/reader.py`.** The fleet reader is outside this slice's paths, and the prompt reads the thread only through the helper. Whether `reader.trusted` should carry the same rule is for the runner.
+  - **A malformed report sent by the prompt's fallback `curl` now trips.** That `curl` doesn't go through `check_post`, so a report in the wrong shape (an unknown `kind`, a missing header field) is a bot finding and disables `operator-wake.yml`. Before, it was accepted. This fails closed, and the first-run doc says so.
+- **`thread.read` drops a repeated comment by id.** A comment deleted between page reads shifts the pages, and the same comment could otherwise come back twice.
+- **The filter lives in the operator's helper, `infra/operator/thread.py`, not in `infra/fleet/reader.py`.** The fleet reader is outside this slice's paths, and the prompt reads the thread only through the helper. `reader.py`'s own stdin `main()`, and the `curl | reader.py` use its docstring shows, still return every unedited bot comment. Nothing on the prompt's path uses them. Whether `reader.trusted` should carry the same rule is for the runner.
 
 ## OPERATOR-04: the injection corpus (check 8)
 - **The four `ignore` items are folded into one, `reader-drops`.** They are the comments the reader drops before the model sees anything, and the test suite proves that drop. The item runs once, to check the session end to end.
@@ -62,7 +66,7 @@ OPERATOR-05 is the runner's own handling of the channel; the runner fixed it out
 
 ## OPERATOR-06 and OPERATOR-07
 - **OPERATOR-06:**
-  - `operator-tripwire.yml`'s `pull_request_target` gains `synchronize`, so a branch update by the bot trips. The sender gate is unchanged.
+  - `operator-tripwire.yml`'s `pull_request_target` gains `synchronize`, so a branch update by the bot trips. The sender gate is unchanged. Every push to any PR now starts a tripwire run whose job is skipped at once, which costs no runner time.
   - Check 7 now lists `PUT …/pulls/{n}/update-branch` among what the App can't do. The owner verifies it there rather than assuming it.
 - **OPERATOR-07:**
   - `wake.py gate`, which holds no secrets, writes the parsed instruction's fixed fields (id, kind, mode, in-reply-to) to the job summary when it allows a run. The id matches `message.ID`, and kind and mode are fixed words, so no comment text reaches the summary. No workflow line changed.
