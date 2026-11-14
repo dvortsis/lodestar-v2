@@ -1424,6 +1424,89 @@ mod queues {
         server.shutdown();
     }
 
+    /// Takes keys handed back while `take` is set, and records them.
+    struct HandSink {
+        take: bool,
+        got: std::sync::Mutex<Vec<([u8; 20], crate::Token)>>,
+    }
+
+    impl crate::server::InboundSink for HandSink {
+        fn handed_back(
+            &self,
+            key: lodestar_metainfo::InfoHash,
+            token: crate::Token,
+            _lease: crate::Lease,
+        ) -> bool {
+            self.got.lock().unwrap().push((key.0, token));
+            self.take
+        }
+    }
+
+    /// A remote worker's report that a key is too large for it hands the
+    /// key to the built-in worker through the sink, not as a loss. If the
+    /// sink can't take it now, the key waits for a re-grant instead.
+    #[tokio::test]
+    async fn an_oversize_report_hands_the_key_to_the_built_in_worker() {
+        for take in [true, false] {
+            let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+            let sink = Arc::new(HandSink {
+                take,
+                got: std::sync::Mutex::new(Vec::new()),
+            });
+            let c = super::cluster(2);
+            let pki = Pki {
+                coordinator: c.coord,
+                store: c.store,
+                secrets: c.secrets,
+            };
+            let clock = Arc::new(ManualClock::new(super::T0 * 1000));
+            let hooks = ServerHooks {
+                authority: authority.clone(),
+                stored: None,
+                sink: Some(sink.clone()),
+                admission: None,
+            };
+            let config = ServerConfig {
+                auto_tick: false,
+                ..ServerConfig::default()
+            };
+            let server = ClusterServer::with_hooks(pki, clock.clone(), config, hooks).unwrap();
+            // A lease held by a remote worker.
+            let remote = WorkerId(2);
+            let claim = crate::Claim {
+                key: lodestar_metainfo::InfoHash([1; 20]),
+                source: lodestar_store::SourceId::new(1).unwrap(),
+                strategy: 0,
+                at: super::T0,
+            };
+            let crate::Claimed::Granted(token) = authority.claim(remote, claim, super::T0) else {
+                panic!("granted")
+            };
+            server.outcome_as(
+                remote,
+                &[OutcomeItem {
+                    key: [1; 20],
+                    token: token.0,
+                    outcome: Outcome::Lost {
+                        reason: crate::leases::LOSS_OVERSIZE,
+                    },
+                }],
+            );
+            let snap = server.snapshot();
+            assert_eq!((snap.handed_back, snap.outcomes), (1, 0), "take {take}");
+            let got = sink.got.lock().unwrap().clone();
+            assert_eq!(got.len(), 1);
+            let key = lodestar_metainfo::InfoHash([1; 20]);
+            if take {
+                let lease = authority.current(&key, got[0].1).expect("leased to it");
+                assert_eq!(lease.holder, WorkerId::LOCAL);
+            } else {
+                assert_eq!(authority.pending(), 1, "it waits for a re-grant");
+            }
+            server.shutdown();
+        }
+    }
+
     fn server(config: ServerConfig, authority: Arc<LeaseAuthority>) -> Arc<ClusterServer> {
         let c = super::cluster(2);
         let pki = Pki {
