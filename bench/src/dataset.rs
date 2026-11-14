@@ -797,54 +797,153 @@ fn index_all(
     Ok(())
 }
 
+/// The tables [`digest`] covers, in its order.
+pub const DIGESTED: [&str; 13] = [
+    "torrents",
+    "torrent_files",
+    "zstd_dicts",
+    "swarm",
+    "swarm_trackers",
+    "swarm_history",
+    "trackers",
+    "rollup_hour",
+    "cohort_hour",
+    "rollup_day",
+    "cohort_day",
+    "index_watermark_hour",
+    "insights_state",
+];
+
+/// FNV-1a, with a separator after each value so ("ab", "c") and
+/// ("a", "bc") differ.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Fnv {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn eat(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= u64::from(b);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+        self.0 ^= 0xff;
+        self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+    }
+
+    fn value(&mut self, v: lodestar_store::rusqlite::types::ValueRef<'_>) {
+        use lodestar_store::rusqlite::types::ValueRef;
+        match v {
+            ValueRef::Null => self.eat(b"N"),
+            ValueRef::Integer(v) => self.eat(&v.to_le_bytes()),
+            ValueRef::Real(v) => self.eat(&v.to_le_bytes()),
+            ValueRef::Text(t) | ValueRef::Blob(t) => self.eat(t),
+        }
+    }
+}
+
+/// Calls `each` with every row of `table`, in the digest's order.
+fn read_rows(
+    c: &lodestar_store::rusqlite::Connection,
+    table: &str,
+    each: &mut dyn FnMut(
+        &lodestar_store::rusqlite::Row<'_>,
+        usize,
+    ) -> lodestar_store::rusqlite::Result<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stmt = c.prepare(&format!("SELECT * FROM {table} ORDER BY 1, 2"))?;
+    let cols = stmt.column_count();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        each(row, cols)?;
+    }
+    Ok(())
+}
+
 /// A digest of the dataset's content: every torrent row, file tree and
 /// swarm row in id order, the dictionary, and the rollups, by FNV-1a.
 /// Equal for two builds with the same key; it names no file's bytes, so
 /// it also checks a copy.
 pub fn digest(db: &Path) -> Result<u64, Box<dyn std::error::Error>> {
-    use lodestar_store::rusqlite::{Connection, OpenFlags, types::ValueRef};
+    use lodestar_store::rusqlite::{Connection, OpenFlags};
     let c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |bytes: &[u8]| {
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-        // A separator, so ("ab", "c") and ("a", "bc") differ.
-        h ^= 0xff;
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    };
-    for table in [
-        "torrents",
-        "torrent_files",
-        "zstd_dicts",
-        "swarm",
-        "swarm_trackers",
-        "swarm_history",
-        "trackers",
-        "rollup_hour",
-        "cohort_hour",
-        "rollup_day",
-        "cohort_day",
-        "index_watermark_hour",
-        "insights_state",
-    ] {
-        eat(table.as_bytes());
-        let mut stmt = c.prepare(&format!("SELECT * FROM {table} ORDER BY 1, 2"))?;
-        let cols = stmt.column_count();
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
+    let mut h = Fnv::new();
+    for table in DIGESTED {
+        h.eat(table.as_bytes());
+        read_rows(&c, table, &mut |row, cols| {
             for i in 0..cols {
-                match row.get_ref(i)? {
-                    ValueRef::Null => eat(b"N"),
-                    ValueRef::Integer(v) => eat(&v.to_le_bytes()),
-                    ValueRef::Real(v) => eat(&v.to_le_bytes()),
-                    ValueRef::Text(t) | ValueRef::Blob(t) => eat(t),
-                }
+                h.value(row.get_ref(i)?);
             }
-        }
+            Ok(())
+        })?;
     }
-    Ok(h)
+    Ok(h.0)
+}
+
+/// A row's first two columns as text, and each column's hash.
+type KeyedRow = (String, Vec<u64>);
+
+/// Where two datasets' content differs, for a test's failure message:
+/// each table that differs, its row counts, and its first differing row
+/// (by its first two columns, and the column that differs). `None` when
+/// they hold the same content.
+pub fn explain_difference(
+    a: &Path,
+    b: &Path,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use lodestar_store::rusqlite::{Connection, OpenFlags};
+    let open = |p: &Path| Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY);
+    let (ca, cb) = (open(a)?, open(b)?);
+    let rows = |c: &Connection, table: &str| -> Result<Vec<KeyedRow>, Box<dyn std::error::Error>> {
+        let mut out = Vec::new();
+        read_rows(c, table, &mut |row, cols| {
+            let text = |i: usize| -> String {
+                use lodestar_store::rusqlite::types::ValueRef;
+                match row.get_ref(i) {
+                    Ok(ValueRef::Integer(v)) => v.to_string(),
+                    Ok(ValueRef::Text(t)) => String::from_utf8_lossy(t).into_owned(),
+                    Ok(other) => format!("{:?}", other.data_type()),
+                    Err(e) => e.to_string(),
+                }
+            };
+            let key = format!(
+                "({}, {})",
+                text(0),
+                if cols > 1 { text(1) } else { String::new() }
+            );
+            let mut each = Vec::with_capacity(cols);
+            for i in 0..cols {
+                let mut h = Fnv::new();
+                h.value(row.get_ref(i)?);
+                each.push(h.0);
+            }
+            out.push((key, each));
+            Ok(())
+        })?;
+        Ok(out)
+    };
+    let mut found = Vec::new();
+    for table in DIGESTED {
+        let (ra, rb) = (rows(&ca, table)?, rows(&cb, table)?);
+        if ra == rb {
+            continue;
+        }
+        let first = ra.iter().zip(&rb).position(|(x, y)| x != y);
+        let detail = match first {
+            Some(i) => {
+                let col = ra[i].1.iter().zip(&rb[i].1).position(|(x, y)| x != y);
+                format!("row {i}: {} against {}, column {col:?}", ra[i].0, rb[i].0)
+            }
+            None => "one is a prefix of the other".to_owned(),
+        };
+        found.push(format!(
+            "{table} ({} and {} rows; {detail})",
+            ra.len(),
+            rb.len()
+        ));
+    }
+    Ok((!found.is_empty()).then(|| found.join("; ")))
 }
 
 /// The folder writing rows run in: a copy of the store and indexes, made

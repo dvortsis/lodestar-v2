@@ -23,10 +23,7 @@ fn the_same_key_builds_the_same_bytes() {
     let key = Key::new(7, N);
     let (da, db) = (build(a.path(), key), build(b.path(), key));
     assert!(da.built_now && db.built_now);
-    assert_eq!(
-        dataset::digest(&da.db()).unwrap(),
-        dataset::digest(&db.db()).unwrap()
-    );
+    same_content(&da, &db, "two builds of one key");
     // SQLite's header counts checkpoints in two fields (the file change
     // counter, bytes 24..28, and version-valid-for, 92..96), and when a
     // checkpoint runs depends on timing; every other byte must match.
@@ -56,6 +53,25 @@ fn the_same_key_builds_the_same_bytes() {
                 .unwrap();
         assert_eq!(index.num_docs(), N);
     }
+    // A changed row is named, by table, row and column.
+    let copy = tempfile::tempdir().unwrap();
+    let changed = copy.path().join("changed.db");
+    std::fs::copy(da.db(), &changed).unwrap();
+    lodestar_store::rusqlite::Connection::open(&changed)
+        .unwrap()
+        .execute(
+            "UPDATE swarm SET leechers = leechers + 1 WHERE torrent_id = 5",
+            [],
+        )
+        .unwrap();
+    let why = dataset::explain_difference(&da.db(), &changed)
+        .unwrap()
+        .expect("they differ");
+    assert!(why.starts_with("swarm (") && why.contains("(5, "), "{why}");
+    assert_eq!(
+        dataset::explain_difference(&da.db(), &db.db()).unwrap(),
+        None
+    );
     // Reused, not rebuilt.
     let again = build(a.path(), key);
     assert!(!again.built_now);
@@ -63,6 +79,15 @@ fn the_same_key_builds_the_same_bytes() {
         dataset::digest(&again.db()).unwrap(),
         dataset::digest(&da.db()).unwrap()
     );
+}
+
+/// Fails, naming where they differ, unless two datasets hold the same
+/// content.
+fn same_content(a: &dataset::Dataset, b: &dataset::Dataset, what: &str) {
+    if dataset::digest(&a.db()).unwrap() != dataset::digest(&b.db()).unwrap() {
+        let why = dataset::explain_difference(&a.db(), &b.db()).unwrap();
+        panic!("{what}: the content differs: {why:?}");
+    }
 }
 
 /// The store's bytes but for SQLite's two checkpoint counters (see
@@ -86,13 +111,11 @@ fn an_interrupted_build_resumes_to_the_same_dataset() {
     let key = Key::new(7, N);
     let clean = tempfile::tempdir().unwrap();
     let clean = build(clean.path(), key);
-    let (bytes, digest) = (store_bytes(&clean), dataset::digest(&clean.db()).unwrap());
+    let bytes = store_bytes(&clean);
     // Resumed at a phase boundary: the same bytes. Resumed inside one
     // (work done, not recorded): the same content; a redone phase may
     // leave SQLite's pages laid out differently.
-    let same_content = |d: &dataset::Dataset, what: &str| {
-        assert_eq!(dataset::digest(&d.db()).unwrap(), digest, "{what}");
-    };
+    let same_content = |d: &dataset::Dataset, what: &str| same_content(d, &clean, what);
     let same = |d: &dataset::Dataset, what: &str| {
         same_content(d, what);
         assert!(store_bytes(d) == bytes, "{what}: the store's bytes differ");
