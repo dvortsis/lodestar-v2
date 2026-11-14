@@ -470,15 +470,30 @@ pub const MAX_PENDING: usize = 262_144;
 /// back.
 pub const PENDING_HIGH_WATER: usize = MAX_PENDING / 2;
 
-/// The window a worker's return allowance counts over.
+/// The most of the waiting queue one remote worker's keys may take: an
+/// eighth of [`PENDING_HIGH_WATER`]. Past it, keys it hands back are
+/// dropped, so no one worker can bring on the backlog alone.
+pub const MAX_PENDING_PER_WORKER: usize = PENDING_HIGH_WATER / 8;
+
+/// The window a worker's return allowance counts over: it starts at the
+/// first hand-back after the last one ended (a fixed window, not a rolling
+/// one, so up to twice the allowance can land around its edge).
 pub const RETURN_WINDOW_SECS: i64 = 3600;
 
 /// A remote worker may hand back (expired, evicted, reconciled away or
 /// drained, marked fetched or not) this share of its lease cap per [`RETURN_WINDOW_SECS`]
 /// for a re-grant, and at least [`MIN_RETURN_ALLOWANCE`] (never more than
-/// the cap). Past that its keys are dropped and it rests for a lease TTL.
+/// the cap, nor [`MAX_PENDING_PER_WORKER`]). Past that its keys are dropped
+/// and it rests for a lease TTL.
 const RETURN_SHARE: usize = 8;
 pub const MIN_RETURN_ALLOWANCE: usize = 1_024;
+
+/// Places `order` may hold past twice the queue before it's compacted.
+const ORDER_SLACK: usize = 1_024;
+
+/// Keys one re-grant looks at, per key it may grant: a bound on the work
+/// done under the authority's lock.
+const REGRANT_LOOK: usize = 4;
 
 /// How long a worker that stopped on its own (`Drained`) gets no new or
 /// re-granted keys ([`LeaseAuthority::rest`]).
@@ -627,7 +642,10 @@ impl AuthorityState {
     /// Keys `worker` may hand back per window for a re-grant.
     fn allowance(&self, worker: WorkerId) -> usize {
         self.cap_of(worker).map_or(usize::MAX, |cap| {
-            (cap / RETURN_SHARE).max(MIN_RETURN_ALLOWANCE).min(cap)
+            (cap / RETURN_SHARE)
+                .max(MIN_RETURN_ALLOWANCE)
+                .min(cap)
+                .min(MAX_PENDING_PER_WORKER)
         })
     }
 
@@ -666,6 +684,12 @@ impl AuthorityState {
         let lease = self.pending.remove(key)?;
         if self.pending.is_empty() {
             self.order.clear();
+        } else if self.order.len() > 2 * self.pending.len() + ORDER_SLACK {
+            // Keys taken out leave their place behind: drop those places
+            // once they're half of `order`, so it stays within twice the
+            // queue.
+            let pending = &self.pending;
+            self.order.retain(|k| pending.contains_key(k));
         }
         self.uncount_parked(lease.holder);
         Some(lease)
@@ -687,12 +711,13 @@ impl AuthorityState {
             let w = lease.holder;
             if w != WorkerId::LOCAL {
                 let allowance = self.allowance(w);
+                let full = self.parked_by(w) >= MAX_PENDING_PER_WORKER;
                 let r = self.returns.entry(w).or_default();
                 if now.saturating_sub(r.since) >= RETURN_WINDOW_SECS {
                     r.since = now;
                     r.count = 0;
                 }
-                if r.count >= allowance {
+                if full || r.count >= allowance {
                     r.rest_until = r.rest_until.max(now.saturating_add(ttl));
                     dropped.push((key, lease));
                     continue;
@@ -1214,9 +1239,9 @@ impl LeaseAuthority {
     }
 
     /// `worker` gets no new or re-granted keys until `until` (Unix
-    /// seconds), or longer if it rests already: for a worker that stopped
-    /// on its own ([`REST_AFTER_DRAIN_SECS`]), so it can't hand its keys
-    /// back and claim again at once. The built-in worker never rests.
+    /// seconds), or longer if it rests already: a worker that says
+    /// `Drained` rests ([`REST_AFTER_DRAIN_SECS`]) before it gets keys
+    /// again. The built-in worker never rests.
     pub fn rest(&self, worker: WorkerId, until: i64) {
         if worker == WorkerId::LOCAL {
             return;
@@ -1266,11 +1291,15 @@ impl LeaseAuthority {
             })
             .collect();
         // A key no target can take now goes to the back, so it never holds
-        // up the keys behind it; each key is looked at once per call.
+        // up the keys behind it. Each key is looked at once per call, and
+        // at most `REGRANT_LOOK` per key the targets may take.
         let mut skipped = Vec::new();
-        let mut left = s.order.len();
+        let mut left = targets
+            .len()
+            .saturating_mul(per_target)
+            .saturating_mul(REGRANT_LOOK)
+            .min(s.pending.len());
         while left > 0 {
-            left -= 1;
             // Done once no target can take any key at all.
             if load.iter().all(|t| {
                 t.got.len() >= per_target
@@ -1281,9 +1310,11 @@ impl LeaseAuthority {
             let Some(key) = s.order.pop_front() else {
                 break;
             };
+            // A place a key left behind costs nothing against the bound.
             let Some(last) = s.pending.get(&key).map(|l| l.holder) else {
                 continue;
             };
+            left -= 1;
             let Some(target) = load
                 .iter_mut()
                 .filter(|t| {
@@ -3135,5 +3166,108 @@ mod tests {
         a.evict(WorkerId::LOCAL);
         assert_eq!(a.pending(), MAX_PENDING);
         assert_eq!(get(&ev.evicted), 11);
+    }
+
+    #[test]
+    fn one_worker_never_takes_more_than_its_share_of_the_queue() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(2_000_000));
+        assert_eq!(a.lock().allowance(A), MAX_PENDING_PER_WORKER);
+        let n = u32::try_from(MAX_PENDING_PER_WORKER).unwrap() + 100;
+        let claims: Vec<Claim> = (0..n).map(wide).collect();
+        assert!(granted_all(&a.claim_batch(A, &claims, 1, None, None)));
+        a.evict(A);
+        assert_eq!(a.pending(), MAX_PENDING_PER_WORKER);
+        assert_eq!(get(&ev.evicted), 100);
+        assert!(a.resting(A, 2));
+        // Another window: still no more than its share waits.
+        let later = 1 + RETURN_WINDOW_SECS + 600;
+        let more: Vec<Claim> = (n..n + 10).map(wide).collect();
+        a.set_lease_cap(None);
+        assert!(granted_all(&a.claim_batch(A, &more, later, None, None)));
+        a.evict(A);
+        assert_eq!(a.pending(), MAX_PENDING_PER_WORKER);
+        assert_eq!(get(&ev.evicted), 110);
+    }
+
+    #[test]
+    fn a_reconcile_counts_against_the_allowance() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(4));
+        let take = |n0: u8, at: i64| {
+            let c: Vec<Claim> = (n0..n0 + 4).map(|n| claim(n, 0)).collect();
+            assert!(granted_all(&a.claim_batch(A, &c, at, None, None)));
+        };
+        take(1, 10);
+        a.heartbeat(A, 10);
+        assert_eq!(a.reconcile(A, 1, &HashSet::new()), 4);
+        assert_eq!(a.regrant_pending(&[B], 4, 11)[0].1.len(), 4);
+        take(11, 12);
+        assert_eq!(a.reconcile(A, 1, &HashSet::new()), 4);
+        assert_eq!((a.pending(), get(&ev.evicted)), (0, 4));
+        assert!(a.resting(A, 12));
+    }
+
+    #[test]
+    fn a_requeued_key_counts_against_its_new_holder() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        assert!(granted_all(&a.claim_batch(
+            A,
+            &[claim(1, 0)],
+            1,
+            None,
+            None
+        )));
+        a.evict(A);
+        assert_eq!(a.lock().parked_by(A), 1);
+        let out = a.regrant_pending(&[B], 4, 2);
+        let (key, token) = out[0].1[0];
+        let parked = || {
+            let s = a.lock();
+            (s.parked_by(A), s.parked_by(B))
+        };
+        assert_eq!(parked(), (0, 0));
+        assert!(a.requeue(&key, token));
+        assert_eq!(parked(), (0, 1));
+    }
+
+    #[test]
+    fn a_regrant_looks_at_a_bounded_number_of_keys() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        // Many keys no remote target may take, then A's own.
+        for i in 0..1_000 {
+            a.claim(WorkerId::LOCAL, wide(i), 1);
+        }
+        a.evict(WorkerId::LOCAL);
+        // A is full of its own waiting keys, so only they could go to it.
+        let mine: Vec<Claim> = (2..=5).map(|n| claim(n, 0)).collect();
+        assert!(granted_all(&a.claim_batch(A, &mine, 1, None, None)));
+        a.evict(A);
+        let before = a.lock().order.len();
+        assert!(a.regrant_pending(&[A], 1, 2).is_empty());
+        // At most REGRANT_LOOK keys were looked at, and all wait still.
+        assert_eq!(a.pending(), 1_004);
+        assert_eq!(a.lock().order.len(), before);
+    }
+
+    #[test]
+    fn the_waiting_order_is_compacted_as_keys_leave() {
+        let (a, _) = counted();
+        for i in 0..5_000 {
+            a.claim(WorkerId::LOCAL, wide(i), 1);
+        }
+        a.evict(WorkerId::LOCAL);
+        for i in 0..4_000 {
+            a.claim(WorkerId::LOCAL, wide(i), 2);
+        }
+        let s = a.lock();
+        assert_eq!(s.pending.len(), 1_000);
+        assert!(
+            s.order.len() <= 2 * s.pending.len() + ORDER_SLACK,
+            "{}",
+            s.order.len()
+        );
     }
 }

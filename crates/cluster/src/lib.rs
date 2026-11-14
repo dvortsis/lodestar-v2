@@ -58,8 +58,9 @@ pub use join::{
 };
 pub use leases::{
     BatchAnswer, Claim, Claimed, FetchedReport, Lease, LeaseAuthority, LeaseEvents, LeaseTable,
-    MAX_PENDING, MIN_RETURN_ALLOWANCE, NoEvents, PENDING_HIGH_WATER, RECENT_COMMITS,
-    REST_AFTER_DRAIN_SECS, RETURN_WINDOW_SECS, Regranted, RestoredLease, Token, WorkerId,
+    MAX_PENDING, MAX_PENDING_PER_WORKER, MIN_RETURN_ALLOWANCE, NoEvents, PENDING_HIGH_WATER,
+    RECENT_COMMITS, REST_AFTER_DRAIN_SECS, RETURN_WINDOW_SECS, Regranted, RestoredLease, Token,
+    WorkerId,
 };
 pub use link::{CoordinatorLink, Link, LinkError, WorkerLink, local_pair};
 pub use server::{
