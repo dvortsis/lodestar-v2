@@ -4,9 +4,8 @@
 //! every listening socket that accepts connections to `127.0.0.1` on the
 //! port must belong to the process the supervisor started for that run:
 //! - **Linux:** the socket's inode, from `/proc/net/tcp` and `tcp6`, must
-//!   be among the open sockets of the child's process group (the child
-//!   leads its own group; Lodestar's launcher `exec`s, so the child's pid
-//!   is the companion's).
+//!   be among the open sockets of the child or a process descended from it
+//!   (Lodestar's launcher `exec`s, so the child's pid is the companion's).
 //! - **Windows:** each listener's owning process, from
 //!   `Get-NetTCPConnection`, must be the child itself. The companion is
 //!   spawned directly there (the launcher is Linux-only), and it listens
@@ -21,7 +20,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
     /// Every listener that accepts `127.0.0.1` on the port is the
-    /// process's (or, on Linux, its process group's).
+    /// process's (or, on Linux, a descendant's).
     Ours,
     /// At least one such listener belongs to another process.
     Other,
@@ -90,11 +89,13 @@ mod imp {
         }
     }
 
-    /// The socket inodes open in `pid` and every process in its process
-    /// group. `None` when the child's own descriptors can't be read, or a
-    /// group member's can't be for any reason but its having exited.
+    /// The socket inodes open in `pid` and every process descended from
+    /// it (by parent, not by process group, which another process of the
+    /// same session could join). `None` when the child's own descriptors
+    /// can't be read, or a descendant's can't be for any reason but its
+    /// having exited.
     fn group_sockets(proc: &Path, pid: u32) -> Option<HashSet<u64>> {
-        let mut members = vec![pid];
+        let mut parents = std::collections::HashMap::new();
         for entry in fs::read_dir(proc).ok()?.flatten() {
             let Some(n) = entry
                 .file_name()
@@ -106,14 +107,21 @@ mod imp {
             if n == pid {
                 continue;
             }
-            // One that exited meanwhile has no stat: it's not a member.
+            // One that exited meanwhile has no stat: it's not counted.
             let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
                 continue;
             };
-            if super::linux::process_group(&stat) == Some(pid) {
-                members.push(n);
+            if let Some(parent) = super::linux::parent(&stat) {
+                parents.insert(n, parent);
             }
         }
+        let mut members = vec![pid];
+        members.extend(
+            parents
+                .keys()
+                .copied()
+                .filter(|&n| super::linux::descends(&parents, n, pid)),
+        );
         let mut sockets = HashSet::new();
         for m in members {
             let fds = match fs::read_dir(proc.join(m.to_string()).join("fd")) {
@@ -170,9 +178,16 @@ mod imp {
     pub(super) fn owner(port: u16, pid: u32) -> Owner {
         // The last line says the script ran to its end, so no listeners
         // is told apart from a failed call.
+        // No match is an error of category ObjectNotFound; any other error
+        // (the cmdlet or its module unavailable) prints no `end`, so it
+        // reads as Unknown. No double quotes, which argument quoting could
+        // mangle.
         let script = format!(
-            "Get-NetTCPConnection -State Listen -LocalPort {port} -ErrorAction SilentlyContinue | \
-             ForEach-Object {{ \"$($_.LocalAddress) $($_.OwningProcess)\" }}; 'end'"
+            "$c = @(Get-NetTCPConnection -State Listen -LocalPort {port} \
+             -ErrorAction SilentlyContinue -ErrorVariable e); \
+             if (@($e | Where-Object {{ $_.CategoryInfo.Category -ne 'ObjectNotFound' }}).Count) \
+             {{ 'failed'; exit }}; \
+             $c | ForEach-Object {{ [string]$_.LocalAddress + ' ' + [string]$_.OwningProcess }}; 'end'"
         );
         match crate::supervise::pidfile::windows::powershell(&script) {
             Some(out) => super::windows::judge(&out, pid),
@@ -194,6 +209,7 @@ mod imp {
 /// tested on every platform.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod linux {
+    use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     /// The header line of `/proc/net/tcp`.
@@ -274,12 +290,26 @@ mod linux {
         a.is_unspecified() || a.to_ipv4_mapped().is_some_and(accepts_v4)
     }
 
-    /// The process group in a `/proc/<pid>/stat` line: the third field
-    /// after the command name, which is in parentheses and may hold
-    /// anything, so it's read from the last `)`.
-    pub(super) fn process_group(stat: &str) -> Option<u32> {
+    /// The parent in a `/proc/<pid>/stat` line: the second field after the
+    /// command name, which is in parentheses and may hold anything, so it's
+    /// read from the last `)`.
+    pub(super) fn parent(stat: &str) -> Option<u32> {
         let rest = &stat[stat.rfind(')')? + 1..];
-        rest.split_whitespace().nth(2)?.parse().ok()
+        rest.split_whitespace().nth(1)?.parse().ok()
+    }
+
+    /// Whether `n` descends from `root` by its parents. The walk is bounded,
+    /// so a table read mid-change can't loop.
+    pub(super) fn descends(parents: &HashMap<u32, u32>, n: u32, root: u32) -> bool {
+        let mut at = n;
+        for _ in 0..64 {
+            match parents.get(&at) {
+                Some(&p) if p == root => return true,
+                Some(&p) if p != at && p != 0 => at = p,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// The inode of a `socket:[N]` descriptor link.
@@ -361,10 +391,17 @@ mod linux {
         }
 
         #[test]
-        fn the_process_group_is_read_after_the_name() {
-            assert_eq!(process_group("42 (a) b) S 1 77 77 0 -1"), Some(77));
-            assert_eq!(process_group("42 (qbittorrent-nox) S 1 42 42 0"), Some(42));
-            assert_eq!(process_group("garbage"), None);
+        fn the_parent_is_read_after_the_name() {
+            assert_eq!(parent("42 (a) b) S 7 77 77 0 -1"), Some(7));
+            assert_eq!(parent("42 (qbittorrent-nox) S 1 42 42 0"), Some(1));
+            assert_eq!(parent("garbage"), None);
+            // 50 → 45 → 40: descends from 40, not from 41.
+            let parents = HashMap::from([(50, 45), (45, 40), (40, 1), (60, 1)]);
+            assert!(descends(&parents, 50, 40) && descends(&parents, 45, 40));
+            assert!(!descends(&parents, 60, 40) && !descends(&parents, 50, 41));
+            // A loop in a table read mid-change ends.
+            let looped = HashMap::from([(5, 6), (6, 5)]);
+            assert!(!descends(&looped, 5, 40));
             assert_eq!(socket_inode("socket:[4242]"), Some(4242));
             assert_eq!(socket_inode("pipe:[1]"), None);
         }

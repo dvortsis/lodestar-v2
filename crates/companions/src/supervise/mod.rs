@@ -500,7 +500,8 @@ async fn supervise(
 ) {
     let redactor = Arc::new(logs::Redactor::new(&c.secrets));
     let set = |state: State| status.send_modify(|s| s.state = state);
-    let mut crashes: VecDeque<Instant> = VecDeque::new();
+    // Each crash in the window, and whether it was a port in use.
+    let mut crashes: VecDeque<(Instant, bool)> = VecDeque::new();
     let mut in_a_row = 0u32;
     // Needs attention survives a hold: a route that comes back doesn't
     // clear it, only your restart does.
@@ -562,7 +563,10 @@ async fn supervise(
         // A port another program holds already: it isn't started, and the
         // try counts as a crash, so it backs off and, if the port stays
         // taken, waits for you (X-cmp09-fix).
-        let port_busy = loopback_port(&c).is_some_and(port_taken);
+        let port_busy = match loopback_port(&c) {
+            Some(p) => still_taken(p).await,
+            None => false,
+        };
         let spawned = if port_busy {
             Err(SpawnError::Start(std::io::ErrorKind::AddrInUse))
         } else {
@@ -601,15 +605,17 @@ async fn supervise(
                 }
                 in_a_row = in_a_row.saturating_add(1);
                 let now = Instant::now();
-                crashes.push_back(now);
+                crashes.push_back((now, port_busy));
                 while crashes
                     .front()
-                    .is_some_and(|at| now.duration_since(*at) >= t.crash_window)
+                    .is_some_and(|(at, _)| now.duration_since(*at) >= t.crash_window)
                 {
                     crashes.pop_front();
                 }
                 if crashes.len() >= t.crash_limit {
-                    parked = Some(if port_busy {
+                    // Only a port that was in use every time is reported
+                    // as that; any real crash among them is a crash loop.
+                    parked = Some(if crashes.iter().all(|(_, busy)| *busy) {
                         Attention::PortInUse
                     } else {
                         Attention::CrashLoop
@@ -655,6 +661,25 @@ fn port_taken(port: u16) -> bool {
             e.kind() == std::io::ErrorKind::AddrInUse
                 || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
         }
+    }
+}
+
+/// How long a port found in use may take to come free before the start
+/// counts it: what an earlier run started may still be exiting.
+const PORT_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether `127.0.0.1:port` is still in use after [`PORT_GRACE`], looked
+/// at every 100 ms.
+async fn still_taken(port: u16) -> bool {
+    let until = Instant::now() + PORT_GRACE;
+    loop {
+        if !port_taken(port) {
+            return false;
+        }
+        if Instant::now() >= until {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
