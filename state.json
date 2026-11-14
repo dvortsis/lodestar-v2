@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:12Z",
+  "updated_at": "2026-11-14T04:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8376,7 +8376,11 @@
     "Owner \u00a72.19 flag at #857 merge: re-judge now judges every stored row (no shortcut); first real per-1M timing still owed from a real store",
     "Owner \u00a72.19 FYI for #863 X-dht01-fix sent via dashboard session",
     "Hardening follow-up: bootstrap fetches Docker GPG key without fingerprint check (akamai cloud-init template); slice later",
-    "slices.yaml: X-gluetun-leak-cmp also owns pia-example/compose.vpn.yaml; sequence after #866"
+    "slices.yaml: X-gluetun-leak-cmp also owns pia-example/compose.vpn.yaml; sequence after #866",
+    {
+      "at": "2026-11-14T04:13Z",
+      "item": "Operator check 8 (operator-injection.yml, level 1 first) is the owner's to start (actor gate, cloud-operator env, spends up to the cap); after checks 1-7 incl. ping-1. Add owner_queue item in next runner PR; reviewer session reads the verdict lines after. Offline suite 265 OK at e16c8581."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9694,7 +9698,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:12Z",
+  "updated": "2026-11-14T04:13Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
