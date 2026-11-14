@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:13Z",
+  "updated_at": "2026-11-14T04:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8380,6 +8380,10 @@
     {
       "at": "2026-11-14T04:13Z",
       "item": "Operator check 8 (operator-injection.yml, level 1 first) is the owner's to start (actor gate, cloud-operator env, spends up to the cap); after checks 1-7 incl. ping-1. Add owner_queue item in next runner PR; reviewer session reads the verdict lines after. Offline suite 265 OK at e16c8581."
+    },
+    {
+      "at": "2026-11-14T04:33Z",
+      "item": "Operator check 2 (ping-1) NOT passed: owner approved the wake 04:29Z; session created (API key, vault and App token worked) but ended with an error on the first poll (~0 s); reply kind escalation \"the session ended with an error\", no pong. End-of-wake sweep green; 03:32Z scheduled sweep green. Ran on 592fd0b8 (pre-#859/#865). Owner to read the error on Console > Managed Agents > Sessions \"wake ping-1\" and check Billing; then runner posts ping-2 on current main."
     }
   ],
   "main_health": [
@@ -9698,7 +9702,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:13Z",
+  "updated": "2026-11-14T04:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
