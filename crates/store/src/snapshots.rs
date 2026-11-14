@@ -1354,14 +1354,17 @@ fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> 
 /// the adult mark as `?4` (`?1`–`?3` are still bound but unused): the
 /// locked floor's own rules first, then a worker's floor report (so a
 /// carry never renames a local floor row to one, which WK-13's purge
-/// could later delete), then an adult hold (the one filtering can't
-/// rebuild, see `Store::purge_filter`), then any other.
+/// could later delete), then a kept hold ([`KEPT_RULES`](crate::KEPT_RULES),
+/// which only its own release lifts, so no carry replaces it with a hold
+/// a release by rule could free), then an adult hold (the one filtering
+/// can't rebuild, see `Store::purge_filter`), then any other.
 fn hold_rank(rule: &str) -> String {
     format!(
-        "CASE WHEN {} THEN 3 WHEN {} THEN 2 \
+        "CASE WHEN {} THEN 4 WHEN {} THEN 3 WHEN {} THEN 2 \
          WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END",
         crate::filter::local_floor_sql(rule),
-        crate::filter::worker_floor_sql(rule)
+        crate::filter::worker_floor_sql(rule),
+        crate::filter::kept_hold_sql(rule)
     )
 }
 
@@ -2027,6 +2030,95 @@ mod tests {
                 assert!(rows.is_empty(), "v{live_version}");
             }
         }
+    }
+
+    /// A rollback's merge never replaces a kept hold with another, even a
+    /// later adult one, whichever side holds it: only the kept hold's own
+    /// release lifts it, and a release by rule could free the other.
+    #[test]
+    fn a_rollback_keeps_a_kept_hold_over_any_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _db) = live(dir.path());
+        let [kept] = crate::KEPT_RULES;
+        let c = store.connection();
+        // In the store: a kept hold the copy has a later adult one for,
+        // and a later adult hold over the copy's kept one.
+        quarantine(c, [30; 20], kept, b"kept-live", T + 400 * DAY);
+        quarantine(c, [31; 20], "U-1+adult", b"adult-live", T + 400 * DAY);
+        // The floor outranks a kept hold, whichever side holds which.
+        let [floor, ..] = crate::FLOOR_RULES;
+        quarantine(c, [32; 20], kept, b"kept-live", T + 400 * DAY);
+        quarantine(c, [33; 20], floor, b"floor-live", T + 100 * DAY);
+        // And in the tombstones, both ways.
+        let tomb = |conn: &Connection, h: u8, rule: &str, at: i64| {
+            conn.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                params![&[h; 20][..], rule, at],
+            )
+            .unwrap();
+        };
+        tomb(c, 34, kept, T + 50 * DAY);
+        tomb(c, 35, floor, T);
+        let copy = dir.path().join("kept.tmp");
+        let conn = fixture(&copy, Plan::KNOWN_THROUGH);
+        quarantine(&conn, [30; 20], "U-1+adult", b"adult-copy", T + 500 * DAY);
+        quarantine(
+            &conn,
+            [31; 20],
+            &format!("{kept}+adult"),
+            b"kept-copy",
+            T + 300 * DAY,
+        );
+        quarantine(&conn, [32; 20], floor, b"floor-copy", T + 100 * DAY);
+        quarantine(&conn, [33; 20], kept, b"kept-copy", T + 400 * DAY);
+        tomb(&conn, 34, floor, T);
+        tomb(&conn, 35, kept, T + 50 * DAY);
+        drop(conn);
+        purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
+        assert_eq!(
+            rows(&copy, "SELECT hash, rule FROM quarantine ORDER BY hash"),
+            [
+                format!("h30 {kept}"),
+                format!("h31 {kept}+adult"),
+                format!("h32 {floor}"),
+                format!("h33 {floor}"),
+            ]
+        );
+        assert_eq!(
+            rows(
+                &copy,
+                "SELECT hash, rule FROM tombstones WHERE hash IN (?1, ?2) ORDER BY hash"
+                    .replace("?1", "x'2222222222222222222222222222222222222222'")
+                    .replace("?2", "x'2323232323232323232323232323232323232323'")
+                    .as_str()
+            ),
+            [format!("h34 {floor}"), format!("h35 {floor}")]
+        );
+    }
+
+    /// A rollback keeps the copy's own core marker, never the store's: the
+    /// restored torrents were judged by the core the copy records, so
+    /// they're judged again if that one is older.
+    #[test]
+    fn a_rollback_keeps_the_copys_core_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _db) = live(dir.path());
+        let pass = crate::CorePass {
+            after: 5,
+            ..Default::default()
+        };
+        store.set_core_rejudge(9, &pass).unwrap();
+        store.finish_core_rejudge(9).unwrap();
+        let copy = dir.path().join("marker.tmp");
+        drop(fixture(&copy, Plan::KNOWN_THROUGH));
+        purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
+        assert_eq!(
+            rows(
+                &copy,
+                "SELECT key FROM settings WHERE key LIKE 'filter.core.%'"
+            ),
+            Vec::<String>::new()
+        );
     }
 
     /// Every table's rows, for comparing a copy's holds.

@@ -21,6 +21,7 @@
 pub mod adult_enrich;
 pub mod control;
 mod coordinator;
+pub mod core_rejudge;
 mod dht;
 mod egress;
 pub mod enrich;
@@ -1180,6 +1181,7 @@ impl Pipeline {
             hot: config.hot.clone(),
             health: health.clone(),
             candidates: Default::default(),
+            core_rejudge: Default::default(),
             sweep: Default::default(),
             verify: unverified::Verify {
                 on: config.verify_unverified,

@@ -539,10 +539,65 @@ const ADULT_WINDOW: u32 = 12;
 /// characters, and how much each costs the first time). A torrent past it
 /// is held as too large to judge (CS-0a); every torrent within it is read
 /// whole. The core's time to judge one at the budget, whatever its
-/// text, is held under 15 ms on the reference runner, with 2-12 ms
+/// text, is held under 15 ms on the reference runner, with 2–12 ms
 /// measured across every input shape (`budget_worst_case` in
 /// `tests/props.rs`).
 pub const BUDGET: u64 = 9_000_000;
+
+/// The core's version: what a stored torrent was judged by. It goes up
+/// whenever a change to the core could judge a stored torrent differently,
+/// so the store re-judges every torrent judged by an older one (§20.5).
+/// 1 is every core before X-filter01-fix (#843): the released one, which
+/// read text one way, and the later one, which read it both ways. A store
+/// that records none was judged by one of them.
+pub const CORE_VERSION: i64 = 2;
+
+/// Version 1 of the core's limits (detail held, docs/security/v1 §5).
+const V1_TOKENS: usize = 128;
+const V1_FILES: usize = 1_000;
+
+thread_local! {
+    /// The earlier reading's tokenizer, kept per thread like the main one.
+    static SPLITTING: std::cell::RefCell<crate::normalize::Tokenizer> =
+        std::cell::RefCell::new(crate::normalize::Tokenizer::splitting());
+}
+
+/// Whether version 1 of the core read `item` whole: within its limits,
+/// in both readings. Unmetered: it reads each path of a torrent within
+/// those limits once, and twice only where the earlier reading differs.
+pub fn read_whole_by_v1(item: &Item) -> bool {
+    if item.files.len() > V1_FILES || item.files.iter().any(|f| f.padding) {
+        return false;
+    }
+    let mut out = Vec::new();
+    let mut fits = |text: &str| {
+        out.clear();
+        crate::normalize::tokens(text, &mut out);
+        if out.len() > V1_TOKENS {
+            return false;
+        }
+        // The earlier reading differs only where a text holds a mark.
+        if !crate::normalize::splits([text]) {
+            return true;
+        }
+        out.clear();
+        SPLITTING.with(|t| t.borrow_mut().text(text, &mut out));
+        out.len() <= V1_TOKENS
+    };
+    fits(item.name) && item.files.iter().all(|f| fits(&f.path.join("/")))
+}
+
+/// Whether a core re-judge reads stored torrent `item` first (§20.5):
+/// version 1 didn't read it whole, or it reads differently in the earlier
+/// reading, which the released core used alone. Every other stored
+/// torrent is judged again after these.
+pub fn rejudge_first(item: &Item) -> bool {
+    let paths: Vec<String> = item.files.iter().map(|f| f.path.join("/")).collect();
+    !read_whole_by_v1(item)
+        || crate::normalize::splits(
+            std::iter::once(item.name).chain(paths.iter().map(String::as_str)),
+        )
+}
 
 /// The most files a torrent within the budget can have: each costs some
 /// of it, however short its path. Every file of a torrent the core judges
