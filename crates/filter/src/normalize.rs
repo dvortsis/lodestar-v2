@@ -269,6 +269,14 @@ struct Plan {
 /// has used is lost. The map's hash is keyed at random (std's), so no
 /// choice of words makes its look-ups slow, and each look-up is charged
 /// the same ([`cost::PROBED`]). Buffers are kept from read to read.
+///
+/// Bounded by charges already paid: every entry was charged as new in
+/// this read, at least [`cost::PLAN`] for a word and [`cost::CHAR_PLAN`]
+/// for a character, so a read within the budget keeps at most about
+/// `BUDGET / PLAN` words and `BUDGET / CHAR_PLAN` characters (checked in
+/// debug builds). [`Tokenizer::meter`] empties it at the start of every
+/// read, and the meter's guard (`Unmeter`) at its end, a panic included,
+/// so nothing carries over between torrents.
 #[derive(Debug)]
 struct Spill<K, P> {
     map: std::collections::HashMap<K, P>,
@@ -621,6 +629,10 @@ impl Tokenizer {
                     };
                     let held = std::mem::replace(&mut self.chars[slot], plan);
                     self.char_spill.map.insert(held.key, held);
+                    debug_assert!(
+                        self.char_spill.map.len() as u64 * cost::CHAR_PLAN <= self.work,
+                        "each kept character was charged as new"
+                    );
                     fresh
                 } else {
                     let plan = &mut self.chars[slot];
@@ -772,6 +784,10 @@ impl Tokenizer {
                     None => held.key.clone(),
                 };
                 self.plan_spill.map.insert(key, held);
+                debug_assert!(
+                    self.plan_spill.map.len() as u64 * cost::PLAN <= self.work,
+                    "each kept word was charged as new"
+                );
                 let plan = &mut self.plans[at];
                 plan.round = self.round;
                 if fresh {

@@ -2863,3 +2863,161 @@ fn budget_worst_case() {
 /// two, which this host can't measure. A bench against a stored
 /// baseline could, as §20.8 says of the budget gate.
 const WORST_CASE_MS: f64 = 15.0;
+
+/// [`budget_worst_case`]'s generated inputs, in work units rather than
+/// time, so CI enforces their charges: each one's charged units reach the
+/// budget at no more files (or name length) than a fixed cap, set about
+/// a quarter above what the charges allow today (12,595, 59, 520, 37,962
+/// files and an 80,815-syllable name), and the torrent is held as too
+/// large to judge (CS-0a) at it. Before these charges every one of them
+/// fitted well past its cap; a charge lost later lets more fit and fails
+/// this.
+#[test]
+fn generated_inputs_reach_the_budget() {
+    use lodestar_filter::{CoreRule, TermSet, read_cost};
+    fn each(n: usize, f: impl Fn(usize) -> String) -> Vec<FileInfo> {
+        (0..n).map(|i| FileInfo::new(vec![f(i)], 1 << 20)).collect()
+    }
+    type Torrent = Box<dyn Fn(usize) -> (String, Vec<FileInfo>)>;
+    let files =
+        |f: fn(usize) -> String| -> Torrent { Box::new(move |n| ("Title".into(), each(n, f))) };
+    let shipped = Core::new(
+        Lists::shipped().unwrap(),
+        CsList::default(),
+        Switches::default(),
+    );
+    let stand_in = Core::new(
+        Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        },
+        CsList::default(),
+        Switches::default(),
+    );
+    let shapes: Vec<(&str, Torrent, &Core, ContentType, usize)> = vec![
+        (
+            "Hangul syllables sharing a slot",
+            files(|i| {
+                let base = 0xAC01 + (i as u32 % 7) * 28;
+                (0..5)
+                    .filter_map(|k| char::from_u32(base + k * 2048))
+                    .collect()
+            }),
+            &shipped,
+            ContentType::Video,
+            16_000,
+        ),
+        (
+            "distinct letter-digit words",
+            files(|i| {
+                let mut x = i as u64 * 2 + 1;
+                let mix = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                let mut s = String::new();
+                while s.len() < 4_000 {
+                    for _ in 0..32 {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        s.push(mix[x as usize % mix.len()] as char);
+                    }
+                    s.push(' ');
+                }
+                s
+            }),
+            &shipped,
+            ContentType::Video,
+            74,
+        ),
+        (
+            "role terms, a gap, then sexual terms",
+            files(|i| {
+                format!(
+                    "{}{}{}{i}",
+                    "rolea ".repeat(200),
+                    "w ".repeat(20),
+                    "lexa ".repeat(200)
+                )
+            }),
+            &stand_in,
+            ContentType::Adult,
+            650,
+        ),
+        (
+            "an age in every short file",
+            files(|i| format!("15 yo {}", i % 10)),
+            &stand_in,
+            ContentType::Adult,
+            48_000,
+        ),
+        (
+            "alternating Hangul syllables in the name",
+            Box::new(|n| {
+                let pair: Vec<char> = (0..2)
+                    .filter_map(|k| char::from_u32(0xAC01 + 27 * 28 + k * 2048))
+                    .collect();
+                let mut s = String::new();
+                for i in 0..n {
+                    s.push(pair[i % 2]);
+                    if i % 3 == 2 {
+                        s.push(' ');
+                    }
+                }
+                (s, vec![FileInfo::new(vec!["a".into()], 1)])
+            }),
+            &shipped,
+            ContentType::Video,
+            CAP_NAME,
+        ),
+    ];
+    for (label, shape, core, content_type, cap) in shapes {
+        let (name, files) = shape(cap);
+        let it = Item {
+            hashes: &[],
+            name: &name,
+            files: &files,
+            content_type,
+        };
+        assert_eq!(core.read_cost(&it), None, "{label}: {cap} fit the budget");
+        assert_eq!(
+            core.verdict(&it).map(|h| h.rule),
+            Some(CoreRule::Cs0a),
+            "{label}"
+        );
+        // Judging counts too: a torrent the read alone fits, held because
+        // judging its signals passes the budget.
+        if label == "role terms, a gap, then sexual terms" {
+            let fits = |n: usize| {
+                let (name, files) = shape(n);
+                core.read_cost(&Item {
+                    hashes: &[],
+                    name: &name,
+                    files: &files,
+                    content_type,
+                })
+                .is_some()
+            };
+            let (mut lo, mut hi) = (1, cap);
+            while hi - lo > 1 {
+                let mid = (lo + hi) / 2;
+                if fits(mid) { lo = mid } else { hi = mid }
+            }
+            let (name, files) = shape(hi);
+            let it = Item {
+                hashes: &[],
+                name: &name,
+                files: &files,
+                content_type,
+            };
+            assert!(
+                read_cost(&it).is_some(),
+                "the read alone fits at {hi} files"
+            );
+            assert_eq!(core.verdict(&it).map(|h| h.rule), Some(CoreRule::Cs0a));
+        }
+    }
+}
+
+/// [`generated_inputs_reach_the_budget`]'s cap on the alternating name's
+/// length, in syllables.
+const CAP_NAME: usize = 101_000;
