@@ -28,7 +28,7 @@ _FIELD = re.compile(r"(id|in-reply-to|kind): ([a-z0-9][a-z0-9-]{0,39})")
 # `up <preset>`, `run <step> <vm> [<commit>]`. Presets and steps come from
 # fleet.yml's own config, so here they're words of command.py's token shape;
 # the verbs and VMs are command.py's own (test_gates_reader pins both). This
-# file is fetched alone into the operator's sandbox, so it can't import it.
+# file is mounted into the operator's sandbox without it, so it can't import it.
 _WORD = re.compile(r"[a-z0-9-]{1,32}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 FLEET_VERBS = ("status", "down", "up", "run")
