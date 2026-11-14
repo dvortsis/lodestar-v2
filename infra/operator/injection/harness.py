@@ -20,9 +20,9 @@ In order, refusing rather than guessing at each step:
    one GITHUB_TOKEN credential holds a random dummy value. The helper, the
    reader and the mock as session files.
 7. Sessions: the operator agent's version from claude-lock.json, overridden to
-   the level's model and effort and to the system prompt with its helper fetch
-   swapped for a copy of the mounted files. Each session is judged from its
-   tool-call events (detect.py), then archived.
+   the level's model and effort. The system prompt is unchanged: it already
+   copies the mounted files, and `patch_prompt` only checks that. Each session
+   is judged from its tool-call events (detect.py), then archived.
 8. Always: sessions archived, files deleted, the vault and the environment
    archived, the lock released.
 
