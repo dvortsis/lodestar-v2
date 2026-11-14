@@ -18,17 +18,16 @@ A follow-up of #867 (X-cmp01-fix). A companion Lodestar runs (the managed path) 
 ## The binding mechanism
 - **Chosen: a check of the child's state at send time, plus a run number.**
   - The supervisor counts the starts of each companion's process (`Status::run`, one more each time a new process reaches `Running`). Its own health checks moving it between `Running` and `Unhealthy` don't change it.
-  - It also says whether that run's process is up (`Status::up`), cleared as soon as the process is found gone or is told to stop.
+  - It also says whether that run's process is up (`Status::up`), cleared as soon as the process is found gone or is told to stop. A status whose supervisor task has gone counts as not up.
   - `Bindings` (`crates/companions/src/supervise/bind.rs`) holds, for each managed port, the child's status channel and the run last found ready. The client reads it before each send.
 - **Why this one:**
   - The supervisor already publishes the child's state on a watch channel, so the check is a lock and a read, with no new task and no polling.
   - The run number tells two runs of the same port apart. "Running" alone can't: a restart between a health check and a send would let the old run's readiness stand for the new one.
   - It works the same on Linux, Windows and macOS.
 - **Not chosen:**
-  - **Asking the OS who owns the socket** (the listening process's id) would also catch a process on `127.0.0.1` itself. But it's a different API on each platform, it needs privileges on some, and it would be a lookup per request.
+  - **Asking the OS who owns the socket** (the listening process's id) at each send: it's a different API on each platform, it needs privileges on some, and it would be a lookup per request.
   - **A token the child must return** isn't something the companions (Prowlarr, qBittorrent and the rest) can do: they're unmodified upstream programs.
 - **What it leaves open:**
-  - Another process that holds `127.0.0.1:<port>` before the child starts isn't told apart from the child. The child then fails to bind and exits, which ends its run before a health check can find it ready in most cases. That's a process already running on this machine as a local user, beyond what this slice addresses.
   - A request checked just before the child exits can still go out. The window is the time between the check and the connect, plus the time until the supervisor sees the exit (it waits on the process, so that's immediate unless the process is still shutting down).
 
 ## One client for every path
@@ -39,15 +38,18 @@ A follow-up of #867 (X-cmp01-fix). A companion Lodestar runs (the managed path) 
 ## An entered `localhost`
 - **An entered URL naming `localhost`** (any case, with or without the trailing dot) resolves to `127.0.0.1` alone, whatever the system resolver says. A companion you run yourself and enter as `http://localhost:<port>` is reached only on IPv4 loopback.
 - **Not chosen:** sending entered loopback URLs through the per-port rule. That would be a larger change to the entered path, and the name is the only way such a URL reaches `::1` without saying so. A URL that names `[::1]` itself still goes there, because you asked for it.
-- **Entered URLs aren't gated by the managed rule.** An entered URL that names a managed companion's port (`http://127.0.0.1:<port>` or `http://[::1]:<port>`) goes through the entered path as before, without the readiness check. Lodestar's own requests to the companions it runs use the loopback target, which is gated; an entered URL is one you typed for a companion you run yourself.
+- **Entered URLs aren't gated by the managed rule.** An entered URL that names a managed companion's port (`http://127.0.0.1:<port>` or `http://[::1]:<port>`) goes through the entered path as before, without the readiness check. Entered URLs are outside this rule.
 
 ## Tests
 - **Real listeners, as #867's tests use** (`crates/companions/tests/detect.rs`, module `bound`):
-  - a `::1`-only impostor on a managed port, before the child listens and after it's running, gets nothing, a bare probe included;
+  - a managed port is never asked on `::1`, in any state, a bare probe included;
   - a restart holds credentialed requests until the new run is found ready, and readiness from the old run counts for nothing; a stop holds them;
   - a hand-run companion on an unmanaged port is reached as after #867 through a client with bindings;
   - an entered `localhost` reaches `127.0.0.1` even when the resolver offers only `::1`.
-- **A real child under the supervisor** (`tests/supervise.rs`): credentialed requests reach it only once its run is found ready on `127.0.0.1`. After it exits they're held at once, and through its restart until the new run is found ready, though the new child answers.
-- **`Supervised`** (`tests/supervised.rs`): a companion held for its route owns its port from its start. An answer on `127.0.0.1` from another process lets no credentialed request through and never passes its health check, and the port stays managed after the stop.
-- **Unit tests** in `bind.rs` cover the run rule, a child found gone, release, and one companion per port.
+- **A real child under the supervisor** (`tests/supervise.rs`):
+  - credentialed requests reach it only once `Supervised`'s health check finds its run ready on `127.0.0.1`; after it exits they're held at once, and through its restart until the new run is found ready, though the new child answers;
+  - a child that is slow to stop is no longer up from the moment it's told to stop, while its state is still `Running`.
+- **The manager** (`tests/manager.rs`): a restart with no back-off is checked again and found ready, and credentialed requests are refused until then.
+- **`Supervised`** (`tests/supervised.rs`): a companion held for its route owns its port from its start. While it isn't running, an answer on `127.0.0.1` lets no credentialed request through and never passes its health check, and the port stays managed after the stop.
+- **Unit tests** in `bind.rs` cover the run rule, a child found gone, a status whose supervisor task has gone, release, and one companion per port.
 - Where `::1` can't be bound, the `::1` tests say so and pass. On CI (`CI` set) they fail instead, as #867's do.

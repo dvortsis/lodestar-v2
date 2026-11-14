@@ -1233,14 +1233,12 @@ mod bound {
         http().with_bindings(Arc::clone(bindings))
     }
 
-    /// A process on `::1` that answers on a managed companion's port
-    /// before the child Lodestar started listens gets nothing: not a
-    /// request that carries something, and not a bare probe either, while
-    /// the child is starting or once it's running.
+    /// A managed port is never asked on `::1`, in any state: not by a
+    /// request that carries something, and not by a bare probe either.
     #[tokio::test]
-    async fn an_ipv6_impostor_on_a_managed_port_gets_nothing() {
-        let impostor: Handler = Arc::new(|_: &str| reply(200, b"impostor"));
-        let Some((server, _v4)) = ipv6_with_ipv4_closed(impostor).await else {
+    async fn a_managed_port_is_never_asked_on_ipv6() {
+        let v6: Handler = Arc::new(|_: &str| reply(200, b"v6"));
+        let Some((server, _v4)) = ipv6_with_ipv4_closed(v6).await else {
             assert!(
                 std::env::var_os("CI").is_none(),
                 "::1 can't be bound here, so the managed-port rule is untested"

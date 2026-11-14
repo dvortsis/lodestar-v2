@@ -317,6 +317,12 @@ pub trait Run: Send + Sync {
     fn status(&self, _id: &CompanionId) -> Option<watch::Receiver<Status>> {
         None
     }
+    /// The run ([`Status::run`]) its last passed health check found ready,
+    /// which the manager's follow starts from. By default the run current
+    /// now, for a runner that doesn't tie readiness to a run.
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        self.status(id).map(|s| s.borrow().run)
+    }
 }
 
 /// Configuring an installed companion through its API (CMP-8b); [`Api`]
@@ -2094,16 +2100,18 @@ impl Manager {
             // A start that passed health was configured; one that didn't
             // (held for its route, say) is configured once it runs.
             let mut configured = now == Health::Healthy;
-            // The run last checked: a new run of the process is checked
-            // again even when no other state was seen between (a restart
-            // with no back-off), so it's found ready (`bind`).
-            let mut checked = status.borrow().run;
+            // The run last checked, from the one the start's check found
+            // ready: a new run of the process is checked again even when
+            // no other state was seen between (a restart with no back-off,
+            // or one before this follow began), so it's found ready
+            // (`bind`).
+            let mut checked = check.ready_run(id);
             loop {
                 let s = *status.borrow_and_update();
                 let state = s.state;
                 let next = match state {
-                    State::Running if last != Health::Healthy || s.run != checked => {
-                        checked = s.run;
+                    State::Running if last != Health::Healthy || checked != Some(s.run) => {
+                        checked = Some(s.run);
                         if !check.healthy(id, &target).await {
                             Some(Health::Unhealthy)
                         } else if configured {
@@ -2677,19 +2685,14 @@ impl Run for Supervised {
                 {
                     return false;
                 }
-                let run = bound.map(|(b, p)| b.running_run(p));
-                if run != Some(None) && h.check(&*self.http, target).await == HealthStatus::Healthy
-                {
-                    match (bound, run.flatten()) {
-                        (Some((b, p)), Some(r)) => {
-                            b.mark_ready(p, r);
-                            // A check that spanned a restart readies nothing.
-                            if b.ready(p) {
-                                return true;
-                            }
-                        }
-                        _ => return true,
-                    }
+                let check =
+                    || async { h.check(&*self.http, target).await == HealthStatus::Healthy };
+                let ok = match bound {
+                    Some((b, p)) => b.try_ready(p, check).await,
+                    None => check().await,
+                };
+                if ok {
+                    return true;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -2718,6 +2721,20 @@ impl Run for Supervised {
 
     fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.running().get(id).and_then(|r| r.status.clone())
+    }
+
+    /// Bound to its port: the run found ready there, if any, so a restart
+    /// between that check and the follow is checked again.
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        let (status, port) = self
+            .running()
+            .get(id)
+            .map(|r| (r.status.clone(), r.port))
+            .unwrap_or((None, None));
+        match self.bindings.as_ref().zip(port) {
+            Some((b, p)) => b.ready_run(p),
+            None => status.map(|s| s.borrow().run),
+        }
     }
 }
 

@@ -103,20 +103,44 @@ impl Bindings {
     /// The run of the child on `port` that is running now, if one is.
     pub fn running_run(&self, port: u16) -> Option<u64> {
         let ports = self.ports();
-        let s = *ports.get(&port)?.status.as_ref()?.borrow();
-        running(&s).then_some(s.run)
+        let s = up(ports.get(&port)?.status.as_ref()?)?;
+        Some(s.run)
     }
 
     /// A health check on `127.0.0.1` answered while run `run` was the
     /// one running: it's ready, if it's still that run.
     pub fn mark_ready(&self, port: u16, run: u64) {
         let mut ports = self.ports();
-        if let Some(p) = ports.get_mut(&port) {
-            let now = p.status.as_ref().map(|s| *s.borrow());
-            if now.is_some_and(|s| running(&s) && s.run == run) {
-                p.ready = Some(run);
-            }
+        if let Some(p) = ports.get_mut(&port)
+            && p.status.as_ref().and_then(up).is_some_and(|s| s.run == run)
+        {
+            p.ready = Some(run);
         }
+    }
+
+    /// One readiness attempt on `port`: `check` (a health check on
+    /// `127.0.0.1`) runs only while a run is up, and a pass marks that run
+    /// ready if it's still the one up. True once the port is ready. What
+    /// [`Supervised`](crate::manager::Supervised)'s health check does.
+    pub async fn try_ready<F, Fut>(&self, port: u16, check: F) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let Some(run) = self.running_run(port) else {
+            return false;
+        };
+        if !check().await {
+            return false;
+        }
+        // A check that spanned a restart readies nothing.
+        self.mark_ready(port, run);
+        self.ready(port)
+    }
+
+    /// The run last found ready on `port`, if any.
+    pub fn ready_run(&self, port: u16) -> Option<u64> {
+        self.ports().get(&port).and_then(|p| p.ready)
     }
 
     /// Whether a request that carries something may go to `port` now: the
@@ -129,15 +153,20 @@ impl Bindings {
         let (Some(status), Some(ready)) = (p.status.as_ref(), p.ready) else {
             return false;
         };
-        let s = status.borrow();
-        running(&s) && s.run == ready
+        up(status).is_some_and(|s| s.run == ready)
     }
 }
 
-/// A child process is up: running, or running with failed health checks,
-/// and not yet found gone or told to stop.
-fn running(s: &Status) -> bool {
-    s.up && matches!(s.state, State::Running | State::Unhealthy { .. })
+/// The child's status, if its process is up: running, or running with
+/// failed health checks, not yet found gone or told to stop, and still
+/// supervised. A status whose sender has gone (the supervisor's task ended
+/// without a stop: a panic or an abort) never counts.
+fn up(rx: &watch::Receiver<Status>) -> Option<Status> {
+    if rx.has_changed().is_err() {
+        return None;
+    }
+    let s = *rx.borrow();
+    (s.up && matches!(s.state, State::Running | State::Unhealthy { .. })).then_some(s)
 }
 
 #[cfg(test)]
@@ -198,12 +227,30 @@ mod tests {
         b.release(9696);
         assert!(b.managed(9696) && !b.ready(9696));
         assert_eq!(b.running_run(9696), None);
-        // A stopped status (the sender gone) isn't running either.
+        // A stopped status isn't running either.
         let (tx, rx) = watch::channel(status(State::Running, 3));
+        b.release(9696);
         assert!(b.hold(9696, rx));
         b.mark_ready(9696, 3);
+        assert!(b.ready(9696));
         tx.send_replace(status(State::Stopped, 3));
         assert!(!b.ready(9696));
+    }
+
+    /// The supervisor's task ended without a stop (a panic or an abort):
+    /// its last status still says running, but nothing counts.
+    #[test]
+    fn a_status_whose_sender_has_gone_isnt_running() {
+        let b = Bindings::new();
+        let (tx, rx) = watch::channel(status(State::Running, 1));
+        assert!(b.hold(8080, rx));
+        b.mark_ready(8080, 1);
+        assert!(b.ready(8080));
+        drop(tx);
+        assert!(!b.ready(8080));
+        assert_eq!(b.running_run(8080), None);
+        b.mark_ready(8080, 1);
+        assert!(!b.ready(8080));
     }
 
     #[test]

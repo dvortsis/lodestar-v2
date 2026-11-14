@@ -77,7 +77,7 @@ fn fake_companion() {
                 let mut buf = [0u8; 4096];
                 let n = sock.read(&mut buf).unwrap_or(0);
                 let _ = sock.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"OK\"}",
                 );
                 if buf[..n].starts_with(b"GET /exit ") {
                     std::process::exit(9);
@@ -883,24 +883,22 @@ async fn credentialed_requests_follow_the_run_found_ready() {
         || ProbeLimits::new(Duration::from_secs(15), 1024).unwrap_or_else(|e| panic!("{e:?}"));
     let at = |p: &str| RequestPath::parse(p).unwrap_or_else(|e| panic!("{e:?}"));
     let carrying = || ProbeRequest::new(&target, at("/api"), limits()).post(b"key=x".to_vec());
-    // What Supervised's health check does: a bare probe on 127.0.0.1
-    // that answers while a run is up marks that run ready.
+    // Supervised's own readiness attempt (`Bindings::try_ready`), with
+    // Prowlarr's real health check on this client, until run `want` is
+    // found ready.
+    let health = lodestar_companions::detect::health(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no prowlarr health check"));
     let found_ready = |want: u64| {
-        let (client, bindings, target) = (&client, &bindings, &target);
+        let (client, bindings, target, health) = (&client, &bindings, &target, &health);
         async move {
             let until = Instant::now() + DEADLINE;
             loop {
                 let run = bindings.running_run(port);
-                if run == Some(want)
-                    && client
-                        .send(ProbeRequest::new(target, at("/"), limits()))
-                        .await
-                        .is_ok_and(|r| r.status() == 200)
-                {
-                    bindings.mark_ready(port, want);
-                    if bindings.ready(port) {
-                        return;
-                    }
+                let check =
+                    || async { health.check(client, target).await == HealthStatus::Healthy };
+                if run == Some(want) && bindings.try_ready(port, check).await {
+                    assert_eq!(bindings.ready_run(port), Some(want));
+                    return;
                 }
                 assert!(
                     Instant::now() < until,
@@ -958,4 +956,92 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     );
     sup.shutdown().await;
     assert!(!bindings.ready(port));
+}
+
+/// The supervisor's timings with a stop that takes its whole deadline for a
+/// companion that ignores SIGTERM: long enough to watch the stop happen.
+#[cfg(unix)]
+fn slow_stop() -> Timings {
+    Timings {
+        stop_deadline: Duration::from_secs(3),
+        ..fast()
+    }
+}
+
+/// Waits for the first status `done` accepts, and gives it back.
+#[cfg(unix)]
+fn first(
+    mut rx: watch::Receiver<Status>,
+    done: impl Fn(&Status) -> bool + Send + Sync + 'static,
+) -> tokio::task::JoinHandle<Option<Status>> {
+    tokio::spawn(async move {
+        match tokio::time::timeout(DEADLINE, rx.wait_for(|s| done(s))).await {
+            Ok(Ok(s)) => Some(*s),
+            _ => None,
+        }
+    })
+}
+
+/// X-cmp-supervisor-bind: a child told to stop is no longer up from that
+/// moment, while it's still running out its stop deadline, so nothing
+/// counts it ready meanwhile.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_told_to_stop_is_down_before_it_has_stopped() {
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), slow_stop())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    sup.add(companion(data.path(), "prowlarr", "stubborn", &[]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    wait_line(&ring, "READY").await;
+    wait_status(&mut rx, "up", |s| s.up && s.state == State::Running).await;
+    // The first of: down while still running, or stopped.
+    let seen = first(rx, |s| {
+        (!s.up && s.state == State::Running) || s.state == State::Stopped
+    });
+    sup.shutdown().await;
+    let s = seen.await.unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        s.is_some_and(|s| !s.up && s.state == State::Running),
+        "it counted as up through its stop: {s:?}"
+    );
+}
+
+/// The same for a stop after failed health checks: down from the moment
+/// the supervisor decides to stop it, before the stop's deadline.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_stopped_for_its_health_is_down_before_it_has_stopped() {
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), slow_stop())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let health = Arc::new(FakeHealth {
+        id: id("prowlarr"),
+        healthy: false,
+        calls: AtomicU32::new(0),
+    });
+    let mut c = companion(data.path(), "prowlarr", "stubborn", &[]);
+    c.probe = Some(probe(health));
+    sup.add(c).unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    wait_status(&mut rx, "up", |s| s.up).await;
+    let seen = first(rx, |s| {
+        (!s.up && matches!(s.state, State::Unhealthy { .. })) || s.restarts >= 1
+    });
+    let s = seen.await.unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        s.is_some_and(|s| !s.up && matches!(s.state, State::Unhealthy { .. })),
+        "it counted as up through its health stop: {s:?}"
+    );
+    sup.shutdown().await;
 }

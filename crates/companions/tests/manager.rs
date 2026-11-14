@@ -10,19 +10,23 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lodestar_companions::adapter::ConfigureInput;
-use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
+use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, GuardedHttp, Target};
+use lodestar_companions::adapter::{Limits, ProbeRequest, RequestPath};
 use lodestar_companions::catalogue::{Arch, Catalogue, NotAvailable, Platform, Sha256};
 use lodestar_companions::configure::{
     self, ConfigSink, DownloadClientEntry, IndexerManagerEntry, InstallReceipt, SinkError,
 };
 use lodestar_companions::credentials::SealedRow;
+use lodestar_companions::detect::CompanionHttp;
 use lodestar_companions::fetch::{Chunks, FetchError, Opened, Source};
+use lodestar_companions::inputs::PortNumber;
 use lodestar_companions::layout::Install;
 use lodestar_companions::manager::{
     ApiConfigure, Downloader, Fault, Health, Host, InstallToken, Launch, Manager, ManagerError,
     Parts, Refusal, RowError, Rows, Run,
 };
 use lodestar_companions::state::{self, Step};
+use lodestar_companions::supervise::bind::Bindings;
 use lodestar_companions::supervise::{State, Status};
 use lodestar_companions::{CompanionId, Version};
 use lodestar_integrations::secret::{SealedSecret, SecretStore};
@@ -203,6 +207,12 @@ struct FakeRun {
     status: Mutex<Option<watch::Sender<Status>>>,
     /// Health checks made.
     checks: AtomicUsize,
+    /// Its port, tied to its runs as `Supervised` ties them
+    /// (X-cmp-supervisor-bind); none for most tests.
+    bound: Mutex<Option<(Arc<Bindings>, u16)>>,
+    /// While set, a health check waits for `opened` before it answers.
+    gate: AtomicBool,
+    opened: tokio::sync::Notify,
 }
 
 impl FakeRun {
@@ -242,7 +252,18 @@ impl Run for FakeRun {
             if st.is_some() {
                 return Box::pin(async { Err("duplicate") });
             }
-            *st = Some(watch::channel(status(State::Running)).0);
+            let bound = self.bound.lock().unwrap().clone();
+            // A bound run is up and counted, as the supervisor's is.
+            let first = Status {
+                run: u64::from(bound.is_some()),
+                up: true,
+                ..status(State::Running)
+            };
+            let tx = watch::channel(first).0;
+            if let Some((b, p)) = bound {
+                assert!(b.hold(p, tx.subscribe()));
+            }
+            *st = Some(tx);
         }
         self.started.lock().unwrap().push(version);
         let park = self.park.load(Ordering::SeqCst);
@@ -255,17 +276,36 @@ impl Run for FakeRun {
         })
     }
     fn healthy<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
-        let ok = !self.sick.load(Ordering::SeqCst);
         self.checks.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async move { ok })
+        Box::pin(async move {
+            if self.gate.load(Ordering::SeqCst) {
+                self.opened.notified().await;
+            }
+            let ok = !self.sick.load(Ordering::SeqCst);
+            let bound = self.bound.lock().unwrap().clone();
+            match bound {
+                // As `Supervised`'s check: it readies only the run up now.
+                Some((b, p)) => b.try_ready(p, || async move { ok }).await,
+                None => ok,
+            }
+        })
     }
     fn stop<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, ()> {
         self.stops.fetch_add(1, Ordering::SeqCst);
         self.status.lock().unwrap().take();
+        if let Some((b, p)) = self.bound.lock().unwrap().clone() {
+            b.release(p);
+        }
         Box::pin(async {})
     }
     fn status(&self, _: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.status.lock().unwrap().as_ref().map(|s| s.subscribe())
+    }
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        match self.bound.lock().unwrap().clone() {
+            Some((b, p)) => b.ready_run(p),
+            None => self.status(id).map(|s| s.borrow().run),
+        }
     }
 }
 
@@ -2314,4 +2354,68 @@ async fn only_a_companion_that_is_handed_over_is_marked() {
     m.crash_at(Some(Fault::After(Step::Configured)));
     assert_eq!(m.install(&token("5.0.3")).await, Err(ManagerError::Crashed));
     assert!(!marker.exists());
+}
+
+/// Polls `f` until it holds, failing after `WAIT`.
+async fn until(what: &str, f: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while !f() {
+        assert!(tokio::time::Instant::now() < deadline, "never {what}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// X-cmp-supervisor-bind: a restart with no back-off, seen by the follow
+/// as one change from one run to the next, is checked again and found
+/// ready. Until then a request that carries something is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_with_no_back_off_is_checked_again_and_found_ready() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let port = 8080;
+    let bindings = Arc::new(Bindings::new());
+    *w.run.bound.lock().unwrap() = Some((bindings.clone(), port));
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    assert_eq!(bindings.ready_run(port), Some(1));
+    assert!(bindings.ready(port));
+    let client = CompanionHttp::new()
+        .unwrap()
+        .with_bindings(bindings.clone());
+    let target = Target::Loopback(PortNumber::new(port).unwrap());
+    let carrying = || {
+        let limits = Limits::new(std::time::Duration::from_secs(15), 1024).unwrap();
+        ProbeRequest::new(&target, RequestPath::parse("/api").unwrap(), limits)
+            .post(b"key=x".to_vec())
+    };
+    // The next run, with no state between: checks wait at the gate.
+    w.run.gate.store(true, Ordering::SeqCst);
+    let checks = w.run.checks.load(Ordering::SeqCst);
+    w.run.run().send_replace(Status {
+        run: 2,
+        up: true,
+        ..status(State::Running)
+    });
+    assert!(!bindings.ready(port));
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Unreachable)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    until("checked again", || {
+        w.run.checks.load(Ordering::SeqCst) > checks
+    })
+    .await;
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Unreachable)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    // The check answers: the new run is ready.
+    w.run.gate.store(false, Ordering::SeqCst);
+    w.run.opened.notify_one();
+    until("ready again", || bindings.ready(port)).await;
+    assert_eq!(bindings.ready_run(port), Some(2));
 }
