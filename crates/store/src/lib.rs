@@ -516,7 +516,7 @@ pub enum Inserted {
     /// Not written: one of its swarm hashes is held (a tombstone or a
     /// quarantine row), read in the write's own transaction, so a hold
     /// written since the batch was judged still keeps it out. Only
-    /// [`WriteBatch::prepared`] is checked this way.
+    /// [`WriteBatch::prepared`] returns it.
     Held,
 }
 
@@ -794,8 +794,9 @@ impl Store {
                 let mut stmt = tx.prepare_cached(
                     "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
                 )?;
-                for ins in out.iter().chain(&prepared) {
-                    stmt.execute([ins.id()])?;
+                // Only what was stored: a refused or held item has no row.
+                for id in out.iter().chain(&prepared).filter_map(|i| i.stored()) {
+                    stmt.execute([id])?;
                 }
                 true
             }

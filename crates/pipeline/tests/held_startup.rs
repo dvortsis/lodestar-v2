@@ -127,7 +127,7 @@ async fn until(what: &str, mut f: impl FnMut() -> bool) {
 fn import_partial(store: &mut Store, raw: &[u8]) -> (i64, InfoHash) {
     let mut info = Info::parse(raw).unwrap();
     info.files.clear();
-    let src = store.register_source("bitmagnet", "1", 0).unwrap();
+    let src = store.register_source("importer", "1", 0).unwrap();
     let id = store
         .insert(&[NewTorrent {
             info: &info,

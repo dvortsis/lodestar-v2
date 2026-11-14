@@ -385,3 +385,48 @@ fn the_sweep_covers_thousands_of_holds() {
     }
     assert_eq!(store.sweep_held_stored().unwrap(), None);
 }
+
+/// A batch whose classification rules changed since it was enriched,
+/// with a fetch held since it was judged: the held one has no row to
+/// mark, and the rest are marked for enrichment again.
+#[test]
+fn a_stale_batch_with_a_held_fetch_marks_only_what_it_stored() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let raws = [info("held", false), info("kept", false)];
+    let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'U-1', 1)",
+            [&infos[0].primary_hash().0[..]],
+        )
+        .unwrap();
+    let mut preparer = store.preparer();
+    let prepared: Vec<_> = infos
+        .iter()
+        .zip(&raws)
+        .map(|(i, r)| preparer.prepare(i, Some(r)).unwrap())
+        .collect();
+    let batch: Vec<lodestar_store::PreparedTorrent<'_>> = prepared
+        .iter()
+        .map(|p| lodestar_store::PreparedTorrent {
+            torrent: p,
+            discovered_at: 1,
+            metadata_at: 1,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+            verified: true,
+        })
+        .collect();
+    let stale = store.class_gen().unwrap() + 1;
+    let written = store
+        .write(&WriteBatch {
+            prepared: &batch,
+            class_gen: Some(stale),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(written.stale_class);
+    assert_eq!(written.prepared[0], lodestar_store::Inserted::Held);
+    assert!(written.prepared[1].stored().is_some());
+}

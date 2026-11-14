@@ -711,11 +711,10 @@ impl Store {
                         hashes.push(k);
                     }
                     for h in hashes {
-                        let found =
-                            crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(h)))?;
-                        if let Some(tid) = found
-                            && !done.torrents_deleted.contains(&tid)
-                        {
+                        for tid in crate::all_by_hash(&tx, &h)? {
+                            if done.torrents_deleted.contains(&tid) {
+                                continue;
+                            }
                             tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
                                 .execute([tid])?;
                             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?

@@ -293,12 +293,20 @@ impl HoldRetry {
     }
 
     /// Queues `holds`, one per hash: a later hold for a hash already
-    /// waiting takes its place, so commits that keep failing never grow
-    /// the queue past the hashes they hold.
+    /// waiting takes its place, with the hashes of every hold it replaces
+    /// added to its own, so no hash goes unheld and commits that keep
+    /// failing never grow the queue past the hashes they hold.
     fn queue(&mut self, holds: impl IntoIterator<Item = unverified::Hold>) {
-        for h in holds {
-            let shares = |q: &unverified::Hold| q.hashes.iter().any(|x| h.hashes.contains(x));
-            self.holds.retain(|q| !shares(q));
+        for mut h in holds {
+            let (replaced, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.holds)
+                .into_iter()
+                .partition(|q| q.hashes.iter().any(|x| h.hashes.contains(x)));
+            for x in replaced.into_iter().flat_map(|q| q.hashes) {
+                if !h.hashes.contains(&x) {
+                    h.hashes.push(x);
+                }
+            }
+            self.holds = kept;
             self.holds.push(h);
         }
     }
@@ -6536,6 +6544,71 @@ mod tests {
             assert_eq!(find(&w, key), None);
             assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
             assert_eq!(w.stats.blocked.load(Ordering::Relaxed), 1);
+        }
+
+        /// One batch with two results for the same key, one held at commit:
+        /// the other is stored, then deleted with the hold in the same
+        /// transaction, so it's counted blocked, never stored, and the
+        /// have-filter never learns the key.
+        #[tokio::test]
+        async fn a_row_the_batch_stores_and_its_hold_deletes_is_blocked() {
+            let (mut w, c, retry) = parts();
+            let cache = w
+                .store
+                .as_mut()
+                .unwrap()
+                .register_source("torrent_cache", "1", 1)
+                .unwrap();
+            let admitted = match cached(&w, "Big Buck Bunny", cache).judged {
+                crate::torrent_cache::Judged::Store(a) => *a,
+                j => panic!("not admitted: {j:?}"),
+            };
+            let key = admitted.key;
+            let from_cache = Committing::lease_free(admitted, cache, unix_now(), false);
+            let engine = w.filter.current();
+            let mut r = results_named("Big Buck Bunny");
+            assert_eq!(r.key, key);
+            r.worker = WorkerId::LOCAL;
+            r.version = engine.version;
+            r.verdict = Verdict {
+                decision: Some(engine.unjudgeable()),
+                shadow: Vec::new(),
+            };
+            let r = leased(&c, r);
+            w.commit_all(vec![r], vec![from_cache], vec![], vec![], vec![], &retry)
+                .await;
+            assert_eq!(find(&w, key), None);
+            assert!(!w.have.contains(&key), "the have-filter never learnt it");
+            let cs = &w.stats.torrent_cache;
+            assert_eq!(cs.stored.load(Ordering::Relaxed), 0);
+            assert_eq!(cs.held.load(Ordering::Relaxed), 1, "the cache's, blocked");
+            assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
+            // The leased result's own hold: CS-0a quarantines.
+            assert_eq!(w.stats.quarantined.load(Ordering::Relaxed), 1);
+        }
+
+        /// A newer hold for some of a waiting hold's hashes keeps the rest
+        /// held too.
+        #[test]
+        fn a_newer_hold_keeps_every_hash_of_the_one_it_replaces() {
+            let hold = |hashes: &[u8], rule: &str| unverified::Hold {
+                hashes: hashes.iter().map(|&h| [h; 20]).collect(),
+                rule: rule.into(),
+                action: Action::Drop.code(),
+                held: Held::Tombstone,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: false,
+            };
+            let mut q = HoldRetry::default();
+            q.queue([hold(&[1, 2], "U-1")]);
+            q.queue([hold(&[2], "U-2")]);
+            assert_eq!(q.holds.len(), 1);
+            let mut hashes = q.holds[0].hashes.clone();
+            hashes.sort_unstable();
+            assert_eq!(hashes, [[1; 20], [2; 20]]);
+            assert_eq!(q.holds[0].rule, "U-2");
         }
 
         /// Commits that keep failing queue one hold per hash, not one per
