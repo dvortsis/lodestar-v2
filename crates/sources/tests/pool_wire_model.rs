@@ -14,6 +14,11 @@
 //! every key with an honest peer has been fetched once, with its own dict;
 //! no key without one has; and the pool holds nothing. A failure names its
 //! seed.
+//!
+//! It is X-fetch-wait-credit's acceptance test (see that decisions file).
+//! `MODEL_SEEDS=n` runs seeds 1 to n and `MODEL_SEED=n` seed n alone;
+//! `MODEL_SWEEP=1` counts lost keys instead of failing, and the run prints
+//! keys lost, wait-outs, late credits and the credits to stalling peers.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
