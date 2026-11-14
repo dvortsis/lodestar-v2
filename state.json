@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:41Z",
+  "updated_at": "2026-11-14T13:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8705,6 +8705,11 @@
       "id": "X-worker-oversize-handback",
       "text": "A worker reports a dict too large for it with its own code; the coordinator re-queues the key for the main node instead of counting a loss. Place after X-fetch-room-fix merges; check slot 30 owns (cluster proto, worker session, coordinator).",
       "at": "2026-11-14T13:41Z"
+    },
+    {
+      "id": "import-host-booking-1114",
+      "text": "Owner go-ahead (given in the X-test-vm coordinator session) for one ext:import-host run: G-import-1M by the coordinator, 10M only if time allows. Runner answered in chat (coordinator reads the transcript). Access path is the owner's to set up; runner never touches the box.",
+      "at": "2026-11-14T13:42Z"
     }
   ],
   "main_health": [
@@ -10032,7 +10037,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:41Z",
+  "updated": "2026-11-14T13:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
