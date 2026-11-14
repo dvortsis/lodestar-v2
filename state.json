@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:50Z",
+  "updated_at": "2026-11-14T01:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8291,6 +8291,21 @@
       "id": "owner-queue-632-857",
       "note": "dashboard session cannot edit owner_queue; add #632 split go-ahead and #857 retroactive-holds flag to runner/dashboard.yaml owner_queue in the next runner PR (dashboard relayed both to owner in chat meanwhile)",
       "at": "2026-11-14T00:50Z"
+    },
+    {
+      "id": "owner-2.71",
+      "note": "owner answered five reviewer recommendations 00:55Z (relayed): FILTER-14 + FILTER-03 choices (held, by id only), re-judge stays visible (no pending gate), check 8 waits for X-operator-hardening merge, #632 split 4 ways (sudo model still owner). Recorded in runner PR commit fe88c146 (unpushed until #858 merges). Report first real re-judge per-1M timing to owner. Send X-operator-hardening PR number to the owner-started reviewer.",
+      "at": "2026-11-14T01:02Z"
+    },
+    {
+      "id": "trackq-order",
+      "note": "filter fixes one at a time: X-filter15-fix, X-filter03-fix, X-apifeat01-fix, X-filter13-fix, X-filter14-fix, X-filter12-fix; X-cluster06-fix after #856 in slot 7",
+      "at": "2026-11-14T01:02Z"
+    },
+    {
+      "id": "858-nits",
+      "note": "#858 review nits for a later CI-filter touch: drift guard matches literal docs/user only; near-miss test docs/userguide.md; note that the guide check returns early until full-scrape is wired",
+      "at": "2026-11-14T01:02Z"
     }
   ],
   "main_health": [
@@ -9344,7 +9359,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:50Z",
+    "updated": "2026-11-14T01:02Z",
     "items": [
       {
         "slot": 1,
@@ -9607,7 +9622,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:50Z",
+  "updated": "2026-11-14T01:02Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
