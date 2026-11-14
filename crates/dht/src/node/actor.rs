@@ -80,9 +80,10 @@ const MAX_SCRAPE_QUEUE: usize = 1024;
 const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 /// Below this frontier size, refill it and explore a random region.
 const LOW_FRONTIER: usize = 64;
-/// Backoff for a sample query that timed out: short, so an address that
-/// never answers gives its place in the table back soon.
-const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(15 * 60);
+/// Backoff for a sample query that timed out (CR-0: six hours, which the
+/// restart proof relies on). What one block can hold this way is bounded
+/// by the sampler's shares instead.
+const SAMPLE_TIMEOUT_BACKOFF: Duration = sampler::MAX_INTERVAL;
 /// The most contacts one reply offers to sampling; an honest reply holds
 /// 8 per family. Ping replies offer none.
 const NODES_PER_REPLY: usize = 16;
