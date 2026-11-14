@@ -466,7 +466,7 @@ fn a_file_list_past_what_the_core_reads_is_held() {
 /// on.
 #[test]
 fn a_batch_that_mostly_wont_read_holds_nothing() {
-    use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, is_breaker};
+    use lodestar_pipeline::core_rejudge::BREAKER_ROWS;
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let ids: Vec<i64> = (0..BREAKER_ROWS * 2)
         .map(|i| add(&mut store, &long(&format!("Plain.Film.{i}.mkv"))).0)
@@ -504,7 +504,7 @@ fn a_batch_that_mostly_wont_read_holds_nothing() {
             ..CorePass::starting(0)
         })
     );
-    let _ = is_breaker;
+
     // A few that won't read among many that do are held, one by one.
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let ids: Vec<i64> = (0..BREAKER_ROWS * 4)
@@ -940,4 +940,71 @@ fn a_stalled_range_is_judged_in_batches() {
     assert_eq!((b.judged, b.cleared), (4, None));
     let after = stalled(&mut store).unwrap();
     assert_eq!((after.ranges, after.rows), (before.ranges, before.rows - 4));
+}
+
+/// Two stalled ranges, the first of which never reads: the breaker stops
+/// it on each try and sends it to the back, so the next try reaches the
+/// second, which reads and is judged.
+#[test]
+fn a_range_that_never_reads_doesnt_hold_up_the_next() {
+    use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, is_breaker, stalled};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = BREAKER_ROWS * 2;
+    let mut runs = [Vec::new(), Vec::new()];
+    // Readable, the first run, readable, the second run, readable.
+    for part in 0..5 {
+        for i in 0..n {
+            let id = add(&mut store, &long(&format!("Plain.Film.{part}.{i}.mkv"))).0;
+            if part % 2 == 1 {
+                runs[part / 2].push(id);
+            }
+        }
+    }
+    break_rows(&mut store, &runs[0]);
+    let second = break_rows(&mut store, &runs[1]);
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    while !batch(&mut store, &filter, &sealer, n).0.unwrap().waiting {}
+    // A range for each run, in each phase.
+    assert_eq!(stalled(&mut store).unwrap().ranges, 4);
+    mend_rows(&mut store, &second);
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+        adult: Default::default(),
+    };
+    // The first range (the first run, first phase) still won't read.
+    let e = rejudge_stored(&mut store, &filter, n, &ctx, &|_, _| {}).unwrap_err();
+    assert!(is_breaker(&e));
+    // The next try reaches the second run's range, which reads.
+    let b = rejudge_stored(&mut store, &filter, n, &ctx, &|_, _| {})
+        .unwrap()
+        .unwrap();
+    let cleared = b.cleared.expect("the second run's range");
+    assert_eq!((cleared.phase, cleared.to), (1, *runs[1].last().unwrap()));
+    assert_eq!(stalled(&mut store).unwrap().ranges, 3);
+}
+
+/// A run of batches the breaker stops one after another is one range,
+/// reported once: the batches after the first only extend it.
+#[test]
+fn a_run_of_stopped_batches_is_reported_once() {
+    use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, stalled};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = BREAKER_ROWS * 2;
+    let ids: Vec<i64> = (0..n * 3)
+        .map(|i| add(&mut store, &long(&format!("Plain.Film.{i}.mkv"))).0)
+        .collect();
+    break_rows(&mut store, &ids);
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let mut reported = Vec::new();
+    for _ in 0..3 {
+        let b = batch(&mut store, &filter, &sealer, n).0.unwrap();
+        reported.push(b.stall.map(|s| (s.phase, s.rows)));
+    }
+    assert_eq!(reported, [Some((1, n as u64)), None, None]);
+    let st = stalled(&mut store).unwrap();
+    assert_eq!((st.ranges, st.rows), (1, 3 * n as u64));
 }

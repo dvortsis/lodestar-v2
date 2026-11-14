@@ -1,4 +1,4 @@
-# X-rejudge-stall decisions
+# X-rejudge-stall decisions (#888)
 
 The core re-judge (§20.5, `crates/pipeline/src/core_rejudge.rs`) no longer stalls on a batch its breaker stops. The breaker (`BREAKER_ROWS`) fails a batch when more than half of its stored torrents, and more than 16, won't read, for example on a damaged dictionary. Before, the whole pass retried that batch from the same place indefinitely, so nothing after it was ever judged again.
 
@@ -18,7 +18,8 @@ The core re-judge (§20.5, `crates/pipeline/src/core_rejudge.rs`) no longer stal
   - **While waiting,** the passes that wait for the re-judge (the candidate re-file, the unverified sweep, the backfill) run. Before, a stalled pass kept them waiting too, in its store-error backoff.
 - **Shown in health:**
   - **Gauges:** `lodestar_core_rejudge_stalled_ranges` and `lodestar_core_rejudge_stalled_rows`, row in `docs/metrics.md`.
-  - **Log events:** `pipeline.core_rejudge_stalled` (Warn) when a range stops, and `pipeline.core_rejudge_stall_cleared` (Info) when one is judged through. Counts only: the range's rows and the ranges left.
+  - **Log events:** `pipeline.core_rejudge_stalled` (Warn) when a new range stops, and `pipeline.core_rejudge_stall_cleared` (Info) when one is judged through. Counts only: the range's rows and the ranges left.
+  - **Logged once a range, not once a batch:** a batch the breaker stops that only extends a kept range (the next batch of a damaged run) isn't logged again. A widely damaged store would otherwise log a Warn line every 256 torrents.
   - **Retries the breaker stops again aren't logged,** so a store that stays damaged doesn't log every few hours. The gauges show the ranges are still there.
   - **`pipeline.core_rejudge_failed`** is now only for other store errors.
 
@@ -26,7 +27,12 @@ The core re-judge (§20.5, `crates/pipeline/src/core_rejudge.rs`) no longer stal
 - **Ranges are per phase.** A torrent's first-phase range is judged again in the first phase. Its second-phase pass over the same ids may stop a second range there, which is kept separately.
 - **The list is bounded.** A range that follows one of its phase extends it; the same range again is kept once. Past 1,024 ranges (`MAX_STALLS`), a new one widens the last range of its phase. Widening only judges again torrents already judged, which changes nothing they show.
 - **A value that won't read** is taken as every torrent of the pass, in both phases (after the pass's start, to the end), so a damaged key never lets a range be skipped. Ranges kept for another core version belong to a pass that's gone (a new pass judges every torrent again), and are dropped.
-- **Rows are approximate.** They're the stored torrents a range covered when it stopped, less those judged since. Merged ranges add their rows.
+- **Rows are approximate.** They're the stored torrents a range covered when it stopped, less those judged since. Merged ranges add their rows, never overflowing (a kept value that says more stays at the most a count can hold).
+- **Overlapping ranges aren't merged** beyond the same range again and one that follows another. A restart only repeats the batch it stopped at, which is the same range, so overlaps don't arise in practice; one that did would only judge some torrents twice.
+- **The fallback for a value that won't read** (every torrent of the pass) counts 0 rows in the gauge, because how many it covers isn't known without counting the store. The ranges gauge still shows 2.
+
+## Accepted (the runner's call)
+- **An older build of the same core version** reads the third phase as the end of its second, and finishes the pass with stalled ranges left. This only happens on a downgrade that keeps the core version; a downgrade to an older core judges every torrent again anyway.
 
 ## Not changed
 - **A missing compression dictionary** isn't the breaker: it's a store error, retried from the same place with the existing backoff, then one torrent at a time (`a_missing_dictionary_fails_the_batch`). The brief covered the breaker only; the runner can queue the missing-dictionary case if it wants it handled the same way.

@@ -554,7 +554,7 @@
 	"settings_logging_ev_pipeline_core_rejudge_failed_n": "重新判断失败",
 	"settings_logging_ev_pipeline_core_rejudge_failed_h": "重新判断已存储的种子时失败，会再次尝试。",
 	"settings_logging_ev_pipeline_core_rejudge_stalled_n": "重新判断跳过了无法读取的种子",
-	"settings_logging_ev_pipeline_core_rejudge_stalled_h": "大部分无法读取的已存种子被跳过，并留待再次判断；未拦截任何内容。",
+	"settings_logging_ev_pipeline_core_rejudge_stalled_h": "大部分无法读取的已存种子被跳过，并留待再次判断；未扣留任何内容。",
 	"settings_logging_ev_pipeline_core_rejudge_stall_cleared_n": "已重新判断跳过的种子",
 	"settings_logging_ev_pipeline_core_rejudge_stall_cleared_h": "此前跳过的已存储种子已重新判断。",
 	"settings_logging_ev_pipeline_enrichment_failed_n": "补充信息失败",

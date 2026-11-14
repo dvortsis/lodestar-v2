@@ -3594,6 +3594,82 @@ mod tests {
         );
     }
 
+    /// A pass that ends with stalled ranges left waits before it tries
+    /// them again: the batch that ends it sets the wait, and no retry runs
+    /// meanwhile (a retry the breaker stopped would have rotated the
+    /// ranges). The passes that wait for the re-judge run.
+    #[tokio::test]
+    async fn the_first_retry_of_stalled_ranges_waits() {
+        use crate::core_rejudge::{BREAKER_ROWS, STALLS_KEY};
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for i in 0..BREAKER_ROWS * 2 {
+            let raw = to_vec(&OwnedValue::Dict(
+                [
+                    (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                    (
+                        b"name".to_vec(),
+                        OwnedValue::Bytes(
+                            format!("{}film {i}.mp4", "word ".repeat(600)).into_bytes(),
+                        ),
+                    ),
+                    (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                    (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .collect(),
+            ));
+            let info = Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1,
+                    metadata_at: 1,
+                    extra_flags: 0,
+                    source: SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        // None of them reads: the breaker stops every batch.
+        store
+            .connection()
+            .execute("UPDATE torrent_files SET codec = 250", [])
+            .unwrap();
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.core_rejudge.done = false;
+        let before = unix_now();
+        let mut batches = 0;
+        while w.core_rejudge.ready() {
+            w.rejudge_core().await;
+            batches += 1;
+            assert!(batches < 10, "the pass ends");
+        }
+        // Each phase: the batch the breaker stops, then the phase's end.
+        assert_eq!(batches, 4, "no retry ran");
+        let at = w.core_rejudge.stall_retry_at.expect("waiting");
+        assert!(at >= before + STALL_RETRY_FIRST, "{at} {before}");
+        assert!(w.core_rejudge.yields() && !w.core_rejudge.done);
+        let kept = w
+            .store
+            .as_ref()
+            .unwrap()
+            .setting_text(STALLS_KEY)
+            .unwrap()
+            .unwrap();
+        let phases: Vec<&str> = kept.split(';').skip(1).map(|r| &r[..1]).collect();
+        assert_eq!(phases, ["1", "2"], "in the order they stopped: {kept}");
+        assert_eq!(w.stats.core_stalled_ranges.load(Ordering::Relaxed), 2);
+        // Once due, a retry runs; the breaker stops it again, and the next
+        // waits twice as long.
+        w.core_rejudge.stall_due(at);
+        assert!(w.core_rejudge.ready());
+        w.rejudge_core().await;
+        let next = w.core_rejudge.stall_retry_at.expect("waiting again");
+        assert!(next >= unix_now() + 2 * STALL_RETRY_FIRST - 5, "{next}");
+    }
+
     /// The writer's sweep holds back a waiting import candidate the core
     /// now matches, and intake refuses its hash from then on.
     #[tokio::test]

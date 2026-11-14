@@ -80,8 +80,9 @@ pub struct CoreRejudged {
     /// Both phases are done and only stalled ranges are left: they're
     /// judged again from time to time, and the pass stays unfinished.
     pub waiting: bool,
-    /// The breaker stopped this batch: its range is kept to judge again,
-    /// and the pass moved past it.
+    /// The breaker stopped this batch, in a range of its own: it's kept to
+    /// judge again, and the pass moved past it. `None` when the batch only
+    /// extended a kept range (the pass still moved past it).
     pub stall: Option<Stall>,
     /// A stalled range judged through in this batch, and removed.
     pub cleared: Option<Stall>,
@@ -241,7 +242,7 @@ pub(crate) fn rejudge_with(
             to: b.last,
             rows: b.rows,
         };
-        add_stall(&mut stalls, stall);
+        let new = add_stall(&mut stalls, stall);
         save_stalls(store, &stalls)?;
         let after = CorePass {
             after: b.last,
@@ -251,7 +252,7 @@ pub(crate) fn rejudge_with(
         return Ok(Some(CoreRejudged {
             before,
             after,
-            stall: Some(stall),
+            stall: new.then_some(stall),
             stalled: totals(&stalls),
             ..CoreRejudged::default()
         }));
@@ -323,7 +324,7 @@ pub struct Stalled {
 fn totals(stalls: &[Stall]) -> Stalled {
     Stalled {
         ranges: stalls.len() as u64,
-        rows: stalls.iter().map(|s| s.rows).sum(),
+        rows: stalls.iter().fold(0, |sum, s| sum.saturating_add(s.rows)),
     }
 }
 
@@ -404,14 +405,15 @@ fn save_stalls(store: &mut Store, stalls: &[Stall]) -> Result<(), Error> {
 /// Adds `new` to the ranges: the same range again (a restart before the
 /// pass moved past it) is kept once, one that follows a range of its
 /// phase extends it, and past [`MAX_STALLS`] it widens the last of its
-/// phase.
-fn add_stall(stalls: &mut Vec<Stall>, new: Stall) {
+/// phase. Returns whether it's a range of its own, so a run of batches
+/// the breaker stops is logged once, not once a batch.
+fn add_stall(stalls: &mut Vec<Stall>, new: Stall) -> bool {
     let same_phase = |s: &&mut Stall| s.phase == new.phase;
     if stalls
         .iter()
         .any(|s| s.phase == new.phase && s.after <= new.after && new.to <= s.to)
     {
-        return;
+        return false;
     }
     if let Some(s) = stalls
         .iter_mut()
@@ -419,18 +421,19 @@ fn add_stall(stalls: &mut Vec<Stall>, new: Stall) {
         .find(|s| s.to == new.after)
     {
         s.to = new.to;
-        s.rows += new.rows;
-        return;
+        s.rows = s.rows.saturating_add(new.rows);
+        return false;
     }
     if stalls.len() >= MAX_STALLS
         && let Some(s) = stalls.iter_mut().rev().find(|s| s.phase == new.phase)
     {
         s.after = s.after.min(new.after);
         s.to = s.to.max(new.to);
-        s.rows += new.rows;
-        return;
+        s.rows = s.rows.saturating_add(new.rows);
+        return false;
     }
     stalls.push(new);
+    true
 }
 
 /// Records the store as judged by today's core, the stalled ranges' key
@@ -824,19 +827,29 @@ mod tests {
     /// its phase.
     #[test]
     fn stalled_ranges_merge() {
-        let mut stalls = vec![stall(1, 0, 32, 32)];
-        add_stall(&mut stalls, stall(1, 0, 32, 32));
-        add_stall(&mut stalls, stall(1, 8, 16, 8));
+        let mut stalls = Vec::new();
+        assert!(add_stall(&mut stalls, stall(1, 0, 32, 32)), "new");
+        assert!(!add_stall(&mut stalls, stall(1, 0, 32, 32)), "the same");
+        assert!(!add_stall(&mut stalls, stall(1, 8, 16, 8)), "inside");
         assert_eq!(stalls, [stall(1, 0, 32, 32)]);
-        add_stall(&mut stalls, stall(1, 32, 64, 30));
+        assert!(!add_stall(&mut stalls, stall(1, 32, 64, 30)), "extends");
         assert_eq!(stalls, [stall(1, 0, 64, 62)]);
-        add_stall(&mut stalls, stall(2, 32, 64, 30));
-        add_stall(&mut stalls, stall(1, 100, 120, 5));
+        assert!(add_stall(&mut stalls, stall(2, 32, 64, 30)), "other phase");
+        assert!(add_stall(&mut stalls, stall(1, 100, 120, 5)), "apart");
+        // Rows never overflow, whatever a kept value says.
+        stalls[0].rows = u64::MAX;
+        assert!(!add_stall(&mut stalls, stall(1, 64, 70, 6)));
+        assert_eq!(stalls[0].rows, u64::MAX);
+        assert_eq!(totals(&stalls).rows, u64::MAX);
+        stalls[0].rows = 62;
         assert_eq!(stalls.len(), 3);
         let mut full: Vec<Stall> = (0..MAX_STALLS as i64)
             .map(|i| stall(1 + i % 2, i * 10, i * 10 + 5, 1))
             .collect();
-        add_stall(&mut full, stall(1, 1_000_000, 1_000_010, 4));
+        assert!(
+            !add_stall(&mut full, stall(1, 1_000_000, 1_000_010, 4)),
+            "widens"
+        );
         assert_eq!(full.len(), MAX_STALLS);
         let last = full.iter().rfind(|s| s.phase == 1).unwrap();
         assert_eq!((last.to, last.rows), (1_000_010, 5));
