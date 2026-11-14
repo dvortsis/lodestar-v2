@@ -1675,6 +1675,12 @@ owner_queue:
   unblocks: Nothing; this goes ahead unless you object
   when: Any time
 
+- n: 26
+  type: decision
+  action: 'X-operator-hardening (#859): an incomplete operator sweep (for example, a summary it can''t read) now escalates to you without disabling the operator; bot findings still disable it. This loosens the runner''s 2026-11-11 fail-closed call (OP-4). Runner recommends accepting: fail-closed on every unreadable summary would disable the operator on transient API errors. Alternative: keep fail-closed.'
+  unblocks: Merging #859, then first-run check 8
+  when: Before check 8
+
 gates:
 - id: G-v05
   name: v0.5 MVP exit
