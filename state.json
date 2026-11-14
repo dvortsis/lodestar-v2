@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:58Z",
+  "updated_at": "2026-11-14T02:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8736,10 +8736,10 @@
       "head": "1e39409b",
       "status": "review CHANGES relayed (1 blocking, 2 important); awaiting fix push"
     },
-    "861": {
+    "862": {
       "slice": "X-metainfo01-fix",
-      "head": "a3f3bfc4",
-      "status": "review CHANGES relayed (test input); to be superseded by a clean-history PR from slice/X-metainfo01-fix-2",
+      "head": "3d300bb2",
+      "status": "delta self-checked against reviewed #861; merge on green",
       "slot": 30
     }
   },
@@ -9387,7 +9387,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:58Z",
+    "updated": "2026-11-14T02:01Z",
     "items": [
       {
         "slot": 1,
@@ -9658,7 +9658,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:58Z",
+  "updated": "2026-11-14T02:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
