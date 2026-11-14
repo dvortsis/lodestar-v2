@@ -1377,6 +1377,7 @@ dependencies = [
  "lodestar-tracker-scrape",
  "lodestar-update",
  "lodestar-utp",
+ "rand 0.10.3",
  "semver",
  "serde_json",
  "sha2",
