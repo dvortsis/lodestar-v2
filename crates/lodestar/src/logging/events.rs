@@ -343,7 +343,7 @@ lodestar_log::catalogue! {
         id: "system.data_dir_open",
         component: System,
         level: Warn,
-        message: "The data folder can be read by other users on this computer. Make it owner-only (chmod 700) so only Lodestar's user can read it; Lodestar never changes an existing folder's permissions.",
+        message: "The data folder can be read by other users on this computer, and it belongs to another account, so Lodestar can't make it owner-only. Make it owner-only (chmod 700) as that account so only Lodestar's user can read it.",
         fields: { path: Path },
     }
     /// The data directory is on Unraid's user share.

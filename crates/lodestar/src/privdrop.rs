@@ -579,20 +579,34 @@ mod imp {
             }
             Err(e) => return Err(format!("{shown}: {e}")),
         }
-        // O_NOFOLLOW: a symlink swapped in since the check fails here.
-        let fd = rustix::fs::open(
+        // O_NOFOLLOW: a symlink swapped in since the check fails here. The
+        // owner is read through an O_PATH descriptor, which needs no read
+        // access: root without DAC_OVERRIDE (a container under `cap_drop:
+        // ALL`) can't open an owner-only folder it doesn't own for reading,
+        // and a folder already the target account's is never opened so.
+        let path_fd = rustix::fs::open(
             dir,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         )
         .map_err(|e| format!("opening {shown}: {e}"))?;
-        let st = rustix::fs::fstat(&fd).map_err(|e| format!("{shown}: {e}"))?;
-        if (st.st_uid, st.st_gid) == (ids.uid, ids.gid) {
+        let st = rustix::fs::fstat(&path_fd).map_err(|e| format!("{shown}: {e}"))?;
+        if !needs_handing_over((st.st_uid, st.st_gid), ids) {
             return Ok(Line::Owned {
                 dir: dir.to_path_buf(),
                 ids,
             });
         }
+        // Read access only now that the tree must be walked: the same
+        // directory, opened through the O_PATH descriptor.
+        let fd = rustix::fs::openat(
+            &path_fd,
+            c".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|e| format!("opening {shown}: {e}"))?;
+        drop(path_fd);
         let root = rustix::fs::stat("/").map_err(|e| format!("stat /: {e}"))?;
         if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
             return Err(format!(
@@ -620,6 +634,13 @@ mod imp {
             special: walk.special,
             too_deep: walk.too_deep,
         })
+    }
+
+    /// Whether a data directory owned by `owner` must be handed to `ids`
+    /// (walked and chowned). One already theirs is left as it is, and isn't
+    /// opened for reading.
+    pub(super) fn needs_handing_over(owner: (u32, u32), ids: Ids) -> bool {
+        owner != (ids.uid, ids.gid)
     }
 
     /// Hands the restart witness directory to `ids`: the directory and the
@@ -1124,7 +1145,8 @@ mod tests {
         use std::os::unix::fs::{MetadataExt, symlink};
 
         use super::super::imp::{
-            can_drop, check_no_caps, chown_data_dir, chown_witness_dir, save_companions_rules,
+            can_drop, check_no_caps, chown_data_dir, chown_witness_dir, needs_handing_over,
+            save_companions_rules,
         };
         use super::super::*;
 
@@ -1153,6 +1175,33 @@ mod tests {
             }
             assert!(can_drop("CapPrm:\t0\n").is_err());
             assert!(can_drop("CapEff:\tzz\n").is_err());
+        }
+
+        #[test]
+        fn only_a_directory_owned_by_others_is_handed_over() {
+            let ids = Ids { uid: 99, gid: 100 };
+            assert!(!needs_handing_over((99, 100), ids));
+            for other in [(0, 0), (99, 0), (0, 100), (65532, 65532)] {
+                assert!(needs_handing_over(other, ids), "{other:?}");
+            }
+        }
+
+        /// A directory already the target account's is never opened for
+        /// reading: with no read access at all (mode 0), it still passes.
+        #[test]
+        fn an_owned_directory_is_checked_without_read_access() {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("data");
+            std::fs::create_dir(&dir).unwrap();
+            let ids = Ids {
+                uid: rustix::process::getuid().as_raw(),
+                gid: rustix::process::getgid().as_raw(),
+            };
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let got = chown_data_dir(&dir, ids);
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(matches!(got, Ok(Line::Owned { .. })), "{got:?}");
         }
 
         #[test]

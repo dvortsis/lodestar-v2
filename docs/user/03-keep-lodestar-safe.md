@@ -285,16 +285,19 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 ### Keep the data folder owner-only
 <!-- index: data folder permissions; chmod; folder mode -->
 
-The data folder holds the store, the search index and your settings. Only Lodestar's own user should be able to open it. When Lodestar creates the folder, it makes it owner-only. A folder that existed before isn't changed. If other users on the computer could read it, Lodestar logs one warning at start. The warning gives the folder's path and says "the data folder can be read by other users".
+The data folder holds the store, the search index and your settings. Only Lodestar's own user should be able to open it, so Lodestar keeps it owner-only. That's mode 700: only the owner can read, write or open it. That's the safe choice because the folder holds your library, settings and keys, and no other account needs it.
 
-**Recommended:** make the folder owner-only (mode 700: only the owner can read, write or open it). It's the safe choice because the folder holds your library, settings and keys, and no other account needs it. Lodestar's own user owns the folder, so Lodestar keeps working, and Docker hands the folder to the `PUID` user at every start.
+- **A folder Lodestar creates** is owner-only from the start.
+- **A folder Lodestar's user owns** is made owner-only at the next start. In Docker and on Unraid, that's every data folder: Lodestar hands it to the `PUID` user first.
+- **A folder another account owns** is never changed. If other users could read it, Lodestar logs one warning at start. The warning gives the folder's path and says "the data folder can be read by other users".
 
-1. Find the folder in the warning: for example `/mnt/cache/appdata/lodestar` on Unraid, or the folder you set in `LODESTAR_DATA_DIR`.
-2. On Unraid or Linux, run this in a terminal on the host, with your folder's path:
+If you see that warning, make the folder owner-only as the account that owns it.
+
+1. Find the folder in the warning, for example the folder you set in `LODESTAR_DATA_DIR`.
+2. Run this in a terminal on that computer, with your folder's path:
    ```bash
-   chmod 700 /mnt/cache/appdata/lodestar
+   chmod 700 /path/to/lodestar-data
    ```
-   For a Docker named volume, run `docker run --rm -v <volume name>:/data alpine chmod 700 /data`.
 
    **Result:** the next start logs no warning.
 
