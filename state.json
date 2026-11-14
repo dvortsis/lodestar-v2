@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:19Z",
+  "updated_at": "2026-11-14T03:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8366,7 +8366,10 @@
     },
     "X-operator-tripwire-settle: operator tripwire settle wait and request budget (component level; detail by message); slot 15 session; before first-run check 8; record in next runner PR slices.yaml",
     "X-snapshot-proactive-carry: store: carry holds into pre-migration snapshots (component level; filter queue after X-update01-store01-fix; waits on owner answers relayed by the reviewer session); add to slices.yaml in next runner PR",
-    "X-pipe01-fix: per-address constant accepted as runner call; owner \u00a72.19 flag at merge"
+    "X-pipe01-fix: per-address constant accepted as runner call; owner \u00a72.19 flag at merge",
+    "Held findings (README \u00a75) from early M8-SEC-1/-8 passes: S1-01..S1-04 important (dht), S1-05..S1-10 polish (dht, utp); S8-01, S8-02 important (store/host), S8-03..S8-06 polish. Owner-queue item naming ids only in next runner PR",
+    "Fix slices: X-sec-S1-01-02 (dht node fix; slot 7 after #863 merges), X-sec-S1-03-04 (dht node fix; after it), X-sec-S8-01 (store and host fix; after X-update01-store01-fix), X-sec-S8-02 (store fix; after #857); polish slices per surface later. Add to slices.yaml and G-v1-security deps in next runner PR",
+    "#857 review brief: its re-judge reads every stored file list (see S8-02)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9679,7 +9682,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T03:19Z",
+  "updated": "2026-11-14T03:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
