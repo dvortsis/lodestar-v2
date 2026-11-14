@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T10:35Z",
+  "updated_at": "2026-11-14T10:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8628,6 +8628,11 @@
       "id": "search-bench-doc-time-bound",
       "note": "search-bench: a time bound for building one document (from #880). Runner places it.",
       "at": "2026-11-14T10:35Z"
+    },
+    {
+      "id": "slices-yaml-x-cmp-supervisor-bind",
+      "note": "Next runner PR: X-cmp-supervisor-bind owns crates/companions/src/{supervise/**,manager.rs,detect/**}, crates/companions/tests/**, crates/lodestar/src/{companion_wiring.rs,companions.rs}; managed-client folded in; entered-loopback if small. X-gluetun-guard-stop owns also infra/fleet/steps/run.py (two timeout values).",
+      "at": "2026-11-14T10:37Z"
     }
   ],
   "main_health": [
@@ -9034,12 +9039,6 @@
       "head": "a8aa48c2",
       "status": "delta review MERGE at a8aa48c2 (+2 Important: link-case guide step, supervisor ordering test); small round requested, then runner self-check; flag fchmod-on-upgrade to owner at merge",
       "at": "2026-11-14T09:48Z"
-    },
-    "881": {
-      "slice": "X-gluetun-guard-stop",
-      "head": "19e032e7",
-      "status": "small round; start-block 2455 s (option a); then runner self-check delta and merge",
-      "at": "2026-11-14T10:19Z"
     }
   },
   "merged_log": [
@@ -9686,7 +9685,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T10:35Z",
+    "updated": "2026-11-14T10:37Z",
     "items": [
       {
         "slot": 1,
@@ -9720,11 +9719,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-gluetun-guard-stop",
+        "slice": "X-cmp-supervisor-bind",
         "role": "build",
         "agent": "session_01MMjhn8LCZuDPeXwdBzodLH",
-        "doing": "#873 merged eed1169d; X-gluetun-guard-stop briefed by message (VPN stop-window guard + test-VM script fixes from 2026-11-14 re-test)",
-        "since": "2026-11-14T09:05Z",
+        "doing": "#881 merged dd2d7f82; X-cmp-supervisor-bind (+ X-cmp-managed-client, X-cmp-entered-loopback if small) briefed by message",
+        "since": "2026-11-14T10:37Z",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
       },
@@ -9955,7 +9954,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T10:35Z",
+  "updated": "2026-11-14T10:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10590,6 +10589,12 @@
       "slice": "X-search01-fix",
       "merged": "04773f13",
       "at": "2026-11-14T10:35Z"
+    },
+    {
+      "pr": 881,
+      "slice": "X-gluetun-guard-stop",
+      "merged": "dd2d7f82",
+      "at": "2026-11-14T10:37Z"
     }
   ],
   "review_sessions": []
