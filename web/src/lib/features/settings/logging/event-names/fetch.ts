@@ -4,6 +4,10 @@
 import { m } from '$lib/paraglide/messages.js';
 
 export const NAMES: Record<string, [name: () => string, help: () => string]> = {
+	'fetch.metadata_limit_clamped': [
+		m.settings_logging_ev_fetch_metadata_limit_clamped_n,
+		m.settings_logging_ev_fetch_metadata_limit_clamped_h
+	],
 	'fetch.failed': [m.settings_logging_ev_fetch_failed_n, m.settings_logging_ev_fetch_failed_h],
 	'fetch.failed_summary': [
 		m.settings_logging_ev_fetch_failed_summary_n,

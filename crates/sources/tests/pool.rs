@@ -12,7 +12,7 @@ use std::time::Duration;
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_sources::pool::{
-    MAX_VOUCHED_PER_IP, Reservation, SHUTDOWN_DRAIN, address_caps, spawn, wait_caps,
+    MAX_VOUCHED_PER_IP, OVERSIZE_AGREE, Reservation, SHUTDOWN_DRAIN, address_caps, spawn, wait_caps,
 };
 use lodestar_sources::{
     BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PeerIpCap,
@@ -1854,18 +1854,80 @@ async fn a_pool_with_no_finder_keeps_every_peer() {
     h.stop().await;
 }
 
+/// A peer in network `net` (each its own /24), for tests that count
+/// networks.
+fn peer_in(net: u8, host: u8) -> SocketAddr {
+    SocketAddr::from(([198, 51, net, host], 6881))
+}
+
+fn lost_as(h: &Harness, loss: Loss) -> i64 {
+    h.funnel.get(COHORT, src(0), Stage::Lost, Some(loss))
+}
+
+/// One peer saying the dict is over the size limit is that peer's failure:
+/// the key goes on to its next peer.
 #[tokio::test(start_paused = true)]
-async fn oversize_is_terminal() {
+async fn one_peers_word_on_the_size_does_not_end_a_key() {
     let h = Harness::start(config(), &[], vec![]);
-    h.script(peer(1, 1), 10, Err(FailureKind::Oversize));
-    h.send(found(0, 1, vec![peer(1, 1), peer(2, 2)]));
-    sleep(Duration::from_secs(1)).await;
-    assert_eq!(
-        h.funnel
-            .get(COHORT, src(0), Stage::Lost, Some(Loss::Oversize)),
-        1
-    );
-    assert_eq!(h.fake.started.lock().unwrap().len(), 1);
+    h.script(peer_in(1, 1), 10, Err(FailureKind::Oversize));
+    h.script(peer_in(2, 1), 10, Ok(()));
+    h.send(found(0, 1, vec![peer_in(1, 1), peer_in(2, 1)]));
+    until("the key's fetch from its second peer", || {
+        h.funnel.get(COHORT, src(0), Stage::Fetched, None) == 1
+    })
+    .await;
+    assert_eq!(lost_as(&h, Loss::Oversize), 0);
+    assert_eq!(h.fake.started.lock().unwrap().len(), 2);
+    h.stop().await;
+}
+
+/// Peers in three networks saying so end the key, with peers left untried.
+#[tokio::test(start_paused = true)]
+async fn peers_in_three_networks_agreeing_on_the_size_end_a_key() {
+    assert_eq!(OVERSIZE_AGREE, 3);
+    let h = Harness::start(config(), &[], vec![]);
+    let peers: Vec<SocketAddr> = (1..=4).map(|net| peer_in(net, 1)).collect();
+    for p in &peers[..3] {
+        h.script(*p, 10, Err(FailureKind::Oversize));
+    }
+    h.script(peers[3], 10, Ok(()));
+    h.send(found(0, 1, peers));
+    until("the key's loss", || lost_as(&h, Loss::Oversize) == 1).await;
+    assert_eq!(h.fake.started.lock().unwrap().len(), 3);
+    assert_eq!(h.funnel.get(COHORT, src(0), Stage::Fetched, None), 0);
+    h.stop().await;
+}
+
+/// However many peers of one network say so, they count once.
+#[tokio::test(start_paused = true)]
+async fn one_networks_peers_agreeing_on_the_size_count_once() {
+    let h = Harness::start(config(), &[], vec![]);
+    let mut peers: Vec<SocketAddr> = (1..=4).map(|host| peer_in(1, host)).collect();
+    peers.push(peer_in(2, 1));
+    for p in &peers {
+        h.script(*p, 10, Err(FailureKind::Oversize));
+    }
+    peers.push(peer_in(3, 1));
+    h.script(peer_in(3, 1), 10, Ok(()));
+    h.send(found(0, 1, peers));
+    until("the key's fetch from its last peer", || {
+        h.funnel.get(COHORT, src(0), Stage::Fetched, None) == 1
+    })
+    .await;
+    assert_eq!(lost_as(&h, Loss::Oversize), 0);
+    assert_eq!(h.fake.started.lock().unwrap().len(), 6);
+    h.stop().await;
+}
+
+/// A key whose peers and attempts run out with the size as its last
+/// failure is lost for the size, as before.
+#[tokio::test(start_paused = true)]
+async fn a_key_out_of_peers_is_lost_for_the_size_its_last_peer_gave() {
+    let h = Harness::start(config(), &[], vec![]);
+    h.script(peer_in(1, 1), 10, Err(FailureKind::Oversize));
+    h.send(found(0, 1, vec![peer_in(1, 1)]));
+    until_within("the key's loss", 7200, || lost_as(&h, Loss::Oversize) == 1).await;
+    assert_eq!(lost(&h).len(), 1);
     h.stop().await;
 }
 
@@ -2834,9 +2896,11 @@ async fn silent_claimers_pin_one_small_window_and_small_dicts_still_flow() {
         4096,
     );
     // Silent peers first, so they hold their windows when the small ones
-    // come: half announcing the old 1 MiB window, half the new 64 KiB.
+    // come: half announcing the old 1 MiB window, half the new 64 KiB. Each
+    // in a network of its own, as a network's partial claims keep to a
+    // share of the room.
     for n in 0..2 * SILENT {
-        let p = SocketAddr::from(([10, 1, (n / 200) as u8, (n % 200) as u8 + 1], 6881));
+        let p = SocketAddr::from(([10, 1, n as u8, 1], 6881));
         let announced = if n < SILENT { MIB } else { WINDOW };
         h.fake.silent.lock().unwrap().insert(p, announced);
         h.send(found(0, 10_000 + n, vec![p]));
