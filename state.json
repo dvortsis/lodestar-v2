@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:44Z",
+  "updated_at": "2026-11-14T04:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8392,6 +8392,10 @@
     {
       "at": "2026-11-14T04:40Z",
       "item": "X-sim-restart-seed: crawler-sim restart-honoured fails on main with seed 5 (restart.rs:423 assertion, sampling resumed after 69 s); golden seed passes. Pre-existing; found by X-sec-S1-01-02 seed spread. Small Opus slice after X-sec-S1-01-02 merges (crawler-sim owns). Next runner PR."
+    },
+    {
+      "at": "2026-11-14T04:49Z",
+      "item": "Record in next runner PR (owner-decisions): the second Fable security session is an extra slot on top of preset limits (owner 2026-11-14, relayed)."
     }
   ],
   "main_health": [
@@ -9715,7 +9719,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:44Z",
+  "updated": "2026-11-14T04:49Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10279,7 +10283,8 @@
       "agent": "session_01MMjhn9pVhTdrt1UjdCY4oL",
       "role": "security second pass (read-only), SEC-2/5/3/6/4/7; no slot",
       "since": "2026-11-14T04:44Z",
-      "decided": "owner 2026-11-14 via the owner-started review session"
+      "decided": "owner 2026-11-14 via the owner-started review session",
+      "slot_rule": "extra slot on top of limits.phase_total and the 4+4 cap (owner 2026-11-14, relayed by the owner-started review session: \"an extra slot, in addition to any other preset limits\")"
     }
   ]
 }
