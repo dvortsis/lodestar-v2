@@ -15,6 +15,11 @@ use crate::tokenizer::{self, MAX_NAME_TOKENS};
 /// file index (M3) covers the rest.
 pub const MAX_PATH_TOKENS: usize = 20_000;
 const MAX_EXT_BYTES: usize = 10;
+/// Distinct extensions indexed per torrent: the first this many, in file
+/// order. A torrent's files can each have their own. `ext:` and a lone
+/// `file:(ext:…)` read this field, so past the cap they match the first
+/// this many only; the file index keeps each covered file's own.
+pub const MAX_EXTS: usize = 1024;
 /// Numbers indexed per span: a `1-1000` episode batch keeps its first
 /// 500, a `1900-2020` collection its first 50 years.
 const MAX_YEARS: u16 = 50;
@@ -197,7 +202,6 @@ impl TorrentDoc {
         let mut dirs: Vec<String> = Vec::new();
         let mut seen_dirs = std::collections::HashSet::new();
         let mut names = Vec::new();
-        let mut exts: Vec<String> = Vec::new();
         let mut largest = 0;
         let mut sizes = Vec::with_capacity(tree.files.len());
         for f in tree.files.iter().filter(|f| !f.is_padding()) {
@@ -218,11 +222,6 @@ impl TorrentDoc {
             let Some((name, parents)) = segments.split_last() else {
                 continue;
             };
-            if let Some(ext) = extension(name)
-                && !exts.contains(&ext)
-            {
-                exts.push(ext);
-            }
             for d in parents {
                 if seen_dirs.insert(d.as_str().to_owned()) {
                     dirs.push(d.clone());
@@ -230,6 +229,7 @@ impl TorrentDoc {
             }
             names.push(name.clone());
         }
+        let exts = distinct_extensions(names.iter().map(String::as_str));
         // A single-file torrent's file name is usually its name; still
         // indexed, since names and file names can differ.
         dirs.extend(names);
@@ -438,6 +438,23 @@ pub fn title_identity(record: &Record) -> Option<u64> {
     title_identity_parts(record).map(|p| p.key())
 }
 
+/// The distinct extensions of `names`, each once, in the order first seen,
+/// and at most [`MAX_EXTS`] of them. One pass: what's been seen is looked
+/// up in a set.
+pub fn distinct_extensions<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for ext in names.filter_map(extension) {
+        if out.len() >= MAX_EXTS {
+            break;
+        }
+        if seen.insert(ext.clone()) {
+            out.push(ext);
+        }
+    }
+    out
+}
+
 /// The lowercased extension of a file name, if it looks like one.
 pub fn extension(name: &str) -> Option<String> {
     let (stem, ext) = name.rsplit_once('.')?;
@@ -609,6 +626,82 @@ mod tests {
         assert_eq!(extension("noext"), None);
         assert_eq!(extension("weird.ex t"), None);
         assert_eq!(extension("x.abcdefghijk"), None);
+    }
+
+    /// Each extension once, in the order first seen. Checked against a
+    /// plain reference on names that repeat, differ only in case, or have
+    /// no extension.
+    #[test]
+    fn distinct_extensions_are_each_kept_once_in_file_order() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for round in 0..200 {
+            let kinds = 1 + (next() % 40) as usize;
+            let names: Vec<String> = (0..(next() % 300))
+                .map(|i| match next() % 6 {
+                    0 => format!("file{i}"),
+                    1 => format!("file{i}.E{}", next() as usize % kinds),
+                    2 => format!(".hidden{i}"),
+                    _ => format!("dir.name{i}.e{}", next() as usize % kinds),
+                })
+                .collect();
+            let mut want: Vec<String> = Vec::new();
+            for ext in names.iter().filter_map(|n| extension(n)) {
+                if !want.contains(&ext) {
+                    want.push(ext);
+                }
+            }
+            let got = distinct_extensions(names.iter().map(String::as_str));
+            assert_eq!(got, want, "round {round}");
+        }
+        assert!(distinct_extensions(std::iter::empty()).is_empty());
+    }
+
+    /// However many extensions the files have, a torrent indexes at most
+    /// [`MAX_EXTS`], the first in file order; repeats past that change
+    /// nothing.
+    #[test]
+    fn distinct_extensions_stop_at_the_cap() {
+        let names: Vec<String> = (0..MAX_EXTS * 3)
+            .map(|i| format!("f.x{i}"))
+            .chain(["again.x0".to_string(), "new.zzz".to_string()])
+            .collect();
+        let got = distinct_extensions(names.iter().map(String::as_str));
+        assert_eq!(got.len(), MAX_EXTS);
+        assert_eq!(
+            (got[0].as_str(), got[MAX_EXTS - 1].as_str()),
+            ("x0", "x1023")
+        );
+        assert!(!got.contains(&"zzz".to_string()));
+        // At the cap nothing is left out.
+        let few = distinct_extensions(names[..MAX_EXTS].iter().map(String::as_str));
+        assert_eq!(few.len(), MAX_EXTS);
+    }
+
+    /// At the boundary: 1,024 distinct extensions are all kept, and with
+    /// 1,025 the one left out is the last first seen in file order.
+    #[test]
+    fn the_extension_first_seen_last_is_the_one_left_out() {
+        assert_eq!(MAX_EXTS, 1024);
+        let name = |i: usize| format!("f{i}.x{i}");
+        let at: Vec<String> = (0..MAX_EXTS).map(name).collect();
+        let kept = distinct_extensions(at.iter().map(String::as_str));
+        assert_eq!(kept.len(), MAX_EXTS);
+        assert!(kept.contains(&"x1023".to_string()));
+        let over: Vec<String> = (0..=MAX_EXTS).map(name).collect();
+        let got = distinct_extensions(over.iter().map(String::as_str));
+        assert_eq!(got, kept, "the first 1,024, in file order");
+        assert!(!got.contains(&"x1024".to_string()));
+        // File order decides, not the extension's own order: with the files
+        // reversed, the one left out is the other end's.
+        let got = distinct_extensions(over.iter().rev().map(String::as_str));
+        assert_eq!(got.len(), MAX_EXTS);
+        assert!(got.contains(&"x1024".to_string()) && !got.contains(&"x0".to_string()));
     }
 
     #[test]
