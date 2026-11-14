@@ -27,7 +27,10 @@ class Render(unittest.TestCase):
         self.assertIn("pull request #700", agent["system"])
         self.assertIn("--runner 111 --bot 555", agent["system"])
         self.assertNotIn("{{", json.dumps(agent))
+        # Nothing rides along: a new top-level key (an MCP server, skills) changes what the operator can reach.
+        self.assertEqual(set(agent), {"name", "description", "model", "system", "tools", "metadata"})
         (tools,) = agent["tools"]
+        self.assertEqual(set(tools), {"type", "default_config", "configs"})
         self.assertEqual(tools["type"], "agent_toolset_20260401")
         self.assertEqual(tools["default_config"], {"enabled": True, "permission_policy": {"type": "auto"}})
         # The owner's decision of 2026-11-14 (X-operator-bash-allow): bash alone runs without the

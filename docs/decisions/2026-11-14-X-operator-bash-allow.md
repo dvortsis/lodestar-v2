@@ -17,7 +17,8 @@ This changes one OP-4 security decision (`2026-11-11-OP-4.md`: the operator's to
 
 ## What it gives up
 - **The policy no longer screens the operator's `bash` calls.** `auto` could have refused a command from an operator led astray by text it read (a comment, command output). That screen is gone for `bash`. It was never a guarantee: `auto` allows what it judges safe. In particular, none of these is screened any more:
-  - **Using the App's token against another pull request** on this repository, through any `bash` command that calls `api.github.com`.
+  - **Using the App's token against another pull request.** The token carries Pull requests write for the whole repository (`infra/operator/ghapp.py`). So an unscreened `bash` call can, on any pull request here: comment, review (an approval included), retitle it, edit its body or its comments, and close it. It can't merge or push.
+  - **Passing an injection on to other agents.** This is the case that matters most. A comment on another pull request reaches every slice session and the runner subscribed to it. A misled operator could write its own instructions there for them to read. What stands against that: the comment shows the App's bot as its author, not the owner; slice sessions take findings and verdicts from the runner by message, and a GitHub comment never overrides them (`.claude/skills/steward/SKILL.md`). The tripwire finds the comment afterwards and disables `operator-wake.yml`, but doesn't prevent it.
   - **Fetching code and running it.** `api.github.com` serves the contents of any public repository, so the download-and-run that `auto` refused in `ping-1` would now run. Code fetched that way can do only what `bash` already can: reach `api.github.com`, with the token.
   - **The prompt's fallback `curl`.** Its three rules are prompt rules only.
 
