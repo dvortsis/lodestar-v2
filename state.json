@@ -8932,9 +8932,9 @@
       "release_run": "41110604990 success at 6be95525 (19:23Z), release env approved by owner",
       "draft_release": "id 429407881 'Lodestar 0.5.1-rc.2' (draft, prerelease); its SHA256SUMS asset holds the per-file hashes",
       "artifact_zip_digests": {
-        "package-linux-x86_64 (13003173665)": "sha256:b1cdf231199d3b768f5a4ee41e31e2f4b4916f2eda2759636697b52f68e3f6eb",
-        "package-linux-aarch64 (13004575289)": "sha256:717ce8f661fe958911ddc6120bdc04f813fd5f891b8c7a0bc9b25da5bf87d672",
-        "package-windows (13005076777)": "sha256:56d9422f295cda36c97989fe8abe35d51c5cf03401ea61a5855033624881c6dd"
+        "package-linux-x86_64": "sha256:b1cdf231199d3b768f5a4ee41e31e2f4b4916f2eda2759636697b52f68e3f6eb",
+        "package-linux-aarch64": "sha256:717ce8f661fe958911ddc6120bdc04f813fd5f891b8c7a0bc9b25da5bf87d672",
+        "package-windows": "sha256:56d9422f295cda36c97989fe8abe35d51c5cf03401ea61a5855033624881c6dd"
       },
       "per_file_hashes": {
         "lodestar-0.5.1-rc.2-x86_64-linux-musl.tar.gz": "6348fad5e6466beaca93e9573af3810c39c84e3f3097af533e572818e3e2a92a",
