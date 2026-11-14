@@ -1373,7 +1373,7 @@ impl Writer {
         let held = self.held.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
         let n = holds.len() as u64;
-        let (store, written, result) = tokio::task::spawn_blocking(move || {
+        let (store, written, result, holds) = tokio::task::spawn_blocking(move || {
             let now = unix_now();
             let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
             let pending = held.pend(&hashes);
@@ -1405,7 +1405,7 @@ impl Writer {
             })();
             // Written or failed: the store says which hold.
             hold_committed(&store, Some(pending), true);
-            (store, written, result)
+            (store, written, result, holds)
         })
         .await
         .expect("cache hold task");
@@ -1415,6 +1415,10 @@ impl Writer {
         match result {
             Ok(()) => {}
             Err(e) => {
+                // Those not written are written again until they are.
+                self.hold_retry
+                    .holds
+                    .extend(holds.into_iter().skip(written as usize));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 cs.errors.fetch_add(n - written, Ordering::Relaxed);
                 lodestar_log::log_event!(

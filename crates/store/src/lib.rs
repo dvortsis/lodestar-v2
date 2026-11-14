@@ -1128,18 +1128,16 @@ impl Store {
         let mut ids = Vec::new();
         let mut seen = std::collections::HashSet::new();
         {
-            let mut find = tx.prepare_cached(FIND_BY_HASH)?;
             // Cached: the delete carries Insights' trigger.
             let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
             let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
             for h in &held {
-                let found: Option<i64> = find.query_row([&h[..]], |r| r.get(0)).optional()?;
-                if let Some(id) = found
-                    && seen.insert(id)
-                {
-                    delete.execute([id])?;
-                    log.execute([id])?;
-                    ids.push(id);
+                for id in all_by_hash(&tx, h)? {
+                    if seen.insert(id) {
+                        delete.execute([id])?;
+                        log.execute([id])?;
+                        ids.push(id);
+                    }
                 }
             }
         }
@@ -1357,9 +1355,10 @@ fn delete_held(tx: &Connection, filtered: &[Filtered<'_>]) -> Result<Vec<i64>> {
     let mut ids = Vec::new();
     for f in filtered.iter().filter(|f| f.held.is_some()) {
         for h in f.hashes {
-            if let Some(id) = find_any(tx, std::iter::once(InfoHash(*h)))?
-                && !ids.contains(&id)
-            {
+            for id in all_by_hash(tx, h)? {
+                if ids.contains(&id) {
+                    continue;
+                }
                 // Cached: the delete carries Insights' trigger.
                 tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
                     .execute([id])?;
@@ -1670,6 +1669,21 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      SELECT id FROM torrents
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
+
+/// Every stored torrent under a swarm hash, as either of its own: what a
+/// hold on it deletes.
+const ALL_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
+     UNION
+     SELECT id FROM torrents
+     WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1";
+
+/// The ids [`ALL_BY_HASH`] finds under `hash`.
+fn all_by_hash(tx: &Connection, hash: &[u8]) -> Result<Vec<i64>> {
+    Ok(tx
+        .prepare_cached(ALL_BY_HASH)?
+        .query_map([hash], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?)
+}
 
 /// Begins a write transaction, taking the write lock up front (`BEGIN
 /// IMMEDIATE`) and waiting for it up to the busy timeout. A deferred one
