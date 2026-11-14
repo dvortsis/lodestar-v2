@@ -26,6 +26,11 @@
 //! - **Raw TCP** ([`connect_tcp_routed`]) takes the same routes, with an
 //!   in-house SOCKS5 handshake ([`socks`]) and an optional kill-switch
 //!   ([`KillSwitch`]). [`connect_tcp`] keeps the direct route.
+//! - **The loopback gate** ([`set_loopback_gate`], X-cmp09-fix-2): once
+//!   set, a connection to a loopback address on a port the gate refuses
+//!   fails with [`NetError::NotReady`] before anything is sent: a literal
+//!   address or a name that resolves to loopback, checked on every request
+//!   (redirects included) and every new connection a request makes.
 //! - **No URL in any error or log.** URLs can carry tokens (Discord webhooks
 //!   do), so errors name only the address class; [`redact`] gives a safe
 //!   form for logs.
@@ -43,8 +48,11 @@ use reqwest::{Method, Request, Response, Url};
 use crate::BoxFuture;
 use crate::secret::Secret;
 
+mod loopback_gate;
 pub mod socks;
 mod tracker;
+use loopback_gate::{Entered, Pending};
+pub use loopback_gate::{GateAlreadySet, LoopbackGate, loopback_gate_is_set, set_loopback_gate};
 pub use tracker::public_tracker_url;
 
 /// The class of an IP address, for [`NetPolicy`].
@@ -255,6 +263,9 @@ pub enum NetError {
     Redirect,
     /// Any other HTTP-level failure.
     Http,
+    /// A loopback port the loopback gate refuses now: a local service
+    /// Lodestar runs that isn't ready ([`set_loopback_gate`]).
+    NotReady,
 }
 
 impl fmt::Display for NetError {
@@ -270,6 +281,7 @@ impl fmt::Display for NetError {
             NetError::TooLarge => f.write_str("the response was too large"),
             NetError::Redirect => f.write_str("too many redirects, or an unsafe redirect"),
             NetError::Http => f.write_str("the HTTP exchange failed"),
+            NetError::NotReady => f.write_str("the local service isn't ready yet"),
         }
     }
 }
@@ -372,6 +384,9 @@ struct GuardResolver {
     /// A bind-address route binds one address family only; the other
     /// family's sockets would connect unbound, so its answers are dropped.
     family: Option<Family>,
+    /// The ports this client's requests send each name to now, for the
+    /// loopback gate's check of each new connection.
+    pending: Arc<Pending>,
 }
 
 /// An IP address family.
@@ -392,6 +407,7 @@ impl reqwest::dns::Resolve for GuardResolver {
         let inner = Arc::clone(&self.inner);
         let policy = self.policy;
         let family = self.family;
+        let pending = Arc::clone(&self.pending);
         Box::pin(async move {
             // A SOCKS5 route with local DNS hands IP literals here too.
             // reqwest passes an IPv6 literal in brackets.
@@ -407,6 +423,13 @@ impl reqwest::dns::Resolve for GuardResolver {
                 None => resolve_checked(&*inner, name.as_str(), policy).await,
             }
             .map_err(|e| Box::new(e) as Box<dyn StdError + Send + Sync>)?;
+            // The loopback gate, on every new connection: a name that
+            // resolves to loopback is refused while a port a request is
+            // sending it to is refused.
+            if addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback) && !pending.allowed(host)
+            {
+                return Err(Box::new(NetError::NotReady) as Box<dyn StdError + Send + Sync>);
+            }
             if let Some(family) = family {
                 addrs.retain(|ip| Family::of(*ip) == family);
                 if addrs.is_empty() {
@@ -616,6 +639,13 @@ pub struct GuardedClient {
     remote_dns: bool,
     /// The only address family a bind-address route can connect to.
     family: Option<Family>,
+    /// The resolver, also asked by the loopback gate's check.
+    resolver: Arc<dyn Resolve>,
+    /// Shared with the resolver hook ([`GuardResolver::pending`]).
+    pending: Arc<Pending>,
+    /// Whether the loopback gate applies; only
+    /// [`without_loopback_gate`](Self::without_loopback_gate) turns it off.
+    gated: bool,
 }
 
 impl fmt::Debug for GuardedClient {
@@ -658,14 +688,16 @@ impl GuardedClient {
         };
         // `no_proxy` first: it clears the proxy list, and turns system
         // proxies (and `NO_PROXY`) off.
+        let pending = Arc::new(Pending::default());
         let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .referer(false)
             .dns_resolver(Arc::new(GuardResolver {
-                inner: resolver,
+                inner: Arc::clone(&resolver),
                 policy,
                 family,
+                pending: Arc::clone(&pending),
             }))
             .connect_timeout(timeout.min(Duration::from_secs(10)))
             .timeout(timeout)
@@ -711,7 +743,56 @@ impl GuardedClient {
             policy,
             remote_dns,
             family,
+            resolver,
+            pending,
+            gated: true,
         })
+    }
+
+    /// The same client without the loopback gate. Only the companions
+    /// crate's own client takes this (`lodestar_companions::detect::
+    /// CompanionHttp`), which applies a finer rule to the same ports
+    /// itself; a test in this crate fails if anything else calls it.
+    #[doc(hidden)]
+    pub fn without_loopback_gate(mut self) -> GuardedClient {
+        self.gated = false;
+        self
+    }
+
+    /// The loopback gate's check of one request, before anything is sent:
+    /// a loopback destination on a port the gate refuses is
+    /// [`NetError::NotReady`]. The returned entry lets the resolver check
+    /// each new connection the request makes.
+    async fn gate(&self, url: &Url) -> Result<Option<Entered>, NetError> {
+        if !self.gated || !loopback_gate_is_set() {
+            return Ok(None);
+        }
+        let (Some(port), Some(host)) = (url.port_or_known_default(), url.host_str()) else {
+            return Ok(None);
+        };
+        // A name a SOCKS5 proxy resolves never reaches this machine's
+        // loopback.
+        let literal = literal_ip(url);
+        if literal.is_none() && self.remote_dns {
+            return Ok(None);
+        }
+        if !loopback_gate::allows(port) {
+            let loopback = match literal {
+                Some(ip) => classify(ip) == AddrClass::Loopback,
+                // A name that doesn't resolve now is refused too: it could
+                // only have failed anyway, and nothing is left to chance.
+                None => {
+                    local_name_class(host) == Some(AddrClass::Loopback)
+                        || self.resolver.resolve(host).await.map_or(true, |addrs| {
+                            addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback)
+                        })
+                }
+            };
+            if loopback {
+                return Err(NetError::NotReady);
+            }
+        }
+        Ok(Some(self.pending.enter(host, port)))
     }
 
     pub fn policy(&self) -> NetPolicy {
@@ -733,6 +814,9 @@ impl GuardedClient {
         // Literal IP hosts never reach the resolver, so check them here.
         check_url(req.url(), self.policy)?;
         self.check_route(req.url())?;
+        // Held until the request is sent, so the resolver can check each
+        // connection it makes.
+        let _entered = self.gate(req.url()).await?;
         #[allow(clippy::disallowed_methods)] // the one checked call site
         let sent = self.http.execute(req).await;
         sent.map_err(map_reqwest)
@@ -1087,13 +1171,19 @@ pub async fn resolve_tcp(
     policy: NetPolicy,
 ) -> Result<Vec<SocketAddr>, NetError> {
     let url = check_host(host, port, policy)?;
-    if let Some(ip) = literal_ip(&url) {
-        return Ok(vec![SocketAddr::new(ip, port)]);
+    let addrs = match literal_ip(&url) {
+        Some(ip) => vec![ip],
+        None => {
+            let name = url
+                .host_str()
+                .ok_or(NetError::InvalidUrl("it has no host"))?;
+            resolve_checked(resolver, name, policy).await?
+        }
+    };
+    // The loopback gate.
+    if !loopback_gate::allows(port) && addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback) {
+        return Err(NetError::NotReady);
     }
-    let name = url
-        .host_str()
-        .ok_or(NetError::InvalidUrl("it has no host"))?;
-    let addrs = resolve_checked(resolver, name, policy).await?;
     Ok(addrs
         .into_iter()
         .map(|ip| SocketAddr::new(ip, port))
@@ -2480,6 +2570,7 @@ pub(crate) mod tests {
             inner: inner.clone(),
             policy: NetPolicy::notification(false),
             family: None,
+            pending: Arc::default(),
         };
         let name = |s: &str| s.parse::<reqwest::dns::Name>().unwrap();
         assert!(guard.resolve(name("127.0.0.1")).await.is_err());
@@ -2500,6 +2591,7 @@ pub(crate) mod tests {
             inner: inner.clone(),
             policy: NetPolicy::notification(false),
             family: Some(Family::V6),
+            pending: Arc::default(),
         };
         assert!(guard.resolve(name("8.8.8.8")).await.is_err());
         assert_eq!(inner.lookups.load(Ordering::SeqCst), 0);
