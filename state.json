@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T09:03Z",
+  "updated_at": "2026-11-14T09:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9612,7 +9612,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T07:27Z",
+    "updated": "2026-11-14T09:05Z",
     "items": [
       {
         "slot": 1,
@@ -9646,12 +9646,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-sec-S1-03-04",
+        "slice": "X-gluetun-guard-stop",
         "role": "build",
         "agent": "session_01MMjhn8LCZuDPeXwdBzodLH",
-        "doing": "dht node intake and reply limits",
-        "since": "2026-11-14T05:50Z",
-        "status": "active",
+        "doing": "#873 merged eed1169d; X-gluetun-guard-stop briefed by message (VPN stop-window guard + test-VM script fixes from 2026-11-14 re-test)",
+        "since": "2026-11-14T09:05Z",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
       },
@@ -9793,11 +9792,11 @@
       },
       {
         "slot": 33,
-        "slice": "X-cmp01-fix",
+        "slice": "X-pipe01-followup",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "#867 merged d3f33891; next X-pipe01-fix, X-search01-fix, X-cluster06-fix, X-fuzz-gaps (blocking first); X-update01-store01-fix and X-store02-pipe02-fix after #857",
-        "since": "2026-11-14T06:58Z"
+        "doing": "#877 merged 2c2fe185; X-pipe01-followup briefed by message (wait list + O-a..O-d); then X-search01-fix, X-cluster06-fix, X-fuzz-gaps",
+        "since": "2026-11-14T09:05Z"
       }
     ]
   },
@@ -9882,7 +9881,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T09:03Z",
+  "updated": "2026-11-14T09:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10499,6 +10498,12 @@
       "slice": "X-sec-S1-03-04",
       "merged": "eed1169d",
       "at": "2026-11-14T08:49Z"
+    },
+    {
+      "pr": 877,
+      "slice": "X-pipe01-fix",
+      "merged": "2c2fe185",
+      "at": "2026-11-14T09:05Z"
     }
   ],
   "review_sessions": []
