@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:40Z",
+  "updated_at": "2026-11-14T04:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9715,7 +9715,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:40Z",
+  "updated": "2026-11-14T04:44Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10272,6 +10272,14 @@
       "slice": "X-operator-tripwire-settle",
       "merged": "e16c8581",
       "at": "2026-11-14T04:12Z"
+    }
+  ],
+  "review_sessions": [
+    {
+      "agent": "session_01MMjhn9pVhTdrt1UjdCY4oL",
+      "role": "security second pass (read-only), SEC-2/5/3/6/4/7; no slot",
+      "since": "2026-11-14T04:44Z",
+      "decided": "owner 2026-11-14 via the owner-started review session"
     }
   ]
 }
