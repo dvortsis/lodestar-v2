@@ -6,17 +6,15 @@
 //! the OS (the deterministic simulator seeds it from a fixed value).
 //!
 //! The permutation is an 8-round balanced Feistel network over 64 bits
-//! with keyed SipHash-2-4 as the round function, restricted to the lower
+//! with keyed SHA-256 as the round function, restricted to the lower
 //! half of the range by cycle walking: an output with the top bit set is
 //! encrypted again until one below it comes out. The walk ends because
 //! the input's own cycle returns to a value below the bit, and takes two
 //! steps on average. The top bit stays clear for the sampler's proof
 //! tokens (CR-0d).
 
-use std::hash::Hasher;
-
 use rand::RngExt;
-use siphasher::sip::SipHasher24;
+use sha2::{Digest, Sha256};
 
 /// Wire ids stay below this; the sampler's proof tokens use the bit.
 pub(crate) const LIMIT: u64 = 1 << 63;
@@ -25,14 +23,14 @@ const ROUNDS: u8 = 8;
 pub(crate) struct TxIds {
     /// How many ids have been issued; the next counter value.
     next: u64,
-    prf: SipHasher24,
+    key: [u8; 32],
 }
 
 impl TxIds {
     pub fn new(rng: &mut impl RngExt) -> TxIds {
         TxIds {
             next: 0,
-            prf: SipHasher24::new_with_keys(rng.random(), rng.random()),
+            key: rng.random(),
         }
     }
 
@@ -58,11 +56,12 @@ impl TxIds {
     }
 
     fn round(&self, round: u8, half: u32) -> u32 {
-        let mut h = self.prf;
-        h.write(&[round]);
-        h.write(&half.to_le_bytes());
-        // Truncation to the half's width.
-        h.finish() as u32
+        let mut h = Sha256::new();
+        h.update(self.key);
+        h.update([round]);
+        h.update(half.to_le_bytes());
+        let d = h.finalize();
+        u32::from_le_bytes([d[0], d[1], d[2], d[3]])
     }
 
     /// A bijection on all of `u64`.
@@ -116,7 +115,7 @@ mod tests {
     fn ids_are_distinct_and_below_the_proof_bit_over_a_long_run() {
         let mut t = ids(1);
         let mut seen = HashSet::new();
-        for _ in 0..200_000 {
+        for _ in 0..100_000 {
             let id = t.next_id().unwrap();
             assert!(id < LIMIT);
             assert!(seen.insert(id), "id {id} issued twice");

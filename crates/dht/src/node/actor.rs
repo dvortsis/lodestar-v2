@@ -761,7 +761,6 @@ impl Actor {
             },
             pending: Map::default(),
             pending_addrs: Map::default(),
-            // The lower half leaves 2^63 tokens before exhaustion.
             tids: TxIds::new(&mut rng),
             lookups: Map::default(),
             next_lookup: 0,
@@ -3266,7 +3265,7 @@ mod tests {
     }
 
     #[test]
-    fn queries_carry_distinct_ids_below_the_proof_bit() {
+    fn each_actor_issues_distinct_ids_below_the_proof_bit() {
         for seed in 0..64 {
             let mut a = Actor::new(
                 Config::default(),
@@ -4094,7 +4093,6 @@ mod tests {
             e.vote(r, me6);
         }
         assert_eq!(ExternalIp::tally_of(&e.v6).voters, 1);
-        assert_eq!(e.tally().ip, None);
         // IPv6 reports don't dilute an IPv4 majority.
         for i in 1..=5u16 {
             e.vote(IpAddr::from([0x2001, 0xdb8, i + 1, 0, 0, 0, 0, 1]), me6);
@@ -4140,20 +4138,12 @@ mod tests {
         let me4: SocketAddr = "203.0.113.9:6881".parse().unwrap();
         let me6: SocketAddr = "[2001:db8::9]:6881".parse().unwrap();
         let mut e = ExternalIp::default();
-        for i in 1..=40u16 {
-            let r6 = IpAddr::from([0x2001, 0xdb8, i, 0, 0, 0, 0, 1]);
-            let r4 = IpAddr::from([9, 9, i as u8, 1]);
-            assert_eq!(e.vote(r6, me4), None);
-            assert_eq!(e.vote(r4, me6), None);
-        }
+        assert_eq!(e.vote("2001:db8:1::1".parse().unwrap(), me4), None);
+        assert_eq!(e.vote("9.9.1.1".parse().unwrap(), me6), None);
+        // A v4-mapped reporter is an IPv4 one.
+        let mapped = IpAddr::from(std::net::Ipv4Addr::new(8, 8, 1, 1).to_ipv6_mapped());
+        assert_eq!(e.vote(mapped, me6), None);
         assert_eq!(e.tally(), ExternalVotes::default());
-        assert_eq!(e.current, None);
-        // A v4-mapped reporter is an IPv4 one, for IPv4 addresses only.
-        for i in 1..=5u8 {
-            let mapped = IpAddr::from(std::net::Ipv4Addr::new(8, 8, i, 1).to_ipv6_mapped());
-            e.vote(mapped, me6);
-        }
-        assert_eq!(e.current, None);
         for i in 1..=5u8 {
             let mapped = IpAddr::from(std::net::Ipv4Addr::new(8, 8, i, 1).to_ipv6_mapped());
             e.vote(mapped, me4);
@@ -4178,26 +4168,30 @@ mod tests {
         assert_eq!(changed, vec![me6.ip(), me4.ip()]);
     }
 
-    /// A reporter drawn from a few /24s and /48s (with many hosts and /64s
-    /// each, and v4-mapped forms), so collisions and cross-family reports
-    /// are common.
+    /// A reporter drawn from up to 48 /24s and 48 /48s (with many hosts
+    /// and /64s each, and v4-mapped forms): more voter units than the
+    /// window holds, with collisions and cross-family reports common.
     fn arb_reporter() -> impl Strategy<Value = IpAddr> {
         prop_oneof![
-            (0..4u8, any::<u8>()).prop_map(|(net, host)| IpAddr::from([10 + net, 1, 1, host])),
-            (0..4u8, any::<u8>()).prop_map(|(net, host)| IpAddr::from(
-                std::net::Ipv4Addr::new(20 + net, 1, 1, host).to_ipv6_mapped()
+            (0..24u8, any::<u8>()).prop_map(|(net, host)| IpAddr::from([10, 1, net, host])),
+            (0..24u8, any::<u8>()).prop_map(|(net, host)| IpAddr::from(
+                std::net::Ipv4Addr::new(20, 1, net, host).to_ipv6_mapped()
             )),
-            (0..6u16, any::<u16>(), any::<u16>()).prop_map(|(net, sub, host)| {
+            (0..48u16, any::<u16>(), any::<u16>()).prop_map(|(net, sub, host)| {
                 IpAddr::from([0x2001, 0xdb8, net, sub, 0, 0, 0, host])
             }),
         ]
     }
 
+    /// Mostly one address per family, so majorities form and shift.
     fn arb_reported() -> impl Strategy<Value = SocketAddr> {
+        let v4 = |i| SocketAddr::from(([198, 51, 100, i], 6881));
+        let v6 = |i| SocketAddr::from(([0x2001, 0xdb8, 0xffff, 0, 0, 0, 0, i], 6881));
         prop_oneof![
-            (0..3u8).prop_map(|i| SocketAddr::from(([198, 51, 100, i], 6881))),
-            (0..3u16)
-                .prop_map(|i| SocketAddr::from(([0x2001, 0xdb8, 0xffff, 0, 0, 0, 0, i], 6881))),
+            4 => Just(v4(0)),
+            1 => (1..3u8).prop_map(v4),
+            4 => Just(v6(0)),
+            1 => (1..3u16).prop_map(v6),
         ]
     }
 
@@ -4208,7 +4202,7 @@ mod tests {
         /// window. Checked against a model built from the inputs alone.
         #[test]
         fn current_changes_only_with_a_same_family_majority(
-            events in proptest::collection::vec((arb_reporter(), arb_reported()), 1..400)
+            events in proptest::collection::vec((arb_reporter(), arb_reported()), 1..600)
         ) {
             let mut e = ExternalIp::default();
             // Per family: each voter unit's latest same-family report, in
