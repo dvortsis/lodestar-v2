@@ -9545,7 +9545,7 @@
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
-        "slot": "rv",
+        "slot": 33,
         "slice": "X-rollback-scrub-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
