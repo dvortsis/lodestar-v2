@@ -883,6 +883,14 @@ See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
 | --- | --- | --- |
 | `filter_rows_unreadable{kind}` | gauge | Stored filter rows the engine couldn't read at its last load, by `kind`: `rule`, `unless`, `class_rule`, `override`, `exception`, `allow`, `pack_override`. Enabled withholding rules, the `unless` of an enabled rule, Is adult classification rules and pack-rule overrides (the stronger action kept, the `unless` dropped; RP-2) fail closed; the rest are skipped, which only tightens. Every kind is rendered, 0 included. It drops back to 0 once the row is fixed or removed. The Insights exception `filter_rows_unreadable` names the rows. |
 
+## Core re-judge stalled ranges (X-rejudge-stall, 2026-11-14)
+
+See [the decision](decisions/2026-11-14-X-rejudge-stall.md). The core re-judge (§20.5) keeps the range of a batch whose stored torrents mostly wouldn't read, moves past it, and judges it again later; the pass stays unfinished while any range is left. Gauges as of the writer's last re-judge batch (0 before the first, and with no pass under way). Ids and counts only.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `core_rejudge_stalled_ranges` / `core_rejudge_stalled_rows` | gauge | Ranges of stored torrents the core re-judge skipped because most of a batch wouldn't read, still to judge again, and the stored torrents they covered when they stopped (a range judged again in part loses those judged). Nothing in a range is held or changed until it reads. A range is logged when it stops (`pipeline.core_rejudge_stalled`) and when it's judged through (`pipeline.core_rejudge_stall_cleared`). |
+
 ## Source egress and kill switch (SRC-5, 2026-11-02)
 
 See [the decision](decisions/2026-11-02-SRC-5.md). `PluginEgress::status()` gives these per running plugin, and `/metrics` renders them since SRC-14a ([decision](decisions/2026-11-02-SRC-14a.md)); a plugin that isn't running has no series. `route` is `direct`, `bind_address`, `interface` or `socks5`. `GET /sources` gives the same counts per source under `egress.live.counts`, with the down reason.

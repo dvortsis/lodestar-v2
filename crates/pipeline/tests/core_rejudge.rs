@@ -462,7 +462,8 @@ fn a_file_list_past_what_the_core_reads_is_held() {
 }
 
 /// A batch that mostly won't read is the store failing, not its
-/// torrents: it stops, holds nothing, and keeps its place.
+/// torrents: it holds nothing, keeps its range to judge again, and moves
+/// on.
 #[test]
 fn a_batch_that_mostly_wont_read_holds_nothing() {
     use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, is_breaker};
@@ -483,14 +484,27 @@ fn a_batch_that_mostly_wont_read_holds_nothing() {
         adult: Default::default(),
     };
     let marked = RefCell::new(0);
-    let e = rejudge_stored(&mut store, &filter, ids.len(), &ctx, &|_, hs| {
+    let b = rejudge_stored(&mut store, &filter, ids.len(), &ctx, &|_, hs| {
         *marked.borrow_mut() += hs.len()
     })
-    .unwrap_err();
-    assert!(is_breaker(&e));
+    .unwrap()
+    .unwrap();
     assert_eq!(*marked.borrow(), 0);
     assert!(ids.iter().all(|&id| stored(&store, id)));
-    assert_eq!(pass(&mut store), Some(CorePass::starting(0)));
+    // Its range is kept, and the pass moved past it with nothing counted.
+    let last = *ids.last().unwrap();
+    assert_eq!(
+        b.stall.map(|s| (s.phase, s.after, s.to, s.rows)),
+        Some((1, 0, last, ids.len() as u64))
+    );
+    assert_eq!(
+        pass(&mut store),
+        Some(CorePass {
+            after: last,
+            ..CorePass::starting(0)
+        })
+    );
+    let _ = is_breaker;
     // A few that won't read among many that do are held, one by one.
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let ids: Vec<i64> = (0..BREAKER_ROWS * 4)
@@ -729,4 +743,201 @@ fn rejudge_rate() {
             s * 1e6 / n as f64
         );
     }
+}
+
+/// Marks torrents `ids` as unreadable (a codec the store doesn't know),
+/// returning what to restore.
+fn break_rows(store: &mut Store, ids: &[i64]) -> Vec<(i64, i64)> {
+    let c = store.connection();
+    ids.iter()
+        .map(|&id| {
+            let codec: i64 = c
+                .query_row(
+                    "SELECT codec FROM torrent_files WHERE torrent_id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            c.execute(
+                "UPDATE torrent_files SET codec = 250 WHERE torrent_id = ?1",
+                [id],
+            )
+            .unwrap();
+            (id, codec)
+        })
+        .collect()
+}
+
+fn mend_rows(store: &mut Store, saved: &[(i64, i64)]) {
+    for &(id, codec) in saved {
+        store
+            .connection()
+            .execute(
+                "UPDATE torrent_files SET codec = ?2 WHERE torrent_id = ?1",
+                [id, codec],
+            )
+            .unwrap();
+    }
+}
+
+/// A store with a run of unreadable torrents between readable ones: the
+/// readable ones before it, the run, and the readable ones after it, each
+/// a batch of `BREAKER_ROWS * 2`. The first readable one after the run is
+/// the stand-in pair, which today's core holds (after it, so the batches
+/// before line up in both phases).
+/// The store, its readable ids, its unreadable ids, and what mends them.
+type Fixture = (Store, Vec<i64>, Vec<i64>, Vec<(i64, i64)>);
+
+fn stalled_store() -> Fixture {
+    use lodestar_pipeline::core_rejudge::BREAKER_ROWS;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = BREAKER_ROWS * 2;
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
+    for part in 0..3 {
+        for i in 0..n {
+            let name = if i == 0 && part == 2 {
+                long(&format!("rolea lexa {part}.mkv"))
+            } else {
+                long(&format!("Plain.Film.{part}.{i}.mkv"))
+            };
+            let id = add(&mut store, &name).0;
+            if part == 1 {
+                bad.push(id)
+            } else {
+                good.push(id)
+            }
+        }
+    }
+    let saved = break_rows(&mut store, &bad);
+    (store, good, bad, saved)
+}
+
+/// The breaker stops the batch of unreadable torrents in each phase: its
+/// range is kept, the pass goes on past it and judges the rest, and it
+/// stays unfinished (the store isn't marked as judged) while the range is
+/// left. Nothing in the range is held or removed.
+#[test]
+fn a_stalled_range_is_skipped_and_the_pass_stays_unfinished() {
+    use lodestar_pipeline::core_rejudge::{RETRY_PHASE, Stalled, is_breaker, stalled};
+    let (mut store, good, bad, _) = stalled_store();
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let n = bad.len();
+    let mut stalls = Vec::new();
+    let mut held = Vec::new();
+    loop {
+        let (b, marked) = batch(&mut store, &filter, &sealer, n);
+        let b = b.unwrap();
+        held.extend(marked);
+        stalls.extend(b.stall);
+        assert!(!b.finished, "never finished with a range left");
+        if b.waiting {
+            break;
+        }
+    }
+    // One range in each phase, the same ids: exactly the run.
+    let ranges: Vec<_> = stalls
+        .iter()
+        .map(|s| (s.phase, s.after, s.to, s.rows))
+        .collect();
+    let (first, last) = (bad[0] - 1, *bad.last().unwrap());
+    assert_eq!(
+        ranges,
+        [(1, first, last, n as u64), (2, first, last, n as u64)]
+    );
+    assert_eq!(
+        stalled(&mut store).unwrap(),
+        Stalled {
+            ranges: 2,
+            rows: 2 * n as u64
+        }
+    );
+    // The readable torrents were judged: the stand-in pair is held.
+    assert_eq!(held.len(), 1);
+    assert!(!stored(&store, good[n]));
+    assert!(
+        good[..n]
+            .iter()
+            .chain(&good[n + 1..])
+            .all(|&id| stored(&store, id))
+    );
+    // Nothing in the range was held or removed.
+    for &id in &bad {
+        assert!(stored(&store, id), "{id}");
+        let hash = store.raw_hashes(id).unwrap();
+        for h in hash {
+            assert_eq!(store.quarantine_rule(&h).unwrap(), None);
+        }
+    }
+    // Unfinished: the pass waits on the range, and the store isn't current.
+    assert_eq!(pass(&mut store).unwrap().phase, RETRY_PHASE);
+    assert!(!lodestar_pipeline::core_rejudge::is_current(&mut store).unwrap());
+    // Tried again while it still won't read: the breaker stops it, and
+    // nothing is held.
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+        adult: Default::default(),
+    };
+    for _ in 0..3 {
+        let e = rejudge_stored(&mut store, &filter, n, &ctx, &|_, hs| {
+            assert!(hs.is_empty(), "nothing held")
+        })
+        .unwrap_err();
+        assert!(is_breaker(&e));
+    }
+    assert!(bad.iter().all(|&id| stored(&store, id)));
+    assert_eq!(stalled(&mut store).unwrap().ranges, 2);
+    assert_eq!(pass(&mut store).unwrap().phase, RETRY_PHASE);
+}
+
+/// Once a stalled range reads again, the next try judges it through and
+/// removes it; with none left, the pass finishes and the store is marked
+/// as judged. The ranges are in the store, so a restart keeps them.
+#[test]
+fn a_stalled_range_that_reads_again_is_judged_and_the_pass_finishes() {
+    use lodestar_pipeline::core_rejudge::{STALLS_KEY, Stalled, stalled};
+    let (mut store, _, bad, saved) = stalled_store();
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let n = bad.len();
+    while !batch(&mut store, &filter, &sealer, n).0.unwrap().waiting {}
+    assert!(store.setting_text(STALLS_KEY).unwrap().is_some());
+    mend_rows(&mut store, &saved);
+    let mut cleared = Vec::new();
+    let finished = loop {
+        let b = batch(&mut store, &filter, &sealer, n).0.unwrap();
+        cleared.extend(b.cleared.map(|s| s.phase));
+        if b.finished {
+            break b;
+        }
+        assert!(cleared.len() <= 2, "the ranges clear");
+    };
+    assert_eq!(cleared, [1, 2]);
+    assert_eq!(finished.after.unreadable, 0);
+    assert!(bad.iter().all(|&id| stored(&store, id)));
+    assert_eq!(stalled(&mut store).unwrap(), Stalled::default());
+    assert_eq!(store.setting_text(STALLS_KEY).unwrap(), None);
+    assert_eq!(pass(&mut store), None);
+    assert!(lodestar_pipeline::core_rejudge::is_current(&mut store).unwrap());
+}
+
+/// A stalled range that reads again in part: what reads is judged, and
+/// the range shrinks to what's left of it.
+#[test]
+fn a_stalled_range_is_judged_in_batches() {
+    use lodestar_pipeline::core_rejudge::stalled;
+    let (mut store, _, bad, saved) = stalled_store();
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let n = bad.len();
+    while !batch(&mut store, &filter, &sealer, n).0.unwrap().waiting {}
+    mend_rows(&mut store, &saved);
+    let before = stalled(&mut store).unwrap();
+    let b = batch(&mut store, &filter, &sealer, 4).0.unwrap();
+    assert_eq!((b.judged, b.cleared), (4, None));
+    let after = stalled(&mut store).unwrap();
+    assert_eq!((after.ranges, after.rows), (before.ranges, before.rows - 4));
 }

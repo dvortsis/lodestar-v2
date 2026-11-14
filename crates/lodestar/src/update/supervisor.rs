@@ -116,9 +116,6 @@ pub fn run(
     runtime.block_on(s.supervise())
 }
 
-/// The child's arguments, built from what was parsed rather than copied:
-/// `serve --child`, and the `--config` the supervisor was given (the
-/// environment is inherited).
 /// Makes the data folder owner-only, then opens its `bin`. The order
 /// matters: a newly handed-over folder is still empty here, so plainly
 /// Lodestar's, while one holding only `bin` isn't a folder `tighten` can
@@ -128,6 +125,9 @@ fn open_data(data_dir: &Path) -> std::io::Result<Bin> {
     Bin::open(data_dir)
 }
 
+/// The child's arguments, built from what was parsed rather than copied:
+/// `serve --child`, and the `--config` the supervisor was given (the
+/// environment is inherited).
 fn child_args(config: Option<&Path>) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     if let Some(c) = config {

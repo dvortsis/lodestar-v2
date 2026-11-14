@@ -488,7 +488,8 @@ const eventNamesLimits = {
 	api: '650 B',
 	companions: '1160 B',
 	integrations: '1060 B',
-	pipeline: '2560 B',
+	// runner §2.26, X-rejudge-stall: measured 2704 B with the two stall events, + 300 B.
+	pipeline: '3010 B',
 	fetch: '610 B'
 };
 for (const c of Object.keys(eventNamesLimits)) {

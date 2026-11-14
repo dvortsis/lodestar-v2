@@ -11,6 +11,12 @@
 //! shown. Only stored torrents are read: a quarantine row is never judged
 //! again from its sealed name here.
 //!
+//! A batch that mostly won't read (the breaker, [`BREAKER_ROWS`]) holds
+//! nothing: its range is kept in the store ([`Stall`]) and the pass goes
+//! on past it. Once both phases are done, the kept ranges are judged
+//! again, with a wait between tries, and the pass stays unfinished, with
+//! the store not marked as judged, until every one has been judged.
+//!
 //! Known limits: a row an older build rewrote in place while downgraded
 //! isn't seen by the high-water id; a batch's totals are written after
 //! its holds commit, so a restart between the two undercounts that batch
@@ -42,10 +48,13 @@ pub const FILES_BOUND: FilesBound = FilesBound {
 
 /// A batch in which more than half the torrents, and more than this many,
 /// won't read stops instead of holding them: that's the store failing
-/// (a missing dictionary, a damaged page), not the torrents.
+/// (a damaged dictionary, a damaged page), not the torrents. Its range is
+/// kept ([`Stall`]) and the pass moves past it.
 pub const BREAKER_ROWS: usize = 16;
 
-/// What [`rejudge_stored`] fails with when the breaker stops a batch.
+/// What [`rejudge_stored`] fails with when the breaker stops a stalled
+/// range judged again ([`RETRY_PHASE`]): the caller waits before the next
+/// try.
 pub const BREAKER: &str = "too many stored torrents in one batch won't read";
 
 /// One batch of the core re-judge.
@@ -68,6 +77,16 @@ pub struct CoreRejudged {
     pub phase_done: bool,
     /// The pass reached the end: the store is now judged by today's core.
     pub finished: bool,
+    /// Both phases are done and only stalled ranges are left: they're
+    /// judged again from time to time, and the pass stays unfinished.
+    pub waiting: bool,
+    /// The breaker stopped this batch: its range is kept to judge again,
+    /// and the pass moved past it.
+    pub stall: Option<Stall>,
+    /// A stalled range judged through in this batch, and removed.
+    pub cleared: Option<Stall>,
+    /// The stalled ranges still to judge after this batch.
+    pub stalled: Stalled,
 }
 
 /// Marks an empty store as judged by today's core: what this build stores
@@ -132,8 +151,11 @@ pub(crate) type Judge<'a> =
 /// of the second it records the store as judged by today's core. `None`
 /// when there's nothing to do (an empty store is marked so first). `mark`
 /// is called with the hashes the batch will hold just before its write,
-/// as the backfill does. Fails with [`BREAKER`] rather than hold a batch
-/// that mostly won't read.
+/// as the backfill does. A batch that mostly won't read holds nothing:
+/// its range is kept ([`Stall`]) and the pass moves on. Once both phases
+/// are done, the kept ranges are judged again ([`RETRY_PHASE`]); one the
+/// breaker stops again fails with [`BREAKER`]. The pass finishes only
+/// once none is left.
 pub fn rejudge_stored(
     store: &mut Store,
     filter: &Handle,
@@ -164,46 +186,409 @@ pub(crate) fn rejudge_with(
             None => return Ok(None),
         }
     }
+    let mut stalls = load_stalls(store, before.start)?;
+    if before.phase >= RETRY_PHASE {
+        return retry_stall(store, filter, limit, ctx, mark, judge, before, stalls);
+    }
     // The generation first, then the rules, as the backfill reads them.
     let generation = store.class_gen()?;
     let engine = filter.current();
     let ids = store.ids_after(before.after, limit.max(1))?;
     if ids.is_empty() {
-        let finished = before.phase >= 2;
-        if finished {
-            store.finish_core_rejudge(CORE_VERSION)?;
+        let next = if before.phase >= 2 {
+            // The end of the second phase: done, unless ranges the breaker
+            // stopped are still to judge.
+            if stalls.is_empty() {
+                finish(store)?;
+                return Ok(Some(CoreRejudged {
+                    before,
+                    after: before,
+                    phase_done: true,
+                    finished: true,
+                    ..CoreRejudged::default()
+                }));
+            }
+            CorePass {
+                phase: RETRY_PHASE,
+                ..before
+            }
         } else {
             // The first phase is done: the second goes over the same ids.
-            let next = CorePass {
+            CorePass {
                 phase: 2,
                 after: before.start,
                 ..before
+            }
+        };
+        store.set_core_rejudge(CORE_VERSION, &next)?;
+        return Ok(Some(CoreRejudged {
+            before,
+            after: next,
+            phase_done: true,
+            waiting: next.phase >= RETRY_PHASE,
+            stalled: totals(&stalls),
+            ..CoreRejudged::default()
+        }));
+    }
+    let b = judge_ids(store, &ids, before.after, before.phase, &engine, ctx, judge)?;
+    if b.tripped() {
+        // Most of the batch wouldn't read: hold nothing, and note the range
+        // to judge again later, before the pass moves past it, so a restart
+        // between the two only notes it again.
+        let stall = Stall {
+            phase: before.phase,
+            after: before.after,
+            to: b.last,
+            rows: b.rows,
+        };
+        add_stall(&mut stalls, stall);
+        save_stalls(store, &stalls)?;
+        let after = CorePass {
+            after: b.last,
+            ..before
+        };
+        store.set_core_rejudge(CORE_VERSION, &after)?;
+        return Ok(Some(CoreRejudged {
+            before,
+            after,
+            stall: Some(stall),
+            stalled: totals(&stalls),
+            ..CoreRejudged::default()
+        }));
+    }
+    let Some(applied) = apply(store, generation, &b, ctx, mark)? else {
+        return Ok(Some(CoreRejudged {
+            rejected: true,
+            before,
+            after: before,
+            stalled: totals(&stalls),
+            ..CoreRejudged::default()
+        }));
+    };
+    // After the holds commit: a restart between the two judges this batch
+    // again, which holds nothing twice (a held torrent is no longer
+    // stored).
+    let after = CorePass {
+        after: b.last,
+        ..counted(before, &b, applied.held_back)
+    };
+    store.set_core_rejudge(CORE_VERSION, &after)?;
+    Ok(Some(CoreRejudged {
+        judged: b.judged,
+        left: b.left,
+        held: applied.held,
+        before,
+        after,
+        stalled: totals(&stalls),
+        ..CoreRejudged::default()
+    }))
+}
+
+/// The pass's phase once both phases are done and only ranges the breaker
+/// stopped are left ([`Stall`]): it's judged again from them, the first
+/// first, and the pass stays unfinished until none is left.
+pub const RETRY_PHASE: i64 = 3;
+
+/// The settings key the ranges the breaker stopped are kept under, with
+/// the core version they're for: `v<version>;<phase>:<after>:<to>:<rows>;…`.
+/// Ids and counts only. Not one of the store's pass keys, so it's written
+/// here and removed before the pass finishes.
+pub const STALLS_KEY: &str = "filter.core.stalled";
+
+/// At most this many ranges are kept. Past it, a new range widens the
+/// last of its phase to cover it: a wider range only judges again
+/// torrents judged already, which changes nothing.
+pub const MAX_STALLS: usize = 1024;
+
+/// A range of stored torrents the breaker stopped: the ids after `after`,
+/// up to and including `to`, in `phase`. Nothing in it was held or
+/// written; it's judged again until it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stall {
+    pub phase: i64,
+    pub after: i64,
+    pub to: i64,
+    /// The stored torrents it covered when it stopped (a range that
+    /// shrinks as it's judged again loses those judged).
+    pub rows: u64,
+}
+
+/// Ranges the breaker stopped that are still to judge, and their rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stalled {
+    pub ranges: u64,
+    pub rows: u64,
+}
+
+fn totals(stalls: &[Stall]) -> Stalled {
+    Stalled {
+        ranges: stalls.len() as u64,
+        rows: stalls.iter().map(|s| s.rows).sum(),
+    }
+}
+
+/// The ranges still to judge again ([`Stall`]), and their rows: for a
+/// status read outside the writer.
+pub fn stalled(store: &mut Store) -> Result<Stalled, Error> {
+    let start = match store.core_rejudge_due(CORE_VERSION)? {
+        Some(pass) => pass.start,
+        None => return Ok(Stalled::default()),
+    };
+    Ok(totals(&load_stalls(store, start)?))
+}
+
+/// The stalled ranges kept for today's core. Ranges kept for another core
+/// are for a pass that's gone (a new one judges every torrent again). A
+/// value that won't read is taken as every torrent of the pass, in both
+/// phases, so nothing it named is ever left unjudged.
+fn load_stalls(store: &mut Store, start: i64) -> Result<Vec<Stall>, Error> {
+    let text = match store.setting_text(STALLS_KEY) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(Vec::new()),
+        Err(e) if row_level(&e) => return Ok(everything(start)),
+        Err(e) => return Err(e),
+    };
+    match parse_stalls(&text) {
+        Some((version, stalls)) if version == CORE_VERSION => Ok(stalls),
+        Some(_) => Ok(Vec::new()),
+        None => Ok(everything(start)),
+    }
+}
+
+fn everything(start: i64) -> Vec<Stall> {
+    (1..=2)
+        .map(|phase| Stall {
+            phase,
+            after: start,
+            to: i64::MAX,
+            rows: 0,
+        })
+        .collect()
+}
+
+fn parse_stalls(text: &str) -> Option<(i64, Vec<Stall>)> {
+    let mut parts = text.split(';');
+    let version = parts.next()?.strip_prefix('v')?.parse().ok()?;
+    let stalls = parts
+        .map(|part| {
+            let mut f = part.split(':');
+            let stall = Stall {
+                phase: f.next()?.parse().ok()?,
+                after: f.next()?.parse().ok()?,
+                to: f.next()?.parse().ok()?,
+                rows: f.next()?.parse().ok()?,
             };
-            store.set_core_rejudge(CORE_VERSION, &next)?;
-        }
+            (f.next().is_none() && (1..=2).contains(&stall.phase) && stall.after < stall.to)
+                .then_some(stall)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((version, stalls))
+}
+
+fn format_stalls(stalls: &[Stall]) -> String {
+    let mut text = format!("v{CORE_VERSION}");
+    for s in stalls {
+        text.push_str(&format!(";{}:{}:{}:{}", s.phase, s.after, s.to, s.rows));
+    }
+    text
+}
+
+fn save_stalls(store: &mut Store, stalls: &[Stall]) -> Result<(), Error> {
+    if stalls.is_empty() {
+        store.update_settings_text(&[], &[STALLS_KEY])
+    } else {
+        store.update_settings_text(&[(STALLS_KEY, &format_stalls(stalls))], &[])
+    }
+}
+
+/// Adds `new` to the ranges: the same range again (a restart before the
+/// pass moved past it) is kept once, one that follows a range of its
+/// phase extends it, and past [`MAX_STALLS`] it widens the last of its
+/// phase.
+fn add_stall(stalls: &mut Vec<Stall>, new: Stall) {
+    let same_phase = |s: &&mut Stall| s.phase == new.phase;
+    if stalls
+        .iter()
+        .any(|s| s.phase == new.phase && s.after <= new.after && new.to <= s.to)
+    {
+        return;
+    }
+    if let Some(s) = stalls
+        .iter_mut()
+        .filter(same_phase)
+        .find(|s| s.to == new.after)
+    {
+        s.to = new.to;
+        s.rows += new.rows;
+        return;
+    }
+    if stalls.len() >= MAX_STALLS
+        && let Some(s) = stalls.iter_mut().rev().find(|s| s.phase == new.phase)
+    {
+        s.after = s.after.min(new.after);
+        s.to = s.to.max(new.to);
+        s.rows += new.rows;
+        return;
+    }
+    stalls.push(new);
+}
+
+/// Records the store as judged by today's core, the stalled ranges' key
+/// first: a restart between the two finds no range left and finishes.
+fn finish(store: &mut Store) -> Result<(), Error> {
+    store.update_settings_text(&[], &[STALLS_KEY])?;
+    store.finish_core_rejudge(CORE_VERSION)
+}
+
+/// One batch from the first stalled range, in that range's phase. The
+/// breaker stops it again: the range goes to the back of the list, so the
+/// next try starts with another, and this fails with [`BREAKER`] for the
+/// caller to wait. Once the range is judged through, it's removed; once
+/// none is left, the pass finishes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the batch's inputs, as rejudge_with's"
+)]
+fn retry_stall(
+    store: &mut Store,
+    filter: &Handle,
+    limit: usize,
+    ctx: &Backfill<'_>,
+    mark: &dyn Fn(&Store, &[[u8; 20]]),
+    judge: &Judge<'_>,
+    before: CorePass,
+    mut stalls: Vec<Stall>,
+) -> Result<Option<CoreRejudged>, Error> {
+    let Some(&stall) = stalls.first() else {
+        finish(store)?;
         return Ok(Some(CoreRejudged {
             before,
             after: before,
             phase_done: true,
-            finished,
+            finished: true,
+            ..CoreRejudged::default()
+        }));
+    };
+    let generation = store.class_gen()?;
+    let engine = filter.current();
+    let limit = limit.max(1);
+    let listed = store.ids_after(stall.after, limit)?;
+    let ids: Vec<i64> = listed
+        .iter()
+        .copied()
+        .filter(|&id| id <= stall.to)
+        .collect();
+    let rest = |stalls: &mut Vec<Stall>| stalls.remove(0);
+    if ids.is_empty() {
+        // Nothing left in it (judged, or no longer stored).
+        rest(&mut stalls);
+        save_stalls(store, &stalls)?;
+        return Ok(Some(CoreRejudged {
+            before,
+            after: before,
+            waiting: true,
+            cleared: Some(stall),
+            stalled: totals(&stalls),
             ..CoreRejudged::default()
         }));
     }
+    let b = judge_ids(store, &ids, stall.after, stall.phase, &engine, ctx, judge)?;
+    if b.tripped() {
+        let s = rest(&mut stalls);
+        stalls.push(s);
+        save_stalls(store, &stalls)?;
+        return Err(Error::Invalid(BREAKER));
+    }
+    let Some(applied) = apply(store, generation, &b, ctx, mark)? else {
+        return Ok(Some(CoreRejudged {
+            rejected: true,
+            before,
+            after: before,
+            waiting: true,
+            stalled: totals(&stalls),
+            ..CoreRejudged::default()
+        }));
+    };
+    // Judged through when the batch reached the range's end: its last id,
+    // or every id listed and none past them inside it.
+    let through = b.last >= stall.to
+        || (b.last == *ids.last().expect("not empty")
+            && (listed.len() < limit || listed.len() > ids.len()));
+    let cleared = if through {
+        rest(&mut stalls);
+        Some(stall)
+    } else {
+        let s = &mut stalls[0];
+        s.after = b.last;
+        s.rows = s.rows.saturating_sub(b.rows);
+        None
+    };
+    save_stalls(store, &stalls)?;
+    let after = counted(before, &b, applied.held_back);
+    store.set_core_rejudge(CORE_VERSION, &after)?;
+    Ok(Some(CoreRejudged {
+        judged: b.judged,
+        left: b.left,
+        held: applied.held,
+        before,
+        after,
+        waiting: true,
+        cleared,
+        stalled: totals(&stalls),
+        ..CoreRejudged::default()
+    }))
+}
+
+/// One batch's judgments, before anything is written.
+struct Batch {
+    refilings: Vec<Refiling>,
+    judged: usize,
+    left: usize,
+    unjudged: usize,
+    /// The last id it reached, and how many ids it reached.
+    last: i64,
+    rows: u64,
+}
+
+impl Batch {
+    /// Most of the batch wouldn't read: the store failing, not its
+    /// torrents.
+    fn tripped(&self) -> bool {
+        self.unjudged > BREAKER_ROWS && self.unjudged * 2 > self.judged + self.left
+    }
+}
+
+/// Judges `ids` (after `from`) in `phase`, as many as [`BATCH_TIME`]
+/// allows (at least one).
+fn judge_ids(
+    store: &mut Store,
+    ids: &[i64],
+    from: i64,
+    phase: i64,
+    engine: &Engine,
+    ctx: &Backfill<'_>,
+    judge: &Judge<'_>,
+) -> Result<Batch, Error> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let started = Instant::now();
-    let mut refilings = Vec::new();
-    let (mut judged, mut left, mut unjudged) = (0, 0, 0);
-    let mut last = before.after;
-    for &id in &ids {
-        if last != before.after && started.elapsed() >= BATCH_TIME {
+    let mut b = Batch {
+        refilings: Vec::new(),
+        judged: 0,
+        left: 0,
+        unjudged: 0,
+        last: from,
+        rows: 0,
+    };
+    for &id in ids {
+        if b.rows > 0 && started.elapsed() >= BATCH_TIME {
             break;
         }
         // The whole of one torrent's judgment, so a panic anywhere in it
         // holds that torrent and the batch goes on.
         let row = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            judge_row(store, id, before.phase, &engine, ctx, now, judge)
+            judge_row(store, id, phase, engine, ctx, now, judge)
         }));
         let row = match row {
             Ok(Ok(row)) => row,
@@ -224,28 +609,48 @@ pub(crate) fn rejudge_with(
                 )
             }
         };
-        last = id;
+        b.last = id;
+        b.rows += 1;
         match row {
             Row::Gone => {}
-            Row::Left => left += 1,
+            Row::Left => b.left += 1,
             Row::Judged(refiling, unread) => {
-                judged += 1;
-                unjudged += usize::from(unread);
-                refilings.extend(refiling);
+                b.judged += 1;
+                b.unjudged += usize::from(unread);
+                b.refilings.extend(refiling);
             }
         }
     }
-    // Most of a batch unreadable is the store failing, not its torrents:
-    // stop, hold nothing, and try again later.
-    if unjudged > BREAKER_ROWS && unjudged * 2 > judged + left {
-        return Err(Error::Invalid(BREAKER));
-    }
-    let refiled: Vec<_> = refilings
+    Ok(b)
+}
+
+/// What a batch's write held.
+struct Applied {
+    held: Vec<[u8; 20]>,
+    held_back: usize,
+}
+
+/// Writes a batch's refilings in one transaction (a held torrent is
+/// deleted with its hold written), marking the hashes it holds for intake
+/// first. `None` when the rules changed under it, so nothing was written.
+fn apply(
+    store: &mut Store,
+    generation: i64,
+    b: &Batch,
+    ctx: &Backfill<'_>,
+    mark: &dyn Fn(&Store, &[[u8; 20]]),
+) -> Result<Option<Applied>, Error> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let refiled: Vec<_> = b
+        .refilings
         .iter()
         .map(|r| r.refiled(now, now + ctx.quarantine_secs))
         .collect();
-    let held_back = refilings.iter().filter(|r| r.held.is_some()).count();
-    let held: Vec<[u8; 20]> = refilings
+    let held_back = b.refilings.iter().filter(|r| r.held.is_some()).count();
+    let held: Vec<[u8; 20]> = b
+        .refilings
         .iter()
         .filter(|r| r.held.is_some())
         .flat_map(|r| r.hashes.iter().copied())
@@ -253,39 +658,23 @@ pub(crate) fn rejudge_with(
     if !held.is_empty() {
         mark(store, &held);
     }
-    // One transaction: a held torrent is deleted with its hold written.
     if store
         .set_enrichments_at(generation, &[], &refiled)?
         .is_none()
     {
-        return Ok(Some(CoreRejudged {
-            rejected: true,
-            before,
-            after: before,
-            ..CoreRejudged::default()
-        }));
+        return Ok(None);
     }
-    // After the holds commit: a restart between the two judges this batch
-    // again, which holds nothing twice (a held torrent is no longer
-    // stored).
-    let after = CorePass {
-        after: last,
-        found: before.found + judged as i64,
+    Ok(Some(Applied { held, held_back }))
+}
+
+/// The pass's totals with a written batch counted.
+fn counted(before: CorePass, b: &Batch, held_back: usize) -> CorePass {
+    CorePass {
+        found: before.found + b.judged as i64,
         held: before.held + held_back as i64,
-        unreadable: before.unreadable + unjudged as i64,
+        unreadable: before.unreadable + b.unjudged as i64,
         ..before
-    };
-    store.set_core_rejudge(CORE_VERSION, &after)?;
-    Ok(Some(CoreRejudged {
-        judged,
-        left,
-        held,
-        rejected: false,
-        before,
-        after,
-        phase_done: false,
-        finished: false,
-    }))
+    }
 }
 
 /// Whether the error is the breaker's ([`BREAKER`]).
@@ -372,6 +761,86 @@ mod tests {
             .unwrap()[0]
             .id();
         (id, info.primary_hash().0)
+    }
+
+    fn stall(phase: i64, after: i64, to: i64, rows: u64) -> Stall {
+        Stall {
+            phase,
+            after,
+            to,
+            rows,
+        }
+    }
+
+    #[test]
+    fn stalled_ranges_round_trip_and_bad_text_is_refused() {
+        let stalls = vec![stall(1, 0, 32, 32), stall(2, 40, 90, 17)];
+        let text = format_stalls(&stalls);
+        assert_eq!(parse_stalls(&text), Some((CORE_VERSION, stalls)));
+        assert_eq!(
+            parse_stalls(&format_stalls(&[])),
+            Some((CORE_VERSION, vec![]))
+        );
+        for bad in [
+            "",
+            "x1;1:0:2:2",
+            "v1;1:0:2",
+            "v1;1:0:2:2:9",
+            "v1;3:0:2:2",
+            "v1;1:5:5:0",
+            "v1;1:a:2:2",
+            "v1;;",
+        ] {
+            assert_eq!(parse_stalls(bad), None, "{bad}");
+        }
+    }
+
+    /// Text that won't read is taken as every torrent of the pass, in
+    /// both phases; ranges kept for another core are for a pass that's
+    /// gone.
+    #[test]
+    fn unreadable_or_other_cores_stalls() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        store
+            .update_settings_text(&[(STALLS_KEY, "not ranges")], &[])
+            .unwrap();
+        assert_eq!(
+            load_stalls(&mut store, 7).unwrap(),
+            [stall(1, 7, i64::MAX, 0), stall(2, 7, i64::MAX, 0)]
+        );
+        let other = format!("v{};1:0:9:9", CORE_VERSION + 1);
+        store
+            .update_settings_text(&[(STALLS_KEY, &other)], &[])
+            .unwrap();
+        assert_eq!(load_stalls(&mut store, 7).unwrap(), []);
+        save_stalls(&mut store, &[stall(1, 0, 9, 9)]).unwrap();
+        assert_eq!(load_stalls(&mut store, 7).unwrap(), [stall(1, 0, 9, 9)]);
+        save_stalls(&mut store, &[]).unwrap();
+        assert_eq!(store.setting_text(STALLS_KEY).unwrap(), None);
+    }
+
+    /// The same range again is kept once, one that follows a range of its
+    /// phase extends it, and past the cap a new range widens the last of
+    /// its phase.
+    #[test]
+    fn stalled_ranges_merge() {
+        let mut stalls = vec![stall(1, 0, 32, 32)];
+        add_stall(&mut stalls, stall(1, 0, 32, 32));
+        add_stall(&mut stalls, stall(1, 8, 16, 8));
+        assert_eq!(stalls, [stall(1, 0, 32, 32)]);
+        add_stall(&mut stalls, stall(1, 32, 64, 30));
+        assert_eq!(stalls, [stall(1, 0, 64, 62)]);
+        add_stall(&mut stalls, stall(2, 32, 64, 30));
+        add_stall(&mut stalls, stall(1, 100, 120, 5));
+        assert_eq!(stalls.len(), 3);
+        let mut full: Vec<Stall> = (0..MAX_STALLS as i64)
+            .map(|i| stall(1 + i % 2, i * 10, i * 10 + 5, 1))
+            .collect();
+        add_stall(&mut full, stall(1, 1_000_000, 1_000_010, 4));
+        assert_eq!(full.len(), MAX_STALLS);
+        let last = full.iter().rfind(|s| s.phase == 1).unwrap();
+        assert_eq!((last.to, last.rows), (1_000_010, 5));
+        assert_eq!(totals(&full).rows, MAX_STALLS as u64 + 4);
     }
 
     /// Judging one torrent panics: that torrent is held under CS-0a and
