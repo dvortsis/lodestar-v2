@@ -1339,6 +1339,50 @@ async fn a_drain_survives_a_reconnect_until_resumed() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_that_stops_on_its_own_rests_before_it_claims_again() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[1, 2])).await.unwrap()[0]);
+        // Not asked to drain: it stops on its own.
+        a.drained().await.unwrap();
+        assert_eq!(
+            event(&mut a).await,
+            WorkerEvent::Ended(Some(StopReason::Drained))
+        );
+        let s = c.server.snapshot();
+        assert_eq!((s.leases, s.pending), (0, 2));
+
+        // Back at once: no new key, and none of the waiting ones.
+        let a = c.session(&nas).await;
+        let denied = a.claim(found(&*c.clock, &[3])).await.unwrap();
+        assert!(
+            matches!(
+                denied[0],
+                GrantItem::Denied {
+                    reason: DenyReason::Busy,
+                    ..
+                }
+            ),
+            "{denied:?}"
+        );
+        c.server.tick().await;
+        assert_eq!(c.server.snapshot().pending, 2, "nothing re-granted to it");
+
+        // Once the rest is over, its waiting keys go back to it and it
+        // claims again.
+        c.clock
+            .advance(Duration::from_secs(REST_AFTER_DRAIN_SECS.unsigned_abs()));
+        a.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert_eq!(c.server.snapshot().pending, 0);
+        token_of(&a.claim(found(&*c.clock, &[3])).await.unwrap()[0]);
+    })
+    .await;
+}
+
 /// A local worker that gives up on replies after 300 ms, behind a store
 /// check the test releases one claim at a time.
 async fn impatient() -> (

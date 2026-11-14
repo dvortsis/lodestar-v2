@@ -78,7 +78,7 @@ use zeroize::Zeroizing;
 
 use crate::clock::{Clock, ClockTime};
 use crate::frame::{self, MAX_JOIN_REQUEST};
-use crate::leases::LOSS_BLOCKED;
+use crate::leases::{LOSS_BLOCKED, REST_AFTER_DRAIN_SECS};
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
@@ -1573,7 +1573,12 @@ impl ClusterServer {
                         state.session = None;
                         state.holding = None;
                     }
+                    // Nor a claimer for a while: it can't hand its keys
+                    // back and claim afresh at once.
+                    let now = self.clock.now_secs();
                     self.leases.evict(w);
+                    self.leases
+                        .rest(w, now.saturating_add(REST_AFTER_DRAIN_SECS));
                 }
                 self.regrant().await;
                 Flow::Stop(StopReason::Drained)
