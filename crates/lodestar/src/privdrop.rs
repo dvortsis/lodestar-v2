@@ -575,7 +575,7 @@ mod imp {
             Ok(m) if !m.is_dir() => return Err(format!("{shown} is not a directory")),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir_all(dir).map_err(|e| format!("creating {shown}: {e}"))?;
+                crate::data_dir::ensure(dir).map_err(|e| format!("creating {shown}: {e}"))?;
             }
             Err(e) => return Err(format!("{shown}: {e}")),
         }

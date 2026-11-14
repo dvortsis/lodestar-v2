@@ -88,7 +88,7 @@ impl Bin {
         let dir = data_dir.join("bin");
         match fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir_all(data_dir)?;
+                crate::data_dir::ensure(data_dir)?;
                 #[cfg(unix)]
                 let builder = {
                     let mut b = fs::DirBuilder::new();

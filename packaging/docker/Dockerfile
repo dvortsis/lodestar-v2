@@ -89,7 +89,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     esac \
     && cargo zigbuild --locked --release -p lodestar --bin lodestar --no-default-features --features web --target "$triple" \
     && install -D "target/$triple/release/lodestar" /out/lodestar \
-    && mkdir -p /out/data \
+    && install -d -m 0700 /out/data \
     && install -d -m 0700 /out/witness
 
 # ---- 3. Runtime ------------------------------------------------------------
