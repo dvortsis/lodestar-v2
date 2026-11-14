@@ -8,11 +8,10 @@ Follow-ups from #839 (X-lease-reconcile-every-session) and two nits from #853. B
   - The local stop now sends `Drained` through the session handle, and keeps reading events until the coordinator's `Stop(Drained)` arrives.
   - A `Stop(Drained)` read in the same wake as `drained`'s reply still counts: the coordinator says it only once it has evicted the leases.
 - **Shared edit (runner, 2026-11-13):** `SessionHandle::drained()` in `crates/cluster/src/client.rs`, as `WorkerSession::drained`. It only adds the method; nothing else changes.
-- **Test:** `a_full_event_queue_doesnt_hold_up_a_local_stop`. A one-slot event queue is flooded with large `Assign`s as the drain ends, and the stop still ends on the coordinator's confirmation, every lease back.
-  - The old code's window (events arriving after the hand-back ends, before `Drained` is written) is too narrow to hit on demand, so the test pins the behaviour rather than reproducing the old stall.
+- **Test:** `a_full_event_queue_doesnt_hold_up_a_local_stop`. A one-slot event queue is flooded with large `Assign`s, and the drain returns only once several are on the wire, so the session's loop is already blocked when `Drained` reaches it. The stop still ends on the coordinator's confirmation, every lease back. Against the old stop it fails: it waits out its deadline and keeps the work for the next start (self-review).
 
 ## A flush on a session change
-- **The flush now sends on a new session before it answers, instead of correcting the comment** (runtime.rs).
+- **The flush now sends on a new session before it answers, instead of correcting the comment** (runtime.rs). Tested by `a_flush_that_sees_a_new_session_sends_there_before_answering`: whichever of the flush or the loop top holds the batch when the session changes (the scheduler decides), it's out on the new session before the flush answers.
   - When the session changes while a flush sends, a new session gets the batches before the flush answers, and no session sends them to the spool.
   - Each extra round needs a real session change, and the caller's drain deadline bounds the wait for the answer.
   - Why: a drain that answered "flushed" with nothing sent on a healthy session would hand back leases whose results never left.

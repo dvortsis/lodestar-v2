@@ -4474,6 +4474,50 @@ pub(crate) mod tests {
         session_pair_with(64).await
     }
 
+    /// X-worker-839-followups: a flush whose session changes to a new, live
+    /// one while it sends answers only once the batch is on the new
+    /// session. The send to the old session stalls (its link is full and
+    /// never read). Whether the flush or the loop top has the batch when
+    /// the session changes is up to the scheduler; either way it's out
+    /// before the flush answers, and nothing goes to the spool.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_flush_that_sees_a_new_session_sends_there_before_answering() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_stalled, old) = session_pair_with(1).await;
+        // The handshake leaves one slot: fill it, so every later frame
+        // stalls.
+        let filler = ToCoordinator::SnapshotAck(lodestar_cluster::proto::SnapshotAck {
+            kind: lodestar_cluster::proto::SnapshotKind::Filter,
+            version: 1,
+            seq: 0,
+        });
+        old.handle().send(filler).await.unwrap();
+        rt.connected(old.handle());
+        let out = rt.test_outbound();
+        out.send(sealed(3)).await.unwrap();
+
+        let (mut coord, new) = session_pair().await;
+        let shared = rt.shared.clone();
+        let handle = new.handle();
+        // As `connected` does: the generation, then the session.
+        let reconnect = async move {
+            shared.generation.fetch_add(1, Ordering::AcqRel);
+            shared.session.send_replace(Some(handle));
+        };
+        let started = Instant::now();
+        // The drain first: its flush is asked for before the session
+        // changes.
+        let (_, ()) = tokio::join!(rt.drain(), reconnect);
+        // Answered before the drain deadline ran out, with the batch sent:
+        // a send that stalled on the old session isn't counted.
+        assert!(started.elapsed() < rt.shared.config.drain_deadline);
+        assert_eq!(rt.counts().sent.load(Ordering::Relaxed), 1);
+        let got = next_results(&mut coord).await;
+        let (_, sealed) = ResultsBatch::decode_with(&got.bytes).unwrap();
+        assert_eq!(sealed.len(), 1);
+        drop((old, new, out));
+    }
+
     /// A session over a link of `capacity` frames: at 1, a coordinator
     /// that never reads stalls it after the handshake.
     pub(crate) async fn session_pair_with(

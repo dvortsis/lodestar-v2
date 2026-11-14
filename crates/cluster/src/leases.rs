@@ -2385,7 +2385,7 @@ mod tests {
     /// The table's per-worker key index (CLUSTER-02, X-worker-839-followups)
     /// against a full scan: the same keys for each worker, and no entry for
     /// a worker holding none.
-    fn assert_counts(t: &LeaseTable) {
+    fn assert_index_matches_a_scan(t: &LeaseTable) {
         let mut scanned: HashMap<WorkerId, HashSet<InfoHash>> = HashMap::new();
         for (k, l) in &t.leases {
             scanned.entry(l.holder).or_default().insert(*k);
@@ -2402,7 +2402,7 @@ mod tests {
         /// worker's index holds exactly the keys it leases, and a worker
         /// holding none has no entry.
         #[test]
-        fn held_counts_follow_every_change(
+        fn the_key_index_follows_every_change(
             ops in proptest::collection::vec((0u8..9, 1u32..4, 0u8..12), 1..200)
         ) {
             let mut t = LeaseTable::new(1, 600);
@@ -2451,7 +2451,7 @@ mod tests {
                         t.heartbeat(w, now);
                     }
                 }
-                assert_counts(&t);
+                assert_index_matches_a_scan(&t);
             }
         }
     }

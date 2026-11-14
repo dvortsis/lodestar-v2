@@ -1290,6 +1290,21 @@ pub(crate) mod tests {
                     break;
                 }
             }
+            // Returned only once several are on the wire, so the session's
+            // loop is already blocked on its one-slot queue when `Drained`
+            // reaches it: that's the stall a stop that doesn't read events
+            // meets (it then waits out its deadline).
+            let full = self.server.queued_bytes(self.worker).unwrap_or(0);
+            let need = 4 * lodestar_cluster::proto::MAX_OPAQUE;
+            let start = Instant::now();
+            while self
+                .server
+                .queued_bytes(self.worker)
+                .is_some_and(|q| q + need > full)
+            {
+                assert!(start.elapsed() < DEADLINE, "the flood never left");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
             Vec::new()
         }
     }
@@ -1302,6 +1317,9 @@ pub(crate) mod tests {
         let s = joined().await;
         let mut quick = settings();
         quick.session.event_queue = 1;
+        // Ten seconds to hand ~8 MiB back on a slow runner; a stop that
+        // stalls waits it out, past `shutdown`'s deadline or with the log line.
+        quick.stop_deadline = SPOOL_RESERVE + Duration::from_secs(10);
         let work = Flooding {
             server: s.coord.server.clone(),
             worker: s.worker,
