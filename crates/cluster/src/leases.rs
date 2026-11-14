@@ -8,9 +8,12 @@
 //!
 //! A lease ends exactly once:
 //! - the holder commits the torrent or reports it lost, with the lease's
-//!   token; or
+//!   token;
 //! - the holder goes silent for longer than the TTL, and the lease expires
-//!   (to be granted again elsewhere with its cohort and sources kept).
+//!   (to be granted again elsewhere with its cohort and sources kept); or
+//! - the holder reported its result `Fetched` (its batch was accepted) and
+//!   no commit came within a TTL of that, holder alive or not: it expires
+//!   the same way (X-wk-fetched-lease).
 //!
 //! A report carrying any other token is stale (from a holder whose lease
 //! expired) and changes nothing, so nothing is ever counted twice.
@@ -23,7 +26,7 @@
 //! remote workers are allowed, so a key can never be leased twice (once
 //! locally, once remotely).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use lodestar_metainfo::InfoHash;
@@ -94,7 +97,29 @@ pub struct LeaseTable {
     leases: HashMap<InfoHash, Lease>,
     /// Unix seconds each worker was last heard from.
     workers: HashMap<WorkerId, i64>,
+    /// Leases whose results the holder's batch delivered (`Fetched`, sent
+    /// on the coordinator's `Accepted`): token → key, and when it was
+    /// marked (X-wk-fetched-lease). Only the commit, a loss, an eviction or
+    /// the TTL after the mark ends one; meanwhile the holder's own claims
+    /// are answered as committed, never with the lease.
+    fetched: HashMap<Token, (InfoHash, i64)>,
+    /// The session each lease was last handed to its holder on (WK-11b):
+    /// a grant, a re-grant, or the holder's own claim answered with it.
+    /// [`PINNED`] for a late result's lease, which the coordinator holds
+    /// for a result already in hand. Ends with the lease.
+    delivered: HashMap<Token, u64>,
+    /// The keys each worker holds, kept with `leases` on every insert and
+    /// removal: a count is one lookup (the per-worker cap, CLUSTER-02), and
+    /// an eviction, expiry or reconcile visits only that worker's leases,
+    /// not the whole table (X-worker-839-followups). A worker with none has
+    /// no entry.
+    by_worker: HashMap<WorkerId, HashSet<InfoHash>>,
 }
+
+/// [`LeaseTable`]'s delivery mark for a lease the coordinator holds on a
+/// worker's behalf for a result already in hand (a late result, plan Q7):
+/// never returned by a reconcile.
+const PINNED: u64 = u64::MAX;
 
 impl LeaseTable {
     pub fn new(epoch: u32, ttl_secs: i64) -> LeaseTable {
@@ -104,7 +129,47 @@ impl LeaseTable {
             ttl: ttl_secs,
             leases: HashMap::new(),
             workers: HashMap::new(),
+            fetched: HashMap::new(),
+            delivered: HashMap::new(),
+            by_worker: HashMap::new(),
         }
+    }
+
+    /// Adds a lease; `key` must have none.
+    fn put(&mut self, key: InfoHash, lease: Lease) {
+        self.by_worker.entry(lease.holder).or_default().insert(key);
+        let old = self.leases.insert(key, lease);
+        debug_assert!(old.is_none(), "a key leased twice");
+    }
+
+    /// Removes `key`'s lease, if any, keeping the counts.
+    fn take(&mut self, key: &InfoHash) -> Option<Lease> {
+        let lease = self.leases.remove(key)?;
+        if let Some(keys) = self.by_worker.get_mut(&lease.holder) {
+            keys.remove(key);
+            if keys.is_empty() {
+                self.by_worker.remove(&lease.holder);
+            }
+        }
+        Some(lease)
+    }
+
+    /// Forgets the per-token marks of a lease that ended.
+    fn ended(&mut self, token: Token) {
+        self.fetched.remove(&token);
+        self.delivered.remove(&token);
+    }
+
+    /// Ends the leases of `keys` (those still leased), with their marks.
+    fn end_all(&mut self, keys: Vec<InfoHash>) -> Vec<(InfoHash, Lease)> {
+        let mut out = Vec::with_capacity(keys.len());
+        for k in keys {
+            if let Some(l) = self.take(&k) {
+                self.ended(l.token);
+                out.push((k, l));
+            }
+        }
+        out
     }
 
     fn token(&mut self) -> Token {
@@ -138,7 +203,7 @@ impl LeaseTable {
             };
         }
         let token = self.token();
-        self.leases.insert(
+        self.put(
             c.key,
             Lease {
                 holder: worker,
@@ -170,7 +235,7 @@ impl LeaseTable {
             return l.token;
         }
         let token = self.token();
-        self.leases.insert(
+        self.put(
             key,
             Lease {
                 holder: worker,
@@ -201,12 +266,39 @@ impl LeaseTable {
         if !self.is_current(key, token) {
             return None;
         }
-        self.leases.remove(key)
+        self.ended(token);
+        self.take(key)
+    }
+
+    /// The holder's batch carrying `key`'s result was accepted: marked
+    /// fetched, from the first mark (a repeat keeps it). `None`, nothing
+    /// marked, unless `worker` holds the key under `token`.
+    pub fn mark_fetched(
+        &mut self,
+        worker: WorkerId,
+        key: &InfoHash,
+        token: Token,
+        now: i64,
+    ) -> Option<Lease> {
+        let lease = *self
+            .leases
+            .get(key)
+            .filter(|l| l.holder == worker && l.token == token)?;
+        self.fetched.entry(token).or_insert((*key, now));
+        Some(lease)
+    }
+
+    /// Whether `worker` holds `key` under a lease marked fetched.
+    pub fn is_fetched(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        self.leases
+            .get(key)
+            .is_some_and(|l| l.holder == worker && self.fetched.contains_key(&l.token))
     }
 
     /// Ends every lease held by a worker silent for longer than the TTL,
-    /// and forgets the worker. The caller grants the keys again (see
-    /// [`regrant`](Self::regrant)).
+    /// and forgets the worker, and every lease marked fetched longer than
+    /// the TTL ago, its holder alive or not. The caller grants the keys
+    /// again (see [`regrant`](Self::regrant)).
     pub fn expire(&mut self, now: i64) -> Vec<(InfoHash, Lease)> {
         let ttl = self.ttl;
         let dead: Vec<WorkerId> = self
@@ -215,22 +307,30 @@ impl LeaseTable {
             .filter(|&(_, &seen)| seen + ttl < now)
             .map(|(&w, _)| w)
             .collect();
-        if dead.is_empty() {
+        // A fetched lease whose commit hasn't come a TTL after the mark
+        // expires too, holder alive or not: its batch never reached the
+        // store (X-wk-fetched-lease).
+        let stuck: Vec<InfoHash> = self
+            .fetched
+            .iter()
+            .filter(|&(t, &(k, marked))| {
+                marked + ttl < now && self.leases.get(&k).is_some_and(|l| l.token == *t)
+            })
+            .map(|(_, &(k, _))| k)
+            .collect();
+        if dead.is_empty() && stuck.is_empty() {
             return Vec::new();
         }
         for w in &dead {
             self.workers.remove(w);
         }
-        let expired: Vec<InfoHash> = self
-            .leases
-            .iter()
-            .filter(|(_, l)| dead.contains(&l.holder))
-            .map(|(k, _)| *k)
-            .collect();
-        expired
-            .into_iter()
-            .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
-            .collect()
+        let mut expired: Vec<InfoHash> = dead.iter().flat_map(|&w| self.keys_of(w)).collect();
+        expired.extend(stuck.into_iter().filter(|k| {
+            self.leases
+                .get(k)
+                .is_some_and(|l| !dead.contains(&l.holder))
+        }));
+        self.end_all(expired)
     }
 
     /// Grants an expired lease to another worker under a new token,
@@ -248,15 +348,51 @@ impl LeaseTable {
     /// caller grants the keys again. Its late reports are stale from now on.
     pub fn evict(&mut self, worker: WorkerId) -> Vec<(InfoHash, Lease)> {
         self.workers.remove(&worker);
-        let keys: Vec<InfoHash> = self
+        let keys = self.keys_of(worker).collect();
+        self.end_all(keys)
+    }
+
+    /// Records that `key`'s lease was handed to `worker` on `session`,
+    /// if `worker` holds it under `token` and it isn't [`PINNED`].
+    pub fn mark_delivered(&mut self, worker: WorkerId, key: &InfoHash, token: Token, session: u64) {
+        if self
             .leases
-            .iter()
-            .filter(|(_, l)| l.holder == worker)
-            .map(|(k, _)| *k)
+            .get(key)
+            .is_some_and(|l| l.holder == worker && l.token == token)
+        {
+            let mark = self.delivered.entry(token).or_insert(session);
+            if *mark != PINNED {
+                *mark = session;
+            }
+        }
+    }
+
+    /// Ends the leases `worker` holds that a reconcile on `session` may
+    /// return (WK-11b): not in `listed`, not marked fetched, and not
+    /// handed to it on `session` itself (one may still be on its way) nor
+    /// [`PINNED`]. The worker stays alive; the caller grants the keys
+    /// again.
+    pub fn reconcile(
+        &mut self,
+        worker: WorkerId,
+        session: u64,
+        listed: &HashSet<Token>,
+    ) -> Vec<(InfoHash, Lease)> {
+        let keys: Vec<InfoHash> = self
+            .keys_of(worker)
+            .filter_map(|k| self.leases.get(&k).map(|l| (k, l)))
+            .filter(|(_, l)| {
+                l.holder == worker
+                    && !listed.contains(&l.token)
+                    && !self.fetched.contains_key(&l.token)
+                    && self
+                        .delivered
+                        .get(&l.token)
+                        .is_none_or(|&s| s != session && s != PINNED)
+            })
+            .map(|(k, _)| k)
             .collect();
-        keys.into_iter()
-            .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
-            .collect()
+        self.end_all(keys)
     }
 
     pub fn len(&self) -> usize {
@@ -267,8 +403,13 @@ impl LeaseTable {
         self.leases.is_empty()
     }
 
+    /// The keys `worker` holds, from the index.
+    fn keys_of(&self, worker: WorkerId) -> impl Iterator<Item = InfoHash> + '_ {
+        self.by_worker.get(&worker).into_iter().flatten().copied()
+    }
+
     pub fn held_by(&self, worker: WorkerId) -> usize {
-        self.leases.values().filter(|l| l.holder == worker).count()
+        self.by_worker.get(&worker).map_or(0, HashSet::len)
     }
 
     pub fn ttl_secs(&self) -> i64 {
@@ -314,6 +455,23 @@ pub const RECENT_COMMITS: usize = 16_384;
 /// a re-grant reports it for a key the store check found held.
 pub(crate) const LOSS_BLOCKED: u8 = 7;
 
+/// What [`LeaseAuthority::fetched`] made of a `Fetched` report, decided
+/// under one lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchedReport {
+    /// The sender holds the key under that token: the lease is marked.
+    Marked(Lease),
+    /// The key has no lease, isn't waiting for a re-grant, and was
+    /// committed (or lost as blocked) lately: the commit beat the report,
+    /// the usual order (`Fetched` goes out on `Accepted`). The recent
+    /// commits are keys only, so this doesn't check the sender or token.
+    Committed,
+    /// Anything else: a lease under another token or holder, a key
+    /// waiting for a re-grant, or a key this run doesn't know (or
+    /// committed too long ago to remember: [`RECENT_COMMITS`]).
+    Stale,
+}
+
 /// One answer of [`LeaseAuthority::claim_batch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchAnswer {
@@ -321,6 +479,10 @@ pub enum BatchAnswer {
     Claimed { claimed: Claimed, harvested: bool },
     /// A new key over what the admission allowed: not leased.
     Busy,
+    /// A new key over the claimer's own lease cap
+    /// ([`LeaseAuthority::set_lease_cap`], CLUSTER-02): not leased. The
+    /// worker claims again once it holds fewer.
+    Capped,
     /// Committed moments ago (a remote claim racing the commit): stored.
     Committed,
 }
@@ -359,11 +521,31 @@ struct AuthorityState {
     /// Commits remembered so far (a sequence number, see
     /// [`LeaseAuthority::commit_seq`]).
     commits: u64,
+    /// The most leases one remote worker may hold (CLUSTER-02): `caps`'
+    /// entry for it, else `cap`. `None` until the cluster server sets one:
+    /// no cap. The built-in worker is never capped.
+    cap: Option<usize>,
+    caps: HashMap<WorkerId, usize>,
 }
 
 impl AuthorityState {
     fn in_flight(&self) -> usize {
         self.table.len() + self.pending.len()
+    }
+
+    /// The worker's lease cap; `None`: uncapped.
+    fn cap_of(&self, worker: WorkerId) -> Option<usize> {
+        if worker == WorkerId::LOCAL {
+            return None;
+        }
+        self.caps.get(&worker).copied().or(self.cap)
+    }
+
+    /// New leases `worker` may still be given under its cap.
+    fn room(&self, worker: WorkerId) -> usize {
+        self.cap_of(worker).map_or(usize::MAX, |cap| {
+            cap.saturating_sub(self.table.held_by(worker))
+        })
     }
 
     fn park(&mut self, key: InfoHash, lease: Lease) {
@@ -434,7 +616,8 @@ impl AuthorityState {
 /// [`LeaseEvents::harvested`] or [`LeaseEvents::lost`].
 ///
 /// The built-in worker ([`WorkerId::LOCAL`]) runs in the coordinator's own
-/// process and can't go silent, so its leases never expire; they end only
+/// process and can't go silent, and never reports `Fetched` (its results
+/// go straight to the writer), so its leases never expire; they end only
 /// by commit, loss or eviction.
 pub struct LeaseAuthority {
     state: Mutex<AuthorityState>,
@@ -460,9 +643,34 @@ impl LeaseAuthority {
                 order: VecDeque::new(),
                 recent: None,
                 commits: 0,
+                cap: None,
+                caps: HashMap::new(),
             }),
             events,
         }
+    }
+
+    /// Sets the most leases one remote worker may hold, for workers
+    /// without a cap of their own (CLUSTER-02). Claims for new keys past
+    /// it are [`BatchAnswer::Capped`], and re-grants pass it by; leases
+    /// already held are kept. The built-in worker is never capped.
+    pub fn set_lease_cap(&self, cap: Option<usize>) {
+        self.lock().cap = cap;
+    }
+
+    /// Sets `worker`'s own lease cap (from its assignment); `None` goes
+    /// back to the default ([`set_lease_cap`](Self::set_lease_cap)).
+    pub fn set_worker_cap(&self, worker: WorkerId, cap: Option<usize>) {
+        let mut s = self.lock();
+        match cap {
+            Some(cap) => s.caps.insert(worker, cap),
+            None => s.caps.remove(&worker),
+        };
+    }
+
+    /// `worker`'s lease cap now; `None`: uncapped.
+    pub fn lease_cap(&self, worker: WorkerId) -> Option<usize> {
+        self.lock().cap_of(worker)
     }
 
     /// Starts remembering recent commits, for remote claims (the cluster
@@ -540,14 +748,18 @@ impl LeaseAuthority {
         let mut allowed = match admit {
             _ if forgotten => 0,
             Some(admit) => {
+                // Keys past the worker's cap aren't asked about.
                 let new = claims
                     .iter()
                     .filter(|c| s.would_lease(&c.key) && !s.committed_recently(worker, &c.key))
-                    .count();
+                    .count()
+                    .min(s.room(worker));
                 if new == 0 { 0 } else { admit(new).min(new) }
             }
             None => usize::MAX,
         };
+        // The worker's own cap (CLUSTER-02), on top of the admission.
+        let mut room = s.room(worker);
         let mut fresh_leases = Vec::new();
         let answers: Vec<BatchAnswer> = claims
             .iter()
@@ -555,11 +767,24 @@ impl LeaseAuthority {
                 if s.committed_recently(worker, &c.key) {
                     return BatchAnswer::Committed;
                 }
+                // The holder's own claim on a lease whose result it already
+                // delivered: answered as committed, never with the lease,
+                // however long the commit takes (X-wk-fetched-lease). The
+                // claim's source still joins the lease.
+                if s.table.is_fetched(worker, &c.key) {
+                    let _ = s.claim(worker, *c, now);
+                    return BatchAnswer::Committed;
+                }
                 if s.would_lease(&c.key) {
+                    // Forgotten commits deny everything as busy, cap or not.
+                    if room == 0 && !forgotten {
+                        return BatchAnswer::Capped;
+                    }
                     if allowed == 0 {
                         return BatchAnswer::Busy;
                     }
                     allowed -= 1;
+                    room -= 1;
                 }
                 let (claimed, fresh) = s.claim(worker, *c, now);
                 if let Some(lease) = fresh {
@@ -622,6 +847,9 @@ impl LeaseAuthority {
             return None;
         }
         let token = s.table.restore(worker, key, lease, now);
+        // Held for a result already in hand: a reconcile never returns it
+        // (WK-11b).
+        s.table.delivered.insert(token, PINNED);
         self.gauge(&s);
         Some(token)
     }
@@ -686,6 +914,38 @@ impl LeaseAuthority {
             .copied()
     }
 
+    /// The holder's batch carrying `key`'s result was accepted
+    /// (`Outcome::Fetched`): the lease stays for the commit, marked so the
+    /// holder's own claims no longer get it back, and expires a TTL after
+    /// the mark if the commit never comes: [`FetchedReport::Marked`]. Only
+    /// if `worker` holds the key under `token`; otherwise nothing is
+    /// marked, and the report is [`FetchedReport::Committed`] if the key
+    /// was committed lately (with no lease or re-grant since), else
+    /// [`FetchedReport::Stale`]. One lock for the mark and the answer, so a
+    /// commit can't land in between.
+    pub fn fetched(
+        &self,
+        worker: WorkerId,
+        key: &InfoHash,
+        token: Token,
+        now: i64,
+    ) -> FetchedReport {
+        let mut s = self.lock();
+        if let Some(lease) = s.table.mark_fetched(worker, key, token, now) {
+            return FetchedReport::Marked(lease);
+        }
+        let committed = s.table.get(key).is_none()
+            && !s.pending.contains_key(key)
+            && s.recent
+                .as_ref()
+                .is_some_and(|(seqs, _)| seqs.contains_key(key));
+        if committed {
+            FetchedReport::Committed
+        } else {
+            FetchedReport::Stale
+        }
+    }
+
     /// The holder lost the key: ends the lease and reports the loss once.
     /// `None` (nothing counted) if `token` was stale.
     pub fn lost(&self, key: &InfoHash, token: Token, reason: u8) -> Option<Lease> {
@@ -745,8 +1005,9 @@ impl LeaseAuthority {
         lease
     }
 
-    /// Ends the leases of workers silent past the TTL; their keys wait for
-    /// a re-grant. Returns how many. The built-in worker never expires.
+    /// Ends the leases of workers silent past the TTL, and leases marked
+    /// fetched longer than the TTL ago; their keys wait for a re-grant.
+    /// Returns how many. The built-in worker never expires.
     pub fn expire(&self, now: i64) -> usize {
         let mut s = self.lock();
         s.table.heartbeat(WorkerId::LOCAL, now);
@@ -779,8 +1040,9 @@ impl LeaseAuthority {
     /// Grants waiting keys, in waiting order (oldest first, except keys
     /// whose check couldn't answer, which wait at the back), to `targets`,
     /// each time to the one
-    /// holding the fewest leases, at most `per_target` keys each. Keys left
-    /// over keep waiting. Not a harvest.
+    /// holding the fewest leases, at most `per_target` keys each and never
+    /// past a target's lease cap (CLUSTER-02). Keys left over keep
+    /// waiting. Not a harvest.
     pub fn regrant_pending(
         &self,
         targets: &[WorkerId],
@@ -791,15 +1053,17 @@ impl LeaseAuthority {
         if s.pending.is_empty() || targets.is_empty() || per_target == 0 {
             return Vec::new();
         }
-        let mut load: Vec<(usize, WorkerId, Regranted)> = targets
+        // Each target's leases and how many more it may take: at most
+        // `per_target` now, and never past its cap (CLUSTER-02).
+        let mut load: Vec<(usize, WorkerId, Regranted, usize)> = targets
             .iter()
-            .map(|&w| (s.table.held_by(w), w, Vec::new()))
+            .map(|&w| (s.table.held_by(w), w, Vec::new(), s.room(w).min(per_target)))
             .collect();
         while let Some(key) = s.order.pop_front() {
             let Some(target) = load
                 .iter_mut()
-                .filter(|(_, _, got)| got.len() < per_target)
-                .min_by_key(|(held, w, _)| (*held, *w))
+                .filter(|(_, _, got, most)| got.len() < *most)
+                .min_by_key(|(held, w, _, _)| (*held, *w))
             else {
                 s.order.push_front(key);
                 break;
@@ -816,8 +1080,8 @@ impl LeaseAuthority {
         }
         self.gauge(&s);
         load.into_iter()
-            .filter(|(_, _, got)| !got.is_empty())
-            .map(|(_, w, got)| (w, got))
+            .filter(|(_, _, got, _)| !got.is_empty())
+            .map(|(_, w, got, _)| (w, got))
             .collect()
     }
 
@@ -851,11 +1115,79 @@ impl LeaseAuthority {
         true
     }
 
+    /// Records that these leases were handed to `worker` on its session
+    /// `session` (a grant, a re-grant, or its own claim answered with the
+    /// lease), under one lock. Leases `worker` doesn't hold under that
+    /// token are left alone. A reconcile on `session` never returns them
+    /// (WK-11b): the worker may not have seen them yet.
+    pub fn delivered(&self, worker: WorkerId, session: u64, leases: &[(InfoHash, Token)]) {
+        if leases.is_empty() {
+            return;
+        }
+        let mut s = self.lock();
+        for (key, token) in leases {
+            s.table.mark_delivered(worker, key, *token, session);
+        }
+    }
+
+    /// Of `leases`, the tokens `worker` holds under their key now, under
+    /// one lock (a reconcile's list, WK-11b).
+    pub fn held_tokens(&self, worker: WorkerId, leases: &[(InfoHash, Token)]) -> Vec<Token> {
+        let s = self.lock();
+        leases
+            .iter()
+            .filter(|(k, t)| {
+                s.table
+                    .get(k)
+                    .is_some_and(|l| l.holder == worker && l.token == *t)
+            })
+            .map(|&(_, t)| t)
+            .collect()
+    }
+
+    /// A reconcile (WK-11b): the leases `worker` holds that its list
+    /// (`listed`, from session `session`) left out go back to wait for a
+    /// re-grant, as after an expiry: cohort, sources and finder kept, no
+    /// loss counted, and their tokens stale from now on (a report or
+    /// result under one is late, WK-9). Kept: a lease marked fetched (its
+    /// result is in the coordinator's hands), one handed to the worker on
+    /// `session` itself (it may still be on its way), and a late result's.
+    /// Returns how many went back. The built-in worker is never
+    /// reconciled.
+    pub fn reconcile(
+        &self,
+        worker: WorkerId,
+        session: u64,
+        listed: &std::collections::HashSet<Token>,
+    ) -> usize {
+        if worker == WorkerId::LOCAL {
+            return 0;
+        }
+        let mut s = self.lock();
+        let returned = s.table.reconcile(worker, session, listed);
+        let n = returned.len();
+        for (key, lease) in returned {
+            s.park(key, lease);
+        }
+        self.gauge(&s);
+        n
+    }
+
     /// Whether `key` is in flight: leased to any worker, or waiting for a
     /// re-grant (late results, plan Q7).
     pub fn in_flight(&self, key: &InfoHash) -> bool {
         let s = self.lock();
         s.table.get(key).is_some() || s.pending.contains_key(key)
+    }
+
+    #[cfg(test)]
+    fn fetched_marks_for_test(&self) -> usize {
+        self.lock().table.fetched.len()
+    }
+
+    #[cfg(test)]
+    fn delivered_marks_for_test(&self) -> usize {
+        self.lock().table.delivered.len()
     }
 
     #[cfg(test)]
@@ -1747,5 +2079,551 @@ mod tests {
         a.serve_remote();
         a.serve_remote();
         assert_eq!(get(&ev.serving), 1);
+    }
+
+    /// X-wk-fetched-lease: once the holder reports its result `Fetched`
+    /// (its batch was accepted), its own claims are answered as committed,
+    /// never with the lease, however long the writer takes (here 500 s,
+    /// past the worker's 180 s grace): the lease isn't lost and stays for
+    /// the commit. Another worker's claim is answered as before.
+    #[test]
+    fn a_fetched_lease_answers_its_holders_claims_as_committed() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(t),
+            ..
+        } = a.claim_batch(A, &[claim(1, 0)], 0, None, None)[0]
+        else {
+            panic!()
+        };
+        assert!(
+            !matches!(a.fetched(B, &key, t, 1), FetchedReport::Marked(_)),
+            "only the holder"
+        );
+        assert!(
+            !matches!(
+                a.fetched(A, &key, Token(t.0 + 1), 1),
+                FetchedReport::Marked(_)
+            ),
+            "its token"
+        );
+        assert!(matches!(a.fetched(A, &key, t, 1), FetchedReport::Marked(_)));
+        assert_eq!(
+            a.claim_batch(A, &[claim(1, 3)], 500, None, None)[0],
+            BatchAnswer::Committed
+        );
+        let lease = a.get(&key).expect("still leased, for the commit");
+        assert_eq!((lease.token, lease.holder), (t, A));
+        assert_eq!(lease.sources, 0b1001, "the claim's source joined it");
+        assert_eq!(get(&ev.lost), 0);
+        assert!(matches!(
+            a.claim_batch(B, &[claim(1, 0)], 500, None, None)[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, token },
+                harvested: false,
+            } if token == t
+        ));
+        // The writer's commit ends it, and its mark with it.
+        assert!(a.commit(A, &key, t).is_some());
+        assert_eq!(a.fetched_marks_for_test(), 0);
+    }
+
+    /// A worker that never sends `Fetched` (an older one) gets its lease
+    /// back on its own claim, as before.
+    #[test]
+    fn a_holder_that_never_reports_fetched_gets_its_lease_back() {
+        let (a, _) = counted();
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(t),
+            ..
+        } = a.claim_batch(A, &[claim(1, 0)], 0, None, None)[0]
+        else {
+            panic!()
+        };
+        assert!(matches!(
+            a.claim_batch(A, &[claim(1, 0)], 500, None, None)[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, token },
+                ..
+            } if token == t
+        ));
+    }
+
+    /// A fetched lease whose commit never comes expires a TTL after the
+    /// mark, though its holder still heartbeats; its key waits for a
+    /// re-grant like any expired lease, and a late report under the old
+    /// token is stale. Ended any other way, the mark goes with the lease.
+    #[test]
+    fn a_fetched_lease_with_no_commit_expires_a_ttl_after_the_mark() {
+        let (a, _) = counted();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        assert!(matches!(
+            a.fetched(A, &key, t, 10),
+            FetchedReport::Marked(_)
+        ));
+        assert!(
+            matches!(a.fetched(A, &key, t, 300), FetchedReport::Marked(_)),
+            "the first mark counts"
+        );
+        a.heartbeat(A, 600);
+        assert_eq!(a.expire(610), 0, "a TTL after the mark, not before");
+        a.heartbeat(A, 611);
+        assert_eq!(a.expire(611), 1);
+        assert_eq!((a.len(), a.pending()), (0, 1));
+        assert_eq!(a.fetched_marks_for_test(), 0);
+        assert!(a.commit(A, &key, t).is_none(), "the old token is stale");
+        // Lost or evicted: the mark goes too.
+        let Claimed::Granted(t) = a.claim(A, claim(2, 0), 700) else {
+            panic!()
+        };
+        assert!(matches!(
+            a.fetched(A, &InfoHash([2; 20]), t, 700),
+            FetchedReport::Marked(_)
+        ));
+        assert!(a.lost(&InfoHash([2; 20]), t, 1).is_some());
+        let Claimed::Granted(t) = a.claim(A, claim(3, 0), 700) else {
+            panic!()
+        };
+        assert!(matches!(
+            a.fetched(A, &InfoHash([3; 20]), t, 700),
+            FetchedReport::Marked(_)
+        ));
+        assert_eq!(a.evict(A), 1);
+        assert_eq!(a.fetched_marks_for_test(), 0);
+    }
+
+    /// A marked lease whose holder is also silent past the TTL expires
+    /// once, counted once, not once per reason (X-wk-fetched-lease-nits).
+    #[test]
+    fn a_marked_lease_of_a_silent_holder_expires_once() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        assert!(matches!(a.fetched(A, &key, t, 0), FetchedReport::Marked(_)));
+        assert_eq!(a.expire(700), 1, "silent and stuck: one expiry");
+        assert_eq!((a.len(), a.pending(), get(&ev.lost)), (0, 1, 0));
+        assert_eq!(a.fetched_marks_for_test(), 0);
+        assert_eq!(a.expire(1_400), 0, "nothing left to expire");
+    }
+
+    /// After a marked lease expires, its holder's claim is a re-grant under
+    /// a new token, not a denial and not a second harvest.
+    #[test]
+    fn the_holders_claim_after_a_marked_lease_expires_is_granted_anew() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(t),
+            ..
+        } = a.claim_batch(A, &[claim(1, 0)], 0, None, None)[0]
+        else {
+            panic!()
+        };
+        assert!(matches!(a.fetched(A, &key, t, 0), FetchedReport::Marked(_)));
+        a.heartbeat(A, 601);
+        assert_eq!(a.expire(601), 1);
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(new),
+            harvested: false,
+        } = a.claim_batch(A, &[claim(1, 0)], 602, None, None)[0]
+        else {
+            panic!("a re-grant")
+        };
+        assert_ne!(new, t);
+        assert_eq!(get(&ev.harvested), 1, "harvested once");
+        assert_eq!(a.get(&key).map(|l| (l.holder, l.token)), Some((A, new)));
+    }
+
+    /// A `Fetched` report is marked, committed (the commit beat it) or
+    /// stale, decided under one lock.
+    #[test]
+    fn a_fetched_report_is_marked_committed_or_stale() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        assert_eq!(a.fetched(A, &key, Token(t.0 + 1), 1), FetchedReport::Stale);
+        assert_eq!(a.fetched(B, &key, t, 1), FetchedReport::Stale);
+        assert!(matches!(a.fetched(A, &key, t, 1), FetchedReport::Marked(_)));
+        assert!(a.commit(A, &key, t).is_some());
+        assert_eq!(a.fetched(A, &key, t, 2), FetchedReport::Committed);
+        assert_eq!(
+            a.fetched(A, &InfoHash([9; 20]), t, 2),
+            FetchedReport::Stale,
+            "a key this run doesn't know"
+        );
+        // Leased again since its commit (the built-in worker may), then
+        // waiting for a re-grant: the old token's report is stale both ways.
+        let Claimed::Granted(_) = a.claim(WorkerId::LOCAL, claim(1, 0), 3) else {
+            panic!()
+        };
+        assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "leased");
+        assert_eq!(a.evict(WorkerId::LOCAL), 1);
+        assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "pending");
+    }
+
+    fn granted(a: &LeaseAuthority, w: WorkerId, n: u8) -> Token {
+        let Claimed::Granted(t) = a.claim(w, claim(n, 0), 0) else {
+            panic!("not granted")
+        };
+        t
+    }
+
+    /// A reconcile returns only what the list left out of the worker's own
+    /// leases delivered on an earlier session, as an expiry would: waiting
+    /// for a re-grant with its cohort kept, no loss counted.
+    #[test]
+    fn a_reconcile_returns_only_the_workers_unlisted_leases_from_earlier_sessions() {
+        let (a, ev) = counted();
+        let [k1, k2, k3, k4] = [1, 2, 3, 4].map(|n| InfoHash([n; 20]));
+        let t1 = granted(&a, A, 1);
+        let t2 = granted(&a, A, 2);
+        let t3 = granted(&a, A, 3);
+        let tb = granted(&a, B, 4);
+        a.delivered(A, 1, &[(k1, t1), (k2, t2), (k3, t3)]);
+        // Handed to A again on its session 2 (its own claim answered with
+        // the lease): it may still be on its way, so it stays.
+        a.delivered(A, 2, &[(k3, t3)]);
+        // B's lease, under A's name: no mark, and never A's to return.
+        a.delivered(A, 2, &[(k4, tb)]);
+        let listed = std::collections::HashSet::from([t1, tb]);
+        let cohort = a.get(&k2).unwrap().cohort;
+        assert_eq!(a.reconcile(A, 2, &listed), 1);
+        assert_eq!(a.get(&k2), None, "returned");
+        assert_eq!(a.pending(), 1);
+        assert_eq!(a.get(&k1).map(|l| l.token), Some(t1), "listed");
+        assert_eq!(a.get(&k3).map(|l| l.token), Some(t3), "this session's");
+        assert_eq!(a.get(&k4).map(|l| (l.holder, l.token)), Some((B, tb)));
+        // Its old token is stale: a report under it counts nothing.
+        assert!(a.report(A, &k2, t2, Some(1)).is_none());
+        assert_eq!(get(&ev.lost), 0);
+        // Granted again under a new token, cohort kept, not a new harvest.
+        let before = get(&ev.harvested);
+        let regranted = a.regrant_pending(&[B], 8, 1);
+        assert_eq!(regranted.len(), 1);
+        let (_, keys) = &regranted[0];
+        assert_eq!(keys[0].0, k2);
+        assert_ne!(keys[0].1, t2);
+        assert_eq!(a.get(&k2).unwrap().cohort, cohort, "cohort kept");
+        assert_eq!(get(&ev.harvested), before);
+        // The built-in worker is never reconciled.
+        let tl = granted(&a, WorkerId::LOCAL, 5);
+        assert_eq!(a.reconcile(WorkerId::LOCAL, 9, &Default::default()), 0);
+        assert!(a.current(&InfoHash([5; 20]), tl).is_some());
+    }
+
+    /// A lease marked fetched (its result is in the coordinator's hands)
+    /// and a late result's lease are never returned, listed or not.
+    #[test]
+    fn a_reconcile_keeps_fetched_and_late_result_leases() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let (k1, k2) = (InfoHash([1; 20]), InfoHash([2; 20]));
+        let t1 = granted(&a, A, 1);
+        assert!(matches!(a.fetched(A, &k1, t1, 0), FetchedReport::Marked(_)));
+        let restored = RestoredLease {
+            cohort: 0,
+            source: src(0),
+            sources: 1,
+            strategy: 0,
+            discovered_at: 0,
+        };
+        let seq = a.commit_seq();
+        let t2 = a.restore_if_free(A, k2, restored, 0, seq).unwrap();
+        // Even a mark from a session can't unpin it.
+        a.delivered(A, 1, &[(k2, t2)]);
+        assert_eq!(a.reconcile(A, 2, &Default::default()), 0);
+        assert!(a.current(&k1, t1).is_some());
+        assert!(a.current(&k2, t2).is_some());
+    }
+
+    /// The delivery marks end with their lease, however it ends.
+    #[test]
+    fn delivery_marks_end_with_their_lease() {
+        let (a, _) = counted();
+        let keys: Vec<InfoHash> = (1..=4).map(|n| InfoHash([n; 20])).collect();
+        let tokens: Vec<Token> = (1..=4).map(|n| granted(&a, A, n)).collect();
+        let pairs: Vec<(InfoHash, Token)> = keys.iter().copied().zip(tokens.clone()).collect();
+        a.delivered(A, 1, &pairs);
+        // Another worker's mark, or a stale token's, is never made.
+        a.delivered(B, 1, &pairs);
+        a.delivered(A, 1, &[(keys[0], Token(tokens[0].0 + 100))]);
+        assert_eq!(a.delivered_marks_for_test(), 4);
+        assert!(a.commit(A, &keys[0], tokens[0]).is_some());
+        assert!(a.report(A, &keys[1], tokens[1], Some(1)).is_some());
+        assert_eq!(a.reconcile(A, 2, &[tokens[3]].into()), 1);
+        assert_eq!(a.evict(A), 1);
+        assert_eq!(a.delivered_marks_for_test(), 0);
+        assert_eq!(a.fetched_marks_for_test(), 0);
+    }
+
+    /// `held_tokens` answers only for the worker's own current leases.
+    #[test]
+    fn held_tokens_are_the_workers_own_current_ones() {
+        let (a, _) = counted();
+        let (k1, k2) = (InfoHash([1; 20]), InfoHash([2; 20]));
+        let t1 = granted(&a, A, 1);
+        let t2 = granted(&a, B, 2);
+        let asked = [
+            (k1, t1),
+            (k2, t2),
+            (k1, Token(t1.0 + 9)),
+            (InfoHash([3; 20]), t1),
+        ];
+        assert_eq!(a.held_tokens(A, &asked), [t1]);
+        assert_eq!(a.held_tokens(B, &asked), [t2]);
+    }
+
+    /// The table's per-worker key index (CLUSTER-02, X-worker-839-followups)
+    /// against a full scan: the same keys for each worker, and no entry for
+    /// a worker holding none.
+    fn assert_index_matches_a_scan(t: &LeaseTable) {
+        let mut scanned: HashMap<WorkerId, HashSet<InfoHash>> = HashMap::new();
+        for (k, l) in &t.leases {
+            scanned.entry(l.holder).or_default().insert(*k);
+        }
+        assert_eq!(t.by_worker, scanned);
+        for (w, keys) in &scanned {
+            assert_eq!(t.held_by(*w), keys.len());
+        }
+    }
+
+    proptest::proptest! {
+        /// Whatever happens to the table (grants, renewals, releases,
+        /// expiries, evictions, re-grants, reconciles, fetched marks), each
+        /// worker's index holds exactly the keys it leases, and a worker
+        /// holding none has no entry.
+        #[test]
+        fn the_key_index_follows_every_change(
+            ops in proptest::collection::vec((0u8..9, 1u32..4, 0u8..12), 1..200)
+        ) {
+            let mut t = LeaseTable::new(1, 600);
+            let mut now = 0;
+            for (op, w, k) in ops {
+                let (w, key) = (WorkerId(w), InfoHash([k; 20]));
+                match op {
+                    0 | 1 => {
+                        let _ = t.claim(w, claim(k, 0), now);
+                    }
+                    2 => {
+                        if let Some(l) = t.get(&key).copied() {
+                            t.release(&key, l.token);
+                        }
+                    }
+                    3 => {
+                        let _ = t.evict(w);
+                    }
+                    4 => {
+                        now += 400;
+                        t.heartbeat(w, now);
+                        let _ = t.expire(now);
+                    }
+                    5 => {
+                        // A re-grant to another worker, as after an expiry.
+                        if let Some(l) = t.get(&key).copied() {
+                            let l = t.release(&key, l.token).unwrap();
+                            t.regrant(w, key, l, now);
+                        }
+                    }
+                    6 => {
+                        // A list naming this key's lease, if it's the worker's.
+                        let listed: HashSet<Token> =
+                            t.get(&key).map(|l| l.token).into_iter().collect();
+                        let _ = t.reconcile(w, 9, &listed);
+                    }
+                    7 => {
+                        // Marked fetched: a later expiry takes it as stuck.
+                        if let Some(l) = t.get(&key).copied() {
+                            let _ = t.mark_fetched(l.holder, &key, l.token, now);
+                        }
+                    }
+                    _ => {
+                        // A renewal only.
+                        now += 100;
+                        t.heartbeat(w, now);
+                    }
+                }
+                assert_index_matches_a_scan(&t);
+            }
+        }
+    }
+
+    /// CLUSTER-02: claims for new keys past the worker's cap are
+    /// `Capped`, never leased; its own held keys still answer with their
+    /// lease; the built-in worker is never capped; a worker's own cap
+    /// overrides the default and can be cleared.
+    #[test]
+    fn claims_past_the_cap_are_capped_and_never_leased() {
+        let (a, ev) = counted();
+        a.set_lease_cap(Some(3));
+        let claims: Vec<Claim> = (1..=5).map(|n| claim(n, 0)).collect();
+        let answers = a.claim_batch(A, &claims, 1, None, None);
+        let capped = answers
+            .iter()
+            .filter(|x| matches!(x, BatchAnswer::Capped))
+            .count();
+        assert_eq!((capped, a.held_by(A)), (2, 3), "{answers:?}");
+        assert!(matches!(
+            answers[3..],
+            [BatchAnswer::Capped, BatchAnswer::Capped]
+        ));
+        assert_eq!(get(&ev.harvested), 3);
+        assert!(a.get(&InfoHash([4; 20])).is_none());
+        // Its own key again: the lease, not a cap.
+        assert!(matches!(
+            a.claim_batch(A, &[claim(1, 1)], 1, None, None)[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, .. },
+                ..
+            }
+        ));
+        // Another worker has its own room.
+        assert!(matches!(
+            a.claim_batch(B, &[claim(4, 0)], 1, None, None)[0],
+            BatchAnswer::Claimed {
+                harvested: true,
+                ..
+            }
+        ));
+        // The built-in worker is never capped.
+        let local: Vec<Claim> = (20..30).map(|n| claim(n, 0)).collect();
+        assert!(
+            a.claim_batch(WorkerId::LOCAL, &local, 1, None, None)
+                .iter()
+                .all(|x| matches!(x, BatchAnswer::Claimed { .. }))
+        );
+        assert_eq!(a.lease_cap(WorkerId::LOCAL), None);
+        // Its own cap, then back to the default.
+        a.set_worker_cap(A, Some(4));
+        assert_eq!(a.lease_cap(A), Some(4));
+        let answers = a.claim_batch(A, &[claim(5, 0), claim(6, 0)], 1, None, None);
+        assert!(
+            matches!(
+                answers[..],
+                [BatchAnswer::Claimed { .. }, BatchAnswer::Capped]
+            ),
+            "{answers:?}"
+        );
+        a.set_worker_cap(A, None);
+        assert_eq!(a.lease_cap(A), Some(3));
+        // A cap lowered under what's held takes nothing back.
+        assert_eq!(a.held_by(A), 4);
+        assert!(matches!(
+            a.claim_batch(A, &[claim(7, 0)], 1, None, None)[0],
+            BatchAnswer::Capped
+        ));
+    }
+
+    /// The admission is asked only about keys within the cap, and a key
+    /// waiting for a re-grant counts against the cap like a new one.
+    #[test]
+    fn the_cap_bounds_what_admission_sees_and_takeovers() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(2));
+        let asked = std::sync::Mutex::new(Vec::new());
+        let admit = |n: usize| {
+            asked.lock().unwrap().push(n);
+            n
+        };
+        let claims: Vec<Claim> = (1..=5).map(|n| claim(n, 0)).collect();
+        let answers = a.claim_batch(A, &claims, 1, Some(&admit), None);
+        assert_eq!(*asked.lock().unwrap(), [2]);
+        assert_eq!(
+            answers
+                .iter()
+                .filter(|x| matches!(x, BatchAnswer::Capped))
+                .count(),
+            3
+        );
+        // B's lease expires: the key waits. A, at its cap, can't take it
+        // over by claiming it.
+        let _ = a.claim_batch(B, &[claim(9, 0)], 1, None, None);
+        a.heartbeat(A, 700);
+        assert_eq!(a.expire(700), 1);
+        assert_eq!(a.pending(), 1);
+        assert!(matches!(
+            a.claim_batch(A, &[claim(9, 0)], 700, None, None)[0],
+            BatchAnswer::Capped
+        ));
+        assert_eq!(a.pending(), 1);
+    }
+
+    /// With commits forgotten since the store check (a stale
+    /// `checked_at`), every new key is busy, even for a worker at its cap:
+    /// the claim is asked again, not counted as capped.
+    #[test]
+    fn a_stale_check_answers_busy_even_at_the_cap() {
+        let (a, _) = counted();
+        a.serve_remote();
+        a.set_lease_cap(Some(1));
+        let _ = a.claim_batch(A, &[claim(1, 0)], 1, None, None);
+        assert_eq!(a.held_by(A), 1);
+        let stale = a.commit_seq();
+        for n in 0..=RECENT_COMMITS as u32 {
+            let key = InfoHash({
+                let mut k = [0xEE; 20];
+                k[..4].copy_from_slice(&n.to_be_bytes());
+                k
+            });
+            let c = Claim { key, ..claim(2, 0) };
+            let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 1) else {
+                panic!("a fresh key wasn't granted")
+            };
+            assert!(a.commit(WorkerId::LOCAL, &key, t).is_some());
+        }
+        assert_eq!(
+            a.claim_batch(A, &[claim(3, 0)], 1, None, Some(stale))[0],
+            BatchAnswer::Busy
+        );
+        // A fresh check: the cap.
+        assert_eq!(
+            a.claim_batch(A, &[claim(3, 0)], 1, None, Some(a.commit_seq()))[0],
+            BatchAnswer::Capped
+        );
+    }
+
+    /// Re-grants pass a target at its cap by and stop at each target's
+    /// room; what's left keeps waiting.
+    #[test]
+    fn regrants_never_take_a_worker_past_its_cap() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(3));
+        let c = WorkerId(3);
+        let _ = a.claim_batch(A, &[claim(1, 0), claim(2, 0), claim(3, 0)], 1, None, None);
+        let _ = a.claim_batch(B, &[claim(4, 0)], 1, None, None);
+        let waiting: Vec<Claim> = (10..16).map(|n| claim(n, 0)).collect();
+        let _ = a.claim_batch(c, &waiting, 1, None, None);
+        // `c` got three (its cap), then goes silent: they wait.
+        assert_eq!(a.held_by(c), 3);
+        a.heartbeat(A, 700);
+        a.heartbeat(B, 700);
+        assert_eq!(a.expire(700), 3);
+        let out = a.regrant_pending(&[A, B], 10, 700);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!((out[0].0, out[0].1.len()), (B, 2));
+        assert_eq!((a.held_by(A), a.held_by(B), a.pending()), (3, 3, 1));
+    }
+
+    /// At the largest pool an assignment allows, the cap is within what a
+    /// reconcile list can carry, so a worker under its cap can always list
+    /// what it holds (WK-11b).
+    #[test]
+    fn the_cap_at_the_largest_pool_is_the_reconcile_lists_limit() {
+        assert!(
+            crate::server::ClusterServer::lease_cap_for(crate::assign::MAX_POOL_CAP)
+                <= crate::proto::MAX_HOLDING
+        );
+        assert_eq!(
+            crate::server::ClusterServer::lease_cap_for(crate::assign::DEFAULT_POOL_CAP),
+            100_000
+        );
     }
 }

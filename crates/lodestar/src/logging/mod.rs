@@ -75,6 +75,7 @@ pub static CATALOGUES: &[&Catalogue] = &[
     &lodestar_peer_wire::log_events::CATALOGUE,
     &crate::update::log_events::CATALOGUE,
     &lodestar_companions::log_events::CATALOGUE,
+    &crate::watch::CATALOGUE,
 ];
 
 /// A registered event by id.

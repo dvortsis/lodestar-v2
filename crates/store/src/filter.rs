@@ -89,6 +89,30 @@ const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// tombstones.
 pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 
+/// Rules whose quarantine never expires (the filter's CS-0a; a filter
+/// test keeps it equal): the core couldn't judge the torrent, so only a
+/// release lifts the hold, never the passing of time.
+pub const KEPT_RULES: [&str; 1] = ["CS-0a"];
+
+/// A quarantine row under one of [`KEPT_RULES`], with or without a
+/// suffix (`+adult`), over `col`: left out of every expiry.
+pub(crate) fn kept_hold_sql(col: &str) -> String {
+    let [a] = KEPT_RULES;
+    format!(
+        "({col} = '{a}' OR substr({col}, 1, {n}) = '{a}+')",
+        n = a.len() + 1
+    )
+}
+
+/// Whether a stored rule is one of [`KEPT_RULES`], with or without a
+/// suffix: [`kept_hold_sql`] in Rust. Only [`Store::release`] lifts such a
+/// hold, never a release by rule or a batch.
+pub fn is_kept_hold(rule: &str) -> bool {
+    KEPT_RULES
+        .iter()
+        .any(|k| rule == *k || rule.strip_prefix(k).is_some_and(|r| r.starts_with('+')))
+}
+
 /// The stored rule of a floor drop a remote worker reported (WK-10d),
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
 /// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
@@ -473,11 +497,13 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut expired = Vec::new();
         {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare(&format!(
                 "SELECT hash FROM quarantine
                  WHERE expires_at <= ?1 AND substr(rule, -length(?2)) != ?2
+                   AND NOT {}
                    AND hash NOT IN (SELECT hash FROM tombstones)",
-            )?;
+                kept_hold_sql("rule")
+            ))?;
             let adult = ADULT_HOLD;
             for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
                 expired.push(hash20(row?)?);
@@ -489,15 +515,22 @@ impl Store {
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
                      SELECT hash, rule, at FROM quarantine
-                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2 AND NOT {}
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
+                    kept_hold_sql("rule"),
                     floor_hold_sql("tombstones.rule")
                 ),
                 params![now, adult],
             )?;
         }
-        tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
+        tx.execute(
+            &format!(
+                "DELETE FROM quarantine WHERE expires_at <= ?1 AND NOT {}",
+                kept_hold_sql("rule")
+            ),
+            [now],
+        )?;
         let hits = tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         tx.commit()?;
         // Every purge scrubs (hourly on the writer), not only one that
@@ -521,8 +554,11 @@ impl Store {
         let mut total = 0;
         let mut deleted_any = false;
         // A worker's floor report isn't released by rule here: only WK-13's
-        // purge-by-worker removes it.
-        for rule in rules.iter().filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX)) {
+        // purge-by-worker removes it. Nor is a kept hold: only `release`.
+        for rule in rules
+            .iter()
+            .filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX) && !is_kept_hold(r))
+        {
             for table in ["quarantine", "tombstones"] {
                 loop {
                     let tx = self.conn.transaction()?;
@@ -600,8 +636,8 @@ impl Store {
         mut released: impl FnMut(&[[u8; 20]]),
     ) -> Result<usize> {
         // As `release_rules`: a worker's floor report isn't released by
-        // rule here.
-        if rule.starts_with(WORKER_FLOOR_PREFIX) {
+        // rule here, nor a kept hold.
+        if rule.starts_with(WORKER_FLOOR_PREFIX) || is_kept_hold(rule) {
             return Ok(0);
         }
         let adult = held_rule(rule, true);
@@ -684,13 +720,19 @@ impl Store {
     /// [`release`](Store::release) for many hashes in one transaction,
     /// with one WAL scrub at the end rather than one per hash. Returns,
     /// per hash, whether a row was removed (a hash a worker's floor report
-    /// holds stays held, as with `release`).
+    /// holds stays held, as with `release`, and so does one a kept rule
+    /// holds, [`KEPT_RULES`], which only `release` lifts).
     pub fn release_many(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<bool>> {
         let tx = self.conn.transaction()?;
         let mut had = Vec::with_capacity(hashes.len());
         {
             let mut tomb = tx.prepare_cached(&release_tombstone_sql())?;
-            let mut quar = tx.prepare_cached("DELETE FROM quarantine WHERE hash = ?1")?;
+            // A kept hold is lifted only by its own release (`release`),
+            // which shows its warning: never as part of a batch by hash.
+            let mut quar = tx.prepare_cached(&format!(
+                "DELETE FROM quarantine WHERE hash = ?1 AND NOT {}",
+                kept_hold_sql("rule")
+            ))?;
             for h in hashes {
                 had.push(tomb.execute([&h[..]])? + quar.execute([&h[..]])? > 0);
             }
@@ -782,6 +824,19 @@ impl Store {
             });
         }
         Ok(out)
+    }
+
+    /// The rule `hash` is quarantined under, as stored (an adult hold's
+    /// with its suffix), if it's quarantined.
+    pub fn quarantine_rule(&self, hash: &[u8; 20]) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT rule FROM quarantine WHERE hash = ?1",
+                [&hash[..]],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     /// Whether `hash` is held (quarantined or tombstoned) as an adult hold.
@@ -882,8 +937,10 @@ impl Store {
     }
 
     /// Releases these quarantine rows if each is still as read: a row a
-    /// writer has replaced since (another rule, a newer time) stays. One
-    /// transaction. Returns the hashes nothing holds any more, for intake.
+    /// writer has replaced since (another rule, a newer time) stays, and
+    /// so does a kept hold ([`KEPT_RULES`]), which only `release` lifts.
+    /// One transaction. Returns the hashes nothing holds any more, for
+    /// intake.
     pub fn release_rows(&mut self, rows: &[HoldRow]) -> Result<Vec<[u8; 20]>> {
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -891,9 +948,10 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut free = Vec::new();
         {
-            let mut del = tx.prepare_cached(
-                "DELETE FROM quarantine WHERE hash = ?1 AND rule = ?2 AND at = ?3",
-            )?;
+            let mut del = tx.prepare_cached(&format!(
+                "DELETE FROM quarantine WHERE hash = ?1 AND rule = ?2 AND at = ?3 AND NOT {}",
+                kept_hold_sql("rule")
+            ))?;
             let mut held = tx.prepare_cached("SELECT 1 FROM tombstones WHERE hash = ?1")?;
             for r in rows {
                 if del.execute(params![&r.hash[..], r.rule, r.at])? > 0
@@ -1180,6 +1238,177 @@ mod tests {
             s.filter_state().unwrap().held,
             vec![([2; 20], Held::Tombstone)]
         );
+    }
+
+    /// A release of many hashes at once leaves a kept hold: only that
+    /// hold's own release lifts it.
+    #[test]
+    fn a_batch_release_leaves_a_kept_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        for (h, rule) in [(1u8, kept), (2, "CS-3")] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            s.release_many(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![true, false]
+        );
+        assert!(s.release(&[1; 20]).unwrap());
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+    }
+
+    /// A store with kept holds (plain and adult) on hashes 1 and 2 and a
+    /// hold by `other` on hash 3, all quarantined at 10.
+    fn with_kept_holds(other: &str) -> Store {
+        let s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        let adult = format!("{kept}+adult");
+        for (h, rule) in [(1u8, kept), (2, adult.as_str()), (3, other)] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        s
+    }
+
+    const KEPT_AND_OTHER: [[u8; 20]; 3] = [[1; 20], [2; 20], [3; 20]];
+
+    /// A release by rule leaves a kept hold, its adult one too; the other
+    /// rule's is released.
+    #[test]
+    fn a_release_by_rule_leaves_a_kept_hold() {
+        let mut s = with_kept_holds("U-1");
+        let [kept] = KEPT_RULES;
+        let mut freed = Vec::new();
+        let rules = [kept.to_owned(), format!("{kept}+adult"), "U-1".to_owned()];
+        let n = s
+            .release_rules(&rules, |h| freed.extend_from_slice(h))
+            .unwrap();
+        assert_eq!((n, freed), (1, vec![[3; 20]]));
+        assert_eq!(
+            s.held_among(&KEPT_AND_OTHER).unwrap(),
+            vec![true, true, false]
+        );
+    }
+
+    /// A release of some of a rule's hashes leaves a kept hold; the other
+    /// rule's is released.
+    #[test]
+    fn a_release_of_a_rules_hashes_leaves_a_kept_hold() {
+        let mut s = with_kept_holds("L-1");
+        let [kept] = KEPT_RULES;
+        for rule in [kept, "CS-0a+adult"] {
+            assert_eq!(
+                s.release_rule_hashes(rule, &KEPT_AND_OTHER, |_| {})
+                    .unwrap(),
+                0
+            );
+        }
+        assert_eq!(
+            s.release_rule_hashes("L-1", &KEPT_AND_OTHER, |_| {})
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.held_among(&KEPT_AND_OTHER).unwrap(),
+            vec![true, true, false]
+        );
+    }
+
+    /// A release of rows as read leaves a kept hold's rows; the other
+    /// rule's is released.
+    #[test]
+    fn a_release_of_rows_leaves_a_kept_hold() {
+        let mut s = with_kept_holds("U-2");
+        let [kept] = KEPT_RULES;
+        let row = |h: u8, rule: &str| HoldRow {
+            hash: [h; 20],
+            rule: rule.to_owned(),
+            at: 10,
+            sealed: None,
+        };
+        let rows = [
+            row(1, kept),
+            row(2, &format!("{kept}+adult")),
+            row(3, "U-2"),
+        ];
+        assert_eq!(s.release_rows(&rows).unwrap(), vec![[3; 20]]);
+        assert_eq!(
+            s.held_among(&KEPT_AND_OTHER).unwrap(),
+            vec![true, true, false]
+        );
+    }
+
+    /// The Rust and SQL tests for a kept hold agree.
+    #[test]
+    fn kept_hold_tests_agree() {
+        let s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for rule in [
+            "CS-0a",
+            "CS-0a+adult",
+            "CS-0ab",
+            "CS-0",
+            "cs-0a",
+            "CS-3",
+            "",
+            "+adult",
+        ] {
+            let sql: bool = s
+                .conn
+                .query_row(&format!("SELECT {}", kept_hold_sql("?1")), [rule], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(is_kept_hold(rule), sql, "{rule:?}");
+        }
+    }
+
+    /// A hold under a kept rule survives the purge, however long past its
+    /// expiry, and isn't reported released; another rule's lapses.
+    #[test]
+    fn kept_holds_survive_the_purge() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        for (h, rule) in [(1u8, kept), (2, "CS-3"), (3, "CS-0a+adult")] {
+            s.conn
+                .execute(
+                    "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                     VALUES (?1, ?2, NULL, 10, 20)",
+                    params![&[h; 20][..], rule],
+                )
+                .unwrap();
+        }
+        let (released, _) = s.purge_filter(i64::MAX, 0).unwrap();
+        assert_eq!(released, vec![[2; 20]]);
+        let left: Vec<[u8; 20]> = s
+            .quarantined(10)
+            .unwrap()
+            .into_iter()
+            .map(|q| q.hash)
+            .collect();
+        assert_eq!(left.len(), 2);
+        assert!(left.contains(&[1; 20]) && left.contains(&[3; 20]));
+        assert!(
+            s.tombstones(10).unwrap().is_empty(),
+            "kept, not turned into a tombstone"
+        );
+        // A release still lifts it.
+        assert!(s.release(&[1; 20]).unwrap());
+        assert!(s.quarantine_rule(&[1; 20]).unwrap().is_none());
     }
 
     /// Deleting a held hash through any of the store's paths leaves its

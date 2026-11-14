@@ -66,9 +66,14 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     ("verified", 1),
     ("source", 1),
     ("network", 1),
-    ("payload_sig", 0),
+    // GS-0: `lodestar_classify::payload::payload_sig`, the hash CS-8a reads.
+    ("payload_sig", 1),
+    // No producer: as declared (INDEXED | FAST) it would copy
+    // `title_identity`'s terms and cost ~30 B per torrent, over §3's
+    // budget (GS-2 decisions); GS-3 settles its shape.
     ("group_key", 0),
-    ("group_minhash", 0),
+    // GS-2: `lodestar_classify::group::band_terms` (plan Q9, Q10 (a)).
+    ("group_minhash", 1),
     ("name_trigram", 0),
     ("file.size_bucket", 1),
     ("file.category", 1),
@@ -379,9 +384,10 @@ mod tests {
     fn a_fresh_index_is_complete_at_this_builds_generations() {
         let t = PopState::fresh(&gens(), Side::Torrents);
         assert_eq!(
-            t.availability("payload_sig"),
+            t.availability("name_trigram"),
             Some(Availability::NoProducer)
         );
+        assert_eq!(t.availability("payload_sig"), Some(Availability::Ready));
         assert_eq!(t.availability("verified"), Some(Availability::Ready));
         assert_eq!(t.availability("file.category"), None, "another side");
         assert_eq!(t.pending(), None);
@@ -395,12 +401,17 @@ mod tests {
 
     #[test]
     fn a_producer_shipping_starts_a_walk_that_resumes_and_completes() {
-        let mut s = PopState::fresh(&gens(), Side::Torrents);
-        let shipped = gens().with("payload_sig", 1);
+        // An index built before GS-0 shipped the `payload_sig` producer.
+        let mut s = PopState::fresh(&gens().with("payload_sig", 0), Side::Torrents);
+        let shipped = gens();
+        assert_eq!(shipped.get("payload_sig"), Some(1));
         s.reconcile(&shipped, Side::Torrents, 500);
         let backfilling = |done| Some(Availability::Backfilling { done, upto: 500 });
         assert_eq!(s.availability("payload_sig"), backfilling(0));
-        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
+        assert_eq!(
+            s.availability("name_trigram"),
+            Some(Availability::NoProducer)
+        );
         assert_eq!(s.pending(), Some((0, 500)));
         s.advance(200);
         // Reopened (a restart): the walk goes on, whatever the index
@@ -415,6 +426,30 @@ mod tests {
             Some(Availability::Ready)
         );
         assert_eq!(reopened.pending(), None);
+    }
+
+    /// GS-2 ships `group_minhash`, and `group_key` stays without a
+    /// producer: an index from GS-0's build walks for the one, and it
+    /// isn't Ready until that walk is done.
+    #[test]
+    fn the_minhash_producer_starts_a_walk_and_group_key_has_none() {
+        let before = gens().with("group_minhash", 0);
+        let mut s = PopState::fresh(&before, Side::Torrents);
+        assert_eq!(
+            s.availability("group_minhash"),
+            Some(Availability::NoProducer)
+        );
+        s.reconcile(&gens(), Side::Torrents, 300);
+        assert_eq!(
+            s.availability("group_minhash"),
+            Some(Availability::Backfilling { done: 0, upto: 300 })
+        );
+        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
+        assert_eq!(s.availability("payload_sig"), Some(Availability::Ready));
+        assert_eq!(s.pending(), Some((0, 300)));
+        s.advance(300);
+        assert_eq!(s.availability("group_minhash"), Some(Availability::Ready));
+        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
     }
 
     #[test]
@@ -443,7 +478,7 @@ mod tests {
         s.reconcile(&gens().with("payload_sig", 1), Side::Torrents, 100);
         s.advance(60);
         s.reconcile(
-            &gens().with("payload_sig", 1).with("group_key", 1),
+            &gens().with("payload_sig", 1).with("name_trigram", 1),
             Side::Torrents,
             150,
         );

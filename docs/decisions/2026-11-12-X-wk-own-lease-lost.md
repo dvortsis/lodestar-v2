@@ -1,4 +1,4 @@
-# X-wk-own-lease-lost decisions: a worker that re-sights a key it holds never ends its own lease as lost
+# X-wk-own-lease-lost decisions (#727): a worker that re-sights a key it holds never ends its own lease as lost
 
 Found by WK-20's harness (#712, `docs/decisions/2026-11-11-WK-20.md`, finding (a)). Brief: runner, 2026-11-12.
 
@@ -38,8 +38,10 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
 - **A finished entry still answers `Out`.** The commit (`Accepted`, through the session's events to the results task) and the answer to the holder's claim (a oneshot to the claim task) take different paths, so the commit can be seen first. Tokens are never reissued, so answering `Out` for a finished entry is always right. The race is closed instead of narrowed (self-review B1).
 - **`pending_len`** counts out entries not finished yet. The chaos scenario and the runtime test assert it returns to 0.
 - **Every entry is pruned on `insert` once it's older than the horizon**, a lease TTL (600 s) plus the longest a result may wait to be sealed (`seal_wait`, 600 s). That bounds the map to the results of one horizon.
-  - **The limit:** a result still out past the horizon is forgotten. That covers a batch the coordinator keeps refusing for longer, or a spool replayed later, with the session up or not. Its own lease coming back then counts as new, which is the old behaviour, not worse, and the coordinator fences any stale result as before. WK-G's gates should know a holder's sightings stay safe only within the horizon.
+  - **The limit:** a result still out past the horizon is forgotten. That covers a batch the coordinator keeps refusing for longer, or a spool replayed later, with the session up or not. A worker restart forgets every entry, since they're in memory only. Its own lease coming back then counts as new, which is the old behaviour, not worse, and the coordinator fences any stale result as before. WK-G's gates should know a holder's sightings stay safe only within the horizon.
 - **The funnel's identity holds:** a held-again grant changes no lease on either side, so harvested = Σ terminal − late + in flight, as the chaos scenario asserts.
+
+**Superseded in part by X-wk-out-set-polish** (`docs/decisions/2026-11-12-X-wk-out-set-polish.md`): committed entries now go after a 180 s grace (released or lost ones are still kept to the horizon), at most 50,000 entries are kept, and the memory cost is stated there.
 
 ## Tests
 - **`WorkerLeases` unit tests:**

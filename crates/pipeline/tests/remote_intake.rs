@@ -687,11 +687,23 @@ async fn hints_are_filtered_and_never_stored() {
 
 /// A multi-file info dict of `files` files, each with one path segment
 /// `path_len` bytes long.
+/// An info dictionary of about `files * path_len` bytes: every file in one
+/// folder `path_len` bytes long, which the dictionary spells out in each
+/// file's path and the batch's path budget counts for each, while the
+/// core reads it once, so the torrent is judged whole.
 fn big_info(name: &str, files: usize, path_len: usize) -> Vec<u8> {
+    let folder = "a".repeat(path_len.saturating_sub(6).max(1));
     let mut out = b"d5:filesl".to_vec();
     for f in 0..files {
-        let seg = format!("{f:06}{}", "a".repeat(path_len - 6));
-        out.extend(format!("d6:lengthi1048576e4:pathl{}:{seg}ee", seg.len()).into_bytes());
+        let seg = format!("{f:06}");
+        out.extend(
+            format!(
+                "d6:lengthi1048576e4:pathl{}:{folder}{}:{seg}ee",
+                folder.len(),
+                seg.len()
+            )
+            .into_bytes(),
+        );
     }
     out.extend(
         format!(
@@ -1473,13 +1485,16 @@ async fn remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_work
     assert_eq!(rows, [(parked, src(2)), (held, src(1))]);
     // Worker 8 is revoked: its key waits, then goes to the built-in worker.
     assert_eq!(authority.evict(WorkerId(8)), 1);
-    until("the built-in worker holds the parked key", || {
+    // One condition for both: `hand_parked` makes the built-in worker the
+    // holder before the pool takes the key, and counts it only after, so
+    // waiting for the holder alone could read `parked` in between.
+    until("the built-in worker holds the parked key, counted", || {
         authority
             .get(&parked)
             .is_some_and(|l| l.holder == WorkerId::LOCAL)
+            && stat(&rig.remote(), |s| &s.parked) == 1
     })
     .await;
-    assert_eq!(stat(&rig.remote(), |s| &s.parked), 1);
     assert_eq!(authority.get(&parked).unwrap().source, src(2), "kept");
     let Rig { db, pipeline, .. } = rig;
     let stopped = now();

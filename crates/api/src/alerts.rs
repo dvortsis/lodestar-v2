@@ -348,7 +348,8 @@ fn feed_xml(store: &Store, id: i64, adult: bool, origin: &str) -> ApiResult<Opti
         let Some((row, _)) = shown_row(store, a.torrent_id, false, adult)? else {
             continue;
         };
-        let private = row.flags & flags::PRIVATE_SOURCE != 0;
+        // Every privacy bit, BEP 27's included (UP-0), as the SQL's.
+        let private = row.flags & flags::PRIVACY != 0;
         if private {
             continue;
         }
@@ -521,6 +522,79 @@ mod tests {
             .map(|(k, v)| (k.as_bytes().to_vec(), v))
             .collect(),
         ))
+    }
+
+    /// The feed leaves out a torrent with any `flags::PRIVACY` bit, and
+    /// only those (UP-0, rv-753 N2): one store per bit, holding a public
+    /// torrent and one with the bit, both alerted on an RSS search.
+    #[test]
+    fn the_feed_leaves_out_every_privacy_bit() {
+        for bit in [
+            flags::PRIVATE,
+            flags::PRIVATE_SOURCE,
+            flags::REMOTE_UNVERIFIED,
+            flags::PRIVATE | flags::PRIVATE_SOURCE,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
+            let mut ids = Vec::new();
+            for (name, extra) in [("Public.Cut.1080p", 0), ("Private.Cut.1080p", bit)] {
+                let raw = info(name);
+                let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+                ids.push(
+                    store
+                        .insert(&[NewTorrent {
+                            info: &parsed,
+                            raw_info: Some(&raw),
+                            discovered_at: 0,
+                            metadata_at: 0,
+                            extra_flags: extra,
+                            source: SourceId::new(0).unwrap(),
+                        }])
+                        .unwrap()[0]
+                        .id(),
+                );
+            }
+            let search = store
+                .create_saved_search(
+                    &SavedSearchInput {
+                        name: "s",
+                        query: "",
+                        ast: "{}",
+                        sort: None,
+                        alert: true,
+                        rss: true,
+                        channels: 0,
+                        paused: false,
+                    },
+                    0,
+                    0,
+                )
+                .unwrap();
+            store
+                .record_percolation(
+                    ids[1],
+                    &[SearchHits {
+                        saved_search_id: search,
+                        torrent_ids: &ids,
+                    }],
+                    0,
+                )
+                .unwrap();
+            let xml = feed_xml(&store, search, false, "http://lodestar.lan")
+                .unwrap()
+                .unwrap();
+            assert!(xml.contains("Public.Cut.1080p"), "{bit}: {xml}");
+            assert!(!xml.contains("Private.Cut.1080p"), "{bit}: {xml}");
+            let private = store.torrent(ids[1]).unwrap().unwrap();
+            let hash: String = private
+                .info_hash
+                .0
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            assert!(!xml.contains(&hash), "{bit}: its hash");
+        }
     }
 
     /// The badge's SQL and the per-row rule agree for every kind of

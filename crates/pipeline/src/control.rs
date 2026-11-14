@@ -580,20 +580,33 @@ pub const CONSENT_GATE_REASON: &str = "this source asks for your consent before 
      on, and this version of Lodestar can't show you an approved consent text yet, so it stays \
      off. It can be turned on in a later version";
 
-/// Whether this build may turn on a source of `class` through
-/// [`Control::update_source`], and keep one on at a start. Only None,
-/// which shows no consent dialog, may. Every other class is turned on
-/// through a dialog whose text the owner approves (§2.49): External,
-/// Restricted and Overlay by accepting a consent text
-/// ([`consent::needs_ack`]), Account by its credentials dialog. None of
-/// those dialogs ships in this build, so those classes stay off until one
-/// does (`docs/plan/2026-11-06-v052-feature-manifest.md` §3.4,
-/// `docs/decisions/2026-11-06-X-consent-gate-052.md`,
-/// `docs/decisions/2026-11-06-X-consent-gate-polish.md`).
-/// X-consent-gate-lift changes this function, and only for the classes
-/// whose approved dialog has shipped.
+/// Whether this build ships the owner-approved dialog for `class`
+/// (§2.49), so a source of that class may be turned on through
+/// [`Control::update_source`] and kept on at a start. Passing it opens
+/// nothing by itself: the class's own condition ([`consent::need_with`])
+/// still has to hold, which for External, Restricted and Overlay is an
+/// accepted acknowledgement of exactly the current text version
+/// ([`consent::text_version`]) and address list, and for Restricted and
+/// Overlay the admin password on every enable as well.
+///
+/// - **None:** shows no dialog.
+/// - **Restricted and Overlay:** SRC-15b's dialogs show their approved
+///   texts (X-consent-gate-lift).
+/// - **External:** refused. The Legal Notice says the torrent cache can't
+///   be turned on in this version; it opens in X-consent-gate-lift-external
+///   once the owner approves the notice's new wording.
+/// - **Account:** refused. Its credentials dialog (SRC-15c) and its
+///   condition are X-consent-gate-lift r2's
+///   (`docs/decisions/2026-11-12-X-consent-gate-lift.md`).
+///
+/// A class this build doesn't know can't reach here: [`Consent`] is
+/// closed, and a stored record naming an unknown class doesn't decode
+/// ([`Ack::decode`]), so it counts as no acknowledgement.
 pub const fn consent_text_approved(class: Consent) -> bool {
-    matches!(class, Consent::None)
+    match class {
+        Consent::None | Consent::Restricted | Consent::Overlay => true,
+        Consent::External | Consent::Account => false,
+    }
 }
 
 /// Why a start switched a source off, as its
@@ -610,22 +623,32 @@ pub const REASON_LAPSED: &str = "consent_lapsed";
 /// source that may not run (both start checks live here; the name is
 /// from when it held only the class check), and logs `pipeline.source_state_changed` with
 /// the reason:
-/// - [`REASON_TEXT_UNAPPROVED`]: its class's consent text isn't approved
-///   ([`consent_text_approved`]), so one turned on by a build before the
-///   gate (a nightly, or a backup restored from one) doesn't run. Its
-///   stored acknowledgement is left as it is: once the approved text
-///   ships, `consent::need_in` decides whether it covers it (blocking).
+/// - [`REASON_TEXT_UNAPPROVED`]: this build doesn't ship its class's
+///   approved dialog ([`consent_text_approved`]: External and Account today), so one
+///   turned on by an earlier build (a nightly, or a backup restored from
+///   one) doesn't run. Its stored acknowledgement is left as it is: once
+///   the dialog ships, `consent::need_in_with` decides whether it covers
+///   it (blocking).
 /// - [`REASON_LAPSED`]: its class condition no longer holds
-///   ([`consent::need_in`], §18.7, §18.9).
+///   ([`consent::need_in_with`] against the plugin's declared
+///   credentials, §18.7, §18.9).
 ///
 /// The class check comes first, so a source that fails both is logged
 /// once, as unapproved.
 pub(crate) fn switch_off_unapproved<'a>(
     store: &mut Store,
-    sources: impl IntoIterator<Item = (&'a lodestar_sources::Manifest, &'a SourceId)>,
+    sources: impl IntoIterator<
+        Item = (
+            (
+                &'a lodestar_sources::Manifest,
+                &'a [lodestar_sources::consent::CredentialSpec],
+            ),
+            &'a SourceId,
+        ),
+    >,
 ) -> Result<(), lodestar_store::Error> {
     let rows = store.sources()?;
-    for (manifest, id) in sources {
+    for ((manifest, spec), id) in sources {
         let enabled = rows
             .iter()
             .any(|r| r.id == *id && r.state == SourceState::Enabled);
@@ -634,7 +657,7 @@ pub(crate) fn switch_off_unapproved<'a>(
         }
         let approved = consent_text_approved(manifest.consent);
         let need = if approved {
-            consent::need_in(store, manifest)?
+            consent::need_in_with(store, manifest, spec)?
         } else {
             None
         };
@@ -665,6 +688,70 @@ fn off_reason(approved: bool, need: Option<Need>) -> Option<&'static str> {
     }
 }
 
+/// Whether a source that isn't enabled may be turned on by `change`,
+/// decided from what's stored: `Ok(Some(record))` enables it and writes
+/// that new acknowledgement, `Ok(None)` enables it on what's stored, and
+/// anything else is refused. Every check must pass, in this order, and a
+/// case none of them lets through is refused:
+/// 1. `approved` ([`consent_text_approved`] for its class): else the gate's
+///    refusal, before anything else is looked at.
+/// 2. No purge under way (`purge_pending`, SRC-14b).
+/// 3. Its class condition ([`consent::need_with`] against `spec`, the
+///    plugin's declared credentials): Account's credentials stored, or for
+///    External, Restricted and Overlay an accepted acknowledgement that
+///    covers the current text version and addresses, either `stored` or
+///    named exactly by `change`.
+/// 4. Account, Restricted and Overlay: the admin password, every time
+///    ([`consent::needs_password`]).
+fn enable_decision(
+    approved: bool,
+    purge_pending: bool,
+    manifest: &lodestar_sources::Manifest,
+    spec: &[consent::CredentialSpec],
+    stored: Option<&Ack>,
+    credentials: &[String],
+    change: &SourceChange,
+) -> Result<Option<String>, SourceError> {
+    if !approved {
+        return Err(SourceError::Invalid {
+            field: "enabled",
+            reason: CONSENT_GATE_REASON.into(),
+        });
+    }
+    if purge_pending {
+        return Err(SourceError::Invalid {
+            field: "enabled",
+            reason: "a purge of this source didn't finish: purge it again to finish, then \
+                     enable it"
+                .into(),
+        });
+    }
+    let mut ack = None;
+    match consent::need_with(manifest, spec, stored, credentials) {
+        None => {}
+        Some(Need::Credentials) => return Err(SourceError::CredentialsRequired),
+        Some(Need::Endpoints | Need::Consent) => {
+            let wanted = consent::version(manifest);
+            if change.consent != Some(manifest.consent)
+                || change.consent_version.as_deref() != Some(wanted.as_str())
+            {
+                return Err(SourceError::ConsentRequired {
+                    class: manifest.consent,
+                    version: wanted,
+                });
+            }
+            ack = Some(Ack::of(manifest).encode());
+        }
+    }
+    // Enabling Account, Restricted or Overlay asks for the password every
+    // time, not only when the consent is first accepted (§20.11: never
+    // remembered).
+    if consent::needs_password(manifest.consent) && !change.password_confirmed {
+        return Err(SourceError::PasswordRequired);
+    }
+    Ok(ack)
+}
+
 /// The largest settings document `PATCH /sources/{id}` takes, in bytes.
 /// A plugin's own rules are tighter (a torrent cache's list is at most
 /// about 4 KiB); this bounds what reaches them.
@@ -679,9 +766,9 @@ pub struct SourceChange {
     pub consent: Option<Consent>,
     /// ...and the version of what they were shown ([`consent::version`]).
     pub consent_version: Option<String>,
-    /// The caller checked the admin password for this change. Accepting
-    /// Restricted or Overlay consent needs it (Q13), and so does any
-    /// egress change.
+    /// The caller checked the admin password for this change. Enabling an
+    /// Account, Restricted or Overlay source needs it, every time (Q13,
+    /// [`consent::needs_password`]), and so does any egress change.
     pub password_confirmed: bool,
     pub egress: Option<EgressSetting>,
     /// `Some(windows)` sets them (`[]`: any time).
@@ -1187,7 +1274,7 @@ impl Control {
             let gates = statuses
                 .iter()
                 .map(|s| {
-                    let need = consent::need_in(&store, &s.manifest)?;
+                    let need = consent::need_in_with(&store, &s.manifest, s.policy.credentials)?;
                     let names = store.source_secret_names(s.manifest.id)?;
                     let settings = saved_settings(&store, s.manifest.id, false)?;
                     let pending = store.source_purge_started(s.manifest.id)?.is_some();
@@ -1278,13 +1365,13 @@ impl Control {
     ///   unless an acknowledgement of that version is stored; Restricted
     ///   and Overlay also need `change.password_confirmed`, every time
     ///   they're enabled.
-    /// - Account needs credentials stored ([`Control::update_credentials`]).
+    /// - Account needs its declared required credentials stored
+    ///   ([`Control::update_credentials`], [`consent::need_with`]).
     ///
-    /// Until a class's consent text is owner-approved
-    /// ([`consent_text_approved`]), enabling a source of that class is
-    /// refused before anything else is checked, credentials included, as
-    /// an invalid `enabled` naming [`CONSENT_GATE_REASON`]: today every
-    /// class but None, so only None sources can be turned on.
+    /// A class whose approved dialog this build doesn't ship
+    /// ([`consent_text_approved`]: External and Account today) is refused before
+    /// anything else is checked, credentials included, as an invalid
+    /// `enabled` naming [`CONSENT_GATE_REASON`].
     pub async fn update_source(
         &self,
         id: SourceId,
@@ -1326,47 +1413,20 @@ impl Control {
             let mut ack = None;
             let state = match change.enabled {
                 Some(true) if current != SourceState::Enabled => {
-                    // No consent text is owner-approved yet: a source of
-                    // any class but None is refused, with or without a
-                    // stored acknowledgement or credentials
-                    // (X-consent-gate-052, X-consent-gate-polish).
-                    if !consent_text_approved(manifest.consent) {
-                        return Err(SourceError::Invalid {
-                            field: "enabled",
-                            reason: CONSENT_GATE_REASON.into(),
-                        });
-                    }
-                    // A purge under way finishes first (SRC-14b).
-                    if store.source_purge_started(manifest.id)?.is_some() {
-                        return Err(SourceError::Invalid {
-                            field: "enabled",
-                            reason: "a purge of this source didn't finish: purge it again \
-                                     to finish, then enable it"
-                                .into(),
-                        });
-                    }
-                    match consent::need_in(&store, &manifest)? {
-                        None => {}
-                        Some(Need::Credentials) => return Err(SourceError::CredentialsRequired),
-                        Some(Need::Endpoints | Need::Consent) => {
-                            let wanted = consent::version(&manifest);
-                            if change.consent != Some(manifest.consent)
-                                || change.consent_version.as_deref() != Some(wanted.as_str())
-                            {
-                                return Err(SourceError::ConsentRequired {
-                                    class: manifest.consent,
-                                    version: wanted,
-                                });
-                            }
-                            ack = Some(Ack::of(&manifest).encode());
-                        }
-                    }
-                    // Enabling Restricted or Overlay asks for the password
-                    // every time, not only when the consent is first
-                    // accepted (§20.11: never remembered).
-                    if consent::needs_password(manifest.consent) && !change.password_confirmed {
-                        return Err(SourceError::PasswordRequired);
-                    }
+                    let stored = store
+                        .source_consent(manifest.id)?
+                        .as_deref()
+                        .and_then(Ack::decode);
+                    let names = store.source_secret_names(manifest.id)?;
+                    ack = enable_decision(
+                        consent_text_approved(manifest.consent),
+                        store.source_purge_started(manifest.id)?.is_some(),
+                        &manifest,
+                        this.policy(id)?.credentials,
+                        stored.as_ref(),
+                        &names,
+                        &change,
+                    )?;
                     Some(SourceState::Enabled)
                 }
                 Some(false) if current == SourceState::Enabled => Some(SourceState::Disabled),
@@ -1429,8 +1489,10 @@ impl Control {
 
     /// Stores or removes a source's credentials, sealed by `sealer` under
     /// the source's own context. Removing what an enabled Account source
-    /// needs disables it in the same write. Values are never returned,
-    /// logged or put in an error.
+    /// needs disables it in the same write. A name is stored only when the
+    /// plugin declares it (`Policy::credentials`) or it's a SOCKS5 one
+    /// ([`consent::check_declared`]); removing any name is allowed. Values
+    /// are never returned, logged or put in an error.
     pub async fn update_credentials(
         &self,
         id: SourceId,
@@ -1438,9 +1500,13 @@ impl Control {
         changes: Vec<CredentialChange>,
     ) -> Result<SourceView, SourceError> {
         let manifest = self.manifest(id)?;
+        let spec = self.policy(id)?.credentials;
         for (name, value) in &changes {
             consent::check_name(name).map_err(SourceError::Credential)?;
             if let Some(v) = value {
+                // Only a name the plugin declares, or a SOCKS5 one, is
+                // stored; any name may be removed (X-consent-gate-lift r2).
+                consent::check_declared(spec, name).map_err(SourceError::Credential)?;
                 consent::check_value(name, v).map_err(SourceError::Credential)?;
             }
         }
@@ -1488,7 +1554,7 @@ impl Control {
                 .as_deref()
                 .and_then(Ack::decode);
             let lapses = current == Some(SourceState::Enabled)
-                && consent::need(&manifest, ack.as_ref(), &names).is_some();
+                && consent::need_with(&manifest, spec, ack.as_ref(), &names).is_some();
             let state = lapses.then_some(SourceState::Disabled);
             let set: Vec<(&str, &[u8])> = set.iter().map(|(n, v)| (*n, v.as_slice())).collect();
             store.update_source_secrets(id, &set, &remove, state)?;
@@ -1764,26 +1830,300 @@ mod tests {
     }
 
     #[test]
-    fn only_a_class_with_no_consent_dialog_can_be_turned_on() {
+    fn the_gate_passes_none_and_the_three_acknowledged_classes_only() {
         for (class, allowed) in [
             (Consent::None, true),
-            // Its credentials dialog isn't approved text yet (§2.49).
-            (Consent::Account, false),
+            (Consent::Restricted, true),
+            (Consent::Overlay, true),
+            // The Legal Notice says it can't be turned on yet.
             (Consent::External, false),
-            (Consent::Restricted, false),
-            (Consent::Overlay, false),
+            // Its credentials dialog is r2's (§2.49).
+            (Consent::Account, false),
         ] {
             assert_eq!(consent_text_approved(class), allowed, "{class:?}");
-            // Every class that's refused is one with a dialog to show.
-            assert_eq!(
-                !allowed,
-                consent::needs_ack(class) || consent::needs_credentials(class),
-                "{class:?}"
-            );
+        }
+        // Every class the gate passes that shows a dialog is one whose
+        // acceptance is an acknowledgement of a versioned text.
+        for class in ALL {
+            if consent_text_approved(class) && class != Consent::None {
+                assert!(consent::needs_ack(class), "{class:?}");
+                assert!(consent::text_version(class) > 0, "{class:?}");
+            }
         }
         // The message names no address and no version.
         assert!(!CONSENT_GATE_REASON.contains("://"));
         assert!(!CONSENT_GATE_REASON.ends_with('.'), "the API adds the stop");
+    }
+
+    const ALL: [Consent; 5] = [
+        Consent::None,
+        Consent::External,
+        Consent::Account,
+        Consent::Restricted,
+        Consent::Overlay,
+    ];
+
+    fn matrix_manifest(consent: Consent) -> lodestar_sources::Manifest {
+        use lodestar_sources::{Endpoint, Kind, Network, Risk};
+        lodestar_sources::Manifest {
+            id: "probe",
+            name: "Probe",
+            version: "1",
+            kinds: &[Kind::Discovery],
+            networks: &[Network::Bt],
+            endpoints: &[Endpoint {
+                protocol: "https",
+                host: "a.example",
+            }],
+            risk: Risk::High,
+            consent,
+            default_priority: Priority::Normal,
+            enabled_by_default: false,
+            always_adult: false,
+            finds_private: false,
+        }
+    }
+
+    /// What's recorded or sent as an acknowledgement in the matrix.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Acked {
+        Nothing,
+        /// Accepted, of exactly the current text version and addresses.
+        Current,
+        /// Accepted, of the text version before this one.
+        Stale,
+        /// Of the current version, but declined.
+        Declined,
+        /// Of the current version, but naming another class.
+        OtherClass,
+    }
+
+    const ACKED: [Acked; 5] = [
+        Acked::Nothing,
+        Acked::Current,
+        Acked::Stale,
+        Acked::Declined,
+        Acked::OtherClass,
+    ];
+
+    fn ack_of(m: &lodestar_sources::Manifest, a: Acked) -> Option<Ack> {
+        let now = Ack::of(m);
+        let tv = consent::text_version(m.consent);
+        Some(match a {
+            Acked::Nothing => return None,
+            Acked::Current => now,
+            Acked::Stale => Ack {
+                version: now.version.replacen(
+                    &format!("t{tv}"),
+                    &format!("t{}", tv.wrapping_sub(1)),
+                    1,
+                ),
+                ..now
+            },
+            Acked::Declined => Ack {
+                accepted: false,
+                ..now
+            },
+            Acked::OtherClass => Ack {
+                class: if m.consent == Consent::Overlay {
+                    Consent::Restricted
+                } else {
+                    Consent::Overlay
+                },
+                ..now
+            },
+        })
+    }
+
+    /// The enable decision over class × gate × stored acknowledgement ×
+    /// sent acknowledgement × password × credentials (X-consent-gate-lift).
+    /// The expected answer is written out independently below, and is
+    /// "refused" unless one of its allow rules matches.
+    #[test]
+    fn the_enable_matrix_refuses_by_default() {
+        const SPEC: &[consent::CredentialSpec] = &[consent::CredentialSpec {
+            name: "api_key",
+            label: "API key",
+            kind: consent::CredentialKind::Secret,
+            required: true,
+        }];
+        let creds: [&[&str]; 4] = [
+            &[],
+            &[consent::SOCKS5_USERNAME, consent::SOCKS5_PASSWORD],
+            &["other"],
+            &["api_key"],
+        ];
+        let mut allowed_count = 0;
+        let mut cases = 0;
+        for class in ALL {
+            let m = matrix_manifest(class);
+            for approved in [false, true] {
+                for stored in ACKED {
+                    for sent in ACKED {
+                        for password in [false, true] {
+                            for names in creds {
+                                for purge in [false, true] {
+                                    cases += 1;
+                                    let stored_ack = ack_of(&m, stored);
+                                    let sent_ack = ack_of(&m, sent);
+                                    let change = SourceChange {
+                                        enabled: Some(true),
+                                        consent: sent_ack.as_ref().map(|a| a.class),
+                                        // A declined record can't be sent:
+                                        // the API takes an acceptance.
+                                        consent_version: sent_ack
+                                            .as_ref()
+                                            .filter(|a| a.accepted)
+                                            .map(|a| a.version.clone()),
+                                        password_confirmed: password,
+                                        ..SourceChange::default()
+                                    };
+                                    let names: Vec<String> =
+                                        names.iter().map(|n| n.to_string()).collect();
+                                    let got = enable_decision(
+                                        approved,
+                                        purge,
+                                        &m,
+                                        SPEC,
+                                        stored_ack.as_ref(),
+                                        &names,
+                                        &change,
+                                    );
+                                    // The oracle.
+                                    let acked = matches!(stored, Acked::Current)
+                                        || matches!(sent, Acked::Current);
+                                    let allowed = approved
+                                        && !purge
+                                        && match class {
+                                            Consent::None => true,
+                                            Consent::External => acked,
+                                            Consent::Restricted | Consent::Overlay => {
+                                                acked && password
+                                            }
+                                            Consent::Account => {
+                                                names.iter().any(|n| n == "api_key") && password
+                                            }
+                                        };
+                                    let case = format!(
+                                        "{class:?} approved={approved} stored={stored:?} \
+                                         sent={sent:?} password={password} \
+                                         creds={names:?} purge={purge}: {got:?}"
+                                    );
+                                    if allowed {
+                                        allowed_count += 1;
+                                        let record = got.as_ref().expect(&case).clone();
+                                        // A new record is written only when
+                                        // none stored covers it, and it's
+                                        // exactly the current one.
+                                        if matches!(stored, Acked::Current)
+                                            || !consent::needs_ack(class)
+                                        {
+                                            assert_eq!(record, None, "{case}");
+                                        } else {
+                                            assert_eq!(
+                                                record,
+                                                Some(Ack::of(&m).encode()),
+                                                "{case}"
+                                            );
+                                        }
+                                    } else {
+                                        assert!(got.is_err(), "{case}");
+                                    }
+                                    if !approved {
+                                        assert!(
+                                            matches!(&got, Err(SourceError::Invalid { field: "enabled", reason }) if reason == CONSENT_GATE_REASON),
+                                            "{case}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 5 * 2 * 5 * 5 * 2 * 4 * 2);
+        assert!(allowed_count > 0);
+        // With this build's gate, External and Account are never let
+        // through, whatever is stored or sent.
+        for class in [Consent::External, Consent::Account] {
+            let m = matrix_manifest(class);
+            for names in creds {
+                let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+                let r = enable_decision(
+                    consent_text_approved(class),
+                    false,
+                    &m,
+                    SPEC,
+                    Some(&Ack::of(&m)),
+                    &names,
+                    &SourceChange {
+                        enabled: Some(true),
+                        consent: Some(class),
+                        consent_version: Some(consent::version(&m)),
+                        password_confirmed: true,
+                        ..SourceChange::default()
+                    },
+                );
+                assert!(
+                    matches!(&r, Err(SourceError::Invalid { field: "enabled", reason }) if reason == CONSENT_GATE_REASON),
+                    "{class:?} {names:?}: {r:?}"
+                );
+            }
+        }
+    }
+
+    /// A raised text version re-closes the gate for that class: a record
+    /// of the version before it covers nothing, so the source asks for the
+    /// new one, and accepting it opens the gate again.
+    #[test]
+    fn a_text_version_bump_closes_the_gate_until_the_new_one_is_accepted() {
+        for class in [Consent::External, Consent::Restricted, Consent::Overlay] {
+            let m = matrix_manifest(class);
+            let old = ack_of(&m, Acked::Stale).unwrap();
+            let bare = SourceChange {
+                enabled: Some(true),
+                password_confirmed: true,
+                ..SourceChange::default()
+            };
+            let r = enable_decision(true, false, &m, &[], Some(&old), &[], &bare);
+            assert!(
+                matches!(&r, Err(SourceError::ConsentRequired { class: c, version }) if *c == class && *version == consent::version(&m)),
+                "{class:?}: {r:?}"
+            );
+            // Sending the old version doesn't do either.
+            let r = enable_decision(
+                true,
+                false,
+                &m,
+                &[],
+                Some(&old),
+                &[],
+                &SourceChange {
+                    consent: Some(class),
+                    consent_version: Some(old.version.clone()),
+                    ..bare.clone()
+                },
+            );
+            assert!(
+                matches!(r, Err(SourceError::ConsentRequired { .. })),
+                "{class:?}"
+            );
+            let r = enable_decision(
+                true,
+                false,
+                &m,
+                &[],
+                Some(&old),
+                &[],
+                &SourceChange {
+                    consent: Some(class),
+                    consent_version: Some(consent::version(&m)),
+                    ..bare
+                },
+            );
+            assert_eq!(r.unwrap(), Some(Ack::of(&m).encode()), "{class:?}");
+        }
     }
 
     #[test]

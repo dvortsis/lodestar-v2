@@ -571,6 +571,9 @@ pub(crate) struct ToCommit {
     /// judges it again when the rules changed before its commit.
     pub info_raw: Vec<u8>,
     pub key: InfoHash,
+    /// Stored as `private_source` (§18.7): a `private=1` upload (UP-0),
+    /// whose hash may be known nowhere else. A cache's file never is.
+    pub private_source: bool,
 }
 
 /// A feed's channel: its sending half for the host, and the receiving
@@ -628,6 +631,7 @@ pub(crate) async fn judge_task(
             at: now,
             info_raw: if held { f.info_raw } else { Vec::new() },
             key: f.key,
+            private_source: false,
         };
         if out.send(commit).await.is_err() {
             return;

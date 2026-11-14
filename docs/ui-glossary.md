@@ -120,5 +120,8 @@ Category labels (facets, file tree) and the group each colours as
 | `source` | Source | Where a torrent was found: the DHT, a feed, an indexer or an import. Searched with `source:`. | 来源 (TBD) |
 | `found_by` | Found by | The sources that reported a torrent, listed in its details. | 发现于 (TBD) |
 | `private_source` | Private source | A source whose finds aren't shared: only the signed-in admin sees it by name; everyone else sees only that some details are private. | 私有来源 (TBD) |
+| `outputs` | Outputs | What other apps can take from your index: Torznab for Prowlarr, Sonarr and Radarr, and exports such as the bitmagnet file (Settings → Outputs). | 输出 (TBD) |
+| `torznab_key` | Torznab key | An API key with the `torznab` scope, one per app and named for it ("Sonarr"); the safe choice is that scope alone. Its secret is shown once, when it's created or regenerated; Lodestar keeps only a hash. | Torznab 密钥 (TBD) |
+| `bitmagnet_export` | bitmagnet export | A download of your torrents in the format bitmagnet's import reads. Never includes private, hidden, unverified or blocklisted torrents; Adult only when "Include adult torrents" is on. Write "bitmagnet" in lower case, as the project does. | bitmagnet 导出 (TBD) |
 
 Don't write "env", "override", "custom" or "dirty" in these labels.

@@ -1353,6 +1353,156 @@
         ]
       }
     },
+    "/companions/{id}/egress": {
+      "put": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Sets its route, then restarts it on the new route. The route is checked\nas a source's is (`direct`, or `socks5` with a usable `host:port`; the\n`interface` and `bind_address` routes, whose lookups would leave outside\nthem, are `409 route_unavailable`), and a SOCKS5 route's kill switch is\nalways on. Like a source's route change it needs the admin `password`\n(`428 confirm_required`). `200` once saved: `restarting` says whether\nits restart on the new route began (its row's `health` shows when it's\nback); when it didn't, `not_restarted` says why, and the route is used\nat its next start.",
+        "operationId": "setCompanionEgress",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionEgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionEgressChanged"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_egress`, with `field`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`bad_password`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`route_unavailable`, `takes_no_route`, `cant_follow_route` (it can't follow that route kind: qBittorrent takes no SOCKS5 proxy), `not_installed`, `busy`, `not_wired`. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`confirm_required`: no password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many password attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/companions/{id}/guided/forget": {
       "post": {
         "tags": [
@@ -7482,7 +7632,7 @@
           "crawler"
         ],
         "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start.",
-        "description": "This build turns on only a source whose class is `none`. Enabling an\n`external`, `account`, `restricted` or `overlay` source is refused with\n`400 invalid_setting` on `enabled`, before its consent, acknowledgement\nor credentials are looked at, whatever the request sends: this version\ncan't show the class's consent dialog yet. A `\"password\"` sent with the\nenable is still checked first (`401` when it's wrong). `needs` and\n`credential_spec` still say what the source will need once a later\nversion can turn it on, and credentials can be stored and removed\nmeanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every\nclass.\n\nAgents, egress and the schedule apply at the next start; changing\negress needs the admin `\"password\"` (`428 confirm_required`), and the\n`interface` and `bind_address` routes are refused (`409\nroute_unavailable`). `config` sets the source's settings, for a source\nwhose `editable` lists it: a JSON object of at most 16 KiB, shaped by\nits `config_schema`, that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
+        "description": "A `none` source is a toggle. A `restricted` or `overlay` source is\nturned on only when the request sends `\"consent\"` naming its class and\nthe `\"consent_version\"` `GET /sources` gives for it, exactly, unless an\nacceptance of that version is already stored, and the admin\n`\"password\"` every time: otherwise `409 consent_required` or `428\nconfirm_required`, and nothing is saved. A new consent text or address\nlist changes the version, and the source asks again. Enabling an\n`external` or `account` source is refused with `400 invalid_setting` on\n`enabled`, before its consent, acknowledgement or credentials are looked\nat, whatever the request sends: this version can't turn it on yet. A\n`\"password\"` sent with the enable is checked first (`401` when it's\nwrong). `needs` and `credential_spec` say what the source needs, and\ncredentials can be stored and removed meanwhile (`PATCH\n/sources/{id}/credentials`). Disabling works for every class.\n\nAgents, egress and the schedule apply at the next start; changing\negress needs the admin `\"password\"` (`428 confirm_required`), and the\n`interface` and `bind_address` routes are refused (`409\nroute_unavailable`). `config` sets the source's settings, for a source\nwhose `editable` lists it: a JSON object of at most 16 KiB, shaped by\nits `config_schema`, that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -7534,7 +7684,7 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Stores or removes a source's credentials: each name maps to a value\n(stored, sealed with the install's key) or `null` (removed). Values\nare never returned: the response lists the names stored. Removing what\nan enabled `account` source needs disables it. `400\ninvalid_credentials` names the rule a change broke, never a value.",
+        "summary": "Stores or removes a source's credentials: each name maps to a value\n(stored, sealed with the install's key) or `null` (removed). A value\nis stored only under a name the source's `credential_spec` lists, or\none of the two SOCKS5 names; any name can be removed. Values are never\nreturned: the response lists the names stored. Removing what an\nenabled `account` source needs disables it. `400 invalid_credentials`\nnames the rule a change broke, never a name or a value.",
         "operationId": "patchSourceCredentials",
         "parameters": [
           {
@@ -7920,6 +8070,126 @@
         ]
       }
     },
+    "/torrents/upload": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "summary": "Adds one `.torrent` file, sent as the raw request body.",
+        "operationId": "uploadTorrent",
+        "requestBody": {
+          "description": "The `.torrent` file itself, at most 8 MiB. Nothing else: no multipart, no file name.",
+          "content": {
+            "application/x-bittorrent": {
+              "schema": {
+                "$ref": "#/components/schemas/TorrentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`: sent from another site.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "`body_timeout`: the body didn't arrive within 60 s.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`body_too_large`: over 8 MiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: the body isn't sent as `application/x-bittorrent`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`refused`: on the safety floor's list; or `held`: the filter holds it. Neither is stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many uploads; wait for `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`uploads_unavailable`: uploads aren't being taken right now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/torrents/{hash}": {
       "get": {
         "tags": [
@@ -8045,7 +8315,7 @@
         "tags": [
           "torrents"
         ],
-        "summary": "Torrents related to one (§10.5): other versions of the same work,\nidentical-payload clones and the same file elsewhere. The last two\nneed data M7 adds, so they're `unavailable` until then.",
+        "summary": "Torrents related to one (§10.5): other versions of the same work,\nclones with an identical payload (equal file sizes), torrents with a\nsimilar payload (most of the same major files) and other torrents\nwith one of its files (v2 and hybrid torrents only). Each group is\nconfirmed against the stored state and withheld as other versions\nare; the `*_partial` flags say when the index is still filling in\nwhat a group needs, so some may be missing.",
         "operationId": "getTorrentSiblings",
         "parameters": [
           {
@@ -10747,6 +11017,25 @@
                 "minimum": 0
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Torrents with this payload signature (16 lowercase hex digits),\nor, given an info hash (40), those with the same payload as that\ntorrent, itself included.",
+            "required": [
+              "sig",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "sig"
+                ]
+              },
+              "sig": {
+                "type": "string"
+              }
+            }
           }
         ],
         "description": "A parsed query (§8), tagged by `op`."
@@ -12549,6 +12838,7 @@
         "required": [
           "available",
           "credentials",
+          "egress",
           "health",
           "id",
           "installed",
@@ -12556,6 +12846,7 @@
           "name",
           "opt_in",
           "refusal",
+          "runs",
           "templates"
         ],
         "properties": {
@@ -12572,6 +12863,17 @@
               "type": "string"
             },
             "description": "The stored credentials, by field (`webui_password`, `api_key`):\nnames only, never values. What `…/reveal` can show."
+          },
+          "egress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CompanionEgress",
+                "description": "Its route (Q18), read from its saved row as its start reads it.\nNull unless `runs` is `lodestar` (elsewhere whatever runs it sets\nits route), and for a companion that takes no route (gluetun).\nRead-only here: `PUT /companions/{id}/egress` changes it."
+              }
+            ]
           },
           "health": {
             "oneOf": [
@@ -12620,6 +12922,21 @@
             ],
             "description": "Why it can't be installed or updated here, as a stable code\n(`native_in_container`, `awaiting_pin`, `unsupported_platform`,\n`guided_only`, …); null when it can, or when it's up to date."
           },
+          "runs": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Where a companion runs (CMP-9a's \"where it runs\").",
+                "enum": [
+                  "lodestar",
+                  "own_container",
+                  "yours",
+                  "not_here"
+                ]
+              }
+            ],
+            "description": "Where it runs, or would run if it were installed here."
+          },
           "templates": {
             "type": "array",
             "items": {
@@ -12658,6 +12975,84 @@
             "items": {
               "type": "string"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionEgress": {
+        "type": "object",
+        "description": "A companion's route (Q18): the same setting, with the same names, as a\nsource's route. A SOCKS5 route carries no credentials.",
+        "required": [
+          "from",
+          "setting"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "Where a companion's route comes from.",
+            "enum": [
+              "saved",
+              "source"
+            ]
+          },
+          "setting": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EgressSetting",
+                "description": "The route. Null when the saved setting can't be read: the\ncompanion's route then stays down, never direct, until it's set\nagain."
+              }
+            ]
+          }
+        }
+      },
+      "CompanionEgressChanged": {
+        "type": "object",
+        "description": "The route was saved. `restarting` says whether the companion's restart\non it has begun; when it hasn't, the route is saved but not applied yet,\nand it's used at the companion's next start.",
+        "required": [
+          "egress",
+          "id",
+          "not_restarted",
+          "restarting"
+        ],
+        "properties": {
+          "egress": {
+            "$ref": "#/components/schemas/CompanionEgress",
+            "description": "The route as saved now."
+          },
+          "id": {
+            "type": "string"
+          },
+          "not_restarted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't restarting on the new route, as a stable code\n(`not_wired`, `busy`, `restart_failed`, …); null when it is."
+          },
+          "restarting": {
+            "type": "boolean",
+            "description": "True once its restart on the new route has begun. That isn't yet\nrunning on it: the companion's row (its `health`) shows when it's\nback, as after `POST …/restart`. False: saved, not applied yet."
+          }
+        }
+      },
+      "CompanionEgressRequest": {
+        "type": "object",
+        "description": "`PUT /companions/{id}/egress`: the new route, and the admin password\nentered again (a route change always needs it, as a source's does).",
+        "required": [
+          "egress"
+        ],
+        "properties": {
+          "egress": {
+            "$ref": "#/components/schemas/EgressSetting"
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false
@@ -13241,7 +13636,7 @@
           },
           "floor": {
             "type": "boolean",
-            "description": "Part of the locked floor: can't be switched off."
+            "description": "Locked: can't be switched off, and takes no exception."
           },
           "id": {
             "type": "string",
@@ -14389,6 +14784,47 @@
           "aria2"
         ]
       },
+      "EgressSetting": {
+        "type": "object",
+        "description": "A source's egress setting.",
+        "required": [
+          "route"
+        ],
+        "properties": {
+          "dns": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Who resolves names on a SOCKS5 route.",
+                "enum": [
+                  "proxy",
+                  "local"
+                ]
+              }
+            ],
+            "description": "For `socks5`: who resolves names. Left out, it's `proxy` for a\nsource that only reaches its built-in sites, so lookups stay inside\nthe tunnel, and `local` for a source whose sites you enter, so a\npublic name can't reach devices on the proxy's network."
+          },
+          "proxy": {
+            "type": "string",
+            "description": "For `socks5`: the proxy as `host:port` (a name, an IPv4 address or\na bracketed IPv6 address). A name is resolved when the source\nstarts."
+          },
+          "route": {
+            "type": "string",
+            "description": "How a source's traffic leaves (§18.4, §18.7).",
+            "enum": [
+              "direct",
+              "socks5",
+              "interface",
+              "bind_address"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "proxy": "10.8.0.1:1080",
+          "route": "socks5"
+        }
+      },
       "EmailDraft": {
         "type": "object",
         "description": "An email channel as the form has it.",
@@ -14445,7 +14881,7 @@
       },
       "EnrichmentSource": {
         "type": "object",
-        "description": "The source behind an adult-enrichment match.",
+        "description": "The source behind an enrichment answer: an adult-enrichment match or\nan identification.",
         "required": [
           "id",
           "name",
@@ -16335,6 +16771,169 @@
           "id": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "Identification": {
+        "type": "object",
+        "description": "One plugin's answer.",
+        "required": [
+          "alt_titles",
+          "canonical_title",
+          "chosen",
+          "confidence",
+          "genres",
+          "ids",
+          "source",
+          "year"
+        ],
+        "properties": {
+          "alt_titles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentifiedTitle"
+            },
+            "description": "Other titles the work is known by, at most 32."
+          },
+          "canonical_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The work's own title in the plugin's database."
+          },
+          "chosen": {
+            "type": "boolean",
+            "description": "The torrent's effective title is this answer's: its name said\nnothing, and the record was resolved via a plugin with the surest\nanswer that has a canonical title. At most one answer is chosen;\nnone when the title isn't a plugin's, or the chosen answer's source\nisn't shown to this caller."
+          },
+          "confidence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How sure the plugin is of the match, 0–100 percent.",
+            "maximum": 100,
+            "minimum": 0
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Normalised genres, at most 16."
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentifiedId"
+            },
+            "description": "The work's ids, at most 32, in the closed schemes enrichment\nwrites: imdb, tmdb, tvdb, anidb, anilist, mbid, olid, igdb,\ndiscogs, steam, wikidata."
+          },
+          "source": {
+            "$ref": "#/components/schemas/EnrichmentSource",
+            "description": "The plugin that answered: \"Identified by Wikidata\"."
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The work's year, 1–9999.",
+            "maximum": 9999,
+            "minimum": 1
+          }
+        }
+      },
+      "IdentifiedAs": {
+        "type": "object",
+        "description": "What general enrichment plugins (Wikidata, TMDB, …) identified a\ntorrent as (ENR-10, ENR-12; architecture §6, §10.5). Every text was\njudged by the content filter before it was stored, and nothing is\njudged again here.",
+        "required": [
+          "alternatives",
+          "resolved_via"
+        ],
+        "properties": {
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Identification"
+            },
+            "description": "Each plugin's answer, the surest first (ties by source id). Two\nplugins that disagree are both kept."
+          },
+          "resolved_via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How an ambiguous name's effective title was resolved, when it was\nfrom the file tree: `files`, `folder` or `structure`. Null in every\nother case: the name said it itself, the title came from a plugin\n(see `chosen`), or the record can't be read. **Null never means\n\"from the name\"**: don't present it as that."
+          }
+        },
+        "example": {
+          "alternatives": [
+            {
+              "alt_titles": [
+                {
+                  "language": "ja",
+                  "title": "ショーシャンクの空に"
+                }
+              ],
+              "canonical_title": "The Shawshank Redemption",
+              "chosen": true,
+              "confidence": 92,
+              "genres": [
+                "drama"
+              ],
+              "ids": [
+                {
+                  "scheme": "imdb",
+                  "value": "tt0111161"
+                },
+                {
+                  "scheme": "wikidata",
+                  "value": "Q172241"
+                }
+              ],
+              "source": {
+                "id": 7,
+                "name": "Wikidata",
+                "plugin": "wikidata"
+              },
+              "year": 1994
+            }
+          ],
+          "resolved_via": null
+        }
+      },
+      "IdentifiedId": {
+        "type": "object",
+        "description": "A work's id in one scheme.",
+        "required": [
+          "scheme",
+          "value"
+        ],
+        "properties": {
+          "scheme": {
+            "type": "string",
+            "description": "`imdb`, `tmdb`, `wikidata`, …"
+          },
+          "value": {
+            "type": "string",
+            "description": "In the scheme's one spelling (`tt0111161`, `Q172241`)."
+          }
+        }
+      },
+      "IdentifiedTitle": {
+        "type": "object",
+        "description": "An alternative title and its language.",
+        "required": [
+          "language",
+          "title"
+        ],
+        "properties": {
+          "language": {
+            "type": "string",
+            "description": "A BCP 47 tag, lower case; `und` when the plugin didn't say."
+          },
+          "title": {
+            "type": "string"
           }
         }
       },
@@ -23068,13 +23667,18 @@
       },
       "SiblingsResponse": {
         "type": "object",
-        "description": "`GET /torrents/{hash}/siblings`: the torrents related to one, in three\ngroups. Each is either available (possibly empty) or unavailable with\na reason.",
+        "description": "`GET /torrents/{hash}/siblings`: the torrents related to one, in four\ngroups. Each is either available (possibly empty) or unavailable with\na reason.",
         "required": [
           "hash",
           "identical_payload",
+          "identical_payload_partial",
           "identity",
           "other_versions",
-          "same_file"
+          "same_file",
+          "same_file_capped",
+          "same_file_partial",
+          "similar_payload",
+          "similar_payload_partial"
         ],
         "properties": {
           "hash": {
@@ -23083,7 +23687,11 @@
           },
           "identical_payload": {
             "$ref": "#/components/schemas/HitGroup",
-            "description": "Identical-payload clones: the same content under another hash."
+            "description": "Identical-payload clones: the same content under another hash\n(equal payload signatures, confirmed by the stored file sizes)."
+          },
+          "identical_payload_partial": {
+            "type": "boolean",
+            "description": "The index is still filling in payload signatures, so some clones\nmay be missing from `identical_payload`."
           },
           "identity": {
             "oneOf": [
@@ -23102,7 +23710,23 @@
           },
           "same_file": {
             "$ref": "#/components/schemas/HitGroup",
-            "description": "Other torrents containing one of this torrent's files."
+            "description": "Other torrents containing one of this torrent's files, by v2\npiece root: only v2 and hybrid torrents have them\n(`needs_v2_files` for a v1-only torrent)."
+          },
+          "same_file_capped": {
+            "type": "boolean",
+            "description": "`same_file` is full (it lists the most the server returns) and\nthe lookup was bounded: only this torrent's largest files were\nlooked up, or more torrents shared them than were read. Some may\nbe missing from it. A shorter list never sets this."
+          },
+          "same_file_partial": {
+            "type": "boolean",
+            "description": "The file index is still filling in piece roots, so some torrents\nmay be missing from `same_file`."
+          },
+          "similar_payload": {
+            "$ref": "#/components/schemas/HitGroup",
+            "description": "Torrents with a similar payload: most of the same large files\n(a season with an episode swapped or added, a pack with an extra\ndisc), newest first. Found by a MinHash of the large file sizes\nand confirmed on the stored sizes; identical clones are in\n`identical_payload` instead. Unavailable (`few_major_files`) for\na torrent whose large files have fewer than 3 different sizes,\nnot counting a split archive's volume size (a size more than 2\nfiles share). `truncated` also when more candidates matched than\nwere read, so some may be missing even from a short list."
+          },
+          "similar_payload_partial": {
+            "type": "boolean",
+            "description": "The index is still filling in the similarity terms, so some\ntorrents may be missing from `similar_payload`."
           }
         }
       },
@@ -23124,6 +23748,7 @@
         "description": "One source plugin of this build.",
         "required": [
           "agents",
+          "always_adult",
           "companion_need",
           "config_schema",
           "consent",
@@ -23179,6 +23804,10 @@
                 "minimum": 0
               }
             }
+          },
+          "always_adult": {
+            "type": "boolean",
+            "description": "Everything it finds is Adult (§20.9, X-source-adult): its finds are\nstored and judged as Adult unless you say Not adult. The detail view\nreads it too, to keep a torrent such a source found out of the\n\"Identified as\" section."
           },
           "companion_need": {
             "oneOf": [
@@ -23484,7 +24113,7 @@
           },
           "password_required": {
             "type": "boolean",
-            "description": "Enabling it asks for the admin password, every time\n(`restricted`, `overlay`)."
+            "description": "Enabling it asks for the admin password, every time\n(`account`, `restricted`, `overlay`)."
           },
           "plugin": {
             "type": "string",
@@ -24745,6 +25374,13 @@
           "kind"
         ],
         "properties": {
+          "companions_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lodestar's companion-files folder on the host, for an Unraid\ntemplate with gluetun: the template mounts gluetun's post-rules file\nfrom it. In a container it's the host folder mounted at\n`/companions`, where Lodestar saves the file as root at start-up;\nthe template uses it only if that file is exact and root's.\nNatively it's a folder you name, outside the data folder, where\nLodestar saves the file; there is no default. Unset, or when the\nfile can't be used, you save the file yourself."
+          },
           "config_dir": {
             "type": [
               "string",
@@ -25031,6 +25667,11 @@
           "search_live"
         ]
       },
+      "TorrentBody": {
+        "type": "string",
+        "format": "binary",
+        "description": "The request body: the `.torrent` file's bytes (the schema only; the\nhandler reads the body itself)."
+      },
       "TorrentDetail": {
         "type": "object",
         "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nA null swarm field is \"never scraped\" (or no estimate), never 0.",
@@ -25137,6 +25778,10 @@
           "id": {
             "type": "integer",
             "format": "int64"
+          },
+          "identified_as": {
+            "$ref": "#/components/schemas/IdentifiedAs",
+            "description": "What general enrichment identified the torrent as (ENR-10, §6):\neach plugin's answer, surest first. **Absent**, never null or\nempty, when there's none to show: no answer is stored, the torrent\nis hidden, held, private or Adult, the host hasn't said which\nsources are always adult, or every answer came from a source this\ncaller may not see."
           },
           "last_scrape_at": {
             "type": [
@@ -25370,7 +26015,13 @@
           "needs_swarm_history",
           "needs_resolution_history",
           "needs_payload_signature",
-          "needs_piece_roots"
+          "needs_piece_roots",
+          "no_content_files",
+          "needs_v2_files",
+          "payload_not_specific",
+          "partial_file_list",
+          "few_major_files",
+          "needs_group_minhash"
         ]
       },
       "UnderstandKpi": {
@@ -25819,6 +26470,24 @@
           "windows_helper"
         ],
         "example": "windows_helper"
+      },
+      "UploadAccepted": {
+        "type": "object",
+        "description": "The body of a `202`.",
+        "required": [
+          "info_hash",
+          "private"
+        ],
+        "properties": {
+          "info_hash": {
+            "type": "string",
+            "description": "The info dict's primary hash, as 40 hex characters."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "The info dict says `private=1` (BEP 27): stored as private, so it\nnever reaches the DHT, a tracker or a cache."
+          }
+        }
       },
       "UsageClear": {
         "type": "object",

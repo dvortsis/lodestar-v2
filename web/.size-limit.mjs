@@ -147,7 +147,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -187,7 +187,7 @@ const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 const settingsConnections = [
 	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget|Advanced|LoadFailed)\.svelte$/,
 	/features\/settings\/screens2\/privacy\.ts$/,
-	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
+	// The five navigation icons (Language too), loaded after the navigation shows (`Screen.iconLoad`).
 	/features\/settings\/screens2\/icons\.ts$/
 ];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
@@ -226,7 +226,9 @@ const bodyMaps = {
 	// Sources (SRC-15a) reads none either.
 	SourcesScreen: [],
 	// Companions (CMP-9a) reads none either.
-	CompanionsScreen: []
+	CompanionsScreen: [],
+	// Outputs (OUT-2) reads `content` with a plain GET, not through the engine.
+	OutputsScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -347,7 +349,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates|companions)|filters|jobs|blocklists|sources)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates|companions|outputs)|filters|jobs|blocklists|sources)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -375,6 +377,10 @@ const settingsCompanionsModules = [/features\/settings\/companions\/icon\.ts$/];
 const settingsCompanionsParts = [
 	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates)\.svelte$/
 ];
+// Outputs (OUT-2): the icon and purpose line load after the first view, like Companions'; its
+// 18+ dialog and Security's key flows (through `key-flows.ts`) load on the first press that needs them.
+const settingsOutputsModules = [/features\/settings\/outputs\/icon\.ts$/];
+const settingsOutputsParts = [/features\/settings\/outputs\/(AdultDialog\.svelte|key-flows\.ts)$/];
 const settingsUpdatesAdvanced = [/features\/settings\/updates\/Advanced\.svelte$/];
 const settingsUpdatesParts = [
 	/features\/settings\/updates\/Releases\.svelte$/,
@@ -421,6 +427,8 @@ const settingsFirstView = [
 	...settingsUpdatesParts,
 	...settingsCompanionsModules,
 	...settingsCompanionsParts,
+	...settingsOutputsModules,
+	...settingsOutputsParts,
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
@@ -474,7 +482,8 @@ const eventNamesLimits = {
 	dht: '1120 B',
 	filters: '1740 B',
 	search: '2250 B',
-	sources: '490 B',
+	// runner §2.26, UP-1: measured 704 B, the watch labels.
+	sources: '768 B',
 	workers: '3780 B',
 	api: '650 B',
 	companions: '1160 B',
@@ -571,6 +580,14 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 					/settings\/companions\/CompanionsScreen\.svelte$/.test(key)
 				)
 		)
+		// And Outputs': its parts load from its body.
+		.filter(
+			(key) =>
+				!(
+					settingsOutputsParts.some((re) => re.test(from)) &&
+					/settings\/outputs\/OutputsScreen\.svelte$/.test(key)
+				)
+		)
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.filter((key) => !(sourcesAllLater.some((re) => re.test(from)) && sourcesBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
@@ -635,6 +652,8 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsUpdatesParts,
 					...settingsCompanionsModules,
 					...settingsCompanionsParts,
+					...settingsOutputsModules,
+					...settingsOutputsParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
 					...settingsLoggingNames,
@@ -782,6 +801,32 @@ const settingsCompanionsPartsLazy = requireMeasuredJs('Settings companions parts
 				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
 					...settingsShellView,
 					...companionsFirstView
+				])
+			)
+	)
+]);
+const settingsOutputsModulesLazy = requireMeasuredJs(
+	'Settings outputs icon and purpose (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsOutputsModules.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
+				)
+		)
+	]
+);
+const outputsFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'OutputsScreen')?.files ?? [];
+const settingsOutputsPartsLazy = requireMeasuredJs('Settings outputs parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsOutputsParts.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...outputsFirstView
 				])
 			)
 	)
@@ -1218,6 +1263,13 @@ const adultSection = ownChunk('src/lib/features/detail/adult/AdultEnrichment.sve
 	...drawerView,
 	...torrentView
 ]);
+// ENR-13: the "Identified as" section loads only when the API sent `identified_as`; own entry, as above.
+const identifiedSection = ownChunk(
+	'src/lib/features/detail/identified/Identified.svelte',
+	[],
+	false,
+	[...drawerView, ...torrentView]
+);
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
@@ -1307,8 +1359,9 @@ export default [
 	),
 	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
 	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
-	// Measured 45.06 kB, limit 45.1 KB: the runner decides this change to the §10.1 number (§2.26).
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.1 KB'),
+	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
+	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1317,7 +1370,8 @@ export default [
 	entry('Insights print layout (on demand)', insightsPrintLazy, '1.62 KB'),
 	// S-privacy-banner: measured + 10%.
 	entry('Privacy banner (on demand)', privacyBannerLazy, '3.71 KB'),
-	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
+	// runner §2.26, UP-1: measured 4220 B, the watch labels.
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4.25 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
@@ -1336,6 +1390,10 @@ export default [
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
 	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
+	// OUT-2: Outputs' 18+ dialog and Security's key flows measured 26.32 kB, limit 27 KB (~2.6%
+	// headroom); its icon and purpose line 0.68 kB, limit 0.75 KB (measured + ~10%).
+	entry('Settings outputs parts (on demand)', settingsOutputsPartsLazy, '27 KB'),
+	entry('Settings outputs icon and purpose (on demand)', settingsOutputsModulesLazy, '0.75 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
@@ -1383,6 +1441,9 @@ export default [
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
 	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
+	// X-sources-restructure: the Sources first view measured 33.59 KB (was ~30.7 KB): the filter box,
+	// collapsible groups with their summary, rows that expand (~2 KB) and the consent legend, whose
+	// text is in en and zh (~0.9 KB). Limit = measured + ~1.2%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
@@ -1396,7 +1457,7 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '31.1 KB'
+								? '34 KB'
 								: name === 'NotificationsScreen'
 									? '45.2 KB'
 									: '45 KB'
@@ -1415,7 +1476,9 @@ export default [
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
 	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
-	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '40 KB'),
+	// X-sources-restructure: 41.3 KB; this walk includes the screen's own chunk, so it grows with the
+	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.
+	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '41.8 KB'),
 	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
 	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
@@ -1553,7 +1616,8 @@ export default [
 	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
 	// hashes in its imports moved by a few bytes). Runner to confirm.
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('Detail drawer (own JS + CSS)', drawerView, '28064 B'),
+	// ENR-13: one dynamic import for the identified-as section (§2.26, runner): 28,064 B -> 28,128 B.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28128 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1565,12 +1629,13 @@ export default [
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared clients (measured
 	// 21,795 B, residue 19 B, rounded up to 64 B).
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21904 B'),
+	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21952 B'),
 	entry(
 		'Detail sections (on demand)',
 		[
 			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
-		].filter((f) => !adultSection.includes(f)),
+		].filter((f) => !adultSection.includes(f) && !identifiedSection.includes(f)),
 		'38608 B' // runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
@@ -1579,6 +1644,8 @@ export default [
 	// ENR-8: the adult-enrichment section, loaded on demand and only when the API sent the field.
 	// Measured 1,530 B; limit = measured + 10%, rounded.
 	entry('Detail adult-enrichment section (on demand)', adultSection, '1700 B'),
+	// ENR-13: the "Identified as" section, on demand and only when the API sent the field. Measured 1,830 B; limit = measured + at most 10%, rounded up to 100 B.
+	entry('Detail identified-as section (on demand)', identifiedSection, '2000 B'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	entry(
@@ -1597,7 +1664,8 @@ export default [
 	// them. Limits: measured + 10%. Part 2 (S-wizard-2) adds the download client's cards and the
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
-	entry('Wizard steps (on demand)', wizardLazy, '53.6 KB'),
+	// runner §2.26, UP-1: measured 53603 B, the watch labels.
+	entry('Wizard steps (on demand)', wizardLazy, '53.7 KB'),
 	// S-blocklists: the wizard's blocklist step, measured separately so the limit above stays.
 	entry('Blocklist wizard step (on demand)', blocklistStepLazy, '8.3 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:

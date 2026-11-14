@@ -46,6 +46,24 @@ pub const PLACEHOLDER: &str = "FILL_IN_YOURSELF";
 /// gluetun's catalogue id.
 pub const GLUETUN: &str = "gluetun";
 
+/// Lodestar's post-rules for gluetun (X-gluetun-leak): without them gluetun
+/// lets connections opened through the tunnel leave by your normal network
+/// once the tunnel drops. A copy of `packaging/companions/gluetun-post-rules.txt`,
+/// kept inside the crate so every build context has it; a test keeps the two
+/// identical byte for byte. gluetun runs its lines as root.
+pub const GLUETUN_POST_RULES: &str = include_str!("gluetun-post-rules.txt");
+
+/// Where gluetun reads its post-rules, inside its container.
+pub const GLUETUN_POST_RULES_TARGET: &str = "/iptables/post-rules.txt";
+
+/// The tunnel interface the post-rules name. gluetun's image defaults
+/// `VPN_INTERFACE` to `tun0`, so every template sets it: the templates are
+/// WireGuard only (`VPN_TYPE`), and the rules name `wg0`.
+pub const GLUETUN_INTERFACE: &str = "wg0";
+
+/// The compose config that carries the post-rules.
+const POST_RULES_CONFIG: &str = "gluetun-post-rules";
+
 /// Why a template wasn't generated. Carries no input value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -335,6 +353,75 @@ pub struct ServiceInput {
     /// Other companions' host folders, where known (CMP-5 and CMP-6 know
     /// what they generated). A folder that overlaps one is refused.
     pub taken: Vec<HostPath>,
+    /// Where Lodestar saved gluetun's post-rules on the host, when it
+    /// could. Unraid's gluetun template then mounts that file; without it,
+    /// you save the file yourself. Compose carries the rules inline either
+    /// way, so it doesn't read this.
+    pub gluetun_paths: Option<GluetunPaths>,
+}
+
+/// The host folders gluetun's files come from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GluetunPaths {
+    /// Lodestar's companion-files folder on the host. Lodestar writes
+    /// `gluetun/post-rules.txt` inside it. It must not overlap Lodestar's
+    /// data folder, which holds its secrets.
+    pub companions: HostPath,
+}
+
+/// The folder inside the companion-files folder that holds gluetun's files.
+pub const GLUETUN_FILES_DIR: &str = "gluetun";
+/// The post-rules file's name in [`GLUETUN_FILES_DIR`].
+pub const POST_RULES_NAME: &str = "post-rules.txt";
+
+impl GluetunPaths {
+    /// The post-rules file on the host.
+    pub fn post_rules(&self) -> String {
+        format!(
+            "{}/{GLUETUN_FILES_DIR}/{POST_RULES_NAME}",
+            self.companions.as_str()
+        )
+    }
+
+    /// Refuses a companion-files folder that overlaps Lodestar's data folder
+    /// (the running one where known, and Unraid's `appdata/lodestar`, which a
+    /// container can't see), or another companion's folder, or has a dot
+    /// component. gluetun mounts a file from it, so it must hold nothing of
+    /// Lodestar's.
+    pub fn check(&self, catalogue: &Catalogue, input: &ServiceInput) -> Result<(), TemplateError> {
+        let c = components(&self.companions);
+        if c.iter().any(|x| x.starts_with('.')) {
+            return Err(TemplateError::DotFolder);
+        }
+        let lodestar_appdata = c
+            .windows(2)
+            .any(|w| w[0] == "appdata" && crate::inputs::LODESTAR_APPDATA.contains(&w[1].as_str()));
+        if lodestar_appdata || input.data.0.iter().any(|d| overlaps(&c, &d.0)) {
+            return Err(TemplateError::DataFolder);
+        }
+        // A companion that can write it could change what gluetun runs as
+        // root: not the routed companion's own folders, not another's.
+        let own = [&input.paths.config, &input.paths.downloads];
+        if own
+            .into_iter()
+            .flatten()
+            .chain(&input.taken)
+            .any(|t| overlaps(&c, &components(t)))
+        {
+            return Err(TemplateError::OtherCompanion);
+        }
+        let companions: Vec<&str> = catalogue
+            .entries()
+            .iter()
+            .filter_map(|e| e.container.as_ref().map(|k| k.name().as_str()))
+            .collect();
+        if c.windows(2)
+            .any(|w| w[0] == "appdata" && companions.contains(&w[1].as_str()))
+        {
+            return Err(TemplateError::OtherCompanion);
+        }
+        Ok(())
+    }
 }
 
 // ─── Per-companion profiles ────────────────────────────────────────────
@@ -438,6 +525,7 @@ const PROFILES: &[Profile] = &[
                 },
             ),
             ("VPN_TYPE", Env::Fixed("wireguard")),
+            ("VPN_INTERFACE", Env::Fixed(GLUETUN_INTERFACE)),
             (
                 "WIREGUARD_PRIVATE_KEY",
                 Env::Vpn {
@@ -454,7 +542,7 @@ const PROFILES: &[Profile] = &[
             ),
         ],
         category: "Network:VPN",
-        overview: "gluetun, the VPN client companion traffic goes through. Fill in the VPN settings yourself: Lodestar never asks for or stores them. Its firewall blocks all traffic while the VPN is down.",
+        overview: "gluetun, the VPN client companion traffic goes through. Fill in the VPN settings yourself: Lodestar never asks for or stores them. While the VPN is down, its firewall blocks new connections, and Lodestar's post-rules stop connections that were already open from leaving outside the VPN.",
         webui: None,
     },
 ];
@@ -598,8 +686,9 @@ fn check_publish(
             return Err(TemplateError::P2pLoopback);
         }
         // gluetun's control server reports the public address and can
-        // change the VPN's state: never on your network.
-        if profile.id == GLUETUN && p.bind == Bind::Lan {
+        // change the VPN's state; FlareSolverr's API fetches any URL it's
+        // given, with no sign-in (CMP-12): neither on your network.
+        if matches!(profile.id, GLUETUN | crate::flaresolverr::ID) && p.bind == Bind::Lan {
             return Err(TemplateError::LanRefused);
         }
         // A port the image is told about (qBittorrent's `WEBUI_PORT`) must
@@ -751,6 +840,9 @@ pub(crate) fn proto_name(p: Proto) -> &'static str {
 /// booleans as JSON too; comments are fixed text from this file.
 enum Y {
     S(String),
+    /// Fixed multi-line text from this crate, written as a literal block
+    /// (`|`), each line indented. Only the embedded post-rules are ever one.
+    Block(&'static str),
     N(u16),
     B(bool),
     Map(Vec<(Option<&'static str>, String, Y)>),
@@ -802,6 +894,7 @@ pub(crate) fn printable(v: &str) -> Result<(), TemplateError> {
 
 fn scalar(y: &Y) -> Result<Option<String>, TemplateError> {
     Ok(match y {
+        Y::Block(_) => None,
         Y::S(v) => Some(quote(v)?),
         Y::N(n) => Some(n.to_string()),
         Y::B(b) => Some(b.to_string()),
@@ -848,6 +941,9 @@ fn emit_value(out: &mut String, value: &Y, indent: usize) -> Result<(), Template
         out.push('\n');
         return Ok(());
     }
+    if let Y::Block(text) = value {
+        return emit_block(out, text, indent);
+    }
     out.push('\n');
     match value {
         Y::Map(m) => emit_map(out, m, indent, None),
@@ -870,6 +966,35 @@ fn emit_value(out: &mut String, value: &Y, indent: usize) -> Result<(), Template
         }
         _ => Err(TemplateError::Encode),
     }
+}
+
+/// A literal block: ` |`, then each line at `indent`. The text must be
+/// whole lines, each printable, none with `$` (compose interpolates config
+/// content too) or a tab, and the first must not start with a space (its
+/// indent sets the block's).
+fn emit_block(out: &mut String, text: &str, indent: usize) -> Result<(), TemplateError> {
+    // YAML reads a literal block back unchanged only if it ends in exactly one
+    // newline (clip chomping) and its first non-empty line takes the indent.
+    let first = text.lines().find(|l| !l.is_empty()).unwrap_or("");
+    if !text.ends_with('\n')
+        || text.ends_with("\n\n")
+        || first.is_empty()
+        || first.starts_with(' ')
+        || text.contains(['$', '\t', '\r'])
+    {
+        return Err(TemplateError::Encode);
+    }
+    let pad = " ".repeat(indent);
+    out.push_str(" |\n");
+    for line in text.lines() {
+        printable(line)?;
+        if !line.is_empty() {
+            out.push_str(&pad);
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    Ok(())
 }
 
 const HEADER: &str = "Generated by Lodestar. Check it before you apply it.
@@ -1001,7 +1126,8 @@ pub fn compose(
             }
         },
     }
-    render(services, net)
+    let rules = vpn.is_some() || main.profile.id == GLUETUN;
+    render(services, net, rules)
 }
 
 /// gluetun's capability and device, each with why.
@@ -1019,14 +1145,25 @@ fn gluetun_own() -> Vec<(Option<&'static str>, String, Y)> {
             "devices".to_owned(),
             Y::Seq(vec![s(GLUETUN_DEVICE)]),
         ),
+        (
+            Some(
+                "Lodestar's post-rules (configs, at the end): gluetun reads them when it\nturns its firewall on. Compose copies them in read-only (mode 0444 by default).",
+            ),
+            "configs".to_owned(),
+            Y::Seq(vec![map(vec![
+                ("source", s(POST_RULES_CONFIG)),
+                ("target", s(GLUETUN_POST_RULES_TARGET)),
+            ])]),
+        ),
     ]
 }
 
 fn render(
     services: Vec<(Option<&'static str>, String, Y)>,
     net: &str,
+    rules: bool,
 ) -> Result<String, TemplateError> {
-    let doc = vec![
+    let mut doc = vec![
         (None, "services".to_owned(), Y::Map(services)),
         (
             Some("The network Lodestar is on. It must exist already (docker network ls)."),
@@ -1037,6 +1174,18 @@ fn render(
             )]),
         ),
     ];
+    if rules {
+        doc.push((
+            Some(
+                "gluetun's post-rules. Without them, gluetun lets connections opened through\nthe tunnel leave by your normal network once the tunnel drops. Each rule\nonly marks or drops traffic. Keep VPN_INTERFACE as it is: the rules name it.",
+            ),
+            "configs".to_owned(),
+            map(vec![(
+                POST_RULES_CONFIG,
+                map(vec![("content", Y::Block(GLUETUN_POST_RULES))]),
+            )]),
+        ));
+    }
     let mut out = String::new();
     comment(&mut out, "", HEADER);
     emit_map(&mut out, &doc, 0, None)?;
@@ -1046,6 +1195,27 @@ fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_block_holds_only_safe_whole_lines() {
+        let mut out = String::new();
+        assert!(emit_block(&mut out, "a\n\nb c\n", 4).is_ok());
+        assert_eq!(out, " |\n    a\n\n    b c\n");
+        for bad in [
+            "no newline",
+            " leading\n",
+            "a $X\n",
+            "a\tb\n",
+            "a\u{1}\n",
+            "a\r\n",
+            "a\n\n",
+            "\n",
+            "\n  x\n",
+        ] {
+            assert!(emit_block(&mut String::new(), bad, 2).is_err(), "{bad:?}");
+        }
+        assert!(emit_block(&mut String::new(), GLUETUN_POST_RULES, 6).is_ok());
+    }
 
     #[test]
     fn quote_refuses_interpolation_and_escapes() {

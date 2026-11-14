@@ -27,6 +27,8 @@ pub mod enrich;
 pub mod gate;
 mod have;
 pub mod health;
+pub mod identify;
+pub mod local_torrent;
 pub mod log_events;
 pub mod marginal;
 pub mod remote;
@@ -631,6 +633,8 @@ pub struct Pipeline {
     health: Option<(watch::Sender<bool>, JoinHandle<Store>)>,
     /// The torrent-cache feed and its judge task (SRC-13b).
     torrent_cache: Option<(torrent_cache::Feed, JoinHandle<()>)>,
+    /// The uploads handle and its judge task (UP-0).
+    uploads: (local_torrent::Uploads, JoinHandle<()>),
     /// The registered always-adult sources ([`Pipeline::adult_sources`]).
     adult: source_adult::AdultSources,
 }
@@ -667,6 +671,7 @@ impl Pipeline {
                 let m = p.manifest();
                 Registering {
                     manifest: m.clone(),
+                    credentials: p.policy().credentials,
                     peer_finder: m.is(Kind::PeerFinder),
                 }
             })
@@ -676,6 +681,16 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
+        // Uploads (UP-0) are stored under a built-in source, as imports
+        // register theirs.
+        let (store, upload_source) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let id = store.register_source(local_torrent::SOURCE, "1", unix_now());
+            (store, id)
+        })
+        .await
+        .map_err(Error::Join)?;
+        let upload_source = upload_source?;
         // The sources SP-3 counts, with a publisher or without (RP-4).
         let flood = writer::Flooding::for_sources(
             registered
@@ -784,6 +799,7 @@ impl Pipeline {
                 .map(|((id, ..), _)| *id)
         });
         let cache_preparer = cache_source.map(|_| store.preparer());
+        let upload_preparer = store.preparer();
 
         let (stop_plugins, plugin_shutdown) = Shutdown::new();
         let (stop_intake, intake_shutdown) = Shutdown::new();
@@ -1116,6 +1132,20 @@ impl Pipeline {
             ));
             (feed, task)
         });
+        // Uploads (UP-0): judged off the writer like a cache's files, then
+        // committed through the same lease-free entry.
+        let uploads = {
+            let (handle, uploads) = local_torrent::channel();
+            let task = tokio::spawn(local_torrent::task(
+                uploads,
+                cache_tx.clone(),
+                upload_preparer,
+                config.filter.clone(),
+                config.sealer.clone(),
+                upload_source,
+            ));
+            (handle, task)
+        };
         drop(cache_tx);
         let lease_stats = coordinator.stats.clone();
         let authority = coordinator.authority().clone();
@@ -1207,6 +1237,7 @@ impl Pipeline {
             writer,
             health: health_task,
             torrent_cache,
+            uploads,
             adult,
         })
     }
@@ -1216,6 +1247,12 @@ impl Pipeline {
     /// plugin that's registered and enabled at this start.
     pub fn torrent_cache_feed(&self) -> Option<torrent_cache::Feed> {
         self.torrent_cache.as_ref().map(|(feed, _)| feed.clone())
+    }
+
+    /// Where the host hands uploaded `.torrent` files (UP-0,
+    /// [`local_torrent`]).
+    pub fn uploads(&self) -> local_torrent::Uploads {
+        self.uploads.0.clone()
     }
 
     pub fn monitor(&self) -> Monitor {
@@ -1292,6 +1329,8 @@ impl Pipeline {
         if let Some((_, task)) = self.torrent_cache {
             task.abort();
         }
+        // Nor from an upload: one not yet judged answers `Closed`.
+        self.uploads.1.abort();
         // The egress monitors end at the same signal.
         for mut task in self.egress_tasks {
             if tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut task)
@@ -1340,6 +1379,11 @@ fn sources_egress_routes(sources: &[SourceEntry]) -> Vec<&'static str> {
 /// What [`prepare`] needs of a plugin's manifest.
 struct Registering {
     manifest: lodestar_sources::Manifest,
+    /// Its declared credentials (`Policy::credentials`), which an Account
+    /// source's condition is judged against ([`consent::need_with`]).
+    ///
+    /// [`consent::need_with`]: lodestar_sources::consent::need_with
+    credentials: &'static [lodestar_sources::consent::CredentialSpec],
     peer_finder: bool,
 }
 
@@ -1347,8 +1391,11 @@ struct Registering {
 /// by default (the Mainline DHT, §18.1) whose class needs nothing more
 /// than a toggle starts enabled; the rest wait for the user, and their
 /// consent (§18.7).
-fn first_state(m: &lodestar_sources::Manifest) -> SourceState {
-    if m.enabled_by_default && lodestar_sources::consent::need(m, None, &[]).is_none() {
+fn first_state(r: &Registering) -> SourceState {
+    let m = &r.manifest;
+    if m.enabled_by_default
+        && lodestar_sources::consent::need_with(m, r.credentials, None, &[]).is_none()
+    {
         SourceState::Enabled
     } else {
         SourceState::Disabled
@@ -1386,14 +1433,20 @@ fn prepare(
         .iter()
         .map(|r| {
             let m = &r.manifest;
-            store.register_source_as(m.id, m.version, first_state(m), now)
+            store.register_source_as(m.id, m.version, first_state(r), now)
         })
         .collect::<Result<Vec<_>, _>>()?;
     // Every start checks each enabled source's class condition again
     // (§18.7, §18.9): one whose consent text or endpoints changed since
     // it was acknowledged, whose credentials are gone, or that was
     // enabled some other way, is switched off before it can run.
-    control::switch_off_unapproved(&mut store, manifests.iter().map(|r| &r.manifest).zip(&ids))?;
+    control::switch_off_unapproved(
+        &mut store,
+        manifests
+            .iter()
+            .map(|r| (&r.manifest, r.credentials))
+            .zip(&ids),
+    )?;
     let states: HashMap<SourceId, SourceState> = store
         .sources()?
         .into_iter()
@@ -1512,6 +1565,12 @@ struct Intake {
     enrichers: adult_enrich::EnrichSources,
 }
 
+/// Whether the intake may claim `d`'s key for the pool: never for a
+/// usenet find, whose key is only a writer-map key (UN-1).
+fn claimable(d: &Discovery) -> bool {
+    !d.found.is_usenet()
+}
+
 /// The worker's intake: known keys go to the writer as rediscoveries; new
 /// ones are claimed from the coordinator (§19.3) and go to the pool.
 ///
@@ -1531,9 +1590,15 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
         };
         if !retried {
             io.stats.received.fetch_add(1, Ordering::Relaxed);
-            // An enrichment match (ENR-1b) is an answer about a stored
-            // torrent, not a key the source harvested.
-            if !adult_enrich::is_match(&d, io.enrichers) {
+            // An enrichment match (ENR-1b) or identification (ENR-10) is
+            // an answer about a stored torrent, not a key the source
+            // harvested.
+            // Nor is a usenet result (UN-1): it has no swarm hash, and it's
+            // sent again on every poll.
+            if !adult_enrich::is_match(&d, io.enrichers)
+                && !unverified::is_identification(&d, io.enrichers)
+                && !d.found.is_usenet()
+            {
                 io.rollups.add(
                     d.at,
                     metric::HARVESTED,
@@ -1547,9 +1612,21 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             // (SRC-2), never fetched from here: verification fetches go
             // through the writer's cursor, behind its switch. A held key
             // is refused first, as below, and the store refuses it too.
+            // A usenet result (UN-1) has no swarm hash: it's judged and
+            // stored by the writer as a usenet item, never claimed, fetched,
+            // looked up or checked as a hash. Without claims there's
+            // nothing to store.
+            let usenet = d.found.is_usenet();
+            if usenet && d.found.claims.is_none() {
+                io.stats.refused.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             if d.found.claims.is_some() {
                 let key = d.found.key.0;
-                if io.held.contains(&key) || io.filter.current().blocked_hash(&[key]).is_some() {
+                let held = !usenet
+                    && (io.held.contains(&key)
+                        || io.filter.current().blocked_hash(&[key]).is_some());
+                if held {
                     io.stats.refused.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
@@ -1580,6 +1657,13 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
                 }
                 continue;
             }
+        }
+        // Defensive (X-un1-nits): a usenet find has no swarm hash, so
+        // whatever path brought it here (a retry, say), its key is never
+        // claimed, leased or looked up as one.
+        if !claimable(&d) {
+            io.stats.refused.fetch_add(1, Ordering::Relaxed);
+            continue;
         }
         let claim = Claim {
             key: d.found.key,
@@ -1679,6 +1763,20 @@ pub fn save_hot(store: &mut Store, hot: &HotColumns, dir: &Path) -> Result<(), E
 mod tests {
     use super::*;
     use lodestar_metainfo::InfoHash;
+
+    #[test]
+    fn a_usenet_find_is_never_claimable() {
+        let d = |found| Discovery {
+            source: SourceId::new(1).unwrap(),
+            found,
+            at: 0,
+            reply: false,
+        };
+        let usenet = lodestar_sources::Found::usenet("7", "g", 0).unwrap();
+        assert!(!claimable(&d(usenet)));
+        let bt = lodestar_sources::Found::key(InfoHash([1; 20]), 0);
+        assert!(claimable(&d(bt)));
+    }
 
     #[test]
     fn a_saved_refetch_is_matched_by_code_and_owner() {

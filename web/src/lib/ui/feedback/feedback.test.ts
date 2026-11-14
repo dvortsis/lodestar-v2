@@ -19,6 +19,15 @@ describe('Banner', () => {
 		}
 	});
 
+	it('live={false} drops the role for every kind so a wrapping live region is not nested', () => {
+		for (const kind of ['info', 'success', 'warning', 'error'] as const) {
+			const { container, unmount } = render(Banner, { kind, live: false, children: text('Body') });
+			expect(container.querySelector('[role]')).toBeNull();
+			expect(container.textContent).toContain('Body');
+			unmount();
+		}
+	});
+
 	it('renders the optional title and action', () => {
 		render(Banner, {
 			kind: 'warning',

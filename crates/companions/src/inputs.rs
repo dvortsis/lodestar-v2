@@ -85,7 +85,7 @@ const VAR_ALLOWED: &[&[&str]] = &[&["lib", "lodestar", "companions"], &["spool",
 /// (`/mnt/<pool>/appdata/lodestar`, `packaging/unraid/lodestar.xml`), which
 /// hold its database and `secrets.key`. Only their `companions/` subtree,
 /// strictly below it, may be given to a companion.
-const LODESTAR_APPDATA: &[&str] = &["lodestar", "lodestar-worker"];
+pub(crate) const LODESTAR_APPDATA: &[&str] = &["lodestar", "lodestar-worker"];
 
 /// An absolute host path to mount into a companion's container
 /// (`/mnt/user/appdata/qbittorrent`).

@@ -104,6 +104,14 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_system_witness_dir_left_n,
 		m.settings_logging_ev_system_witness_dir_left_h
 	],
+	'system.companions_dir': [
+		m.settings_logging_ev_system_companions_dir_n,
+		m.settings_logging_ev_system_companions_dir_h
+	],
+	'system.companions_dir_left': [
+		m.settings_logging_ev_system_companions_dir_left_n,
+		m.settings_logging_ev_system_companions_dir_left_h
+	],
 	'system.running_as_root': [
 		m.settings_logging_ev_system_running_as_root_n,
 		m.settings_logging_ev_system_running_as_root_h
@@ -315,6 +323,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'update.install_failed': [
 		m.settings_logging_ev_update_install_failed_n,
 		m.settings_logging_ev_update_install_failed_h
+	],
+	'update.install_stopped': [
+		m.settings_logging_ev_update_install_stopped_n,
+		m.settings_logging_ev_update_install_stopped_h
 	],
 	'update.state_unsaved': [
 		m.settings_logging_ev_update_state_unsaved_n,

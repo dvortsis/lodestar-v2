@@ -11,6 +11,46 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod common;
+mod ports;
+
+/// `%SystemRoot%\Temp\lodestar-service.log`, which every service test that
+/// is refused or stops on an error appends to. Whoever creates it owns it,
+/// and a service under another account can't append to it then. So these
+/// tests take this lock while they use it, and the worker test, whose
+/// service runs as LocalSystem, removes the file if it created it
+/// ([`TempLogGuard`]).
+static TEMP_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds [`TEMP_LOG`], and on drop (also after a failed assert) removes the
+/// temp log if it didn't exist when taken, so a SYSTEM-owned file is never
+/// left for another account's service.
+struct TempLogGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    remove: bool,
+}
+
+impl TempLogGuard {
+    fn take() -> TempLogGuard {
+        let lock = TEMP_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        TempLogGuard {
+            _lock: lock,
+            remove: !temp_log_path().exists(),
+        }
+    }
+}
+
+impl Drop for TempLogGuard {
+    fn drop(&mut self) {
+        if self.remove {
+            let _ = std::fs::remove_file(temp_log_path());
+        }
+    }
+}
+
+fn temp_log_path() -> std::path::PathBuf {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    Path::new(&root).join("Temp").join("lodestar-service.log")
+}
 
 fn healthz(port: u16) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -134,7 +174,23 @@ fn register(
     program_data: &Path,
     cleanup: Option<std::path::PathBuf>,
 ) -> Registered {
-    let bin_path = format!("\"{}\"", exe.display());
+    register_command(
+        name,
+        format!("\"{}\"", exe.display()),
+        account,
+        program_data,
+        cleanup,
+    )
+}
+
+/// [`register`] with a whole command line (`"<exe>" worker`, say).
+fn register_command(
+    name: &str,
+    bin_path: String,
+    account: Option<&str>,
+    program_data: &Path,
+    cleanup: Option<std::path::PathBuf>,
+) -> Registered {
     let mut args = vec!["create", name, "binPath=", &bin_path, "start=", "demand"];
     if let Some(account) = account {
         args.extend(["obj=", account]);
@@ -346,6 +402,7 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     );
 
     // Users get read access: refused before anything is read or written.
+    let _temp_log = TEMP_LOG.lock().unwrap_or_else(|e| e.into_inner());
     icacls(&["/grant", "*S-1-5-32-545:(OI)(CI)R"]);
     let before = std::fs::read_to_string(&log_path).unwrap();
     sc(&["start", &service.name]);
@@ -357,13 +414,7 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     );
     assert_eq!(std::fs::read_to_string(&log_path).unwrap(), before);
     // The reason goes outside the folder, beside the installer's log.
-    let root_dir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    let reasons = std::fs::read_to_string(
-        Path::new(&root_dir)
-            .join("Temp")
-            .join("lodestar-service.log"),
-    )
-    .unwrap_or_default();
+    let reasons = std::fs::read_to_string(temp_log_path()).unwrap_or_default();
     assert!(
         reasons.contains(&format!("{} isn't private", data.display())),
         "{reasons}"
@@ -570,10 +621,22 @@ impl Drop for KillByConfig {
 
 /// The console (stderr, which the relaunched copy shares) and
 /// `lodestar.jsonl`, for a failure message: a copy that died at start
-/// says why on the console.
-fn dump(console: &std::sync::Mutex<String>, jsonl: &Path) -> String {
+/// says why on the console. Each console line carries the UTC time the
+/// test read it (X-flake-portable-restart-3), and `seen` the moments the
+/// test saw, so a failure shows when the copy gave up against when the old
+/// process had exited and the hand-over (`app.relaunch`) came.
+fn dump(
+    console: &std::sync::Mutex<String>,
+    jsonl: &Path,
+    seen: &[(&str, jiff::Timestamp)],
+) -> String {
+    let seen: String = seen
+        .iter()
+        .map(|(what, at)| format!("{at:.3} {what}\n"))
+        .collect();
     format!(
-        "--- console ---\n{}\n--- lodestar.jsonl ---\n{}",
+        "--- seen by the test ---\n{seen}{:.3} this failure\n--- console (read at) ---\n{}\n--- lodestar.jsonl ---\n{}",
+        jiff::Timestamp::now(),
         console.lock().unwrap_or_else(|e| e.into_inner()),
         std::fs::read_to_string(jsonl).unwrap_or_else(|e| format!("(unreadable: {e})"))
     )
@@ -617,14 +680,14 @@ fn portable_restart(bind: &str) -> (u16, u16) {
                 .map_while(Result::ok)
             {
                 let mut c = console.lock().unwrap();
-                c.push_str(&line);
-                c.push('\n');
+                c.push_str(&format!("[{:.3}] {line}\n", jiff::Timestamp::now()));
             }
         }
     });
     let jsonl = dir.path().join("data").join("logs").join("lodestar.jsonl");
+    let mut seen = vec![("started the old process", jiff::Timestamp::now())];
     let first = nth_port(&jsonl, 1, Duration::from_secs(60))
-        .unwrap_or_else(|| panic!("server didn't come up\n{}", dump(&console, &jsonl)));
+        .unwrap_or_else(|| panic!("server didn't come up\n{}", dump(&console, &jsonl, &seen)));
     wait_for(Duration::from_secs(60), || healthz(first)).expect("healthz");
     let token_logged = wait_for(Duration::from_secs(30), || {
         let c = console.lock().unwrap().clone();
@@ -636,22 +699,47 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     assert_eq!(info["method"], "relaunch", "{info}");
     assert_eq!(info["available"], true, "{info}");
 
+    seen.push(("asked for Restart now", jiff::Timestamp::now()));
     let restart = signed_in(first, "POST", "/api/v1/system/restart", &cookie);
     assert!(restart.starts_with("HTTP/1.0 202"), "{restart}");
     let status = wait_for(Duration::from_secs(90), || child.try_wait().ok().flatten())
-        .unwrap_or_else(|| panic!("the old process didn't exit\n{}", dump(&console, &jsonl)));
+        .unwrap_or_else(|| {
+            panic!(
+                "the old process didn't exit\n{}",
+                dump(&console, &jsonl, &seen)
+            )
+        });
+    // When the process object signalled, to within the 250 ms poll.
+    seen.push(("saw the old process exit", jiff::Timestamp::now()));
     assert_eq!(
         status.code(),
         Some(80),
         "the old process exited with {status}\n{}",
-        dump(&console, &jsonl)
+        dump(&console, &jsonl, &seen)
     );
 
-    // The new copy: same config, so the same log, and the same store.
-    let second = nth_port(&jsonl, 2, Duration::from_secs(90))
-        .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl)));
-    let health = wait_for(Duration::from_secs(60), || healthz(second))
-        .unwrap_or_else(|| panic!("no healthz from the new copy\n{}", dump(&console, &jsonl)));
+    // The new copy: same config, so the same log, and the same store (the
+    // session below still signs in). Its `app.serving` line is read from the
+    // console it shares with the old process, or from `lodestar.jsonl`,
+    // whichever shows it first (X-test-blockers-1112): on a saturated host
+    // the copy, at below-normal priority, serves well before its file log
+    // flushes, and the file then missed the deadline.
+    let second = wait_for(Duration::from_secs(90), || {
+        let c = console.lock().unwrap().clone();
+        let log = std::fs::read_to_string(&jsonl).unwrap_or_default();
+        [c, log]
+            .iter()
+            .filter(|text| text.matches("app.serving").count() >= 2)
+            .find_map(|text| common::serving_port(text))
+    })
+    .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl, &seen)));
+    seen.push(("saw the new copy serving", jiff::Timestamp::now()));
+    let health = wait_for(Duration::from_secs(60), || healthz(second)).unwrap_or_else(|| {
+        panic!(
+            "no healthz from the new copy\n{}",
+            dump(&console, &jsonl, &seen)
+        )
+    });
     assert!(health.starts_with("HTTP/1.0 200"), "{health}");
     let info = restart_info(second, &cookie);
     assert_eq!(info["method"], "relaunch", "{info}");
@@ -846,6 +934,14 @@ fn a_relaunched_copy_waits_for_the_process_it_replaces() {
         shown.contains("wait for the copy it replaces to exit timed out"),
         "{shown}"
     );
+    // X-flake-portable-restart-3: then when the check started, was ready
+    // and gave up, from the hand-over. It never answered, since this
+    // process never exits.
+    assert!(
+        shown.contains("The check's timeline, from the hand-over: started "),
+        "{shown}"
+    );
+    assert!(shown.contains(", no answer at +"), "{shown}");
     assert!(!shown.contains(&token), "{shown}");
 }
 
@@ -908,4 +1004,212 @@ fn reads_sc_output() {
     assert_eq!(field(out, "PID").as_deref(), Some("4242"));
     assert_eq!(field(out, "WIN32_EXIT_CODE").as_deref(), Some("0"));
     assert_eq!(field(out, "FLAGS"), None);
+}
+
+/// A coordinator for a worker service to join (WK-18s): an ordinary `serve`
+/// with its cluster port on `port`, killed when dropped.
+struct Coordinator {
+    child: std::process::Child,
+    dir: tempfile::TempDir,
+}
+
+impl Drop for Coordinator {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn coordinator(port: u16) -> Coordinator {
+    use std::io::BufRead;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("config.toml"),
+        format!("[cluster]\nenabled = true\nlisten = \"127.0.0.1:{port}\"\n"),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
+        .env("LODESTAR_DATA_DIR", dir.path())
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
+        .env("LODESTAR_DHT_ENABLED", "false")
+        .env("LODESTAR_SCRAPE_ENABLED", "false")
+        .env("LODESTAR_LOG", "info")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let coordinator = Coordinator { child, dir };
+    let start = Instant::now();
+    loop {
+        let left = Duration::from_secs(90).saturating_sub(start.elapsed());
+        match rx.recv_timeout(left) {
+            Ok(line) if line.contains("cluster.listening") => break,
+            Ok(_) => {}
+            Err(_) => panic!("the coordinator didn't open its cluster port"),
+        }
+    }
+    // Drained in the background from here on, so its pipe never fills.
+    std::thread::spawn(move || while rx.recv().is_ok() {});
+    coordinator
+}
+
+/// A join token, made on the coordinator's own store, as the CLI does.
+fn make_token(dir: &Path, name: &str) -> String {
+    use lodestar_store::{Store, StoreConfig};
+    let mut store = Store::open(dir.join("lodestar.db"), StoreConfig::default()).unwrap();
+    let secrets = lodestar_integrations::SecretStore::open_or_create(dir).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let mut coord = lodestar_cluster::Coordinator::open(&mut store, &secrets, now).unwrap();
+    let token = coord.create_join_token(&mut store, name, now).unwrap();
+    token.expose().to_string()
+}
+
+/// Plain `lodestar worker` as a service (WK-18s), as the installer's
+/// "Join an existing Lodestar" mode sets it up. Not joined, it starts,
+/// secures its folder, says why it can't run in the service's temp log and
+/// stops with code 1 for the SCM's recovery (not error 1053: the SCM got
+/// its answer). Joined with `--join-only`, as the installer does, it runs
+/// until Stop, which ends it gracefully with code 0.
+#[test]
+fn runs_a_worker_as_a_service() {
+    if !can_register() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let name = format!("LodestarWorkerTest{}", std::process::id());
+    let exe = Path::new(env!("CARGO_BIN_EXE_lodestar"));
+    let service = register_command(
+        &name,
+        format!("\"{}\" worker", exe.display()),
+        None,
+        root.path(),
+        None,
+    );
+    let data = root.path().join("Lodestar");
+
+    // This service runs as LocalSystem: a temp log it creates is SYSTEM's,
+    // so the guard removes it again, however this part ends.
+    let temp_log_guard = TempLogGuard::take();
+    let temp_log = temp_log_path();
+    sc(&["start", &name]);
+    let stopped = wait_until_stopped(&service);
+    assert_eq!(
+        field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
+        Some("536870913"),
+        "{stopped}"
+    );
+    let why = wait_for(Duration::from_secs(30), || {
+        let text = std::fs::read_to_string(&temp_log).unwrap_or_default();
+        text.contains("hasn't joined a coordinator").then_some(text)
+    });
+    assert!(why.is_some(), "no reason in {}", temp_log.display());
+    drop(temp_log_guard);
+    let sd = sddl(&data);
+    assert!(sd.contains(&service_sid(&name)), "{sd}");
+
+    let port = ports::test_port();
+    let coord = coordinator(port);
+    let token = make_token(coord.dir.path(), "svc");
+    let token_file = coord.dir.path().join("join-token");
+    std::fs::write(&token_file, format!("{token}\n")).unwrap();
+    let out = Command::new(exe)
+        .args([
+            "worker",
+            "--join",
+            &format!("https://127.0.0.1:{port}"),
+            "--token-file",
+        ])
+        .arg(&token_file)
+        .arg("--join-only")
+        .arg("--data")
+        .arg(&data)
+        .env_remove("LODESTAR_TOKEN")
+        .env_remove("LODESTAR_DATA_DIR")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "join-only: {err}");
+    assert!(
+        err.contains("joined 127.0.0.1") && !err.contains(&token),
+        "{err}"
+    );
+
+    sc(&["start", &name]);
+    // Running is reported at once, so that alone proves nothing: wait for
+    // the session itself, a TCP connection from the service's process to
+    // the coordinator's cluster port.
+    let session = wait_for(Duration::from_secs(60), || {
+        let pid = field(&sc(&["queryex", &name]), "PID")?;
+        let out = Command::new("netstat.exe")
+            .args(["-ano", "-p", "TCP"])
+            .output()
+            .ok()?;
+        let table = String::from_utf8_lossy(&out.stdout).into_owned();
+        connected(&table, &pid, port).then_some(())
+    });
+    assert!(
+        session.is_some(),
+        "the worker service never connected to 127.0.0.1:{port}: {}",
+        sc(&["queryex", &name])
+    );
+    let stopped = stop(&service);
+    assert_eq!(
+        field(&stopped, "WIN32_EXIT_CODE").as_deref(),
+        Some("0"),
+        "{stopped}"
+    );
+    assert_eq!(
+        field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
+        Some("0"),
+        "{stopped}"
+    );
+    drop(coord);
+}
+
+/// Whether `netstat -ano` output holds an established TCP connection owned
+/// by process `pid` to port `port`.
+fn connected(netstat: &str, pid: &str, port: u16) -> bool {
+    let remote = format!(":{port}");
+    netstat.lines().any(|l| {
+        let cols: Vec<&str> = l.split_whitespace().collect();
+        cols.len() == 5
+            && cols[0] == "TCP"
+            && cols[2].ends_with(&remote)
+            && cols[3] == "ESTABLISHED"
+            && cols[4] == pid
+    })
+}
+
+#[test]
+fn reads_netstat_output() {
+    let table = "\
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    127.0.0.1:50000        127.0.0.1:20001        ESTABLISHED     4242
+  TCP    127.0.0.1:20001        127.0.0.1:50000        ESTABLISHED     77
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       900
+";
+    assert!(connected(table, "4242", 20001));
+    assert!(
+        !connected(table, "77", 20001),
+        "its local port, not the remote"
+    );
+    assert!(!connected(table, "4242", 20002));
+    assert!(!connected(table, "900", 0));
 }

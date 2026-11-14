@@ -45,15 +45,20 @@ export type Status =
 /**
  * What a user must still do before the server lets this source on; null when enabling is a
  * toggle. `needs` is the server's own answer (null once the class's condition holds, so a source
- * acknowledged earlier toggles back on); `password_required` (restricted and overlay) asks every
- * time, and that prompt is SRC-15b. The server's gate still judges every PATCH.
+ * acknowledged earlier toggles back on). `password_required` asks every time: for Restricted and
+ * Overlay that's a setup step of its own, the SRC-15b prompt. For Account it isn't: every Account
+ * enable already goes through the Account dialog, which asks for whatever the class needs, and
+ * while this build's gate refuses Account the dialog shows that refusal. So a disabled Account
+ * source whose credentials are stored shows no "needs your password" note
+ * (X-sources-restructure, from X-consent-gate-lift r2, which makes `password_required` true for
+ * Account). The server's gate still judges every PATCH.
  */
 export function setupNeed(s: Source): 'consent' | 'endpoints' | 'credentials' | 'password' | null {
 	if (s.enabled) return null;
 	if (s.needs === 'credentials') return 'credentials';
 	if (s.needs === 'endpoints_ack') return 'endpoints';
 	if (s.needs === 'consent') return 'consent';
-	return s.password_required ? 'password' : null;
+	return s.password_required && s.consent !== 'account' ? 'password' : null;
 }
 
 export function statusOf(s: Source): Status {
@@ -146,3 +151,63 @@ export const consentText = (c: Source['consent']): string | null =>
 				restricted: m.sources_consent_restricted,
 				overlay: m.sources_consent_overlay
 			}[c]();
+
+/**
+ * Whether a source matches the filter box: its name or one of its kinds, ignoring case. An empty
+ * query matches everything.
+ */
+export function matches(s: Source, query: string): boolean {
+	const q = query.trim().toLocaleLowerCase();
+	if (!q) return true;
+	const kinds = s.kinds.filter((k) => KINDS.includes(k)).map((k) => kindText(k));
+	if (groupOf(s) === null) kinds.push(kindText(null));
+	return [s.name, ...kinds].some((t) => t.toLocaleLowerCase().includes(q));
+}
+
+/**
+ * Whether a source needs the person's attention: it failed, it waits for a restart, a purge
+ * didn't finish, or it's on and waits for a companion. A source that is simply off, or still needs setup before it can be
+ * turned on, doesn't.
+ */
+export function needsAttention(s: Source): boolean {
+	return (
+		statusOf(s) === 'error' ||
+		s.restart_required ||
+		s.purge_pending ||
+		(s.enabled && s.companion_need !== null)
+	);
+}
+
+/** A group's one-line summary: how many of its sources are on, and how many need attention. */
+export function summary(sources: readonly Source[]): {
+	on: number;
+	total: number;
+	attention: number;
+} {
+	return {
+		on: sources.filter((s) => s.enabled).length,
+		total: sources.length,
+		attention: sources.filter(needsAttention).length
+	};
+}
+
+/** The consent classes in the legend's order, `none` shown as Open. */
+export const CONSENT_CLASSES: readonly Source['consent'][] = [
+	'none',
+	'external',
+	'account',
+	'restricted',
+	'overlay'
+];
+
+export const consentName = (c: Source['consent']): string =>
+	consentText(c) ?? m.sources_consent_open();
+
+export const consentHelp = (c: Source['consent']): string =>
+	({
+		none: m.sources_legend_open,
+		external: m.sources_legend_external,
+		account: m.sources_legend_account,
+		restricted: m.sources_legend_restricted,
+		overlay: m.sources_legend_overlay
+	})[c]();

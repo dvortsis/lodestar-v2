@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+ <head><meta type="title">Lodestar Fixture</meta></head>
+ <file poster="fixture@example.invalid" date="1767225600" subject="Lodestar Fixture - &quot;fixture.bin&quot; yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="1024" number="1">fixture-part1@example.invalid</segment></segments>
+ </file>
+</nzb>

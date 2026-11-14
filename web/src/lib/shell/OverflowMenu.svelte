@@ -1,12 +1,14 @@
 <script lang="ts">
-	// The overflow menu (§10.3): the items of MORE in nav.ts (only screens that exist). A separate file so the
-	// menu primitive (Bits UI + positioning) loads on first use instead of with the page.
+	// The overflow menu (§10.3): the items of MORE in nav.ts (only screens that exist), then Sign out,
+	// an action rather than a route. A separate file so the menu primitive (Bits UI + positioning)
+	// loads on first use instead of with the page.
 	import IconMore from '~icons/ph/dots-three';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconButton from '$lib/ui/controls/IconButton.svelte';
 	import Menu from '$lib/ui/overlays/Menu.svelte';
+	import { signOut } from '$lib/features/auth/sign-out';
 	import { MORE, type Route } from './nav';
 
 	interface Props {
@@ -16,7 +18,10 @@
 		openNow?: boolean;
 	}
 	let { hrefFor, openNow = false }: Props = $props();
+	const SIGN_OUT = 'sign-out';
 	function onSelect(id: string) {
+		// Lands on the sign-in page; a failure says so in a toast and stays here.
+		if (id === SIGN_OUT) return void signOut();
 		const item = MORE.find((i) => i.id === id);
 		if (item) void goto(resolve(hrefFor(item.href) as Route));
 	}
@@ -28,7 +33,10 @@
 <Menu
 	bind:open
 	label={m.shell_more_label()}
-	items={MORE.map((i) => ({ id: i.id, label: i.label() }))}
+	items={[
+		...MORE.map((i) => ({ id: i.id, label: i.label() })),
+		{ id: SIGN_OUT, label: m.auth_logout(), separatorBefore: true }
+	]}
 	{onSelect}
 >
 	{#snippet trigger({ props })}

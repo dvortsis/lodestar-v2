@@ -22,10 +22,16 @@ use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use crate::catalogue::{Catalogue, Proto, TemplateId};
 use crate::compose::{
-    Bind, Checked, GLUETUN, GLUETUN_CAP, Route, ServiceInput, TemplateError, check_pair, printable,
-    proto_name,
+    Bind, Checked, GLUETUN, GLUETUN_CAP, GLUETUN_POST_RULES_TARGET, GluetunPaths, Route,
+    ServiceInput, TemplateError, check_pair, printable, proto_name,
 };
 use crate::inputs::CompanionId;
+
+/// Where gluetun's post-rules file is on your server, by default: the path
+/// the user guide's download step saves it to. You can change it in the
+/// form. A missing file fails closed: Docker makes a folder there, and
+/// gluetun stops with "is a directory" before its VPN starts.
+pub const POST_RULES_HOST: &str = "/mnt/cache/appdata/gluetun/post-rules.txt";
 
 /// Where Unraid keeps your own templates, on the flash drive.
 pub const TEMPLATES_USER: &str = "/boot/config/plugins/dockerMan/templates-user";
@@ -67,6 +73,10 @@ pub fn unraid(
     input: &ServiceInput,
 ) -> Result<Vec<UnraidTemplate>, TemplateError> {
     let (main, vpn) = check_pair(catalogue, id, input, TemplateId::UnraidTemplate)?;
+    if let Some(g) = &input.gluetun_paths {
+        g.check(catalogue, input)?;
+    }
+    let saved = input.gluetun_paths.as_ref();
     let net = input.network.as_str();
     let mut out = Vec::new();
     // Each flag is fixed text plus a closed ContainerName.
@@ -76,13 +86,13 @@ pub fn unraid(
         // the container it shares a network with exists.
         (Some(v), _) => {
             let alias = format!("--network-alias={}", main.name.as_str());
-            out.push(render(v, net, &[alias])?);
-            out.push(render(&main, "none", &[join(v.name.as_str())])?);
+            out.push(render(v, net, &[alias], saved)?);
+            out.push(render(&main, "none", &[join(v.name.as_str())], saved)?);
         }
         (None, Route::ExistingGluetun(name)) => {
-            out.push(render(&main, "none", &[join(name.as_str())])?);
+            out.push(render(&main, "none", &[join(name.as_str())], saved)?);
         }
-        (None, _) => out.push(render(&main, net, &[])?),
+        (None, _) => out.push(render(&main, net, &[], saved)?),
     }
     Ok(out)
 }
@@ -149,6 +159,16 @@ fn config(w: &mut W, c: &Config<'_>) -> Result<(), TemplateError> {
 const PATH_NOTE: &str = "Mount real folders only, never a link to somewhere else.";
 const REPLACE_NOTE: &str = "Applying it replaces a container or template you already have with the same name: check first.";
 const NETWORK_NOTE: &str = "Create the Docker network first: Unraid starts a container on a network it doesn't know with none.";
+const POST_RULES_NOTE: &str = "Before you start it, save Lodestar's post-rules file at the Post-rules path, as the Lodestar user guide shows (chapter 3, \"Close gluetun's gap when the VPN drops\"). Without the file, gluetun won't start, and check it, as the guide shows: an empty or wrong file starts gluetun with no rules.";
+const SAVED_NOTE: &str = "Lodestar saved its post-rules file at the Post-rules path, in its companion-files folder. Keep that path. Without the file, gluetun won't start. After it starts, check that it loaded the rules, as the Lodestar user guide shows (chapter 3, \"Close gluetun's gap when the VPN drops\").";
+const INTERFACE_NOTE: &str = "Set by Lodestar. Keep wg0: Lodestar's post-rules name this tunnel, and with any other value they do nothing.";
+/// The start-order note for a container routed through gluetun container
+/// `vpn` (a closed ContainerName, so the text stays fixed plus a name).
+fn start_note(vpn: &str) -> String {
+    format!(
+        "Start {vpn} first. In Unraid's Docker autostart list, put {vpn} above this container and set {vpn}'s wait to at least 30 seconds, so its VPN firewall is on before this one starts."
+    )
+}
 const VPN_NOTE: &str =
     "You fill this in, from your VPN provider. Lodestar never asks for or stores it.";
 
@@ -156,6 +176,7 @@ fn render(
     c: &Checked<'_>,
     network: &str,
     extra: &[String],
+    saved: Option<&GluetunPaths>,
 ) -> Result<UnraidTemplate, TemplateError> {
     let mut args: Vec<String> = extra.to_vec();
     if c.profile.id == GLUETUN {
@@ -176,6 +197,23 @@ fn render(
             mask: false,
         });
     }
+    if c.profile.id == GLUETUN {
+        configs.push(Config {
+            name: "Post-rules",
+            target: GLUETUN_POST_RULES_TARGET.to_owned(),
+            value: saved.map_or_else(|| POST_RULES_HOST.to_owned(), GluetunPaths::post_rules),
+            mode: "ro",
+            help: if saved.is_some() {
+                "Lodestar's post-rules file, read-only. Lodestar saved it here: keep this path."
+            } else {
+                "Lodestar's post-rules file, read-only. Save it here before you start gluetun."
+            },
+            kind: "Path",
+            required: true,
+            fill: false,
+            mask: false,
+        });
+    }
     for (key, value, vpn) in &c.env {
         configs.push(Config {
             name: key,
@@ -188,6 +226,8 @@ fn render(
             mode: "rw",
             help: if vpn.is_some() {
                 VPN_NOTE
+            } else if *key == "VPN_INTERFACE" {
+                INTERFACE_NOTE
             } else {
                 "Set by Lodestar."
             },
@@ -227,6 +267,23 @@ fn render(
     }
     let homepage = c.entry.homepage.as_str();
     let mut overview = c.profile.overview.to_owned();
+    if c.profile.id == GLUETUN {
+        overview.push(' ');
+        overview.push_str(if saved.is_some() {
+            SAVED_NOTE
+        } else {
+            POST_RULES_NOTE
+        });
+    }
+    // Routed through a gluetun container: this one must start after
+    // gluetun's firewall is on (Unraid has no health condition to wait on).
+    if let Some(vpn) = extra
+        .iter()
+        .find_map(|a| a.strip_prefix("--network=container:"))
+    {
+        overview.push(' ');
+        overview.push_str(&start_note(vpn));
+    }
     if !c.mounts.is_empty() {
         overview.push(' ');
         overview.push_str(PATH_NOTE);

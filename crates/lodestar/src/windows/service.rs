@@ -2,8 +2,9 @@
 //!
 //! The installer (P-release) registers the service as [`NAME`] with the
 //! image path `"<install dir>\lodestar.exe"`, optionally followed by
-//! `--config <path>`. No subcommand marks a service start: when the
-//! arguments are a serve command line and the process has no console,
+//! `--config <path>`. No subcommand, `serve`, or plain `worker` (a worker
+//! of an existing Lodestar, WK-18s) marks a service start: when the
+//! arguments are such a command line and the process has no console,
 //! `main` asks the Service Control Manager whether it started it
 //! ([`run_if_launched`]), and an ordinary run is told no at once.
 //!
@@ -164,16 +165,7 @@ impl Refusal {
 pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
     // One line, no control or invisible characters: a folder name can't
     // forge a second message.
-    let dir: String = dir
-        .display()
-        .to_string()
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        // Unicode's format and separator characters (bidirectional
-        // controls, zero-width and soft-hyphen characters, tags), which
-        // could make a folder name read as other text: `acl`'s list.
-        .filter(|c| !super::acl::invisible(*c))
-        .collect();
+    let dir = one_line(&dir.display().to_string());
     // A configured folder can be long; `eventcreate` takes a short line.
     let dir = match dir.char_indices().nth(MAX_SHOWN) {
         Some((at, _)) => format!("{}…", &dir[..at]),
@@ -197,6 +189,17 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
     }
 }
 
+/// `text` on one line: control characters become spaces, and Unicode's
+/// format and separator characters (bidirectional controls, zero-width and
+/// soft-hyphen characters, tags), which could make a name read as other
+/// text, are dropped (`acl`'s list).
+pub fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !super::acl::invisible(*c))
+        .collect()
+}
+
 /// The most of a folder's name the Event Log message shows, in characters.
 const MAX_SHOWN: usize = 260;
 
@@ -212,6 +215,22 @@ fn write_event_note(
     limit: std::time::Duration,
 ) -> std::io::Result<i32> {
     super::process::run_bounded(cmd, "eventcreate", limit)
+}
+
+/// The refusal note's `eventcreate`, started as the update helper starts
+/// its own: from `System32` by absolute path with no console window
+/// ([`super::system32_command`]), and with every `LODESTAR_*` variable
+/// removed ([`crate::update::windows::helper::clean_env`]), so both writers
+/// spawn the same way (rv-728 N4). `None` without `%SystemRoot%`.
+#[cfg(windows)]
+fn event_note_command(kind: &str, id: u16, text: &str) -> Option<std::process::Command> {
+    let mut cmd = super::system32_command("eventcreate.exe")?;
+    crate::update::windows::helper::clean_env(&mut cmd);
+    let id = id.to_string();
+    cmd.args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
+        .args(["/SO", EVENT_SOURCE, "/D"])
+        .arg(text);
+    Some(cmd)
 }
 
 /// How the service's idle wait during a rollback ended.
@@ -311,25 +330,57 @@ pub fn same_dir(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
-/// The config path when the arguments are a service command line (none,
-/// `serve`, and an optional `--config <path>`), else `None`: every other
+/// What a service command line runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// `serve` (or no subcommand): Lodestar itself.
+    Serve,
+    /// Plain `worker`: a worker of an existing Lodestar, from the
+    /// credentials the installer's one-shot `--join-only` saved (WK-18s).
+    Worker,
+}
+
+/// A service command line: its role and its optional `--config <path>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceCommand {
+    pub config: Option<PathBuf>,
+    pub role: Role,
+}
+
+/// The service command line the arguments are (none, `serve` or plain
+/// `worker`, and an optional `--config <path>`), else `None`: every other
 /// command runs as usual, without asking the SCM anything.
-pub fn service_command<I, T>(args: I) -> Option<Option<PathBuf>>
+pub fn service_command<I, T>(args: I) -> Option<ServiceCommand>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
+    use crate::cli::Command;
     use clap::Parser;
     let cli = crate::cli::Cli::try_parse_from(args).ok()?;
-    // `serve --fixture` serves test data offline: never a service start.
-    matches!(
-        cli.command,
-        None | Some(crate::cli::Command::Serve {
+    let role = match cli.command {
+        // `serve --fixture` serves test data offline: never a service start.
+        None
+        | Some(Command::Serve {
             fixture: None,
-            child: false
-        })
-    )
-    .then_some(cli.config)
+            child: false,
+        }) => Role::Serve,
+        // Only with no flags: a service never joins (a token file would join
+        // again on every start), never rotates and keeps the default folder,
+        // which the start-up check secures.
+        Some(Command::Worker(crate::cli::worker::WorkerArgs {
+            join: None,
+            token_file: None,
+            data: None,
+            rotate_key: false,
+            join_only: false,
+        })) => Role::Worker,
+        _ => return None,
+    };
+    Some(ServiceCommand {
+        config: cli.config,
+        role,
+    })
 }
 
 #[cfg(windows)]
@@ -706,6 +757,8 @@ mod scm {
 
     /// The `--config` path from the command line, for `service_main`.
     static CONFIG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+    /// What the command line runs, for `service_main`.
+    static ROLE: OnceLock<super::Role> = OnceLock::new();
     /// The service's exit code, for the process's.
     static EXIT: OnceLock<u32> = OnceLock::new();
     /// For the control handler, which runs on the dispatcher's thread.
@@ -717,12 +770,13 @@ mod scm {
     /// Runs Lodestar as a service if the SCM started this process with
     /// `config` from its command line, and returns its exit code once it
     /// has stopped; `None` for an ordinary run.
-    pub fn run_if_launched(config: Option<PathBuf>) -> Option<ExitCode> {
+    pub fn run_if_launched(command: super::ServiceCommand) -> Option<ExitCode> {
         // A service has no console; a console run needn't ask the SCM.
         if std::io::stdin().is_terminal() {
             return None;
         }
-        let _ = CONFIG_PATH.set(config);
+        let _ = CONFIG_PATH.set(command.config);
+        let _ = ROLE.set(command.role);
         // Fails at once (ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) unless
         // the SCM started this process.
         service_dispatcher::start(NAME, ffi_service_main).ok()?;
@@ -831,10 +885,11 @@ mod scm {
                             error = lodestar_log::Error::kind(why)
                         );
                     }
-                    match config
-                        .map_err(BoxError::from)
-                        .and_then(|c| serve(&c, stop_rx))
-                    {
+                    let role = ROLE.get().copied().unwrap_or(super::Role::Serve);
+                    match config.map_err(BoxError::from).and_then(|c| match role {
+                        super::Role::Serve => serve(&c, stop_rx),
+                        super::Role::Worker => worker(&c, stop_rx),
+                    }) {
                         Ok(Ended::Stopped) => {
                             lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPED);
                             0
@@ -848,9 +903,13 @@ mod scm {
                         }
                         // Its message can name a path: the kind only.
                         Err(_) => {
+                            let kind = match role {
+                                super::Role::Serve => "serve",
+                                super::Role::Worker => "worker",
+                            };
                             lodestar_log::log_event!(
                                 crate::logging::events::SERVICE_FAILED,
-                                error = lodestar_log::Error::kind("serve")
+                                error = lodestar_log::Error::kind(kind)
                             );
                             1
                         }
@@ -924,30 +983,17 @@ mod scm {
     }
 
     /// Writes [`super::event_log_text`] to the Windows Application event
-    /// log as [`super::EVENT_SOURCE`], through `eventcreate` from
-    /// `System32` as the update helper does (the workspace forbids
-    /// `unsafe`, so no `ReportEventW`). Best effort, and bounded
+    /// log as [`super::EVENT_SOURCE`], through `eventcreate` started as the
+    /// update helper starts its own ([`super::event_note_command`]; the
+    /// workspace forbids `unsafe`, so no `ReportEventW`). Best effort, and bounded
     /// ([`super::write_event_note`]): the temp log and the exit code
     /// already say it. The Legal Notice's section 5 names this write.
     fn event_log(refusal: super::Refusal, dir: &std::path::Path) {
-        use std::os::windows::process::CommandExt;
-        /// `CREATE_NO_WINDOW`.
-        const NO_WINDOW: u32 = 0x0800_0000;
-        let Some(root) = std::env::var_os("SystemRoot") else {
-            return;
-        };
         let (kind, id) = refusal.event();
-        let id = id.to_string();
-        let mut cmd = std::process::Command::new(
-            std::path::Path::new(&root)
-                .join("System32")
-                .join("eventcreate.exe"),
-        );
-        cmd.creation_flags(NO_WINDOW)
-            .args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
-            .args(["/SO", super::EVENT_SOURCE, "/D"])
-            .arg(super::event_log_text(refusal, dir));
-        let _ = super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
+        if let Some(cmd) = super::event_note_command(kind, id, &super::event_log_text(refusal, dir))
+        {
+            let _ = super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
+        }
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -1095,6 +1141,37 @@ mod scm {
         })
     }
 
+    /// The worker (WK-18s): `lodestar worker` from the saved credentials,
+    /// stopped gracefully by the SCM's Stop or Shutdown. It has no store,
+    /// web page or Restart now; an error is reported as for `serve` (code 1),
+    /// so the SCM's recovery restarts it. Its progress lines have no log
+    /// event yet, so only the service's own events are logged.
+    fn worker(config: &Config, stop: watch::Receiver<bool>) -> Result<Ended, BoxError> {
+        std::fs::create_dir_all(&config.data_dir)?;
+        let args = crate::cli::worker::WorkerArgs {
+            join: None,
+            token_file: None,
+            data: None,
+            rotate_key: false,
+            join_only: false,
+        };
+        let mut stop = stop;
+        let stopping = async move { stopped(&mut stop).await };
+        let report: crate::worker::session::Report = std::sync::Arc::new(|_: &str| {});
+        crate::cli::worker::run_until(config, args, stopping, report)
+            .map(|()| Ended::Stopped)
+            .map_err(|e| {
+                // Why it stopped (revoked, expired, outdated, …), which says
+                // what to do and never holds a token, goes beside the
+                // installer's log, as a refused start's reason does.
+                let _ = crate::windows::temp_log::append(
+                    "worker stopped",
+                    &super::one_line(&e.to_string()),
+                );
+                BoxError::from(e.to_string())
+            })
+    }
+
     /// Resolves once a stop is requested.
     async fn stopped(stop: &mut watch::Receiver<bool>) {
         while !*stop.borrow_and_update() {
@@ -1126,7 +1203,14 @@ mod scm {
 mod tests {
     use super::*;
 
+    /// The `--config` path of a serve command line.
     fn command(s: &str) -> Option<Option<PathBuf>> {
+        let c = role_of(s)?;
+        assert_eq!(c.role, Role::Serve, "{s}");
+        Some(c.config)
+    }
+
+    fn role_of(s: &str) -> Option<ServiceCommand> {
         service_command(std::iter::once("lodestar").chain(s.split_whitespace()))
     }
 
@@ -1364,6 +1448,30 @@ mod tests {
             "bogus",
         ] {
             assert_eq!(command(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn only_a_plain_worker_command_line_is_a_worker_service() {
+        let worker = |config: Option<&str>| {
+            Some(ServiceCommand {
+                config: config.map(Into::into),
+                role: Role::Worker,
+            })
+        };
+        assert_eq!(role_of("worker"), worker(None));
+        assert_eq!(role_of("--config c.toml worker"), worker(Some("c.toml")));
+        // A service never joins (a token file would join on every start),
+        // rotates, or uses another folder than the one the start secures.
+        for other in [
+            "worker --join https://c:8091",
+            "worker --join https://c:8091 --token-file t",
+            "worker --join https://c:8091 --token-file t --join-only",
+            "worker --data D:\\w",
+            "worker --rotate-key",
+            "worker --help",
+        ] {
+            assert_eq!(role_of(other), None, "{other}");
         }
     }
 
@@ -1651,6 +1759,53 @@ mod tests {
             start.elapsed() < std::time::Duration::from_secs(10),
             "{:?}",
             start.elapsed()
+        );
+    }
+
+    /// The refusal note's `eventcreate` spawns as the update helper's does:
+    /// `System32`'s by absolute path, and without the relaunch token or any
+    /// other `LODESTAR_*` variable this process has (rv-728 N4).
+    #[cfg(windows)]
+    #[test]
+    fn the_event_note_spawns_as_the_helpers_does() {
+        let cmd = event_note_command("ERROR", 3, "text").unwrap();
+        let program = std::path::Path::new(cmd.get_program());
+        let root = std::env::var_os("SystemRoot").unwrap();
+        assert_eq!(
+            program,
+            std::path::Path::new(&root)
+                .join("System32")
+                .join("eventcreate.exe")
+        );
+        let removed: Vec<_> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_os_string())
+            .collect();
+        let marker = std::ffi::OsString::from(crate::windows::relaunch::MARKER);
+        assert!(removed.contains(&marker), "{removed:?}");
+        for (k, _) in std::env::vars_os() {
+            if k.to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("LODESTAR_")
+            {
+                assert!(removed.contains(&k), "{k:?} reaches eventcreate");
+            }
+        }
+        assert!(
+            cmd.get_args().eq([
+                "/T",
+                "ERROR",
+                "/ID",
+                "3",
+                "/L",
+                "APPLICATION",
+                "/SO",
+                "Lodestar",
+                "/D",
+                "text"
+            ]
+            .map(std::ffi::OsStr::new))
         );
     }
 

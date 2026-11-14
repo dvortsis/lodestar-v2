@@ -142,6 +142,7 @@ fn every_section_reports_every_field() {
             "crawler",
             "transport",
             "storage",
+            "watch",
             "search",
             "trackers",
             "content",
@@ -623,7 +624,7 @@ async fn the_log_filter_follows_live() {
     task.abort();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn the_intensity_reaches_the_running_dht() {
     use lodestar_dht::node::{Config as DhtConfig, Intensity as DhtIntensity, Node};
     let dir = tempfile::tempdir().unwrap();
@@ -674,12 +675,18 @@ async fn the_intensity_reaches_the_running_dht() {
     // A change to another crawler field leaves the node alone.
     r.patch("crawler", patch(json!({ "timeout_secs": 30 })))
         .unwrap();
-    // A negative check: the node must still be Aggressive after a fixed
-    // window, so it stays a sleep.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // A negative check, ordered rather than timed. This test runs on
+    // tokio's current-thread runtime, where the patch has woken the follow
+    // task and the yield lets it run before this task goes on. Its whole
+    // reaction happens in that one poll: it compares the value and, were
+    // it to change the node, queues the command without waiting (the
+    // channel has room). The snapshot is queued after any such command, so
+    // it shows what the patch did.
+    tokio::task::yield_now().await;
     assert_eq!(
         node.snapshot().await.unwrap().intensity,
-        DhtIntensity::Aggressive
+        DhtIntensity::Aggressive,
+        "a change to another crawler field changed the intensity"
     );
     task.abort();
     node.shutdown().await.unwrap();

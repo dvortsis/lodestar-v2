@@ -14,7 +14,7 @@ use axum::http::{Request, header};
 use axum::{Extension, Router};
 use lodestar_api::companions::CompanionsError;
 use lodestar_api::companions_guided::{CompanionsGuidedApi, GuidedError, PASTE_MAX};
-use lodestar_api::dto::companions::{Companion, TemplateKind};
+use lodestar_api::dto::companions::{Companion, CompanionRuns, TemplateKind};
 use lodestar_api::dto::companions_guided::{
     CompanionForgotten, CompanionTarget, DetectedCompanion,
 };
@@ -118,6 +118,7 @@ impl CompanionsGuidedApi for Fake {
             Ok(Companion {
                 available: Some("5.1.2".into()),
                 credentials: vec!["webui_password".into()],
+                egress: None,
                 health: None,
                 id,
                 installed: None,
@@ -125,6 +126,7 @@ impl CompanionsGuidedApi for Fake {
                 name: "qBittorrent".into(),
                 opt_in: false,
                 refusal: None,
+                runs: CompanionRuns::Lodestar,
                 templates: vec![TemplateKind::Compose],
             })
         })

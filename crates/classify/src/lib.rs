@@ -24,7 +24,9 @@ mod composition;
 mod content;
 mod effective;
 pub mod ext;
+pub mod group;
 mod junk;
+pub mod payload;
 mod record;
 mod structure;
 
@@ -33,7 +35,7 @@ use std::collections::HashSet;
 pub use adult::{ADULT_THRESHOLD, AdultKind, EnrichmentMatch, MATCH_CONFIDENCE, MatchKind};
 pub use composition::{COMP_VERSION, CategoryStat, Composition, DecodeError};
 pub use content::ContentType;
-pub use effective::{Effective, ResolvedVia};
+pub use effective::{Effective, MAX_PLUGIN_CONFIDENCE, PluginTitle, ResolvedVia, via_plugin};
 pub use ext::Category;
 pub use junk::{ClaimedFile, Junk, JunkReason, claim_mismatch, lure_hits};
 /// The crack check MW-6 and UC-2 read (owner §2.39).

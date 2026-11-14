@@ -31,7 +31,8 @@ concurrency:
   # Scheduled runs get their own group, so a push to main can't cancel
   # the nightly (G-m5a).
   group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
-  cancel-in-progress: true
+  # Only pull requests cancel superseded runs; main runs finish in order.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,6 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.c.outputs.rust }}
+      rust_docs: ${{ steps.c.outputs.rust_docs }}
       test_os: ${{ steps.c.outputs.test_os }}
       bench: ${{ steps.c.outputs.bench }}
       filter: ${{ steps.c.outputs.filter }}
@@ -51,9 +53,11 @@ jobs:
       mmap_retention: ${{ steps.c.outputs.mmap_retention }}
       fuzz: ${{ steps.c.outputs.fuzz }}
       soak_tools: ${{ steps.c.outputs.soak_tools }}
+      unraid: ${{ steps.c.outputs.unraid }}
       companion_pins: ${{ steps.c.outputs.companion_pins }}
       infra: ${{ steps.c.outputs.infra }}
       update_manifest: ${{ steps.c.outputs.update_manifest }}
+      advisories: ${{ steps.c.outputs.advisories }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,6 +121,7 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$BASE"
           python3 .github/scripts/test_log_lint.py
+          python3 .github/scripts/test_workflow_concurrency.py
           python3 .github/scripts/log_lint.py --base FETCH_HEAD
 
   openapi:
@@ -451,6 +456,21 @@ jobs:
             python -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
           fi
 
+  # The Unraid templates are what users install; a broken one ships unseen
+  # unless the validator and its tests run. Standard library only.
+  unraid-templates:
+    name: unraid templates
+    needs: changes
+    if: needs.changes.outputs.unraid == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python packaging/unraid/validate.py
+      - run: python -m unittest discover -s packaging/unraid -p 'test_*.py' -v
+
   # CMP-13's pin tool decides what a companion pin trusts, so its offline
   # tests (fixture keys made with the runner's gpg, an in-memory network)
   # gate like any other code. Standard library only.
@@ -466,6 +486,27 @@ jobs:
           persist-credentials: false
       - run: python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version' && gpg --version | head -1
       - run: python3 -m unittest discover -s tools/companion-pins -p 'test_*.py' -v
+
+  # Every crate in Cargo.lock against the RustSec advisory database
+  # (X-ci-advisories, INFRA-09): a vulnerability, an unsound or unmaintained
+  # crate or a yanked version fails it, unless deny.toml ignores that advisory
+  # with a reason and a review date. Main and the nightly always run it, so a
+  # new advisory against a locked crate shows the next night. cargo-deny is
+  # pinned by version and built with its own lockfile (--locked).
+  advisories:
+    name: RustSec advisories
+    needs: changes
+    if: needs.changes.outputs.advisories == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny --locked check advisories
 
   # The Windows collector's own fault-injection test: PID reuse, bounded
   # retries, safe binds. The rehearsal script needs a real crawler and stays
@@ -483,7 +524,9 @@ jobs:
   # Cloud infrastructure (X-cloud-infra, docs/decisions/2026-11-08-X-cloud-infra.md).
   # No credentials, no terraform plan or apply, and nothing runs against AWS
   # or Akamai. No script that can reach a cloud runs here; pure test files may
-  # (the runner, OP-2a).
+  # (the runner, OP-2a). The one exception is Deploy-AwsWindows.ps1, which runs
+  # only against a stub AWS CLI, with every AWS_* variable removed
+  # (X-ci-deploy-aws-test).
   infra:
     name: infra
     needs: changes
@@ -556,6 +599,18 @@ jobs:
       - name: StateBackend.ps1 test
         shell: pwsh
         run: ./infra/akamai/terraform/tests/Test-StateBackend.ps1
+      # The deploy script against a stub AWS CLI (X-ci-deploy-aws-test): no
+      # network, no credentials. Every AWS_* variable is removed first, and the
+      # test itself checks that `aws` resolves to its stub before the deploy
+      # script is run.
+      - name: Deploy-AwsWindows.ps1 offline test
+        shell: pwsh
+        run: |
+          Get-ChildItem Env: | Where-Object { $_.Name -clike 'AWS_*' } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+          ./infra/akamai/terraform/tests/Test-DeployAwsWindows.ps1
+          # GitHub's pwsh wrapper already exits with $LASTEXITCODE; this keeps it
+          # visible and independent of the wrapper.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # The update manifest (PK-manifest): the builder's tests, then a round trip
   # through the verifier clients run, signed with the minisign CLI as
@@ -636,9 +691,29 @@ jobs:
           python3 .github/scripts/update_manifest.py extract "$work/stable.json" "$work/b" "$work/s"
           python3 -c 'import json,sys; v=[r["version"] for r in json.load(open(sys.argv[1]))["releases"]]; assert v == ["0.6.0"], v' "$work/b"
 
+  # The user guide's one Rust reader: the guide-wording assertion in
+  # crates/sources-plugins/tests/safety.rs walks every .md under docs/user/.
+  # A guide-only change runs this instead of the whole workspace's tests
+  # (X-ci-filter-docs-user); when the Rust jobs run for another reason, the
+  # `test` job covers it and this one is skipped.
+  rust-docs:
+    name: user guide wording
+    needs: changes
+    if: needs.changes.outputs.rust_docs == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # As in `test`: line tables keep backtraces and a lean cache.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p lodestar-sources-plugins --test safety
+
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, companion-pins, update-manifest, infra]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, unraid-templates, companion-pins, update-manifest, infra, advisories, rust-docs]
     if: always()
     runs-on: ubuntu-latest
     steps:

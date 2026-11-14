@@ -286,3 +286,29 @@ describe('adding a rule', () => {
 		expect(screen.queryByTestId('change-password')).toBeNull();
 	});
 });
+
+describe('too large to judge', () => {
+	const HL = 'c'.repeat(40);
+	const held = { hash: HL, rule: 'CS-0a', at: 1, expires_at: 2, sealed: true, adult_hold: false };
+	it('says so, and is released only with the warning and the password', async () => {
+		setup();
+		net.on('GET /filters/queue', {
+			body: { ...queue, quarantine: [held, ...queue.quarantine] }
+		});
+		const label = await screen.findByTestId(`queue-too-large-${HL}`);
+		expect(label.textContent).toBe('Too large to judge');
+		expect(screen.queryByTestId(`queue-fp-${HL}`)).toBeNull();
+		expect(screen.getByTestId(`queue-fp-${H}`)).toBeTruthy();
+		expect(screen.queryByTestId(`queue-too-large-${H}`)).toBeNull();
+		// The server's warning for this hold, shown before the password is asked for.
+		const warning =
+			"This torrent is too large for the child-safety core to judge, so it was held. Releasing it removes the hold, and the next time it's seen it's held again unless it has become small enough to judge. Safer: keep it held.";
+		job(weakening({ warning }));
+		await fireEvent.click(screen.getByTestId(`queue-release-${HL}`));
+		await screen.findByTestId('change-password');
+		const dialog = screen.getByTestId('change-dialog');
+		expect(dialog.textContent).toContain('too large for the child-safety core to judge');
+		expect(dialog.textContent).toContain('held again');
+		expect(net.to('/filters/apply')).toHaveLength(0);
+	});
+});

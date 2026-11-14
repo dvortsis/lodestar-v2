@@ -14,5 +14,6 @@ export const LOADERS: Record<string, () => Promise<{ MESSAGES: Record<string, ()
 	search: () => import('./message-maps/search'),
 	storage: () => import('./message-maps/storage'),
 	trackers: () => import('./message-maps/trackers'),
-	transport: () => import('./message-maps/transport')
+	transport: () => import('./message-maps/transport'),
+	watch: () => import('./message-maps/watch')
 };

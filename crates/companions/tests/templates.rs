@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use lodestar_companions::catalogue::{Catalogue, NotAvailable, PortName};
 use lodestar_companions::compose::{
-    Bind, DataFolder, DataFolders, Paths, Publish, Route, ServiceInput, TemplateError, compose,
+    Bind, DataFolder, DataFolders, GluetunPaths, Paths, Publish, Route, ServiceInput,
+    TemplateError, compose,
 };
 use lodestar_companions::inputs::{
     CompanionId, ContainerName, HostPath, InputError, NetworkName, Pgid, PortNumber, Puid,
@@ -127,6 +128,7 @@ fn input(companion: &str, route: Route) -> ServiceInput {
         )
         .expect("data folders"),
         taken: Vec::new(),
+        gluetun_paths: None,
     }
 }
 
@@ -794,5 +796,218 @@ proptest! {
             prop_assert_eq!(y, y0);
             prop_assert_eq!(x, x0);
         }
+    }
+}
+
+// ─── gluetun's post-rules (X-gluetun-templates) ─────────────────────────
+
+/// The crate's embedded copy is `packaging/companions/gluetun-post-rules.txt`
+/// byte for byte: the file users download, pinned by SHA-256 in the docs.
+#[test]
+fn embedded_post_rules_are_the_packaging_file() {
+    let shipped =
+        std::fs::read_to_string(here("../../packaging/companions/gluetun-post-rules.txt"))
+            .expect("packaging rules file");
+    assert_eq!(lodestar_companions::compose::GLUETUN_POST_RULES, shipped);
+}
+
+/// The interfaces a rules text names (`-o X` and `! -o X`), from its rule lines.
+fn rule_interfaces(rules: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in rules
+        .lines()
+        .filter(|l| l.starts_with("iptables ") || l.starts_with("ip6tables "))
+    {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for w in words.windows(2) {
+            if w[0] == "-o" {
+                out.push(w[1].to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// The literal block under `"content": |` in a compose document, unindented.
+fn config_content(yaml: &str) -> Option<String> {
+    let mut lines = yaml
+        .lines()
+        .skip_while(|l| !l.trim_end().ends_with("\"content\": |"));
+    let head = lines.next()?;
+    let pad = head.len() - head.trim_start().len() + 2;
+    let mut out = String::new();
+    for l in lines {
+        if !l.is_empty() && !l.starts_with(&" ".repeat(pad)) {
+            break;
+        }
+        out.push_str(l.get(pad..).unwrap_or(""));
+        out.push('\n');
+    }
+    Some(out)
+}
+
+/// Every template with gluetun carries the rules (compose: inline, exactly
+/// the embedded text; Unraid: a read-only Path at gluetun's post-rules
+/// location), and sets VPN_INTERFACE to the one interface the rules name.
+#[test]
+fn every_gluetun_template_carries_the_rules_for_its_interface() {
+    use lodestar_companions::compose::{GLUETUN_INTERFACE, GLUETUN_POST_RULES};
+    let names = rule_interfaces(GLUETUN_POST_RULES);
+    assert_eq!(names.len(), 6, "three rules per family name the tunnel");
+    assert!(names.iter().all(|n| n == GLUETUN_INTERFACE), "{names:?}");
+    let cat = golden_catalogue();
+    for (companion, route) in [
+        ("gluetun", Route::Direct),
+        ("qbittorrent", Route::Gluetun),
+        ("prowlarr", Route::Gluetun),
+        ("flaresolverr", Route::Gluetun),
+    ] {
+        let inp = input(companion, route);
+        let yaml = compose(&cat, &id(companion), &inp).expect("compose");
+        assert_eq!(
+            config_content(&yaml).as_deref(),
+            Some(GLUETUN_POST_RULES),
+            "{companion}"
+        );
+        assert_eq!(
+            yaml.matches(&format!("\"VPN_INTERFACE\": \"{GLUETUN_INTERFACE}\""))
+                .count(),
+            1,
+            "{companion}"
+        );
+        assert!(
+            yaml.contains("\"target\": \"/iptables/post-rules.txt\""),
+            "{companion}"
+        );
+        let xml = unraid(&cat, &id(companion), &inp).expect("unraid");
+        let g = &xml[0];
+        assert_eq!(g.file_name, "my-gluetun.xml");
+        assert!(g.xml.contains(
+            "<Config Name=\"Post-rules\" Target=\"/iptables/post-rules.txt\" Default=\"/mnt/cache/appdata/gluetun/post-rules.txt\" Mode=\"ro\""
+        ));
+        assert!(
+            g.xml.contains(&format!(
+                "<Config Name=\"VPN_INTERFACE\" Target=\"VPN_INTERFACE\" Default=\"{GLUETUN_INTERFACE}\""
+            ))
+        );
+        assert!(!g.xml.contains("blocks all traffic"), "the old overclaim");
+        assert!(
+            g.xml
+                .contains("save Lodestar&apos;s post-rules file at the Post-rules path"),
+            "gluetun's Overview says to save the file first"
+        );
+        assert!(
+            g.xml.contains(&format!(
+                "Keep {GLUETUN_INTERFACE}: Lodestar&apos;s post-rules name this tunnel"
+            )),
+            "VPN_INTERFACE's help names the value the rules need"
+        );
+        assert!(g.xml.contains("and check it, as the guide shows"));
+        if companion != "gluetun" {
+            // The routed companion is told to start after gluetun's firewall.
+            assert!(xml[1].xml.contains("put gluetun above this container"));
+        }
+    }
+    // Without gluetun there are no rules.
+    let yaml = compose(&cat, &id("prowlarr"), &input("prowlarr", Route::Direct)).expect("compose");
+    assert!(!yaml.contains("\"configs\""));
+    let mut existing = input("prowlarr", Route::ExistingGluetun(name("my-vpn")));
+    existing.publish.clear();
+    let yaml = compose(&cat, &id("prowlarr"), &existing).expect("compose");
+    assert!(
+        !yaml.contains("\"configs\""),
+        "an existing gluetun is yours to configure"
+    );
+    // Its Unraid template names that container in the start-order note.
+    let xml = unraid(&cat, &id("prowlarr"), &existing).expect("unraid");
+    assert!(xml[0].xml.contains("put my-vpn above this container"));
+}
+
+// ─── Post-rules Lodestar saved (X-gluetun-templates-hostfile) ───────────
+
+fn saved(companions: &str) -> GluetunPaths {
+    GluetunPaths {
+        companions: path(companions),
+    }
+}
+
+/// With the companion-files folder, Unraid's gluetun mounts the file
+/// Lodestar saved there, read-only, and says so; compose doesn't change.
+#[test]
+fn unraid_gluetun_mounts_the_post_rules_lodestar_saved() {
+    let cat = golden_catalogue();
+    for (companion, route) in [("gluetun", Route::Direct), ("qbittorrent", Route::Gluetun)] {
+        let plain = input(companion, route.clone());
+        let mut inp = plain.clone();
+        inp.gluetun_paths = Some(saved("/mnt/user/appdata/lodestar-companions"));
+        let xml = unraid(&cat, &id(companion), &inp).expect("unraid");
+        let g = &xml[0];
+        assert_eq!(g.file_name, "my-gluetun.xml");
+        assert!(g.xml.contains(
+            "<Config Name=\"Post-rules\" Target=\"/iptables/post-rules.txt\" Default=\"/mnt/user/appdata/lodestar-companions/gluetun/post-rules.txt\" Mode=\"ro\""
+        ), "{companion}");
+        assert!(
+            g.xml
+                .contains("Lodestar saved its post-rules file at the Post-rules path")
+        );
+        assert!(!g.xml.contains("Before you start it, save Lodestar"));
+        // Compose carries the rules inline either way.
+        assert_eq!(
+            compose(&cat, &id(companion), &inp).expect("compose"),
+            compose(&cat, &id(companion), &plain).expect("compose"),
+        );
+    }
+}
+
+/// gluetun mounts a file from the companion-files folder, so the folder
+/// can't hold anything of Lodestar's or another companion's.
+#[test]
+fn the_companion_files_folder_holds_nothing_of_lodestars() {
+    let cat = golden_catalogue();
+    let mut inp = input("gluetun", Route::Direct);
+    inp.data = DataFolders::new("/srv/lodestar", None, None).expect("data");
+    inp.taken = vec![path("/srv/qbittorrent")];
+    for (folder, err) in [
+        ("/srv/lodestar", TemplateError::DataFolder),
+        ("/srv/lodestar/companions", TemplateError::DataFolder),
+        ("/srv", TemplateError::DataFolder),
+        (
+            "/mnt/user/appdata/lodestar/companions/x",
+            TemplateError::DataFolder,
+        ),
+        (
+            "/mnt/cache/appdata/lodestar-worker/companions/x",
+            TemplateError::DataFolder,
+        ),
+        ("/srv/qbittorrent/files", TemplateError::OtherCompanion),
+        ("/srv/.hidden", TemplateError::DotFolder),
+    ] {
+        inp.gluetun_paths = Some(saved(folder));
+        assert_eq!(
+            unraid(&cat, &id("gluetun"), &inp).err(),
+            Some(err),
+            "{folder}"
+        );
+    }
+    // Another catalogue companion's appdata.
+    inp.gluetun_paths = Some(saved("/mnt/user/appdata/qbittorrent/files"));
+    assert_eq!(
+        unraid(&cat, &id("gluetun"), &inp).err(),
+        Some(TemplateError::OtherCompanion)
+    );
+    inp.gluetun_paths = Some(saved("/srv/lodestar-companions"));
+    assert!(unraid(&cat, &id("gluetun"), &inp).is_ok());
+    // The routed companion's own folders: it could rewrite the rules.
+    let mut routed = input("qbittorrent", Route::Gluetun);
+    for folder in [routed.paths.config.clone(), routed.paths.downloads.clone()]
+        .into_iter()
+        .flatten()
+    {
+        routed.gluetun_paths = Some(saved(&format!("{folder}/companions")));
+        assert_eq!(
+            unraid(&cat, &id("qbittorrent"), &routed).err(),
+            Some(TemplateError::OtherCompanion),
+            "{folder}"
+        );
     }
 }

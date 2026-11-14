@@ -54,3 +54,5 @@ export const screens: Screen[] = [
 		extra: () => import('../shell/SettingsExport.svelte')
 	}
 ];
+
+export default screens;

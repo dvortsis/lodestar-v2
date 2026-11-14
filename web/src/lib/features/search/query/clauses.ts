@@ -383,6 +383,9 @@ function parts(node: Ast, depth: number): Part[] {
 		case 'network':
 			// Provenance (SRC-3) shows as its query text until SRC-17 gives it words.
 			return [mono(`${node.op}:${node.any.join(',')}`)];
+		case 'sig':
+			// A payload signature (GS-0) shows as its query text until the UI gives it words.
+			return [mono(`sig:${node.sig}`)];
 		default: {
 			// Exhaustive: a new AST op fails type-checking here until it has a label.
 			const unknown: never = node;

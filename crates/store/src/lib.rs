@@ -54,8 +54,8 @@ pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
-    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, LATEST_HITS_CHUNK, Quarantined,
-    Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX, is_floor_hold,
+    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, KEPT_RULES, LATEST_HITS_CHUNK,
+    Quarantined, Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX, is_floor_hold,
 };
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
@@ -150,6 +150,9 @@ pub enum Error {
     /// sent again after the job resumes. Unlike a sequence gap, it isn't
     /// a fault.
     ImportNotRunning,
+    /// A usenet item met a promote or verify path: nothing verifies one
+    /// (UN-0, `unverified::Network::Usenet`).
+    NeverVerified,
 }
 
 impl fmt::Display for Error {
@@ -167,6 +170,7 @@ impl fmt::Display for Error {
             Error::Invalid(what) => write!(f, "invalid: {what}"),
             Error::NotFound(what) => write!(f, "not found: {what}"),
             Error::ImportNotRunning => write!(f, "the import job isn't taking batches"),
+            Error::NeverVerified => write!(f, "a usenet item is never verified"),
         }
     }
 }

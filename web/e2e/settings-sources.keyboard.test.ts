@@ -53,8 +53,14 @@ test.describe('keyboard: Settings → Sources', () => {
 		kbd
 	}) => {
 		await go('/settings/sources');
+		// Priority sits in the row's detail: open it first (X-sources-restructure).
+		const expand = page.getByTestId('source-0-expand');
+		await expect(expand).toHaveAccessibleName('Mainline DHT');
+		await kbd.tabTo(expand, 40);
+		await kbd.press('Enter');
+		await expect(expand).toHaveAttribute('aria-expanded', 'true');
 		const toggle = page.getByRole('switch', { name: 'Mainline DHT: on' });
-		await kbd.tabTo(toggle, 40);
+		await kbd.tabTo(toggle, 10);
 		await kbd.press('Space');
 		await expect(page.getByTestId('sources-announce')).toHaveText('Mainline DHT updated.');
 		await expect(page.getByTestId('source-0-restart')).toBeVisible();
@@ -85,6 +91,27 @@ test.describe('keyboard: Settings → Sources', () => {
 		await expect(dialog).toBeHidden();
 		await expect(toggle).toBeFocused();
 		await expect(toggle).not.toBeChecked();
+		expect(sent).toEqual([]);
+	});
+
+	test('Enter and Space on the row name open and close it, and leave its switch alone', async ({
+		page,
+		go,
+		kbd
+	}) => {
+		await go('/settings/sources');
+		const expand = page.getByTestId('source-0-expand');
+		const toggle = page.getByRole('switch', { name: 'Mainline DHT: on' });
+		await expect(toggle).toBeChecked();
+		await kbd.tabTo(expand, 40);
+		await kbd.press('Enter');
+		await expect(expand).toHaveAttribute('aria-expanded', 'true');
+		await expect(page.getByTestId('source-0-detail')).toBeVisible();
+		await kbd.press('Space');
+		await expect(expand).toHaveAttribute('aria-expanded', 'false');
+		await expect(page.getByTestId('source-0-detail')).toBeHidden();
+		await expect(expand).toBeFocused();
+		await expect(toggle).toBeChecked();
 		expect(sent).toEqual([]);
 	});
 });

@@ -199,6 +199,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "lemmy"
+path = "fuzz_targets/lemmy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "json"
 path = "fuzz_targets/json.rs"
 test = false
@@ -241,8 +248,22 @@ doc = false
 bench = false
 
 [[bin]]
+name = "wikidata"
+path = "fuzz_targets/wikidata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "local_torrent"
+path = "fuzz_targets/local_torrent.rs"
 test = false
 doc = false
 bench = false
@@ -271,6 +292,41 @@ bench = false
 [[bin]]
 name = "worker_spool"
 path = "fuzz_targets/worker_spool.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "regex_plan"
+path = "fuzz_targets/regex_plan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sabnzbd_answer"
+path = "fuzz_targets/sabnzbd_answer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nzbget_answer"
+path = "fuzz_targets/nzbget_answer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nostr"
+path = "fuzz_targets/nostr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "socks_reply"
+path = "fuzz_targets/socks_reply.rs"
 test = false
 doc = false
 bench = false

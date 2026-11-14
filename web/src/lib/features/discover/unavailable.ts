@@ -31,6 +31,18 @@ export function unavailableText(reason: Unavailable): UnavailableText {
 			return { text: m.discover_unavailable_needs_payload_signature() };
 		case 'needs_piece_roots':
 			return { text: m.discover_unavailable_needs_piece_roots() };
+		case 'no_content_files':
+			return { text: m.discover_unavailable_no_content_files() };
+		case 'needs_v2_files':
+			return { text: m.discover_unavailable_needs_v2_files() };
+		case 'payload_not_specific':
+			return { text: m.discover_unavailable_payload_not_specific() };
+		case 'partial_file_list':
+			return { text: m.discover_unavailable_partial_file_list() };
+		case 'few_major_files':
+			return { text: m.discover_unavailable_few_major_files() };
+		case 'needs_group_minhash':
+			return { text: m.discover_unavailable_needs_group_minhash() };
 		default: {
 			const unreachable: never = reason;
 			return unreachable;

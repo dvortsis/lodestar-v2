@@ -3,20 +3,18 @@
 // the harness one: no OpenAPI mock. /dev/shortcuts exists only in a build made with
 // VITE_DEV_ROUTES=1, which the server must embed.
 import { expect, test, type Page } from '@playwright/test';
+import { FIXTURE_STATE } from './support/fixture-session';
 
 const url = process.env.E2E_FIXTURE_URL;
-const password = process.env.E2E_FIXTURE_PASSWORD ?? 'correct horse battery';
 
 test.skip(!url, 'set E2E_FIXTURE_URL to run against serve --fixture');
 
-// One sign-in for the file: the server rate-limits logins (a burst of 5 per address), and the
-// fixture files together sign in 5 times, so a second sign-in here would be refused.
+// The project's global setup signs in once (the server limits logins to a burst of 5 per
+// address), so this file reuses that session rather than signing in again.
 test.describe.configure({ mode: 'serial' });
 let page: Page;
 test.beforeAll(async ({ browser }) => {
-	const context = await browser.newContext({ baseURL: url });
-	const res = await context.request.post('/api/v1/login', { data: { password } });
-	expect(res.ok(), `login: ${res.status()}`).toBe(true);
+	const context = await browser.newContext({ baseURL: url, storageState: FIXTURE_STATE });
 	page = await context.newPage();
 });
 test.afterAll(() => page?.context().close());

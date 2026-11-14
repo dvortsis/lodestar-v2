@@ -1851,3 +1851,40 @@ async fn overhead() {
         busy_rows as f64 / busy_secs
     );
 }
+
+/// OUT-0's rule for the plain exports is unchanged by UP-0: a crawled
+/// BEP 27 private torrent (its hash already public on the DHT) is still
+/// in the CSV, NDJSON and magnet exports, and a private upload, stored
+/// as both `PRIVATE` and `PRIVATE_SOURCE` (runner, 2026-11-12), never is.
+#[tokio::test]
+async fn a_private_upload_is_never_exported_and_a_crawled_bep27_one_still_is() {
+    let f = fixture(
+        &[
+            t("Public.Upload.2021"),
+            T {
+                flags: flags::PRIVATE,
+                ..t("Crawled.Bep27.2021")
+            },
+            T {
+                flags: flags::PRIVATE | flags::PRIVATE_SOURCE,
+                ..t("Private.Upload.2021")
+            },
+        ],
+        Opts::default(),
+    );
+    let c = session(&f).await;
+    for format in ["csv", "json", "magnets"] {
+        let (_, body) = export(
+            &f,
+            &c,
+            &format!("/api/v1/export?format={format}&sort=%2Bdiscovered"),
+            None,
+        )
+        .await;
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains(&f.hashes[0]), "{format}: {text}");
+        assert!(text.contains(&f.hashes[1]), "{format}: {text}");
+        assert!(!text.contains(&f.hashes[2]), "{format}: {text}");
+        assert!(!text.contains("Private.Upload"), "{format}: {text}");
+    }
+}

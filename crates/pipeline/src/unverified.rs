@@ -41,7 +41,7 @@ use lodestar_store::claims::{self, Claims};
 use lodestar_store::unverified::{
     MAX_PAGE, Network, NewUnverified, Put, RefiledClaims, RefiledUnverified, UnverifiedItem,
 };
-use lodestar_store::{Filtered, Held, Prepared, SearchableCodes, SourceId, Store};
+use lodestar_store::{Filtered, Held, Prepared, SearchableCodes, SourceId, Store, flags};
 
 use crate::source_adult::AdultSources;
 use crate::writer::Backoff;
@@ -94,14 +94,31 @@ pub const CLAIMS_STEP_KIB: u32 = 8 * 1024;
 /// of [`CLAIMS_BUDGET_KIB`] until the writer has stored or dropped it.
 pub type Claimed = (Discovery, tokio::sync::OwnedSemaphorePermit);
 
+/// The longest verified name a details section is joined with at ingest,
+/// for [`claims_kib`]'s charge: names are capped at 4,096 raw bytes, but a
+/// decoded one can reach about 12 KiB (legacy encodings, runner #557).
+pub const JUDGED_NAME_MAX: usize = 12 * 1024;
+
 /// A discovery's claims in KiB, counting each file's entry as well as its
 /// text (an empty path still takes memory), at least 1 and at most
 /// [`CLAIMS_STEP_KIB`].
+///
+/// A details section is charged at what [`judge_in`] judges for it
+/// ([`details_judged_len`]), joined with the claimed name and a verified
+/// name of [`JUDGED_NAME_MAX`] bytes, since intake can't know the torrent
+/// it lands on. So the writer's [`CLAIMS_STEP_KIB`] per step also bounds
+/// the text one ingest step judges (ENR-10, runner #557): about 8 MiB,
+/// plus one discovery.
 pub fn claims_kib(d: &Discovery) -> u32 {
     let Some(c) = d.found.claims.as_deref() else {
         return 1;
     };
+    let judged = c.details.as_deref().map_or(0, |s| {
+        let names = distinct_names(&[c.name.as_deref()]);
+        judged_len_of(s, names.iter().map(|n| n.len()).chain([JUDGED_NAME_MAX]))
+    });
     let bytes = c.text_len()
+        + judged
         + c.files.len() * std::mem::size_of::<lodestar_sources::ClaimedFile>()
         + c.trackers.len() * std::mem::size_of::<String>()
         + c.ids.len() * std::mem::size_of::<lodestar_sources::ExternalId>();
@@ -154,12 +171,15 @@ pub struct UnverifiedStats {
     pub existing: AtomicU64,
     /// Claims stored on a torrent that already held the key.
     pub on_torrent: AtomicU64,
-    /// Keys whose claims a rule held: tombstoned or quarantined, never
-    /// stored.
+    /// Keys whose claims the floor or the core held: tombstoned or
+    /// quarantined, never stored. A usenet item the floor or the core
+    /// holds is counted here too, though no hold is written for its key
+    /// (UN-0); any other rule's hit on either network is `dropped`.
     pub held: AtomicU64,
-    /// Claims a rule matched on a stored torrent, dropped without holding
-    /// it (not a floor or core hit: claims never override verified
-    /// metadata).
+    /// Claims a rule other than the floor or the core matched, dropped
+    /// without holding anything: on a stored torrent (claims never
+    /// override verified metadata), on a key nothing stores, or on a
+    /// usenet item.
     pub dropped: AtomicU64,
     /// Discoveries the store refused: the key is held, or the source is
     /// disabled or purged.
@@ -281,6 +301,7 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
             // Never for a private find: a private tracker's reference can
             // be a passkey URL. Plugins drop it too; this enforces it in
             // one place (runner, security pre-audit L3).
+            // Every usenet find is private, so none stores one (UN-1).
             external_ref: p
                 .filter(|_| !d.found.private_source)
                 .and_then(|p| p.external_ref.clone()),
@@ -301,7 +322,7 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
     // The trackers last, in the room the rest leaves under the total.
     // None for a private find: a private tracker's announce URL can carry
     // a passkey, which the host guard doesn't look for (runner, L3).
-    if !d.found.private_source {
+    if !d.found.private_source && !d.found.is_usenet() {
         let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
         out.trackers = stored_trackers(&c.trackers, room);
     }
@@ -477,7 +498,31 @@ pub fn judge_in(
     adult: bool,
     now: i64,
 ) -> Option<Hold> {
-    let hashes = vec![key];
+    judge_texts(engine, vec![key], c, context, sealer, adult, now)
+}
+
+/// [`judge`] for a usenet item's claims (UN-1), which have no swarm hash:
+/// every text the same way, with no hash to match a list. A hold means
+/// the item isn't stored; there's no store hold for a usenet key (UN-0).
+pub fn judge_usenet(
+    engine: &Engine,
+    c: &Claims,
+    sealer: Option<&Sealer>,
+    adult: bool,
+    now: i64,
+) -> Option<Hold> {
+    judge_texts(engine, Vec::new(), c, None, sealer, adult, now)
+}
+
+fn judge_texts(
+    engine: &Engine,
+    hashes: Vec<[u8; 20]>,
+    c: &Claims,
+    context: Option<&str>,
+    sealer: Option<&Sealer>,
+    adult: bool,
+    now: i64,
+) -> Option<Hold> {
     let files = claimed_files(c);
     let size = c
         .size
@@ -612,6 +657,11 @@ pub fn details_texts(d: &claims::Details, names: &[Option<&str>]) -> Vec<String>
 /// without building them, for the refile's per-step budget
 /// ([`REFILE_JUDGED_BYTES`]).
 pub fn details_judged_len(d: &claims::Details, names: &[Option<&str>]) -> usize {
+    judged_len_of(d, distinct_names(names).iter().map(|n| n.len()))
+}
+
+/// [`details_judged_len`] from the lengths of the distinct names.
+fn judged_len_of(d: &claims::Details, names: impl Iterator<Item = usize>) -> usize {
     let alone = details_alone(d);
     let (k, l) = (alone.len(), alone.iter().map(|t| t.len()).sum::<usize>());
     if k == 0 {
@@ -620,8 +670,8 @@ pub fn details_judged_len(d: &claims::Details, names: &[Option<&str>]) -> usize 
     // Alone, then together (`k - 1` spaces).
     let together = if k > 1 { l + k - 1 } else { 0 };
     let mut total = l + together;
-    for name in distinct_names(names) {
-        let n = name.len() + 1;
+    for name in names {
+        let n = name + 1;
         total += k * n + l;
         if k > 1 {
             total += n + together;
@@ -800,6 +850,31 @@ pub struct Ingested {
     /// Stored torrents that gained an adult-enrichment match (ENR-1),
     /// classified again with it here ([`crate::enrich::apply_matches`]).
     pub matched: Vec<i64>,
+    /// Stored torrents that gained an identification (ENR-10,
+    /// [`is_identification`]): marked for the backfill, which resolves
+    /// their effective title with it and logs them for the index.
+    pub identified: Vec<i64>,
+}
+
+/// Whether `d` is a general enrichment answer (ENR-10,
+/// [`crate::identify`]): a details section with nothing but ids beside
+/// it, from a registered `Kind::Enrichment` source that isn't a listed
+/// adult enricher. Like an adult match, it's about a stored torrent the
+/// runtime asked about, not a find: [`ingest`] stores it on that torrent
+/// only, never as an unverified item, a sighting or a rediscovery.
+pub fn is_identification(d: &Discovery, enrichers: crate::adult_enrich::EnrichSources) -> bool {
+    enrichers.of_kind(d.source)
+        && !enrichers.has(d.source)
+        && d.found.claims.as_deref().is_some_and(|c| {
+            c.details.is_some()
+                && c.name.is_none()
+                && c.size.is_none()
+                && c.files.is_empty()
+                && c.trackers.is_empty()
+                && c.description.is_none()
+                && c.publisher.is_none()
+                && c.adult.is_none()
+        })
 }
 
 /// Judges a batch of discoveries with claims and stores what the rules
@@ -822,7 +897,9 @@ pub fn ingest(
     // enrichment source claimed, dropped).
     let mut keep: Vec<(&Discovery, Option<Claims>)> = Vec::with_capacity(found.len());
     // Enrichment matches, with the stored torrent they're on.
-    let mut matches: Vec<(&Discovery, Claims, i64)> = Vec::new();
+    // Enrichment matches and identifications, with the stored torrent
+    // they're on; `true` for an identification.
+    let mut matches: Vec<(&Discovery, Claims, i64, bool)> = Vec::new();
     let mut holds: Vec<Hold> = Vec::new();
     for d in found {
         let Some(mut c) = store_claims(d) else {
@@ -830,6 +907,23 @@ pub fn ingest(
         };
         if c.check().is_err() {
             UnverifiedStats::add(&stats.invalid, 1);
+            continue;
+        }
+        // A usenet result (UN-1): judged by its claims alone, since it has
+        // no swarm hash, and never an enrichment answer about a stored
+        // torrent. Any hold stores nothing: the store has no hold for a
+        // usenet key, so it's judged again when it's found again.
+        if d.found.is_usenet() {
+            c.adult = None;
+            let adult = ctx.adult.has(d.source);
+            match judge_usenet(engine, &c, ctx.sealer, adult, now) {
+                // Counted as the BitTorrent path counts: the floor or the
+                // core as held (though nothing is written, UN-0's gap),
+                // any other rule as dropped.
+                Some(h) if h.core => UnverifiedStats::add(&stats.held, 1),
+                Some(_) => UnverifiedStats::add(&stats.dropped, 1),
+                None => keep.push((d, Some(c))),
+            }
             continue;
         }
         // Only an enrichment source may attach an adult section (ENR-1b).
@@ -855,23 +949,30 @@ pub fn ingest(
             }
         }
         let adult = ctx.adult.has(d.source);
+        // An identification (ENR-10) takes the same path as an adult match,
+        // and is refused on a private torrent too: the runtime never asks
+        // about one, so an answer for it is stale or forged.
+        let identification = c.adult.is_none() && is_identification(d, ctx.enrichers);
         // An adult-enrichment match (ENR-1) is only ever about a stored,
         // verified torrent, looked up by the enrichment runtime: one for
         // any other key, or through a private source, is refused.
-        let on = match &c.adult {
-            None => None,
-            Some(_) => {
-                let id = if d.found.private_source {
-                    None
-                } else {
-                    store.find(&d.found.key)?
-                };
-                let Some(id) = id else {
-                    UnverifiedStats::add(&stats.refused, 1);
-                    continue;
-                };
-                Some((id, store.torrent(id)?.map(|r| r.name)))
-            }
+        let on = if c.adult.is_some() || identification {
+            let id = if d.found.private_source {
+                None
+            } else {
+                store.find(&d.found.key)?
+            };
+            let row = match id {
+                Some(id) => store.torrent(id)?,
+                None => None,
+            };
+            let Some(row) = row.filter(|r| !identification || r.flags & flags::PRIVACY == 0) else {
+                UnverifiedStats::add(&stats.refused, 1);
+                continue;
+            };
+            Some((row.id, Some(row.name)))
+        } else {
+            None
         };
         // A details section is judged with the verified name of a torrent
         // stored under the key too, as an adult section is (ENR-9b).
@@ -889,7 +990,7 @@ pub fn ingest(
         let Some(mut h) = judge_in(engine, d.found.key.0, &c, context, ctx.sealer, adult, now)
         else {
             match on {
-                Some((id, _)) => matches.push((d, c, id)),
+                Some((id, _)) => matches.push((d, c, id, identification)),
                 None => keep.push((d, Some(c))),
             }
             continue;
@@ -939,8 +1040,14 @@ pub fn ingest(
         let items: Vec<NewUnverified<'_>> = group
             .iter()
             .map(|(d, c)| NewUnverified {
-                network: Network::Bt,
-                key: &d.found.key.0,
+                network: match d.found.usenet {
+                    Some(_) => Network::Usenet,
+                    None => Network::Bt,
+                },
+                key: match &d.found.usenet {
+                    Some(k) => &k[..],
+                    None => &d.found.key.0,
+                },
                 source,
                 private_source: d.found.private_source,
                 claims: c.as_ref(),
@@ -976,11 +1083,16 @@ pub fn ingest(
     // Enrichment matches go on the torrent as the source's claims, never
     // as an unverified item and never as a sighting: the source didn't
     // find the key, the runtime asked about it.
-    for (d, c, id) in matches {
+    for (d, c, id, identification) in matches {
         let counter = match store.put_claims(id, d.source, &c, false) {
             Ok(true) => {
-                if !out.matched.contains(&id) {
-                    out.matched.push(id);
+                let list = if identification {
+                    &mut out.identified
+                } else {
+                    &mut out.matched
+                };
+                if !list.contains(&id) {
+                    list.push(id);
                 }
                 &stats.on_torrent
             }
@@ -1014,6 +1126,15 @@ pub fn ingest(
             }
         };
         if deferred && let Some(flag) = ctx.reenrich {
+            flag.store(true, Ordering::Release);
+        }
+    }
+    if !out.identified.is_empty() {
+        // The effective title is resolved by the backfill, which reads the
+        // claims and logs the torrent for the index (ENR-10). Like a match's
+        // kind, it's a refinement, never a safety decision.
+        mark_for_backfill(store, &out.identified, stats);
+        if let Some(flag) = ctx.reenrich {
             flag.store(true, Ordering::Release);
         }
     }
@@ -1317,15 +1438,21 @@ fn judge_item(
         // finder's next claims (SRC-1).
         return i.unreadable.then_some((i.id, None));
     };
-    // Not a swarm hash (no network but clearnet BitTorrent exists yet):
-    // it can't be judged by hash, so it's removed rather than kept.
-    let Ok(key) = <[u8; 20]>::try_from(i.key.as_slice()) else {
-        return Some((i.id, None));
-    };
     // Only the floor and the core hold; any other rule removes the item
     // and holds nothing (runner, #383). An item any always-adult source
     // found is judged as adult too, whichever source's claims it holds.
     let adult = ctx.adult.any(i.sources) || ctx.adult.has(i.source);
+    // A usenet item (UN-1) is judged by its claims, never by its key's
+    // length. Any hold removes it and holds nothing: there's no store
+    // hold for a usenet key (UN-0).
+    if i.network == Network::Usenet {
+        return judge_usenet(engine, claims, ctx.sealer, adult, now).map(|_| (i.id, None));
+    }
+    // Not a swarm hash (no other network exists yet): it can't be judged
+    // by hash, so it's removed rather than kept.
+    let Ok(key) = <[u8; 20]>::try_from(i.key.as_slice()) else {
+        return Some((i.id, None));
+    };
     judge(engine, key, claims, ctx.sealer, adult, now).map(|h| (i.id, h.core.then_some(h)))
 }
 
@@ -1460,5 +1587,138 @@ mod tests {
         };
         let s = format!("{h:?}");
         assert!(!s.contains("sealed-secret") && !s.contains("115"), "{s}");
+    }
+    /// UN-1: the re-judge sweep keeps a usenet item, whose key isn't a
+    /// 20-byte swarm hash, and removes one only when its claims match.
+    #[test]
+    fn a_rejudged_usenet_item_is_kept_and_judged_by_its_claims() {
+        use lodestar_filter::{Core, CsList, Lists, Switches, TermSet};
+        use lodestar_sources::Found;
+        const T: i64 = 1_700_000_000;
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let src = store.register_source("prowlarr", "1", T).unwrap();
+        let lists = Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        };
+        let filter = Handle::new(Engine::new(Core::new(
+            lists,
+            CsList::default(),
+            Switches::default(),
+        )));
+        let find = |guid: &str, name: &str| Discovery {
+            source: src,
+            found: Found::usenet("7", guid, 1)
+                .unwrap()
+                .with_claims(lodestar_sources::Claims {
+                    name: Some(name.into()),
+                    ..Default::default()
+                }),
+            at: T,
+            reply: false,
+        };
+        let key = |guid: &str| {
+            *lodestar_store::unverified::UsenetKey::new("7", guid)
+                .unwrap()
+                .as_bytes()
+        };
+        let stats = UnverifiedStats::default();
+        let batch = [
+            find("g1", "Plain Film"),
+            find("g2", "Badword Film"),
+            find("g3", "Rolea Lexa"),
+        ];
+        let ctx = Ctx::default();
+        ingest(
+            &mut store,
+            &filter.current(),
+            ctx,
+            &batch,
+            &stats,
+            T,
+            &|_, _| {},
+        )
+        .unwrap();
+        // The core's hit is counted as held at ingest, and nothing is written.
+        assert_eq!(stats.stored.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.held.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.dropped.load(Ordering::Relaxed), 0);
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g3"))
+                .unwrap()
+                .is_none()
+        );
+        let sweep = |store: &mut Store| {
+            let v = filter.current().version;
+            let s = refile_step(
+                store,
+                &filter,
+                v,
+                Phase::Items,
+                0,
+                (0, 0),
+                ctx,
+                T,
+                &|_, _| {},
+            )
+            .unwrap();
+            assert!(!s.rejected && s.held.is_empty());
+            s.removed
+        };
+        // Re-judged with nothing matching: both kept.
+        assert_eq!(sweep(&mut store), 0);
+        assert_eq!(store.unverified_count(Network::Usenet).unwrap(), 2);
+        // A rule their claims match: only that item goes, holding nothing.
+        filter.update_engine(|e| {
+            let notes = e.load_rules(&lodestar_store::RuleSet {
+                rules: vec![lodestar_store::RuleRow {
+                    id: 1,
+                    query: "badword".into(),
+                    action: Action::Drop.code(),
+                    enabled: true,
+                    shadow_until: None,
+                    unless_query: None,
+                }],
+                ..Default::default()
+            });
+            assert!(notes.is_empty(), "{notes:?}");
+            e.version += 1;
+        });
+        assert_eq!(sweep(&mut store), 1);
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g1"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g2"))
+                .unwrap()
+                .is_none()
+        );
+        // Your rule at ingest: dropped, as on BitTorrent, not held.
+        let stats = UnverifiedStats::default();
+        let batch = [find("g4", "Badword Again")];
+        ingest(
+            &mut store,
+            &filter.current(),
+            ctx,
+            &batch,
+            &stats,
+            T,
+            &|_, _| {},
+        )
+        .unwrap();
+        assert_eq!(stats.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.held.load(Ordering::Relaxed), 0);
+        assert!(
+            store
+                .unverified(Network::Usenet, &key("g4"))
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -19,9 +19,10 @@
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Requires></Requires>
+  <Requires>A running VPN container named gluetun. Install it first.</Requires>
   <Icon>https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/icons/lodestar-256.png</Icon>
   <Config Name="Data" Target="/data" Default="/mnt/cache/appdata/lodestar" Mode="rw" Description="Index, database and settings. Use a pool path (/mnt/cache/... or your pool name), not /mnt/user. /mnt/user goes through Unraid's FUSE layer, which is slow for this workload and risky for SQLite." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/lodestar</Config>
+  <Config Name="Companion files" Target="/companions" Default="/mnt/user/appdata/lodestar-companions" Mode="rw" Description="Files Lodestar saves for its companions, such as gluetun&apos;s post-rules. Keep it outside the Data folder: gluetun reads from it, and the Data folder holds Lodestar&apos;s secrets. Lodestar saves the file there as root, read-only to it on purpose, so nothing Lodestar runs can change what gluetun runs. Leave it empty to save gluetun&apos;s post-rules yourself." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/lodestar-companions</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="rw" Description="User ID the container runs as (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="rw" Description="Group ID the container runs as (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="rw" Description="Time zone for log timestamps, for example Europe/Berlin." Type="Variable" Display="advanced" Required="false" Mask="false">Etc/UTC</Config>

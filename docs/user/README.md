@@ -31,6 +31,9 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
 | Back up and restore Lodestar | [Chapter 3](03-keep-lodestar-safe.md#37-back-up-and-restore) |
 | Install on Windows or Linux | [Chapter 4](04-install-on-windows-and-linux.md) |
 | Search, browse and check crawler health | [Chapter 5](05-use-lodestar.md) |
+| Connect Prowlarr, Sonarr or Radarr | [Chapter 7](07-connect-other-apps.md#73-connect-prowlarr) |
+| Export torrents to bitmagnet | [Chapter 7](07-connect-other-apps.md#77-export-your-torrents-to-bitmagnet) |
+| Add qBittorrent or another companion | [Chapter 8](08-add-companions.md) |
 | Fix a problem | [Chapter 6](06-troubleshooting.md) |
 
 **Reading paths.** First-time installers read Chapters 1 to 3 in order. Returning readers use the table above to jump to a task, backup step or fix.
@@ -78,6 +81,25 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
   - [6.1 Common problems](06-troubleshooting.md#61-common-problems)
   - [6.2 Fix Windows service error 3](06-troubleshooting.md#62-fix-windows-service-error-3)
   - [6.3 Get help](06-troubleshooting.md#63-get-help)
+- [Chapter 7: Connect other apps](07-connect-other-apps.md)
+  - [7.1 Know what other apps can take from Lodestar](07-connect-other-apps.md#71-know-what-other-apps-can-take-from-lodestar)
+  - [7.2 Create a Torznab key](07-connect-other-apps.md#72-create-a-torznab-key)
+  - [7.3 Connect Prowlarr](07-connect-other-apps.md#73-connect-prowlarr)
+  - [7.4 Connect Sonarr or Radarr directly](07-connect-other-apps.md#74-connect-sonarr-or-radarr-directly)
+  - [7.5 Read the apps' error messages](07-connect-other-apps.md#75-read-the-apps-error-messages)
+  - [7.6 Regenerate or revoke a key](07-connect-other-apps.md#76-regenerate-or-revoke-a-key)
+  - [7.7 Export your torrents to bitmagnet](07-connect-other-apps.md#77-export-your-torrents-to-bitmagnet)
+  - [7.8 Check your understanding](07-connect-other-apps.md#78-check-your-understanding)
+- [Chapter 8: Add companions](08-add-companions.md)
+  - [8.1 Know what a companion is](08-add-companions.md#81-know-what-a-companion-is)
+  - [8.2 Know the safety rules](08-add-companions.md#82-know-the-safety-rules)
+  - [8.3 Add a companion with Docker Compose](08-add-companions.md#83-add-a-companion-with-docker-compose)
+  - [8.4 Add a companion on Unraid](08-add-companions.md#84-add-a-companion-on-unraid)
+  - [8.5 Add a companion on Windows or Linux](08-add-companions.md#85-add-a-companion-on-windows-or-linux)
+  - [8.6 See what Lodestar finds and sets up](08-add-companions.md#86-see-what-lodestar-finds-and-sets-up)
+  - [8.7 Add a companion you already run](08-add-companions.md#87-add-a-companion-you-already-run)
+  - [8.8 Fix a problem](08-add-companions.md#88-fix-a-problem)
+  - [8.9 Check your understanding](08-add-companions.md#89-check-your-understanding)
 - [Appendix A: Answers to check your understanding](appendix-a-answers.md)
 - [Appendix B: Settings reference](appendix-b-settings-reference.md)
 - [Glossary](glossary.md)

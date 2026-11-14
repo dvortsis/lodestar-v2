@@ -40,17 +40,30 @@
 	}: Props = $props();
 
 	// The labels and help of these fields' sections: nothing renders before they're in, so a raw
-	// key never flashes. Already loaded (a return visit) renders at once.
-	const sections = untrack(() => form.specs.map((spec) => spec.section));
-	const inPlace = messagesLoaded(sections);
-	let labelsReady = $state(inPlace);
+	// key never flashes. Already loaded (a return visit) renders at once. A form built from keys
+	// gets its specs only once the settings index is in, after mount, so the sections follow
+	// `form.specs` rather than being read once (X-wizard-labels-signout).
+	const sectionsOf = (specs: { section: string }[]) => [...new Set(specs.map((s) => s.section))];
+	const first = untrack(() => sectionsOf(form.specs));
+	let labelsReady = $state(messagesLoaded(first));
 	// A map that didn't load leaves the fields' names for labels: say so, like any lazy part.
-	let labelsFailed = $state(messagesFailed(sections));
-	if (!inPlace)
+	let labelsFailed = $state(messagesFailed(first));
+	$effect(() => {
+		const sections = sectionsOf(form.specs);
+		if (messagesLoaded(sections)) {
+			labelsReady = true;
+			labelsFailed = messagesFailed(sections);
+			return;
+		}
+		labelsReady = false;
+		let live = true;
 		void loadMessages(sections).then((ok) => {
+			if (!live) return;
 			labelsFailed = !ok;
 			labelsReady = true;
 		});
+		return () => (live = false);
+	});
 
 	let summaryShown = $state(false);
 	let summaryFocus = $state(0);

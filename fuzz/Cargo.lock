@@ -1473,6 +1473,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
  "lodestar-store",
+ "regex-syntax",
  "serde",
  "tantivy",
  "tantivy-fst",
@@ -1498,6 +1499,7 @@ version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
  "quick-xml",
+ "sha2",
 ]
 
 [[package]]
@@ -1541,6 +1543,7 @@ version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
  "rusqlite",
+ "sha2",
  "zstd",
 ]
 

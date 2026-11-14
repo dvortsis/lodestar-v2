@@ -67,7 +67,7 @@ impl<'a> Doc<'a> {
             self.item
                 .files
                 .iter()
-                .take(crate::MAX_FILES)
+                .take(crate::MATCH_FILES)
                 .map(|f| tokenize(&f.path.join("/")))
                 .collect()
         })
@@ -198,7 +198,7 @@ impl<'a> Doc<'a> {
             }),
             Node::File { of } => {
                 file.is_none()
-                    && (0..self.item.files.len().min(crate::MAX_FILES))
+                    && (0..self.item.files.len().min(crate::MATCH_FILES))
                         .any(|i| !self.item.files[i].padding && self.eval(of, Some(i), neutral))
             }
             Node::Share { by, cat, lo, hi } => {
@@ -214,6 +214,9 @@ impl<'a> Doc<'a> {
             }
             // As the matcher: the judge doesn't see provenance (SRC-3).
             Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => false,
+            // A payload signature is the search index's (GS-0); rules block
+            // payloads through CS-8's keys instead.
+            Node::Sig { .. } => false,
         }
     }
 

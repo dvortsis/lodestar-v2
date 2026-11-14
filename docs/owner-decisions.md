@@ -593,7 +593,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       A change to any of these is a network change, and the runner re-runs the comparator before the next run. That is stricter than CR-SPEC rule 6.8, which asks for it only before CR-COMB. The box's addresses aren't recorded here (CR-SPEC rule 7.4).
     - **Runner addition: what the results can claim.** Checkpoint 1 projects the rate of one node behind NAT with no port forwarding, measured beside bitmagnet on the same network. It doesn't claim what a forwarded install reaches. Forwarding is one of the options the runner puts to the owner if the projection falls short.
     - **Runner addition: runs never overlap the soaks** on the same box (build-plan §0.7, "The owner's machines"). The runner reads the plan's "not the soak PC" as the Windows PC that ran CR-0.
-    - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold.
+    - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold. *(Superseded for crawler runs by §2.68: no per-run booking.)*
 
 52. **The runner's recommendation on the remaining owner items; no more counsel reminders; package installers after 1.0** (owner, about 2026-11-07T18:00Z, relayed by the dashboard session): "Use runner recommendations for all those. Stop reminding me about counsel review. Yes, I register with winget and other package installers after 1.0."
     - **The X-refetch-private backport:** yes. v0.5.2 is the next v0.5.x patch and is cut from `main` after #576, so it ships the full fix: the refetch skips `flags::PRIVACY` (`PRIVATE | PRIVATE_SOURCE | REMOTE_UNVERIFIED`) and private unverified items. The cut-down `PRIVATE|PRIVATE_SOURCE` mask was only for a backport onto v0.5.1's code, and isn't needed. There's no separate v0.5.1 patch (runner). v0.5.1 has no private sources; its only partial rows come from the bitmagnet importer, whose hashes bitmagnet found on the public DHT. The practical risk until v0.5.2 is low, though it is still a BEP 27 violation (`docs/decisions/2026-11-07-X-refetch-private.md`).
@@ -656,6 +656,70 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **At most eight slices at a time in total,** Opus, helper and docs slices alike, replacing §2.56's twelve. `runner/slices.yaml` `limits.phase_total` is 8.
     - **Nothing is stopped.** Each session that was running at the time finishes its slice, including its review rounds. While more than eight are running, nothing new launches, and a session that finishes isn't given a follow-on slice.
     - Unchanged: filling every slot isn't required, `owns` never overlap, the ladder decides, and the runner runs at most three reviewers at once.
+60. **Four more sessions, shared by the cloud tester and the runner** (owner, in the runner session, 2026-11-12T07:00Z): "You can reserve 4 additional sessions exclusively for Cloud Tester". Then, to the cloud tester's session (X-test-vm) at 2026-11-12T07:01:20Z: "I told runner that it can run 4 additional sessions for Cloud Tester. You and Agent Runner can share those 4 slots between yourselves. Make sure you coordinate if you want to run your own sessions."
+    - **Four sessions on top of §2.59's eight,** shared by the cloud tester and the runner. `runner/slices.yaml` `limits.extra_shared` is 4.
+    - **The split, agreed by the two (runner's call, 2026-11-12):** the cloud tester holds at most two, for its test lanes (the Windows-lane cloud session, then the Linux test VM's own Remote Control session). The runner may use the other two for build slices.
+    - **Coordinating:** whichever side wants a third asks the other first. Whoever frees a slot tells the other.
+    - **The cloud tester's own session is still one of the eight,** as it was under §2.59.
+    - The runner tracks the cloud tester's sessions in runner-state `cloud_tester`. Its own two go in runner-state `extra`, not in `slots`, so the slots view keeps its eight rows. Each of the cloud tester's sessions keeps X-test-vm's limits: the least-privilege cloud users, the per-cloud spending cap, teardown reported, and never the owner's soak or Windows hosts.
+
+61. **Twelve build sessions plus up to four for cloud testing** (owner, in the runner session, 2026-11-12): twelve build slots, and up to four more for cloud testing, which the cloud tester and its lanes use.
+    - This replaced §2.59's eight plus §2.60's four shared sessions for the rest of 2026-11-12. §2.64 replaced it in turn.
+62. **Cloud testing first** (owner, in the runner session, 2026-11-12 at about 18:56Z): "Have Agent Runner prioritize anything needed for cloud testing."
+    - **The runner's rule (§2.19):** cloud-testing PRs are reviewed and merged first. Cloud-testing fix slices take a cloud-testing slot at once, and the next free build slot ahead of features. Plan r4 (#798) puts this above the ladder in build-plan §0.2.
+63. **A window of up to ten more sessions** (owner, in the runner session, 2026-11-12T22:05Z): up to ten sessions on top of §2.61's, until 2026-11-12T23:30Z (end time confirmed by the owner). §2.64 extended it.
+64. **The window runs to 2026-11-13T00:00Z, then four build plus four cloud-testing sessions** (owner, in the runner session, 2026-11-12T22:30Z; the owner's message gave the end in local time, recorded here in UTC):
+    - **Until 2026-11-13T00:00Z:** keep the ten window sessions building while work is available, and open a replacement session when one's PR is ready to merge. At 22:41Z: "Keep opening slices if there is work available."
+    - **From 2026-11-13T00:00Z:** at most **four build slices and four cloud-testing slices** at a time. `runner/slices.yaml` `limits.phase_total` is 4 and `limits.extra_shared` is 4, now for cloud testing only (the cloud tester and the runner's cloud-testing slices). This replaces §2.59 to §2.61.
+    - **The runner's choice of the four build sessions kept (§2.19):** GS-2, X-cmp-egress-api, X-percolate-promoted-hold and X-consent-gate-lift. Cloud testing kept X-test-vm, X-gluetun-leak, X-unraid-validate-all and X-win-soak-attach-proc-hash.
+    - Unchanged: filling every slot isn't required, `owns` never overlap, the ladder decides after §2.62, and the runner runs at most three reviewers at once.
+65. **Over-cap sessions finish their open PR, then stop** (owner, in the runner session, 2026-11-13 at about 00:05Z): "Finish up open sessions to reduce running sessions to 4 + up to 4 tester sessions."
+    - **Each session over the cap finishes only its open PR** (review rounds and CI fixes), and the runner archives it once that PR merges. It isn't given a follow-on slice. Draft or parked work (WK-18s #801, WK-18w #802, M8-PERF-1b) resumes in a kept slot as one frees.
+66. **UI/UX review decisions and the B1/B2 priority** (owner, 2026-11-13, in the codebase-review session, relayed to the runner by that session and by the "Remaining work plan" session). The owner accepted that session's recommendation on each open decision of its second UI/UX review: "Go with your recommendations to all the decisions." Details and the runner's slice placement are in `docs/decisions/2026-11-13-runner-ui-review-decisions.md`.
+    1. **The detail drawer sits beside the results from 1366 px** (review I1), as §10.15 says, and no longer overlays the toolbar and rows there. While the drawer is open, the results track may shrink below `--results-min-width` to a floor of 480 px, and the drawer opens at `--drawer-min-width` (480 px) until the window is wide enough for the stored width. It's built together with I3 (rows adapt to their container).
+    2. **"Group versions" is on by default** once group data is ready, remembered per account and kept in the URL. While group data isn't ready, search answers ungrouped with the one-line reason. If G-v07-scale shows the keyword p95 budget fails with grouping on, the default falls back to off and the question comes back to the owner.
+    3. **No posters or other third-party images in the drawer's "Identified as"**: text, IDs and links only, because each view would send a request from the user's browser to a third party. Artwork, if ever wanted, is a separate setting, off by default, and a new owner question.
+    4. **Settings → Sources is restructured as its own small slice, before the next plug-in row is added**: collapsible groups with a summary line, a filter box, one-line rows that expand, and a legend for the consent classes. No change to the consent dialogs or to what any switch does. It lands before IRC-2, NOS-3, LEM-1 and the enrichment plug-in rows.
+    5. **Fix the review's B1 and B2 first**, ahead of the larger queue: the first-run wizard's raw config keys as labels, and the missing Sign out.
+    - Not decisions: B4 (Fetch 0 against the funnel's 413) is a fixture gap, re-ranked Important; Usenet visibility was already decided (§2.46, §2.47).
+
+67. **The API credit: the key's home, three approved uses and the runner's choice for the rest** (owner, 2026-11-13, relayed by the dashboard session; dispatching from main confirmed directly in the runner session):
+    - **Q1, done:** `ANTHROPIC_API_KEY` is an environment secret in `cloud-operator`, and the repository secret was to be deleted. The Console workspace limit is $200, and it's the hard stop.
+    - **Q2, all three uses approved, at these caps:**
+      - (a) operator runs: at most $10 a run;
+      - (b) the M8-SEC independent security pass: at most $15 a pass and $60 in total;
+      - (c) fuzz-corpus triage: at most $5 a job.
+    - **The goal:** use the full $200 by 2026-11-25, on valuable work that offsets plan spend.
+    - **Then the owner said:** "The runner can dispatch it and use it for whatever the runner believes is the best use of it."
+      - The runner may dispatch operator-apply from `main`. The owner confirmed this directly in the runner session.
+      - **The runner's own share is at most $40 in total:** independent reviews of security-sensitive PRs, at most $5 each.
+      - **Any new workflow that reads the key** says so plainly in its PR, and the runner tells the owner before it merges.
+    - **Record:** operator-apply was dispatched at 2026-11-13T06:04Z and skipped at its job gate, because the owner's repository variables `OWNER_USER_ID` and `OPERATOR_STOP=false` aren't set yet. $0 spent. Setting them is an owner action in the dashboard's owner queue.
+
+68. **Crawler testing on the Unraid box whenever needed** (owner, 2026-11-13; confirmed directly in the runner session): "OK to run crawler testing on unraid machine whenever needed." and "It can pause backup and parity operations when running tests. Just have it restore them after."
+    - **No per-run booking** on the experiment host (§2.51). The owner queue's "book each crawler run" item goes.
+    - **What a test may pause:** Appdata Backup, and a scheduled parity check (correcting or not). Nothing else. Never a parity sync, a rebuild or a disk recovery: ask the owner first (a sync or rebuild runs while the array isn't fully protected).
+    - **Every pause has a restore step that always runs,** on failure or cancel too. Each run logs what it paused and what it restored.
+    - **A failed or unconfirmed restore stops all further tests,** and the owner is told at once.
+    - **What it doesn't cover:** cancelling a parity check that's running, changing schedules or settings, or touching data. Every other host-safety, network and legal rule stands (§2.51 included).
+
+69. **The runner decides the owner queue, except the two filter choices** (owner, 2026-11-13, relayed; confirmed directly in the runner session for items 14, 21 and 22): "Decisions: Everything except filters - Approve Agent Runner making the best decisions. For the filters, please give me more detail."
+    - **To the runner, within CLAUDE.md's limits:** owner-queue items 4, 10, 14, 16, 17, 18, 19, 21 and 22. The runner's answers are in `docs/decisions/2026-11-13-runner-owner-queue.md`.
+    - **Still the owner's:** items 13 (FILTER-01) and 15 (FILTER-03). The runner gives the owner the detail directly.
+
+70. **FILTER-01 and FILTER-03 are chosen** (owner, 2026-11-13, directly in the runner session, after the runner's write-up).
+    - FILTER-01 (blocking, content safety) and FILTER-03 (blocking, content safety): the owner picked one of the options the runner put to them for each.
+    - The choices are held like the findings (`docs/security/v1/README.md` §5). No file records them; the runner gives each fix session its choice directly.
+    - `ext:owner-filter01-choice` and `ext:owner-filter03-choice` now hold.
+
+71. **Five answers on the security review's follow-ups** (owner, 2026-11-14 about 00:55Z, in the owner-started security review session, answering "go with all of them" to five recommendations put to them; relayed to the runner by that session).
+    - **FILTER-14 (important, content safety) and FILTER-03's two remaining questions:** the owner took the recommended option for each. They're held like the findings (`docs/security/v1/README.md` §5): no file records them, and the runner gives each fix session its choice directly.
+    - **FILTER-01's follow-up:** the owner took the recommended option. It's held like the finding (`docs/security/v1/README.md` §5), and the runner gives the fix session the choice directly. The runner reports the first real measurement of the follow-up's time per million stored to the owner.
+    - **Operator first-run check 8** (the injection test) waits until X-operator-hardening has merged, then runs.
+    - **PR #632** (the owner's branch, the PIA bridge) is split, not merged as it stands: (a) its control-plane files are dropped in favour of main's; (b) one PR for the on-VM helper, compose and cloud-init, once the sudo model is settled against main's fleet steps, with the Ubuntu 24.04 awk fix; (c) one PR for the bridge script, its tests and the PowerShell verbs, as the manual break-glass path; (d) one PR for the docs. (e) The new `vpn-provision`, `vpn-crawler` and `vpn-cleanup` verbs get the typed-phrase gate that the deploy and destroy scripts have. The runner slices and places the split.
+    - **The sudo model for (b) is the runner's to choose** (owner, 2026-11-14 about 01:05Z, relayed by the same session: "the question about the sudo model: Let the runner decide."). The runner's choice is in `docs/decisions/2026-11-14-runner-trackq-order.md` and is flagged to the owner (§2.19). `ext:owner-pia-sudo-model` holds.
+    - **The owner-started reviewer also builds** (owner, 2026-11-14 about 01:20Z, to that session: "Send whatever doesn't make sense for Fable to do to lower agents/ is efficient to do so. It's up to you what part other agents take over. Proceed with all. Keep coordinating with Agent Runner."). The session takes held fixes outside the child-safety core, early security-review passes and fuzz gaps; how its PRs land is the runner's call, in `docs/decisions/2026-11-14-runner-trackq-order.md`.
+    - **The operator tripwire** (owner, 2026-11-14 about 01:30Z, relayed by the same session: "a"). The owner chose option (a), held like the OPERATOR findings (`docs/security/v1/README.md` §5). It replaces the runner's 2026-11-11 fail-closed call (OP-4) and is built in X-operator-hardening.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.

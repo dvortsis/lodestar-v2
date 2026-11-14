@@ -6,20 +6,34 @@ request gets:
 
 - the Rust jobs (fmt, clippy, openapi drift, Linux and Windows tests) only if
   it touches Rust: a crate, bench/, fuzz/, a Cargo manifest or lockfile, the
-  toolchain file, this workflow, or web/src/lib/api/openapi.json (the drift
-  job checks it);
+  toolchain file, this workflow, web/src/lib/api/openapi.json (the drift
+  job checks it), or one of the files listed in RUST_ALSO below (the
+  companion templates, the Windows launcher, main.wxs, the packaging
+  PowerShell scripts, the public keys, the docs that Rust tests read, the
+  licence notices and the scripts the Rust jobs run). The user guide
+  (`docs/user/`) is not on that list: the one Rust test that reads it runs in
+  the small `rust-docs` job (`rust_docs` below), so a guide edit doesn't pay
+  for the whole workspace's tests, and a PR that turns the Rust jobs on for
+  another reason covers it already;
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
 - the soak tools' Python tests only if it touches `docs/soak/tools/`;
+- the Unraid template checks only if it touches `packaging/unraid/` (UNRAID below);
 - the companion pin tool's tests only if it touches `tools/companion-pins/`, its
   workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
-  fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
+  fmt/validate, PowerShell parse) only if it touches `infra/`, the fleet,
+  fleet-emergency-down and operator workflows, the gluetun post-rules file,
+  `docs/user/03-keep-lodestar-safe.md` or `docs/operations.md` (INFRA below);
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
+- the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
+  workflow or this file (ADVISORIES below). Main and the nightly always run it,
+  so an advisory published against a crate already locked turns main red the
+  next night;
 - `web` and `e2e` for web.yml / e2e.yml (see WEB_INPUTS below). Those two
   workflows always run on a pull request and use these outputs to skip their
   heavy jobs, so their `web-ok` / `e2e-ok` aggregates can be required.
@@ -49,7 +63,27 @@ RUST_ALSO = re.compile(
     r"|^\.github/scripts/(test_)?log_lint\.py$"
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
+    # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.
+    r"|^packaging/companions/(gluetun-post-rules\.txt$|compose/|unraid/)"
+    # Windows packaging that Rust reads: the portable launcher (portable.rs include_str!),
+    # main.wxs and every packaging/**/*.ps1 (legal_facts.rs), and the public keys that
+    # crates/update/src/keys.rs compares with its embedded copies.
+    r"|^packaging/windows/(main\.wxs$|portable/Start Lodestar\.cmd$)"
+    r"|^packaging/.*\.ps1$"
+    r"|^packaging/keys/[^/]+\.pub$"
+    # Docs that Rust tests and includes read: the metrics table (metrics.rs, serve.rs),
+    # the query-language examples (doc_examples.rs), the legal notice (api/src/legal.rs,
+    # legal_facts.rs) and the bitmagnet reader-role SQL (bitmagnet_check.rs). The user guide
+    # (sources-plugins safety.rs) is not here: see RUST_DOCS_ONLY.
+    r"|^docs/(metrics|query-language)\.md$"
+    r"|^docs/legal/legal-notice\.md$"
+    r"|^docs/operations/imports/bitmagnet-restore/reader-role\.sql$"
 )
+
+# The user guide. Its only Rust reader is the guide-wording assertion in
+# crates/sources-plugins/tests/safety.rs, which the `rust-docs` job runs alone.
+# test_ci_changes.py greps the Rust sources, so a second reader can't go unnoticed.
+USER_GUIDE = re.compile(r"^docs/user/")
 
 # Web and E2E applicability. Both workflows run on every pull request; these
 # patterns decide whether their heavy jobs do. Files the web tests read from
@@ -73,7 +107,12 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 # Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
 # The fleet and operator workflows too, whose structure and public-log leak
 # tests live in infra/fleet/tests (OP-1) and infra/operator/tests (OP-4).
-INFRA = re.compile(r"^(infra/|\.github/workflows/(fleet|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)")
+# The rules file and the docs that quote it: the fleet tests that read them run in this job.
+INFRA = re.compile(
+    r"^(infra/"
+    r"|packaging/companions/gluetun-post-rules\.txt$|docs/user/03-keep-lodestar-safe\.md$|docs/operations\.md$"
+    r"|\.github/workflows/(fleet|fleet-emergency-down|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
+)
 # The update manifest's builder, the workflow that signs with it, and the
 # verifier it round-trips through.
 UPDATE_MANIFEST = re.compile(
@@ -86,6 +125,15 @@ COMPANION_PINS = re.compile(
     r"^(tools/companion-pins/|\.github/workflows/companion-pins\.yml$|crates/companions/data/catalogue\.json$"
     r"|crates/companions/src/catalogue\.rs$|crates/lodestar/src/update/check\.rs$)"
 )
+
+# The RustSec advisory check (X-ci-advisories): what it reads (the lockfile and
+# deny.toml), and what decides how it runs. A Cargo.toml change that moves a
+# version also changes Cargo.lock.
+ADVISORIES = re.compile(r"^(Cargo\.lock|deny\.toml|\.github/workflows/ci\.yml|\.github/scripts/ci_changes\.py)$")
+
+# The Unraid templates and their validator. The validator and its tests live beside
+# the templates, so one prefix covers all of them.
+UNRAID = re.compile(r"^packaging/unraid/")
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"
@@ -153,6 +201,11 @@ def fuzz_roots(target: str) -> set[str]:
     return {m.replace("_", "-") for m in re.findall(r"\blodestar_[a-z_]+", source)}
 
 
+def parse_changed(raw: str) -> list[str]:
+    """The changed paths from `git diff --name-only -z`: split on NUL, never on spaces."""
+    return [f for f in raw.split("\0") if f]
+
+
 def main() -> None:
     event, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
     try:
@@ -164,6 +217,7 @@ def main() -> None:
     if event != "pull_request" or "full-ci" in labels:
         out.update(
             rust="true",
+            rust_docs="true",
             bench="true",
             filter="true",
             importer="true",
@@ -172,7 +226,9 @@ def main() -> None:
             soak_tools="true",
             companion_pins="true",
             infra="true",
+            unraid="true",
             update_manifest="true",
+            advisories="true",
             web="true",
             e2e="true",
         )
@@ -181,14 +237,17 @@ def main() -> None:
         emit(out)
         return
 
-    changed = subprocess.run(
-        # --no-renames: a file moved out of a crate must list its old path too.
-        ["git", "diff", "--no-renames", "--name-only", f"{base}...{head}"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
+    changed = parse_changed(
+        subprocess.run(
+            # --no-renames: a file moved out of a crate must list its old path too.
+            # -z: NUL-separated and unquoted, so a path with a space stays one path.
+            ["git", "diff", "--no-renames", "--name-only", "-z", f"{base}...{head}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
 
     out["web"] = str(any(WEB.match(f) for f in changed)).lower()
     out["e2e"] = str(any(E2E.match(f) for f in changed)).lower()
@@ -207,6 +266,8 @@ def main() -> None:
 
     rust = everything or bool(touched) or any(RUST_ALSO.match(f) for f in changed)
     out["rust"] = str(rust).lower()
+    # The user guide's one Rust reader runs on its own, unless the full Rust jobs already do.
+    out["rust_docs"] = str(not rust and any(USER_GUIDE.match(f) for f in changed)).lower()
     out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest"] if rust else [])
     out["bench"] = str(needs({"lodestar-bench"})).lower()
     out["filter"] = str(needs({"lodestar-filter"}, tested=True)).lower()
@@ -221,8 +282,10 @@ def main() -> None:
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
     out["companion_pins"] = str(everything or any(COMPANION_PINS.match(f) for f in changed)).lower()
+    out["unraid"] = str(everything or any(UNRAID.match(f) for f in changed)).lower()
     out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     out["update_manifest"] = str(everything or any(UPDATE_MANIFEST.match(f) for f in changed)).lower()
+    out["advisories"] = str(any(ADVISORIES.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate
     # that holds it, or anything it builds (the search crate among them).
     out["mmap_retention"] = str(needs({"lodestar-bench"}, tested=True)).lower()

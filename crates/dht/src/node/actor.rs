@@ -30,7 +30,7 @@ use super::{
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
-use crate::routing::{Contact, Inserted, RoutingTable, Status};
+use crate::routing::{Contact, Inserted, K, RoutingTable, Status};
 use crate::secure_id;
 use crate::state::{State, StateError};
 
@@ -54,6 +54,13 @@ const RECENT_SAMPLES: usize = 20;
 const MAX_GET_PEERS: usize = super::PEER_REQUEST_CAPACITY;
 const MAX_GET_PEERS_QUEUE: usize = MAX_GET_PEERS;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(25);
+/// The join refresh's levels at most, from the farthest: 2^32 nodes is
+/// far more than the DHT holds (about 2^23), so deeper levels would only
+/// cost queries.
+const JOIN_LEVELS: usize = 32;
+/// How long after a start owned get_peers requests may wait for the
+/// first self-lookup ([`Actor::parks_lookups`]).
+const PARK_DEADLINE: Duration = Duration::from_secs(30);
 const MAX_PEER_QUERIES: usize = 64;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
@@ -412,6 +419,31 @@ struct Actor {
     epoch: Instant,
     bootstrap: Vec<SocketAddr>,
     last_bootstrap: Option<Instant>,
+    /// The bootstrap has settled since the start: a self-lookup ended with
+    /// nodes in its family's table, or every one of them ended without.
+    /// Until then owned lookups wait ([`Actor::parks_lookups`]). Per
+    /// family, not per lookup: a dual-stack node's v6 self-lookup may end
+    /// at once (no v6 router, or v6 unroutable) while v4's is still out.
+    bootstrapped: bool,
+    /// Kademlia's join step: the far targets still to look up once, from
+    /// each family's first self-lookup that left nodes in its table.
+    /// `None` when there are none left; drained a few at a time on the
+    /// tick.
+    join_refresh: Option<Vec<(usize, NodeId)>>,
+    /// Per family: its join refresh has been planned (once per start,
+    /// and again for a new BEP 42 id).
+    join_planned: Vec<bool>,
+    /// Per family: a BEP 42 id change rebuilt its table, and a self-lookup
+    /// for the new `ids[0]` is still to start ([`Actor::rejoin_tick`]).
+    rejoin: Vec<bool>,
+    /// While `start_bootstrap` is still creating a round's self-lookups:
+    /// one that ends at once then isn't the round's last, because a later
+    /// family's may not exist yet ([`Actor::bootstrapped`]'s rule, settled
+    /// after the loop instead).
+    bootstrap_starting: bool,
+    /// When parking's [`PARK_DEADLINE`] runs from: the actor's construction,
+    /// after the routers' names resolved, so slow DNS doesn't use it up.
+    park_since: Instant,
     /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
     seed_tids: Set<u64>,
     /// The last bootstrap's routers refused (policy or socket) and throttled
@@ -688,6 +720,12 @@ impl Actor {
                 .map(lodestar_network_policy::normalize)
                 .collect(),
             last_bootstrap: None,
+            bootstrapped: false,
+            join_refresh: None,
+            join_planned: vec![false; family_count],
+            rejoin: vec![false; family_count],
+            bootstrap_starting: false,
+            park_since: Instant::now(),
             seed_tids: Set::default(),
             seed_refused: 0,
             seed_throttled: 0,
@@ -1594,6 +1632,36 @@ impl Actor {
                 }
             }
         }
+        // The self-lookups so far looked up the old id's neighbourhood, and
+        // a join planned from them counted levels against the old id: look
+        // up the new id once per family, and plan its join afresh from that
+        // lookup (rv-756 N-3). Flags, not a queue: votes can't pile up.
+        self.rejoin = vec![true; self.families.len()];
+        self.join_planned = vec![false; self.families.len()];
+        self.join_refresh = None;
+    }
+
+    /// Starts the self-lookup a BEP 42 id change asked for, once per
+    /// family, through the ordinary lookup limits. It waits while a
+    /// self-lookup for an old id is still out: that one carries the
+    /// bootstrap's routers and its answers land in the rebuilt table,
+    /// which then seeds this one.
+    fn rejoin_tick(&mut self, sockets: &[SendSocket]) {
+        let target = self.ids[0];
+        for f in 0..self.families.len() {
+            if !self.rejoin.get(f).copied().unwrap_or(false) {
+                continue;
+            }
+            let stale = self
+                .lookups
+                .values()
+                .any(|l| l.bootstrap && l.family == f && l.target != target);
+            if stale || self.maintenance_lookups() >= MAX_LOOKUPS {
+                continue;
+            }
+            self.rejoin[f] = false;
+            self.start_lookup_as(sockets, f, target, &[], &[], None, false, None, true);
+        }
     }
 
     /// Admits or refuses an owned request, final or streaming alike.
@@ -1683,6 +1751,7 @@ impl Actor {
                 Some(hash),
                 false,
                 Some(owner),
+                false,
             );
         }
     }
@@ -1787,7 +1856,17 @@ impl Actor {
         // A hash-bearing lookup always starts, under the next id; the
         // waiter is in place before the first drive, which may finish it.
         self.scrape_waiters.insert(self.next_lookup, reply);
-        self.start_lookup_as(sockets, 0, NodeId(hash.0), &[], &[], Some(hash), true, None);
+        self.start_lookup_as(
+            sockets,
+            0,
+            NodeId(hash.0),
+            &[],
+            &[],
+            Some(hash),
+            true,
+            None,
+            false,
+        );
     }
 
     /// Answers a finished (or timed-out) scrape lookup with its counts.
@@ -1804,6 +1883,39 @@ impl Actor {
                 peers: peers.count(),
                 responders,
             }));
+        }
+    }
+
+    /// Whether owned get_peers requests wait in their queue rather than
+    /// start: right after a start with bootstrap routers to ask, before
+    /// the first self-lookup has finished and while no table holds [`K`]
+    /// nodes. A lookup started then has nobody to ask, or only a router's
+    /// neighbourhood, and ends empty; the routers are never asked on its
+    /// behalf (politeness, §2.33). After [`PARK_DEADLINE`] they start
+    /// anyway and end empty, as they did before parking.
+    fn parks_lookups(&self, now: Instant) -> bool {
+        !self.bootstrapped
+            && !self.bootstrap.is_empty()
+            && self.families.iter().all(|f| f.table.len() < K)
+            && now.duration_since(self.park_since) < PARK_DEADLINE
+    }
+
+    /// Starts the next join-refresh lookups, keeping the maintenance
+    /// lookups at half of [`MAX_LOOKUPS`] or fewer, so the stale-bucket
+    /// refresh and the re-bootstrap always have room. Owned get_peers
+    /// lookups don't count against it.
+    fn join_refresh_tick(&mut self, sockets: &[SendSocket]) {
+        while self.maintenance_lookups() < MAX_LOOKUPS / 2 {
+            let Some((f, target)) = self.join_refresh.as_mut().and_then(Vec::pop) else {
+                break;
+            };
+            // Below half of MAX_LOOKUPS, so start_lookup can't refuse it
+            // and no target is lost.
+            debug_assert!(self.maintenance_lookups() < MAX_LOOKUPS);
+            self.start_lookup(sockets, f, target, &[], &[], None);
+        }
+        if self.join_refresh.as_ref().is_some_and(Vec::is_empty) {
+            self.join_refresh = None;
         }
     }
 
@@ -1828,7 +1940,7 @@ impl Actor {
         info_hash: Option<InfoHash>,
     ) {
         self.start_lookup_as(
-            sockets, family, target, known, seeds, info_hash, false, None,
+            sockets, family, target, known, seeds, info_hash, false, None, false,
         );
     }
 
@@ -1843,11 +1955,15 @@ impl Actor {
         info_hash: Option<InfoHash>,
         scrape: bool,
         owner: Option<u32>,
+        bootstrap: bool,
     ) {
         if info_hash.is_none() && self.maintenance_lookups() >= MAX_LOOKUPS {
             return;
         }
         let lid = self.insert_lookup(family, target, known, info_hash, scrape, owner);
+        if let Some(l) = self.lookups.get_mut(&lid) {
+            l.bootstrap = bootstrap;
+        }
         // A router answers in the family it sees the query arrive in. Through
         // NAT64 that's IPv4, so an IPv6 family asks for its own (BEP 32).
         let ipv6 = self.families[family].ipv6;
@@ -2061,6 +2177,37 @@ impl Actor {
         let Some(done) = self.lookups.remove(&lid) else {
             return;
         };
+        if done.bootstrap {
+            let f = done.family;
+            let found = !self.families[f].table.is_empty();
+            let others_out = self.bootstrap_starting || self.lookups.values().any(|l| l.bootstrap);
+            if found || !others_out {
+                self.bootstrapped = true;
+            }
+            // A family's first self-lookup to leave nodes in its table
+            // plans its join refresh: every prefix length farther than its
+            // closest neighbour, once.
+            if self.join_planned.len() <= f {
+                self.join_planned.resize(f + 1, false);
+            }
+            // Only a lookup for the current id plans it: one for an id a
+            // BEP 42 change replaced found the old neighbourhood.
+            if found && !self.join_planned[f] && done.target == self.ids[0] {
+                self.join_planned[f] = true;
+                let rng = &mut self.rng;
+                let mut targets: Vec<(usize, NodeId)> = self.families[f]
+                    .table
+                    .join_targets(JOIN_LEVELS, || rng.random())
+                    .into_iter()
+                    .map(|t| (f, t))
+                    .collect();
+                // Popped from the end: the farthest level goes first.
+                targets.reverse();
+                let queue = self.join_refresh.get_or_insert_with(Vec::new);
+                targets.append(queue);
+                *queue = targets;
+            }
+        }
         if done.scrape {
             self.finish_scrape(lid, &done);
         } else if let Some(owner) = done.owner {
@@ -2157,6 +2304,14 @@ impl Actor {
             self.seed_answered = false;
         }
         (self.seed_refused, self.seed_throttled) = (0, 0);
+        // Each family gets a self-lookup for the current `ids[0]` below:
+        // the one a pending rejoin waits to start, so it isn't started twice
+        // (a re-bootstrap in the tick a stale self-lookup expired, rv-768
+        // O-1). Both callers start it with no maintenance lookup out, so
+        // `MAX_LOOKUPS` can't refuse it.
+        debug_assert!(self.maintenance_lookups() + self.families.len() <= MAX_LOOKUPS);
+        self.rejoin.fill(false);
+        self.bootstrap_starting = true;
         for f in 0..self.families.len() {
             let ipv6 = self.families[f].ipv6;
             let known: Vec<NodeInfo> = saved
@@ -2171,7 +2326,15 @@ impl Actor {
                 .copied()
                 .collect();
             let target = self.ids[0];
-            self.start_lookup(sockets, f, target, &known, &routers, None);
+            self.start_lookup_as(
+                sockets, f, target, &known, &routers, None, false, None, true,
+            );
+        }
+        self.bootstrap_starting = false;
+        // Every family's self-lookup ended inside the loop, none with
+        // nodes: the round is over, so parked requests may start.
+        if !self.lookups.values().any(|l| l.bootstrap) {
+            self.bootstrapped = true;
         }
         // Every router refused at send, or none resolved.
         self.end_seed_round_if_done();
@@ -2294,12 +2457,16 @@ impl Actor {
                 }
             }
         }
-        while !self.paused && self.active_get_peers < MAX_GET_PEERS {
+        while !self.paused && self.active_get_peers < MAX_GET_PEERS && !self.parks_lookups(now_i) {
             let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
                 break;
             };
             self.start_peer_request(sockets, hash, reply, permit);
         }
+        // After the requests: in the turn that releases parked ones, they
+        // have first claim on the query budget.
+        self.rejoin_tick(sockets);
+        self.join_refresh_tick(sockets);
         self.drop_cancelled_queued();
         self.scrape_tick(sockets, now_i);
         if self.cfg.harvest.sample && !self.paused {
@@ -2582,7 +2749,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (Actor, Vec<SendSocket>) {
+    pub(super) fn fixture() -> (Actor, Vec<SendSocket>) {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();
         let addr = socket.local_addr().unwrap();
@@ -3500,6 +3667,244 @@ mod tests {
         assert_eq!(a.stats.snapshot().packets_out, 1);
     }
 
+    /// X-dht-bep42-rejoin: a public address no BEP 42 id of the fixture
+    /// fits, and the saved node a bootstrap asks.
+    const REJOIN_PUBLIC: [u8; 4] = [93, 184, 216, 34];
+
+    fn rejoin_neighbour() -> NodeInfo {
+        NodeInfo {
+            id: NodeId([0x55; 20]),
+            addr: unbound(false, 21),
+        }
+    }
+
+    /// Five distinct reporters agree on `ip`, the quorum.
+    fn vote_rejoin(a: &mut Actor, ip: IpAddr) {
+        for n in 1..=5u8 {
+            a.on_external_ip(IpAddr::from([n, n, n, n]), SocketAddr::new(ip, 6881));
+        }
+        assert_eq!(a.external.current, Some(ip), "the vote reached a quorum");
+    }
+
+    /// Self-lookups (bootstrap-marked) for `target` that are running.
+    fn self_lookups_for(a: &Actor, target: NodeId) -> usize {
+        a.lookups
+            .values()
+            .filter(|l| l.bootstrap && l.target == target)
+            .count()
+    }
+
+    /// The tids of `find_node` queries for `target` in flight.
+    fn find_nodes_for(a: &Actor, target: NodeId) -> Vec<u64> {
+        a.pending
+            .iter()
+            .filter(|(_, p)| {
+                matches!(p.purpose, Purpose::Lookup(lid)
+                    if a.lookups.get(&lid).is_some_and(|l| l.target == target && l.info_hash.is_none()))
+            })
+            .map(|(t, _)| *t)
+            .collect()
+    }
+
+    /// A bootstrap from the saved neighbour; returns its query's tid.
+    fn rejoin_bootstrap(a: &mut Actor, sockets: &[SendSocket]) -> u64 {
+        a.start_bootstrap(sockets, vec![rejoin_neighbour()]);
+        let tids = find_nodes_for(a, a.ids[0]);
+        assert_eq!(tids.len(), 1, "the self-lookup asked the saved node");
+        tids[0]
+    }
+
+    #[test]
+    fn an_id_change_mid_bootstrap_looks_up_the_new_id_once() {
+        let (mut a, sockets) = fixture();
+        let old = a.ids[0];
+        let first = rejoin_bootstrap(&mut a, &sockets);
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        let new = a.ids[0];
+        assert_ne!(new, old, "the vote gave a new BEP 42 id");
+        assert!(!a.bootstrapped, "mid-bootstrap");
+        // The old self-lookup is still out: the rejoin waits for it.
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 0);
+        assert_eq!(self_lookups_for(&a, old), 1);
+        // It ends with the neighbour in the rebuilt table: the bootstrap
+        // settles, but no join is planned from the old neighbourhood.
+        reply(&mut a, &sockets, first, vec![]);
+        assert_eq!(self_lookups_for(&a, old), 0);
+        assert!(a.bootstrapped && !a.families[0].table.is_empty());
+        assert!(!a.join_planned[0] && a.join_refresh.is_none());
+        // The next tick looks up the new id, from the rebuilt table.
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1);
+        let rejoin = find_nodes_for(&a, new);
+        assert_eq!(rejoin.len(), 1);
+        assert_eq!(a.pending[&rejoin[0]].to, rejoin_neighbour().addr);
+        // A repeated vote for the same address queues nothing more.
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        a.on_external_ip(
+            IpAddr::from([6, 6, 6, 6]),
+            SocketAddr::new(REJOIN_PUBLIC.into(), 6881),
+        );
+        assert_eq!(a.ids[0], new);
+        assert!(a.rejoin.iter().all(|r| !r));
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1, "one extra self-lookup only");
+        // It ends with nodes: the join is planned once, around the new id.
+        reply(&mut a, &sockets, rejoin[0], vec![]);
+        assert_eq!(self_lookups_for(&a, new), 0);
+        assert!(a.join_planned[0]);
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 0, "no second self-lookup");
+    }
+
+    #[test]
+    fn an_id_change_after_the_bootstrap_looks_up_the_new_id_and_rejoins() {
+        let (mut a, sockets) = fixture();
+        let old = a.ids[0];
+        let first = rejoin_bootstrap(&mut a, &sockets);
+        reply(&mut a, &sockets, first, vec![]);
+        assert!(a.bootstrapped && a.join_planned[0]);
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        let new = a.ids[0];
+        assert_ne!(new, old);
+        // The old id's join plan is dropped, to be planned for the new id.
+        assert!(!a.join_planned[0] && a.join_refresh.is_none());
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1);
+        let rejoin = find_nodes_for(&a, new);
+        assert_eq!(rejoin.len(), 1);
+        assert!(a.bootstrapped, "a rejoin doesn't reopen parking");
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1, "still one");
+        reply(&mut a, &sockets, rejoin[0], vec![]);
+        assert!(a.join_planned[0], "the join is planned for the new id");
+    }
+
+    #[test]
+    fn an_exempt_or_fitting_address_looks_up_nothing() {
+        let (mut a, sockets) = fixture();
+        let first = rejoin_bootstrap(&mut a, &sockets);
+        reply(&mut a, &sockets, first, vec![]);
+        let ids = a.ids.clone();
+        vote_rejoin(&mut a, IpAddr::from([192, 168, 1, 20]));
+        assert_eq!(a.ids, ids, "an exempt address keeps the ids");
+        assert!(a.rejoin.iter().all(|r| !r) && a.join_planned[0]);
+        a.maintain(&sockets);
+        assert!(a.lookups.values().all(|l| !l.bootstrap));
+        assert!(find_nodes_for(&a, a.ids[0]).is_empty());
+        // Ids that already fit a new public address are kept too.
+        let public = IpAddr::from(REJOIN_PUBLIC);
+        a.ids = secure_id::virtual_ids(&public, a.ids.len(), &mut StdRng::seed_from_u64(9));
+        let ids = a.ids.clone();
+        vote_rejoin(&mut a, public);
+        assert_eq!(a.ids, ids, "fitting ids are kept");
+        assert!(a.rejoin.iter().all(|r| !r) && a.join_planned[0]);
+        a.maintain(&sockets);
+        assert!(a.lookups.values().all(|l| !l.bootstrap));
+    }
+
+    #[test]
+    fn a_re_bootstrap_stands_in_for_a_pending_rejoin() {
+        let (mut a, sockets) = fixture();
+        let old = a.ids[0];
+        rejoin_bootstrap(&mut a, &sockets);
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        let new = a.ids[0];
+        assert!(a.rejoin[0], "waiting on the old self-lookup");
+        // The neighbour is in the rebuilt table, so a duplicate self-lookup
+        // would ask it and stay out rather than end at once.
+        let now = a.now_secs();
+        a.families[0]
+            .table
+            .insert(rejoin_neighbour(), Contact::Response, now);
+        // rv-768 O-1: the old self-lookup ends at its deadline (scrape_tick),
+        // and later in the same tick the thin-table re-bootstrap, which
+        // passes no saved nodes, looks up the new id.
+        let stale: Vec<u32> = a
+            .lookups
+            .iter()
+            .filter(|(_, l)| l.bootstrap && l.target == old)
+            .map(|(lid, _)| *lid)
+            .collect();
+        assert_eq!(stale.len(), 1);
+        a.finish_lookup(stale[0]);
+        a.start_bootstrap(&sockets, Vec::new());
+        assert_eq!(self_lookups_for(&a, new), 1);
+        assert_eq!(find_nodes_for(&a, new).len(), 1, "it asks the neighbour");
+        assert!(
+            a.rejoin.iter().all(|r| !r),
+            "the re-bootstrap is the rejoin"
+        );
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1, "no duplicate self-lookup");
+        assert_eq!(find_nodes_for(&a, new).len(), 1);
+    }
+
+    #[test]
+    fn a_rejoin_waits_for_room_under_max_lookups() {
+        let (mut a, sockets) = fixture();
+        let first = rejoin_bootstrap(&mut a, &sockets);
+        reply(&mut a, &sockets, first, vec![]);
+        // Maintenance lookups fill MAX_LOOKUPS (inserted, not driven).
+        let mut fillers = Vec::new();
+        while a.maintenance_lookups() < MAX_LOOKUPS {
+            let target = NodeId([fillers.len() as u8 + 1; 20]);
+            fillers.push(a.insert_lookup(0, target, &[], None, false, None));
+        }
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        let new = a.ids[0];
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 0, "no room yet");
+        assert!(a.rejoin[0], "kept, not lost");
+        a.lookups.remove(&fillers[0]);
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1, "started once there's room");
+        assert!(!a.rejoin[0]);
+    }
+
+    #[test]
+    fn each_family_waits_only_for_its_own_old_self_lookup() {
+        for v6_first in [false, true] {
+            let (mut a, mut sockets) = fixture();
+            // A v6 family with no node: its self-lookup ends at once. It
+            // never sends, so its socket slot needs no IPv6 on the host.
+            let placeholder = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            placeholder.set_nonblocking(true).unwrap();
+            let (v6, v4) = if v6_first { (0, 1) } else { (1, 0) };
+            sockets.insert(v6, SendSocket::Udp(placeholder));
+            a.families.insert(
+                v6,
+                Family {
+                    table: RoutingTable::new(a.ids[0], true),
+                    ipv6: true,
+                },
+            );
+            a.join_planned.insert(v6, false);
+            a.rejoin.insert(v6, false);
+            let first = rejoin_bootstrap(&mut a, &sockets);
+            assert!(!a.lookups.values().any(|l| l.family == v6));
+            vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+            let new = a.ids[0];
+            // v6's rejoin starts (and ends at once, empty); v4's waits for
+            // its old self-lookup, which keeps the bootstrap open.
+            a.maintain(&sockets);
+            assert!(!a.rejoin[v6] && a.rejoin[v4], "v6 first {v6_first}");
+            assert!(!a.bootstrapped, "v6 first {v6_first}: not settled early");
+            assert_eq!(self_lookups_for(&a, new), 0);
+            reply(&mut a, &sockets, first, vec![]);
+            assert!(a.bootstrapped);
+            a.maintain(&sockets);
+            assert!(!a.rejoin[v4]);
+            let rejoin: Vec<_> = a
+                .lookups
+                .values()
+                .filter(|l| l.bootstrap && l.target == new)
+                .map(|l| l.family)
+                .collect();
+            assert_eq!(rejoin, vec![v4], "v6 first {v6_first}");
+        }
+    }
+
     #[test]
     fn external_ip_needs_a_quorum_of_distinct_reporters() {
         let mut e = ExternalIp::default();
@@ -3934,3 +4339,7 @@ mod prefix_tests;
 #[cfg(test)]
 #[path = "shard_tests.rs"]
 mod shard_tests;
+
+#[cfg(test)]
+#[path = "join_tests.rs"]
+mod join_tests;

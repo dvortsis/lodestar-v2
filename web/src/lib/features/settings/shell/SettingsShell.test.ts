@@ -41,6 +41,7 @@ const EN = [
 	'Filters & Safety',
 	'Blocklist subscriptions',
 	'Integrations',
+	'Outputs',
 	'Notifications',
 	'Insights & digest',
 	'General',

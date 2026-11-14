@@ -108,11 +108,18 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
 ### 3.2 `/fleet run leak-test <vm>` (optional: `start-block` runs it too)
 - **What it does:** proves nothing leaves the VM outside PIA.
   - **With the tunnel up:** IPv4 goes out through PIA, not the host's own address; IPv6 is blocked; DNS goes through gluetun.
-  - **With the tunnel down, twice** (the endpoint blocked, then gluetun's VPN interface also taken down): IPv4, IPv6, DNS and UDP all fail, and a capture on gluetun's side sees zero packets.
+  - **gluetun's post-rules are loaded** (IPv4 and IPv6), for the interface gluetun actually uses, ahead of its own rules. Without them, gluetun lets connections opened through the tunnel leave by the host's network once its interface is down. A ping opened through the tunnel keeps running through both down phases, so that case is always exercised.
+  - **With the tunnel down, twice** (the endpoint blocked, then gluetun's VPN interface also taken down): IPv4, IPv6, DNS and UDP all fail. A capture on gluetun's side sees zero packets, and a counter on the host sees zero packets forwarded out of the host from the stack's network, apart from the endpoint's own UDP.
   - **Then the tunnel recovers** through the same exit.
   - **The host's own IPv6 too:** no IPv6 forwarding, no IPv6 on the stack's Docker network, and no global IPv6 address in gluetun's namespace.
   - It refuses while a block is recorded or running.
-- **Works:** `run leak-test main: done; <n> ok; captured_packets_down 0, captured_packets_ifdown 0`.
+- **Works:** `run leak-test main: done; <n> ok;` followed by the counts. For both phases (`_down`, `_ifdown`), `captured_packets`, `captured_tcp`, `captured_udp`, `captured_icmp`, `captured_other` and `host_egress_packets` are all 0. These count only what gluetun's container sends. `captured_inbound_<phase>` counts packets towards it, which are evidence only. Each `icmp_<phase>_<in|out>_t<type>_c<code>_<class>` line counts ICMP packets by type, code, direction and the far end's class (endpoint, linklocal, multicast or other).
+- **The guards:** while it recreates gluetun, the test holds the VPN endpoint's packets at the host, with a DOCKER-USER rule and an INPUT rule. Both are removed before the verdict, and any left by an earlier run are removed first. These failure names are about the guards, not a leak:
+  - `host_guarded` or `recreate_guarded`: a guard couldn't be set, so gluetun wasn't recreated. Check `iptables` on the VM, then ask for the run again.
+  - `post_rules_before_egress`: gluetun didn't load its post-rules in time. It's a stop, with or without `recreate_guard_held`: tell the runner. With `recreate_guard_held`, the endpoint stayed held and the tunnel couldn't come up; that is not a credentials problem. Check `docker logs gluetun` for a post-rules error.
+  - `recreate_guard_lifted` or `guards_released`: a guard rule wouldn't come off. Tell the runner before anything else runs on that VM. Next to `host_guarded` or `recreate_guarded`, `guards_released` can also mean the rule was rejected outright: tell the runner either way.
+  - `post_rules_after_restart_ipv4` or `_ipv6`: gluetun's post-rules weren't in place after its VPN restart in phase B. It's a stop: tell the runner.
+- **`container_mac`:** gluetun's MAC couldn't be read, so the capture can't be judged. Ask for the run again; if it repeats, tell the runner.
 - **Fails:** `failed (exit 1); <n> ok; failed: <names>, leak_test`. **That's a stop condition: no crawl starts on that VM.** Tell the runner, with the failed names.
 
 ### 3.3 `/fleet run start-block <vm> <rules commit>`
@@ -148,23 +155,41 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
 - **Works:** counters only, for example `done; <n> ok; block_segment <n>, collectors_running 1, disk_free_gib <n>, mem_available_mib <n>, uptime_hours <n>`.
   - A `failed:` list names what isn't so; `lodestar_running` between segments is normal.
   - No `block_segment` means no block is recorded.
+  - **During a block** it also reports `block_intact` and `host_guard_drops <n>`:
+    - `host_guard_drops` above 0 means the host guard (the rule that keeps the host from answering the VPN server outside the tunnel) went missing, after a reboot or a firewall flush, and was put back. The block isn't clean.
+    - `failed: block_intact` means the guard couldn't be put back. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
+  - **`failed: boot_guard_held`** means the VM rebooted mid-block and the guard couldn't be held at boot. Docker is kept down on purpose, so `docker_up` fails too and no container runs, gluetun and Lodestar included. The VM itself is still on the internet (that's how this step reaches it). Anything that starts Docker again runs the same check first. That VM's block and its evidence are lost, because copy-off needs Docker: tear the fleet down.
 
 ### 3.6 `/fleet run outage-watcher <vm>`, if needed
 - **What the watcher does:** it follows gluetun's container events and log. On a VPN restart or tunnel-down line it counts an outage, and writes a `link_outage` note into the running segment's evidence at once.
   - It never stops the crawl; the analyzer judges the segment.
-  - This step restarts it if it has stopped. It needs a recorded block.
-- **Works:** `done; 2 ok; outages_seen <n>` when it started the watcher, or `done; 1 ok; outages_seen <n>` when it was already running.
+  - **It also keeps the host guard.** It checks it when it starts and every 30 seconds. A missing guard is put back and counted as an outage. If it can't be put back, the watcher stops gluetun and marks the block damaged.
+  - It starts again by itself after a reboot.
+- **What this step does:** it checks the host guard, then restarts the watcher if it has stopped. It needs a recorded block.
+- **Works:**
+  - `done; 3 ok; host_guard_drops <n>, outages_seen <n>` when it started the watcher;
+  - `done; 2 ok; host_guard_drops <n>, outages_seen <n>` when the watcher was already running.
+  - `host_guard_reheld` among the ok lines means the guard was missing and is back. The block isn't clean.
+- **Fails:**
+  - **`failed: host_guarded, block_intact, outage_watcher`:** the guard couldn't be held. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
+  - **`failed: host_guard_checked, outage_watcher`:** another check was running at the same moment. Run it again.
 
 ### 3.7 `/fleet run copy-off <vm>`
 - **What it does:**
   1. Refuses while a collector runs, and stops a Lodestar left running alone.
   2. Runs the analyzer and the allow-list scrubber over the block's evidence, in a container with no network.
   3. The control plane scrubs the result again, and stores it only in the private evidence bucket, as `fleet/<run id>/copy-off-<vm>.json`.
-  4. Ends the block: the marker, the watcher and the Docker proxy go.
-- **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket`.
+  4. Ends the block: the watcher stops first, then the host guard, the marker and the Docker proxy go.
+- **Works:** `done; <n> ok; segments_copied 4; evidence stored in the private bucket; host guard held`.
+- **The host guard's state** ends the line, in this order. Any part can be missing.
+  1. `not clean: damaged, the host guard couldn't be held`, or `damaged not reported`. The first means the block isn't clean.
+  2. `host_guard_drops <n>`: the guard went missing <n> times and was put back. Any <n> above 0 means the block isn't clean either, as in §3.6. `host_guard_drops not reported` means that count didn't come back.
+  - Instead of these parts, the line ends with `host guard held` when both say nothing went wrong.
+  - It ends with `host guard not reported` when the evidence is from before the guard fields existed.
+  - Anything "not reported" is never a clean block. Treat it as unknown.
 - **Fails:**
   - **`failed: block_running, copy_off`:** a collector is still running, so the segment isn't over.
-  - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again.
+  - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again. This line also ends with the host guard's state, which reads as above.
 - **Raw logs, databases, executables and the password never leave the VM.** They're destroyed with it.
 
 ### 3.8 Owner cleanup (`/fleet down` is dry-run only)
@@ -274,7 +299,7 @@ For Worker, use `"worker"` in place of `"main"`. Check the address against Cloud
    - `sudo cat /var/lib/lodestar-block/notes` gains a line with the segment number. That note went into the segment's evidence: one per 30-second burst.
 5. **End the segment and the block:** `sudo docker stop -t 120 lodestar-collector-<segment>`.
    - The collector finishes with reason `operator_stop`, and stops Lodestar first. That takes up to a minute; `-t 120` gives it the time, where Docker's default of 10 s would kill it part-way.
-   - Then log out, and ask for `run copy-off <vm>`. It should answer `done; <n> ok; segments_copied <k>; evidence stored in the private bucket`.
+   - Then log out, and ask for `run copy-off <vm>`. It should answer `done; <n> ok; segments_copied <k>; evidence stored in the private bucket; host guard held`. Any other guard state reads as in §3.7.
    - A `vm-status` afterwards shows no `block_segment`. The stopped segment's verdict is in the evidence bucket copy.
    - Tell the runner it can resume that VM's commands.
 6. **Afterwards:** gluetun stays stopped.

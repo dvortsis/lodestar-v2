@@ -1405,7 +1405,9 @@ mod tests {
         drop(index);
         // Reopened by a build whose producer shipped (a resumed build
         // with other generations), with torrents arriving meanwhile.
-        let gens = crate::Generations::current().with("payload_sig", 1);
+        let gens = crate::Generations::current();
+        let next = gens.get("payload_sig").unwrap() + 1;
+        let gens = gens.with("payload_sig", next);
         let index = SearchIndex::open(&tmp.path().join("v"))
             .unwrap()
             .with_generations(gens)

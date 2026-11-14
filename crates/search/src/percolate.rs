@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tantivy::collector::{Collector, SegmentCollector};
-use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, RangeQuery};
+use tantivy::query::{BooleanQuery, EmptyQuery, EnableScoring, Occur, Query, RangeQuery};
 use tantivy::{DocId, Score, Searcher, SegmentOrdinal, SegmentReader, Term};
 
 use crate::cancel::{CHECK_EVERY, CancelToken};
@@ -77,6 +77,12 @@ pub struct Due<'a> {
     /// The token may stop it inside its scan even as the call's first:
     /// for entries that run on what another call left of a budget.
     pub stoppable: bool,
+    /// Hold it while `sig:<info hash>` can't resolve every reference
+    /// (see [`percolate`]): a forward run, whose watermark would move past
+    /// clones that then never alert. A one-off pass that records no
+    /// watermark (a promoted torrent's) runs at once instead, finding the
+    /// clones of references already backfilled.
+    pub hold_unresolved: bool,
 }
 
 /// One search's result: every torrent id in `(watermark, through]` it
@@ -96,7 +102,8 @@ pub struct Matched {
 /// What one run did.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Percolation {
-    /// Searches that ran, in the order given.
+    /// Searches that ran, in the order given. A held search (see
+    /// [`percolate`]) isn't here and keeps its watermark.
     pub matched: Vec<Matched>,
     /// The highest id in the snapshot, which bounds every range: a
     /// search never moves past what it could see.
@@ -119,6 +126,14 @@ impl Percolation {
 
 /// Runs `due` against `index` up to `through`, on one searcher snapshot,
 /// checking `cancel` before each search. `now` resolves relative dates.
+///
+/// **Held searches** (GS-0): while `payload_sig` isn't complete in the
+/// snapshot, a saved search containing `sig:<info hash>` with
+/// [`Due::hold_unresolved`] isn't run. It's
+/// left out of [`Percolation::matched`], so its watermark stays and it
+/// runs once the backfill is done. It isn't counted as stopped, capped
+/// or failed: nothing is lost by waiting, and [`Percolation::more`]
+/// doesn't spin on it.
 pub fn percolate(
     index: &SearchIndex,
     due: &[Due<'_>],
@@ -143,7 +158,34 @@ pub fn percolate(
     let id_field = index.fields().id;
     // Ids start at 1, so a watermark of 0 or below never changes a range.
     let term = |v: i64| Term::from_field_u64(id_field, v.max(0) as u64);
+    // Whether `sig:<info hash>` can resolve every reference in this
+    // snapshot (see the held searches above).
+    let sig_complete = index
+        .prefilter("payload_sig", &searcher, Box::new(EmptyQuery))
+        .is_some();
     for d in due {
+        // `sig:<info hash>` resolves its reference torrent through the
+        // query's own visibility clauses (`compile::SamePayload`). A saved
+        // search has none, so a withheld reference's clones would alert
+        // where an unknown hash alerts nothing: it runs with the default
+        // visibility instead (GS-0). Live queries carry their own.
+        //
+        // Until `payload_sig` is complete in this snapshot, the reference
+        // may not carry its signature yet and would match only itself; the
+        // watermark would then move past clones that never alert. So such
+        // a search isn't run: it keeps its watermark and runs once the
+        // backfill is done. A bare signature looks nothing up and runs:
+        // the new torrents it covers are indexed with the field.
+        let guarded;
+        let query = if !d.count_only && d.query.mentions_same_payload() {
+            if d.hold_unresolved && !sig_complete {
+                continue;
+            }
+            guarded = d.query.clone().with_default_visibility();
+            &guarded
+        } else {
+            d.query
+        };
         let end = upto.min(d.watermark.saturating_add(limits.max_range.max(1)));
         if end <= d.watermark {
             continue;
@@ -158,7 +200,7 @@ pub fn percolate(
         let scan_cancel = (d.stoppable || !out.matched.is_empty()).then(|| cancel.clone());
         let compiled = match &scan_cancel {
             Some(token) => {
-                match index.compile_cancelled(d.query, now, d.utc_offset, d.stems, token) {
+                match index.compile_cancelled(query, now, d.utc_offset, d.stems, token) {
                     Ok(compiled) => compiled,
                     // Not run: it keeps its watermark, as a stopped scan does.
                     Err(Error::Cancelled | Error::OutOfTime) => {
@@ -168,7 +210,7 @@ pub fn percolate(
                     Err(e) => return Err(e),
                 }
             }
-            None => index.compile(d.query, now, d.utc_offset, d.stems),
+            None => index.compile(query, now, d.utc_offset, d.stems),
         };
         let range: Box<dyn Query> = Box::new(RangeQuery::new(
             Bound::Excluded(term(d.watermark)),
@@ -262,13 +304,13 @@ fn may_hold(seg: &SegmentReader, after: i64, upto: i64) -> Result<bool> {
 /// match was left out, and how many matched in all. With a token, it stops collecting once the
 /// token does (checked every [`CHECK_EVERY`] documents) and sets
 /// `stopped`: the result is then incomplete and isn't used.
-struct TopIds {
-    keep: usize,
-    cancel: Option<CancelToken>,
-    stopped: Arc<AtomicBool>,
+pub(crate) struct TopIds {
+    pub(crate) keep: usize,
+    pub(crate) cancel: Option<CancelToken>,
+    pub(crate) stopped: Arc<AtomicBool>,
 }
 
-struct TopIdsSegment {
+pub(crate) struct TopIdsSegment {
     col: tantivy::columnar::Column<u64>,
     keep: usize,
     /// A min-heap of the highest ids so far.
@@ -407,6 +449,7 @@ mod tests {
             count_only: false,
             stems: false,
             stoppable: false,
+            hold_unresolved: true,
         }];
         percolate(index, &due, through, limits, 0, &CancelToken::new()).unwrap()
     }
@@ -472,6 +515,7 @@ mod tests {
                 count_only: true,
                 stems: false,
                 stoppable: false,
+                hold_unresolved: true,
             },
             Due {
                 id: 2,
@@ -481,6 +525,7 @@ mod tests {
                 count_only: false,
                 stems: false,
                 stoppable: false,
+                hold_unresolved: true,
             },
         ];
         let limits = PercolateLimits {
@@ -582,6 +627,7 @@ mod tests {
                 count_only: false,
                 stems: false,
                 stoppable: false,
+                hold_unresolved: true,
             })
             .collect();
         let token = CancelToken::new();
@@ -691,6 +737,7 @@ mod tests {
             count_only: false,
             stems: false,
             stoppable,
+            hold_unresolved: true,
         }
     }
 

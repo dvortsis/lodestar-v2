@@ -267,7 +267,7 @@ fn windows(w: &[Window]) -> Vec<String> {
     w.iter().map(|w| window_text(w.start, w.end)).collect()
 }
 
-fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
+pub(crate) fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
     match e {
         control::EgressSetting::Direct => EgressSetting {
             route: EgressRoute::Direct,
@@ -290,7 +290,7 @@ fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
 
 /// The route's checked setting back as the pipeline's (the API refused
 /// the interface and bind-address routes, and checked the proxy).
-fn egress_back(e: EgressSetting) -> Result<control::EgressSetting, OpsError> {
+pub(crate) fn egress_back(e: EgressSetting) -> Result<control::EgressSetting, OpsError> {
     let invalid = |m: &str| OpsError::Invalid {
         code: "invalid_egress",
         field: "egress",
@@ -480,6 +480,7 @@ fn source(v: SourceView, companion: CompanionState) -> Source {
         enabled,
         // Exactly what an acknowledgement covers.
         endpoints: consent_rules::addresses(m),
+        always_adult: m.always_adult,
         finds_private: m.finds_private,
         health: SourceHealth {
             harvested_24h: v.harvested_24h,
@@ -904,7 +905,7 @@ mod spec_tests {
     use lodestar_sources_plugins::full_scrape::{LookupError, PrivateTrackers, SystemClock};
     use lodestar_sources_plugins::{
         StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa,
-        prowlarr, stashdb, torrent_cache, tpdb,
+        prowlarr, stashdb, torrent_cache, tpdb, wikidata,
     };
     use serde_json::{Value, json};
 
@@ -948,6 +949,10 @@ mod spec_tests {
             ),
             (torrent_cache::ID, *cache.policy()),
             (tpdb::ID, *AdultEnricher::policy(&tpdb::Tpdb::new(creds()))),
+            (
+                wikidata::ID,
+                *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata::new()),
+            ),
         ]
     }
 

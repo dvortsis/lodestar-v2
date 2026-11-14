@@ -437,6 +437,18 @@ pub struct SourceSchedule {
 pub struct Source {
     #[schema(inline)]
     pub agents: SourceAgents,
+    /// Everything it finds is Adult (§20.9, X-source-adult): its finds are
+    /// stored and judged as Adult unless you say Not adult. The detail view
+    /// reads it too, to keep a torrent such a source found out of the
+    /// "Identified as" section.
+    // `default` only lets a client or fixture written before this field
+    // read a `Source`; every listing sends it. The default, `false`, fails
+    // open: the server never deserializes a `Source` today, and anything
+    // that ever reads a listing from elsewhere (a remote host, a peer)
+    // must treat a missing field as unknown, never as "not always adult".
+    #[serde(default)]
+    #[schema(required = true)]
+    pub always_adult: bool,
     /// The companion it waits for before it runs (§18.10); null when it
     /// needs none, or has it and it's healthy. Not the same as `needs`,
     /// which is what enabling it asks for.
@@ -515,7 +527,7 @@ pub struct Source {
     #[schema(required = true, inline)]
     pub needs: Option<SourceNeed>,
     /// Enabling it asks for the admin password, every time
-    /// (`restricted`, `overlay`).
+    /// (`account`, `restricted`, `overlay`).
     pub password_required: bool,
     /// The manifest id.
     pub plugin: String,

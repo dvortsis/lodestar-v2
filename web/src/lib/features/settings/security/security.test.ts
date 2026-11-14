@@ -9,6 +9,8 @@ import { dismissPasswordDialogs } from './confirm';
 import { dismissReveals } from './reveal';
 import { screens } from '../shell/screens';
 import SecurityScreen from './SecurityScreen.svelte';
+import { currentSession, setSession } from '$lib/features/auth/session.svelte';
+import { toast, toasts } from '$lib/ui/feedback/toasts.svelte';
 
 type Nav = {
 	type: string;
@@ -57,6 +59,8 @@ beforeEach(() => {
 	calls = [];
 	nav.guards.length = 0;
 	nav.goto.mockClear();
+	toast.clear();
+	setSession('signed_in');
 	replies = {
 		'GET /settings/network': () => ({ status: 200, body: NETWORK(null) }),
 		'POST /sessions/revoke-others': () => ({ status: 200, body: { ok: true } }),
@@ -152,6 +156,30 @@ describe('Security screen', () => {
 		expect(screen.getByTestId('security-sessions-result').textContent).toContain(
 			'Every other browser signed in with the password was signed out.'
 		);
+	});
+
+	it('Sign out ends this browser’s session and lands on sign-in', async () => {
+		replies['POST /logout'] = () => ({ status: 200, body: { ok: true } });
+		render(SecurityScreen);
+		const button = await screen.findByTestId('security-sign-out');
+		expect(button.textContent?.trim()).toBe('Sign out');
+		await fireEvent.click(button);
+		await until(() => expect(nav.goto).toHaveBeenCalledWith('/login', { replaceState: true }));
+		expect(writes()).toEqual([{ method: 'POST', path: '/logout', body: {} }]);
+		expect(currentSession()).toBe('signed_out');
+		expect(toasts.items).toEqual([]);
+	});
+
+	it('a failed Sign out shows the error toast and stays', async () => {
+		replies['POST /logout'] = () => err(503, 'unavailable', 'Busy.');
+		render(SecurityScreen);
+		const button = await screen.findByTestId('security-sign-out');
+		await fireEvent.click(button);
+		await until(() => expect(toasts.items.map((t) => t.kind)).toEqual(['error']));
+		expect(toasts.items[0]!.text).toContain("Couldn't sign out");
+		expect(nav.goto).not.toHaveBeenCalled();
+		expect(currentSession()).toBe('signed_in');
+		await until(() => expect(button.getAttribute('aria-busy')).toBeNull());
 	});
 
 	it('shows the lock-out and holds the button until it ends', async () => {

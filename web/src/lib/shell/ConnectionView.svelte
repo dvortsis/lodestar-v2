@@ -7,10 +7,41 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import StateScreen from './StateScreen.svelte';
 
-	let { kind }: { kind: 'unreachable' | 'reconnecting' } = $props();
+	// `offline`: the page itself could not load because nothing answered (+error.svelte). It retries on
+	// its own; `status` is the live line saying when, and Try again asks now. +error.svelte sets the
+	// tab title (and puts it back), so this view doesn't.
+	let {
+		kind,
+		status = '',
+		onretry
+	}: {
+		kind: 'unreachable' | 'reconnecting' | 'offline';
+		status?: string;
+		onretry?: () => void;
+	} = $props();
 </script>
 
-{#if kind === 'unreachable'}
+{#if kind === 'offline'}
+	<StateScreen
+		title={m.shell_state_offline_title()}
+		text={m.shell_state_offline_text()}
+		scene="connection_error"
+	>
+		{#snippet actions()}
+			<button type="button" class="btn btn-primary" onclick={() => onretry?.()}
+				>{m.shell_state_retry()}</button
+			>
+			<p
+				role="status"
+				aria-live="polite"
+				data-testid="offline-status"
+				class="flex items-center text-small text-muted-text"
+			>
+				{status}
+			</p>
+		{/snippet}
+	</StateScreen>
+{:else if kind === 'unreachable'}
 	<StateScreen
 		title={m.shell_state_unreachable_title()}
 		text={m.shell_state_unreachable_text()}

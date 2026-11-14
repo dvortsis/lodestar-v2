@@ -247,6 +247,10 @@ workstreams:
     phase: ph-polish
     name: Planned follow-ups
     plain: Small known items waiting for a free slot.
+  ws-review-fixes:
+    phase: ph-polish
+    name: Code-review fixes
+    plain: Fixes from the 2026-11-12 code review (Track Q) that belong to no feature area, such as the test net and CI. Security and content-safety findings are named by id only until a release with the fix is out.
   ws-rounds:
     phase: ph-polish
     name: Fix and polish rounds (merged)
@@ -274,6 +278,8 @@ placement:
   - M-auth
   - X-settings-trim
   - X-settings-followups
+  - X-wizard-labels-signout
+  - X-session-draft-keep
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -284,12 +290,15 @@ placement:
   - B17
 - ws: ws-search-ui
   match:
+  - X-results-drawer-adaptive
   - S-search-*
   - S-detail
   - S-compare
   - S-discover
 - ws: ws-insights
   match:
+  - X-insights-funnel-fixture
+  - X-insights-scroll-a11y
   - S-alerts
   - S-insights-*
   - B9
@@ -311,8 +320,16 @@ placement:
   - X-spool-damage-log
   - X-wk-own-lease-lost
   - X-wk-out-set-polish
+  - X-wk-fetched-lease
+  - X-wk-fetched-lease-nits
+  - X-wk18w-rollback
+  - X-lease-reconcile-every-session
+  - X-worker-service-log
 - ws: ws-web
   match:
+  - X-ui-guards
+  - X-offline-retry
+  - X-offline-retry-nits
   - W*
   - C0
   - C1
@@ -396,6 +413,7 @@ placement:
   - X-flake-email-bcc
   - X-flake-ops-pause
   - X-flake-query-token-style
+  - X-flake-relevance-lock
   - X-flake-utp-lossy
   - X-flake-export-wal
   - X-flake-filter-trails
@@ -405,18 +423,36 @@ placement:
   - X-cloud-infra
   - X-cloud-infra-2
   - X-test-vm
+  - X-gluetun-guard-reboot
+  - X-gluetun-guard-reboot-nits
+  - X-scrub-guard-fields
+  - X-scrub-guard-fields-nits
+  - X-damaged-mark-links
+  - X-scrub-fields-readers
+  - X-fleet-guard-docs
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
+  - X-operator-hardening
   - X-op4-polish
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
+  - X-dht-lookup-converge
+  - X-dht-bep42-rejoin
   - X-win-clippy
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
+  - X-companions-loopback-nits
+  - X-worker-839-followups
   - X-svc-eventcreate-bounded
   - X-win-fs-followups
   - X-flake-portable-restart-3
+  - X-flake-scrape-udp-port
+  - X-flake-companions-loopback
+  - X-pia-vm-helper
+  - X-fleet-sudo-narrow
+  - X-pia-bridge-manual
+  - X-pia-bridge-docs
   - X-restart-banner-polish
   - X-restart-save-lag
   - X-win-upd-history-polish
@@ -503,6 +539,11 @@ placement:
   - SRC-14b
   - SRC-15*
   - X-sources-api-spec
+  - X-sources-restructure
+  - X-sources-nits
+  - X-consent-gate-lift-r2
+  - X-consent-gate-lift-account
+  - X-consent-gate-lift-external
   - SRC-16
   - SRC-17
   - SRC-17a
@@ -513,6 +554,7 @@ placement:
   match:
   - GS-gate
   - RX-0
+  - X-rx0-nits
   - TZ-0
   - X-tz0-polish
   - UP-0
@@ -530,6 +572,7 @@ placement:
 - ws: ws-m7-w3
   match:
   - GS-2
+  - X-gs2-nits
   - ENR-14
   - UN-1
   - UN-2
@@ -541,6 +584,8 @@ placement:
   - GS-3
   - ENR-12
   - UP-2
+  - X-watch-env
+  - X-watch-stall-retry
   - /^ENR-[a-z]+$/
 - ws: ws-m7-w5
   match:
@@ -548,14 +593,19 @@ placement:
   - GS-4
   - GS-5
   - ENR-13
+  - ENR-13b
+  - X-always-adult-detail-mask
+  - X-percolate-promoted-hold
 - ws: ws-m7-w6
   match:
   - SRC-3b
   - UN-3
   - UN-4
+  - X-unverified-cap-index
   - OUT-1
   - OUT-3
   - D-outputs-guide
+  - X-outputs-guide-nits
   - IRC-2
   - IRC-3
 - ws: ws-m7-gates
@@ -595,6 +645,16 @@ placement:
   - X-cmp-native-handover
   - X-cmp-handover-followups
   - X-cmp-egress-api
+  - X-gluetun-leak
+  - X-gluetun-leak-cmp
+  - X-gluetun-templates
+  - X-gluetun-templates-hostfile
+  - X-gluetun-hostfile-ui
+  - X-gluetun-pin-ci-filter
+  - X-ci-filter-fleet
+  - X-ci-filter-rust-inputs
+  - X-ci-filter-docs-user
+  - X-companions-mount-check
   - X-cmp-egress-ui
   - D-companions-guide
   - X-cmp0-polish
@@ -618,6 +678,7 @@ placement:
   match:
   - X-utp
   - X-utp-backoff
+  - X-utp-spurious-rto
   - X-integrations
   - X-clients
   - X-notify
@@ -671,6 +732,32 @@ placement:
   match:
   - R-v1-cut
   - G-v1*
+- ws: ws-review-fixes
+  match:
+  - X-e2e-orphan-specs
+  - X-ci-advisories
+  - X-fixed-sleep-asserts
+  - X-rusqlite-041
+  - X-filter01-fix
+  - X-filter01-rejudge
+  - X-filter03-fix
+  - X-apifeat01-fix
+  - X-filter01-hardening
+  - X-rejudge-pending-gate
+  - X-filter15-fix
+  - X-filter13-fix
+  - X-filter14-fix
+  - X-filter12-fix
+  - X-fixed-sleep-nits
+  - X-cluster06-fix
+  - X-metainfo01-fix
+  - X-filter02-fix
+  - X-update01-store01-fix
+  - X-dht01-fix
+  - X-search01-fix
+  - X-pipe01-fix
+  - X-store02-pipe02-fix
+  - X-cmp01-fix
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -685,7 +772,9 @@ pinned:
   X-strip-format-chars: ws-small
   i9-stage2: ws-small
   openapi-example-size: ws-small
-held: []
+held:
+- X-rejudge-pending-gate  # held (owner-decisions §2.71)
+- PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
 - E-v06-sources
 - E-M6
@@ -789,13 +878,15 @@ conditions:
     label: You tag and publish v0.5.1
     auto: tag:v0.5.1
   experiment-host:
-    met: false
+    met: true
     who: you
-    label: 'Not booked. cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h. Next booking: CR-AB-ADM, after 2026-11-09T02:01Z and rc.2 steps B-E'
+    label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check, with a restore step that always runs'
+    note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h'
   owner-checkpoint-1:
-    met: false
+    met: true
     who: you
     label: You re-decide at Checkpoint 1 if the crawler projection falls short
+    note: 'The first step is decided by the runner on your delegation, §2.69: Track C fixes and a new measurement first. If still short, you re-decide the number (§2.27)'
   import-host:
     met: false
     who: you
@@ -893,9 +984,10 @@ conditions:
     who: you
     label: You do the M6 manual Unraid and MSI installs and approve the rc's signing (M6 Q14)
   owner-pk-nightly-host:
-    met: false
+    met: true
     who: you
     label: You approve the host that serves the nightly update manifests (PK-nightly-host)
+    note: 'The PK-manifest proposal is approved as written by the runner on your delegation, §2.69; only if the Nightly channel is offered'
   owner-v08-q1:
     met: true
     who: you
@@ -958,6 +1050,51 @@ conditions:
     who: you
     label: You tag and publish v1.0.0
     auto: tag:v1.0.0
+  owner-filter01-choice:
+    met: true
+    who: you
+    label: You choose between the two held fixes for FILTER-01 (the runner gives you the detail directly)
+    note: 'Chosen by you on 2026-11-13 (§2.70); held by id only'
+  owner-apifeat01-choice:
+    met: true
+    who: you
+    label: You choose between the two held options for APIFEAT-01 (the runner gives you the detail directly)
+    note: 'Decided by the runner on your delegation, §2.69 (docs/decisions/2026-11-13-runner-owner-queue.md)'
+  owner-pia-sudo-model:
+    met: true
+    who: runner
+    label: The VM sudo model for the PIA bridge helper (#632 split, part b)
+    note: 'Delegated to the runner by you on 2026-11-14 (§2.71); decided in docs/decisions/2026-11-14-runner-trackq-order.md'
+  owner-filter03-choice:
+    met: true
+    who: you
+    label: You choose between the two held fixes for FILTER-03 (the runner gives you the detail directly)
+    note: 'Chosen by you on 2026-11-13 (§2.70); held by id only'
+  owner-infra01-image-gate:
+    met: true
+    who: you
+    label: You decide whether the image publish waits for the release environment approval (INFRA-01), before the v0.5.2 tag
+    note: 'Yes, decided by the runner on your delegation, §2.69'
+  owner-ui-part4:
+    met: true
+    who: you
+    label: You answer the UI review's eight part 4 proposals that change §10 or the glossary
+    note: 'Seven of eight accepted by the runner on your delegation, §2.69'
+  owner-v06-tag-scope:
+    met: true
+    who: you
+    label: You say whether the v0.6 tag waits on the crawler gate only, or also on WK-G, CMP-G and G-m6
+    note: 'The crawler gate only (P4), decided by the runner on your delegation, §2.69'
+  owner-notice-torrent-cache:
+    met: true
+    who: you
+    label: You approve or change the proposed Legal Notice section 2 sentence about the torrent cache
+    note: 'Approved as proposed by the runner on your delegation, §2.69'
+  owner-notice-account-wording:
+    met: true
+    who: you
+    label: You approve the Legal Notice section 2 sentence for Account sources (Prowlarr/Jackett)
+    note: 'Approved as proposed by the runner on your delegation, §2.69, subject to X-consent-gate-lift-account adding the Account dialog''s password field'
 roadmap:
   steps:
   - id: soak
@@ -984,7 +1121,7 @@ roadmap:
     override: done
   - id: v052
     label: Cut v0.5.2
-    plain: A new release branch from main, now that v0.5.1 is out. The consent gate is in (sources that need consent stay off in v0.5.2); the feature manifest is frozen first, and the release notes are trimmed at the cut.
+    plain: A new release branch from main, now that v0.5.1 is out. The consent gate is in (sources that need consent stay off in v0.5.2); the feature manifest is frozen first, and the release notes are trimmed at the cut. INFRA-01 (the image publish on a version tag) is checked before the tag.
     col: 3
     row: 2
     members:
@@ -1160,6 +1297,8 @@ roadmap:
     - WK-16
     - WK-17
     - WK-18
+    - WK-18s
+    - WK-18w
     - WK-19
     - WK-20
     - WK-G
@@ -1249,6 +1388,7 @@ roadmap:
     - ENR-11
     - ENR-12
     - ENR-13
+    - ENR-13b
     - ENR-14
     - ENR-tmdb
     - ENR-tvdb
@@ -1359,6 +1499,48 @@ roadmap:
     - G-v1-design
     - G-v1-ui
     - G-v1
+  - id: tracku
+    label: 'Track U: UI review fixes'
+    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in.'
+    col: 5
+    row: 4
+    members:
+    - X-wizard-labels-signout
+    - X-sources-restructure
+    - X-ui-guards
+    - X-insights-funnel-fixture
+    - X-results-drawer-adaptive
+    - X-insights-scroll-a11y
+    - X-offline-retry
+    - X-session-draft-keep
+  - id: trackq
+    label: 'Track Q: code-review fixes'
+    plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'
+    col: 6
+    row: 4
+    members:
+    - X-lease-reconcile-every-session
+    - X-watch-stall-retry
+    - X-utp-spurious-rto
+    - X-e2e-orphan-specs
+    - X-ci-advisories
+    - X-fixed-sleep-asserts
+    - X-filter01-fix
+    - X-filter03-fix
+    - X-apifeat01-fix
+    - X-filter15-fix
+    - X-filter13-fix
+    - X-filter14-fix
+    - X-filter12-fix
+    - X-metainfo01-fix
+    - X-filter02-fix
+    - X-update01-store01-fix
+    - X-dht01-fix
+    - X-search01-fix
+    - X-pipe01-fix
+    - X-store02-pipe02-fix
+    - X-cmp01-fix
+    - X-cluster06-fix
   arrows:
   - - soak
     - gluetun
@@ -1426,12 +1608,13 @@ roadmap:
     - m7
   - - m8
     - v1
+  - - trackq
+    - m8
+  - - trackq
+    - v1
+  - - tracku
+    - m8
 owner_queue:
-- n: 1
-  type: action
-  action: Book each crawler run on the experiment host (the Unraid box, §2.51). The comparator is booked from 2026-11-07T13:00Z
-  unblocks: All live crawler measurement and the v0.6 tag
-  when: Before CR-4 lands
 - n: 2
   type: action
   action: Add web-ok and e2e-ok to the main ruleset's required checks, next to ci-ok (you said yes, §2.37)
@@ -1442,11 +1625,6 @@ owner_queue:
   action: Create the nightly signing key and its environment (deferred, §2.52)
   unblocks: Update checks on the Nightly channel
   when: Before 1.0, only if the Nightly channel is offered
-- n: 4
-  type: decision
-  action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
-  unblocks: The v0.6 tag
-  when: After the A/B runs
 - n: 5
   type: action
   action: Fix your Backups share minimum free space (500 GB) on the Unraid box
@@ -1472,20 +1650,30 @@ owner_queue:
   action: Replace the published v0.5.1 release text with the runner's draft (runner-state notes/v051-release-body.md; §2.52)
   unblocks: A release page that matches docs/releases/v0.5.1.md
   when: Any time
-- n: 10
-  type: decision
-  action: 'PK-nightly-host: approve where nightly update manifests are published, signed with the nightly key (proposal in docs/decisions/2026-11-08-PK-manifest.md)'
-  unblocks: Automatic updates on the Nightly channel
-  when: Only if the Nightly channel is offered; pairs with item 3
 - n: 11
   type: review
   action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
-- n: 12
+- n: 20
   type: action
-  action: 'Deploy the status connector: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (repository Settings, Actions, or the status-connector-deploy environment) and re-run "Status connector deploy", or run `npx wrangler deploy` from tools/status-connector. Without them the workflow only runs the tests, so #742 is merged but not live'
-  unblocks: The dashboard's per-hour activity bars (#742)
+  action: 'Open draft security advisories for the held findings, then delete the review branch that holds their detail (the runner gives you both directly)'
+  unblocks: Disclosure records for the held findings, and their detail off the repository
+  when: Any time; the advisories before the fixes ship
+- n: 23
+  type: review
+  action: 'Runner calls you may want to veto (§2.19): every restore path carries recorded holds and deletions, Windows included (UPDATE-01, UPDATE-05, STORE-01; the rule is already recorded in docs/decisions/2026-11-12-X-win-upd-manual-rollback.md follow-up 1); SRC-02, settled before X-consent-gate-lift-external, the Account round or the first Restricted or Overlay plug-in lets more sources run; TEST-05, the detail drawer''s size budget (28 KB in the gate against 15 KB in the architecture, a §2.26 call); the runner''s answers to owner-queue items 4, 10, 14, 16 to 19, 21 and 22, which you gave it on 2026-11-13 (§2.69; docs/decisions/2026-11-13-runner-owner-queue.md)'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
+- n: 24
+  type: action
+  action: Set the repository variables `OWNER_USER_ID` (your numeric GitHub ID) and `OPERATOR_STOP=false` so operator-apply can run (§2.67)
+  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
+  when: Any time
+- n: 25
+  type: review
+  action: 'Runner call you may want to veto (§2.19; you delegated it on 2026-11-14, §2.71): the PIA bridge helper keeps main''s VM sudo model for now, with a test tying the sudoers lines to what the fleet steps run, and a separate slice (X-fleet-sudo-narrow) then narrows sudo to root-owned fixed-verb helpers for every fleet step'
+  unblocks: Nothing; this goes ahead unless you object
   when: Any time
 
 gates:
@@ -1638,10 +1826,10 @@ gates:
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-security
   name: '1.0: security'
-  plain: The eight security reviews done, a delta review to the RC, no open blocking or important findings.
+  plain: The eight security reviews done, a delta review to the RC, no open blocking or important findings, including the code review's (Track Q).
   slice: G-v1-security
   measure: ''
-  target: runner/standards.md 5
+  target: 'runner/standards.md 5; none of Track Q''s blocking or important findings open at the RC unless held under docs/security/v1/README.md 5 (ids only)'
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-design
   name: '1.0: design review'
@@ -1692,8 +1880,14 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-08'
+  updated: '2026-11-13'
   now:
+  - label: The runner decides the owner queue, except the filters (§2.69)
+    text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68), and the API credit is in use (§2.67).'
+  - label: B1 and B2 first (§2.66)
+    text: By your decision, the first-run wizard's raw labels and the missing Sign out went ahead of the larger queue (X-wizard-labels-signout, merged as #811). The Sources restructure is next, then the UI guards.
+  - label: 'Review fixes: Tracks Q and U, held findings named by id only'
+    text: The code review (Track Q) and the UI review (Track U) are sliced beside the ladder. Security and content-safety findings are named only by id, severity and surface until a release with the fix is out (§2.47); their fix slices are added by id later. Track Q's blocking and important findings must be closed, or held, for the 1.0 security gate.
   - label: A cloud screen before experiment-host runs
     text: Before each run on your Unraid box, a candidate first runs a short screen on the two cloud Linodes. The screen can only stop a candidate that clearly fails (a crash, a memory or disk bound, nothing stored). It never counts as evidence of a gain, is never combined with Unraid runs, and never delays a booking. You approved adding this stage; the runner set its rules (P-cloud-test-plan).
   - label: v0.5.1 is published
@@ -1705,10 +1899,10 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Four slots
-    text: 'By your instruction at most eight worker slots run at once from 2026-11-12T06:03Z, filled only when ready work fits the plan (owner-decisions §2.59, replacing §2.56''s twelve). Sessions already running finish their slices first. The runner paused on 2026-11-09 at your request and resumed on your command on 2026-11-11. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
+  - label: Four plus four sessions
+    text: 'By your instruction, from 2026-11-13T00:00Z at most four build sessions and four cloud-testing sessions run at once (owner-decisions §2.64, replacing §2.59 to §2.61), filled only when ready work fits the plan. Cloud testing comes first (§2.62). Sessions over the cap finish their open pull request and are then archived (§2.65). The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
-  - label: The comparator run
-    text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
+  - label: New decisions from the reviews
+    text: Owner queue item 20 (the draft security advisories); the runner gives you its detail directly. FILTER-01 and FILTER-03 are chosen (§2.70); the others are the runner's now (§2.69).
   - label: Also for you
     text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Paste the new v0.5.1 release text. The nightly signing key is deferred (§2.52); the Unraid Backups share minimum free space is optional.

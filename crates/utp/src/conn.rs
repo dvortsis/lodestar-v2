@@ -36,6 +36,13 @@ const HANDSHAKE_TIMEOUT: Duration = INITIAL_RTO.saturating_mul(8);
 /// Duplicate ACKs (or packets selectively acknowledged past a hole) that
 /// mean the hole was lost.
 const DUP_ACK_THRESHOLD: u32 = 3;
+/// How old a transmission may be for an echoed timestamp to be matched
+/// against it. Our 32-bit microsecond clock wraps every ~71 minutes; half
+/// that keeps the wrapping comparison in `echoed_sample` unambiguous.
+/// Timeouts that count give up within about 7 minutes, but probing a
+/// closed window doesn't count, so a packet can stay unacknowledged for
+/// longer than this: past it, Karn's rule applies and there's no sample.
+const ECHO_HORIZON: Duration = Duration::from_micros(1 << 31);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Limits {
@@ -75,7 +82,17 @@ struct Sent {
     seq: u16,
     ty: PacketType,
     payload: Vec<u8>,
+    /// When its latest transmission went out.
     sent_at: Instant,
+    /// When its first and its second-to-latest transmissions went out
+    /// (both `sent_at` until it's resent): with `sent_at`, what the peer's
+    /// echoed timestamp is matched against (`echoed_sample`).
+    first_sent_at: Instant,
+    prev_sent_at: Instant,
+    /// When its latest transmission went out relative to every other
+    /// packet's (`Connection::next_order`): a selective ACK of a packet
+    /// sent later is evidence this transmission was lost.
+    order: u64,
     transmissions: u32,
     acked: bool,
     /// Considered lost; goes out again when the window allows.
@@ -112,9 +129,11 @@ pub(crate) struct Connection {
     rtt: Rtt,
     timer: Option<Instant>,
     /// Whether any packet arrived since the timer was last armed: a
-    /// timeout only counts towards giving up when the peer went silent
-    /// (a live peer with a full window isn't dead).
+    /// timeout doesn't count towards giving up when the peer answered
+    /// with a closed window (a live receiver that's full isn't dead).
     heard: bool,
+    /// Transmission counter behind `Sent::order`.
+    next_order: u64,
     /// When the last packet from the peer arrived (or the connection was
     /// created), for the idle timeout.
     last_recv: Instant,
@@ -166,6 +185,9 @@ impl Connection {
             ty: PacketType::Syn,
             payload: Vec::new(),
             sent_at: now,
+            first_sent_at: now,
+            prev_sent_at: now,
+            order: 0,
             transmissions: 0,
             acked: false,
             lost: true,
@@ -229,6 +251,7 @@ impl Connection {
             rtt: Rtt::new(),
             timer: None,
             heard: false,
+            next_order: 0,
             last_recv: now,
             handshake_deadline: None,
             timeouts: 0,
@@ -401,7 +424,18 @@ impl Connection {
             self.close_with(Closed::Done);
             return;
         }
-        if !self.heard {
+        // A peer that answers with a window too small for our oldest
+        // packet is flow control, not loss: we keep probing. Anything else
+        // that acknowledged nothing since the last timeout counts, even if
+        // the peer kept sending: one that talks but never acknowledges our
+        // data must not hold the connection open for ever.
+        let oldest = self
+            .inflight
+            .iter()
+            .find(|s| !s.acked)
+            .map_or(MSS, |s| s.payload.len().max(1));
+        let closed_window = (self.peer_wnd as usize) < oldest;
+        if !(self.heard && closed_window) {
             self.timeouts += 1;
         }
         let limit = if self.state == State::SynSent {
@@ -499,6 +533,17 @@ impl Connection {
         let cumulative = if upto <= len { upto } else { 0 };
         let mut acked_bytes = 0;
         let mut newest_sample = None;
+        // Only used when no first transmission gives a sample: that one is
+        // exact, an echoed one at worst an overestimate.
+        let mut echoed = None;
+        // Our timestamp on the last packet the peer received, plus however
+        // long it held this reply: its timestamp minus the delay it
+        // measured (BEP 29). Untrusted. A zero delay means the peer had
+        // nothing to measure, so there's no echo.
+        let h = &p.header;
+        let echo =
+            (h.timestamp_diff_us != 0).then(|| h.timestamp_us.wrapping_sub(h.timestamp_diff_us));
+        let epoch = self.epoch;
         let mut mark = |s: &mut Sent, unacked: &mut usize, flight: &mut usize| {
             if s.acked {
                 return;
@@ -511,44 +556,50 @@ impl Connection {
             acked_bytes += s.payload.len();
             if s.transmissions == 1 {
                 newest_sample = Some(now.saturating_duration_since(s.sent_at));
+            } else if s.ty != PacketType::Syn
+                && let Some(r) = echo.and_then(|e| echoed_sample(s, e, epoch, now))
+            {
+                // (Not a SYN: the accepting side doesn't refresh its echo
+                // for a repeated SYN, so the echo there is stale, and the
+                // handshake drops the backoff anyway.)
+                echoed = Some(r);
             }
         };
         for s in self.inflight.iter_mut().take(cumulative) {
             mark(s, &mut self.unacked_bytes, &mut self.flight);
         }
-        let mut sacked_past_hole = 0;
         if let Some(mask) = p.sack {
-            for (j, byte) in mask.iter().enumerate() {
-                for bit in 0..8 {
-                    if byte & (1 << bit) == 0 {
-                        continue;
-                    }
-                    let seq = ack.wrapping_add(2 + (j * 8 + bit) as u16);
-                    let idx = seq.wrapping_sub(una) as usize;
-                    if idx < len {
-                        mark(
-                            &mut self.inflight[idx],
-                            &mut self.unacked_bytes,
-                            &mut self.flight,
-                        );
-                        sacked_past_hole += 1;
-                    }
+            for seq in sacked(ack, mask) {
+                let idx = seq.wrapping_sub(una) as usize;
+                if idx < len {
+                    mark(
+                        &mut self.inflight[idx],
+                        &mut self.unacked_bytes,
+                        &mut self.flight,
+                    );
                 }
             }
         }
-        if let Some(r) = newest_sample {
+        if let Some(r) = newest_sample.or(echoed) {
             self.rtt.sample(r);
         }
-        let progressed = cumulative > 0;
+        // Progress is our oldest packet being acknowledged, by any means.
+        let mut progressed = false;
         while self.inflight.front().is_some_and(|s| s.acked) {
             let s = self.inflight.pop_front().expect("front exists");
+            progressed = true;
             if s.ty == PacketType::Fin {
                 self.fin_acked = true;
             }
         }
+        if progressed {
+            // Only progress shows the peer is taking our data: selective
+            // ACKs of later packets alone must not keep a connection whose
+            // oldest packet never gets through from timing out.
+            self.timeouts = 0;
+        }
         if acked_bytes > 0 || progressed {
             self.cc.on_ack(acked_bytes, p.header.timestamp_diff_us, now);
-            self.timeouts = 0;
             self.dup_acks = 0;
             if !self.time_wait {
                 self.timer = None;
@@ -564,12 +615,32 @@ impl Connection {
             self.dup_acks += 1;
         }
         // Fast retransmit: the oldest packet is presumed lost once three
-        // later packets got through, or three duplicate ACKs arrive.
+        // packets sent after its latest transmission got through. That
+        // covers a lost retransmission too, which would otherwise wait for
+        // a backed-off timeout. Three duplicate ACKs also count, but only
+        // for a first transmission: they may answer packets sent before a
+        // resend.
+        let Some(front) = self.inflight.front() else {
+            return;
+        };
+        // The selective ACK describes the packets after the hole it
+        // leaves; only when that hole is our oldest does it tell us
+        // anything about it.
+        let sent_after = match p.sack {
+            Some(mask) if front.seq == ack.wrapping_add(1) => sacked(ack, mask)
+                .filter(|seq| {
+                    self.inflight
+                        .get(seq.wrapping_sub(front.seq) as usize)
+                        .is_some_and(|s| s.order > front.order)
+                })
+                .count(),
+            _ => 0,
+        };
         if let Some(front) = self.inflight.front_mut()
             && !front.acked
             && !front.lost
-            && front.transmissions == 1
-            && (sacked_past_hole >= DUP_ACK_THRESHOLD || self.dup_acks >= DUP_ACK_THRESHOLD)
+            && (sent_after >= DUP_ACK_THRESHOLD as usize
+                || (front.transmissions == 1 && self.dup_acks >= DUP_ACK_THRESHOLD))
         {
             front.lost = true;
             self.flight -= front.payload.len();
@@ -652,8 +723,20 @@ impl Connection {
             if flight == 0 || flight + len <= window {
                 let s = &mut self.inflight[i];
                 s.lost = false;
+                if s.transmissions == 0 {
+                    // A SYN's first transmission.
+                    s.first_sent_at = now;
+                    s.prev_sent_at = now;
+                } else {
+                    s.prev_sent_at = s.sent_at;
+                }
                 s.transmissions += 1;
                 s.sent_at = now;
+                // Only the latest copy's order is kept, so a late selective
+                // ACK of an earlier copy also counts as "sent after"; that
+                // costs at worst one early resend.
+                s.order = self.next_order;
+                self.next_order += 1;
                 if s.transmissions > 1 {
                     self.retransmits += 1;
                 }
@@ -705,10 +788,14 @@ impl Connection {
             ty,
             payload,
             sent_at: now,
+            first_sent_at: now,
+            prev_sent_at: now,
+            order: self.next_order,
             transmissions: 1,
             acked: false,
             lost: false,
         });
+        self.next_order += 1;
         self.seq_nr = self.seq_nr.wrapping_add(1);
     }
 
@@ -780,6 +867,50 @@ impl Connection {
     pub fn buffered(&self) -> usize {
         self.unsent.len() + self.unacked_bytes + self.readable.len() + self.ooo_bytes
     }
+}
+
+/// A round-trip sample for a resent packet from the peer's echoed
+/// timestamp `echo` (our clock, microseconds), or `None` where the echo
+/// can't vouch for one (Karn's rule).
+///
+/// The echo is our timestamp on the last packet the peer received plus
+/// how long it held its reply, so an honest echo is never earlier than
+/// that packet's send time, and `now - echo` is a real round trip. The
+/// sample is measured from the latest transmission of ours at or before
+/// the echo: when that's the first, the timeout that resent it was
+/// spurious. It is never shorter than `now - echo`, and it's our own
+/// clock's reading, so a forged echo can only choose among our own
+/// transmission times, not invent a duration. An echo before the first
+/// transmission or after `now` (forged, wrapped, or a peer with nothing to
+/// echo) gives nothing, as does a zero round trip. (`Rtt::sample` caps it
+/// at `MAX_RTO`.)
+fn echoed_sample(s: &Sent, echo: u32, epoch: Instant, now: Instant) -> Option<Duration> {
+    if now.saturating_duration_since(s.first_sent_at) >= ECHO_HORIZON {
+        return None;
+    }
+    let us = |t: Instant| t.saturating_duration_since(epoch).as_micros() as u32;
+    let first = us(s.first_sent_at);
+    // Offsets from the first transmission, wrapping like the clock.
+    let at = |t: Instant| us(t).wrapping_sub(first);
+    let e = echo.wrapping_sub(first);
+    if e > at(now) {
+        return None;
+    }
+    let from = [s.sent_at, s.prev_sent_at, s.first_sent_at]
+        .into_iter()
+        .find(|&t| at(t) <= e)?;
+    let r = now.saturating_duration_since(from);
+    (!r.is_zero()).then_some(r)
+}
+
+/// The sequence numbers a selective-ACK mask acknowledges: bit `k` is
+/// `ack + 2 + k` (BEP 29; `ack + 1` is the hole).
+fn sacked(ack: u16, mask: &[u8]) -> impl Iterator<Item = u16> + '_ {
+    mask.iter().enumerate().flat_map(move |(j, byte)| {
+        (0..8)
+            .filter(move |bit| byte & (1 << bit) != 0)
+            .map(move |bit| ack.wrapping_add(2 + (j * 8 + bit) as u16))
+    })
 }
 
 fn closed_error(why: Closed, writing: bool) -> io::Error {

@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_identified_title": "Identified as",
+	"detail_identified_by": "Identified by {source}",
+	"detail_identified_confidence": "{percent} sure",
+	"detail_identified_chosen": "Used as the title",
+	"detail_identified_title_row": "Title",
+	"detail_identified_year": "Year",
+	"detail_identified_genres": "Genres",
+	"detail_identified_ids": "IDs",
+	"detail_identified_alt_titles": "Also known as"
+}

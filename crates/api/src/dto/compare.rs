@@ -9,15 +9,19 @@ use utoipa::ToSchema;
 use super::discover::HitGroup;
 use super::search::CompositionShare;
 
-/// `GET /torrents/{hash}/siblings`: the torrents related to one, in three
+/// `GET /torrents/{hash}/siblings`: the torrents related to one, in four
 /// groups. Each is either available (possibly empty) or unavailable with
 /// a reason.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SiblingsResponse {
     /// 40 hex digits: the torrent asked about.
     pub hash: String,
-    /// Identical-payload clones: the same content under another hash.
+    /// Identical-payload clones: the same content under another hash
+    /// (equal payload signatures, confirmed by the stored file sizes).
     pub identical_payload: HitGroup,
+    /// The index is still filling in payload signatures, so some clones
+    /// may be missing from `identical_payload`.
+    pub identical_payload_partial: bool,
     /// What other versions were matched on; null when the torrent has no
     /// parsed title.
     #[schema(required = true)]
@@ -25,8 +29,31 @@ pub struct SiblingsResponse {
     /// Other versions of the same work (other releases, qualities,
     /// groups), best first.
     pub other_versions: HitGroup,
-    /// Other torrents containing one of this torrent's files.
+    /// Other torrents containing one of this torrent's files, by v2
+    /// piece root: only v2 and hybrid torrents have them
+    /// (`needs_v2_files` for a v1-only torrent).
     pub same_file: HitGroup,
+    /// `same_file` is full (it lists the most the server returns) and
+    /// the lookup was bounded: only this torrent's largest files were
+    /// looked up, or more torrents shared them than were read. Some may
+    /// be missing from it. A shorter list never sets this.
+    pub same_file_capped: bool,
+    /// The file index is still filling in piece roots, so some torrents
+    /// may be missing from `same_file`.
+    pub same_file_partial: bool,
+    /// Torrents with a similar payload: most of the same large files
+    /// (a season with an episode swapped or added, a pack with an extra
+    /// disc), newest first. Found by a MinHash of the large file sizes
+    /// and confirmed on the stored sizes; identical clones are in
+    /// `identical_payload` instead. Unavailable (`few_major_files`) for
+    /// a torrent whose large files have fewer than 3 different sizes,
+    /// not counting a split archive's volume size (a size more than 2
+    /// files share). `truncated` also when more candidates matched than
+    /// were read, so some may be missing even from a short list.
+    pub similar_payload: HitGroup,
+    /// The index is still filling in the similarity terms, so some
+    /// torrents may be missing from `similar_payload`.
+    pub similar_payload_partial: bool,
 }
 
 /// A work's title identity (`docs/decisions/2026-10-22-B13.md`): its normalized title plus the

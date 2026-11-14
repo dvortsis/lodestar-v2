@@ -394,6 +394,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/companions/{id}/egress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Sets its route, then restarts it on the new route. The route is checked
+         *     as a source's is (`direct`, or `socks5` with a usable `host:port`; the
+         *     `interface` and `bind_address` routes, whose lookups would leave outside
+         *     them, are `409 route_unavailable`), and a SOCKS5 route's kill switch is
+         *     always on. Like a source's route change it needs the admin `password`
+         *     (`428 confirm_required`). `200` once saved: `restarting` says whether
+         *     its restart on the new route began (its row's `health` shows when it's
+         *     back); when it didn't, `not_restarted` says why, and the route is used
+         *     at its next start.
+         */
+        put: operations["setCompanionEgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/companions/{id}/guided/forget": {
         parameters: {
             query?: never;
@@ -2117,16 +2144,20 @@ export interface paths {
         /**
          * Enables or disables a source, or sets its priority. A priority
          *     applies at once; enabling or disabling at the next start.
-         * @description This build turns on only a source whose class is `none`. Enabling an
-         *     `external`, `account`, `restricted` or `overlay` source is refused with
-         *     `400 invalid_setting` on `enabled`, before its consent, acknowledgement
-         *     or credentials are looked at, whatever the request sends: this version
-         *     can't show the class's consent dialog yet. A `"password"` sent with the
-         *     enable is still checked first (`401` when it's wrong). `needs` and
-         *     `credential_spec` still say what the source will need once a later
-         *     version can turn it on, and credentials can be stored and removed
-         *     meanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every
-         *     class.
+         * @description A `none` source is a toggle. A `restricted` or `overlay` source is
+         *     turned on only when the request sends `"consent"` naming its class and
+         *     the `"consent_version"` `GET /sources` gives for it, exactly, unless an
+         *     acceptance of that version is already stored, and the admin
+         *     `"password"` every time: otherwise `409 consent_required` or `428
+         *     confirm_required`, and nothing is saved. A new consent text or address
+         *     list changes the version, and the source asks again. Enabling an
+         *     `external` or `account` source is refused with `400 invalid_setting` on
+         *     `enabled`, before its consent, acknowledgement or credentials are looked
+         *     at, whatever the request sends: this version can't turn it on yet. A
+         *     `"password"` sent with the enable is checked first (`401` when it's
+         *     wrong). `needs` and `credential_spec` say what the source needs, and
+         *     credentials can be stored and removed meanwhile (`PATCH
+         *     /sources/{id}/credentials`). Disabling works for every class.
          *
          *     Agents, egress and the schedule apply at the next start; changing
          *     egress needs the admin `"password"` (`428 confirm_required`), and the
@@ -2157,10 +2188,12 @@ export interface paths {
         head?: never;
         /**
          * Stores or removes a source's credentials: each name maps to a value
-         *     (stored, sealed with the install's key) or `null` (removed). Values
-         *     are never returned: the response lists the names stored. Removing what
-         *     an enabled `account` source needs disables it. `400
-         *     invalid_credentials` names the rule a change broke, never a value.
+         *     (stored, sealed with the install's key) or `null` (removed). A value
+         *     is stored only under a name the source's `credential_spec` lists, or
+         *     one of the two SOCKS5 names; any name can be removed. Values are never
+         *     returned: the response lists the names stored. Removing what an
+         *     enabled `account` source needs disables it. `400 invalid_credentials`
+         *     names the rule a change broke, never a name or a value.
          */
         patch: operations["patchSourceCredentials"];
         trace?: never;
@@ -2348,6 +2381,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/torrents/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adds one `.torrent` file, sent as the raw request body. */
+        post: operations["uploadTorrent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/torrents/{hash}": {
         parameters: {
             query?: never;
@@ -2391,8 +2441,12 @@ export interface paths {
         };
         /**
          * Torrents related to one (§10.5): other versions of the same work,
-         *     identical-payload clones and the same file elsewhere. The last two
-         *     need data M7 adds, so they're `unavailable` until then.
+         *     clones with an identical payload (equal file sizes), torrents with a
+         *     similar payload (most of the same major files) and other torrents
+         *     with one of its files (v2 and hybrid torrents only). Each group is
+         *     confirmed against the stored state and withheld as other versions
+         *     are; the `*_partial` flags say when the index is still filling in
+         *     what a group needs, so some may be missing.
          */
         get: operations["getTorrentSiblings"];
         put?: never;
@@ -3258,6 +3312,10 @@ export interface components {
             op: "time_of_day";
             /** Format: int32 */
             to: number;
+        } | {
+            /** @enum {string} */
+            op: "sig";
+            sig: string;
         };
         /** @enum {string} */
         AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk" | "seeders" | "leechers" | "trackers" | "dht";
@@ -3957,6 +4015,7 @@ export interface components {
              *     names only, never values. What `…/reveal` can show.
              */
             credentials: string[];
+            egress: null | components["schemas"]["CompanionEgress"];
             /** @description Null when Lodestar didn't install it. */
             health: null | ("unknown" | "healthy" | "unhealthy");
             /** @description The catalogue id, e.g. `qbittorrent`. */
@@ -3975,6 +4034,8 @@ export interface components {
              *     `guided_only`, …); null when it can, or when it's up to date.
              */
             refusal: string | null;
+            /** @description Where it runs, or would run if it were installed here. */
+            runs: "lodestar" | "own_container" | "yours" | "not_here";
             /** @description The templates it offers. */
             templates: ("compose" | "unraid")[];
         };
@@ -3988,6 +4049,47 @@ export interface components {
         /** @description `POST /companions/{id}/confirm`: the plan's settings, echoed exactly. */
         CompanionConfirmRequest: {
             settings: string[];
+        };
+        /**
+         * @description A companion's route (Q18): the same setting, with the same names, as a
+         *     source's route. A SOCKS5 route carries no credentials.
+         */
+        CompanionEgress: {
+            /**
+             * @description Where a companion's route comes from.
+             * @enum {string}
+             */
+            from: "saved" | "source";
+            setting: null | components["schemas"]["EgressSetting"];
+        };
+        /**
+         * @description The route was saved. `restarting` says whether the companion's restart
+         *     on it has begun; when it hasn't, the route is saved but not applied yet,
+         *     and it's used at the companion's next start.
+         */
+        CompanionEgressChanged: {
+            /** @description The route as saved now. */
+            egress: components["schemas"]["CompanionEgress"];
+            id: string;
+            /**
+             * @description Why it isn't restarting on the new route, as a stable code
+             *     (`not_wired`, `busy`, `restart_failed`, …); null when it is.
+             */
+            not_restarted: string | null;
+            /**
+             * @description True once its restart on the new route has begun. That isn't yet
+             *     running on it: the companion's row (its `health`) shows when it's
+             *     back, as after `POST …/restart`. False: saved, not applied yet.
+             */
+            restarting: boolean;
+        };
+        /**
+         * @description `PUT /companions/{id}/egress`: the new route, and the admin password
+         *     entered again (a route change always needs it, as a source's does).
+         */
+        CompanionEgressRequest: {
+            egress: components["schemas"]["EgressSetting"];
+            password?: string | null;
         };
         /** @description `POST /companions/{id}/guided/forget`: `confirm` is the companion's id. */
         CompanionForgetRequest: {
@@ -4239,7 +4341,7 @@ export interface components {
         };
         CoreRuleState: {
             action: string;
-            /** @description Part of the locked floor: can't be switched off. */
+            /** @description Locked: can't be switched off, and takes no exception. */
             floor: boolean;
             /** @example CS-3a */
             id: string;
@@ -4838,6 +4940,33 @@ export interface components {
          * @enum {string}
          */
         DownloadClientKind: "qbittorrent" | "transmission" | "deluge" | "rtorrent" | "aria2";
+        /**
+         * @description A source's egress setting.
+         * @example {
+         *       "proxy": "10.8.0.1:1080",
+         *       "route": "socks5"
+         *     }
+         */
+        EgressSetting: {
+            /**
+             * @description For `socks5`: who resolves names. Left out, it's `proxy` for a
+             *     source that only reaches its built-in sites, so lookups stay inside
+             *     the tunnel, and `local` for a source whose sites you enter, so a
+             *     public name can't reach devices on the proxy's network.
+             */
+            dns?: "proxy" | "local";
+            /**
+             * @description For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+             *     a bracketed IPv6 address). A name is resolved when the source
+             *     starts.
+             */
+            proxy?: string;
+            /**
+             * @description How a source's traffic leaves (§18.4, §18.7).
+             * @enum {string}
+             */
+            route: "direct" | "socks5" | "interface" | "bind_address";
+        };
         /** @description An email channel as the form has it. */
         EmailDraft: {
             allow_private?: boolean;
@@ -4863,7 +4992,10 @@ export interface components {
          * @enum {string}
          */
         EmailSecurity: "tls" | "starttls" | "none";
-        /** @description The source behind an adult-enrichment match. */
+        /**
+         * @description The source behind an enrichment answer: an adult-enrichment match or
+         *     an identification.
+         */
         EnrichmentSource: {
             /** Format: int32 */
             id: number;
@@ -5744,6 +5876,110 @@ export interface components {
         IdBody: {
             /** Format: int64 */
             id: number;
+        };
+        /** @description One plugin's answer. */
+        Identification: {
+            /** @description Other titles the work is known by, at most 32. */
+            alt_titles: components["schemas"]["IdentifiedTitle"][];
+            /** @description The work's own title in the plugin's database. */
+            canonical_title: string | null;
+            /**
+             * @description The torrent's effective title is this answer's: its name said
+             *     nothing, and the record was resolved via a plugin with the surest
+             *     answer that has a canonical title. At most one answer is chosen;
+             *     none when the title isn't a plugin's, or the chosen answer's source
+             *     isn't shown to this caller.
+             */
+            chosen: boolean;
+            /**
+             * Format: int32
+             * @description How sure the plugin is of the match, 0–100 percent.
+             */
+            confidence: number;
+            /** @description Normalised genres, at most 16. */
+            genres: string[];
+            /**
+             * @description The work's ids, at most 32, in the closed schemes enrichment
+             *     writes: imdb, tmdb, tvdb, anidb, anilist, mbid, olid, igdb,
+             *     discogs, steam, wikidata.
+             */
+            ids: components["schemas"]["IdentifiedId"][];
+            /** @description The plugin that answered: "Identified by Wikidata". */
+            source: components["schemas"]["EnrichmentSource"];
+            /**
+             * Format: int32
+             * @description The work's year, 1–9999.
+             */
+            year: number | null;
+        };
+        /**
+         * @description What general enrichment plugins (Wikidata, TMDB, …) identified a
+         *     torrent as (ENR-10, ENR-12; architecture §6, §10.5). Every text was
+         *     judged by the content filter before it was stored, and nothing is
+         *     judged again here.
+         * @example {
+         *       "alternatives": [
+         *         {
+         *           "alt_titles": [
+         *             {
+         *               "language": "ja",
+         *               "title": "ショーシャンクの空に"
+         *             }
+         *           ],
+         *           "canonical_title": "The Shawshank Redemption",
+         *           "chosen": true,
+         *           "confidence": 92,
+         *           "genres": [
+         *             "drama"
+         *           ],
+         *           "ids": [
+         *             {
+         *               "scheme": "imdb",
+         *               "value": "tt0111161"
+         *             },
+         *             {
+         *               "scheme": "wikidata",
+         *               "value": "Q172241"
+         *             }
+         *           ],
+         *           "source": {
+         *             "id": 7,
+         *             "name": "Wikidata",
+         *             "plugin": "wikidata"
+         *           },
+         *           "year": 1994
+         *         }
+         *       ],
+         *       "resolved_via": null
+         *     }
+         */
+        IdentifiedAs: {
+            /**
+             * @description Each plugin's answer, the surest first (ties by source id). Two
+             *     plugins that disagree are both kept.
+             */
+            alternatives: components["schemas"]["Identification"][];
+            /**
+             * @description How an ambiguous name's effective title was resolved, when it was
+             *     from the file tree: `files`, `folder` or `structure`. Null in every
+             *     other case: the name said it itself, the title came from a plugin
+             *     (see `chosen`), or the record can't be read. **Null never means
+             *     "from the name"**: don't present it as that.
+             */
+            resolved_via: string | null;
+        };
+        /** @description A work's id in one scheme. */
+        IdentifiedId: {
+            /** @description `imdb`, `tmdb`, `wikidata`, … */
+            scheme: string;
+            /** @description In the scheme's one spelling (`tt0111161`, `Q172241`). */
+            value: string;
+        };
+        /** @description An alternative title and its language. */
+        IdentifiedTitle: {
+            /** @description A BCP 47 tag, lower case; `und` when the plugin didn't say. */
+            language: string;
+            title: string;
         };
         /** @description One setting an import changes. */
         ImportChange: {
@@ -9166,23 +9402,64 @@ export interface components {
         /** @enum {string} */
         Severity: "warning" | "error";
         /**
-         * @description `GET /torrents/{hash}/siblings`: the torrents related to one, in three
+         * @description `GET /torrents/{hash}/siblings`: the torrents related to one, in four
          *     groups. Each is either available (possibly empty) or unavailable with
          *     a reason.
          */
         SiblingsResponse: {
             /** @description 40 hex digits: the torrent asked about. */
             hash: string;
-            /** @description Identical-payload clones: the same content under another hash. */
+            /**
+             * @description Identical-payload clones: the same content under another hash
+             *     (equal payload signatures, confirmed by the stored file sizes).
+             */
             identical_payload: components["schemas"]["HitGroup"];
+            /**
+             * @description The index is still filling in payload signatures, so some clones
+             *     may be missing from `identical_payload`.
+             */
+            identical_payload_partial: boolean;
             identity: null | components["schemas"]["TitleIdentity"];
             /**
              * @description Other versions of the same work (other releases, qualities,
              *     groups), best first.
              */
             other_versions: components["schemas"]["HitGroup"];
-            /** @description Other torrents containing one of this torrent's files. */
+            /**
+             * @description Other torrents containing one of this torrent's files, by v2
+             *     piece root: only v2 and hybrid torrents have them
+             *     (`needs_v2_files` for a v1-only torrent).
+             */
             same_file: components["schemas"]["HitGroup"];
+            /**
+             * @description `same_file` is full (it lists the most the server returns) and
+             *     the lookup was bounded: only this torrent's largest files were
+             *     looked up, or more torrents shared them than were read. Some may
+             *     be missing from it. A shorter list never sets this.
+             */
+            same_file_capped: boolean;
+            /**
+             * @description The file index is still filling in piece roots, so some torrents
+             *     may be missing from `same_file`.
+             */
+            same_file_partial: boolean;
+            /**
+             * @description Torrents with a similar payload: most of the same large files
+             *     (a season with an episode swapped or added, a pack with an extra
+             *     disc), newest first. Found by a MinHash of the large file sizes
+             *     and confirmed on the stored sizes; identical clones are in
+             *     `identical_payload` instead. Unavailable (`few_major_files`) for
+             *     a torrent whose large files have fewer than 3 different sizes,
+             *     not counting a split archive's volume size (a size more than 2
+             *     files share). `truncated` also when more candidates matched than
+             *     were read, so some may be missing even from a short list.
+             */
+            similar_payload: components["schemas"]["HitGroup"];
+            /**
+             * @description The index is still filling in the similarity terms, so some
+             *     torrents may be missing from `similar_payload`.
+             */
+            similar_payload_partial: boolean;
         };
         /** @description `POST /updates/skip`. */
         SkipRequest: {
@@ -9206,6 +9483,13 @@ export interface components {
                  */
                 max: number;
             };
+            /**
+             * @description Everything it finds is Adult (§20.9, X-source-adult): its finds are
+             *     stored and judged as Adult unless you say Not adult. The detail view
+             *     reads it too, to keep a torrent such a source found out of the
+             *     "Identified as" section.
+             */
+            always_adult: boolean;
             /**
              * @description The companion it waits for before it runs (§18.10); null when it
              *     needs none, or has it and it's healthy. Not the same as `needs`,
@@ -9400,7 +9684,7 @@ export interface components {
             not_yet_editable: string[];
             /**
              * @description Enabling it asks for the admin password, every time
-             *     (`restricted`, `overlay`).
+             *     (`account`, `restricted`, `overlay`).
              */
             password_required: boolean;
             /** @description The manifest id. */
@@ -10138,6 +10422,17 @@ export interface components {
          *     here is stored.
          */
         TemplateRequest: {
+            /**
+             * @description Lodestar's companion-files folder on the host, for an Unraid
+             *     template with gluetun: the template mounts gluetun's post-rules file
+             *     from it. In a container it's the host folder mounted at
+             *     `/companions`, where Lodestar saves the file as root at start-up;
+             *     the template uses it only if that file is exact and root's.
+             *     Natively it's a folder you name, outside the data folder, where
+             *     Lodestar saves the file; there is no default. Unset, or when the
+             *     file can't be used, you save the file yourself.
+             */
+            companions_dir?: string | null;
             /** @description The host folder for its settings. */
             config_dir?: string | null;
             /** @description The host folder it saves downloads in. */
@@ -10253,6 +10548,12 @@ export interface components {
          */
         Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings" | "updates" | "search_live";
         /**
+         * Format: binary
+         * @description The request body: the `.torrent` file's bytes (the schema only; the
+         *     handler reads the body itself).
+         */
+        TorrentBody: string;
+        /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
          *
@@ -10298,6 +10599,15 @@ export interface components {
             hash_v2: string | null;
             /** Format: int64 */
             id: number;
+            /**
+             * @description What general enrichment identified the torrent as (ENR-10, §6):
+             *     each plugin's answer, surest first. **Absent**, never null or
+             *     empty, when there's none to show: no answer is stored, the torrent
+             *     is hidden, held, private or Adult, the host hasn't said which
+             *     sources are always adult, or every answer came from a source this
+             *     caller may not see.
+             */
+            identified_as?: components["schemas"]["IdentifiedAs"];
             /**
              * Format: int64
              * @description Null = never scraped.
@@ -10430,7 +10740,7 @@ export interface components {
          * @description Why a section isn't available. Stable keys; the UI words them.
          * @enum {string}
          */
-        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
+        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots" | "no_content_files" | "needs_v2_files" | "payload_not_specific" | "partial_file_list" | "few_major_files" | "needs_group_minhash";
         UnderstandKpi: {
             /**
              * Format: int64
@@ -10618,6 +10928,16 @@ export interface components {
          * @enum {string}
          */
         UpdatesUnavailable: "fixture" | "network" | "windows_helper";
+        /** @description The body of a `202`. */
+        UploadAccepted: {
+            /** @description The info dict's primary hash, as 40 hex characters. */
+            info_hash: string;
+            /**
+             * @description The info dict says `private=1` (BEP 27): stored as private, so it
+             *     never reaches the DHT, a tracker or a cache.
+             */
+            private: boolean;
+        };
         /** @description `POST /usage/clear`. */
         UsageClear: {
             /**
@@ -11906,6 +12226,123 @@ export interface operations {
             };
             /** @description `unknown_companion`, `no_credential`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirm_required`: no password. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many password attempts. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setCompanionEgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanionEgressRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionEgressChanged"];
+                };
+            };
+            /** @description `invalid_egress`, with `field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_password`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `route_unavailable`, `takes_no_route`, `cant_follow_route` (it can't follow that route kind: qBittorrent takes no SOCKS5 proxy), `not_installed`, `busy`, `not_wired`. Nothing was saved. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16093,6 +16530,104 @@ export interface operations {
             };
             /** @description `restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadTorrent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The `.torrent` file itself, at most 8 MiB. Nothing else: no multipart, no file name. */
+        requestBody: {
+            content: {
+                "application/x-bittorrent": components["schemas"]["TorrentBody"];
+            };
+        };
+        responses: {
+            /** @description Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadAccepted"];
+                };
+            };
+            /** @description `malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`: sent from another site. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `body_timeout`: the body didn't arrive within 60 s. */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `body_too_large`: over 8 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: the body isn't sent as `application/x-bittorrent`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `refused`: on the safety floor's list; or `held`: the filter holds it. Neither is stored. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many uploads; wait for `Retry-After`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `uploads_unavailable`: uploads aren't being taken right now. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

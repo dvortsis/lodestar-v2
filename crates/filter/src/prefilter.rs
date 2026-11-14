@@ -323,7 +323,7 @@ impl DocKeys {
         let bytes = name.len()
             + files
                 .iter()
-                .take(crate::MAX_FILES)
+                .take(crate::MATCH_FILES)
                 .flat_map(|f| &f.path)
                 .map(|s| s.len() + 1)
                 .sum::<usize>();
@@ -354,7 +354,7 @@ impl DocKeys {
         // picks up where the longest of them ended (a season's episodes
         // and their subtitles alternate between two folders).
         let mut folders = Folders::default();
-        for f in files.iter().take(crate::MAX_FILES) {
+        for f in files.iter().take(crate::MATCH_FILES) {
             let Some((file, dirs)) = f.path.split_last() else {
                 continue;
             };

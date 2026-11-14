@@ -1,5 +1,9 @@
-import { render, waitFor } from '@testing-library/svelte';
+import { configure, render, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Waits get the whole deadline a slow CI runner may need.
+configure({ asyncUtilTimeout: 10_000 });
+vi.setConfig({ testTimeout: 20_000 });
 
 const destroy = vi.fn();
 const setSize = vi.fn();
@@ -94,9 +98,25 @@ describe('LineChart', () => {
 	});
 	it('does not create a chart if unmounted before uPlot loads', async () => {
 		const { default: LineChart } = await import('./LineChart.svelte');
-		const { unmount } = render(LineChart, props);
+		const onerror = vi.fn();
+		// A build reads the host's styles first, so an unguarded build is seen
+		// here even though, unmounted, it throws before reaching uPlot.
+		const styles = vi.spyOn(window, 'getComputedStyle');
+		const { unmount } = render(LineChart, { ...props, onerror });
 		unmount();
-		await new Promise((r) => setTimeout(r, 20));
+		// Not a timed absence. `dynamicImportSettled` waits for every dynamic
+		// import in flight, the chart's own included, whatever order the
+		// module runner settles them in. The rest of the chart's load is a
+		// chain of promise reactions, and a zero-delay macrotask runs only
+		// after every pending reaction. So by then the chart has had its
+		// chance to build and didn't (nor did it fail, which would also skip
+		// the build).
+		await vi.dynamicImportSettled();
+		await new Promise((r) => setTimeout(r, 0));
+		const builds = styles.mock.calls.length;
+		styles.mockRestore();
+		expect(builds, 'an unmounted chart started a build').toBe(0);
 		expect(ctor).not.toHaveBeenCalled();
+		expect(onerror).not.toHaveBeenCalled();
 	});
 });

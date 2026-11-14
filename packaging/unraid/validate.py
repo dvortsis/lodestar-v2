@@ -4,6 +4,7 @@
 Run: python3 packaging/unraid/validate.py
 Each template must be well-formed XML and carry the fields CA requires.
 """
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -16,6 +17,7 @@ TEMPLATES = {
     "lodestar-gluetun.xml": {"webui": True, "extra": "--network=container:gluetun", "paths": {"/data"}},
     "lodestar-worker.xml": {"webui": False, "vars": {"LODESTAR_JOIN", "LODESTAR_TOKEN"}, "requires": "v0.6"},
 }
+NETWORK_CONTAINER = re.compile(r"--net(?:work)?[= ]container:(\S+)")
 
 
 def check(path: Path, rules: dict) -> list[str]:
@@ -47,6 +49,28 @@ def check(path: Path, rules: dict) -> list[str]:
         errors.append("ExtraParams must contain --stop-timeout=60")
     if "requires" in rules and rules["requires"] not in (root.findtext("Overview") or ""):
         errors.append(f"Overview must say it requires Lodestar {rules['requires']}+")
+    # <Requires> is shown on the install page. Every template carries the element; one that
+    # depends on something else must name it, or a user installs it and it can't start.
+    requires_el = root.find("Requires")
+    requires = (requires_el.text or "").strip() if requires_el is not None else ""
+    if requires_el is None:
+        errors.append("<Requires> element missing")
+    if "requires" in rules and rules["requires"] not in requires:
+        errors.append(f"<Requires> must name Lodestar {rules['requires']} or newer")
+    # The dependency can also come from the Network type ("container:NAME").
+    network = (root.findtext("Network") or "").strip()
+    names = NETWORK_CONTAINER.findall(extra)
+    if network.startswith("container:"):
+        names.append(network[len("container:"):])
+    for name in names:
+        if name not in requires:
+            errors.append(f"<Requires> must name the running container {name!r} (it runs in that container's network)")
+    # The first sentence says what the container is. A leading "Requires Lodestar v0.6+." comes first.
+    overview = " ".join((root.findtext("Overview") or "").split())
+    sentences = [x for x in re.split(r"(?<=[.!?])\s+", overview) if x and not x.startswith("Requires ")]
+    first = sentences[0] if sentences else ""
+    if overview and (len(first.split()) < 5 or not re.search(r"Lodestar|worker", first)):
+        errors.append("Overview's first sentence must say what the container is (name Lodestar or the worker)")
     configs = root.findall("Config")
     for c in configs:
         for a in CONFIG_ATTRS:
@@ -81,9 +105,17 @@ def check(path: Path, rules: dict) -> list[str]:
     return errors
 
 
-def main() -> int:
-    here = Path(__file__).parent
+def unlisted(folder: Path) -> list[str]:
+    """Templates in the folder that have no rules entry, so they would skip every check."""
+    return [f"{p.name}: no rules entry in TEMPLATES; add one so this template is checked"
+            for p in sorted(folder.iterdir()) if p.suffix.lower() == ".xml" and p.name not in TEMPLATES]
+
+
+def main(here: Path = Path(__file__).parent) -> int:
     failed = False
+    for e in unlisted(here):
+        print(e)
+        failed = True
     for name, rules in TEMPLATES.items():
         errors = check(here / name, rules)
         for e in errors:

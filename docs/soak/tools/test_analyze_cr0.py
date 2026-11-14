@@ -952,6 +952,387 @@ class AnalyzerTests(unittest.TestCase):
         self.rows([sample(0, phase="startup")])
         self.assertEqual(analyze(self.root)["memory_attribution"]["refused"], "no_baseline")
 
+    # ---- Windows 1.0 checks (M8-WIN-1) ----
+    def svc_rows(self, pid_at=lambda i: 700, start=1000):
+        return [sample(i * 60, i, service_pid=pid_at(i), service_start_ticks=pid_at(i) * 10, image_sha256="b" * 64,
+                       values={"start_time_seconds": start, "dht_peer_admitted_total": i,
+                               "dht_peer_active": 3, "dht_peer_queued": 0,
+                               "dht_sample_cooling": 200000, "dht_sample_inflight": 0})
+                for i in range(5)]
+
+    def life(self, **parts):
+        (self.root / "lifecycle.json").write_text(json.dumps({"schema_version": 1, **parts}))
+
+    GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0", "service_running": True,
+               "service_restarted": True, "image_matches_installed": True,
+               "from_image_sha256": "a" * 64, "to_image_sha256": "b" * 64,
+               "data_present": True, "torrents_before": 500, "torrents_after": 520}
+    GOOD_UN = {"service_present": False, "program_files_present": False,
+               "data_present": True, "data_policy": "kept"}
+
+    def done(self, **changes):
+        (self.root / "result.json").write_text(json.dumps(
+            {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
+             "service_detached": True, "finalization_complete": True,
+             "shutdown": {"exit_confirmed": False}, **changes}))
+
+    def checks(self, rows=None, finished=True, bound="b" * 64, **parts):
+        self.run_json(service_image_sha256=bound, settings={"baseline_hours": 24, "service_mode": True})
+        self.rows(rows if rows is not None else self.svc_rows())
+        if finished:
+            self.done()
+        if parts:
+            self.life(**parts)
+        return analyze(self.root)["windows_checks"]
+
+    def test_memory_fit_constants_are_unchanged(self):
+        from analyze_cr0 import MEMORY_FIT
+        self.assertEqual((MEMORY_FIT["field"], MEMORY_FIT["from_hour"], MEMORY_FIT["to_hour"],
+                          MEMORY_FIT["bar_mib_per_hour"], MEMORY_FIT["min_samples"]),
+                         ("private_bytes", 12.0, 24.0, 2.0, 30))
+
+    def test_old_evidence_reports_absent_not_failed(self):
+        self.rows([sample(0, 1), sample(60, 2)])
+        checks = analyze(self.root)["windows_checks"]
+        self.assertEqual({c["status"] for c in checks.values()}, {"absent"})
+        self.assertIn("absent", markdown(analyze(self.root)))
+
+    def test_service_restart_pass_and_fail(self):
+        self.assertEqual(self.checks()["service_restart"]["status"], "pass")
+        pid = self.checks(self.svc_rows(lambda i: 700 if i < 3 else 701))
+        self.assertEqual(pid["service_restart"]["status"], "fail")
+        start = self.checks(self.svc_rows(start=1000)[:3] + self.svc_rows(start=2000)[3:])
+        self.assertEqual(start["service_restart"]["status"], "fail")
+
+    def test_unfinished_or_aborted_service_run_fails_restart_check(self):
+        # A restart or reboot ends the loop before another sample, so one PID proves nothing.
+        self.assertEqual(self.checks(finished=False)["service_restart"]["status"], "fail")
+        for reason in ("process_exited_1", "collector_error"):
+            self.rows(self.svc_rows())
+            self.done(reason=reason)
+            self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail", reason)
+
+    def test_sample_without_service_identity_fails_restart_check(self):
+        rows = self.svc_rows()
+        del rows[2]["service_pid"]
+        self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
+
+    def test_build_binding(self):
+        self.assertEqual(self.checks()["build_binding"]["status"], "pass")
+        rows = self.svc_rows()
+        rows[3]["image_sha256"] = "c" * 64  # binary swapped mid-run
+        self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
+        self.assertEqual(self.checks(bound="d" * 64)["build_binding"]["status"], "fail")
+        rows = self.svc_rows()
+        del rows[1]["image_sha256"]
+        self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
+
+    def test_versions_are_information_not_a_check(self):
+        # An RC prints the base version, so equal versions with a new binary still pass.
+        up = {**self.GOOD_UP, "from_version": "1.0.0", "to_version": "1.0.0"}
+        self.assertEqual(self.checks(upgrade=up)["upgrade"]["status"], "pass")
+
+    def test_service_restart_needs_a_complete_sample_set(self):
+        self.assertEqual(self.checks([])["service_restart"]["status"], "fail")  # empty samples
+        self.rows(self.svc_rows())
+        self.done(samples=1440)  # truncated file
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+        self.done(finalization_complete=False)
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+
+    def test_service_mode_without_any_hash_fails_binding(self):
+        rows = [{k: v for k, v in r.items() if k != "image_sha256"} for r in self.svc_rows()]
+        self.assertEqual(self.checks(rows, bound=None)["build_binding"]["status"], "fail")
+
+    def test_lifecycle_file_cannot_hide_check_lines_with_a_key(self):
+        checks = self.checks(invalid=True, upgrade=self.GOOD_UP, uninstall=self.GOOD_UN)
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("pass", "pass"))
+
+    def test_list_values_fail_instead_of_raising(self):
+        rows = self.svc_rows()
+        rows[1]["service_start_ticks"] = [1, 2]
+        self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
+        self.assertEqual(self.checks(bound=["x"])["build_binding"]["status"], "fail")
+
+    def test_upgrade_must_land_on_the_bound_binary(self):
+        same = {**self.GOOD_UP, "from_image_sha256": "b" * 64}
+        other = {**self.GOOD_UP, "to_image_sha256": "c" * 64}
+        for up in (same, other):
+            self.assertEqual(self.checks(upgrade=up)["upgrade"]["status"], "fail")
+
+    def test_upgrade_pass_and_fail(self):
+        self.assertEqual(self.checks(upgrade=self.GOOD_UP)["upgrade"]["status"], "pass")
+        for change in ({"service_running": False}, {"service_restarted": False}, {"image_matches_installed": False}, {"data_present": False}, {"torrents_after": 10},
+                       {"torrents_before": 0}, {"torrents_after": None}):
+            self.assertEqual(self.checks(upgrade={**self.GOOD_UP, **change})["upgrade"]["status"],
+                             "fail", change)
+
+    def test_uninstall_pass_and_fail(self):
+        self.assertEqual(self.checks(uninstall=self.GOOD_UN)["uninstall"]["status"], "pass")
+        removed = {**self.GOOD_UN, "data_present": False, "data_policy": "removed"}
+        self.assertEqual(self.checks(uninstall=removed)["uninstall"]["status"], "pass")
+        for change in ({"service_present": True}, {"program_files_present": True},
+                       {"data_present": False}, {"data_policy": "removed"}, {"data_policy": "maybe"}):
+            self.assertEqual(self.checks(uninstall={**self.GOOD_UN, **change})["uninstall"]["status"],
+                             "fail", change)
+
+    def test_invalid_lifecycle_file_fails_both_steps(self):
+        self.rows(self.svc_rows())
+        (self.root / "lifecycle.json").write_text("{not json")
+        checks = analyze(self.root)["windows_checks"]
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("fail", "fail"))
+
+    def test_detached_service_result_is_not_a_failed_shutdown(self):
+        self.rows(self.svc_rows())
+        self.done()
+        report = analyze(self.root)
+        self.assertIsNone(report["clean_shutdown"])
+        self.assertEqual(report["run_state"], "detached_service_running")
+
+
+
+# X-soak-screen-calibrate: the screen against r4- and r5-shaped runs. Every value is
+# invented; the shapes follow the committed aggregates only (r5's replayed mimalloc
+# growth of 37.79 MiB per 1,000 stored and RssAnon 0.86 MiB/h; r4's 47 MiB in 1.9 h,
+# about 63% outside mimalloc, at about 680 stored an hour). No owner soak data.
+SCREEN_MIB = 2**20
+
+
+def screen_r5_replay(h):
+    """A pass: mimalloc fills at 37.79 MiB per 1,000 stored to hour 4, then flat at
+    568 MiB; RssAnon outside it rises 0.86 MiB/h with noise; every gauge present."""
+    stored = 900 + 695 * h
+    committed = 568 - 37.79 * max(0.0, 695 * 4 - (stored - 900)) / 1000
+    files, main = round(8 + 13 * ((h / 1.5) % 1)), round(3 + 3 * ((h / 2.3) % 1))
+    prom = {'search_mmap_cache_entries{index="files"}': 5 * files + 4,
+            'search_mmap_cache_entries{index="main"}': 6 * main,
+            'search_segments{index="files"}': files, 'search_segments{index="main"}': main,
+            'mem_anon_mappings{size="128k_512k"}': 2,
+            "mem_mimalloc_committed_bytes": committed * SCREEN_MIB,
+            "mem_rss_anon_bytes": (committed + 40 + 0.86 * h + 3 * math.sin(h * 5)) * SCREEN_MIB,
+            "fetch_held_bytes": 20 * SCREEN_MIB}
+    return {"torrents": stored, "fetch_pending": 200000}, prom
+
+
+def screen_r4_replay(h):
+    """r4's memory behaviour on a binary with the memory gauges (rc.4 or later; r4's
+    own rc.3 had none, see screen_r4_rc3): no mapping gauge and no main-index segment
+    count (so mmap_cache_excess[main] is absent), mimalloc nearly flat, and anonymous
+    memory outside it growing 22.9 MiB per 1,000 stored (47 x 0.63 / (1.9 x 680 / 1,000))."""
+    values, prom = screen_r5_replay(h)
+    stored = 900 + 680 * h
+    values["torrents"] = stored
+    committed = 500 + 0.5 * h
+    del prom['mem_anon_mappings{size="128k_512k"}'], prom['search_segments{index="main"}']
+    prom["mem_mimalloc_committed_bytes"] = committed * SCREEN_MIB
+    prom["mem_rss_anon_bytes"] = (committed + 60 + 22.9 * (stored - 900) / 1000) * SCREEN_MIB
+    return values, prom
+
+
+def screen_r4_rc3(h):
+    """r4 as its rc.3 binary recorded it: no memory gauges at all (X-mem-gauges first
+    shipped in rc.4), so the growth outside mimalloc can't be read."""
+    values, prom = screen_r4_replay(h)
+    for k in ("mem_mimalloc_committed_bytes", "mem_rss_anon_bytes", "fetch_held_bytes"):
+        del prom[k]
+    return values, prom
+
+
+def screen_r5_early_fill(h):
+    """r5 with mimalloc committing ahead of residency while it fills (to hour 4): the
+    input outside mimalloc falls during the fill, and a fall never trips."""
+    values, prom = screen_r5_replay(h)
+    prom["mem_rss_anon_bytes"] -= 15 * max(0.0, 4 - abs(h - 4)) * SCREEN_MIB
+    return values, prom
+
+
+def screen_text(prom):
+    return "".join(f"lodestar_{k} {v:.0f}\n" for k, v in prom.items())
+
+
+def screen_points(shape, drop=()):
+    """(hour, inputs) every minute to hour 12.5, through the analyzer's own parser."""
+    from analyze_cr0 import screen_inputs
+    out = []
+    for i in range(12 * 60 + 31):
+        values, prom = shape(i / 60)
+        values = {k: v for k, v in values.items() if k not in drop}
+        prom = {k: v for k, v in prom.items() if k not in drop}
+        out.append((i / 60, screen_inputs(values, screen_text(prom))))
+    return out
+
+
+# Each raw input, and the judged counters that go without a reading when it's absent.
+SCREEN_INPUT_COUNTERS = {
+    "torrents": ["mmap_cache_entries_per_1000_stored[main]", "mmap_cache_entries_per_1000_stored[files]",
+                 "segments_per_1000_stored[main]", "segments_per_1000_stored[files]",
+                 "anon_mappings_128k_512k_per_1000_stored", "anon_outside_mimalloc_mib_per_1000_stored"],
+    "fetch_pending": ["fetch_pending"],
+    'search_mmap_cache_entries{index="main"}': ["mmap_cache_entries_per_1000_stored[main]",
+                                                "mmap_cache_excess[main]"],
+    'search_mmap_cache_entries{index="files"}': ["mmap_cache_entries_per_1000_stored[files]",
+                                                 "mmap_cache_excess[files]"],
+    'search_segments{index="main"}': ["mmap_cache_excess[main]", "segments_per_1000_stored[main]",
+                                      "segments[main]"],
+    'search_segments{index="files"}': ["mmap_cache_excess[files]", "segments_per_1000_stored[files]",
+                                       "segments[files]"],
+    'mem_anon_mappings{size="128k_512k"}': ["anon_mappings_128k_512k_per_1000_stored", "anon_mappings_128k_512k"],
+    "mem_mimalloc_committed_bytes": ["mimalloc_committed_mib", "anon_outside_mimalloc_mib_per_1000_stored"],
+    "mem_rss_anon_bytes": ["anon_outside_mimalloc_mib_per_1000_stored"],
+    "fetch_held_bytes": ["fetch_held_mib"],
+}
+
+
+class ScreenCalibrationTests(unittest.TestCase):
+    """r5 (a pass) reads ok and r4 (a fail) trips, from shapes alone; an absent input
+    is named and the rest still decide; nothing usable at all is not_available."""
+
+    def setUp(self):
+        from analyze_cr0 import screen_config
+        here = Path(__file__).resolve().parent
+        self.run = screen_config(json.loads((here.parent / "screen-thresholds.json").read_text(encoding="utf-8")))
+
+    def checkpoints(self, points):
+        from analyze_cr0 import screen_checkpoint
+        return [screen_checkpoint(points, points[-1][0], h, self.run) for h in (3, 6, 12)]
+
+    def without(self, c):
+        return [m.split(":", 1)[1] for m in c.get("without", [])]
+
+    def test_the_r5_shape_doesnt_trip_and_mimallocs_fill_is_information_only(self):
+        cps = self.checkpoints(screen_points(screen_r5_replay))
+        self.assertEqual([c["line"] for c in cps], ["ok", "ok", "ok"])
+        fill = cps[0]["counters"]["mimalloc_committed_mib_per_1000_stored"]
+        self.assertEqual(fill["status"], "info")
+        self.assertAlmostEqual(fill["value"], 37.79, places=1)  # above the old threshold of 20
+        outside = [c["counters"]["anon_outside_mimalloc_mib_per_1000_stored"]["value"] for c in cps]
+        self.assertTrue(all(abs(v) < 8 / 1.5 for v in outside), outside)
+
+    def test_the_r4_shape_trips_on_memory_outside_mimalloc_at_every_checkpoint(self):
+        cps = self.checkpoints(screen_points(screen_r4_replay))
+        for c in cps:
+            self.assertEqual(c["status"], "trip", c["line"])
+            self.assertEqual(c["counter"], "anon_outside_mimalloc_mib_per_1000_stored")
+            self.assertRegex(c["line"], r"^trip\(anon_outside_mimalloc_mib_per_1000_stored, 22\.9[0-9], 8\)$")
+            # What it went without is still named in the JSON.
+            self.assertIn("mmap_cache_excess[main]", self.without(c))
+            self.assertIn("anon_mappings_128k_512k", self.without(c))
+
+    def test_r4s_own_rc3_evidence_is_unjudged_for_memory(self):
+        """What the owner's replay of r4 will print: no memory gauges, so the structural
+        counters alone can't make it ok (runner, §2.33: absence of evidence isn't a pass)."""
+        from analyze_cr0 import screen_overall
+        cps = self.checkpoints(screen_points(screen_r4_rc3))
+        line = ("unjudged(no memory inputs: absent:anon_mappings_128k_512k_per_1000_stored, "
+                "absent:anon_mappings_128k_512k, absent:mimalloc_committed_mib, "
+                "absent:anon_outside_mimalloc_mib_per_1000_stored)")
+        for c in cps:
+            self.assertEqual((c["status"], c["line"]), ("unjudged", line))
+            self.assertIn("mmap_cache_excess[main]", self.without(c))  # still named in the JSON
+        self.assertEqual(screen_overall(cps), {"status": "unjudged", "line": line})
+
+    def test_unjudged_only_when_every_memory_input_is_missing(self):
+        from analyze_cr0 import screen_checkpoint, screen_overall
+        # One memory input left (mimalloc's level): ok, naming the rest.
+        keep = [(h, dict(p, mimalloc_committed_mib=500.0)) for h, p in screen_points(screen_r4_rc3)]
+        for c in self.checkpoints(keep):
+            self.assertEqual(c["status"], "ok", c["line"])
+        # A structural trip still trips without memory inputs.
+        leak = [(h, dict(p, **{"segments[files]": 3 + p["stored"] / 10})) for h, p in screen_points(screen_r4_rc3)]
+        self.assertEqual(self.checkpoints(leak)[0]["status"], "trip")
+        # Overall: an unjudged checkpoint beside ok ones isn't ok.
+        ok = screen_checkpoint(screen_points(screen_r5_replay), 12.5, 3, self.run)
+        unjudged = self.checkpoints(screen_points(screen_r4_rc3))[1]
+        self.assertEqual(screen_overall([ok, unjudged])["status"], "unjudged")
+
+    def test_an_early_fill_ahead_of_residency_reads_low_not_high(self):
+        cps = self.checkpoints(screen_points(screen_r5_early_fill))
+        self.assertEqual([c["line"] for c in cps], ["ok", "ok", "ok"])
+        self.assertLess(cps[0]["counters"]["anon_outside_mimalloc_mib_per_1000_stored"]["value"], 0)
+
+    def test_r4_with_an_early_fill_still_trips_by_hour_6(self):
+        """A fill lag like screen_r5_early_fill's can hide r4's growth at hour 3; hours
+        6 and 12 still trip (the decisions file, "Why 8")."""
+        def r4_fill(h):
+            values, prom = screen_r4_replay(h)
+            prom["mem_rss_anon_bytes"] -= 15 * max(0.0, 4 - abs(h - 4)) * SCREEN_MIB
+            return values, prom
+        cps = self.checkpoints(screen_points(r4_fill))
+        for c in cps[1:]:
+            self.assertEqual(c["status"], "trip", c["line"])
+            self.assertEqual(c["counter"], "anon_outside_mimalloc_mib_per_1000_stored")
+
+    def no_reading_case(self, change):
+        """r5's points to hour 4, with `change` applied; fetch_pending stays ok."""
+        from analyze_cr0 import screen_checkpoint
+        pts = [(h, dict(p)) for h, p in screen_points(screen_r5_replay) if h <= 4]
+        change(pts)
+        return screen_checkpoint(pts, 4.0, 3, self.run)
+
+    def test_too_little_stored_spread_is_named_not_blocking(self):
+        from analyze_cr0 import screen_checkpoint
+        pts = [(h, dict(p, stored=900.0)) for h, p in screen_points(screen_r5_replay) if h <= 4]
+        out = screen_checkpoint(pts, 4.0, 3, self.run)
+        self.assertEqual(out["status"], "ok", out["line"])  # the bounds still read
+        self.assertIn("too_little_stored:anon_outside_mimalloc_mib_per_1000_stored", out["without"])
+
+    def test_an_input_gone_at_the_checkpoint_is_named_not_blocking(self):
+        def gone_at_3(pts):
+            for h, p in pts:
+                if h > 2.9:
+                    p.pop("fetch_held_mib", None)
+        out = self.no_reading_case(gone_at_3)
+        self.assertEqual(out["status"], "ok", out["line"])
+        self.assertEqual(out["without"], ["absent_at_checkpoint:fetch_held_mib"])
+
+    def test_an_unusable_reading_is_the_reason_given_even_beside_an_ok(self):
+        from analyze_cr0 import screen_checkpoint
+        pts = [(i / 10, {"stored": 1000.0 * i, "fetch_pending": 1.0,
+                         "anon_outside_mimalloc_mib": 1e307 * (1 + i)}) for i in range(41)]
+        out = screen_checkpoint(pts, 4.0, 3, self.run)
+        self.assertEqual(out["counters"]["fetch_pending"]["status"], "ok")
+        self.assertEqual(out["line"], "not_available(unusable:anon_outside_mimalloc_mib_per_1000_stored)")
+
+    def test_each_absent_input_is_named_and_the_rest_still_decide(self):
+        for name, counters in SCREEN_INPUT_COUNTERS.items():
+            with self.subTest(input=name):
+                for c in self.checkpoints(screen_points(screen_r5_replay, drop={name})):
+                    self.assertEqual(c["status"], "ok", c["line"])
+                    self.assertEqual(sorted(self.without(c)), sorted(counters))
+                    self.assertTrue(c["line"].startswith("ok(without "), c["line"])
+                r4 = self.checkpoints(screen_points(screen_r4_replay, drop={name}))
+                if "anon_outside_mimalloc_mib_per_1000_stored" in counters:
+                    # r4's only tripping reading gone: the screen says so, and never trips on nothing.
+                    # Without mimalloc too (and r4 has no mapping gauge) no memory input is left.
+                    want = "unjudged" if name == "mem_mimalloc_committed_bytes" else "ok"
+                    self.assertTrue(all(c["status"] == want for c in r4), [c["line"] for c in r4])
+                    self.assertTrue(all("anon_outside_mimalloc_mib_per_1000_stored" in self.without(c) for c in r4))
+                else:
+                    self.assertTrue(all(c["counter"] == "anon_outside_mimalloc_mib_per_1000_stored" for c in r4))
+
+    def test_every_input_absent_is_not_available(self):
+        for c in self.checkpoints(screen_points(screen_r5_replay, drop=set(SCREEN_INPUT_COUNTERS))):
+            self.assertEqual(c["status"], "not_available")
+            self.assertEqual(c["line"], "not_available(absent:mmap_cache_entries_per_1000_stored[main])")
+            self.assertNotIn("without", c)
+
+    def test_through_the_analyzer_r5_reads_ok_and_r4_trips(self):
+        from test_screen import write_run, NOW
+        def shaped(shape):
+            def s(h):
+                values, prom = shape(h)
+                return {"stored": values["torrents"], "fetch_pending": values["fetch_pending"],
+                        "private_mib": 300, "prom": prom}
+            return s
+        with tempfile.TemporaryDirectory() as tmp:
+            r5 = analyze(write_run(Path(tmp) / "r5", shaped(screen_r5_replay), hours=13.0), now=NOW)
+            r4 = analyze(write_run(Path(tmp) / "r4", shaped(screen_r4_replay), hours=13.0), now=NOW)
+        self.assertEqual(r5["screen"]["overall"]["line"], "ok")
+        self.assertRegex(r4["screen"]["overall"]["line"], r"^trip\(anon_outside_mimalloc_mib_per_1000_stored, ")
+        self.assertIn("screen: trip(anon_outside_mimalloc_mib_per_1000_stored", markdown(r4))
+        # Advisory only: the gate's figures don't read the screen.
+        self.assertNotIn("screen", json.dumps(r4["memory_fit"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,7 +117,7 @@ fn prowlarr_zip(v: &mut Value) -> &mut Value {
 fn builtin_validates() {
     let c = builtin().unwrap_or_else(|e| panic!("data/catalogue.json: {e}"));
     let ids: Vec<&str> = c.entries().iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(ids, ["qbittorrent", "prowlarr", "gluetun"]);
+    assert_eq!(ids, ["qbittorrent", "prowlarr", "gluetun", "flaresolverr"]);
     // The same text through the test loader gives the same answer.
     assert!(Catalogue::from_json(BUILTIN).is_ok());
 }
@@ -161,10 +161,17 @@ fn builtin_entries_follow_the_owner_decisions() {
     assert!(g.container.is_some());
     assert!(g.needs(Need::VpnRoute));
 
-    // FlareSolverr arrives with CMP-12, opt-in.
-    assert!(c.get("flaresolverr").is_none());
+    // FlareSolverr (CMP-12, Q21): opt-in, and only a challenge solver.
+    let f = c.get("flaresolverr").unwrap();
+    assert!(f.opt_in);
+    assert_eq!(f.needed_for, [Need::ChallengeSolver]);
     for e in c.entries() {
-        assert!(!e.opt_in, "{}: v0.6's default entries are not opt-in", e.id);
+        assert_eq!(
+            e.opt_in,
+            e.id.as_str() == "flaresolverr",
+            "{}: v0.6's default entries are not opt-in",
+            e.id
+        );
         for h in &e.hosts {
             assert!(DOWNLOAD_HOSTS.contains(&h.as_str()));
         }

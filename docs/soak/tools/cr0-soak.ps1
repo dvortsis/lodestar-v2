@@ -11,7 +11,10 @@ param(
     [long]$MaxLogBytes = 1GB,
     [string[]]$AdditionalStoragePaths = @(),
     [Parameter(Mandatory)][ValidateSet('embedded', 'stub')][string]$Ui,
-    [Parameter(Mandatory)][string]$BuildRecord
+    [string]$BuildRecord = '',
+    # Windows 1.0 soak: watch the installed MSI service instead of launching a child.
+    # Exe is then the installed lodestar.exe, read only; the service is never stopped.
+    [string]$ServiceName = ''
 )
 # Aggregate-only evidence. Raw process logs and the database remain local.
 $ErrorActionPreference = 'Stop'
@@ -20,13 +23,23 @@ $ErrorActionPreference = 'Stop'
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
 $Root = [IO.Path]::GetFullPath($Root)
 if (Test-Path -LiteralPath $Root) { throw 'Run already exists; use a fresh directory.' }
-Test-SoakLaunchEnvironment $Bind
+$serviceMode = $ServiceName -ne ''
+Test-SoakLaunchEnvironment $Bind -Attach $serviceMode
 if ($WarmupMinutes -lt 30 -or $BaselineHours -lt 24) { throw 'Baseline requires at least 30 minutes warmup and 24 measured hours.' }
 if ($StopFreeBytes -le 0 -or $WarnFreeBytes -le $StopFreeBytes -or $MinFreeBytes -lt $WarnFreeBytes -or $MaxLogBytes -le 0) { throw 'Invalid storage guardrails.' }
-$BuildRecord = (Resolve-Path -LiteralPath $BuildRecord).Path
-$build = Get-Content -LiteralPath $BuildRecord -Raw | ConvertFrom-Json
 $originalExeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
-Test-SoakBuildRecord $build $originalExeHash $Commit $Ui
+# Service mode: the running process, the service's file and -Exe must all be one binary.
+$attach = $null
+if ($serviceMode) { $attach = Assert-SoakAttachBinding $ServiceName $Exe }
+# The MSI's executable has no CR-0 build record: service mode records the installed
+# version and hash only, and skips the embedded-UI hash check (CI's MSI smoke covers it).
+if ($BuildRecord -eq '' -and -not $serviceMode) { throw 'A build record is required outside service mode.' }
+$build = $null
+if ($BuildRecord -ne '') {
+    $BuildRecord = (Resolve-Path -LiteralPath $BuildRecord).Path
+    $build = Get-Content -LiteralPath $BuildRecord -Raw | ConvertFrom-Json
+    Test-SoakBuildRecord $build $originalExeHash $Commit $Ui
+}
 $storagePaths = @($Root, [IO.Path]::GetTempPath()) + $AdditionalStoragePaths
 $volumes = @($storagePaths | ForEach-Object { [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($_)) } | Sort-Object -Unique)
 function Read-Volumes {
@@ -37,8 +50,10 @@ foreach ($volume in @(Read-Volumes)) {
 }
 New-Item -ItemType Directory -Force $Root, (Join-Path $Root 'metrics') | Out-Null
 $data = Join-Path $Root 'data'
-if (Test-Path $data) { throw 'A fresh data directory is required.' }
-New-Item -ItemType Directory $data | Out-Null
+if (-not $serviceMode) {
+    if (Test-Path $data) { throw 'A fresh data directory is required.' }
+    New-Item -ItemType Directory $data | Out-Null
+}
 $events = Join-Path $Root 'events.log'
 $statusPath = Join-Path $Root 'status.json'
 function Note([string]$message) {
@@ -63,7 +78,7 @@ if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $originalExeHash
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $Root 'collector.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr0-common.ps1') -Destination (Join-Path $Root 'cr0-common.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr0-signal.ps1') -Destination (Join-Path $Root 'cr0-signal.ps1')
-Copy-Item -LiteralPath $BuildRecord -Destination (Join-Path $Root 'build-record.json')
+if ($null -ne $build) { Copy-Item -LiteralPath $BuildRecord -Destination (Join-Path $Root 'build-record.json') }
 function Read-Metric([string]$text, [string]$name) {
     $match = [regex]::Match($text, '(?m)^lodestar_' + [regex]::Escape($name) + ' ([0-9.]+)\r?$')
     if (-not $match.Success) { throw "Missing metric: $name" }
@@ -71,16 +86,18 @@ function Read-Metric([string]$text, [string]$name) {
 }
 
 # Avoid inheriting unrelated overrides. Only the explicit settings below apply.
-Get-ChildItem Env:LODESTAR_* | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
-$env:LODESTAR_DATA_DIR = $data
-$env:LODESTAR_HTTP_BIND = $Bind
-$env:LODESTAR_DHT_PORT = '6881'
-$env:LODESTAR_INTENSITY = 'balanced'
-$env:LODESTAR_LOG = 'info'
-$env:LODESTAR_UPDATES = 'off'
+if (-not $serviceMode) {
+    Get-ChildItem Env:LODESTAR_* | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+    $env:LODESTAR_DATA_DIR = $data
+    $env:LODESTAR_HTTP_BIND = $Bind
+    $env:LODESTAR_DHT_PORT = '6881'
+    $env:LODESTAR_INTENSITY = 'balanced'
+    $env:LODESTAR_LOG = 'info'
+    $env:LODESTAR_UPDATES = 'off'
+}
 $settings = @{
-    data = $data; http_bind = $Bind; dht_port = 6881; intensity = 'balanced'
-    transport = 'TCP'; encryption = 'prefer'; updates = 'off'; fresh_data = $true
+    data = if ($serviceMode) { 'service default' } else { $data }; http_bind = $Bind; dht_port = 6881; intensity = 'balanced'
+    transport = 'TCP'; encryption = 'prefer'; updates = $(if ($serviceMode) { 'set in the service (runbook: off)' } else { 'off' }); fresh_data = (-not $serviceMode); service_mode = $serviceMode
     storage_guardrails = @{ start_free_bytes = $MinFreeBytes; warn_free_bytes = $WarnFreeBytes; stop_free_bytes = $StopFreeBytes; max_redirected_log_bytes = $MaxLogBytes; check_seconds = 10; volumes = $volumes }; query_timeout_seconds = 4; suppression_seconds = 21604; cooldown_floor_seconds = 60
     targets = 'random'; warmup_minutes = $WarmupMinutes; baseline_hours = $BaselineHours
     ui = $Ui; all_other_settings = 'commit defaults'
@@ -91,13 +108,13 @@ $clock = New-SoakClock
 $run = [ordered]@{
     schema_version = 2; commit = $Commit; exe = $Exe; sha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
     version = Get-SoakExecutableVersion $Exe; started = $started.ToString('o')
-    timezone = (Get-TimeZone).Id; user_timezone = 'UTC'
+    timezone = if ($serviceMode) { 'withheld' } else { (Get-TimeZone).Id }; user_timezone = 'UTC'
     os = [Environment]::OSVersion.VersionString; logical_cpus = [Environment]::ProcessorCount
     collector_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
     common_sha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'cr0-common.ps1') -Algorithm SHA256).Hash
     signal_sha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'cr0-signal.ps1') -Algorithm SHA256).Hash
-    build_record_sha256 = (Get-FileHash -LiteralPath $BuildRecord -Algorithm SHA256).Hash
-    toolchain = @{ rustc = $build.rustc; cargo = $build.cargo; target = $build.target }
+    build_record_sha256 = if ($null -ne $build) { (Get-FileHash -LiteralPath $BuildRecord -Algorithm SHA256).Hash } else { $null }
+    toolchain = if ($null -ne $build) { @{ rustc = $build.rustc; cargo = $build.cargo; target = $build.target } } else { $null }
     network = @{ http_bind = $Bind; dht_port = 6881; proxy_configured = [bool]($env:HTTP_PROXY -or $env:HTTPS_PROXY -or $env:ALL_PROXY) }
     ui_verified = $false
     settings = $settings
@@ -109,6 +126,7 @@ $baselineStart = $null
 $baselineAt = $null
 $endAt = $null
 $suppressionSeen = $false
+$sawFirstMetrics = $false
 $suppressionEndAt = $null
 $badHealth = 0; $badMetrics = 0; $badBounds = 0; $badMemory = 0
 $lastCompleted = 0; $lastProgressAt = 0.0
@@ -124,9 +142,18 @@ $latestVolumes = @()
 $lastLogs = 0L
 try {
     Enable-SoakChildCtrlC
-    $p = Start-Process -FilePath $Exe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
+    if ($serviceMode) {
+        $svcId = Get-SoakServiceIdentity $ServiceName; $p = Get-Process -Id $svcId.pid
+        # Bind the evidence to the binary the service runs; every sample repeats the hash.
+        $img = Get-SoakServiceImage $ServiceName
+        # The service must still be the process and file the attach check passed on.
+        Assert-SoakAttachUnchanged $attach $svcId $img.sha256 $originalExeHash
+        $run.service_image_sha256 = $img.sha256
+        $run.service_reported_version = Get-SoakInstalledVersion $Exe  # information only, never compared
+    }
+    else { $p = Start-Process -FilePath $Exe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Root 'lodestar.out.log') `
-        -RedirectStandardError (Join-Path $Root 'lodestar.err.log')
+        -RedirectStandardError (Join-Path $Root 'lodestar.err.log') }
     $identity = "$($p.Id):$($p.StartTime.ToUniversalTime().Ticks)"
     $run.process_identity = $identity
     $run.process_id = $p.Id
@@ -137,7 +164,7 @@ try {
     while ($true) {
         if (Test-Path (Join-Path $Root 'stop.request')) { $reason = 'operator_stop'; break }
         $p.Refresh()
-        if ($p.HasExited) { $reason = "process_exited_$($p.ExitCode)"; break }
+        if ($p.HasExited) { $reason = if ($serviceMode) { 'service_process_exited' } else { "process_exited_$($p.ExitCode)" }; break }
         $elapsed = $clock.Elapsed.TotalSeconds
         if ($elapsed -ge (8 + $BaselineHours) * 3600) { $reason = 'overall_deadline_without_complete_baseline'; break }
         if ($elapsed -ge $nextDisk) {
@@ -145,7 +172,7 @@ try {
             try {
                 $latestVolumes = @(Read-Volumes)
                 $lastLogs = 0L
-                foreach ($name in @('lodestar.out.log', 'lodestar.err.log')) {
+                foreach ($name in @(@('lodestar.out.log', 'lodestar.err.log') | Where-Object { -not $serviceMode })) {
                     $file = Get-Item -LiteralPath (Join-Path $Root $name) -ErrorAction Stop
                     if ($null -ne $file) { $lastLogs += $file.Length }
                 }
@@ -171,7 +198,7 @@ try {
         $health = 0
         try { $health = [int](Invoke-WebRequest "http://$Bind/healthz" -TimeoutSec 3).StatusCode } catch {}
         if ($health -eq 200) { $badHealth = 0 } else { $badHealth++ }
-        if ($health -eq 200 -and -not $run.ui_verified) {
+        if ($health -eq 200 -and -not $run.ui_verified -and $null -ne $build) {
             # Verify the bytes actually served by this process, not a caller's UI label.
             $page = Invoke-WebRequest "http://$Bind/" -Headers @{ 'Accept-Encoding' = 'identity' } -TimeoutSec 3
             $pageBytes = if ($page.Content -is [byte[]]) { $page.Content } else { [Text.Encoding]::UTF8.GetBytes([string]$page.Content) }
@@ -198,6 +225,8 @@ try {
         if ($metricsOk) {
             Write-Evidence (Join-Path $Root ('metrics/{0:D5}.prom' -f $sample)) $metrics
             if ($values.dht_sample_suppression_seconds -gt 0) { $suppressionSeen = $true }
+            # A service attached after its start-up pause already ended shows 0 on its first sample.
+            if ($serviceMode -and -not $sawFirstMetrics) { $sawFirstMetrics = $true; if ($values.dht_sample_suppression_seconds -eq 0) { $suppressionSeen = $true } }
             if ($suppressionSeen -and $values.dht_sample_suppression_seconds -eq 0 -and $null -eq $baselineAt) {
                 $suppressionEndAt = $stamp.ToString('o')
                 $baselineAt = $elapsed + $WarmupMinutes * 60
@@ -229,6 +258,11 @@ try {
             threads = $p.Threads.Count; handles = $p.HandleCount; cpu_seconds = $p.TotalProcessorTime.TotalSeconds
             volumes = $latestVolumes; redirected_log_bytes = $lastLogs; values = $values
         }
+        if ($serviceMode) {
+            # A restart shows as a new PID or start time, even between two samples.
+            try { $svcNow = Get-SoakServiceIdentity $ServiceName; $row.service_pid = $svcNow.pid; $row.service_start_ticks = $svcNow.start_ticks; $row.image_sha256 = (Get-SoakServiceImage $ServiceName).sha256 }
+            catch { Note 'service not running at sample time' }
+        }
         Write-Evidence (Join-Path $Root 'samples.jsonl') ($row | ConvertTo-Json -Depth 6 -Compress) -Append
         Save-Json @{
             state = 'running'; phase = $phase; sample = $sample; latest = $row
@@ -250,7 +284,11 @@ try {
     Note 'collector failure; evidence may be incomplete'
     [Console]::Error.WriteLine('Collector failed; starting protected finalization.')
 } finally {
-    if ($null -ne $p) {
+    if ($serviceMode) {
+        # The service keeps running; the analyzer reads restarts from the samples.
+        $stopMode = 'service_left_running'
+        $shutdown = @{ stop_mode = $stopMode; exit_confirmed = $false; signal_delivered = $false; exit_code = $null; errors = @() }
+    } elseif ($null -ne $p) {
         # No HTTP or evidence writes precede process cleanup.
         try {
             $adapter = New-SoakWindowsProcessAdapter $p $identity (Join-Path $Root 'cr0-signal.ps1')
@@ -263,7 +301,7 @@ try {
         }
     }
     $result = @{
-        schema_version = 2; state = if ($null -ne $shutdown -and $shutdown.exit_confirmed) { 'stopped' } else { 'unknown' }; reason = $reason; stop_mode = $stopMode; samples = $sample
+        schema_version = 2; state = if ($serviceMode) { 'detached' } elseif ($null -ne $shutdown -and $shutdown.exit_confirmed) { 'stopped' } else { 'unknown' }; service_detached = $serviceMode; reason = $reason; stop_mode = $stopMode; samples = $sample
         shutdown = $shutdown; process_identity = $identity
         ended = (Get-SoakUtcNow).ToString('o'); suppression_ended = $suppressionEndAt
         baseline_started = $baselineStart; elapsed_seconds = $clock.Elapsed.TotalSeconds
@@ -273,5 +311,6 @@ try {
     if ($finalizationErrors -gt 0) { [Console]::Error.WriteLine('Final evidence publication failed; completion remains uncertain.') }
     Note "done: $reason; stop=$stopMode"
 }
+if ($serviceMode) { if ($reason -ne 'baseline_window_complete' -or $finalizationErrors -gt 0) { exit 1 }; exit 0 }
 if ($reason -ne 'baseline_window_complete' -or $stopMode -ne 'exited_0' -or $finalizationErrors -gt 0 -or -not $shutdown.signal_delivered -or $shutdown.errors.Count -gt 0) { exit 1 }
 exit 0

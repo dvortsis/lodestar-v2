@@ -572,9 +572,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.2"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
 dependencies = [
  "cmov",
 ]
@@ -1617,6 +1617,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-pipeline",
  "lodestar-search",
+ "lodestar-sources",
  "lodestar-store",
  "proptest",
  "quick-xml",
@@ -1626,6 +1627,7 @@ dependencies = [
  "serde_path_to_error",
  "serde_urlencoded",
  "sha2",
+ "tantivy",
  "tempfile",
  "tokio",
  "tower",
@@ -1654,6 +1656,7 @@ dependencies = [
  "mimalloc",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
+ "serde_json",
  "tantivy",
  "tempfile",
  "tokio",
@@ -1732,13 +1735,21 @@ dependencies = [
 name = "lodestar-crawler-sim"
 version = "0.5.0"
 dependencies = [
+ "axum",
+ "lodestar-api",
+ "lodestar-bencode",
  "lodestar-dht",
+ "lodestar-log",
  "lodestar-metainfo",
  "lodestar-network-policy",
  "lodestar-peer-wire",
+ "lodestar-pipeline",
+ "lodestar-search",
  "lodestar-sources",
  "lodestar-store",
+ "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -1888,6 +1899,7 @@ dependencies = [
  "lodestar-release-parser",
  "lodestar-store",
  "proptest",
+ "regex-syntax",
  "serde",
  "serde_json",
  "tantivy",
@@ -1918,6 +1930,7 @@ dependencies = [
  "lodestar-sources",
  "proptest",
  "quick-xml",
+ "sha2",
 ]
 
 [[package]]
@@ -1977,6 +1990,7 @@ dependencies = [
  "lodestar-metainfo",
  "proptest",
  "rusqlite",
+ "sha2",
  "tempfile",
  "zstd",
 ]
@@ -2795,9 +2809,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",

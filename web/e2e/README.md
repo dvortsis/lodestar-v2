@@ -24,25 +24,30 @@ Filter with `--project=<name>` (globs work). Every project starts the web server
 | `sample-<theme-id>`       | the same smoke at 1366 for a rotating 6 non-Riverstone themes                                                                                                                                                           | `npm run e2e:sample`                    |
 | `reduced-motion`          | smoke + the motion-token test under `prefers-reduced-motion: reduce`                                                                                                                                                    | `npm run e2e:motion`                    |
 | `keyboard-only`           | `*.keyboard.test.ts`                                                                                                                                                                                                    | `npm run e2e:keyboard`                  |
-| `fixture`                 | `*.fixture.test.ts` against a real `lodestar serve --fixture` server, not the mock. Opt-in (`--project=fixture` or `E2E_FIXTURE=1`); nightly in CI                                                                      | `npx playwright test --project=fixture` |
+| `fixture-writes`          | the `*.fixture.test.ts` specs that change server state (`filters-flows`, `settings-form`). `fixture` depends on it, so `--project=fixture` runs it first                                                                | `npx playwright test --project=fixture` |
+| `fixture`                 | the other `*.fixture.test.ts` specs against a real `lodestar serve --fixture` server, not the mock. Opt-in (`--project=fixture` or `E2E_FIXTURE=1`); nightly in CI                                                      | `npx playwright test --project=fixture` |
 | `all-themes`              | axe on every route in all 48 themes, plus the 46-theme baselines. Opt-in (`--project=all-themes` or `E2E_ALL_THEMES=1`); nightly in CI                                                                                  | `npm run e2e:all-themes`                |
 
 `npx playwright test` runs everything except `all-themes` and `fixture`.
 
-**Running `fixture` locally.** The specs skip unless `E2E_FIXTURE_URL` is set. Start the fixture backend (bench/README.md "Fixture backend") on a private port, then point the specs at it:
+**Every spec must run in some project.** `playwright.config.ts` fails at load when a spec under `e2e/` (any `*.spec.*` or `*.test.*` file, which is what Playwright would pick up) is run by no project: `testMatch` must match it and `testIgnore` must not. Opt-in projects (`fixture-writes`, `fixture`, `docs`, `all-themes`) count. It also fails when a spec that reads `E2E_FIXTURE_URL` would run in any project other than `fixture` or `fixture-writes`, so a real-server spec must be named `*.fixture.test.ts`. The check reads the same project list Playwright runs (`scripts/e2e-spec-guard.ts`, tested in `scripts/e2e-spec-guard.test.ts`). An untracked spec that fits no project therefore fails every local run until you name or remove it. Do not name a real-server spec `*.fixture.routes.test.ts`: it would match `core`, skip silently and never run. Specs that mock the API with a "fixture" module (such as `settings-smoke-fixture.routes.test.ts`) are mock specs and belong in `core`.
+
+**Running `fixture` locally.** The specs skip unless `E2E_FIXTURE_URL` is set (and, for most, `E2E_FIXTURE_PASSWORD`). Start the fixture backend (bench/README.md "Fixture backend") on a private port, then point the specs at it:
 
 ```sh
 npm run build
 LODESTAR_HTTP_BIND=127.0.0.1:8291 LODESTAR_FIXTURE_PASSWORD='correct horse battery' \
   cargo run -p lodestar -- serve --fixture /tmp/lodestar-fixture &
-E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
+E2E_FIXTURE=1 E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
   E2E_FIXTURE_PASSWORD='correct horse battery' LODESTAR_FIXTURE_PASSWORD='correct horse battery' \
   npx playwright test --project=fixture
 ```
 
 **In CI** the `fixture` job in `e2e.yml` runs nightly and on manual dispatch (Actions → E2E → Run workflow, on any branch; leave `update_snapshots` off). It is not a pull-request check and not part of `ci-ok`. A `fixture-build` job builds the release binary (UI embedded) on `ubuntu-latest`; the Playwright container downloads it, starts it on `127.0.0.1:8291`, waits up to 120 s for `/healthz`, and runs this project with `E2E_FIXTURE=1` set (the workers need it to find the project). A failure uploads `playwright-report-fixture` with the server log.
 
-Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on the port is reused); the fixture specs never use it.
+The project's `globalSetup` (`support/fixture-session.ts`) signs in once, because the server limits logins to a burst of 5; specs reuse that session (`FIXTURE_STATE`, `fixtureCookies()`) and must not log in themselves, except the one real login through the form in `filters-flows.fixture.test.ts`. The session file lives in `test-results/.auth/` (gitignored). The limiter's burst is 5 and a run spends 4, so two runs within about a minute can get a 429 in the setup; wait and retry. Specs that change server state (`filters-flows`, `settings-form`) are the `fixture-writes` project, which `fixture` depends on, so they never run beside a read. If a `fixture-writes` spec fails, the `fixture` specs are reported as "did not run" (a project does not start when its dependency fails): read the first failure, not the count.
+
+Set `E2E_FIXTURE=1` as well as `--project=fixture`: the workers re-read the config without the command line, so without it they report `Project "fixture-writes" not found`. Name the project exactly; a glob does not select it. Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on the port is reused); the fixture specs never use it.
 
 **Rotating sample.** `sampleThemes(seed)` (`support/themes.ts`) takes the 46 non-Riverstone themes, permutes them with a coprime stride and returns a 6-wide window that moves by 6 each run. The seed is `GITHUB_RUN_NUMBER`, or the day number locally. Eight consecutive runs cover every theme.
 

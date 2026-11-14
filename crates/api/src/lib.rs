@@ -57,6 +57,7 @@ pub mod system;
 mod torrents;
 pub mod torznab;
 pub mod updates;
+pub mod upload;
 mod user_items;
 pub mod webhooks;
 pub mod workers;
@@ -113,6 +114,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(facets::routes())
         .merge(suggest::routes())
         .merge(torrents::routes())
+        .merge(upload::routes())
         .merge(filters::routes())
         .merge(settings::routes())
         .merge(ops::routes())

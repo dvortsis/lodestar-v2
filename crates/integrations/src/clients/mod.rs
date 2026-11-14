@@ -15,9 +15,12 @@
 pub mod aria2;
 pub mod deluge;
 pub mod magnet;
+pub mod nzbget;
 pub mod qbittorrent;
 pub mod rtorrent;
+pub mod sabnzbd;
 pub mod transmission;
+pub mod usenet;
 mod xmlrpc;
 
 use std::collections::HashSet;

@@ -309,6 +309,7 @@ enum Command {
     Stats(Stats),
     Send(ToCoordinator, oneshot::Sender<()>),
     Committed(Vec<([u8; 20], u64)>, oneshot::Sender<()>),
+    Holding(Vec<HeldLease>, oneshot::Sender<ReconcileAnswer>),
 }
 
 type Queued = (WorkerEvent, Option<OwnedSemaphorePermit>);
@@ -376,6 +377,7 @@ impl WorkerSession {
             ttl_ms: i64::from(welcome.lease_ttl_secs).saturating_mul(1000),
             claims: HashMap::new(),
             heartbeats: HashMap::new(),
+            reconciling: None,
             renewal: None,
             next_batch: 1,
             seq: 0,
@@ -516,6 +518,27 @@ impl WorkerSession {
         self.ask(Command::Drained).await
     }
 
+    /// Lists every lease the worker still holds (keys held and results
+    /// not yet committed), in [`Holding`] parts, and waits for the
+    /// coordinator's answer (WK-11b): the leases it has on record for this
+    /// worker that the list leaves out, delivered on an earlier session,
+    /// go back for re-grant. `Ok(None)`, nothing sent, when the
+    /// coordinator's minor predates [`MINOR_HOLDING`]. Over [`MAX_HOLDING`]
+    /// leases is [`ClientError::Invalid`]: a partial list would give back
+    /// leases the worker holds.
+    pub async fn holding(
+        &self,
+        leases: Vec<HeldLease>,
+    ) -> Result<Option<ReconcileAnswer>, ClientError> {
+        if self.welcome.minor < MINOR_HOLDING {
+            return Ok(None);
+        }
+        if leases.len() > MAX_HOLDING {
+            return Err(ClientError::Invalid);
+        }
+        self.ask(|tx| Command::Holding(leases, tx)).await.map(Some)
+    }
+
     /// The next unsolicited message, or `None` after
     /// [`WorkerEvent::Ended`].
     pub async fn next_event(&mut self) -> Option<WorkerEvent> {
@@ -577,6 +600,12 @@ impl SessionHandle {
         self.ask(|tx| Command::Committed(leases, tx)).await
     }
 
+    /// As [`WorkerSession::drained`]: from the handle, the session's events
+    /// can be read while it waits.
+    pub async fn drained(&self) -> Result<(), ClientError> {
+        self.ask(Command::Drained).await
+    }
+
     /// As [`WorkerSession::set_stats`].
     pub async fn set_stats(&self, stats: Stats) -> Result<(), ClientError> {
         self.commands
@@ -617,6 +646,8 @@ struct Driver {
     fetched: HashMap<[u8; 20], (u64, i64)>,
     /// The lease TTL the coordinator stated (`Welcome`), in ms.
     ttl_ms: i64,
+    /// The reconcile round awaiting its answer (one at a time).
+    reconciling: Option<(u64, oneshot::Sender<ReconcileAnswer>)>,
     /// Claims awaiting their reply, with the keys each asked for.
     claims: HashMap<u64, (ClaimReply, Vec<[u8; 20]>)>,
     heartbeats: HashMap<u64, oneshot::Sender<HeartbeatAck>>,
@@ -797,6 +828,31 @@ impl Driver {
                 let _ = reply.send(());
                 step
             }
+            Command::Holding(leases, reply) => {
+                // Its round number comes from the claims' counter: never 0,
+                // never reused on this session.
+                // The parts go out back to back without reading: a list of
+                // many parts against a coordinator that isn't reading can
+                // stall until its send timeout ends the session. Lists are
+                // rare (after a replay with drift) and usually one part.
+                let round = self.next_batch;
+                self.next_batch += 1;
+                self.reconciling = Some((round, reply));
+                let parts = leases.len().div_ceil(MAX_HOLDING_BATCH).max(1);
+                let mut chunks = leases.chunks(MAX_HOLDING_BATCH);
+                for part in 0..parts {
+                    let msg = ToCoordinator::Holding(Holding {
+                        round,
+                        part: u32::try_from(part).unwrap_or(u32::MAX),
+                        last: part + 1 == parts,
+                        leases: HeldList(chunks.next().unwrap_or(&[]).to_vec()),
+                    });
+                    if let Step::End(r) = self.send(msg).await {
+                        return Step::End(r);
+                    }
+                }
+                Step::Continue
+            }
             Command::Stats(stats) => {
                 self.stats = Stats {
                     claimed: self.stats.claimed,
@@ -918,6 +974,17 @@ impl Driver {
             ToWorker::HaveDelta(b) => self.event(WorkerEvent::HaveDelta(b)).await,
             // Update offers are out of v1 (plan Q13).
             ToWorker::Update(_) => Step::Continue,
+            ToWorker::Reconciled(r) => {
+                if self
+                    .reconciling
+                    .as_ref()
+                    .is_some_and(|(round, _)| *round == r.round)
+                    && let Some((_, reply)) = self.reconciling.take()
+                {
+                    let _ = reply.send(r.answer);
+                }
+                Step::Continue
+            }
         }
     }
 }

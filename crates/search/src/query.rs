@@ -23,8 +23,8 @@
 //!
 //! Keyword values are normalised as the release parser reads them
 //! (`codec:x265` is `codec:h265`, `res:4k` is `res:2160p`), so the AST
-//! holds what the index holds. Fields that need later milestones
-//! (`sig:`, …) parse to a clear "not available yet" error
+//! holds what the index holds. A field that needs a later milestone
+//! ([`FieldKind::Later`]) parses to a clear "not available yet" error
 //! rather than being ignored.
 //! Input is untrusted: length, clause count and nesting are bounded.
 //!
@@ -326,6 +326,13 @@ pub enum Node {
     Hash {
         hash: String,
     },
+    /// `sig:` (§6 "Grouping/dedup"): torrents with this payload
+    /// signature, as [`SIG_DIGITS`] lowercase hex digits; or, as the 40
+    /// of an info hash, those with the same payload as that torrent,
+    /// itself included.
+    Sig {
+        sig: String,
+    },
     /// A keyword facet; matches any of the values.
     Tag {
         key: TagKey,
@@ -409,7 +416,13 @@ pub(crate) enum FieldKind {
     Share(ShareBy),
     File,
     TimeOfDay,
-    /// Known, but needs a later milestone.
+    Sig,
+    /// Known, but needs a later milestone. None is today (`sig:` was the
+    /// last, GS-0); kept so the next announced field has its error.
+    #[expect(
+        dead_code,
+        reason = "no field is announced ahead of its milestone today"
+    )]
     Later(&'static str),
 }
 
@@ -454,7 +467,7 @@ pub(crate) const FIELDS: &[(&str, FieldKind)] = &[
     ("cat", FieldKind::Share(ShareBy::Count)),
     ("bytes", FieldKind::Share(ShareBy::Bytes)),
     ("file", FieldKind::File),
-    ("sig", FieldKind::Later("grouping keys (M7)")),
+    ("sig", FieldKind::Sig),
     ("seeders", FieldKind::Num(NumField::Seeders)),
     ("leechers", FieldKind::Num(NumField::Leechers)),
     ("trackers", FieldKind::Num(NumField::Trackers)),
@@ -1023,8 +1036,36 @@ fn field_value(
             })?;
             Ok(Node::TimeOfDay { from, to })
         }
+        FieldKind::Sig => match sig_value(value) {
+            Some(sig) => Ok(Node::Sig { sig }),
+            None => err(
+                format!(
+                    "{name}: use all {SIG_DIGITS} hex digits of a payload signature, or paste \
+                     an info hash (40 hex digits)"
+                ),
+                start,
+                end,
+            ),
+        },
         FieldKind::Later(what) => err(format!("{name}: arrives with {what}"), start, end),
     }
+}
+
+/// Hex digits in a `sig:` payload signature: a whole `u64`.
+pub const SIG_DIGITS: usize = 16;
+
+/// A `sig:` value, lowercased: a payload signature, or an info hash (or
+/// magnet link) whose payload to match.
+fn sig_value(v: &str) -> Option<String> {
+    if v.len() == SIG_DIGITS && v.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(v.to_ascii_lowercase());
+    }
+    bare_hash(v)
+}
+
+/// A payload signature's `sig:` form.
+pub fn sig_hex(sig: u64) -> String {
+    format!("{sig:0width$x}", width = SIG_DIGITS)
 }
 
 /// A comma-separated list of values, each read by `read`, without
@@ -1422,13 +1463,53 @@ impl Node {
         }
     }
 
-    /// Whether any clause tests `verified:`, `source:` or `network:`.
+    /// Whether any clause tests `verified:`, `source:` or `network:`, or
+    /// `sig:`: what only the search index knows, so a filter rule can't
+    /// test it (the judge would call it no match, and negated, a match
+    /// for everything).
     pub fn mentions_provenance(&self) -> bool {
         match self {
-            Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => true,
+            Node::Verified { .. }
+            | Node::Source { .. }
+            | Node::Network { .. }
+            | Node::Sig { .. } => true,
             Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_provenance),
             Node::Not { of } | Node::File { of } => of.mentions_provenance(),
             _ => false,
+        }
+    }
+
+    /// Whether any clause is `sig:<info hash>`, which resolves a reference
+    /// torrent ([`Node::with_default_visibility`]).
+    pub fn mentions_same_payload(&self) -> bool {
+        match self {
+            Node::Sig { sig } => sig.len() != SIG_DIGITS,
+            Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_same_payload),
+            Node::Not { of } | Node::File { of } => of.mentions_same_payload(),
+            _ => false,
+        }
+    }
+
+    /// The query with a search's default visibility: filter-hidden,
+    /// unverified and Adult torrents left out, as `/search` leaves them
+    /// out with Adult hidden. For a caller with no request visibility (a
+    /// saved search's alerts), so a `sig:<info hash>` reference a request
+    /// couldn't see resolves like an unknown hash (GS-0).
+    pub fn with_default_visibility(self) -> Node {
+        let no_adult = Node::Not {
+            of: Box::new(Node::Tag {
+                key: TagKey::Type,
+                any: vec!["adult".into()],
+            }),
+        };
+        match self.without_hidden().without_unverified() {
+            Node::And { mut of } => {
+                of.push(no_adult);
+                Node::And { of }
+            }
+            other => Node::And {
+                of: vec![other, no_adult],
+            },
         }
     }
 
@@ -1476,6 +1557,11 @@ impl Node {
                 Node::Source { .. } => {
                     if !out.contains(&"source") {
                         out.push("source");
+                    }
+                }
+                Node::Sig { .. } => {
+                    if !out.contains(&"payload_sig") {
+                        out.push("payload_sig");
                     }
                 }
                 Node::And { of } | Node::Or { of } => of.iter().for_each(|n| walk(n, out)),
@@ -1686,6 +1772,9 @@ impl Node {
             }
             Node::Hash { hash } => {
                 let _ = write!(out, "hash:{hash}");
+            }
+            Node::Sig { sig } => {
+                let _ = write!(out, "sig:{sig}");
             }
             Node::Tag { key, any } => {
                 let _ = write!(out, "{}:{}", key.as_str(), any.join(","));
@@ -1957,7 +2046,18 @@ mod tests {
         assert!(e("cat:vid>1").contains("expects a category"));
         assert!(e("cat:video>100").contains("0–100%"));
         assert_eq!(e("codec:a$b"), "codec: can't read \"a$b\"");
-        assert_eq!(e("sig:7a9f3c12"), "sig: arrives with grouping keys (M7)");
+        let sig_help = "sig: use all 16 hex digits of a payload signature, or paste an info hash \
+                        (40 hex digits)";
+        for bad in [
+            "sig:7a9f3c12",
+            "sig:7a9f3c12dd0e44b",
+            "sig:7a9f3c12dd0e44b10",
+            "sig:7a9f3c12dd0e44bz",
+            "sig:0123456789abcdef0123456789abcdef0123456",
+        ] {
+            assert_eq!(e(bad), sig_help, "{bad}");
+        }
+        assert_eq!(e("sig:"), "sig: needs a value");
         assert!(e("seeders:lots").contains("can't read"));
         assert!(
             e("seeders:5GB").contains("can't read"),
@@ -2423,6 +2523,42 @@ mod tests {
         assert_eq!(fields("verified:no network:bt"), Vec::<&str>::new());
         assert_eq!(fields("source:nyaa"), ["source"]);
         assert_eq!(fields("x (y | -source:a) source:b"), ["source"]);
+        assert_eq!(
+            fields("-sig:0123456789abcdef source:a sig:00000000000000ff"),
+            ["payload_sig", "source"]
+        );
+    }
+
+    #[test]
+    fn sig_takes_a_signature_or_an_info_hash() {
+        let sig = |q: &str| parse(q).unwrap();
+        assert_eq!(
+            sig("sig:7A9F3C12DD0E44B1"),
+            Node::Sig {
+                sig: "7a9f3c12dd0e44b1".into()
+            }
+        );
+        let hash = "38a68a3bbc7cdb158e44c404c52c7d1ea6aa2cff";
+        let want = Node::Sig { sig: hash.into() };
+        assert_eq!(sig(&format!("sig:{}", hash.to_uppercase())), want);
+        assert_eq!(sig(&format!("sig:magnet:?xt=urn:btih:{hash}&dn=x")), want);
+        // Only the search index knows it: a filter rule refuses it.
+        assert!(sig("-sig:7a9f3c12dd0e44b1").mentions_provenance());
+        assert!(sig(&format!("x (y | sig:{hash})")).mentions_provenance());
+        assert!(!sig(&format!("hash:{hash}")).mentions_provenance());
+        // Only the pasted-hash form resolves a reference torrent.
+        let same = |q: &str| sig(q).mentions_same_payload();
+        assert!(same(&format!("sig:{hash}")));
+        assert!(same(&format!("-sig:{hash}")));
+        assert!(same(&format!("x (y | sig:{hash})")));
+        assert!(same(&format!(
+            "file:(x) (sig:7a9f3c12dd0e44b1 | sig:{hash})"
+        )));
+        assert!(!same("sig:7a9f3c12dd0e44b1"));
+        assert!(!same("-sig:7a9f3c12dd0e44b1 | x"));
+        assert!(!same(&format!("hash:{hash}")));
+        assert_eq!(sig_hex(0xff), "00000000000000ff");
+        assert_eq!(sig_hex(u64::MAX), "ffffffffffffffff");
     }
 
     #[test]
@@ -2450,6 +2586,7 @@ mod tests {
             "time:22:00..02:00 time:9..17 time:22:30 (x | time:00:00..00:59)",
             "verified:no verified:yes,no -verified:yes (x | verified:yes)",
             "source:nyaa,dht -source:a.b_c-9 network:bt network:bt-i2p,ed2k,ipfs,usenet",
+            "sig:7a9f3c12dd0e44b1 -sig:38a68a3bbc7cdb158e44c404c52c7d1ea6aa2cff",
             // Found by fuzzing: phrase words that look like syntax, a
             // lone `!` before `)`, and a negated NEAR.
             "\"a\" NEAR \"NEAR $*\" NEAR \"x|y\"",

@@ -2285,9 +2285,25 @@ mod tests {
         finds_private: false,
     };
 
+    /// Prowlarr's declared credential, as the real plugin declares it: the
+    /// credentials route stores only declared names (X-consent-gate-lift
+    /// r2).
+    const POLICY: lodestar_sources::Policy = lodestar_sources::Policy {
+        credentials: &[lodestar_sources::consent::CredentialSpec {
+            name: "api_key",
+            label: "API key",
+            kind: lodestar_sources::consent::CredentialKind::Secret,
+            required: true,
+        }],
+        ..lodestar_sources::Policy::STRICT
+    };
+
     impl lodestar_sources::SourcePlugin for StandIn {
         fn manifest(&self) -> &lodestar_sources::Manifest {
             &self.0
+        }
+        fn policy(&self) -> &lodestar_sources::Policy {
+            &POLICY
         }
         fn config_editable(&self) -> bool {
             self.1.load(std::sync::atomic::Ordering::SeqCst)

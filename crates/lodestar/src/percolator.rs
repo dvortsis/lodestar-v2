@@ -31,8 +31,11 @@
 //!   the serving index has applied, matches each against the searches
 //!   that existed when it was promoted and have passed its id, and
 //!   records the hits and drops the rows in one transaction
-//!   ([`Store::record_promoted`]). A merge adds no torrent, so it's not
-//!   queued.
+//!   ([`Store::record_promoted_rows`]). A merge adds no torrent, so it's
+//!   not queued. A search held as the forward run is (GS-0: `sig:` during
+//!   the `payload_sig` backfill) keeps its row queued, and later batches
+//!   step past it, until it can run (X-percolate-promoted-hold,
+//!   `docs/decisions/2026-11-12-X-percolate-promoted-hold.md`).
 //! - **Logs** name saved-search ids and counts, never a query or a
 //!   torrent name (§12.1).
 //! - **Fixture mode** never starts it (`fixture::unless_offline`), so the
@@ -93,6 +96,11 @@ impl Default for PercolatorConfig {
 /// saved search, so a batch stays well inside the budget.
 pub const PROMOTED_BATCH: usize = 256;
 
+/// Held rows [`Seen::held`] remembers at most. A row past it isn't
+/// remembered, so its retry reruns every due search, which alerts'
+/// uniqueness makes safe; it only costs those searches again.
+const HELD_CAP: usize = 16 * PROMOTED_BATCH;
+
 /// What the commit hook hands the task.
 #[derive(Debug, Default)]
 struct Wake {
@@ -133,6 +141,8 @@ pub struct Run {
     /// Promoted torrents percolated, and what that took.
     pub promoted: usize,
     pub promoted_took: Duration,
+    /// Promoted torrents left queued on a held search.
+    pub promoted_held: usize,
 }
 
 /// What the task remembers between runs.
@@ -141,6 +151,27 @@ pub struct Seen {
     /// Saved searches already logged as unreadable, so each is logged
     /// once per process rather than every run.
     unreadable: HashSet<i64>,
+    /// Where the next promoted batch starts: past the rows the last one
+    /// left queued (0: the queue's head).
+    promoted_after: i64,
+    /// Queued promotions left waiting on held searches, by
+    /// `reindex_log` seq: the searches to retry them with (the others
+    /// already ran). Lost on a restart, when every search reruns. At most
+    /// [`HELD_CAP`] rows.
+    held: HashMap<i64, Vec<i64>>,
+}
+
+impl Seen {
+    /// Remembers `held` rows' held searches, while there's room (see
+    /// [`HELD_CAP`]). A row already remembered is always updated: its
+    /// held set only shrinks.
+    fn hold(&mut self, held: Vec<(i64, Vec<i64>)>) {
+        for (seq, searches) in held {
+            if self.held.len() < HELD_CAP || self.held.contains_key(&seq) {
+                self.held.insert(seq, searches);
+            }
+        }
+    }
 }
 
 /// One run up to `through` (see the module docs). `hub` gets the
@@ -182,15 +213,7 @@ pub fn run_once(
     let asts: HashMap<i64, &str> = due.iter().map(|s| (s.id, s.ast.as_str())).collect();
     let due: Vec<Due<'_>> = parsed
         .iter()
-        .map(|(id, watermark, node)| Due {
-            id: *id,
-            watermark: *watermark,
-            query: node,
-            utc_offset: 0,
-            count_only: false,
-            stems: false,
-            stoppable: false,
-        })
+        .map(|(id, watermark, node)| forward_due(*id, *watermark, node))
         .collect();
     let cancel = CancelToken::new().with_budget(config.budget);
     let limits = PercolateLimits {
@@ -225,7 +248,7 @@ pub fn run_once(
     }
     if failed.is_none() {
         let started = Instant::now();
-        let promoted = run_promoted(index, store, &cancel, now, &mut run);
+        let promoted = run_promoted(index, store, &cancel, now, &mut run, seen);
         run.promoted_took = started.elapsed();
         failed = promoted.err();
     }
@@ -281,25 +304,37 @@ pub fn run_once(
 /// Percolates up to [`PROMOTED_BATCH`] queued promotions (see the module
 /// docs) on what's left of `cancel`'s budget, adding their alerts to
 /// `run`. Rows the budget didn't reach stay queued and `run.more` is set.
+///
+/// A row with a search that's held (X-percolate-promoted-hold, see
+/// [`matched_promoted`]) stays queued too, and its other searches'
+/// hits are recorded at once. The next batch starts past it
+/// ([`Seen::promoted_after`]), so held rows never stall the queue, and
+/// once a batch reaches the queue's end the next run starts from its
+/// head again, retrying them. On a retry only the searches still held
+/// run ([`Seen::held`]); after a restart every due search runs again and
+/// the alerts it already made are not made twice.
 fn run_promoted(
     index: &SearchIndex,
     store: &mut Store,
     cancel: &CancelToken,
     now: i64,
     run: &mut Run,
+    seen: &mut Seen,
 ) -> Result<(), BoxError> {
     // The entry first, then the reader: a torrent the entry names is in
     // what the refreshed reader sees.
     let applied = index.reindex_watermark()?;
-    let rows = store.promoted_due(applied, PROMOTED_BATCH)?;
+    let rows = store.promoted_due_after(seen.promoted_after, applied, PROMOTED_BATCH)?;
     // An index rebuilt from empty commits the log's head before its ids
     // reach a promoted one: the row waits until both indexes' ids do, or
     // it would be matched without its document (or its files, for a
     // `file:(…)` clause) and lost.
     let indexed = index.watermark()?.min(index.files_watermark()?);
-    let Some(last) = rows.last().map(|r| r.seq) else {
+    if rows.is_empty() {
+        // Past the end: the next run retries the held rows from the head.
+        seen.promoted_after = 0;
         return Ok(());
-    };
+    }
     index.refresh()?;
     // Every active search; one with an unreadable query gets nothing (the
     // forward run logs it).
@@ -319,26 +354,58 @@ fn run_promoted(
     // The run's first row always finishes, whatever the forward run left
     // of the budget, so the queue moves however busy the runs are.
     let first = CancelToken::new();
-    let mut done = None;
+    let mut done = Vec::new();
+    let mut held = Vec::new();
+    // The batch was read to its end: neither the budget nor the index
+    // stopped it.
+    let mut whole = true;
     let mut stopped = false;
     for (i, row) in rows.iter().enumerate() {
         // A row the index hasn't reached waits for a later commit (or the
         // idle poll): not `more`, which would spin until it's indexed.
         if row.torrent_id > indexed {
+            whole = false;
             break;
         }
         let token = if i == 0 { &first } else { cancel };
-        if !matched_promoted(index, &parsed, row, limits, now, token, &mut hits)? {
-            stopped = true;
-            break;
+        let only = seen.held.get(&row.seq).map(Vec::as_slice);
+        match matched_promoted(index, &parsed, row, only, limits, now, token, &mut hits)? {
+            None => {
+                stopped = true;
+                whole = false;
+                break;
+            }
+            Some(h) if h.is_empty() => {
+                done.push(row.seq);
+                run.promoted += 1;
+            }
+            Some(h) => {
+                held.push((row.seq, h));
+                run.promoted_held += 1;
+            }
         }
-        done = Some(row.seq);
-        run.promoted += 1;
     }
-    run.more |= stopped || (done == Some(last) && rows.len() == PROMOTED_BATCH);
-    let Some(done) = done else {
-        return Ok(());
+    // Where the next batch starts: past every row this one examined,
+    // unless the queue's end (or a row the index hasn't reached) came
+    // first, when the next run retries the held rows from the head.
+    let examined = done.len() + held.len();
+    let after = if whole && rows.len() == PROMOTED_BATCH {
+        rows[examined - 1].seq
+    } else if stopped {
+        examined
+            .checked_sub(1)
+            .map_or(seen.promoted_after, |i| rows[i].seq)
+    } else {
+        0
     };
+    // Only rows that were percolated make another run worth having at
+    // once: a batch of held rows waits for a commit or the idle poll.
+    run.more |= stopped || (whole && rows.len() == PROMOTED_BATCH && !done.is_empty());
+    if done.is_empty() && hits.is_empty() {
+        seen.promoted_after = after;
+        seen.hold(held);
+        return Ok(());
+    }
     let asts: HashMap<i64, &str> = parsed.iter().map(|p| (p.0, p.2)).collect();
     let results: Vec<(SearchHits<'_>, &str)> = hits
         .iter()
@@ -353,50 +420,105 @@ fn run_promoted(
         })
         .collect();
     run.created
-        .extend(store.record_promoted(done, &results, now)?);
+        .extend(store.record_promoted_rows(&done, &results, now)?);
+    // Only once recorded: after a failed write the same batch is taken
+    // again, with every search.
+    seen.promoted_after = after;
+    for seq in &done {
+        seen.held.remove(seq);
+    }
+    seen.hold(held);
     Ok(())
 }
 
 /// Matches one promoted torrent against the searches it's due for: those
 /// that existed when it was promoted and whose watermark has passed its
-/// id (a search below it meets it in its own range). Whether the budget
-/// let them all run; a search that fails in the index is passed over, so
+/// id (a search below it meets it in its own range), or only those in
+/// `only` (the ones held last time). `None` when the budget stopped it
+/// before they all ran; otherwise the searches held, which is empty once
+/// the row is done. A search that fails in the index is passed over, so
 /// one bad query can't hold the queue.
+///
+/// **Held:** each runs as a forward run does ([`forward_due`]'s
+/// `hold_unresolved`), so `percolate` leaves out a search whose query
+/// needs a field it can't answer for yet (GS-0: a `sig:<info hash>`
+/// during the `payload_sig` backfill). One left out that reads a
+/// population-tracked field ([`Node::population_fields`]) is held: it
+/// matched nothing because it didn't run, and its row stays queued.
+#[allow(clippy::too_many_arguments)]
 fn matched_promoted(
     index: &SearchIndex,
     searches: &[(i64, i64, &str, Node)],
     row: &PromotedDue,
+    only: Option<&[i64]>,
     limits: PercolateLimits,
     now: i64,
     cancel: &CancelToken,
     hits: &mut BTreeMap<i64, Vec<i64>>,
-) -> Result<bool, BoxError> {
+) -> Result<Option<Vec<i64>>, BoxError> {
     let due: Vec<Due<'_>> = searches
         .iter()
         .filter(|(id, watermark, ..)| *id <= row.searches_through && *watermark >= row.torrent_id)
-        .map(|(id, _, _, node)| Due {
-            id: *id,
-            watermark: row.torrent_id - 1,
-            query: node,
-            utc_offset: 0,
-            count_only: false,
-            stems: false,
-            stoppable: false,
-        })
+        .filter(|(id, ..)| only.is_none_or(|o| o.contains(id)))
+        .map(|(id, _, _, node)| promoted_due(*id, row.torrent_id, node))
         .collect();
     if due.is_empty() || row.torrent_id <= 0 {
-        return Ok(true);
+        return Ok(Some(Vec::new()));
     }
     let p = percolate(index, &due, row.torrent_id, limits, now, cancel)?;
     if p.stopped {
-        return Ok(false);
+        return Ok(None);
     }
+    // A torrent the snapshot no longer reaches (removed since, and the
+    // highest id) matches nothing: the row is done, never held for ever
+    // on a search `percolate` passed over because its range was empty.
+    if p.snapshot_max < row.torrent_id {
+        return Ok(Some(Vec::new()));
+    }
+    let ran: HashSet<i64> = p
+        .matched
+        .iter()
+        .map(|m| m.id)
+        .chain(p.failed.iter().copied())
+        .collect();
+    let held = due
+        .iter()
+        .filter(|d| !ran.contains(&d.id) && !d.query.population_fields().is_empty())
+        .map(|d| d.id)
+        .collect();
     for m in p.matched {
         if m.torrent_ids.contains(&row.torrent_id) {
             hits.entry(m.id).or_default().push(row.torrent_id);
         }
     }
-    Ok(true)
+    Ok(Some(held))
+}
+
+/// A saved search's forward run from its watermark. It's held while a
+/// `sig:<info hash>` can't resolve every reference (GS-0): its watermark
+/// would otherwise move past clones that then never alert.
+fn forward_due(id: i64, watermark: i64, query: &Node) -> Due<'_> {
+    Due {
+        id,
+        watermark,
+        query,
+        utc_offset: 0,
+        count_only: false,
+        stems: false,
+        stoppable: false,
+        hold_unresolved: true,
+    }
+}
+
+/// A saved search's one-off pass over a promoted torrent. Held as a
+/// forward run is: its promotion row stays queued while it's held
+/// ([`matched_promoted`]), so the pass runs once the backfill is done
+/// instead of missing the clones of references not yet reached.
+fn promoted_due(id: i64, torrent_id: i64, query: &Node) -> Due<'_> {
+    Due {
+        watermark: torrent_id - 1,
+        ..forward_due(id, 0, query)
+    }
 }
 
 /// Keeps each saved search's newest `keep` alerts.
@@ -560,6 +682,19 @@ fn alert_query(node: Node) -> Node {
 
 #[cfg(test)]
 mod tests {
+    /// GS-0 and X-percolate-promoted-hold: both the forward run and a
+    /// promoted torrent's pass wait for the `payload_sig` backfill.
+    #[test]
+    fn forward_runs_and_promoted_passes_both_hold() {
+        let q = Node::All;
+        let f = super::forward_due(3, 40, &q);
+        assert!(f.hold_unresolved);
+        assert_eq!((f.id, f.watermark, f.count_only), (3, 40, false));
+        let p = super::promoted_due(3, 41, &q);
+        assert!(p.hold_unresolved);
+        assert_eq!((p.id, p.watermark, p.count_only), (3, 40, false));
+    }
+
     #[test]
     fn alerts_leave_unverified_items_out_unless_asked() {
         use lodestar_search::parse;
@@ -1430,6 +1565,386 @@ mod tests {
         let second = run(&mut s, w);
         assert_eq!((second.promoted, second.more), (3, false));
         assert_eq!(alert_ids(&s.store, promo), items);
+    }
+
+    /// `Seen::held` stops growing at `HELD_CAP`; a row it already holds
+    /// is still updated, and a row it can't take just reruns every
+    /// search on its retry.
+    #[test]
+    fn the_held_map_is_capped() {
+        let mut seen = Seen::default();
+        let rows = |from: i64, to: i64| (from..to).map(|seq| (seq, vec![7, 8])).collect();
+        seen.hold(rows(1, HELD_CAP as i64 + 100));
+        assert_eq!(seen.held.len(), HELD_CAP);
+        assert!(!seen.held.contains_key(&(HELD_CAP as i64 + 1)));
+        seen.hold(vec![(1, vec![8]), (HELD_CAP as i64 + 1, vec![8])]);
+        assert_eq!(seen.held.len(), HELD_CAP);
+        assert_eq!(seen.held[&1], [8]);
+        assert!(!seen.held.contains_key(&(HELD_CAP as i64 + 1)));
+        // Room again once rows are done.
+        seen.held.remove(&2);
+        seen.hold(rows(HELD_CAP as i64 + 1, HELD_CAP as i64 + 2));
+        assert!(seen.held.contains_key(&(HELD_CAP as i64 + 1)));
+    }
+
+    /// A store and an on-disk index (so it can be reopened mid-backfill)
+    /// with an unverified item `Promo.Even` (id 1) below 20 indexed
+    /// torrents. Every fixture torrent is one 2 GB file, so all share one
+    /// payload signature: each is a clone of every other.
+    fn disk_setup() -> (Setup, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let item = unverified(&mut store, "Promo.Even");
+        add(&mut store, &names(0, 20));
+        let index = SearchIndex::open(&lodestar_search::index_dir(dir.path())).unwrap();
+        index_all(&index, &mut store);
+        assert!(index.watermark().unwrap() > item);
+        let s = Setup {
+            _dir: dir,
+            db,
+            store,
+            index,
+        };
+        (s, item)
+    }
+
+    /// `sig:<info hash of torrent i>`.
+    fn sig_of(i: usize) -> String {
+        let raw = info(&names(0, 20)[i]);
+        let v1 = lodestar_metainfo::Info::parse(&raw).unwrap().v1.unwrap();
+        format!("sig:{v1}")
+    }
+
+    /// GS-0's walk under way: the index reopened with `payload_sig` one
+    /// generation on, so the field is backfilled over every torrent again
+    /// and `sig:<info hash>` is held until it's done.
+    fn start_backfill(s: &mut Setup) {
+        let gens = lodestar_search::Generations::current();
+        let next = gens.get("payload_sig").unwrap() + 1;
+        s.index = SearchIndex::open(&lodestar_search::index_dir(s._dir.path()))
+            .unwrap()
+            .with_generations(gens.with("payload_sig", next))
+            .unwrap();
+        assert_backfilling(&s.index);
+    }
+
+    fn assert_backfilling(index: &SearchIndex) {
+        assert!(
+            matches!(
+                index.availability("payload_sig"),
+                lodestar_search::Availability::Backfilling { .. }
+            ),
+            "{:?}",
+            index.availability("payload_sig")
+        );
+    }
+
+    /// One small indexer step: the queued promotions' `reindex_log`
+    /// entries are applied and the walk moves a torrent or so.
+    fn step(s: &mut Setup) {
+        let mut w = s.index.writer(15 << 20).unwrap();
+        w.catch_up(&mut s.store, 1).unwrap();
+        w.commit().unwrap();
+    }
+
+    fn finish_backfill(s: &mut Setup) {
+        index_all(&s.index, &mut s.store);
+        assert_eq!(
+            s.index.availability("payload_sig"),
+            lodestar_search::Availability::Ready
+        );
+    }
+
+    fn run_seen(s: &mut Setup, through: i64, seen: &mut Seen) -> Run {
+        run_once(&s.index, &mut s.store, None, through, &quick(), NOW, seen).unwrap()
+    }
+
+    /// The brief's first two cases: during the backfill a promoted clone
+    /// of `sig:<H>` isn't alerted, nor lost; an unrelated search on the
+    /// same row alerts at once; once the field is Ready the next run
+    /// alerts the clone exactly once.
+    #[test]
+    fn a_held_promotion_waits_for_the_backfill_and_alerts_once() {
+        let (mut s, item) = disk_setup();
+        let w = s.index.watermark().unwrap();
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        let promo = save(&mut s.store, "promo", "Promo", w);
+        start_backfill(&mut s);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        step(&mut s);
+        assert_backfilling(&s.index);
+        let mut seen = Seen::default();
+        let r = run_seen(&mut s, w, &mut seen);
+        assert_eq!((r.promoted, r.promoted_held, r.more), (0, 1, false));
+        assert_eq!(alert_ids(&s.store, promo), vec![item], "not held");
+        assert!(alert_ids(&s.store, sig).is_empty());
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        // Still backfilling: every run retries it, finds it still held,
+        // writes nothing and asks for no run straight away.
+        step(&mut s);
+        assert_backfilling(&s.index);
+        for _ in 0..3 {
+            let r = run_seen(&mut s, w, &mut seen);
+            assert_eq!((r.promoted, r.promoted_held, r.alerts), (0, 1, 0));
+            assert!(!r.more, "doesn't spin");
+            assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        }
+
+        finish_backfill(&mut s);
+        let r = run_seen(&mut s, w, &mut seen);
+        assert_eq!((r.promoted, r.promoted_held, r.alerts), (1, 0, 1));
+        assert_eq!(alert_ids(&s.store, sig), vec![item]);
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+        assert!(seen.held.is_empty());
+        let r = run_seen(&mut s, w, &mut seen);
+        assert_eq!((r.promoted, r.alerts), (0, 0));
+    }
+
+    /// The held set is inferred: `percolate` returns none, and giving it
+    /// one needs `crates/search`. This pins the inference to the hold:
+    /// mid-backfill `percolate` leaves the `sig:` search out of both
+    /// `matched` and `failed` and runs the others, and `matched_promoted`
+    /// reports exactly that search held; once Ready, none.
+    #[test]
+    fn the_held_set_is_what_percolate_holds() {
+        let (mut s, item) = disk_setup();
+        let w = s.index.watermark().unwrap();
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        let promo = save(&mut s.store, "promo", "Promo", w);
+        let source = save(&mut s.store, "source", "source:dht", w);
+        start_backfill(&mut s);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        step(&mut s);
+        s.index.refresh().unwrap();
+        let searches = s.store.percolation_due(i64::MAX).unwrap();
+        let parsed: Vec<(i64, i64, &str, Node)> = searches
+            .iter()
+            .map(|x| {
+                let node = serde_json::from_str::<Node>(&x.ast).unwrap();
+                (x.id, x.watermark, x.ast.as_str(), alert_query(node))
+            })
+            .collect();
+        let row = s.store.promoted_due(i64::MAX, 1).unwrap().remove(0);
+        let limits = PercolateLimits {
+            keep: 1,
+            max_range: 1,
+        };
+        let due: Vec<Due<'_>> = parsed
+            .iter()
+            .map(|(id, _, _, n)| promoted_due(*id, row.torrent_id, n))
+            .collect();
+        let p = percolate(
+            &s.index,
+            &due,
+            row.torrent_id,
+            limits,
+            NOW,
+            &CancelToken::new(),
+        )
+        .unwrap();
+        assert!(!p.stopped && p.failed.is_empty());
+        let ran: Vec<i64> = p.matched.iter().map(|m| m.id).collect();
+        // `source:` reads a population-tracked field too, but it's
+        // complete here, so it runs: only what `percolate` holds is held.
+        assert_eq!(ran, [promo, source]);
+        let held = |s: &Setup| {
+            let mut hits = BTreeMap::new();
+            matched_promoted(
+                &s.index,
+                &parsed,
+                &row,
+                None,
+                limits,
+                NOW,
+                &CancelToken::new(),
+                &mut hits,
+            )
+            .unwrap()
+        };
+        assert_eq!(held(&s), Some(vec![sig]));
+        finish_backfill(&mut s);
+        s.index.refresh().unwrap();
+        assert_eq!(held(&s), Some(vec![]));
+    }
+
+    /// Under a spent budget each run finishes one row and stops at the
+    /// next. The cursor moves past a held row, so the rows behind it
+    /// still go, one a run, and the held one waits for Ready.
+    #[test]
+    fn a_spent_budget_steps_past_a_held_row() {
+        let (mut s, item) = disk_setup();
+        let w = s.index.watermark().unwrap();
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        // Past `sig`'s watermark, so not due for it.
+        let free: Vec<i64> = (0..2)
+            .map(|i| unverified(&mut s.store, &format!("Promo.Late.{i}")))
+            .collect();
+        add(&mut s.store, &names(20, 22));
+        index_all(&s.index, &mut s.store);
+        let w2 = s.index.watermark().unwrap();
+        let promo = save(&mut s.store, "promo", "Promo", w2);
+        start_backfill(&mut s);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        for (i, id) in free.iter().enumerate() {
+            promote(&mut s.store, *id, &format!("Promo.Late.{i}"), 0);
+        }
+        let mut w = s.index.writer(15 << 20).unwrap();
+        w.catch_up(&mut s.store, 3).unwrap();
+        w.commit().unwrap();
+        drop(w);
+        assert_backfilling(&s.index);
+        let spent = PercolatorConfig {
+            budget: Duration::ZERO,
+            ..quick()
+        };
+        let mut seen = Seen::default();
+        let mut go = |s: &mut Setup| {
+            run_once(&s.index, &mut s.store, None, w2, &spent, NOW, &mut seen).unwrap()
+        };
+        let counts = |r: &Run| (r.promoted, r.promoted_held, r.more);
+        // The held row first (it's the run's first, so it finishes), then
+        // stopped at the next.
+        assert_eq!(counts(&go(&mut s)), (0, 1, true));
+        assert_eq!(counts(&go(&mut s)), (1, 0, true));
+        assert_eq!(alert_ids(&s.store, promo), [item, free[0]]);
+        let r = go(&mut s);
+        assert_eq!((r.promoted, r.promoted_held), (1, 0));
+        assert_eq!(alert_ids(&s.store, promo), [item, free[0], free[1]]);
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        // From the head again, every run: still held, nothing alerted,
+        // and no run straight away.
+        for _ in 0..3 {
+            let r = go(&mut s);
+            assert_eq!(counts(&r), (0, 1, false));
+            assert_eq!(r.alerts, 0);
+        }
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        finish_backfill(&mut s);
+        let r = go(&mut s);
+        assert_eq!(r.promoted, 1);
+        assert!(alert_ids(&s.store, sig).contains(&item));
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+    }
+
+    /// A restart while a row is held: it's still queued, and runs once
+    /// after Ready; the search that already alerted on it doesn't again.
+    #[test]
+    fn a_held_promotion_survives_a_restart() {
+        let (mut s, item) = disk_setup();
+        let w = s.index.watermark().unwrap();
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        let promo = save(&mut s.store, "promo", "Promo", w);
+        start_backfill(&mut s);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        step(&mut s);
+        let r = run_seen(&mut s, w, &mut Seen::default());
+        assert_eq!((r.promoted_held, r.alerts), (1, 1));
+        // The restart: the store reopened from the file, a fresh task.
+        s.store = Store::open(&s.db, StoreConfig::default()).unwrap();
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        finish_backfill(&mut s);
+        let r = run_seen(&mut s, w, &mut Seen::default());
+        assert_eq!((r.promoted, r.promoted_held), (1, 0));
+        assert_eq!(
+            r.created
+                .iter()
+                .map(|a| (a.saved_search_id, a.torrent_id))
+                .collect::<Vec<_>>(),
+            [(sig, item)],
+            "`promo` already had it"
+        );
+        assert_eq!(alert_ids(&s.store, sig), vec![item]);
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+    }
+
+    /// A full batch of held rows doesn't stall the queue: the next run
+    /// takes the rows past it, and the one after retries the held rows
+    /// with only their held search. None spins.
+    #[test]
+    fn held_rows_do_not_stall_the_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let held: Vec<i64> = (0..PROMOTED_BATCH)
+            .map(|i| unverified(&mut store, &format!("Promo.{i}")))
+            .collect();
+        add(&mut store, &names(0, 20));
+        let index = SearchIndex::open(&lodestar_search::index_dir(dir.path())).unwrap();
+        index_all(&index, &mut store);
+        let mut s = Setup {
+            _dir: dir,
+            db,
+            store,
+            index,
+        };
+        let w = s.index.watermark().unwrap();
+        // Due for the held rows only: the later items are past its
+        // watermark, and the forward run meets them in its own range.
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        let free: Vec<i64> = (0..3)
+            .map(|i| unverified(&mut s.store, &format!("Promo.Late.{i}")))
+            .collect();
+        add(&mut s.store, &names(20, 25));
+        index_all(&s.index, &mut s.store);
+        let w2 = s.index.watermark().unwrap();
+        let promo = save(&mut s.store, "promo", "Promo", w2);
+        start_backfill(&mut s);
+        for (i, id) in held.iter().enumerate() {
+            promote(&mut s.store, *id, &format!("Promo.{i}"), 0);
+        }
+        for (i, id) in free.iter().enumerate() {
+            promote(&mut s.store, *id, &format!("Promo.Late.{i}"), 0);
+        }
+        let mut w = s.index.writer(15 << 20).unwrap();
+        w.catch_up(&mut s.store, PROMOTED_BATCH + 3).unwrap();
+        w.commit().unwrap();
+        drop(w);
+        assert_backfilling(&s.index);
+        let mut seen = Seen::default();
+
+        let first = run_seen(&mut s, w2, &mut seen);
+        assert_eq!(
+            (first.promoted, first.promoted_held, first.more),
+            (0, PROMOTED_BATCH, false),
+            "a batch of held rows doesn't spin"
+        );
+        assert_eq!(first.alerts, PROMOTED_BATCH, "`promo` ran on them");
+        let second = run_seen(&mut s, w2, &mut seen);
+        assert_eq!((second.promoted, second.promoted_held), (3, 0));
+        let mut all: Vec<i64> = held.iter().chain(&free).copied().collect();
+        all.sort_unstable();
+        assert_eq!(alert_ids(&s.store, promo), all);
+        assert_eq!(
+            s.store.promoted_due(i64::MAX, 1000).unwrap().len(),
+            PROMOTED_BATCH
+        );
+        // From the head again: only `sig` is retried, and it's held.
+        let third = run_seen(&mut s, w2, &mut seen);
+        assert_eq!(
+            (
+                third.promoted,
+                third.promoted_held,
+                third.alerts,
+                third.more
+            ),
+            (0, PROMOTED_BATCH, 0, false)
+        );
+        assert!(alert_ids(&s.store, sig).is_empty());
+
+        finish_backfill(&mut s);
+        // The cursor is past the batch (the third run read a full one):
+        // this run finds the end and the next starts from the head.
+        let fourth = run_seen(&mut s, w2, &mut seen);
+        assert_eq!(fourth.promoted, 0);
+        let fifth = run_seen(&mut s, w2, &mut seen);
+        assert_eq!((fifth.promoted, fifth.promoted_held), (PROMOTED_BATCH, 0));
+        // The forward run, no longer held, adds the torrents past `w`.
+        let alerted = alert_ids(&s.store, sig);
+        assert!(held.iter().all(|id| alerted.contains(id)), "{alerted:?}");
+        assert!(s.store.promoted_due(i64::MAX, 1000).unwrap().is_empty());
     }
 
     /// The cost of one full batch, for the decisions file:
