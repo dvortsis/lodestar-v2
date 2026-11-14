@@ -10,10 +10,10 @@ The re-judge that X-filter01-fix (#843) left as a follow-up, the store's hold pr
   - A pass under way records its version, its place and its totals.
   - A store marked by a newer core (a downgrade) has its marker lowered to today's on start, and what was stored above `seen` is judged again; an upgrade later judges everything again.
   - An empty store is marked as judged by today's core: by the writer's first pass, and by `lodestar import` before it stores anything (one call in `crates/lodestar/src/cli/import.rs`, which also records what the import judged when it ends).
-- **Only what the earlier core couldn't read whole is judged again** (runner, §2.33). A cheap check with the real tokenizer (`read_whole_by_v1`) finds the torrents within the earlier core's caps: at most 1,000 files, no padding file, and at most 128 tokens in the name and every path, in both readings. Their judgment stands, and only the marker moves on. A torrent with a partial file list (an import's) is never taken as read whole. Every other stored torrent is judged again, and one that can't be read is held. A compile-time check makes the next core version say what a pass may leave.
+- **Only what the earlier core couldn't read whole is judged again** (runner, §2.33). A cheap check with the real tokenizer (`read_whole_by_v1`) finds the torrents the earlier core read whole. Their judgment stands, and only the marker moves on. A torrent with a partial file list (an import's) is never taken as read whole. Every other stored torrent is judged again, and one that can't be read is held. A compile-time check makes the next core version say what a pass may leave.
 - **Torrents the earlier core couldn't read whole stay visible under its judgment until the pass reaches them.**
   - The pass runs first after start, before the enrichment backfill, the import-candidate refile and the unverified sweep.
-  - Measured on the build VM, it takes about 11 s per million stored in memory and 13 s on disk, with 2% past the caps (`rejudge_rate`). Ingest shares the writer, so it takes longer on a busy server.
+  - Measured on the build VM, it takes about 18 s per million stored in memory and 22 s on disk, with 2% of them not read whole by the earlier core (`rejudge_rate`). Ingest shares the writer, so it takes longer on a busy server.
   - Hiding them from every output until they're re-judged is deferred to the owner, as a slice of its own.
 - **The writer runs the re-judge in the background** (`crate::core_rejudge`), one batch per turn between ingest batches: up to 256 stored torrents in id order, and no longer than 250 ms past the first, since one torrent can take up to the core's budget to judge.
   - Its place is the last torrent it finished, written after each batch's holds commit, so a restart resumes there. A restart between the two judges that batch again, which holds nothing twice.
@@ -26,7 +26,7 @@ The re-judge that X-filter01-fix (#843) left as a follow-up, the store's hold pr
   - A held torrent is deleted, with its hashes quarantined or tombstoned in the same transaction, marked for intake first, as the backfill's holds are.
 - **Counts are logged, never names or hashes.**
   - `pipeline.core_rejudge_started` fires when the pass starts or resumes on a run, with its totals so far.
-  - `pipeline.core_rejudge_done` fires at the end: the torrents found past the caps and judged again, how many are now held, and how many of those couldn't be judged at all.
+  - `pipeline.core_rejudge_done` fires at the end: the torrents found that the earlier core could not read whole, judged again, how many are now held, and how many of those couldn't be judged at all.
   - The totals are kept with the pass's place, so they add up across restarts.
   - The events' labels in the logging screen are a follow-up outside this slice; until then the screen shows their ids.
 - **A rollback or restore judges its torrents again** when the copy's marker is older. A rollback never carries the store's marker into the copy, so the pass runs on the next start.
@@ -40,5 +40,5 @@ The re-judge that X-filter01-fix (#843) left as a follow-up, the store's hold pr
 
 ## Numbers
 - **`budget_worst_case`:** 28 shapes, worst 12–15.7 ms scaled on the build VM this run, against 9–11 ms for the same shapes on `main` in the same session. The difference is the host's noise, not this change: the costliest shape reads the same file count and units on both. The bound (15 ms) and the CI budget limit are unchanged, and CI's `filter budget (§20.8)` job decides.
-- **The re-judge:** about 11 s per million stored in memory and 13 s on disk, with 2% past the earlier core's caps.
+- **The re-judge:** about 18 s per million stored in memory and 22 s on disk, with 2% of them not read whole by the earlier core.
 - **Held in the repo's corpora:** still 0 of 515 (198 pack-corpus torrents, 317 release names), now counted with `too_large`, as intake checks it.

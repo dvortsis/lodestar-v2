@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn a_panic_judging_one_torrent_holds_it_and_the_batch_goes_on() {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-        let long = |n: &str| format!("{}{n}", "word ".repeat(130));
+        let long = |n: &str| format!("{}{n}", "word ".repeat(600));
         let (bad, bad_hash) = add(&mut store, &long("panics here"));
         let (good, _) = add(&mut store, &long("plain film"));
         let filter = Handle::new(Engine::new(Core::new(

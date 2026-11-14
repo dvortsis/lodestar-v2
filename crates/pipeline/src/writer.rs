@@ -3318,7 +3318,7 @@ mod tests {
                 (
                     b"name".to_vec(),
                     OwnedValue::Bytes(
-                        format!("{}rolea lexa.mp4", "word ".repeat(130)).into_bytes(),
+                        format!("{}rolea lexa.mp4", "word ".repeat(600)).into_bytes(),
                     ),
                 ),
                 (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),

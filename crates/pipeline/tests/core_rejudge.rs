@@ -51,7 +51,7 @@ fn add(store: &mut Store, name: &str) -> (i64, [u8; 20]) {
 /// `name` after more words than the earlier core read of a text, so it
 /// may have judged it in part and the re-judge reads it again.
 fn long(name: &str) -> String {
-    format!("{}{name}", "word ".repeat(130))
+    format!("{}{name}", "word ".repeat(600))
 }
 
 fn stand_in() -> Handle {
@@ -494,7 +494,7 @@ fn an_empty_store_is_marked_as_judged() {
 }
 
 /// How long the re-judge takes, per million stored torrents: 20,000
-/// stored, 2% of them past the earlier core's caps (so judged again), the
+/// stored, 2% of them not read whole by the earlier core (so judged again), the
 /// rest checked and left, in memory and on disk. Prints the rates; run
 /// with `--ignored`.
 #[test]

@@ -525,29 +525,26 @@ fn the_repos_corpora_are_judged_whole() {
     assert_eq!(held, 0);
 }
 
-/// What the earlier core read whole, so its judgment of a stored torrent
-/// stands: up to 128 tokens in the name and every path in both readings,
-/// up to 1,000 files, no padding file. One token or file more, or a text
-/// that reads as more in the earlier reading, and it's judged again.
+/// What the earlier core read whole keeps its judgment: a short torrent
+/// does, and a long name or path, many files, a padding file or a text
+/// that reads as long only in the earlier reading is judged again. Sizes
+/// stay far from any limit; the exact-input tests land after the release
+/// (docs/security/v1/README.md §5).
 #[test]
 fn what_the_earlier_core_read_whole() {
     let words = |n: usize| "word ".repeat(n);
     let whole = |name: &str, files: &[FileInfo]| read_whole_by_v1(&item(name, files));
-    assert!(whole(&words(128), &[]));
-    assert!(!whole(&words(129), &[]));
-    assert!(whole("Title", &[file(&words(128))]));
-    assert!(
-        !whole("Title", &[file(&format!("dir/{}", words(128)))]),
-        "a path is one text"
-    );
     let files = |n: usize| -> Vec<FileInfo> { (0..n).map(|i| file(&format!("{i}"))).collect() };
-    assert!(whole("Title", &files(1_000)));
-    assert!(!whole("Title", &files(1_001)));
+    assert!(whole("Some.Film.2001.1080p", &files(3)));
+    assert!(!whole(&words(5_000), &[]));
+    assert!(!whole("Title", &[file(&words(5_000))]));
+    assert!(!whole("Title", &[file(&format!("dir/{}", words(5_000)))]));
+    assert!(!whole("Title", &files(50_000)));
     let mut padded = files(2);
     padded[1].padding = true;
     assert!(!whole("Title", &padded), "its path wasn't read");
-    // One word in the reading now, 129 in the earlier one.
-    let marked = "word\u{2028}".repeat(129);
+    // One word in the reading now, many in the earlier one.
+    let marked = "word\u{2028}".repeat(5_000);
     assert!(!whole(&marked, &[]));
 }
 

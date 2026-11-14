@@ -551,18 +551,14 @@ pub const BUDGET: u64 = 9_000_000;
 /// was judged by that one.
 pub const CORE_VERSION: i64 = 2;
 
-/// The most tokens a text, and files a torrent, version 1 of the core
-/// read: past either it judged a truncated view.
+/// Version 1 of the core's limits (detail held, docs/security/v1 §5).
 const V1_TOKENS: usize = 128;
 const V1_FILES: usize = 1_000;
 
 /// Whether version 1 of the core read `item` whole, so judging it again
-/// by this one can't change what the core decides (§20.5): at most
-/// [`V1_FILES`] files, no padding file (whose path it skipped), and at
-/// most [`V1_TOKENS`] tokens in the name and in every path, in both
-/// readings. Anything else it may have judged in part, so it's judged
-/// again. Unmetered: it reads at most [`V1_FILES`] paths, each once in
-/// each reading.
+/// by this one can't change what the core decides (§20.5). Anything else
+/// it may have judged in part, so it's judged again. Unmetered: it reads
+/// each path of a torrent within those limits once in each reading.
 pub fn read_whole_by_v1(item: &Item) -> bool {
     if item.files.len() > V1_FILES || item.files.iter().any(|f| f.padding) {
         return false;
