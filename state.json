@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T02:48Z",
+  "updated_at": "2026-11-14T03:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8354,6 +8354,15 @@
         "DHT backlog (component level): pending_addrs per-IP dedupe; bound pings from pending inserts in the DHT-02/DHT-11 fix",
         "perf slices from Windows lane leads: /suggest prefix p95 at 1M; Magnetico import scaling 200k->1M; two Chromium e2e failures on Windows"
       ]
+    },
+    {
+      "at": "2026-11-14T03:10Z",
+      "from": "X-metainfo01-fix",
+      "items": [
+        "metainfo: worker per-batch byte budget (one parse within the budget can exceed the worker 256 MB steady-state budget)",
+        "metainfo: halved-caller path budgets",
+        "owner call: delete old branch slice/X-metainfo01-fix"
+      ]
     }
   ],
   "main_health": [
@@ -8757,12 +8766,6 @@
       "state": "fix round (review items + owner rule A); held for owner rule build",
       "head": "37c1ae03",
       "status": "delta review CHANGES relayed (round 2); awaiting fix push"
-    },
-    "862": {
-      "slice": "X-metainfo01-fix",
-      "head": "3d300bb2",
-      "status": "delta self-checked against reviewed #861; merge on green",
-      "slot": 30
     }
   },
   "merged_log": [
@@ -9409,7 +9412,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T02:48Z",
+    "updated": "2026-11-14T03:10Z",
     "items": [
       {
         "slot": 1,
@@ -9574,9 +9577,9 @@
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "status": "active",
+        "status": "idle",
         "since": "2026-11-14T00:43Z",
-        "doing": "session_01MMjhn8uWYYRNeLqCmiGGvY: METAINFO-01 fix (blocking); previous session parking X-ci-filter-docs-user",
+        "doing": "#862 merged (0dc154ee); slot free",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9680,7 +9683,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T02:48Z",
+  "updated": "2026-11-14T03:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10213,6 +10216,12 @@
       "slice": "X-worker-839-followups",
       "merged": "d649932e",
       "at": "2026-11-14T02:29Z"
+    },
+    {
+      "pr": 862,
+      "slice": "X-metainfo01-fix",
+      "merged": "0dc154ee",
+      "at": "2026-11-14T03:10Z"
     }
   ]
 }
