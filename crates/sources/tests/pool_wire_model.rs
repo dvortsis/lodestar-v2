@@ -474,6 +474,112 @@ async fn run(seed: u64) -> Outcome {
 
 /// Every seed: honest keys are all fetched once with their own dicts, no
 /// key without an honest peer is, and the budget holds throughout.
+/// Runs `f` on a fresh current-thread runtime in paused time.
+fn paused<T>(f: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(f)
+}
+
+/// Seed 51 once lost an honest key: its peer's room came so late that its
+/// fetch timed out, and the timeout was charged to the peer
+/// (X-fetch-wait-credit).
+#[test]
+fn seed_51_fetches_every_honest_key() {
+    assert_eq!(paused(run(51)).missing, 0);
+}
+
+/// A peer that keeps half an even pace, then stops well before its
+/// deadline, earns no credit for its late room: it ends as behind, and is
+/// charged as the timeout it is.
+#[test]
+fn a_half_pace_staller_with_a_late_room_earns_no_credit() {
+    paused(async {
+        let wire = Arc::new(Wire {
+            peers: Mutex::new(HashMap::new()),
+            stalled: Arc::default(),
+        });
+        // A large dict from an honest peer holds most of the budget for
+        // about 4.6 s; the staller's window waits behind it, then grows at
+        // once, so its room took over `LATE_ROOM` in all.
+        let (big, big_key) = dict_of(3_000_000, 1);
+        let (dict, key) = dict_of(1_200_000, 2);
+        let hog = SocketAddr::from(([198, 51, 1, 1], 6881));
+        let staller = SocketAddr::from(([198, 52, 2, 1], 6881));
+        // 41 of its 74 pieces, at once: over half of an even pace at every
+        // check, then nothing for the last 3 s.
+        let script = [
+            (hog, Arc::new(big), big_key, Peer::Honest { each: 25 }),
+            (staller, Arc::new(dict), key, Peer::Stops { serve: 41 }),
+        ];
+        for (addr, info, k, peer) in script.clone() {
+            wire.peers.lock().unwrap().insert(addr, (info, k, peer));
+        }
+        let (disc_tx, disc_rx) = mpsc::channel(4);
+        let (out_tx, mut out) = mpsc::channel(4);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: BUDGET,
+                max_attempts: 1,
+                retry_backoff: Duration::from_secs(600),
+                ..PoolConfig::default()
+            },
+            wire.clone(),
+            PoolIo {
+                discoveries: disc_rx,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        for (addr, _, k, _) in &script {
+            disc_tx
+                .send(Discovery {
+                    source: SourceId::new(0).unwrap(),
+                    found: Found::key(*k, 0).with_peers(vec![*addr]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+            sleep(Duration::from_millis(100)).await;
+        }
+        let got = tokio::time::timeout(Duration::from_secs(10), out.recv())
+            .await
+            .expect("the large dict")
+            .unwrap();
+        assert_eq!(got.key, big_key);
+        let stats = handle.stats();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        // Its fetch ends charged or credited.
+        while stats.failure_count(FailureKind::TimedOut) + stats.late_waits.load(Ordering::Relaxed)
+            == 0
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the staller's fetch never ended"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+        let stalled = wire.stalled.lock().unwrap().clone();
+        assert!(
+            stalled.iter().any(|&(_, creditable)| !creditable),
+            "its room came late and it grew: {stalled:?}"
+        );
+        assert_eq!(stats.late_waits.load(Ordering::Relaxed), 0, "no credit");
+        assert_eq!(stats.failure_count(FailureKind::TimedOut), 1, "charged");
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    });
+}
+
 #[test]
 fn the_pool_and_the_fetch_loop_serve_honest_keys_among_hostile_peers() {
     let seeds = std::env::var("MODEL_SEEDS")
@@ -490,12 +596,7 @@ fn the_pool_and_the_fetch_loop_serve_honest_keys_among_hostile_peers() {
     let (mut lost, mut failed, mut wait_outs, mut late) = (0, Vec::new(), 0, 0);
     let (mut hold, mut credits) = (Duration::ZERO, 0);
     for seed in seeds {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build()
-            .unwrap();
-        let o = rt.block_on(run(seed));
+        let o = paused(run(seed));
         if o.missing > 0 {
             lost += o.missing;
             failed.push(seed);

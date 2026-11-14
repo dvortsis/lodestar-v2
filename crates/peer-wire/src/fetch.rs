@@ -1193,6 +1193,89 @@ mod tests {
         }
     }
 
+    /// At the deadline, a fetch still waiting to write to a large dict's
+    /// peer that keeps its checks but has stopped reading ends as behind.
+    #[tokio::test(start_paused = true)]
+    async fn at_the_deadline_a_peer_that_stopped_reading_is_behind() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let deadline = Duration::from_secs(8);
+        // 256 pieces: past the first window, a window of 64 requests goes
+        // out at once, and one more as each piece comes in.
+        let info = vec![7u8; 4 * MIB];
+        let key = InfoHash(Sha1::digest(&info).into());
+        // Room for about 120 requests (33 bytes each): the refills past
+        // those wait, with over half the dict in.
+        let (ours, theirs) = tokio::io::duplex(4 << 10);
+        let (mut rd, mut wr) = tokio::io::split(theirs);
+        let (asked, mut seen) = tokio::sync::watch::channel(0usize);
+        // The peer reads the first window's 4 requests and the 64 after
+        // it, then stops reading, the stream left open.
+        let reader = tokio::spawn(async move {
+            let mut hs = [0u8; HANDSHAKE_LEN];
+            rd.read_exact(&mut hs).await.unwrap();
+            let mut n = 0;
+            while n < 68 {
+                let mut len = [0u8; 4];
+                rd.read_exact(&mut len).await.unwrap();
+                let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+                rd.read_exact(&mut body).await.unwrap();
+                if body.len() > 2 && body[0] == 20 && body[1] == OUR_UT_METADATA {
+                    n += 1;
+                    asked.send_replace(n);
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+        // It sends the first window once asked, then all but the last four
+        // pieces at once. Those that get in before the refills fill the pipe
+        // are over half of an even pace at every check.
+        let writer = tokio::spawn({
+            let info = info.clone();
+            async move {
+                let frame = |ext_id: u8, body: Vec<u8>| {
+                    let mut f = ((body.len() + 2) as u32).to_be_bytes().to_vec();
+                    f.extend([20, ext_id]);
+                    f.extend(body);
+                    f
+                };
+                let hello = message::handshake(&key.0, b"-SC0001-scriptscript", true);
+                wr.write_all(&hello).await.unwrap();
+                let ext = message::our_extended_handshake(Some(info.len()));
+                wr.write_all(&frame(0, ext)).await.unwrap();
+                for (pieces, after) in [(0..FIRST_PIECES, FIRST_PIECES), (FIRST_PIECES..252, 68)] {
+                    seen.wait_for(|n| *n >= after).await.unwrap();
+                    for piece in pieces {
+                        let start = piece * METADATA_PIECE;
+                        let data = &info[start..start + METADATA_PIECE];
+                        let reply = message::metadata_data(piece, info.len(), data);
+                        if wr.write_all(&frame(OUR_UT_METADATA, reply)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                std::future::pending::<()>().await;
+            }
+        });
+        let mut opts = plain(deadline);
+        // A reservation, so the rest is asked for once the window is in.
+        opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+        let started = Instant::now();
+        let got = timeout(
+            deadline + Duration::from_secs(1),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("it ends at its deadline");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
+        assert!(
+            started.elapsed() >= deadline,
+            "at the deadline, not a check: {:?}",
+            started.elapsed()
+        );
+        reader.abort();
+        writer.abort();
+    }
+
     /// A peer that floods other messages once the first window is in, so
     /// one is always waiting to be read, still ends at its first check:
     /// the pace is checked before every read, not only while one waits.
