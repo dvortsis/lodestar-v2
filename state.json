@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:57Z",
+  "updated_at": "2026-11-14T14:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8717,6 +8717,11 @@
       "id": "operator-apply-ping4",
       "text": "#878 merged (owner confirmed in runner chat). Author runs operator-apply, then drafts ping-4 (plus token presence/length check); runner relays via dashboard.",
       "at": "2026-11-14T13:57Z"
+    },
+    {
+      "id": "operator-checks-3-5",
+      "note": "Owner runs check 3 (a: second account neg-1; b: not done, no App token; c: owner posts /fleet status, pass = gate+refuse green, nothing posted) and optional check 5 (status-1, ghs_ prefix False closes token item). Check 2 passed except token item pending check 5. Nit: #885 decisions heading (#PR) -> (#885) in next operator-docs push.",
+      "at": "2026-11-14T14:17Z"
     }
   ],
   "main_health": [
@@ -9764,7 +9769,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T13:57Z",
+    "updated": "2026-11-14T14:17Z",
     "items": [
       {
         "slot": 1,
@@ -10033,7 +10038,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:57Z",
+  "updated": "2026-11-14T14:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10698,6 +10703,12 @@
       "slice": "X-cmp-supervisor-bind",
       "merged": "17c8f30d",
       "at": "2026-11-14T13:57Z"
+    },
+    {
+      "pr": 885,
+      "slice": "X-operator-check-notes",
+      "merged": "19041df6",
+      "at": "2026-11-14T14:17Z"
     }
   ],
   "review_sessions": []
