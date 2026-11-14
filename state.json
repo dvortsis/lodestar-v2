@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:43Z",
+  "updated_at": "2026-11-14T00:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8271,6 +8271,21 @@
       "id": "trackq-unplaced-fixes",
       "note": "reviewer found no fix slices on main for UPDATE-01, UPDATE-05, STORE-01: check their placement",
       "at": "2026-11-14T00:41Z"
+    },
+    {
+      "id": "FILTER-15",
+      "note": "high, content safety, store/writer ingest hold path (provisional id; detail held). Fix slice in slot 32 right after #857 merges, ahead of FILTER-13 (owns overlap with #857).",
+      "at": "2026-11-14T00:49Z"
+    },
+    {
+      "id": "856-r2-items",
+      "note": "second reviewer: one test-timing item + two polish items relayed to slot 7 for the same push",
+      "at": "2026-11-14T00:49Z"
+    },
+    {
+      "id": "owner-fyi-632",
+      "note": "#632 summary + split recommendation sent to dashboard session for the owner queue",
+      "at": "2026-11-14T00:49Z"
     }
   ],
   "main_health": [
@@ -8660,12 +8675,6 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "854": {
-      "slice": "X-fleet-guard-docs",
-      "head": "8d9b816e",
-      "state": "Opus MERGE + nit round requested",
-      "at": "2026-11-13T23:57Z"
-    },
     "856": {
       "slice": "X-worker-839-followups",
       "head": "eac647c1",
@@ -8679,6 +8688,11 @@
       "slot": 32,
       "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
       "at": "2026-11-14T00:39Z"
+    },
+    "858": {
+      "slice": "X-ci-filter-docs-user",
+      "head": "fb817f1f",
+      "note": "runner keeps it (session parked); review on green; slices.yaml entry in next runner PR"
     }
   },
   "merged_log": [
@@ -9325,7 +9339,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:43Z",
+    "updated": "2026-11-14T00:49Z",
     "items": [
       {
         "slot": 1,
@@ -9410,12 +9424,14 @@
       },
       {
         "slot": 15,
-        "slice": "X-fleet-guard-docs",
+        "slice": "X-operator-hardening",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-13T22:02Z",
-        "doing": "building (docs follow-up to #852)",
-        "cap": "kept cloud-testing (\u00a72.64 4+4)"
+        "since": "2026-11-14T00:49Z",
+        "doing": "OPERATOR-01..04, 06-08 fix (detail by message); before first-run check 8",
+        "cap": "kept cloud-testing (\u00a72.64 4+4)",
+        "model": "opus",
+        "status": "active"
       },
       {
         "slot": 16,
@@ -9586,7 +9602,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:43Z",
+  "updated": "2026-11-14T00:49Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10095,6 +10111,12 @@
       "slice": "X-flake-scrape-udp-port",
       "merged": "652a2e18",
       "at": "2026-11-14T00:24Z"
+    },
+    {
+      "pr": 854,
+      "slice": "X-fleet-guard-docs",
+      "merged": "38cbef39",
+      "at": "2026-11-14T00:49Z"
     }
   ]
 }
