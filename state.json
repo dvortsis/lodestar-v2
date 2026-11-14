@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T18:00Z",
+  "updated_at": "2026-11-14T18:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8802,6 +8802,11 @@
       "id": "flake-fleet-post-rules",
       "note": "infra/fleet test_steps.VMScripts post_rules-after-start failed once under load (reviewer, local); watch CI",
       "added": "2026-11-14T18:00Z"
+    },
+    {
+      "id": "owner-branch-cleanup",
+      "note": "slice/X-operator-unattended-wake (#890 merged) left on remote; branch deletion is the owner's call",
+      "added": "2026-11-14T18:12Z"
     }
   ],
   "main_health": [
@@ -9622,6 +9627,12 @@
       "sha": "fd4ba0fc",
       "id": "X-operator-unattended-wake",
       "at": "2026-11-14T18:00Z"
+    },
+    {
+      "pr": 891,
+      "sha": "f186458f",
+      "id": "X-operator-unattended-docs",
+      "at": "2026-11-14T18:12Z"
     }
   ],
   "active_sessions": {
@@ -9860,7 +9871,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T18:00Z",
+    "updated": "2026-11-14T18:12Z",
     "items": [
       {
         "slot": 1,
@@ -9939,11 +9950,11 @@
       },
       {
         "slot": 14,
-        "doing": "#890 merged (fd4ba0fc); X-operator-unattended-docs follow-up PR; runner posts status-2 after owner apply rerun",
+        "doing": "X-operator-unattended-wake done (#890, #891 merged); session archived",
         "slice": "X-operator-unattended-wake",
         "role": "cloud-testing",
-        "agent": "session_01MMjhnAKMHA7ivZA8V6FnWJ",
-        "since": "2026-11-14T17:23Z"
+        "since": "2026-11-14T17:23Z",
+        "status": "idle"
       },
       {
         "slot": 15,
@@ -10138,7 +10149,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T18:00Z",
+  "updated": "2026-11-14T18:12Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
