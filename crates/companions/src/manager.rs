@@ -317,12 +317,19 @@ pub trait Run: Send + Sync {
     fn status(&self, _id: &CompanionId) -> Option<watch::Receiver<Status>> {
         None
     }
+    // The three below have no default: a runner that wraps another (serve's
+    // `Wiring`) can't leave one out and fall back to a permissive answer.
     /// The run ([`Status::run`]) its last passed health check found ready,
-    /// which the manager's follow starts from. By default the run current
-    /// now, for a runner that doesn't tie readiness to a run.
-    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
-        self.status(id).map(|s| s.borrow().run)
-    }
+    /// which the manager's follow starts from.
+    fn ready_run(&self, id: &CompanionId) -> Option<u64>;
+    /// After a configuration, which may move the companion's listener:
+    /// readiness is found again, listener and all, before anything else is
+    /// sent. False when it isn't, or the companion isn't running.
+    fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool>;
+    /// Why its last readiness check failed, when the listener check said
+    /// so: a code for the log (`listener_not_ours`, `listener_missing`,
+    /// `listener_unverified`).
+    fn refusal(&self, id: &CompanionId) -> Option<&'static str>;
 }
 
 /// Configuring an installed companion through its API (CMP-8b); [`Api`]
@@ -1485,6 +1492,7 @@ impl Manager {
             .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))?;
+        self.recheck(id, &target).await?;
         // Handed over before the commit point: a failed hand-over fails
         // the install, which is undone, so it's never "installed" without
         // being the download client (X-cmp-native-handover).
@@ -1565,7 +1573,7 @@ impl Manager {
             .await
             .map_err(failed("start"))?;
         if !m.p.run.healthy(id, target).await {
-            return Err(failed("health")("unhealthy"));
+            return Err(failed("health")(m.p.run.refusal(id).unwrap_or("unhealthy")));
         }
         Ok(())
     }
@@ -1684,7 +1692,20 @@ impl Manager {
         tokio::time::timeout(self.0.deadline(), configured)
             .await
             .map_err(|_| failed("configure")("timed_out"))?
-            .map_err(|e| failed("configure")(configure::code(&e)))
+            .map_err(|e| failed("configure")(configure::code(&e)))?;
+        self.recheck(id, target).await
+    }
+
+    /// After a configuration (which may have moved the companion's
+    /// listener, as qBittorrent's bind address does): it's found ready
+    /// again, its own listener included, or the step fails.
+    async fn recheck(&self, id: &CompanionId, target: &Target) -> Result<(), ManagerError> {
+        let run = &self.0.p.run;
+        if run.recheck(id, target).await {
+            Ok(())
+        } else {
+            Err(failed("configure")(run.refusal(id).unwrap_or("unhealthy")))
+        }
     }
 
     /// Uninstalls `id`: stop, credential rows, then the folder. Like
@@ -2721,6 +2742,34 @@ impl Run for Supervised {
 
     fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.running().get(id).and_then(|r| r.status.clone())
+    }
+
+    /// Bound to its port: not ready until found so again, listener and
+    /// all ([`Run::recheck`]).
+    fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            // Never started here, stopped, or its process isn't up:
+            // nothing to find ready.
+            let Some((port, up)) = self.running().get(id).map(|r| {
+                let up = r.status.as_ref().is_some_and(|s| s.borrow().up);
+                (r.port, up)
+            }) else {
+                return false;
+            };
+            if !up {
+                return false;
+            }
+            match self.bindings.as_ref().zip(port) {
+                Some((b, p)) => b.recheck(p, self.healthy(id, target)).await,
+                // No ports tied to runs (tests of other things): its health.
+                None => self.healthy(id, target).await,
+            }
+        })
+    }
+
+    fn refusal(&self, id: &CompanionId) -> Option<&'static str> {
+        let port = self.running().get(id).and_then(|r| r.port)?;
+        self.bindings.as_ref()?.refusal(port)
     }
 
     /// Bound to its port: the run found ready there, if any, so a restart

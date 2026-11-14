@@ -1190,6 +1190,7 @@ mod bound {
             last_exit: None,
             run,
             up,
+            pid: None,
         }
     }
 
