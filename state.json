@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:29Z",
+  "updated_at": "2026-11-14T00:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8614,6 +8614,13 @@
       "slot": 7,
       "review": "fresh Opus running",
       "at": "2026-11-14T00:29Z"
+    },
+    "857": {
+      "slice": "X-filter01-rejudge",
+      "head": "35bbae5a",
+      "slot": 32,
+      "review": "fresh Opus + security running; security reviewer session told",
+      "at": "2026-11-14T00:31Z"
     }
   },
   "merged_log": [
@@ -9260,7 +9267,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:29Z",
+    "updated": "2026-11-14T00:31Z",
     "items": [
       {
         "slot": 1,
@@ -9435,7 +9442,7 @@
         "agent": "claude",
         "status": "active",
         "since": "2026-11-13T23:39Z",
-        "doing": "building (brief sent)",
+        "doing": "#857 open; CI + fresh Opus/security review",
         "cap": "kept build (\u00a72.64 4+4)"
       }
     ]
@@ -9521,7 +9528,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:29Z",
+  "updated": "2026-11-14T00:31Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
