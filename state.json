@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T11:55Z",
+  "updated_at": "2026-11-14T12:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8581,7 +8581,7 @@
     },
     {
       "id": "store-write-stale-class-refused-panic",
-      "note": "Store::write stale_class branch calls id() on a Refused item (stopped source) and can panic; pre-existing, not in #879. Small Opus fix slice.",
+      "note": "Folded into #879 round (iterate stored() over out+prepared; covers Refused and Held).",
       "at": "2026-11-14T09:58Z"
     },
     {
@@ -9035,8 +9035,8 @@
     "879": {
       "slice": "X-filter15-fix",
       "head": "8918299a",
-      "status": "fresh Opus code+security review running on 8918299a (started with CI in flight; mergetree 0, no overlap)",
-      "at": "2026-11-14T11:47Z",
+      "status": "review CHANGES on 8918299a (1 blocking hygiene, 2 important, 2 optional taken); one round requested, then fresh delta review",
+      "at": "2026-11-14T12:13Z",
       "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
     },
     "882": {
@@ -9959,7 +9959,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T11:55Z",
+  "updated": "2026-11-14T12:13Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
