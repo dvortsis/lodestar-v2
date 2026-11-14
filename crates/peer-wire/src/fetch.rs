@@ -1164,6 +1164,35 @@ mod tests {
         }
     }
 
+    /// At the deadline, a large dict's peer that keeps its checks but had
+    /// stopped sending ends as behind, its own failure. One still sending
+    /// ran out of time, a timeout (which a late wait for room may excuse).
+    #[tokio::test(start_paused = true)]
+    async fn at_the_deadline_a_peer_that_stopped_is_behind() {
+        let deadline = Duration::from_secs(8);
+        // Both send above half an even pace, so every check passes: one
+        // too slowly to finish, the other at twice that for 4 s, then
+        // nothing.
+        for (serve, each, behind) in [(usize::MAX, 200, false), (FIRST_PIECES + 40, 100, true)] {
+            let info = vec![7u8; MIB];
+            let key = InfoHash(Sha1::digest(&info).into());
+            let (ours, theirs) = tokio::io::duplex(1 << 16);
+            let peer = tokio::spawn(scripted(theirs, info, serve, Then::Steady { each }));
+            let got = timeout(
+                deadline + Duration::from_secs(1),
+                fetch_on_stream(ours, &key, &plain(deadline), false),
+            )
+            .await
+            .expect("it ends at its deadline");
+            if behind {
+                assert!(matches!(got, Err(Error::Behind)), "{got:?}");
+            } else {
+                assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+            }
+            peer.abort();
+        }
+    }
+
     /// A peer that floods other messages once the first window is in, so
     /// one is always waiting to be read, still ends at its first check:
     /// the pace is checked before every read, not only while one waits.
