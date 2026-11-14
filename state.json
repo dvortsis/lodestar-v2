@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T08:49Z",
+  "updated_at": "2026-11-14T09:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8528,6 +8528,41 @@
       "id": "fuzz-hour-m8-sec-1-network",
       "added": "2026-11-14T08:41Z",
       "note": "Slot 33: 1 h libFuzzer runs of 9 network-parser targets (metainfo, peer_wire, krpc, bencode, utp, tracker_scrape, full_scrape, dht_restart, filetree) all clean. Shared 4-core container, so lower exec counts. peer_wire to re-run with the BEP 3 handshake added. Query-language targets next."
+    },
+    {
+      "id": "vpn-retest-1114-tunnel-guard",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test 2026-11-14 (main 82797c01): host guard does not cover the stop/restart window of the VPN container; small leak outside the tunnel seen. Security, tunnel component. Fix slice needed (X-gluetun-guard-*), owner flag at merge."
+    },
+    {
+      "id": "vpn-retest-1114-restart-perms",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test: start-block.sh / arm-switch.sh data folder modes stop a restarted container opening /data. Packaging/test-script fix."
+    },
+    {
+      "id": "vpn-retest-1114-local-image",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test: start-block.sh only accepts the registry digest; allow a locally built image for test runs."
+    },
+    {
+      "id": "vpn-retest-1114-netns-rejoin",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test: after the VPN container restarts, Lodestar keeps the old network namespace until restarted. Decide auto-restart or documented step."
+    },
+    {
+      "id": "vpn-retest-1114-leaktest-deadline",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test: leak test vpn_interface_stayed_down fails under full CPU load (0 packets captured); deadline too tight. Test fix."
+    },
+    {
+      "id": "vpn-retest-1114-pia-key-expiry",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test: PIA WireGuard key expired unused in ~11 min; --rekey fixes. Docs/script note."
+    },
+    {
+      "id": "vpn-retest-1114-short-run-dht",
+      "added": "2026-11-14T09:03Z",
+      "note": "VPN re-test: first-start 6 h sampling suppression leaves short tests with only a ~2.5 min DHT burst. Test design note."
     }
   ],
   "main_health": [
@@ -9847,7 +9882,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T08:49Z",
+  "updated": "2026-11-14T09:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
