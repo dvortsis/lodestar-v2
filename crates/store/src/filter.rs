@@ -4,7 +4,6 @@
 //! The store keeps plain values: rule ids as text, actions and origins as
 //! small integers. Their meaning belongs to the filter engine.
 
-use lodestar_metainfo::InfoHash;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{Error, Result, Store};
@@ -705,11 +704,12 @@ impl Store {
     pub fn delete_torrents(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<i64>> {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut ids = Vec::new();
+        // Every stored torrent under each hash, as either of its own.
         for h in hashes {
-            if let Some(id) = crate::find_any(&tx, std::iter::once(InfoHash(*h)))?
-                && !ids.contains(&id)
-            {
-                ids.push(id);
+            for id in crate::all_by_hash(&tx, h)? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
             }
         }
         {

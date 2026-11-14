@@ -1182,6 +1182,7 @@ impl Pipeline {
             health: health.clone(),
             candidates: Default::default(),
             core_rejudge: Default::default(),
+            hold_retry: Default::default(),
             sweep: Default::default(),
             verify: unverified::Verify {
                 on: config.verify_unverified,
@@ -1483,6 +1484,9 @@ fn prepare(
         .map(|(_, id)| *id)
         .collect();
     queue.retain(|q| !saved_refetch(q, &finders));
+    // Once: what an earlier build left stored under a held hash is deleted
+    // (FILTER-15), before anything is queued from the store.
+    store.sweep_held_stored()?;
     // Imports with incomplete file lists get their info dicts fetched, if
     // there's a peer finder to find them peers. Public ones only:
     // `partial_hashes` never returns a key with a `flags::PRIVACY` bit
