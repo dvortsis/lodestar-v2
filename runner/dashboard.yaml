@@ -429,6 +429,7 @@ placement:
   - X-damaged-mark-links
   - X-scrub-fields-readers
   - X-fleet-guard-docs
+  - X-operator-hardening
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*

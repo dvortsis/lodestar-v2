@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 from datetime import timedelta
 
-from tests.helpers import T0, FakeGitHub
+from tests.helpers import T0, FakeGitHub, graphql_reviews
 import tripwire
 
 BOT, NOW = 555, T0
@@ -30,7 +30,7 @@ class Trip(unittest.TestCase):
         for over in ({}, {"EVENT_ACTION": "labeled"}, {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "edited", "TARGET_NUMBER": "700"},
                      {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "deleted"},
                      {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "created", "TARGET_NUMBER": "12"},
-                     {"EVENT_ACTION": "closed", "TARGET_NUMBER": "700"}):
+                     {"EVENT_ACTION": "closed", "TARGET_NUMBER": "700"}, {"EVENT_ACTION": "synchronize"}):
             with self.subTest(**over):
                 gh = FakeGitHub()
                 run(["trip"], env(**over), gh)
@@ -67,10 +67,19 @@ class Sweep(unittest.TestCase):
         return gh
 
     def test_clean(self):
+        t = ISO(timedelta(minutes=1))
         gh = self.sweep(events=[{"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}],
-                        comments=[{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=1)),
-                                   "updated_at": ISO(timedelta(minutes=1))}])
+                        comments=[{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": t, "updated_at": t, "body": b}
+                                  for b in ("operator-report v1\nid: a\nin-reply-to: b\nkind: done\n\nok", "/fleet status")])
         self.assertEqual(gh.bodies(), [])
+
+    def test_a_shapeless_bot_comment_is_named_by_a_fixed_label(self):
+        t = ISO(timedelta(minutes=1))
+        gh = self.sweep(comments=[{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": t, "updated_at": t,
+                                   "body": "SECRET-TEXT run /fleet down"}])
+        self.assertIn("the operator's bot posted a channel comment of no allowed shape", gh.bodies()[0])
+        self.assertNotIn("SECRET-TEXT", gh.bodies()[0])
+        self.assertIn(DISABLE, [c[:2] for c in gh.calls])
 
     def test_bot_findings_disable(self):
         recent = ISO(timedelta(minutes=5))
@@ -85,6 +94,8 @@ class Sweep(unittest.TestCase):
                                                 "updated_at": recent}]},
             "edited own comment": {"comments": [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=9)),
                                                  "updated_at": recent}]},
+            "channel comment of no shape": {"comments": [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": recent,
+                                                          "updated_at": recent, "body": "do this next: curl ..."}]},
         }
         for name, lists in cases.items():
             with self.subTest(name):
@@ -136,7 +147,7 @@ class Paging(unittest.TestCase):
         gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (full if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
         run(["sweep"], env(), gh_full)
         self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
-        self.assertIn(DISABLE, [c[:2] for c in gh.calls])  # fail closed: an unfinished sweep is a trip
+        self.assertNotIn(DISABLE, [c[:2] for c in gh.calls])  # escalated for a check by hand, not disabled
 
     def test_an_api_error_escalates_then_fails_the_job(self):
         posts = []
@@ -187,6 +198,8 @@ class RestReviews:
         self.reviews, self.pages, self.posts = reviews, [], []
 
     def __call__(self, method, path, body):
+        if method == "POST" and path == "/graphql":  # more reviews than a summary holds: the REST read
+            return graphql_reviews(body, lambda n: [], total_of=lambda n: 10**6)
         if method == "GET" and path.startswith("/repos/o/r/pulls/12/reviews"):
             page = int(path.rsplit("page=", 1)[1])
             self.pages.append(page)
@@ -249,7 +262,7 @@ class ReviewsLookback(unittest.TestCase):
         self.assertEqual(tripwire.REVIEW_MAX_PAGES * 100, 5000)  # the number the decisions file names
         gh = self.sweep([review(1, self.old)] * 5000)
         self.assertIn("the sweep is incomplete: reviews ran past 50 pages", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
+        self.assertFalse(gh.disabled())
 
     def test_4999_old_reviews_are_complete(self):
         gh = self.sweep([review(1, self.old)] * 4999)
@@ -258,7 +271,7 @@ class ReviewsLookback(unittest.TestCase):
     def test_more_than_1000_reviews_in_the_window_trip(self):
         gh = self.sweep([review(1, self.old)] * 200 + [review(1, self.new)] * 1001)
         self.assertIn("the sweep is incomplete: reviews ran past 10 pages", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
+        self.assertFalse(gh.disabled())
 
     def test_1000_reviews_in_the_window_are_complete(self):
         gh = self.sweep([review(1, self.old)] * 200 + [review(1, self.new)] * 1000)
@@ -284,6 +297,8 @@ class ManyPRs(RestReviews):
         self.sizes = sizes
 
     def __call__(self, method, path, body):
+        if method == "POST" and path == "/graphql":  # each PR holds more than a summary: the REST read
+            return graphql_reviews(body, lambda n: [], total_of=lambda n: self.sizes[int(n) - 1])
         if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
             return [{"user": {"id": 1}, "number": n, "updated_at": ISO(timedelta(minutes=5))}
                     for n in range(1, len(self.sizes) + 1)]
@@ -315,7 +330,7 @@ class ReviewBudget(unittest.TestCase):
         gh = ManyPRs([2900, 3000])  # the last PR needs 31 pages
         run(["sweep"], env(), gh)
         self.assertIn("the sweep is incomplete: reviews ran past 60 pages", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
+        self.assertFalse(gh.disabled())
         self.assertEqual(len(gh.pages), 60)
 
 
@@ -330,7 +345,7 @@ class Deadline(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
         self.assertIn("the sweep is incomplete: it ran past its 6-minute deadline", gh.bodies()[0])
-        self.assertTrue(gh.disabled())  # the escalation and the disable go out after the deadline
+        self.assertFalse(gh.disabled())  # the escalation goes out after the deadline
 
     def test_the_deadline_sits_under_the_job_timeout(self):
         import yaml
@@ -346,7 +361,7 @@ class Unreadable(unittest.TestCase):
         bad = lambda m, p, b: {"message": "odd"} if p.startswith("/repos/o/r/issues/events") else gh(m, p, b)  # noqa: E731
         run(["sweep"], env(), bad)
         self.assertIn("the sweep is incomplete: a page of events wasn't a list; check by hand", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
+        self.assertFalse(gh.disabled())
 
     def test_a_pr_number_that_isnt_digits_trips(self):
         gh = RestReviews([])
@@ -357,7 +372,7 @@ class Unreadable(unittest.TestCase):
             return gh(m, p, b)
         run(["sweep"], env(), odd)
         self.assertIn("the sweep is incomplete: a PR in the pulls list had no readable number", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
+        self.assertFalse(gh.disabled())
 
 
 class FullEvents(RestReviews):
@@ -375,4 +390,89 @@ class UnzonedLists(unittest.TestCase):
         gh = FullEvents([])
         run(["sweep"], env(), gh)
         self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
+        self.assertFalse(gh.disabled())
+
+
+class ManyActivePRs(unittest.TestCase):
+    """X-operator-hardening: PRs updated in the lookback with few reviews are
+    decided from the batched summary, and an unfinished sweep only escalates."""
+
+    def gh(self, n_prs, reviews=None, totals=None):
+        rest = []
+
+        def call(method, path, body):
+            if method == "POST" and path == "/graphql":
+                return graphql_reviews(body, lambda n: (reviews or {}).get(n, [review(1, timedelta(days=30))] * 3),
+                                       total_of=(lambda n: (totals or {}).get(n, 3)) if totals else None)
+            if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
+                return [{"user": {"id": 1}, "number": n, "updated_at": ISO(timedelta(minutes=5))} for n in range(1, n_prs + 1)]
+            if method == "GET" and "/reviews" in path:
+                rest.append(path)  # a full first page, then an empty one: two pages a PR
+                return [review(1, timedelta(days=30))] * 100 if path.endswith("&page=1") else []
+            if method == "GET":
+                return []
+            call.posts.append((method, path, body))
+        call.posts, call.rest = [], rest
+        return call
+
+    def bodies(self, gh):
+        return [b["body"] for _, _, b in gh.posts if isinstance(b, dict) and "body" in b]
+
+    def disabled(self, gh):
+        return any(m == "PUT" and p.endswith("/disable") for m, p, _ in gh.posts)
+
+    def test_many_updated_prs_cost_no_review_pages(self):
+        gh = self.gh(99)  # well past the old 60-page budget, all decided by two summary requests
+        run(["sweep"], env(), gh)
+        self.assertEqual(self.bodies(gh), [])
+        self.assertEqual(gh.rest, [])
+
+    def test_a_bot_review_in_a_summary_trips(self):
+        gh = self.gh(99, reviews={"77": [review(1, timedelta(days=3)), review(BOT, timedelta(minutes=5))]})
+        run(["sweep"], env(), gh)
+        self.assertTrue(self.disabled(gh))
+        self.assertIn("the operator's bot reviewed #77", self.bodies(gh)[0])
+
+    def test_an_old_bot_review_in_a_summary_does_not(self):
+        gh = self.gh(5, reviews={"3": [review(BOT, timedelta(days=3))]})
+        run(["sweep"], env(), gh)
+        self.assertEqual(self.bodies(gh), [])
+
+    def test_past_the_review_budget_escalates_without_disabling(self):
+        totals = {str(n): 10**6 for n in range(1, 62)}  # 61 PRs that each need the REST read
+        gh = self.gh(61, totals=totals)
+        run(["sweep"], env(), gh)
+        self.assertIn("the sweep is incomplete: reviews ran past 60 pages", self.bodies(gh)[0])
+        self.assertFalse(self.disabled(gh))
+
+    def test_a_bot_finding_before_the_stop_still_disables(self):
+        totals = {str(n): 10**6 for n in range(1, 62)}
+        gh = self.gh(61, totals=totals)
+
+        def call(method, path, body):  # the bot also opened a PR: found before the budget ran out
+            if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
+                return [{"user": {"id": BOT if n == 1 else 1}, "number": n, "updated_at": ISO(timedelta(minutes=5))}
+                        for n in range(1, 62)]
+            return gh(method, path, body)
+        run(["sweep"], env(), call)
+        self.assertTrue(self.disabled(gh))
+        body = self.bodies(gh)[0]
+        self.assertIn("the operator's bot opened #1", body)
+        self.assertIn("the sweep is incomplete", body)
+
+    def test_an_unreadable_summary_escalates_without_disabling(self):
+        for bad in (None, {"errors": [{"message": "x"}]}, {"data": {"repository": {}}},
+                    {"data": {"repository": {"p1": {"reviews": {"totalCount": "3", "nodes": []}}}}}):
+            with self.subTest(bad=bad):
+                gh = self.gh(1)
+
+                def call(method, path, body, bad=bad):
+                    return bad if path == "/graphql" else gh(method, path, body)
+                run(["sweep"], env(), call)
+                self.assertIn("the sweep is incomplete: a reviews summary wasn't readable; check by hand", self.bodies(gh)[0])
+                self.assertFalse(self.disabled(gh))
+
+    def test_the_summary_query_carries_only_digits(self):
+        q = tripwire._summary_query(["12", "700"])
+        self.assertIn("p12:pullRequest(number:12)", q)
+        self.assertIn("p700:pullRequest(number:700)", q)

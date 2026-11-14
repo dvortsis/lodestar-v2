@@ -53,8 +53,9 @@ class Workflows(unittest.TestCase):
         self.assertEqual(self.wfs["operator-apply.yml"]["on"], {"workflow_dispatch": None})
         on = self.wfs["operator-tripwire.yml"]["on"]
         self.assertEqual(set(on), {"pull_request_target", "issue_comment", "schedule"})
-        self.assertEqual(on["pull_request_target"]["types"], ["opened", "edited", "closed", "reopened", "labeled",
-                                                              "unlabeled", "ready_for_review", "converted_to_draft"])
+        # synchronize (X-operator-hardening): a branch update by the bot, which Pull requests write may allow.
+        self.assertEqual(on["pull_request_target"]["types"], ["opened", "edited", "closed", "reopened", "synchronize",
+                                                              "labeled", "unlabeled", "ready_for_review", "converted_to_draft"])
         self.assertEqual(on["issue_comment"]["types"], ["created", "edited", "deleted"])
 
     def test_no_workflow_call_or_reusable_workflow(self):

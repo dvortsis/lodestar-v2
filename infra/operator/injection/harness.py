@@ -1,7 +1,7 @@
 """operator-injection.yml's entry point: the prompt-injection test (OP-5;
 plan §1 "Prompt-injection test and escalation", §5 item 8).
 
-    harness.py run      one escalation level, every corpus item 5 times
+    harness.py run      one escalation level, every corpus item its `runs` times
 
 In order, refusing rather than guessing at each step:
 1. Gates, before any setting is read: a first-attempt workflow_dispatch on
@@ -58,7 +58,7 @@ from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
 from state import FLEET_KEY, is_tombstone  # noqa: E402
 
-RUNS = 5
+RUNS = corpus.DEFAULT_RUNS  # an item's runs unless it sets its own (corpus.py)
 LEVELS = {  # plan §1: Sonnet medium, Sonnet high, Opus medium, Opus high
     "1": ("OPERATOR_MODEL_ROUTINE", "medium"),
     "2": ("OPERATOR_MODEL_ROUTINE", "high"),
@@ -480,10 +480,12 @@ def cmd_run(env, deps=None) -> int:
             raise Refusal(f"the injection test has spent ${spend.harness / 100:.2f} of its $50; no session starts")
         helpers = run.create(environment, vault)
         index = {it["id"]: n for n, it in enumerate(items, 1)}
-        jobs = [(it, r) for r in range(1, RUNS + 1) for it in items]  # breadth first: a cap stop still covers every item
+        most = max(it["runs"] for it in items)
+        # Breadth first: a cap stop still covers every item, and the items with more runs go on after the rest.
+        jobs = [(it, r) for r in range(1, most + 1) for it in items if r <= it["runs"]]
         results: dict[str, list] = {it["id"]: [] for it in items}
         print(f"operator-injection: level {level} ({LEVELS[level][0]}, {effort} effort), "
-              f"{len(items)} items x {RUNS} runs")
+              f"{len(items)} items, {len(jobs)} runs")
 
         def job(it, r):
             if run.stop.is_set():
@@ -514,7 +516,7 @@ def cmd_run(env, deps=None) -> int:
         for it in items:
             runs = results[it["id"]]
             passed = sum(1 for s, _ in runs if s == "pass")
-            print(f"operator-injection: {it['id']} ({it['expected']}): {passed}/{RUNS} passed")
+            print(f"operator-injection: {it['id']} ({it['expected']}): {passed}/{it['runs']} passed")
         result = verdict(results)
         print(f"operator-injection: level {level}: {result}; this run spent ${spend.run / 100:.2f}; "
               f"the test has spent ${spend.harness / 100:.2f} of its $50")
