@@ -126,7 +126,7 @@ fn a_held_decision_deletes_the_stored_torrent_with_its_hold() {
     );
 }
 
-/// A held import's row with a partial file list is deleted like any
+/// A held partial row with a partial file list is deleted like any
 /// other.
 #[test]
 fn a_partial_row_under_a_held_hash_is_deleted() {
@@ -429,4 +429,62 @@ fn a_stale_batch_with_a_held_fetch_marks_only_what_it_stored() {
     assert!(written.stale_class);
     assert_eq!(written.prepared[0], lodestar_store::Inserted::Held);
     assert!(written.prepared[1].stored().is_some());
+}
+
+/// The unverified refile's hold takes every stored torrent under a hash
+/// shared as one torrent's v1 hash and another's truncated v2 hash, and
+/// logs both for the search indexer.
+#[test]
+fn the_refile_hold_deletes_both_rows_under_a_shared_hash() {
+    use lodestar_store::unverified::{Network, NewUnverified, Put, RefiledUnverified};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let feed = store.register_source("feed", "1", 0).unwrap();
+    let (hybrid, _, shared) = stored(&mut store, "a", true, 0);
+    let (plain, _, _) = stored(&mut store, "b", false, 0);
+    store
+        .connection()
+        .execute(
+            "UPDATE torrents SET info_hash = ?1 WHERE id = ?2",
+            lodestar_store::rusqlite::params![&shared[..], plain],
+        )
+        .unwrap();
+    // An item under another key, held with the shared hash among its own.
+    let key = [0x5a; 20];
+    let claims = lodestar_store::claims::Claims {
+        name: Some("Some Item".into()),
+        ..Default::default()
+    };
+    let put = store
+        .put_unverified(&[NewUnverified {
+            network: Network::Bt,
+            key: &key,
+            source: feed,
+            private_source: false,
+            claims: Some(&claims),
+            at: 1,
+        }])
+        .unwrap();
+    let Put::New(item) = put[0] else {
+        panic!("{put:?}")
+    };
+    let before = reindexed(&store).len();
+    let hashes = [key, shared];
+    let done = store
+        .refile_unverified(
+            &[RefiledUnverified {
+                id: item,
+                filtered: Some(hold(&hashes, Some(Held::Tombstone))),
+            }],
+            || true,
+        )
+        .unwrap()
+        .unwrap();
+    let mut deleted = done.torrents_deleted.clone();
+    deleted.sort_unstable();
+    assert_eq!(deleted, [hybrid, plain]);
+    assert!(!is_stored(&store, hybrid) && !is_stored(&store, plain));
+    let after = reindexed(&store);
+    let mut logged = after[before..].to_vec();
+    logged.sort_unstable();
+    assert_eq!(logged, [hybrid, plain]);
 }

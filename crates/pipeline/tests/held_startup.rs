@@ -1,4 +1,4 @@
-//! FILTER-15 at start-up: an import's partial row left stored under a
+//! FILTER-15 at start-up: a partial row left stored under a
 //! held hash is deleted once, before anything is queued, and never
 //! refetched; a partial row whose refetched metadata is held (here, too
 //! large to judge) is held and deleted when the refetch commits.

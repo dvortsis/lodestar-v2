@@ -292,15 +292,22 @@ impl HoldRetry {
         !self.holds.is_empty() && self.backoff.ready()
     }
 
-    /// Queues `holds`, one per hash: a later hold for a hash already
-    /// waiting takes its place, with the hashes of every hold it replaces
-    /// added to its own, so no hash goes unheld and commits that keep
-    /// failing never grow the queue past the hashes they hold.
+    /// Queues `holds`, at most one per hash and strength (its held kind,
+    /// and whether the core decided it or it's an adult hold). A later
+    /// hold of the same strength for a hash already waiting takes its
+    /// place, with every hash of the holds it replaces added to its own,
+    /// so no hash goes unheld. A hold of another strength waits beside it:
+    /// holds are never merged across strengths, so a weaker one can't
+    /// stand in for a stronger, and the store's precedence decides when
+    /// both are written. Commits that keep failing never grow the queue
+    /// past the hashes and strengths they hold.
     fn queue(&mut self, holds: impl IntoIterator<Item = unverified::Hold>) {
+        let class = |h: &unverified::Hold| (h.held, h.core, h.adult_hold);
         for mut h in holds {
-            let (replaced, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.holds)
-                .into_iter()
-                .partition(|q| q.hashes.iter().any(|x| h.hashes.contains(x)));
+            let (replaced, kept): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut self.holds).into_iter().partition(|q| {
+                    class(q) == class(&h) && q.hashes.iter().any(|x| h.hashes.contains(x))
+                });
             for x in replaced.into_iter().flat_map(|q| q.hashes) {
                 if !h.hashes.contains(&x) {
                     h.hashes.push(x);
@@ -6585,6 +6592,50 @@ mod tests {
             assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
             // The leased result's own hold: CS-0a quarantines.
             assert_eq!(w.stats.quarantined.load(Ordering::Relaxed), 1);
+        }
+
+        /// A waiting core tombstone and a newer, weaker quarantine for one
+        /// of its hashes wait side by side, never merged: once written,
+        /// both hashes carry the tombstone. Repeated failures of one hold
+        /// keep one entry.
+        #[tokio::test]
+        async fn holds_of_different_strength_are_never_merged() {
+            let (mut w, _c, _retry) = parts();
+            let hold = |hashes: &[u8], held, core, rule: &str| unverified::Hold {
+                hashes: hashes.iter().map(|&h| [h; 20]).collect(),
+                rule: rule.into(),
+                action: if held == Held::Tombstone {
+                    Action::Drop.code()
+                } else {
+                    Action::Quarantine.code()
+                },
+                held,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core,
+            };
+            w.hold_retry
+                .queue([hold(&[1, 2], Held::Tombstone, true, "CS-4a")]);
+            for _ in 0..3 {
+                w.hold_retry
+                    .queue([hold(&[2], Held::Quarantine, false, "U-1")]);
+            }
+            assert_eq!(w.hold_retry.holds.len(), 2, "one per hash and strength");
+            w.retry_holds().await;
+            assert!(w.hold_retry.holds.is_empty());
+            let store = w.store.as_ref().unwrap();
+            for h in [[1u8; 20], [2; 20]] {
+                let rule: String = store
+                    .connection()
+                    .query_row(
+                        "SELECT rule FROM tombstones WHERE hash = ?1",
+                        [&h[..]],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(rule, "CS-4a");
+            }
         }
 
         /// A newer hold for some of a waiting hold's hashes keeps the rest
