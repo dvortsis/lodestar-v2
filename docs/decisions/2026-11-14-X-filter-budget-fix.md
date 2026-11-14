@@ -1,4 +1,4 @@
-# X-filter-budget-fix decisions (#PRNUM)
+# X-filter-budget-fix decisions (#895)
 
 FILTER-13 and FILTER-14: the filter budget charges. The detail stays held under `docs/security/v1/README.md` §5.
 
