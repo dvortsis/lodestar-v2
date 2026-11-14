@@ -450,6 +450,7 @@ placement:
   - X-flake-scrape-udp-port
   - X-flake-companions-loopback
   - X-pia-vm-helper
+  - X-fleet-sudo-narrow
   - X-pia-bridge-manual
   - X-pia-bridge-docs
   - X-restart-banner-polish
@@ -1052,10 +1053,10 @@ conditions:
     label: You choose between the two held options for APIFEAT-01 (the runner gives you the detail directly)
     note: 'Decided by the runner on your delegation, §2.69 (docs/decisions/2026-11-13-runner-owner-queue.md)'
   owner-pia-sudo-model:
-    met: false
-    who: you
-    label: You choose the VM sudo model for the PIA bridge helper (#632 split, part b)
-    note: 'Still open (§2.71); the runner brings you the options and a recommendation'
+    met: true
+    who: runner
+    label: The VM sudo model for the PIA bridge helper (#632 split, part b)
+    note: 'Delegated to the runner by you on 2026-11-14 (§2.71); decided in docs/decisions/2026-11-14-runner-trackq-order.md'
   owner-filter03-choice:
     met: true
     who: you
@@ -1655,10 +1656,10 @@ owner_queue:
   unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
   when: Any time
 - n: 25
-  type: decision
-  action: 'The VM sudo model for the PIA bridge helper (#632 split, part b; §2.71). The runner will put the options and a recommendation to you when it slices that part'
-  unblocks: X-pia-vm-helper, then the manual bridge and its docs
-  when: When the runner asks
+  type: review
+  action: 'Runner call you may want to veto (§2.19; you delegated it on 2026-11-14, §2.71): the PIA bridge helper keeps main''s VM sudo model for now, with a test tying the sudoers lines to what the fleet steps run, and a separate slice (X-fleet-sudo-narrow) then narrows sudo to root-owned fixed-verb helpers for every fleet step'
+  unblocks: Nothing; this goes ahead unless you object
+  when: Any time
 
 gates:
 - id: G-v05
