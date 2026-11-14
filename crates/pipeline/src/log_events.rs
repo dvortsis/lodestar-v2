@@ -314,14 +314,36 @@ lodestar_log::catalogue! {
         fields: { judged: Size, held: Size, unreadable: Size },
     }
     /// A core re-judge batch failed in the store: it's tried again from
-    /// the same place after a backoff, then one torrent at a time (not
-    /// when most of a batch wouldn't read: that waits, holding nothing).
+    /// the same place after a backoff, then one torrent at a time. (A
+    /// batch that mostly won't read is `core_rejudge_stalled` instead.)
     CORE_REJUDGE_FAILED {
         id: "pipeline.core_rejudge_failed",
         component: Pipeline,
         level: Error,
         message: "Re-judge of stored torrents failed; it will try again",
         fields: { error: Error },
+    }
+    /// The core re-judge's breaker stopped a batch: most of its stored
+    /// torrents wouldn't read. Nothing in it was held; its range is kept to
+    /// judge again, and the pass went on past it. The torrents the range
+    /// covers, and the ranges kept now. Counts only.
+    CORE_REJUDGE_STALLED {
+        id: "pipeline.core_rejudge_stalled",
+        component: Pipeline,
+        level: Warn,
+        message: "Re-judge skipped stored torrents that won't read; it will try them again",
+        fields: { rows: Size, ranges: Size },
+    }
+    /// A range the core re-judge's breaker stopped was judged through and
+    /// removed: the torrents it still counted (those it covered when it
+    /// stopped, less any judged in earlier tries), and the ranges still
+    /// kept. Counts only.
+    CORE_REJUDGE_STALL_CLEARED {
+        id: "pipeline.core_rejudge_stall_cleared",
+        component: Pipeline,
+        level: Info,
+        message: "Re-judge judged stored torrents it had skipped",
+        fields: { rows: Size, ranges: Size },
     }
     /// The background enrichment pass failed.
     ENRICHMENT_FAILED {

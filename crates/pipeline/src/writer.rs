@@ -84,6 +84,11 @@ pub struct WriterStats {
     pub unverified: UnverifiedStats,
     /// Torrent-cache files judged and committed (SRC-13b).
     pub torrent_cache: crate::torrent_cache::CacheStats,
+    /// Ranges of stored torrents the core re-judge's breaker stopped,
+    /// still to judge again, and the torrents they cover
+    /// ([`crate::core_rejudge::Stall`]): gauges, as of its last batch.
+    pub core_stalled_ranges: AtomicU64,
+    pub core_stalled_rows: AtomicU64,
 }
 
 pub(crate) struct WriterIo {
@@ -259,18 +264,43 @@ pub(crate) struct CoreSweep {
     pub failures: u32,
     /// The wait after a store error.
     pub backoff: Backoff,
+    /// When the ranges the breaker stopped are next tried, once only they
+    /// are left ([`crate::core_rejudge::RETRY_PHASE`]), in Unix seconds;
+    /// the passes that wait for the re-judge run meanwhile. `None` once
+    /// due, so the first run after a start tries them at once.
+    pub stall_retry_at: Option<i64>,
+    /// Tries in a row the breaker stopped again: each waits twice as long.
+    pub stall_tries: u32,
 }
 
 impl CoreSweep {
     /// Has a batch to judge now.
     fn ready(&self) -> bool {
-        !self.done && self.backoff.ready()
+        !self.done && self.backoff.ready() && self.stall_retry_at.is_none()
     }
 
-    /// Lets the passes that wait for it run: it's done, or waiting out a
-    /// store failure.
+    /// Lets the passes that wait for it run: it's done, waiting out a
+    /// store failure, or waiting to try its stalled ranges again.
     fn yields(&self) -> bool {
-        self.done || !self.backoff.ready()
+        self.done || !self.backoff.ready() || self.stall_retry_at.is_some()
+    }
+
+    /// The stalled ranges are tried again once `stall_retry_at` passes.
+    fn stall_due(&mut self, now: i64) {
+        if self.stall_retry_at.is_some_and(|at| now >= at) {
+            self.stall_retry_at = None;
+        }
+    }
+
+    /// Waits before the stalled ranges are tried again: from
+    /// [`STALL_RETRY_FIRST`], doubling for each try the breaker stopped
+    /// again, up to [`STALL_RETRY_MAX`].
+    fn stall_wait(&mut self, now: i64) {
+        let wait = STALL_RETRY_FIRST
+            .saturating_mul(1 << self.stall_tries.min(10))
+            .min(STALL_RETRY_MAX);
+        self.stall_tries = self.stall_tries.saturating_add(1);
+        self.stall_retry_at = Some(now.saturating_add(wait));
     }
 }
 
@@ -448,6 +478,7 @@ impl Writer {
                     self.note_engine();
                     self.candidates.backoff.retry_due(unix_now());
                     self.core_rejudge.backoff.retry_due(unix_now());
+                    self.core_rejudge.stall_due(unix_now());
                     self.sweep.backoff.retry_due(unix_now());
                     self.backfill_backoff.retry_due(unix_now());
                     self.verify(&io.retry).await;
@@ -1858,6 +1889,19 @@ impl Writer {
         .await
         .expect("core rejudge task");
         self.store = Some(store);
+        let stalled = match &result {
+            Ok(Some(b)) => Some(b.stalled),
+            Ok(None) => Some(Default::default()),
+            Err(_) => None,
+        };
+        if let Some(st) = stalled {
+            self.stats
+                .core_stalled_ranges
+                .store(st.ranges, Ordering::Relaxed);
+            self.stats
+                .core_stalled_rows
+                .store(st.rows, Ordering::Relaxed);
+        }
         match result {
             Ok(Some(b)) => {
                 let counts = |p: lodestar_store::CorePass| {
@@ -1871,6 +1915,27 @@ impl Writer {
                         held = held,
                         unreadable = unreadable
                     );
+                }
+                if let Some(stall) = b.stall {
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_STALLED,
+                        rows = stall.rows,
+                        ranges = b.stalled.ranges
+                    );
+                }
+                if let Some(stall) = b.cleared {
+                    self.core_rejudge.stall_tries = 0;
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_STALL_CLEARED,
+                        rows = stall.rows,
+                        ranges = b.stalled.ranges
+                    );
+                }
+                // Both phases just ended with stalled ranges left: they're
+                // tried again after a wait, not at once. (After a start
+                // they're tried at once.)
+                if b.waiting && b.phase_done {
+                    self.core_rejudge.stall_wait(unix_now());
                 }
                 // A rejected batch (the rules changed under it) runs again.
                 if b.finished {
@@ -1891,15 +1956,17 @@ impl Writer {
                 self.core_rejudge.failures = 0;
                 self.core_rejudge.backoff.succeeded();
             }
+            Err(e) if crate::core_rejudge::is_breaker(&e) => {
+                // A stalled range judged again still mostly won't read: it
+                // went to the back of the list, and the next try waits
+                // longer. Nothing was held.
+                self.core_rejudge.stall_wait(unix_now());
+            }
             Err(e) => {
                 // The store failed (a torrent's own bad rows are held, not
                 // errors): the same place again after a backoff. The error
-                // carries no name. A batch that mostly wouldn't read is the
-                // store's fault too, and going one at a time would hold
-                // what it can't read, so it only waits.
-                if !crate::core_rejudge::is_breaker(&e) {
-                    self.core_rejudge.failures += 1;
-                }
+                // carries no name.
+                self.core_rejudge.failures += 1;
                 self.core_rejudge.backoff.failed(unix_now());
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
@@ -2465,6 +2532,11 @@ const CORE_REJUDGE_SINGLE: u32 = 3;
 /// each further one up to the cap (seconds).
 const RETRY_FIRST: i64 = 5;
 const RETRY_MAX: i64 = 300;
+/// The first wait before stalled core re-judge ranges are tried again,
+/// doubling after each try the breaker stops again up to the cap
+/// (seconds).
+const STALL_RETRY_FIRST: i64 = 300;
+const STALL_RETRY_MAX: i64 = 6 * 3600;
 
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
@@ -3938,6 +4010,30 @@ mod tests {
         assert!(c.ready() && !c.yields());
         c.done = true;
         assert!(!c.ready() && c.yields());
+    }
+
+    /// With only stalled ranges left, the core re-judge waits between
+    /// tries, longer after each the breaker stops again, up to a cap, and
+    /// the passes that wait for it run meanwhile.
+    #[test]
+    fn stalled_ranges_are_tried_again_after_a_growing_wait() {
+        let mut c = CoreSweep::default();
+        let waits: Vec<i64> = (0..8)
+            .map(|_| {
+                c.stall_wait(1_000);
+                assert!(!c.ready() && c.yields());
+                c.stall_due(1_000);
+                assert!(!c.ready(), "not before it's due");
+                let wait = c.stall_retry_at.unwrap() - 1_000;
+                c.stall_due(1_000 + wait);
+                assert!(c.ready() && !c.yields());
+                wait
+            })
+            .collect();
+        assert_eq!(waits, [300, 600, 1200, 2400, 4800, 9600, 19_200, 21_600]);
+        c.stall_tries = u32::MAX;
+        c.stall_wait(i64::MAX);
+        assert_eq!(c.stall_retry_at, Some(i64::MAX));
     }
 
     /// The sweeps' backoff doubles after each error in a row, up to its
