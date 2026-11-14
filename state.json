@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:45Z",
+  "updated_at": "2026-11-14T01:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8309,7 +8309,7 @@
     },
     {
       "id": "rv-slices-1114",
-      "note": "Register in runner PR: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-filter02-fix (filter queue); hold #795 until X-rollback-scrub-fix lands; retire slot 7 after #856 merges (cap 4); SRC-02 to owner after verification.",
+      "note": "Register in runner PR: X-update01-store01-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-store02-pipe02-fix, X-cmp01-fix, X-filter02-fix (filter queue); hold #795 until X-update01-store01-fix lands; retire slot 7 after #856 merges (cap 4); SRC-02 to owner after verification.",
       "at": "2026-11-14T01:18Z"
     },
     {
@@ -8726,7 +8726,7 @@
     },
     "860": {
       "slice": "runner",
-      "state": "fresh Opus review running"
+      "state": "review CHANGES fixed at 89629350; fresh delta review running"
     }
   },
   "merged_log": [
@@ -9373,7 +9373,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:45Z",
+    "updated": "2026-11-14T01:47Z",
     "items": [
       {
         "slot": 1,
@@ -9558,7 +9558,7 @@
         "slice": "X-dht01-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "X-dht01-fix built first (dht node only); PR from its own branch next. X-rollback-scrub-fix waits on #857 (store snapshot module). Queue after: X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-cluster06-fix (after #856).",
+        "doing": "X-dht01-fix built first (dht node only); PR from its own branch next. X-update01-store01-fix waits on #857 (store snapshot module). Queue after: X-search01-fix, X-pipe01-fix, X-store02-pipe02-fix, X-cmp01-fix, X-cluster06-fix (after #856).",
         "since": "2026-11-14T01:45Z"
       }
     ]
@@ -9644,7 +9644,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:45Z",
+  "updated": "2026-11-14T01:47Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
