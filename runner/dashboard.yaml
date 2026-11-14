@@ -752,11 +752,11 @@ placement:
   - X-cluster06-fix
   - X-metainfo01-fix
   - X-filter02-fix
-  - X-rollback-scrub-fix
+  - X-update01-store01-fix
   - X-dht01-fix
   - X-search01-fix
   - X-pipe01-fix
-  - X-writer-panic-fix
+  - X-store02-pipe02-fix
   - X-cmp01-fix
 unplaced_workstream: ws-small
 pinned:
@@ -1526,19 +1526,19 @@ roadmap:
     - X-ci-advisories
     - X-fixed-sleep-asserts
     - X-filter01-fix
-    - X-apifeat01-fix
     - X-filter03-fix
+    - X-apifeat01-fix
     - X-filter15-fix
     - X-filter13-fix
     - X-filter14-fix
     - X-filter12-fix
     - X-metainfo01-fix
     - X-filter02-fix
-    - X-rollback-scrub-fix
+    - X-update01-store01-fix
     - X-dht01-fix
     - X-search01-fix
     - X-pipe01-fix
-    - X-writer-panic-fix
+    - X-store02-pipe02-fix
     - X-cmp01-fix
     - X-cluster06-fix
   arrows:
