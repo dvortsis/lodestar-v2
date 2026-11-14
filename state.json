@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T08:35Z",
+  "updated_at": "2026-11-14T08:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8518,6 +8518,11 @@
       "id": "flake-metainfo-bound-rss",
       "added": "2026-11-14T08:26Z",
       "note": "crates/metainfo/tests/bound.rs tree_at_the_full_budget_parses_within_bounds: peak RSS just over its ceiling, about 1 in 3 alone. No fix PR open. Needs one owner session."
+    },
+    {
+      "id": "flake-bench-relevance-lock-load",
+      "added": "2026-11-14T08:38Z",
+      "note": "bench/tests/relevance_sets.rs refused_while_a_server_holds_it fails locally under heavy parallel load (two occurrences today, both with fuzzers running beside it; none alone, none in CI known). Watch; fix if it appears in CI."
     }
   ],
   "main_health": [
@@ -9837,7 +9842,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T08:35Z",
+  "updated": "2026-11-14T08:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
