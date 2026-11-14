@@ -5280,3 +5280,7 @@ mod vouch {
         assert_eq!(v.freed_networks, [address(1).network()]);
     }
 }
+
+#[cfg(test)]
+#[path = "pool_budget_model.rs"]
+mod budget_model;
