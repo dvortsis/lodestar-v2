@@ -150,7 +150,14 @@ impl Worker {
     async fn found(&self, key: InfoHash, token: u64) {
         self.leases.insert(key, Token(token));
         let mut found = Found::key(key, 0);
-        found.peers = vec!["192.0.2.1:6881".parse().unwrap()];
+        // A peer in a network of its own for each key (documentation
+        // addresses): the pool takes only so many keys at once with a peer
+        // at one address or in one network.
+        let net = token as u16;
+        found.peers = vec![std::net::SocketAddr::from((
+            [0x2001, 0xdb8, net, 0, 0, 0, 0, 1],
+            6881,
+        ))];
         self.discoveries
             .send(Discovery {
                 source: source(),

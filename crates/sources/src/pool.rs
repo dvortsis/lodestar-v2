@@ -823,6 +823,8 @@ pub fn spawn(
     let admission = config
         .coordinated_admission
         .then(|| Admission::new(io.peer_finders.len(), config.finder_capacity.max(1)));
+    let limit_addresses = !io.peer_finders.is_empty();
+    let places = Places::new(config.max_pending);
     let budget = Arc::new(Budget::new(config.max_held_bytes));
     let mut pool = Pool {
         cfg: config,
@@ -845,6 +847,8 @@ pub fn spawn(
         lookups: 0,
         requests: RequestMap::default(),
         per_ip: HashMap::new(),
+        vouched: places,
+        limit_addresses,
         tasks: JoinSet::new(),
         task_keys: HashMap::new(),
         recent: HashSet::new(),
@@ -871,6 +875,208 @@ pub fn spawn(
         },
         task,
     )
+}
+
+/// The most keys in the pool at once with a peer at one address: an IPv4
+/// address, or an IPv6 /64. A smaller queue has a smaller limit
+/// ([`address_caps`]). Past it, a peer at that address isn't added to
+/// another key: the key is still taken, with its other peers, or with none
+/// and looked up like any key found with none, so it gives way to newer
+/// keys when the queue is full.
+pub const MAX_VOUCHED_PER_IP: usize = 256;
+
+/// The most keys in the pool at once with a peer in one network: an IPv4
+/// /24, or an IPv6 /48. Both limits hold at once.
+pub const MAX_VOUCHED_PER_NET: usize = 1024;
+
+/// The limits for a queue of `max_pending` keys: per address and per
+/// network. A share of the queue, so a few addresses can't hold a small
+/// one, and no more than the two constants.
+pub fn address_caps(max_pending: usize) -> (usize, usize) {
+    let address = (max_pending / 512).clamp(1, MAX_VOUCHED_PER_IP);
+    let network = (max_pending / 128).clamp(address, MAX_VOUCHED_PER_NET);
+    (address, network)
+}
+
+/// How many keys in the pool have a peer at each address, or in each
+/// network: one count, with its limit.
+struct Vouched {
+    cap: usize,
+    by_net: HashMap<Net, u32>,
+}
+
+impl Vouched {
+    fn new(cap: usize) -> Vouched {
+        Vouched {
+            cap,
+            by_net: HashMap::new(),
+        }
+    }
+
+    /// A place for one more key at `net`, unless it has `cap` already.
+    fn take(&mut self, net: Net) -> bool {
+        let keys = self.by_net.entry(net).or_default();
+        if *keys as usize >= self.cap {
+            // An address with no keys holds nothing (a limit of 0 never
+            // happens: the smallest is 1).
+            if *keys == 0 {
+                self.by_net.remove(&net);
+            }
+            return false;
+        }
+        *keys += 1;
+        true
+    }
+
+    /// Counts a key that already has its peer at `net`, whatever the
+    /// limit: a key that turns public keeps the peers it has.
+    fn count(&mut self, net: Net) {
+        let keys = self.by_net.entry(net).or_default();
+        *keys = keys.saturating_add(1);
+    }
+
+    fn give_back(&mut self, net: Net) {
+        let std::collections::hash_map::Entry::Occupied(mut keys) = self.by_net.entry(net) else {
+            debug_assert!(false, "a place given back that wasn't taken");
+            return;
+        };
+        *keys.get_mut() -= 1;
+        if *keys.get() == 0 {
+            keys.remove();
+            // Give the memory back after a burst of addresses has gone.
+            if self.by_net.capacity() > 4096 && self.by_net.len() * 8 < self.by_net.capacity() {
+                self.by_net.shrink_to(self.by_net.len() * 2);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn keys(&self, net: Net) -> u32 {
+        self.by_net.get(&net).copied().unwrap_or(0)
+    }
+}
+
+/// How many public keys in the pool have a peer at each address and in
+/// each network. A key counts once for each address, and once for each
+/// network, its peers are at; the counts are taken as a peer is added and
+/// given back as it goes.
+struct Places {
+    addresses: Vouched,
+    networks: Vouched,
+}
+
+impl Places {
+    fn new(max_pending: usize) -> Places {
+        let (address, network) = address_caps(max_pending);
+        Places {
+            addresses: Vouched::new(address),
+            networks: Vouched::new(network),
+        }
+    }
+
+    /// Places for `p` in a key whose peers are `have`: one at its address
+    /// and one in its network, each only if the key has no peer there
+    /// yet. Both or neither.
+    fn take(&mut self, have: &[SocketAddr], p: SocketAddr) -> bool {
+        let address = net_of(p.ip());
+        let network = address.network();
+        let new_address = !have.iter().any(|q| net_of(q.ip()) == address);
+        let new_network = !have.iter().any(|q| net_of(q.ip()).network() == network);
+        if new_address && !self.addresses.take(address) {
+            return false;
+        }
+        if new_network && !self.networks.take(network) {
+            if new_address {
+                self.addresses.give_back(address);
+            }
+            return false;
+        }
+        true
+    }
+
+    /// Counts a key that already has `peers`, whatever the limits: a key
+    /// that turns public keeps the peers it has.
+    fn count(&mut self, peers: &[SocketAddr]) {
+        let (addresses, networks) = nets_of(peers);
+        addresses.into_iter().for_each(|n| self.addresses.count(n));
+        networks.into_iter().for_each(|n| self.networks.count(n));
+    }
+
+    /// Gives back the places of a key whose peers were `peers`.
+    fn give_back(&mut self, peers: &[SocketAddr]) {
+        self.give_back_dropped(peers, &[]);
+    }
+
+    /// Gives back the places a key held for `before` and has no peer for
+    /// in `after`.
+    fn give_back_dropped(&mut self, before: &[SocketAddr], after: &[SocketAddr]) {
+        let (had_addresses, had_networks) = nets_of(before);
+        let (addresses, networks) = nets_of(after);
+        for n in had_addresses {
+            if addresses.binary_search(&n).is_err() {
+                self.addresses.give_back(n);
+            }
+        }
+        for n in had_networks {
+            if networks.binary_search(&n).is_err() {
+                self.networks.give_back(n);
+            }
+        }
+    }
+}
+
+/// What a peer counts under: an IPv4 address or the /64 of an IPv6 one,
+/// and ([`Net::network`]) the IPv4 /24 or IPv6 /48 around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Net {
+    V4(u32),
+    V6(u64),
+}
+
+impl Net {
+    /// The network an address is in: its IPv4 /24, or its IPv6 /48.
+    fn network(self) -> Net {
+        match self {
+            Net::V4(a) => Net::V4(a & 0xffff_ff00),
+            Net::V6(a) => Net::V6(a & 0xffff_ffff_ffff_0000),
+        }
+    }
+}
+
+/// The address `ip` counts under. An IPv4-mapped or NAT64 /96 address
+/// counts as the IPv4 address inside it.
+fn net_of(ip: IpAddr) -> Net {
+    match ip {
+        IpAddr::V4(v4) => Net::V4(u32::from(v4)),
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return Net::V4(u32::from(v4));
+            }
+            let nat64 = s[0] == 0x64
+                && s[1] == 0xff9b
+                && (s[2..6] == [0; 4] || (s[2] == 1 && s[3..6] == [0; 3]));
+            if nat64 {
+                return Net::V4((u32::from(s[6]) << 16) | u32::from(s[7]));
+            }
+            Net::V6(
+                (u64::from(s[0]) << 48)
+                    | (u64::from(s[1]) << 32)
+                    | (u64::from(s[2]) << 16)
+                    | u64::from(s[3]),
+            )
+        }
+    }
+}
+
+/// Each address `peers` are at, and each network, once and sorted.
+fn nets_of(peers: &[SocketAddr]) -> (Vec<Net>, Vec<Net>) {
+    let mut addresses: Vec<Net> = peers.iter().map(|p| net_of(p.ip())).collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    let mut networks: Vec<Net> = addresses.iter().map(|n| n.network()).collect();
+    networks.dedup();
+    (addresses, networks)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -991,6 +1197,13 @@ struct Pool {
     lookups: usize,
     requests: RequestMap,
     per_ip: HashMap<IpAddr, usize>,
+    /// Public keys in `entries` per address and per network their peers
+    /// are at.
+    vouched: Places,
+    /// Whether the limits in [`Places`] apply: only with a peer finder to
+    /// look up a key that goes without a peer. A pool with none (a worker
+    /// that runs no DHT) has only the peers its keys came with.
+    limit_addresses: bool,
     /// Each fetch's result, and whether it ran out of time waiting for a
     /// reservation.
     tasks: JoinSet<(Result<Fetched, FailureKind>, bool)>,
@@ -1299,7 +1512,12 @@ impl Pool {
             e.sources |= 1u64 << d.source.get();
             // A private source can't make a public key private, but a
             // public sighting does make a private key public.
+            let was_private = e.private;
             e.private &= d.found.private_source;
+            if was_private && !e.private && self.limit_addresses {
+                // Public from here: the peers it has count now.
+                self.vouched.count(&e.peers);
+            }
             if d.found.interest {
                 self.raise_interest(key);
             }
@@ -1401,6 +1619,7 @@ impl Pool {
         };
         let before = e.peers.len();
         let mut capped = 0;
+        let limited = self.limit_addresses && !e.private;
         for p in peers
             .iter()
             .copied()
@@ -1418,6 +1637,14 @@ impl Pool {
             }
             if e.peers.len() >= cap {
                 capped += 1;
+                continue;
+            }
+            // Each address, and each network, has peers in a bounded
+            // number of public keys at once, by whatever way the peer
+            // came: past that, this key does without it. A private key's
+            // peers are the user's own (their client, a private tracker):
+            // never limited.
+            if limited && !self.vouched.take(&e.peers, p) {
                 continue;
             }
             e.peers.push(p);
@@ -2224,11 +2451,22 @@ impl Pool {
                 // isn't put off for ever (WK-10e).
                 let tried = e.tried;
                 let mut at = 0;
+                // Only when a peer is about to go: the addresses before.
+                let counted = self.limit_addresses
+                    && !e.private
+                    && e.peers[tried..]
+                        .iter()
+                        .any(|p| cap_for(policy, per_ip, p.ip()) == 0);
+                let before = if counted { e.peers.clone() } else { Vec::new() };
                 e.peers.retain(|p| {
                     let keep = at < tried || cap_for(policy, per_ip, p.ip()) > 0;
                     at += 1;
                     keep
                 });
+                if counted {
+                    // The addresses it has no peer at any more.
+                    self.vouched.give_back_dropped(&before, &e.peers);
+                }
                 if e.has_untried() {
                     // Every untried peer's IP is busy; try again next round.
                     deferred.push(key);
@@ -2417,6 +2655,7 @@ impl Pool {
         match result {
             Ok(fetched) => {
                 let e = self.entries.remove(&key).expect("present");
+                self.unvouch(&e);
                 // A verified result cancels every finder still streaming.
                 if self.requests.remove(&key).is_some() {
                     self.lookups -= 1;
@@ -2524,6 +2763,9 @@ impl Pool {
             // the dropped one's included: which of the rest were private
             // isn't known, so it's private from here (SRC-14b). A live
             // public sighting makes it public again.
+            if !e.private && self.limit_addresses {
+                self.vouched.give_back(&e.peers);
+            }
             e.private = true;
             if e.source == source {
                 // The lowest remaining finder; its bit is under 64.
@@ -2570,8 +2812,36 @@ impl Pool {
         only.len() + dropped.len()
     }
 
+    /// Gives a removed entry's places back to the addresses its peers are
+    /// at. Called wherever an entry leaves `entries`.
+    fn unvouch(&mut self, e: &Entry) {
+        if self.limit_addresses && !e.private {
+            self.vouched.give_back(&e.peers);
+        }
+    }
+
+    /// The counts per address and per network, taken afresh from the
+    /// entries.
+    #[cfg(debug_assertions)]
+    fn vouched_afresh(&self) -> (HashMap<Net, u32>, HashMap<Net, u32>) {
+        let mut afresh = (HashMap::new(), HashMap::new());
+        if self.limit_addresses {
+            for e in self.entries.values().filter(|e| !e.private) {
+                let (addresses, networks) = nets_of(&e.peers);
+                for n in addresses {
+                    *afresh.0.entry(n).or_default() += 1;
+                }
+                for n in networks {
+                    *afresh.1.entry(n).or_default() += 1;
+                }
+            }
+        }
+        afresh
+    }
+
     fn lose(&mut self, key: InfoHash, loss: Loss) {
         let e = self.entries.remove(&key).expect("present");
+        self.unvouch(&e);
         if loss == Loss::Evicted {
             let stage = if e.fetch_started {
                 3
@@ -2616,6 +2886,15 @@ impl Pool {
     }
 
     fn snapshot(&self) -> Vec<QueuedKey> {
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            (
+                self.vouched.addresses.by_net.clone(),
+                self.vouched.networks.by_net.clone()
+            ),
+            self.vouched_afresh(),
+            "the counts per address and network follow the entries"
+        );
         let mut out: Vec<QueuedKey> = self
             .entries
             .iter()
@@ -3313,5 +3592,127 @@ mod budget {
         assert!(b.lock().starved.is_none());
         drop((fills, large, small));
         assert_eq!(used(&b), 0);
+    }
+}
+
+#[cfg(test)]
+mod vouch {
+    use super::*;
+
+    fn a(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    /// One address, whatever the port; an IPv6 address by its /64; an
+    /// IPv4-mapped or NAT64 address as the IPv4 one inside it. A network
+    /// is the /24 or the /48 around it.
+    #[test]
+    fn a_peer_counts_under_its_address_and_its_network() {
+        let net = |s: &str| net_of(s.parse::<IpAddr>().unwrap());
+        let one = net("203.0.113.7");
+        assert_eq!(nets_of(&[]), (Vec::new(), Vec::new()));
+        let (addresses, networks) = nets_of(&[a("203.0.113.7:1"), a("203.0.113.7:65535")]);
+        assert_eq!((addresses, networks), (vec![one], vec![one.network()]));
+        let (addresses, networks) = nets_of(&[a("203.0.113.7:1"), a("203.0.113.8:1")]);
+        assert_eq!((addresses.len(), networks.len()), (2, 1));
+        assert_ne!(one, net("203.0.113.8"));
+        assert_eq!(net("::ffff:203.0.113.7"), one);
+        assert_eq!(net("64:ff9b::203.0.113.7"), one);
+        assert_eq!(net("64:ff9b:1::203.0.113.7"), one);
+        assert_ne!(net("64:ff9b::203.0.113.8"), one);
+        assert_eq!(net("2001:db8:1:2::1"), net("2001:db8:1:2:ffff::9"));
+        assert_ne!(net("2001:db8:1:2::1"), net("2001:db8:1:3::1"));
+        // An IPv4 address and a /64 never share a count.
+        assert_ne!(net("0.0.0.1"), net("0:0:0:1::"));
+        assert_ne!(net("203.0.113.7"), net("ffff:ffff:cb00:7107::"));
+        // Networks: a /24, a /48.
+        assert_eq!(one.network(), net("203.0.113.200").network());
+        assert_ne!(one.network(), net("198.51.100.7").network());
+        assert_eq!(
+            net("2001:db8:1:2::1").network(),
+            net("2001:db8:1:ffff::1").network()
+        );
+        assert_ne!(
+            net("2001:db8:1:2::1").network(),
+            net("2001:db8:2:2::1").network()
+        );
+    }
+
+    /// The limits are a share of the queue, and never more than the two
+    /// constants or less than 1; the network's is never under the
+    /// address's.
+    #[test]
+    fn the_limits_follow_the_queue() {
+        assert_eq!(address_caps(200_000), (256, 1024));
+        assert_eq!(address_caps(50_000), (97, 390));
+        assert_eq!(address_caps(1_000), (1, 7));
+        assert_eq!(address_caps(100), (1, 1));
+        assert_eq!(address_caps(0), (1, 1));
+        assert_eq!(address_caps(usize::MAX), (256, 1024));
+    }
+
+    /// An address has places up to the limit and no more; a place given
+    /// back can be taken again; an address with no keys holds nothing.
+    #[test]
+    fn places_are_counted_per_address() {
+        let ip = |n: u8| net_of(IpAddr::from([203, 0, 113, n]));
+        let mut v = Vouched::new(MAX_VOUCHED_PER_IP);
+        for _ in 0..MAX_VOUCHED_PER_IP {
+            assert!(v.take(ip(1)));
+        }
+        assert!(!v.take(ip(1)));
+        assert_eq!(v.keys(ip(1)) as usize, MAX_VOUCHED_PER_IP);
+        assert!(v.take(ip(2)));
+        v.give_back(ip(1));
+        assert!(v.take(ip(1)) && !v.take(ip(1)));
+        // A key that turns public keeps its peer, past the limit too, and
+        // gives the place back like any other.
+        v.count(ip(1));
+        assert_eq!(v.keys(ip(1)) as usize, MAX_VOUCHED_PER_IP + 1);
+        v.give_back(ip(1));
+        for _ in 0..MAX_VOUCHED_PER_IP {
+            v.give_back(ip(1));
+        }
+        v.give_back(ip(2));
+        assert!(v.by_net.is_empty());
+    }
+
+    /// A peer takes a place at its address and one in its network, both
+    /// or neither, and only where the key has no peer yet.
+    #[test]
+    fn a_peer_takes_both_places_or_neither() {
+        // Two keys an address, three a network.
+        let mut v = Places {
+            addresses: Vouched::new(2),
+            networks: Vouched::new(3),
+        };
+        let p = |n: u8| a(&format!("203.0.113.{n}:1"));
+        let net = net_of(p(1).ip()).network();
+        // One key with peers at two addresses of the network: two places
+        // for addresses, one for the network.
+        assert!(v.take(&[], p(1)) && v.take(&[p(1)], p(2)));
+        assert_eq!((v.addresses.by_net.len(), v.networks.keys(net)), (2, 1));
+        // Another port of an address it has takes nothing.
+        assert!(v.take(&[p(1), p(2)], a("203.0.113.1:9")));
+        assert_eq!(v.addresses.keys(net_of(p(1).ip())), 1);
+        // Two more keys fill the network; a fourth key's peer is refused
+        // and leaves nothing behind at its own address.
+        assert!(v.take(&[], p(3)) && v.take(&[], p(4)));
+        assert!(!v.take(&[], p(5)));
+        assert_eq!(v.addresses.keys(net_of(p(5).ip())), 0);
+        assert!(!v.addresses.by_net.contains_key(&net_of(p(5).ip())));
+        // Another network has its own share.
+        assert!(v.take(&[], a("198.51.100.5:1")));
+        // The first key drops one of its two peers: that address's place
+        // comes back, the network's stays.
+        v.give_back_dropped(&[p(1), p(2)], &[p(1)]);
+        assert_eq!(v.addresses.keys(net_of(p(2).ip())), 0);
+        assert_eq!(v.networks.keys(net), 3);
+        // The keys leave: nothing is left counted.
+        v.give_back(&[p(1)]);
+        v.give_back(&[p(3)]);
+        v.give_back(&[p(4)]);
+        v.give_back(&[a("198.51.100.5:1")]);
+        assert!(v.addresses.by_net.is_empty() && v.networks.by_net.is_empty());
     }
 }
