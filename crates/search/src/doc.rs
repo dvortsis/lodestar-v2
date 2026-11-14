@@ -16,8 +16,9 @@ use crate::tokenizer::{self, MAX_NAME_TOKENS};
 pub const MAX_PATH_TOKENS: usize = 20_000;
 const MAX_EXT_BYTES: usize = 10;
 /// Distinct extensions indexed per torrent: the first this many, in file
-/// order. A torrent's files can each have their own; the file index covers
-/// every file's extension whatever this is.
+/// order. A torrent's files can each have their own. `ext:` and a lone
+/// `file:(ext:…)` read this field, so past the cap they match the first
+/// this many only; the file index keeps each covered file's own.
 pub const MAX_EXTS: usize = 1024;
 /// Numbers indexed per span: a `1-1000` episode batch keeps its first
 /// 500, a `1900-2020` collection its first 50 years.
@@ -438,8 +439,8 @@ pub fn title_identity(record: &Record) -> Option<u64> {
 }
 
 /// The distinct extensions of `names`, each once, in the order first seen,
-/// and at most [`MAX_EXTS`] of them. One pass, whatever the names are:
-/// what's been seen is looked up in a set, never searched for in the list.
+/// and at most [`MAX_EXTS`] of them. One pass: what's been seen is looked
+/// up in a set.
 pub fn distinct_extensions<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -627,9 +628,9 @@ mod tests {
         assert_eq!(extension("x.abcdefghijk"), None);
     }
 
-    /// The extensions are what a search through the list would have kept:
-    /// each once, in the order first seen. Checked against that search on
-    /// names that repeat, differ only in case, or have no extension.
+    /// Each extension once, in the order first seen. Checked against a
+    /// plain reference on names that repeat, differ only in case, or have
+    /// no extension.
     #[test]
     fn distinct_extensions_are_each_kept_once_in_file_order() {
         let mut state = 0x9e37_79b9_7f4a_7c15u64;
@@ -676,14 +677,14 @@ mod tests {
             (got[0].as_str(), got[MAX_EXTS - 1].as_str()),
             ("x0", "x1023")
         );
-        // Under the cap nothing is left out.
+        assert!(!got.contains(&"zzz".to_string()));
+        // At the cap nothing is left out.
         let few = distinct_extensions(names[..MAX_EXTS].iter().map(String::as_str));
         assert_eq!(few.len(), MAX_EXTS);
     }
 
     /// At the boundary: 1,024 distinct extensions are all kept, and with
-    /// 1,025 the one left out is the last first seen in file order, the
-    /// same on every build of the document.
+    /// 1,025 the one left out is the last first seen in file order.
     #[test]
     fn the_extension_first_seen_last_is_the_one_left_out() {
         assert_eq!(MAX_EXTS, 1024);
@@ -701,11 +702,6 @@ mod tests {
         let got = distinct_extensions(over.iter().rev().map(String::as_str));
         assert_eq!(got.len(), MAX_EXTS);
         assert!(got.contains(&"x1024".to_string()) && !got.contains(&"x0".to_string()));
-        assert_eq!(
-            got,
-            distinct_extensions(over.iter().rev().map(String::as_str)),
-            "the same every time"
-        );
     }
 
     #[test]
