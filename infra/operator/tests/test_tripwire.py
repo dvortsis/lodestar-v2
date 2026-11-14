@@ -20,9 +20,13 @@ def env(**over):
     return e
 
 
+def no_sleep(_seconds):
+    raise AssertionError("a test reached a real wait")
+
+
 def run(argv, e, gh):
     with redirect_stdout(io.StringIO()):
-        return tripwire.main(argv, env=e, transport=gh, clock=lambda: NOW)
+        return tripwire.main(argv, env=e, transport=gh, clock=lambda: NOW, sleep=no_sleep)
 
 
 class Trip(unittest.TestCase):
@@ -323,7 +327,14 @@ class ReviewBudget(unittest.TestCase):
         # (an accepted residual in the decisions file).
         import wake
         self.assertEqual(tripwire.REVIEW_PAGE_BUDGET, 60)
-        self.assertLessEqual((wake.PER_HOUR + 1) * (tripwire.REVIEW_PAGE_BUDGET + 4 * tripwire.MAX_PAGES + 2), 750)
+        sweep = tripwire.REVIEW_PAGE_BUDGET + 4 * tripwire.MAX_PAGES + 2
+        self.assertLessEqual((wake.PER_HOUR + 1) * sweep, 750)
+        # The worst hour: every sweep incomplete at its full page use, then the session check
+        # at its request cap. Still inside the token's ~1,000 (decisions file).
+        self.assertLessEqual((wake.PER_HOUR + 1) * (sweep + tripwire.SESSION_REQUESTS), 1000)
+        # One full pass: two counts, every status list, two counts again, with room for jobs and a retry.
+        one_pass = 2 + len(tripwire.RUN_STATES + tripwire.RUN_CONCLUSIONS) + 2
+        self.assertGreaterEqual(tripwire.SESSION_REQUESTS, 2 * one_pass + 4)
 
     def test_exactly_the_budget_is_complete(self):
         gh = ManyPRs([2900, 2900])  # 30 pages each (29 full, then an empty one): 60
@@ -832,8 +843,10 @@ class SessionCheck(unittest.TestCase):
             return actions(path)
         return tripwire._wake_session(env(), gh, NOW, mono or (lambda: 0.0), sleep or (lambda s: None))
 
+    # A wake job that would count but for the skipped gate, so the gate rule is what decides.
     STRANGER_JOBS = [{"name": "gate", "status": "completed", "conclusion": "skipped"},
-                     {"name": "refuse", "status": "completed", "conclusion": "skipped"}]
+                     {"name": "refuse", "status": "completed", "conclusion": "skipped"},
+                     {"name": "wake", "status": "queued", "conclusion": None, "completed_at": None}]
 
     def test_a_strangers_run_in_flight_never_counts(self):
         # Any comment starts an operator-wake run; for a moment it's in flight.
@@ -920,8 +933,7 @@ class SessionCheck(unittest.TestCase):
     def test_thousands_of_skipped_runs_and_no_session(self):
         actions = Actions([skipped_run(i, timedelta(minutes=i)) for i in range(1, 5001)])
         self.assertIsNone(self.check(actions))
-        # Totals of 1,000 or more are counted by splitting the window (in case GitHub caps them).
-        self.assertLessEqual(len(actions.paths), 120)
+        self.assertLessEqual(len(actions.paths), 19)
         self.assertFalse(any("/actions/runs/" in p for p in actions.paths))
 
     def test_the_window_is_thirty_days(self):
@@ -976,14 +988,52 @@ class SessionCheck(unittest.TestCase):
 
     def test_a_run_added_between_queries_is_read_again(self):
         added = {"done": False}
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
 
-        def late(actions):  # one run turns up inside the window between the counts and the lists, once
+        def late(actions):  # a completed, non-skipped run turns up between the counts and the lists, once
             if not added["done"] and len(actions.paths) == 3:
                 added["done"] = True
-                actions.runs.append(skipped_run(77, timedelta(minutes=3)))
-        actions = Actions([skipped_run(1)], before_call=late)
+                actions.runs.append(wake_run(77, created=timedelta(hours=5), updated=old))
+        actions = Actions([skipped_run(1)], {"77": wake_jobs(completed=old)}, before_call=late)
         self.assertIsNone(self.check(actions))
         self.assertTrue(added["done"])
+        # The first pass's counts didn't match the runs read: the counts were read again.
+        self.assertGreater(sum(1 for p in actions.paths if "&per_page=1&" in p and "status" not in p), 2)
+
+    def test_a_run_listed_in_a_state_it_has_left_is_read_again(self):
+        # Listed as in progress, but the copy returned already says completed long ago: read
+        # as it says, the runner's session in flight would be missed. It's read again.
+        r = dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))
+        stale = {"left": True}
+        actions = Actions([r], {"1": wake_jobs(None, status="in_progress")})
+
+        def answer(path):
+            out = actions(path)
+            if stale["left"] and "&status=in_progress&per_page=100" in path and out["workflow_runs"]:
+                stale["left"] = False
+                old = ISO(timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5))
+                out = dict(out, workflow_runs=[dict(out["workflow_runs"][0], status="completed",
+                                                    conclusion="success", updated_at=old)])
+            return out
+        self.assertEqual(self.check(answer), tripwire.SESSION_RAN)
+        self.assertFalse(stale["left"])
+
+    def test_a_real_total_over_a_thousand_isnt_split(self):
+        actions = Actions([skipped_run(i, timedelta(minutes=i)) for i in range(1, 5001)])
+        self.assertIsNone(self.check(actions))
+        self.assertLessEqual(len(actions.paths), 19)
+
+    def test_a_capped_total_is_split_so_an_unlisted_state_still_shows(self):
+        runs = [skipped_run(i, timedelta(minutes=17 * i)) for i in range(1, 2501)]
+        runs.append(dict(skipped_run(9999, timedelta(minutes=50)), conclusion="something-new"))
+        self.assertEqual(self.check(Actions(runs, cap=True)), tripwire.SESSION_UNKNOWN)
+
+    def test_the_check_stops_at_its_request_cap(self):
+        def churn(actions):
+            actions.runs.append(skipped_run(1000 + len(actions.paths), timedelta(minutes=3)))
+        actions = Actions([skipped_run(1)], before_call=churn)
+        self.assertEqual(self.check(actions), tripwire.SESSION_UNKNOWN)
+        self.assertLessEqual(len(actions.paths), tripwire.SESSION_REQUESTS)
 
     def test_a_queued_or_running_wake_job_counts(self):
         for status in ("queued", "in_progress"):

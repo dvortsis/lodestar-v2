@@ -73,10 +73,15 @@ RUN_UNREAD = ("skipped",)
 # A comment arriving during the check moves a run between lists: a count that
 # doesn't add up is read again, up to SESSION_ATTEMPTS times, before it counts.
 SESSION_ATTEMPTS = 3
-# GitHub may cap a created= list's total_count at 1,000: a time range whose
-# total reaches it is split in two and counted again, up to COUNT_SPLITS deep.
+# GitHub may cap a created= list's total_count at 1,000. A capped total can't
+# exceed it, so only a total of exactly COUNT_CAP is split in two and counted
+# again, up to COUNT_SPLITS deep; any other total is real and used as it is.
+# The first run verifies whether the cap exists.
 COUNT_CAP = 1000
 COUNT_SPLITS = 6
+# Requests the check may make in all, its retries included: past it, it counts
+# as a session (test_the_budget_leaves_room_for_the_other_workflows).
+SESSION_REQUESTS = 40
 # A run in flight whose gate job hasn't finished is read again, GATE_READS
 # times GATE_WAIT_SECONDS apart, all inside the check's deadline.
 GATE_READS = 5
@@ -422,11 +427,19 @@ def _wake_session(env, transport, now: datetime, monotonic=time.monotonic, sleep
     counts that still don't add up after SESSION_ATTEMPTS reads, or
     SESSION_DEADLINE_SECONDS passing counts as a session. The end-of-wake sweep
     is decided by the caller (END_OF_WAKE)."""
-    call = with_deadline(transport, monotonic, SESSION_DEADLINE_SECONDS)
+    timed = with_deadline(transport, monotonic, SESSION_DEADLINE_SECONDS)
+    made = [0]
+
+    def call(method, path, body):
+        made[0] += 1
+        if made[0] > SESSION_REQUESTS:
+            raise _Unknown
+        return timed(method, path, body)
     since = now - timedelta(minutes=LOOKBACK_MINUTES)
     try:
         repo = env["GITHUB_REPOSITORY"]
-        lo, hi = now - timedelta(days=APPROVAL_WAIT_DAYS), now  # fixed: a run created during the check isn't in it
+        # The window ends at the sweep's `now`, fixed: a run created during the check isn't in it.
+        lo, hi = now - timedelta(days=APPROVAL_WAIT_DAYS), now
         for _ in range(SESSION_ATTEMPTS):
             try:
                 return _session_pass(call, repo, lo, hi, since, sleep)
@@ -448,9 +461,9 @@ def _runs_page(call, repo: str, lo: datetime, hi: datetime, status: str, page: i
 
 def _counted(call, repo: str, lo: datetime, hi: datetime, depth: int = 0) -> int:
     """All runs created in [lo, hi] minus those the check never reads
-    (RUN_UNREAD). A range whose total reaches COUNT_CAP is split in two."""
+    (RUN_UNREAD). A range whose total is exactly COUNT_CAP (perhaps capped) is split."""
     total = _runs_page(call, repo, lo, hi, "", 1, 1)[1]
-    if total >= COUNT_CAP:
+    if total == COUNT_CAP:
         if depth >= COUNT_SPLITS or hi - lo < timedelta(seconds=2):
             raise _Unknown
         mid = lo + (hi - lo) / 2
@@ -464,12 +477,15 @@ def _session_pass(call, repo: str, lo: datetime, hi: datetime, since: datetime, 
     read = 0
     for status in RUN_STATES + RUN_CONCLUSIONS:
         key = "status" if status in RUN_STATES else "conclusion"
-        seen = 0
+        ids: set[str] = set()  # paging over a list that moves can repeat a run: each counts once
         for page in range(1, SESSION_PAGES + 1):
             items, total = _runs_page(call, repo, lo, hi, status, page, 100)
             for run in items:
                 if not isinstance(run, dict) or _digits(run.get("id")) is None:
                     raise _Unknown
+                if _digits(run.get("id")) in ids:
+                    continue
+                ids.add(_digits(run.get("id")))
                 if run.get(key) != status:
                     raise _Mismatch  # moved on since it was listed, or a filter the API didn't apply
                 updated = _when(run.get("updated_at"))
@@ -477,12 +493,11 @@ def _session_pass(call, repo: str, lo: datetime, hi: datetime, since: datetime, 
                     continue  # a run's update time is at or after its jobs' completion
                 if _wake_ran(call, repo, _digits(run.get("id")), since, run.get("status") != "completed", sleep):
                     return SESSION_RAN
-            seen += len(items)
-            if len(items) < 100 or seen >= total:
+            if len(items) < 100 or len(ids) >= total:
                 break
         else:
             raise _Unknown  # more than SESSION_PAGES pages
-        if seen < total:
+        if len(ids) != total:
             raise _Mismatch
         read += total
     if read != expected or _counted(call, repo, lo, hi) != expected:  # a status no list covers, or runs moved
@@ -509,10 +524,11 @@ def _wake_ran(call, repo: str, rid: str, since: datetime, in_flight: bool, sleep
     attempts (`filter=all`: a re-run waiting for approval keeps its earlier
     attempts' jobs).
 
-    Only a run with a `gate` job that succeeded can count. The gate runs only
-    for the runner's instruction and every attempt re-runs it on the same
-    event, and the `wake` job needs it to succeed, so this can't miss a
-    session. Then a `wake` job counts when it wasn't skipped, isn't waiting for
+    Only a run with a `gate` job that succeeded can count: the `wake` job
+    needs the gate to succeed, and the gate runs only for the runner's
+    instruction. The `wake` job also runs only on a run's first attempt
+    (`run_attempt == 1`), and gates are pooled across attempts here, so a
+    later attempt can't hide the first one's session. Then a `wake` job counts when it wasn't skipped, isn't waiting for
     approval, and hadn't completed before the lookback. In flight, a gate that
     hasn't finished (or a wake job not there yet) is read again; still so
     after GATE_READS, or at the deadline, it counts as a session (_Unknown)."""
@@ -542,7 +558,7 @@ PENDING = (f"if a wake session ran inside the sweep's lookback, or that can't be
            "is disabled after this post; check whether it is")
 
 
-def _incomplete(env, transport, now, findings: list[str], monotonic) -> bool:
+def _incomplete(env, transport, now, findings: list[str], monotonic, sleep=time.sleep) -> bool:
     """The owner's rule (2026-11-14) for an incomplete sweep without a bot
     finding: the escalation first, then the session check, then the disable
     if a session ran. A timeout can then miss the disable, never the post."""
@@ -550,7 +566,7 @@ def _incomplete(env, transport, now, findings: list[str], monotonic) -> bool:
         act(env, transport, findings + [f"{END_OF_WAKE}, so an incomplete sweep disables"], True)
         return True
     posted = act(env, transport, findings + [PENDING], False)
-    why = _wake_session(env, transport, now, monotonic)
+    why = _wake_session(env, transport, now, monotonic, sleep)
     if why is None:
         print("tripwire: no wake session in the lookback; not disabled")
         return posted
@@ -598,7 +614,7 @@ def describe(e: Incomplete) -> str:
     return f"the sweep is incomplete: {what}; check by hand"
 
 
-def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
+def cmd_sweep(env, transport, now, monotonic=time.monotonic, sleep=time.sleep) -> int:
     if not _digits(env.get("OPERATOR_BOT_USER_ID")):
         # Nothing can be attributed without the bot's ID: say so (best effort), then fail the job.
         act(env, transport, ["OPERATOR_BOT_USER_ID isn't set; nothing was checked this run"], False)
@@ -623,7 +639,7 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
         print("tripwire: sweep clean")
         seen = True
     elif incomplete and not disable:
-        seen = _incomplete(env, transport, now, findings, monotonic)
+        seen = _incomplete(env, transport, now, findings, monotonic, sleep)
     else:
         seen = act(env, transport, findings, disable) or disable
     if failed:
@@ -633,7 +649,7 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
     return 0
 
 
-def main(argv=None, env=None, transport=None, clock=None, monotonic=None) -> int:
+def main(argv=None, env=None, transport=None, clock=None, monotonic=None, sleep=None) -> int:
     env = dict(os.environ if env is None else env)
     argv = sys.argv[1:] if argv is None else argv
     if transport is None:  # pragma: no cover - network
@@ -644,7 +660,8 @@ def main(argv=None, env=None, transport=None, clock=None, monotonic=None) -> int
     if argv == ["sweep"]:
         if not env.get("GITHUB_REPOSITORY"):
             raise SystemExit("tripwire: GITHUB_REPOSITORY isn't set")
-        return cmd_sweep(env, transport, (clock or (lambda: datetime.now(timezone.utc)))(), monotonic or time.monotonic)
+        return cmd_sweep(env, transport, (clock or (lambda: datetime.now(timezone.utc)))(), monotonic or time.monotonic,
+                         sleep or time.sleep)
     raise SystemExit("usage: tripwire.py trip|sweep")
 
 
