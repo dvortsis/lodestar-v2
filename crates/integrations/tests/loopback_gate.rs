@@ -137,6 +137,8 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
         format!("http://localhost:{p}/"),
         format!("http://svc.test:{p}/"),
         format!("http://127.0.0.2:{p}/"),
+        // A name that doesn't resolve now, on a refused port.
+        format!("http://nowhere.test:{p}/"),
     ] {
         assert_eq!(get(&c, &url).await, Err(NetError::NotReady), "{url}");
     }
@@ -183,23 +185,29 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
 }
 
 /// `without_loopback_gate` is for the companions' own client alone: no
-/// other source file in the workspace calls it.
+/// other source file in the workspace names it, in any form of call.
 #[test]
 fn only_the_companions_client_opts_out_of_the_gate() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut callers = Vec::new();
-    let mut stack = vec![root.join("crates")];
+    let mut stack = vec![root.join("crates"), root.join("fuzz"), root.join("tools")];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if path.file_name().is_some_and(|n| n == "target") {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n == "target" || n == "node_modules")
+                {
                     continue;
                 }
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
-                if text.contains(".without_loopback_gate(") {
+                if text.contains("without_loopback_gate") {
                     let rel = path
                         .strip_prefix(&root)
                         .unwrap()
@@ -215,6 +223,7 @@ fn only_the_companions_client_opts_out_of_the_gate() {
         callers,
         [
             "crates/companions/src/detect/mod.rs",
+            "crates/integrations/src/net.rs",
             "crates/integrations/tests/loopback_gate.rs"
         ],
         "a new caller of without_loopback_gate needs the runner's agreement"

@@ -29,8 +29,8 @@
 //! - **The loopback gate** ([`set_loopback_gate`], X-cmp09-fix-2): once
 //!   set, a connection to a loopback address on a port the gate refuses
 //!   fails with [`NetError::NotReady`] before anything is sent: a literal
-//!   address or a name that resolves to loopback, on every request and
-//!   every connection, redirects included.
+//!   address or a name that resolves to loopback, checked on every request
+//!   (redirects included) and every new connection a request makes.
 //! - **No URL in any error or log.** URLs can carry tokens (Discord webhooks
 //!   do), so errors name only the address class; [`redact`] gives a safe
 //!   form for logs.
@@ -779,9 +779,11 @@ impl GuardedClient {
         if !loopback_gate::allows(port) {
             let loopback = match literal {
                 Some(ip) => classify(ip) == AddrClass::Loopback,
+                // A name that doesn't resolve now is refused too: it could
+                // only have failed anyway, and nothing is left to chance.
                 None => {
                     local_name_class(host) == Some(AddrClass::Loopback)
-                        || self.resolver.resolve(host).await.is_ok_and(|addrs| {
+                        || self.resolver.resolve(host).await.map_or(true, |addrs| {
                             addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback)
                         })
                 }

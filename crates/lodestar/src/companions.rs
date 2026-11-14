@@ -311,7 +311,8 @@ async fn start_with(
     // `CompanionHttp`'s own loopback client applies its finer rule instead.
     // Set once per process; a later start in the same process (tests)
     // keeps the first.
-    let _ = lodestar_integrations::net::set_loopback_gate(Arc::new(ReadyPorts(bindings.clone())));
+    let gate = Arc::new(ReadyPorts::new(bindings.clone()));
+    let _ = lodestar_integrations::net::set_loopback_gate(gate.clone());
     let http = CompanionHttp::new()
         .ok()
         .map(|h| Arc::new(h.with_bindings(bindings.clone())));
@@ -374,12 +375,30 @@ async fn start_with(
     }
     let mut tasks = Vec::new();
     if wiring.supervised.get().is_some() {
+        // Each port held by the gate from now, while its companion waits
+        // its turn, as once it's started.
+        let ports: Vec<(CompanionId, Option<u16>)> = started
+            .into_iter()
+            .map(|id| {
+                let port = loopback_port(catalogue, &id);
+                if let Some(p) = port {
+                    gate.expect(p);
+                }
+                (id, port)
+            })
+            .collect();
         // One at a time, in the background: each waits for its health.
         // A failure is logged by the manager (step `start`).
         let m = manager.clone();
+        let gate = gate.clone();
         tasks.push(tokio::spawn(async move {
-            for id in started {
+            for (id, port) in ports {
                 let _ = m.start(&id).await;
+                // Started, it's the bindings' now; not started, it's no
+                // companion's.
+                if let Some(p) = port {
+                    gate.settle(p);
+                }
             }
         }));
     }
@@ -425,12 +444,55 @@ async fn start_with(
 /// The process's loopback gate (X-cmp09-fix-2): a port Lodestar runs a
 /// companion on is allowed only while that companion is ready; every
 /// other port always.
-struct ReadyPorts(Arc<Bindings>);
+///
+/// A port whose companion is queued to start at serve is held too, from
+/// before its turn until its start is done.
+struct ReadyPorts {
+    bindings: Arc<Bindings>,
+    expected: std::sync::Mutex<std::collections::HashSet<u16>>,
+}
+
+impl ReadyPorts {
+    fn new(bindings: Arc<Bindings>) -> ReadyPorts {
+        ReadyPorts {
+            bindings,
+            expected: std::sync::Mutex::default(),
+        }
+    }
+
+    fn expected(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<u16>> {
+        self.expected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A companion will be started on `port`: held until [`settle`].
+    fn expect(&self, port: u16) {
+        self.expected().insert(port);
+    }
+
+    /// Its start is done: the bindings decide from here.
+    fn settle(&self, port: u16) {
+        self.expected().remove(&port);
+    }
+}
 
 impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
     fn allow(&self, port: u16) -> bool {
-        !self.0.managed(port) || self.0.ready(port)
+        if self.bindings.managed(port) {
+            self.bindings.ready(port)
+        } else {
+            !self.expected().contains(&port)
+        }
     }
+}
+
+/// The loopback port a catalogue companion is reached on, as the manager
+/// starts it: its health check's port.
+fn loopback_port(catalogue: &Catalogue, id: &CompanionId) -> Option<u16> {
+    let entry = catalogue.get(id.as_str())?;
+    let health = entry.health.as_ref()?;
+    Some(entry.port(health.port.as_str())?.number.get())
 }
 
 /// The supervisor in its sandbox, with the guarded client, and CMP-8b's
@@ -3492,7 +3554,7 @@ mod tests {
     fn the_gate_refuses_a_companions_port_until_ready() {
         use lodestar_integrations::net::LoopbackGate;
         let bindings = Arc::new(Bindings::new());
-        let gate = ReadyPorts(bindings.clone());
+        let gate = ReadyPorts::new(bindings.clone());
         assert!(gate.allow(8080));
         let (_tx, rx) = tokio::sync::watch::channel(lodestar_companions::supervise::Status {
             state: lodestar_companions::supervise::State::Running,
@@ -3503,6 +3565,16 @@ mod tests {
         });
         assert!(bindings.hold(8080, rx));
         assert!(!gate.allow(8080) && gate.allow(9696));
+        // A port whose companion waits its turn to start is held too, until
+        // its start is done.
+        gate.expect(9696);
+        assert!(!gate.allow(9696));
+        gate.settle(9696);
+        assert!(gate.allow(9696));
+        // The catalogue's ports, as the manager starts them.
+        let cat = lodestar_companions::builtin().unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        assert_eq!(loopback_port(cat, &qbt), Some(8080));
     }
 
     /// At serve, a native run hands the manager a supervisor, and shutdown
