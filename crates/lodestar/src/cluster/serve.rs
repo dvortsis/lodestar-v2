@@ -327,6 +327,8 @@ pub(crate) struct FloorReports {
     held: Option<Arc<lodestar_filter::HeldSet>>,
     /// [`FLOOR_PENDING_CAP`], smaller in tests.
     cap: usize,
+    /// [`LAPSED_CAP`], smaller in tests.
+    lapsed_cap: usize,
     /// Held across a whole flush and a revoke's purge, so a purge never
     /// lands while a batch it should cover is being written.
     writing: Mutex<()>,
@@ -338,6 +340,9 @@ pub(crate) struct FloorReports {
     /// Revoked workers whose written reports are still to be deleted (a
     /// purge that failed): every flush tries them first.
     to_purge: Mutex<std::collections::BTreeSet<u32>>,
+    /// Keys whose worker report lapsed, with that worker
+    /// ([`LAPSED_CAP`] at most, oldest out).
+    lapsed: Mutex<Lapsed>,
     wake: tokio::sync::Notify,
     /// Reports taken, rows written, writes that failed (kept), reports
     /// over a worker's budget (dropped), and reports the full map turned
@@ -369,6 +374,61 @@ enum Reported {
     TurnedAway,
     /// From a revoked worker: dropped, nothing held.
     Revoked,
+    /// From the worker whose own report of the key lapsed: dropped,
+    /// nothing held, no budget slot used.
+    Lapsed,
+}
+
+/// Keys whose worker report lapsed, each with the worker whose it was, in
+/// the order they lapsed. A key lapsing again moves to the back under its
+/// new worker.
+#[derive(Debug, Default)]
+struct Lapsed {
+    by_key: HashMap<[u8; 20], (u32, u64)>,
+    /// `(key, seq)` oldest first; an entry whose seq no longer matches
+    /// `by_key` was replaced or cleared.
+    order: std::collections::VecDeque<([u8; 20], u64)>,
+    next: u64,
+}
+
+impl Lapsed {
+    fn insert(&mut self, key: [u8; 20], worker: u32, cap: usize) {
+        let seq = self.next;
+        self.next += 1;
+        self.by_key.insert(key, (worker, seq));
+        self.order.push_back((key, seq));
+        while self.by_key.len() > cap {
+            let Some((k, q)) = self.order.pop_front() else {
+                break;
+            };
+            if self.by_key.get(&k).is_some_and(|e| e.1 == q) {
+                self.by_key.remove(&k);
+            }
+        }
+        self.compact(cap);
+    }
+
+    /// Whether `key` lapsed last from `worker`'s report.
+    fn from(&self, key: &[u8; 20], worker: u32) -> bool {
+        self.by_key.get(key).is_some_and(|e| e.0 == worker)
+    }
+
+    fn clear_worker(&mut self, worker: u32, cap: usize) {
+        self.by_key.retain(|_, e| e.0 != worker);
+        self.compact(cap);
+    }
+
+    /// Drops `order`'s stale entries once they outnumber the live ones,
+    /// so it stays within about twice the map.
+    fn compact(&mut self, cap: usize) {
+        if self.by_key.is_empty() {
+            self.order.clear();
+        } else if self.order.len() > 2 * self.by_key.len().max(cap.min(1024)) {
+            let by_key = &self.by_key;
+            self.order
+                .retain(|(k, q)| by_key.get(k).is_some_and(|e| e.1 == *q));
+        }
+    }
 }
 
 /// A worker's floor reports per rolling window before it's paused. An
@@ -378,6 +438,9 @@ pub(crate) const FLOOR_BUDGET: usize = 100;
 pub(crate) const FLOOR_WINDOW: Duration = Duration::from_secs(3600);
 /// Reports the map holds at most (about 5 MB).
 pub(crate) const FLOOR_PENDING_CAP: usize = 100_000;
+/// Lapsed keys [`FloorReports`] remembers the worker of, at most (about
+/// 4 MB); past it the oldest is forgotten.
+pub(crate) const LAPSED_CAP: usize = 65_536;
 
 impl Default for FloorReports {
     fn default() -> FloorReports {
@@ -391,6 +454,14 @@ impl FloorReports {
     }
 
     fn with_cap(held: Option<Arc<lodestar_filter::HeldSet>>, cap: usize) -> FloorReports {
+        FloorReports::with_caps(held, cap, LAPSED_CAP)
+    }
+
+    fn with_caps(
+        held: Option<Arc<lodestar_filter::HeldSet>>,
+        cap: usize,
+        lapsed_cap: usize,
+    ) -> FloorReports {
         FloorReports {
             pending: Mutex::default(),
             recent: Mutex::default(),
@@ -400,6 +471,8 @@ impl FloorReports {
             revoked: Mutex::default(),
             to_release: Mutex::default(),
             to_purge: Mutex::default(),
+            lapsed: Mutex::default(),
+            lapsed_cap,
             wake: tokio::sync::Notify::new(),
             reported: AtomicU64::new(0),
             written: AtomicU64::new(0),
@@ -411,6 +484,16 @@ impl FloorReports {
 
     fn pending(&self) -> std::sync::MutexGuard<'_, BTreeMap<[u8; 20], Report>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lapsed(&self) -> std::sync::MutexGuard<'_, Lapsed> {
+        self.lapsed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether `key`'s last lapsed report was `worker`'s. The built-in
+    /// worker never reports, so it's never one.
+    pub(crate) fn lapsed_from(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        worker != WorkerId::LOCAL && self.lapsed().from(&key.0, worker.0)
     }
 
     fn recent(
@@ -436,6 +519,9 @@ impl FloorReports {
             .contains(&worker.0)
         {
             return Reported::Revoked;
+        }
+        if self.lapsed().from(&key.0, worker.0) {
+            return Reported::Lapsed;
         }
         let q = recent.entry(worker.0).or_default();
         while q
@@ -493,6 +579,7 @@ impl FloorReports {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(worker.0);
         recent.remove(&worker.0);
+        self.lapsed().clear_worker(worker.0, self.lapsed_cap);
         let mut pending = self.pending();
         let mut dropped = Vec::new();
         pending.retain(|k, r| {
@@ -569,6 +656,22 @@ impl FloorReports {
         let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let mut store = Store::open(db, config)?;
         let gone = store.expire_worker_floor(now.saturating_sub(WORKER_FLOOR_HOLD_SECS))?;
+        {
+            // Under `recent`, as `forget_worker` marks a worker revoked and
+            // clears its keys there: a revoke either comes after and clears
+            // these, or came before, and its rows are skipped.
+            let _recent = self.recent();
+            let revoked = self.revoked.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut lapsed = self.lapsed();
+            for (k, w) in &gone {
+                // A revoked worker's rows lapse only after a failed purge;
+                // its id never comes back.
+                if let Some(w) = w.filter(|w| !revoked.contains(w)) {
+                    lapsed.insert(*k, w, self.lapsed_cap);
+                }
+            }
+        }
+        let gone: Vec<[u8; 20]> = gone.into_iter().map(|(k, _)| k).collect();
         self.release_held(&store, &gone);
         Ok(gone.len())
     }
@@ -892,6 +995,10 @@ impl StoredKeys for StoreCheck {
 
     fn key_checks(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
         self.check_with(keys, || {})
+    }
+
+    fn excludes(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        self.floor.lapsed_from(worker, key)
     }
 }
 
@@ -3387,6 +3494,121 @@ mod tests {
         floor.report(WorkerId(5), &key_n(1), end + 2, Instant::now());
         assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
         assert_eq!(check(), vec![KeyCheck::Held]);
+    }
+
+    /// Writes each `(key, worker)` report at `at` and lets them lapse.
+    fn lapse(floor: &FloorReports, db: &std::path::Path, reports: &[(usize, u32)], at: i64) {
+        for &(k, w) in reports {
+            assert_eq!(
+                floor.report(WorkerId(w), &key_n(k), at, Instant::now()),
+                Reported::Taken
+            );
+        }
+        assert_eq!(
+            floor.flush(db, StoreConfig::default()).unwrap(),
+            reports.len()
+        );
+        assert_eq!(
+            floor
+                .expire(db, StoreConfig::default(), at + WORKER_FLOOR_HOLD_SECS + 1)
+                .unwrap(),
+            reports.len()
+        );
+    }
+
+    /// Once a worker's report lapses, the store check excludes the key for
+    /// that worker only: another worker and the built-in one may have it,
+    /// and that worker's own report of it is refused while another's is
+    /// taken.
+    #[test]
+    fn a_lapsed_key_is_excluded_for_its_worker_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = Arc::new(FloorReports::new(None));
+        lapse(&floor, &db, &[(1, 4)], 1_000_000);
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+            floor: floor.clone(),
+            filter: None,
+        };
+        let keys = [key_n(1), key_n(2)];
+        assert_eq!(check.key_checks(&keys), vec![KeyCheck::Free; 2]);
+        let excluded = |w: WorkerId| {
+            keys.iter()
+                .map(|k| check.excludes(w, k))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(excluded(WorkerId(4)), vec![true, false]);
+        assert_eq!(excluded(WorkerId(5)), vec![false, false]);
+        assert_eq!(excluded(WorkerId::LOCAL), vec![false, false]);
+        let now = Instant::now();
+        assert_eq!(
+            floor.report(WorkerId(4), &key_n(1), 2_000_000, now),
+            Reported::Lapsed
+        );
+        assert_eq!(floor.len(), 0, "nothing held");
+        assert_eq!(
+            floor.report(WorkerId(5), &key_n(1), 2_000_000, now),
+            Reported::Taken
+        );
+    }
+
+    /// A key that lapses again follows its newest worker, and a revoke
+    /// clears its worker's lapsed keys only.
+    #[test]
+    fn lapsed_keys_follow_their_newest_worker_and_a_revoke_clears_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let at = 1_000_000;
+        lapse(&floor, &db, &[(1, 4), (2, 4), (3, 5)], at);
+        lapse(&floor, &db, &[(1, 6)], at + 2 * WORKER_FLOOR_HOLD_SECS);
+        let from = |w: u32, k: usize| floor.lapsed_from(WorkerId(w), &key_n(k));
+        assert!(!from(4, 1) && from(6, 1));
+        assert!(from(4, 2) && from(5, 3));
+        floor
+            .revoke(WorkerId(4), &db, StoreConfig::default())
+            .unwrap();
+        assert!(!from(4, 2), "cleared");
+        assert!(from(5, 3) && from(6, 1), "another worker's stay");
+    }
+
+    /// The lapsed keys are bounded, oldest out, and forgetting one never
+    /// excludes it, or any other key, for a different worker.
+    #[test]
+    fn lapsed_keys_are_bounded_oldest_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::with_caps(None, FLOOR_PENDING_CAP, 2);
+        let at = 1_000_000;
+        lapse(&floor, &db, &[(1, 4)], at);
+        lapse(&floor, &db, &[(2, 5)], at + 2 * WORKER_FLOOR_HOLD_SECS);
+        lapse(&floor, &db, &[(3, 6)], at + 4 * WORKER_FLOOR_HOLD_SECS);
+        let from = |w: u32, k: usize| floor.lapsed_from(WorkerId(w), &key_n(k));
+        assert!(!from(4, 1), "the oldest went");
+        assert!(from(5, 2) && from(6, 3));
+        for w in [4, 5, 6, 7] {
+            for k in 1..=3 {
+                assert_eq!(
+                    from(w, k),
+                    (w, k) == (5, 2) || (w, k) == (6, 3),
+                    "worker {w}, key {k}"
+                );
+            }
+        }
+        // Many more stay within the bound.
+        let mut lapsed = Lapsed::default();
+        for i in 0..10_000u32 {
+            let mut k = [0; 20];
+            k[..4].copy_from_slice(&i.to_be_bytes());
+            lapsed.insert(k, i % 3, 64);
+            if i % 7 == 0 {
+                lapsed.clear_worker(i % 3, 64);
+            }
+            assert!(lapsed.by_key.len() <= 64);
+            assert!(lapsed.order.len() <= 2 * 64 + 1);
+        }
     }
 
     /// A revoke drops the worker's reports not written yet and deletes its
