@@ -88,7 +88,7 @@ impl Bin {
         let dir = data_dir.join("bin");
         match fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir_all(data_dir)?;
+                crate::data_dir::ensure(data_dir)?;
                 #[cfg(unix)]
                 let builder = {
                     let mut b = fs::DirBuilder::new();
@@ -710,6 +710,15 @@ mod tests {
         std::os::unix::fs::symlink(elsewhere.path(), other.path().join("bin")).unwrap();
         assert!(Bin::open(other.path()).is_err());
         assert!(Bin::existing(other.path()).is_err());
+    }
+
+    #[test]
+    fn a_missing_data_folder_is_created_owner_only() {
+        let base = tempfile::tempdir().unwrap();
+        let data = base.path().join("data");
+        Bin::open(&data).unwrap();
+        let mode = fs::metadata(&data).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "mode {:o}", mode & 0o777);
     }
 
     #[test]
