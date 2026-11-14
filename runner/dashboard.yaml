@@ -731,6 +731,7 @@ placement:
   - X-filter01-fix
   - X-filter03-fix
   - X-apifeat01-fix
+  - X-metainfo01-fix
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small

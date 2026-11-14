@@ -1,0 +1,25 @@
+# X-metainfo01-fix decisions
+
+Fixes Track Q item METAINFO-01 (blocking; component: the metainfo parser). This PR adds a combined resource bound on parsed file trees. The detail stays held under `docs/security/v1/README.md` §5. Only `crates/metainfo` changes, plus its fuzz target and seeds. `Info`'s public API is unchanged, no caller changes, and no owner-set number moves.
+
+- **A combined bound on the whole file tree, not only on each path.** `Limits` gains two fields: **`max_total_path_segments` (default 2,000,000)** and **`max_total_path_bytes` (default 32 MiB)**. They're summed over every path the parse stores and every symlink target: the `path.utf-8` when one is used, padding files' stand-in path and a single file's name. That covers v1 lists, single files and v2 trees. Each view of a hybrid is charged on its own.
+  - **When the budget is charged:** as each file is read, before its path is built. Text conversion can grow a path, so the budget is charged again file by file on the resolved paths.
+  - **Over the budget:** the parse returns the existing `Error::LimitExceeded` (`"total path segments"` or `"total path bytes"`), never a partial `Info`.
+  - **What callers see:** the fetch pipeline already maps every parse error to the `invalid` loss, as it does for the other limit errors, so no caller changes. `.torrent` parsing and the torrent-cache plugin's `LIMITS` (`..Limits::DEFAULT`) pick the new defaults up as they are.
+- **Why these defaults.** A large real torrent, 200,000 files (the file-count limit) of 8 segments and 100 path bytes each, costs 1.6M segments and 20 MB, so it parses with room to spare (`large_realistic_torrent_parses_within_bounds`). The segment budget equals the bencode item budget (`max_items`). A v1 list can't exceed it anyway, because each of its segments is an item, so the new cap only binds where segments aren't items in the input.
+- **Memory figure: under 450 MiB per parse, about half the 1 GB RSS budget (architecture §3).** These are peaks of the whole test process (binary and input included), measured on Linux with the workspace's optimised test profile:
+  - the large realistic torrent: about 310 MiB;
+  - a tree just inside both budgets (2,000,000 segments, 32,000,000 bytes): about 350–370 MiB;
+  - every v2 depth and name-length mix up to the per-path limits at 200,000 files, and v1 lists at the item budget: at most about 340 MiB, whether they parse or are refused.
+
+  Bencode's own decode cost is bounded by the item budget (about 90 MB at 2M items) and is live during the parse, so it's inside those figures for the shapes measured. An input that maxed the item budget as well as both path budgets would add at most about that much, so the worst case is estimated under 450 MiB. The tests assert **512 MiB** for every shape. Concurrent parses add up, one such peak each. What downstream stages (prepare, enrichment) spend wasn't measured here; they only handle what an `Info` holds, which is now bounded.
+- **Directory prefixes aren't shared.** `File::path` is `Vec<Vec<u8>>` in the public API, so every file in the result owns its full path whatever the parser does inside. Sharing would only shrink the parser's temporary per-file lists, about 16 bytes a segment, so the budget is what bounds the cost. Revisit if `Info`'s API ever changes.
+- **Memory is measured as peak RSS, not with a counting allocator.** The workspace forbids `unsafe` (`Cargo.toml`), and a global allocator can't be written without it. `tests/bound.rs` resets Linux's high-water mark (`/proc/self/clear_refs`), reads `VmHWM` after each parse, and runs its tests one at a time. The absolute peak can only overstate the parse. Other platforms check results and time only; Linux CI runs the memory checks. The time ceiling is 60 s per parse, so the slowest runner passes; measured parses take under 0.6 s.
+- **Tests:**
+  - `tests/bound.rs` sweeps v2 trees over depth and directory-name length up to the per-path limits at the file-count limit, and v1 lists at the item budget. Each case must parse or be refused with the budget that runs out first, and stay within both ceilings. It also parses a realistic large torrent and a tree at the full budget.
+  - `tests/info.rs` checks each layout at its exact cost and one under (v1, single file, v2, hybrid), the re-check after decoding, and the new seeds.
+  - The exact-input regression test follows after the release, under §5.
+- **Fuzzing:**
+  - New metainfo seeds: a deep tree, a wide tree, a hybrid whose tree disagrees with its list, and a non-canonical dict.
+  - The `metainfo` target now also asserts the combined budget over every parsed result.
+  - **No fuzz dictionary.** CI's fuzz job passes none, so the layout doesn't support one yet. Adding one means changing `.github/workflows/ci.yml`, outside this slice.
