@@ -213,9 +213,16 @@ impl Bindings {
         if owner != Owner::Ours {
             // Readiness found before counts no longer: the port is ready
             // again only once its own listener is found again.
+            // Only for the run checked: an earlier run's late answer
+            // neither takes a later run's readiness nor speaks for it.
             if let Some(p) = self.ports().get_mut(&port).filter(|p| p.claim == claim) {
-                p.refusal = Some(owner.code());
-                p.ready = None;
+                let current = p.status.as_ref().and_then(up).map(|s| s.run);
+                if current == Some(run) {
+                    p.refusal = Some(owner.code());
+                }
+                if p.ready == Some(run) {
+                    p.ready = None;
+                }
             }
             return false;
         }
@@ -231,6 +238,20 @@ impl Bindings {
         if let Some(p) = self.ports().get_mut(&port) {
             p.ready = None;
         }
+    }
+
+    /// After a change that may have moved its listener: `port` is not ready
+    /// until `healthy` (a health check that ends in [`Bindings::try_ready`])
+    /// finds it so again. A check that fails before the listener is looked
+    /// at leaves it not ready too. What
+    /// [`Supervised`](crate::manager::Supervised)'s `recheck` does.
+    pub async fn recheck(
+        &self,
+        port: u16,
+        healthy: impl std::future::Future<Output = bool>,
+    ) -> bool {
+        self.unready(port);
+        healthy.await && self.ready(port)
     }
 
     /// One whose listener check is `check`, for tests of what a check's
@@ -471,5 +492,43 @@ mod tests {
         b.unready(8080);
         assert!(!b.ready(8080));
         assert!(b.try_ready(8080, || async { true }).await);
+    }
+
+    /// A recheck takes readiness away first: a health check that fails
+    /// before the listener is looked at leaves the port not ready.
+    #[tokio::test]
+    async fn a_recheck_whose_health_fails_leaves_the_port_not_ready() {
+        let b = with_owner(Owner::Ours);
+        let (_tx, rx) = watch::channel(running(1, Some(40)));
+        assert!(b.hold(8080, rx));
+        assert!(b.try_ready(8080, || async { true }).await);
+        assert!(!b.recheck(8080, async { false }).await);
+        assert!(!b.ready(8080));
+        // Found again: ready.
+        assert!(b.recheck(8080, b.try_ready(8080, || async { true })).await);
+        assert!(b.ready(8080));
+    }
+
+    /// An earlier run's late refusal takes nothing from a later run that
+    /// was found ready meanwhile.
+    #[tokio::test]
+    async fn an_earlier_runs_refusal_leaves_a_later_run_ready() {
+        let b = Arc::new(with_owner(Owner::Other));
+        let (tx, rx) = watch::channel(running(1, Some(40)));
+        assert!(b.hold(8080, rx));
+        let later = Arc::clone(&b);
+        // Held here, so the run's status stays supervised.
+        let tx = &tx;
+        let got = b
+            .try_ready(8080, || async move {
+                // Run 2 starts, and is found ready, while run 1 is checked.
+                tx.send_replace(running(2, Some(41)));
+                later.mark_ready(8080, 2);
+                true
+            })
+            .await;
+        assert!(!got);
+        assert_eq!(b.ready_run(8080), Some(2));
+        assert!(b.ready(8080) && b.refusal(8080).is_none());
     }
 }

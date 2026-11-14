@@ -1349,6 +1349,15 @@ impl Run for NotWired {
     fn stop<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }
+    fn ready_run(&self, _: &CompanionId) -> Option<u64> {
+        None
+    }
+    fn recheck<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+    fn refusal(&self, _: &CompanionId) -> Option<&'static str> {
+        None
+    }
 }
 
 /// [`Net`], counting what's asked for.
@@ -2512,4 +2521,43 @@ async fn a_configuration_is_followed_by_a_fresh_readiness_check() {
             assert!(!bindings.ready(port));
         }
     }
+}
+
+/// X-cmp09-fix: a restart's configuration (`configure_now`, as the
+/// follow's and a regenerate's are) is followed by a fresh check too: a
+/// listener found to be another's then fails the restart's configure step.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarts_configuration_is_followed_by_a_fresh_check() {
+    use lodestar_companions::supervise::listener::Owner;
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let port = 8080;
+    let asked = Arc::new(AtomicUsize::new(0));
+    let n = Arc::clone(&asked);
+    // The install's two checks and the restart's start check are ours;
+    // the one after the restart's configuration isn't.
+    let bindings = Arc::new(Bindings::with_owner_check(move |_, _| {
+        if n.fetch_add(1, Ordering::SeqCst) < 3 {
+            Owner::Ours
+        } else {
+            Owner::Other
+        }
+    }));
+    *w.run.bound.lock().unwrap() = Some((bindings.clone(), port));
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    let got = m.restart(&qbt()).await.unwrap().finished().await;
+    assert!(
+        matches!(
+            &got,
+            Err(ManagerError::Step {
+                step: "configure",
+                code: "listener_not_ours"
+            })
+        ),
+        "{got:?}"
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 4);
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), 2);
+    assert!(!bindings.ready(port));
 }

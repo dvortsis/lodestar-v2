@@ -317,24 +317,19 @@ pub trait Run: Send + Sync {
     fn status(&self, _id: &CompanionId) -> Option<watch::Receiver<Status>> {
         None
     }
+    // The three below have no default: a runner that wraps another (serve's
+    // `Wiring`) can't leave one out and fall back to a permissive answer.
     /// The run ([`Status::run`]) its last passed health check found ready,
-    /// which the manager's follow starts from. By default the run current
-    /// now, for a runner that doesn't tie readiness to a run.
-    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
-        self.status(id).map(|s| s.borrow().run)
-    }
+    /// which the manager's follow starts from.
+    fn ready_run(&self, id: &CompanionId) -> Option<u64>;
     /// After a configuration, which may move the companion's listener:
-    /// readiness is found again before anything else is sent. Nothing to
-    /// do, by default, for a runner that doesn't tie readiness to a port.
-    fn recheck<'a>(&'a self, _id: &'a CompanionId, _target: &'a Target) -> BoxFuture<'a, bool> {
-        Box::pin(async { true })
-    }
+    /// readiness is found again, listener and all, before anything else is
+    /// sent. False when it isn't, or the companion isn't running.
+    fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool>;
     /// Why its last readiness check failed, when the listener check said
     /// so: a code for the log (`listener_not_ours`, `listener_missing`,
     /// `listener_unverified`).
-    fn refusal(&self, _id: &CompanionId) -> Option<&'static str> {
-        None
-    }
+    fn refusal(&self, id: &CompanionId) -> Option<&'static str>;
 }
 
 /// Configuring an installed companion through its API (CMP-8b); [`Api`]
@@ -2753,13 +2748,14 @@ impl Run for Supervised {
     /// all ([`Run::recheck`]).
     fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
         Box::pin(async move {
-            let port = self.running().get(id).and_then(|r| r.port);
+            // Not running: nothing to find ready.
+            let Some(port) = self.running().get(id).map(|r| r.port) else {
+                return false;
+            };
             match self.bindings.as_ref().zip(port) {
-                Some((b, p)) => {
-                    b.unready(p);
-                    self.healthy(id, target).await
-                }
-                None => true,
+                Some((b, p)) => b.recheck(p, self.healthy(id, target)).await,
+                // No ports tied to runs (tests of other things): its health.
+                None => self.healthy(id, target).await,
             }
         })
     }
