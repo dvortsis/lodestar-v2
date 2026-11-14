@@ -42,6 +42,7 @@ pub fn ensure(dir: &Path) -> io::Result<bool> {
 }
 
 /// What the start does with an existing data folder.
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     /// Owner-only already: nothing to do.
@@ -54,6 +55,7 @@ pub enum Action {
 
 /// The decision for a folder with permission bits `mode`, owned by `owner`,
 /// when Lodestar runs as `euid`.
+#[cfg(unix)]
 pub fn action(mode: u32, owner: u32, euid: u32) -> Action {
     match (mode & 0o077 == 0, owner == euid) {
         (true, _) => Action::Keep,
@@ -137,6 +139,7 @@ mod tests {
         assert!(!ensure(&dir).unwrap());
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_an_open_folder_lodestars_user_owns_is_tightened() {
         assert_eq!(action(0o700, 7, 7), Action::Keep);
