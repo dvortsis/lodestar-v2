@@ -773,7 +773,7 @@ pinned:
   i9-stage2: ws-small
   openapi-example-size: ws-small
 held:
-- X-rejudge-pending-gate  # owner-decisions §2.71: not wanted for now; revisit only if the re-judge proves much slower than expected
+- X-rejudge-pending-gate  # held (owner-decisions §2.71)
 - PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
 - E-v06-sources
