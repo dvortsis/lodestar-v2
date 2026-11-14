@@ -750,6 +750,13 @@ placement:
   - X-fixed-sleep-nits
   - X-cluster06-fix
   - X-metainfo01-fix
+  - X-filter02-fix
+  - X-rollback-scrub-fix
+  - X-dht01-fix
+  - X-search01-fix
+  - X-pipe01-fix
+  - X-writer-panic-fix
+  - X-cmp01-fix
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -1525,6 +1532,13 @@ roadmap:
     - X-filter14-fix
     - X-filter12-fix
     - X-metainfo01-fix
+    - X-filter02-fix
+    - X-rollback-scrub-fix
+    - X-dht01-fix
+    - X-search01-fix
+    - X-pipe01-fix
+    - X-writer-panic-fix
+    - X-cmp01-fix
     - X-cluster06-fix
   arrows:
   - - soak
