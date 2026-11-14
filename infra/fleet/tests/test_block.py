@@ -60,7 +60,7 @@ case "$1" in
     esac ;;
   image) [ "$*" = "image inspect -f {{.Id}} sha256:$LOCAL_ID" ] || bad "$*"
          [ -n "$LOCAL_MISSING" ] && exit 1; echo "sha256:$LOCAL_ID" ;;
-  restart) [ "$*" = "restart -t 60 lodestar" ] || bad "$*"
+  restart) [ "$*" = "restart -t 30 lodestar" ] || bad "$*"
            # A restarted Lodestar joins gluetun's namespace (RESTART_STALE: it doesn't).
            [ -n "$RESTART_STALE" ] || ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net"
            : > "$STUB/lodestar_restarted" ;;

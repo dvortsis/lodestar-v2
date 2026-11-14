@@ -402,7 +402,7 @@ same_netns() {
 lodestar_follows_gluetun() {
   running lodestar || return 0
   same_netns && return 0
-  timeout 120 docker restart -t 60 lodestar >/dev/null 2>&1 || return 1
+  timeout 75 docker restart -t 30 lodestar >/dev/null 2>&1 || return 1  # within start-block's budget (steps/run.py)
   same_netns
 }
 # The collector's Docker proxy (docker-proxy.cfg), rendered with the IDs of the

@@ -44,10 +44,12 @@ BUILT = {
     # The stop window (X-gluetun-guard-stop) adds up to about 7 minutes on a loaded host.
     "leak-test": {"files": ("leak-test.sh", "block-lib.sh", "compose.yaml"), "timeout": 900},
     # The leak test (900 s) runs inside it; then the pulls (300 + 120 + 120 s),
-    # Lodestar's start (240 s), the proxy (about 200 s), the API wait (180 s),
-    # the token (90 s), the collector's start (120 s), and the rest.
+    # Lodestar's start (240 s), a restart into gluetun's namespace if it's in an
+    # old one (75 s, and two 30 s inspects), the proxy (about 200 s), the API
+    # wait (180 s), the token (90 s) and the collector's start (120 s): about
+    # 2,405 s, and the rest. 2,455 s is the most the 45-minute session allows.
     "start-block": {"files": ("start-block.sh", "block-lib.sh", "leak-test.sh", "compose.yaml", "watcher.sh",
-                              "scrub.py", "docker-proxy.cfg"), "timeout": 2400},
+                              "scrub.py", "docker-proxy.cfg"), "timeout": 2455},
     # Up to 15 minutes' wait for the segment to end (WAIT_SECONDS), then the switch.
     "arm-switch": {"files": ("arm-switch.sh", "block-lib.sh", "compose.yaml", "watcher.sh", "docker-proxy.cfg"),
                    "timeout": 2100},

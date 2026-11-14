@@ -33,6 +33,7 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
   - The added worst case is about 7 minutes: stop 60 s, window 75 s, start 60 s, health 120 s, and the interface check's deadline with a probe in flight. A loaded host could push a whole run past 600 s.
   - start-block's inner limit on the leak test is raised from 600 to 900 s, within start-block's own 2,400 s.
   - The standalone leak-test step's limit in `steps/run.py` is raised from 600 to 900 s too. The runner widened this slice's owns to that one value.
+  - start-block's own limit goes from 2,400 to 2,455 s, the most the 45-minute session allows (the cap is unchanged; the runner's decision). To fit the new namespace restart under it, that restart is held to `timeout 75 docker restart -t 30`. The worst case then sums to about 2,405 s, which leaves about 50 s for the rest: a margin thinner than before, which the coordinator's loaded re-test should confirm.
 
 ## Data folder modes
 - **The problem:** Lodestar starts as root with only CHOWN, SETGID and SETUID (compose `cap_drop: ALL`), so root can't override file modes. On every start it opens `/data` to check the owner. A 0700 folder owned by 65532 refuses that on every start after the first: `PUID/PGID: opening /data: Permission denied`.
