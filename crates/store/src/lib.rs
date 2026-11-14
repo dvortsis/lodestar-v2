@@ -54,9 +54,10 @@ pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
-    CORE_AFTER_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY, FLOOR_RULES, FilterHit, FilterState, Filtered,
-    Held, HoldRow, KEPT_RULES, LATEST_HITS_CHUNK, Quarantined, Refiled, SHADOW, Tombstone,
-    WORKER_FLOOR_PREFIX, is_floor_hold, is_kept_hold,
+    CORE_AFTER_KEY, CORE_FOUND_KEY, CORE_HELD_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY,
+    CORE_UNREADABLE_KEY, CorePass, FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow,
+    KEPT_RULES, LATEST_HITS_CHUNK, Quarantined, Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX,
+    is_floor_hold, is_kept_hold,
 };
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};

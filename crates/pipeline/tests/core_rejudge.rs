@@ -14,7 +14,8 @@ use lodestar_metainfo::Info;
 use lodestar_pipeline::core_rejudge::{CoreRejudged, rejudge_stored};
 use lodestar_pipeline::enrich::Backfill;
 use lodestar_store::{
-    CORE_AFTER_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY, NewTorrent, SourceId, Store, StoreConfig,
+    CORE_AFTER_KEY, CORE_FOUND_KEY, CORE_HELD_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY,
+    CORE_UNREADABLE_KEY, CorePass, NewTorrent, SourceId, Store, StoreConfig,
 };
 
 fn add(store: &mut Store, name: &str) -> (i64, [u8; 20]) {
@@ -44,6 +45,12 @@ fn add(store: &mut Store, name: &str) -> (i64, [u8; 20]) {
         .unwrap()[0]
         .id();
     (id, store.torrent(id).unwrap().unwrap().info_hash.0)
+}
+
+/// `name` after more words than the earlier core read of a text, so it
+/// may have judged it in part and the re-judge reads it again.
+fn long(name: &str) -> String {
+    format!("{}{name}", "word ".repeat(130))
 }
 
 fn stand_in() -> Handle {
@@ -83,6 +90,9 @@ fn run(store: &mut Store, filter: &Handle, sealer: &Sealer, limit: usize) -> usi
     let mut batches = 0;
     while let (Some(b), _) = batch(store, filter, sealer, limit) {
         assert!(!b.rejected);
+        if b.finished {
+            break;
+        }
         batches += 1;
         assert!(batches < 100, "the re-judge ends");
     }
@@ -99,8 +109,10 @@ fn stored(store: &Store, id: i64) -> bool {
 fn a_store_judged_by_an_older_core_is_judged_again() {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let (filter, sealer) = (stand_in(), Sealer::new(&[9; 32]));
-    let (plain, _) = add(&mut store, "Another.Film.2001.1080p.mkv");
-    let (pair, pair_hash) = add(&mut store, "rolea lexa.mkv");
+    let (plain, _) = add(&mut store, &long("Another.Film.2001.1080p.mkv"));
+    let (pair, pair_hash) = add(&mut store, &long("rolea lexa.mkv"));
+    // Read whole by the earlier core, which judged it then: it stands.
+    let (short, _) = add(&mut store, "rolea lexa.mkv");
     // A file list that won't read can't be judged: held, never shown.
     let (unreadable, unreadable_hash) = add(&mut store, "Some.Show.S01E01.mkv");
     store
@@ -110,13 +122,16 @@ fn a_store_judged_by_an_older_core_is_judged_again() {
             [unreadable],
         )
         .unwrap();
-    assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), Some(0));
+    assert_eq!(
+        store.core_rejudge_due(CORE_VERSION).unwrap(),
+        Some(CorePass::default())
+    );
     let (first, marked) = batch(&mut store, &filter, &sealer, 10);
     let first = first.unwrap();
-    assert_eq!(first.judged, 3);
+    assert_eq!((first.judged, first.stood), (3, 1));
     assert_eq!(marked, first.held, "marked for intake before the write");
     assert!(first.held.contains(&pair_hash) && first.held.contains(&unreadable_hash));
-    assert!(stored(&store, plain));
+    assert!(stored(&store, plain) && stored(&store, short));
     assert!(!stored(&store, pair) && !stored(&store, unreadable));
     assert_eq!(
         store.quarantine_rule(&pair_hash).unwrap().as_deref(),
@@ -126,13 +141,36 @@ fn a_store_judged_by_an_older_core_is_judged_again() {
         store.quarantine_rule(&unreadable_hash).unwrap().as_deref(),
         Some("CS-0a")
     );
-    // The next batch finds nothing left, and records the version.
+    assert_eq!(
+        (first.before, first.after),
+        (
+            CorePass::default(),
+            CorePass {
+                after: unreadable,
+                found: 3,
+                held: 2,
+                unreadable: 1,
+            }
+        ),
+        "counts only, kept with the place"
+    );
+    // The next batch finds nothing left, records the version and reports
+    // the totals.
+    let last = batch(&mut store, &filter, &sealer, 10).0.unwrap();
+    assert!(last.finished);
+    assert_eq!(last.after, first.after);
     assert_eq!(batch(&mut store, &filter, &sealer, 10).0, None);
     assert_eq!(
         store.setting_i64(CORE_JUDGED_KEY).unwrap(),
         Some(CORE_VERSION)
     );
-    for key in [CORE_PASS_KEY, CORE_AFTER_KEY] {
+    for key in [
+        CORE_PASS_KEY,
+        CORE_AFTER_KEY,
+        CORE_FOUND_KEY,
+        CORE_HELD_KEY,
+        CORE_UNREADABLE_KEY,
+    ] {
         assert_eq!(store.setting_i64(key).unwrap(), None, "{key}");
     }
     assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), None);
@@ -150,14 +188,27 @@ fn a_restart_resumes_where_the_rejudge_stopped() {
     for i in 0..5 {
         ids.push(add(&mut store, &format!("Plain.Film.{i}.mkv")).0);
     }
-    let (pair, pair_hash) = add(&mut store, "rolea lexa.mkv");
+    let (pair, pair_hash) = add(&mut store, &long("rolea lexa.mkv"));
     let (first, _) = batch(&mut store, &filter, &sealer, 2);
-    assert_eq!(first.unwrap().judged, 2);
-    assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), Some(ids[1]));
+    let first = first.unwrap();
+    assert_eq!(first.judged + first.stood, 2);
+    assert_eq!(
+        store
+            .core_rejudge_due(CORE_VERSION)
+            .unwrap()
+            .map(|p| p.after),
+        Some(ids[1])
+    );
     drop(store);
     // A new start, as after a crash or an upgrade mid-run.
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
-    assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), Some(ids[1]));
+    assert_eq!(
+        store
+            .core_rejudge_due(CORE_VERSION)
+            .unwrap()
+            .map(|p| p.after),
+        Some(ids[1])
+    );
     assert_eq!(run(&mut store, &filter, &sealer, 2), 2);
     assert!(!stored(&store, pair));
     assert_eq!(
@@ -173,11 +224,18 @@ fn a_restart_resumes_where_the_rejudge_stopped() {
 #[test]
 fn another_versions_pass_starts_again() {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-    let (pair, _) = add(&mut store, "rolea lexa.mkv");
-    store
-        .set_core_rejudge_after(CORE_VERSION - 1, pair)
-        .unwrap();
-    assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), Some(0));
+    let (pair, _) = add(&mut store, &long("rolea lexa.mkv"));
+    let stale = CorePass {
+        after: pair,
+        found: 7,
+        held: 7,
+        unreadable: 7,
+    };
+    store.set_core_rejudge(CORE_VERSION - 1, &stale).unwrap();
+    assert_eq!(
+        store.core_rejudge_due(CORE_VERSION).unwrap(),
+        Some(CorePass::default())
+    );
     run(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
     assert!(!stored(&store, pair));
 }
@@ -188,7 +246,7 @@ fn another_versions_pass_starts_again() {
 fn a_current_or_newer_store_is_left_alone() {
     for judged in [CORE_VERSION, CORE_VERSION + 1] {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-        let (pair, _) = add(&mut store, "rolea lexa.mkv");
+        let (pair, _) = add(&mut store, &long("rolea lexa.mkv"));
         store.set_setting_i64(CORE_JUDGED_KEY, judged).unwrap();
         assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), None);
         let (r, marked) = batch(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
@@ -211,9 +269,9 @@ const SPREAD: &str = "Rolea one two three four five six seven eight nine Lexa";
 fn corrections_are_judged_as_ingest_judges_them() {
     use lodestar_store::ClassCorrection;
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-    let (detected, detected_hash) = add(&mut store, &format!("Some.Title.XXX {SPREAD}.mp4"));
-    let (relabelled, relabelled_hash) = add(&mut store, &format!("Plain {SPREAD}.mp4"));
-    let (plain, _) = add(&mut store, &format!("Other {SPREAD}.mp4"));
+    let (detected, detected_hash) = add(&mut store, &long(&format!("Some.Title.XXX {SPREAD}.mp4")));
+    let (relabelled, relabelled_hash) = add(&mut store, &long(&format!("Plain {SPREAD}.mp4")));
+    let (plain, _) = add(&mut store, &long(&format!("Other {SPREAD}.mp4")));
     let set = |store: &mut Store, id, adult| {
         store
             .set_correction(
@@ -246,4 +304,27 @@ fn corrections_are_judged_as_ingest_judges_them() {
     assert!(!stored(&store, relabelled), "Is adult is read as adult");
     assert_eq!(stored_rule(&store, relabelled_hash), "CS-5a+adult");
     assert!(stored(&store, plain), "only CS-5a reads that far apart");
+}
+
+/// How long the re-judge takes, per million stored torrents: 20,000
+/// stored, 2% of them past the earlier core's caps (so judged again), the
+/// rest checked and left. Prints the rate; run with `--ignored`.
+#[test]
+#[ignore]
+fn rejudge_rate() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = 20_000;
+    for i in 0..n {
+        let name = format!("Some.Show.S01E{i:05}.1080p.WEB-DL.DDP5.1.x264-GRP.mkv");
+        let name = if i % 50 == 0 { long(&name) } else { name };
+        add(&mut store, &name);
+    }
+    let (filter, sealer) = (stand_in(), Sealer::new(&[9; 32]));
+    let t = std::time::Instant::now();
+    run(&mut store, &filter, &sealer, 256);
+    let s = t.elapsed().as_secs_f64();
+    println!(
+        "{n} stored, 2% judged again: {s:.2} s, {:.0} s per million stored",
+        s * 1e6 / n as f64
+    );
 }

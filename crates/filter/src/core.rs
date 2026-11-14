@@ -551,6 +551,37 @@ pub const BUDGET: u64 = 9_000_000;
 /// that records none was judged by that one.
 pub const CORE_VERSION: i64 = 2;
 
+/// The most tokens a text, and files a torrent, version 1 of the core
+/// read: past either it judged a truncated view.
+const V1_TOKENS: usize = 128;
+const V1_FILES: usize = 1_000;
+
+/// Whether version 1 of the core read `item` whole, so judging it again
+/// by this one can't change what the core decides (§20.5): at most
+/// [`V1_FILES`] files, no padding file (whose path it skipped), and at
+/// most [`V1_TOKENS`] tokens in the name and in every path, in both
+/// readings. Anything else it may have judged in part, so it's judged
+/// again. Unmetered: it reads at most [`V1_FILES`] paths, each once in
+/// each reading.
+pub fn read_whole_by_v1(item: &Item) -> bool {
+    if item.files.len() > V1_FILES || item.files.iter().any(|f| f.padding) {
+        return false;
+    }
+    let mut out = Vec::new();
+    let mut split = crate::normalize::Tokenizer::splitting();
+    let mut fits = |text: &str| {
+        out.clear();
+        crate::normalize::tokens(text, &mut out);
+        if out.len() > V1_TOKENS {
+            return false;
+        }
+        out.clear();
+        split.text(text, &mut out);
+        out.len() <= V1_TOKENS
+    };
+    fits(item.name) && item.files.iter().all(|f| fits(&f.path.join("/")))
+}
+
 /// The most files a torrent within the budget can have: each costs some
 /// of it, however short its path. Every file of a torrent the core judges
 /// is read.

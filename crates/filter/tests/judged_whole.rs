@@ -8,7 +8,7 @@ use lodestar_classify::{ContentType, FileInfo, classify};
 use lodestar_filter::{
     Action, Allow, BUDGET, Core, CoreRule, CsList, Engine, Evidence, Exception, Facts, Field, Item,
     Lists, MAX_FILES, Match, Origin, Override, RuleRef, Strength, Switches, TermSet, read_cost,
-    too_large,
+    read_whole_by_v1, too_large,
 };
 use lodestar_search::parse;
 use proptest::prelude::*;
@@ -523,6 +523,32 @@ fn the_repos_corpora_are_judged_whole() {
     // Every example was read: a corpus that grows changes these.
     assert_eq!((examples.len(), names), (198, 317));
     assert_eq!(held, 0);
+}
+
+/// What the earlier core read whole, so its judgment of a stored torrent
+/// stands: up to 128 tokens in the name and every path in both readings,
+/// up to 1,000 files, no padding file. One token or file more, or a text
+/// that reads as more in the earlier reading, and it's judged again.
+#[test]
+fn what_the_earlier_core_read_whole() {
+    let words = |n: usize| "word ".repeat(n);
+    let whole = |name: &str, files: &[FileInfo]| read_whole_by_v1(&item(name, files));
+    assert!(whole(&words(128), &[]));
+    assert!(!whole(&words(129), &[]));
+    assert!(whole("Title", &[file(&words(128))]));
+    assert!(
+        !whole("Title", &[file(&format!("dir/{}", words(128)))]),
+        "a path is one text"
+    );
+    let files = |n: usize| -> Vec<FileInfo> { (0..n).map(|i| file(&format!("{i}"))).collect() };
+    assert!(whole("Title", &files(1_000)));
+    assert!(!whole("Title", &files(1_001)));
+    let mut padded = files(2);
+    padded[1].padding = true;
+    assert!(!whole("Title", &padded), "its path wasn't read");
+    // One word in the reading now, 129 in the earlier one.
+    let marked = "word\u{2028}".repeat(129);
+    assert!(!whole(&marked, &[]));
 }
 
 /// One file more than the core reads, so the torrent is CS-0a's.

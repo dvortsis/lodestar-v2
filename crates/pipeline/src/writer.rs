@@ -252,6 +252,8 @@ impl CandidateSweep {
 pub(crate) struct CoreSweep {
     /// Nothing is left to judge again: done, or judged already.
     pub done: bool,
+    /// Its start was logged on this run.
+    pub started: bool,
     /// The wait after a store error.
     pub backoff: Backoff,
 }
@@ -426,9 +428,9 @@ impl Writer {
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
                 () = std::future::ready(()), if self.backfill_ready() => self.backfill().await,
-                () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
+                () = std::future::ready(()), if self.core_rejudge.done && self.candidates.ready() => self.refile_candidates().await,
                 () = std::future::ready(()), if self.core_rejudge.ready() => self.rejudge_core().await,
-                () = std::future::ready(()), if self.sweep.ready() => self.refile_unverified().await,
+                () = std::future::ready(()), if self.core_rejudge.done && self.sweep.ready() => self.refile_unverified().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
@@ -1381,7 +1383,9 @@ impl Writer {
     /// The backfill has a batch to enrich now: not done, and not waiting
     /// out a store error.
     fn backfill_ready(&self) -> bool {
-        !self.backfill_done && self.backfill_backoff.ready()
+        // The core re-judge goes first: torrents the earlier core couldn't
+        // read whole are judged again before any other background pass.
+        self.core_rejudge.done && !self.backfill_done && self.backfill_backoff.ready()
     }
 
     /// Enriches the next batch of stored torrents that lack an up-to-date
@@ -1842,8 +1846,33 @@ impl Writer {
         .expect("core rejudge task");
         self.store = Some(store);
         match result {
-            // The rules changed under the batch: the same batch again.
-            Ok(Some(_)) => self.core_rejudge.backoff.succeeded(),
+            Ok(Some(b)) => {
+                let counts = |p: lodestar_store::CorePass| {
+                    (p.found as u64, p.held as u64, p.unreadable as u64)
+                };
+                if !std::mem::replace(&mut self.core_rejudge.started, true) {
+                    let (found, held, unreadable) = counts(b.before);
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_STARTED,
+                        found = found,
+                        held = held,
+                        unreadable = unreadable
+                    );
+                }
+                // A rejected batch (the rules changed under it) runs again.
+                if b.finished {
+                    let (found, held, unreadable) = counts(b.after);
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_DONE,
+                        found = found,
+                        rejudged = found,
+                        held = held,
+                        unreadable = unreadable
+                    );
+                    self.core_rejudge.done = true;
+                }
+                self.core_rejudge.backoff.succeeded();
+            }
             Ok(None) => {
                 self.core_rejudge.done = true;
                 self.core_rejudge.backoff.succeeded();
@@ -3244,7 +3273,9 @@ mod tests {
                 (b"length".to_vec(), OwnedValue::Int(900 << 20)),
                 (
                     b"name".to_vec(),
-                    OwnedValue::Bytes(b"rolea lexa.mp4".to_vec()),
+                    OwnedValue::Bytes(
+                        format!("{}rolea lexa.mp4", "word ".repeat(130)).into_bytes(),
+                    ),
                 ),
                 (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
                 (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
@@ -3268,12 +3299,16 @@ mod tests {
         let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
         let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
         w.core_rejudge.done = false;
+        // The re-judge goes first: the backfill waits for it.
+        w.backfill_done = false;
+        assert!(!w.backfill_ready());
         let mut steps = 0;
         while w.core_rejudge.ready() {
             w.rejudge_core().await;
             steps += 1;
             assert!(steps < 10, "the re-judge ends");
         }
+        assert!(w.core_rejudge.started && w.backfill_ready());
         let hash = info.primary_hash().0;
         assert!(w.held.contains(&hash));
         let store = w.store.as_ref().unwrap();
