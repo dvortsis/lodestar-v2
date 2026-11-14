@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T07:12Z",
+  "updated_at": "2026-11-14T07:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8470,6 +8470,12 @@
       "from": "slot 33",
       "at": "2026-11-14T07:12Z",
       "note": "X-pipe01-followup (per-address wait list) runs right after X-pipe01-fix merges; brief by message only."
+    },
+    {
+      "id": "vm-retest-vpn-drills",
+      "from": "X-test-vm coordinator",
+      "at": "2026-11-14T07:20Z",
+      "note": "Owner decision: short VM re-test of VPN failure drills on main cb156f3b (#841 host guard, #845 guard after reboot). One cloud-tester session (owner-started), under 2 h. Numbers only to runner; VM deleted and session archived after."
     }
   ],
   "main_health": [
@@ -8861,11 +8867,11 @@
     },
     "857": {
       "slice": "X-filter01-rejudge",
-      "head": "35bbae5a",
+      "head": "c50530c7",
       "slot": 32,
       "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
       "at": "2026-11-14T00:39Z",
-      "status": "review CHANGES (2 blocking, 4 important) relayed by message; await ready -> fresh delta review"
+      "status": "ready; fresh Opus delta review running"
     },
     "874": {
       "slice": "X-sec-S6-02-03 (part)",
@@ -9790,7 +9796,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T07:12Z",
+  "updated": "2026-11-14T07:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
