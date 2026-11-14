@@ -16,11 +16,16 @@
 //! **Deterministic.** Nothing reads the clock: timestamps come from the
 //! generator, scrapes from [`SCRAPED_AT`], and the year of Insights
 //! rollups ends at [`ANCHOR_HOUR`]; the two bookkeeping columns the store
-//! stamps with the clock are pinned to [`synth::EPOCH`] at the end. Two clean builds with the same key
-//! give the same SQLite file, byte for byte but for the two header
-//! counters SQLite bumps at each checkpoint, and the same [`digest`]
-//! (`bench/tests/dataset.rs`). Tantivy names segments at random, so the
-//! indexes are compared by their documents, not their bytes.
+//! stamps with the clock are pinned to [`synth::EPOCH`] at the end. Two
+//! clean builds with the same key give the same [`digest`], and the same
+//! SQLite file, byte for byte but for the two header counters SQLite bumps
+//! at each checkpoint (`bench/tests/dataset.rs`). One exception: zstd has
+//! encoded one file tree two ways on macOS arm64, so the digest reads a
+//! file-tree blob as the tree it decodes to, and the byte check excuses
+//! blobs that differ only in how they encode the same tree
+//! (`docs/decisions/2026-11-14-X-flake-dataset-macos.md`). Tantivy names
+//! segments at random, so the indexes are compared by their documents, not
+//! their bytes.
 //!
 //! **Read-only once built.** Rows that write (new torrent → searchable
 //! under ingest) run on a [`scratch`] copy, so every run starts from the
@@ -879,20 +884,25 @@ fn dictionaries(
 /// decodes to, so two encodings of one tree are the same (zstd at the
 /// store's settings has given two encodings of one tree on macOS arm64;
 /// see `docs/decisions/2026-11-14-X-flake-dataset-macos.md`). A blob that
-/// won't decode is read as its bytes, marked apart.
+/// won't decode fails the read, naming its torrent: a dataset that holds
+/// one is broken, whatever the other store holds.
 fn file_tree(
     codec: &mut lodestar_store::BlobCodec,
     row: &lodestar_store::rusqlite::Row<'_>,
 ) -> lodestar_store::rusqlite::Result<Vec<u8>> {
+    let torrent: i64 = row.get(0)?;
     let id: i64 = row.get(1)?;
     let dict: Option<i64> = row.get(2)?;
     let data: Vec<u8> = row.get(3)?;
-    let tree =
-        lodestar_store::Codec::from_id(id).and_then(|c| codec.decompress(c, dict, &data).ok());
-    Ok(match tree {
-        Some(tree) => [b"T".as_slice(), &tree].concat(),
-        None => [b"X".as_slice(), &data].concat(),
-    })
+    lodestar_store::Codec::from_id(id)
+        .and_then(|c| codec.decompress(c, dict, &data).ok())
+        .ok_or_else(|| {
+            lodestar_store::rusqlite::Error::FromSqlConversionFailure(
+                3,
+                lodestar_store::rusqlite::types::Type::Blob,
+                format!("torrent {torrent}'s file tree won't decode").into(),
+            )
+        })
 }
 
 /// The digest's reading of one column: `torrent_files.data` as its tree,
@@ -916,8 +926,8 @@ fn column(
 /// swarm row in id order, the dictionary, and the rollups, by FNV-1a.
 /// Equal for two builds with the same key; it names no file's bytes, so
 /// it also checks a copy. A file tree counts by its torrent, codec,
-/// dictionary and the tree it decodes to, not its compressed bytes; the
-/// dictionaries count by their bytes.
+/// dictionary and the tree it decodes to, not its compressed bytes, and
+/// one that won't decode fails it; the dictionaries count by their bytes.
 pub fn digest(db: &Path) -> Result<u64, Box<dyn std::error::Error>> {
     use lodestar_store::rusqlite::{Connection, OpenFlags};
     let c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;

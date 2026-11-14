@@ -73,38 +73,66 @@ fn same_content(a: &dataset::Dataset, b: &dataset::Dataset, what: &str) {
     }
 }
 
+/// A `torrent_files` row: torrent, codec, dictionary id, blob.
+type Blob = (i64, i64, Option<i64>, Vec<u8>);
+
+/// A store's file-tree blobs in torrent order, and a codec holding its
+/// dictionaries.
+fn blobs(p: &Path) -> (Vec<Blob>, lodestar_store::BlobCodec) {
+    use lodestar_store::rusqlite::{Connection, OpenFlags};
+    let c = Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let blobs = c
+        .prepare("SELECT torrent_id, codec, dict_id, data FROM torrent_files ORDER BY 1")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut codec = lodestar_store::BlobCodec::new(0);
+    let mut dicts = c.prepare("SELECT id, data FROM zstd_dicts").unwrap();
+    for d in dicts.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap() {
+        let (id, data) = d.unwrap();
+        codec.add_dict(id, data);
+    }
+    (blobs, codec)
+}
+
+/// The tree a blob holds, `None` when it won't decode.
+fn tree(codec: &mut lodestar_store::BlobCodec, (_, kind, dict, data): &Blob) -> Option<Vec<u8>> {
+    let kind = lodestar_store::Codec::from_id(*kind)?;
+    codec.decompress(kind, *dict, data).ok()
+}
+
+/// Whether two stores' file-tree blobs differ, and only in how they
+/// encode the same trees: the same torrents, and every blob that differs
+/// has the same codec and dictionary id and decodes, with its own store's
+/// dictionaries, to the same tree.
+fn only_encodings_differ(a: &Path, b: &Path) -> bool {
+    let ((ba, mut ca), (bb, mut cb)) = (blobs(a), blobs(b));
+    if ba.len() != bb.len() {
+        return false;
+    }
+    let mut differ = false;
+    for (x, y) in ba.iter().zip(&bb) {
+        if x == y {
+            continue;
+        }
+        differ = true;
+        if (x.0, x.1, x.2) != (y.0, y.1, y.2) {
+            return false;
+        }
+        match (tree(&mut ca, x), tree(&mut cb, y)) {
+            (Some(t), Some(u)) if t == u => {}
+            _ => return false,
+        }
+    }
+    differ
+}
+
 /// Whether two stores' file-tree blobs that differ hold the same trees:
 /// each is decompressed with its own store's dictionary.
 fn file_trees(a: &Path, b: &Path) -> String {
-    use lodestar_store::rusqlite::{Connection, OpenFlags};
-    type Blob = (i64, i64, Option<i64>, Vec<u8>);
-    let read = |p: &Path| -> (Vec<Blob>, Vec<(i64, Vec<u8>)>) {
-        let c = Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let blobs = c
-            .prepare("SELECT torrent_id, codec, dict_id, data FROM torrent_files ORDER BY 1")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        let dicts = c
-            .prepare("SELECT id, data FROM zstd_dicts ORDER BY 1")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        (blobs, dicts)
-    };
-    let raw = |(_, codec, dict, data): &Blob, dicts: &[(i64, Vec<u8>)]| -> Vec<u8> {
-        let mut c = lodestar_store::BlobCodec::new(0);
-        for (id, d) in dicts {
-            c.add_dict(*id, d.clone());
-        }
-        let codec = lodestar_store::Codec::from_id(*codec).unwrap();
-        c.decompress(codec, *dict, data).unwrap()
-    };
-    let ((ba, da), (bb, db)) = (read(a), read(b));
+    let ((ba, mut ca), (bb, mut cb)) = (blobs(a), blobs(b));
     let (mut blobs, mut trees) = (0, 0);
     let mut first = None;
     for (x, y) in ba.iter().zip(&bb) {
@@ -112,7 +140,10 @@ fn file_trees(a: &Path, b: &Path) -> String {
             continue;
         }
         blobs += 1;
-        let same = x.1 == y.1 && x.2 == y.2 && raw(x, &da) == raw(y, &db);
+        let same = x.1 == y.1 && x.2 == y.2 && {
+            let t = tree(&mut ca, x);
+            t.is_some() && t == tree(&mut cb, y)
+        };
         if !same {
             trees += 1;
         }
@@ -141,31 +172,13 @@ fn trees_only(db: &Path) -> Vec<u8> {
     let dir = tempfile::tempdir().unwrap();
     let copy = dir.path().join("copy.db");
     std::fs::copy(db, &copy).unwrap();
+    let (rows, mut codec) = blobs(&copy);
     let c = Connection::open(&copy).unwrap();
-    let mut codec = lodestar_store::BlobCodec::new(0);
-    let dicts: Vec<(i64, Vec<u8>)> = c
-        .prepare("SELECT id, data FROM zstd_dicts")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    for (id, d) in dicts {
-        codec.add_dict(id, d);
-    }
-    let blobs: Vec<(i64, i64, Option<i64>, Vec<u8>)> = c
-        .prepare("SELECT torrent_id, codec, dict_id, data FROM torrent_files")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    for (id, kind, dict, data) in blobs {
-        let kind = lodestar_store::Codec::from_id(kind).unwrap();
-        let tree = codec.decompress(kind, dict, &data).unwrap();
+    for row in rows {
+        let tree = tree(&mut codec, &row).expect("a blob that decodes");
         c.execute(
             "UPDATE torrent_files SET data = ?2 WHERE torrent_id = ?1",
-            params![id, tree],
+            params![row.0, tree],
         )
         .unwrap();
     }
@@ -178,15 +191,25 @@ fn trees_only(db: &Path) -> Vec<u8> {
 /// Fails unless two stores are the same bytes, but for the checkpoint
 /// counters ([`masked`]) and how their file-tree blobs are encoded. zstd
 /// has encoded one tree two ways on macOS arm64
-/// (`docs/decisions/2026-11-14-X-flake-dataset-macos.md`), and a blob of
-/// another length moves the pages after it, so when the bytes differ, both
-/// stores with their blobs replaced by the trees they hold and rebuilt
-/// must be the same bytes: every other byte of content still counts.
+/// (`docs/decisions/2026-11-14-X-flake-dataset-macos.md`). Only when
+/// file-tree blobs differ, and every one that does encodes the same tree
+/// ([`only_encodings_differ`]), are both stores compared rebuilt with
+/// their blobs replaced by the trees they hold ([`trees_only`]), since a
+/// blob of another length moves the pages after it. Any other difference,
+/// page layout included, fails on the bytes.
 fn same_bytes(a: &Path, b: &Path, what: &str) {
     let (x, y) = (masked(a), masked(b));
     if x == y {
         return;
     }
+    assert!(
+        only_encodings_differ(a, b),
+        "{what}: the store's bytes differ ({} and {} bytes), and not only in how \
+         file trees are encoded; file trees: {}",
+        x.len(),
+        y.len(),
+        file_trees(a, b)
+    );
     assert!(
         trees_only(a) == trees_only(b),
         "{what}: the store's bytes differ beyond how file trees are encoded \
@@ -604,4 +627,53 @@ fn a_file_tree_counts_by_its_tree_not_its_encoding() {
         .unwrap()
         .expect("they differ");
     assert!(why.starts_with("torrent_files ("), "{why}");
+}
+
+/// A store whose content is the same but whose pages are laid out
+/// differently (a row written to another table and deleted again) isn't
+/// the same bytes: the rebuild that excuses file-tree encodings is only
+/// for them.
+#[test]
+#[should_panic(expected = "not only in how file trees are encoded")]
+fn a_layout_change_is_not_the_same_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let moved = dir.path().join("moved.db");
+    std::fs::copy(ds.db(), &moved).unwrap();
+    let c = lodestar_store::rusqlite::Connection::open(&moved).unwrap();
+    c.execute(
+        "INSERT INTO settings (key, value) VALUES ('bench.layout', ?1)",
+        [vec![7u8; 64 << 10]],
+    )
+    .unwrap();
+    c.execute("DELETE FROM settings WHERE key = 'bench.layout'", [])
+        .unwrap();
+    drop(c);
+    assert_eq!(
+        dataset::explain_difference(&ds.db(), &moved).unwrap(),
+        None,
+        "the same content"
+    );
+    assert!(masked(&ds.db()) != masked(&moved), "laid out differently");
+    same_bytes(&ds.db(), &moved, "a layout change");
+}
+
+/// A file-tree blob that won't decode fails the digest, naming its
+/// torrent, rather than counting as its bytes.
+#[test]
+fn a_file_tree_that_wont_decode_fails_the_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let broken = dir.path().join("broken.db");
+    std::fs::copy(ds.db(), &broken).unwrap();
+    lodestar_store::rusqlite::Connection::open(&broken)
+        .unwrap()
+        .execute(
+            "UPDATE torrent_files SET data = x'00010203' WHERE torrent_id = 5",
+            [],
+        )
+        .unwrap();
+    let e = dataset::digest(&broken).unwrap_err().to_string();
+    assert!(e.contains("torrent 5's file tree won't decode"), "{e}");
+    assert!(dataset::digest(&ds.db()).is_ok());
 }
