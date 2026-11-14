@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:15Z",
+  "updated_at": "2026-11-14T00:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8167,6 +8167,16 @@
       "id": "OPERATOR-05",
       "note": "runner: unsubscribed from #821 activity; #821 read as numbers and fixed words only via a local checker",
       "at": "2026-11-14T00:15Z"
+    },
+    {
+      "id": "FILTER-12",
+      "note": "new Track Q id from the owner-started security review: important, filter payload signature (CS-8a); detail held; fix slice X-filter12-fix after X-filter01-rejudge, one filter slice at a time; add to slices.yaml and G-v1-security scope by id only in the next runner PR",
+      "at": "2026-11-14T00:17Z"
+    },
+    {
+      "id": "filter03-owner-questions",
+      "note": "before X-filter03-fix launches, ask the owner two component-level design questions (destructive-effect warning on Accept anyway for a floor-list subscription; visibility of not-yet-re-judged torrents after a core change); detail held locally",
+      "at": "2026-11-14T00:17Z"
     }
   ],
   "main_health": [
@@ -9207,7 +9217,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:15Z",
+    "updated": "2026-11-14T00:17Z",
     "items": [
       {
         "slot": 1,
@@ -9468,7 +9478,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:15Z",
+  "updated": "2026-11-14T00:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
