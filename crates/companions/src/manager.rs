@@ -323,6 +323,18 @@ pub trait Run: Send + Sync {
     fn ready_run(&self, id: &CompanionId) -> Option<u64> {
         self.status(id).map(|s| s.borrow().run)
     }
+    /// After a configuration, which may move the companion's listener:
+    /// readiness is found again before anything else is sent. Nothing to
+    /// do, by default, for a runner that doesn't tie readiness to a port.
+    fn recheck<'a>(&'a self, _id: &'a CompanionId, _target: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async { true })
+    }
+    /// Why its last readiness check failed, when the listener check said
+    /// so: a code for the log (`listener_not_ours`, `listener_missing`,
+    /// `listener_unverified`).
+    fn refusal(&self, _id: &CompanionId) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Configuring an installed companion through its API (CMP-8b); [`Api`]
@@ -1485,6 +1497,7 @@ impl Manager {
             .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))?;
+        self.recheck(id, &target).await?;
         // Handed over before the commit point: a failed hand-over fails
         // the install, which is undone, so it's never "installed" without
         // being the download client (X-cmp-native-handover).
@@ -1565,7 +1578,7 @@ impl Manager {
             .await
             .map_err(failed("start"))?;
         if !m.p.run.healthy(id, target).await {
-            return Err(failed("health")("unhealthy"));
+            return Err(failed("health")(m.p.run.refusal(id).unwrap_or("unhealthy")));
         }
         Ok(())
     }
@@ -1684,7 +1697,20 @@ impl Manager {
         tokio::time::timeout(self.0.deadline(), configured)
             .await
             .map_err(|_| failed("configure")("timed_out"))?
-            .map_err(|e| failed("configure")(configure::code(&e)))
+            .map_err(|e| failed("configure")(configure::code(&e)))?;
+        self.recheck(id, target).await
+    }
+
+    /// After a configuration (which may have moved the companion's
+    /// listener, as qBittorrent's bind address does): it's found ready
+    /// again, its own listener included, or the step fails.
+    async fn recheck(&self, id: &CompanionId, target: &Target) -> Result<(), ManagerError> {
+        let run = &self.0.p.run;
+        if run.recheck(id, target).await {
+            Ok(())
+        } else {
+            Err(failed("configure")(run.refusal(id).unwrap_or("unhealthy")))
+        }
     }
 
     /// Uninstalls `id`: stop, credential rows, then the folder. Like
@@ -2721,6 +2747,26 @@ impl Run for Supervised {
 
     fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.running().get(id).and_then(|r| r.status.clone())
+    }
+
+    /// Bound to its port: not ready until found so again, listener and
+    /// all ([`Run::recheck`]).
+    fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let port = self.running().get(id).and_then(|r| r.port);
+            match self.bindings.as_ref().zip(port) {
+                Some((b, p)) => {
+                    b.unready(p);
+                    self.healthy(id, target).await
+                }
+                None => true,
+            }
+        })
+    }
+
+    fn refusal(&self, id: &CompanionId) -> Option<&'static str> {
+        let port = self.running().get(id).and_then(|r| r.port)?;
+        self.bindings.as_ref()?.refusal(port)
     }
 
     /// Bound to its port: the run found ready there, if any, so a restart

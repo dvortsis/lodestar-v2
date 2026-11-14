@@ -13,29 +13,60 @@
 //!   the one running. A restart starts a new run, which isn't ready until
 //!   it's found so again.
 //!
+//! Before a run is marked ready, the listener on its port must be that
+//! run's own process ([`super::listener`], X-cmp09-fix). What can't be
+//! told never counts, and the reason is kept ([`Bindings::refusal`]).
+//!
 //! A port stays managed for the life of the [`Bindings`] once a companion
 //! was started on it, running or not, so a stopped companion's port never
 //! falls back to looking on `::1`. One companion holds a port at a time:
 //! a second start on a port another holds is refused ([`Bindings::claim`]).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::watch;
 
+use super::listener::{self, Owner};
 use super::{State, Status};
+
+/// Who listens on a port, against a process id ([`listener::owner`]).
+type Verify = Arc<dyn Fn(u16, u32) -> Owner + Send + Sync>;
 
 /// The managed ports, each with its child's status and the run it was
 /// last found ready in. Shared by the supervisor's side and the client's.
-#[derive(Debug, Default)]
 pub struct Bindings {
     ports: Mutex<HashMap<u16, Port>>,
+    /// The last claim's number: each claim takes the next, so nothing
+    /// from an earlier claim of a port counts for a later one.
+    claims: AtomicU64,
+    verify: Verify,
+}
+
+impl std::fmt::Debug for Bindings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Bindings")
+            .field("ports", &self.ports)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for Bindings {
+    fn default() -> Bindings {
+        Bindings::with_verify(Arc::new(listener::owner))
+    }
 }
 
 #[derive(Debug, Default)]
 struct Port {
     /// A companion holds it: claimed at its start, until its stop.
     held: bool,
+    /// Which claim this is ([`Bindings::claims`]); 0 when unclaimed.
+    claim: u64,
+    /// Why the last readiness attempt that passed its health check
+    /// didn't count (a [`listener::Owner`] code).
+    refusal: Option<&'static str>,
     /// The child's status while Lodestar holds it; `None` before it's
     /// attached and once it's stopped or removed.
     status: Option<watch::Receiver<Status>>,
@@ -46,6 +77,21 @@ struct Port {
 impl Bindings {
     pub fn new() -> Bindings {
         Bindings::default()
+    }
+
+    fn with_verify(verify: Verify) -> Bindings {
+        Bindings {
+            ports: Mutex::new(HashMap::new()),
+            claims: AtomicU64::new(0),
+            verify,
+        }
+    }
+
+    /// One that takes every listener for the run's own, for tests whose
+    /// statuses name no real process.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn trusting() -> Bindings {
+        Bindings::with_verify(Arc::new(|_, _| Owner::Ours))
     }
 
     fn ports(&self) -> std::sync::MutexGuard<'_, HashMap<u16, Port>> {
@@ -63,6 +109,8 @@ impl Bindings {
         }
         *p = Port {
             held: true,
+            claim: self.claims.fetch_add(1, Ordering::Relaxed) + 1,
+            refusal: None,
             status: None,
             ready: None,
         };
@@ -107,35 +155,95 @@ impl Bindings {
         Some(s.run)
     }
 
-    /// A health check on `127.0.0.1` answered while run `run` was the
-    /// one running: it's ready, if it's still that run.
+    /// Marks run `run` ready under the current claim, with no listener
+    /// check: for tests of what readiness lets through.
+    #[cfg(any(test, feature = "testing"))]
     pub fn mark_ready(&self, port: u16, run: u64) {
+        let claim = self.ports().get(&port).map_or(0, |p| p.claim);
+        self.mark(port, claim, run);
+    }
+
+    /// Ready, if `port` is still under claim `claim` and run `run` is
+    /// still the one up.
+    fn mark(&self, port: u16, claim: u64, run: u64) {
         let mut ports = self.ports();
         if let Some(p) = ports.get_mut(&port)
+            && p.claim == claim
             && p.status.as_ref().and_then(up).is_some_and(|s| s.run == run)
         {
             p.ready = Some(run);
+            p.refusal = None;
         }
     }
 
+    /// The claim, run and process id of the run up on `port` now.
+    fn attempt(&self, port: u16) -> Option<(u64, u64, Option<u32>)> {
+        let ports = self.ports();
+        let p = ports.get(&port)?;
+        let s = up(p.status.as_ref()?)?;
+        Some((p.claim, s.run, s.pid))
+    }
+
     /// One readiness attempt on `port`: `check` (a health check on
-    /// `127.0.0.1`) runs only while a run is up, and a pass marks that run
-    /// ready if it's still the one up. True once the port is ready. What
+    /// `127.0.0.1`) runs only while a run is up. A pass counts only if the
+    /// listener on the port is that run's process ([`listener::owner`]),
+    /// and marks the run ready if the claim and the run are still the
+    /// ones checked. True once the port is ready. What
     /// [`Supervised`](crate::manager::Supervised)'s health check does.
     pub async fn try_ready<F, Fut>(&self, port: u16, check: F) -> bool
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
-        let Some(run) = self.running_run(port) else {
+        let Some((claim, run, pid)) = self.attempt(port) else {
             return false;
         };
         if !check().await {
             return false;
         }
-        // A check that spanned a restart readies nothing.
-        self.mark_ready(port, run);
+        let owner = match pid {
+            Some(pid) => {
+                let verify = Arc::clone(&self.verify);
+                tokio::task::spawn_blocking(move || verify(port, pid))
+                    .await
+                    .unwrap_or(Owner::Unknown)
+            }
+            None => Owner::Unknown,
+        };
+        if owner != Owner::Ours {
+            // Readiness found before counts no longer: the port is ready
+            // again only once its own listener is found again.
+            if let Some(p) = self.ports().get_mut(&port).filter(|p| p.claim == claim) {
+                p.refusal = Some(owner.code());
+                p.ready = None;
+            }
+            return false;
+        }
+        // A check that spanned a restart, or a new claim, readies nothing.
+        self.mark(port, claim, run);
         self.ready(port)
+    }
+
+    /// `port` is no longer ready, under its current claim: after a change
+    /// that may have moved its listener, until a readiness attempt finds
+    /// it again ([`Bindings::try_ready`]).
+    pub fn unready(&self, port: u16) {
+        if let Some(p) = self.ports().get_mut(&port) {
+            p.ready = None;
+        }
+    }
+
+    /// One whose listener check is `check`, for tests of what a check's
+    /// answer does.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn with_owner_check(check: impl Fn(u16, u32) -> Owner + Send + Sync + 'static) -> Bindings {
+        Bindings::with_verify(Arc::new(check))
+    }
+
+    /// Why the last readiness attempt on `port` that passed its health
+    /// check didn't count, if it didn't: a [`listener::Owner`] code.
+    pub fn refusal(&self, port: u16) -> Option<&'static str> {
+        self.ports().get(&port).and_then(|p| p.refusal)
     }
 
     /// The run last found ready on `port`, if any.
@@ -181,12 +289,13 @@ mod tests {
             last_exit: None,
             run,
             up,
+            pid: None,
         }
     }
 
     #[test]
     fn a_port_is_ready_only_in_the_run_found_ready() {
-        let b = Bindings::new();
+        let b = Bindings::trusting();
         let (tx, rx) = watch::channel(status(State::Starting, 0));
         assert!(!b.managed(8080));
         assert!(b.hold(8080, rx));
@@ -219,7 +328,7 @@ mod tests {
 
     #[test]
     fn a_released_port_stays_managed_and_isnt_ready() {
-        let b = Bindings::new();
+        let b = Bindings::trusting();
         let (_tx, rx) = watch::channel(status(State::Running, 1));
         assert!(b.hold(9696, rx));
         b.mark_ready(9696, 1);
@@ -241,7 +350,7 @@ mod tests {
     /// its last status still says running, but nothing counts.
     #[test]
     fn a_status_whose_sender_has_gone_isnt_running() {
-        let b = Bindings::new();
+        let b = Bindings::trusting();
         let (tx, rx) = watch::channel(status(State::Running, 1));
         assert!(b.hold(8080, rx));
         b.mark_ready(8080, 1);
@@ -255,7 +364,7 @@ mod tests {
 
     #[test]
     fn one_companion_holds_a_port_at_a_time() {
-        let b = Bindings::new();
+        let b = Bindings::trusting();
         let (_a, ra) = watch::channel(status(State::Running, 1));
         let (_c, rc) = watch::channel(status(State::Running, 7));
         assert!(b.hold(8080, ra));
@@ -271,5 +380,96 @@ mod tests {
         b.release(8080);
         assert!(b.claim(8080) && !b.claim(8080));
         assert!(b.managed(8080) && b.running_run(8080).is_none() && !b.ready(8080));
+    }
+
+    fn with_owner(owner: Owner) -> Bindings {
+        Bindings::with_verify(Arc::new(move |_, _| owner))
+    }
+
+    fn running(run: u64, pid: Option<u32>) -> Status {
+        Status {
+            pid,
+            ..status(State::Running, run)
+        }
+    }
+
+    /// A passing health check counts only when the listener is the run's
+    /// own process; otherwise the port stays not ready and says why.
+    #[tokio::test]
+    async fn only_the_runs_own_listener_makes_it_ready() {
+        for (owner, code) in [
+            (Owner::Other, "listener_not_ours"),
+            (Owner::Unknown, "listener_unverified"),
+            (Owner::Nobody, "listener_missing"),
+        ] {
+            let b = with_owner(owner);
+            let (_tx, rx) = watch::channel(running(1, Some(40)));
+            assert!(b.hold(8080, rx));
+            assert!(!b.try_ready(8080, || async { true }).await);
+            assert!(!b.ready(8080) && b.ready_run(8080).is_none());
+            assert_eq!(b.refusal(8080), Some(code));
+        }
+        // A run that names no process can't be told: not ready.
+        let b = with_owner(Owner::Ours);
+        let (_tx, rx) = watch::channel(running(1, None));
+        assert!(b.hold(8080, rx));
+        assert!(!b.try_ready(8080, || async { true }).await);
+        assert_eq!(b.refusal(8080), Some("listener_unverified"));
+        // Its own listener: ready, and the refusal is gone.
+        let (_tx, rx) = watch::channel(running(1, Some(40)));
+        b.release(8080);
+        assert!(b.hold(8080, rx));
+        assert!(b.try_ready(8080, || async { true }).await);
+        assert_eq!((b.ready_run(8080), b.refusal(8080)), (Some(1), None));
+    }
+
+    /// A check begun under one claim of a port readies nothing once the
+    /// port was released and claimed again, even at the same run number.
+    #[tokio::test]
+    async fn a_check_from_an_earlier_claim_counts_for_nothing() {
+        let b = Arc::new(with_owner(Owner::Ours));
+        let (_old, rx) = watch::channel(running(1, Some(40)));
+        assert!(b.hold(8080, rx));
+        let (_new, rx_new) = watch::channel(running(1, Some(41)));
+        let again = Arc::clone(&b);
+        let got = b
+            .try_ready(8080, || async move {
+                // Stopped and started again while the check ran: the new
+                // claim's first run is run 1 too.
+                again.release(8080);
+                assert!(again.hold(8080, rx_new));
+                true
+            })
+            .await;
+        assert!(!got && !b.ready(8080) && b.ready_run(8080).is_none());
+    }
+
+    /// A ready run whose listener is found to be another's, or gone, is
+    /// ready no more, and stays so until its own listener is found again.
+    #[tokio::test]
+    async fn a_ready_run_whose_listener_moves_is_ready_no_more() {
+        use std::sync::atomic::AtomicU8;
+        let answer = Arc::new(AtomicU8::new(0));
+        let read = Arc::clone(&answer);
+        let b = Bindings::with_verify(Arc::new(move |_, _| match read.load(Ordering::SeqCst) {
+            0 => Owner::Ours,
+            1 => Owner::Other,
+            _ => Owner::Nobody,
+        }));
+        let (_tx, rx) = watch::channel(running(1, Some(40)));
+        assert!(b.hold(8080, rx));
+        assert!(b.try_ready(8080, || async { true }).await);
+        for (n, code) in [(1, "listener_not_ours"), (2, "listener_missing")] {
+            answer.store(n, Ordering::SeqCst);
+            assert!(!b.try_ready(8080, || async { true }).await);
+            assert!(!b.ready(8080) && b.ready_run(8080).is_none());
+            assert_eq!(b.refusal(8080), Some(code));
+            answer.store(0, Ordering::SeqCst);
+            assert!(b.try_ready(8080, || async { true }).await);
+        }
+        // Marked not ready by hand (after a change that may move it).
+        b.unready(8080);
+        assert!(!b.ready(8080));
+        assert!(b.try_ready(8080, || async { true }).await);
     }
 }
