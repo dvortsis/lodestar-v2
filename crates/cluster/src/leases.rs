@@ -116,10 +116,6 @@ pub struct LeaseTable {
     by_worker: HashMap<WorkerId, HashSet<InfoHash>>,
 }
 
-/// A lease that ended without an outcome, and whether it was marked
-/// fetched.
-type Ended = (InfoHash, Lease, bool);
-
 /// [`LeaseTable`]'s delivery mark for a lease the coordinator holds on a
 /// worker's behalf for a result already in hand (a late result, plan Q7):
 /// never returned by a reconcile.
@@ -166,22 +162,11 @@ impl LeaseTable {
 
     /// Ends the leases of `keys` (those still leased), with their marks.
     fn end_all(&mut self, keys: Vec<InfoHash>) -> Vec<(InfoHash, Lease)> {
-        self.end_all_marked(keys)
-            .into_iter()
-            .map(|(k, l, _)| (k, l))
-            .collect()
-    }
-
-    /// [`end_all`](Self::end_all), saying of each lease whether it was
-    /// marked fetched: its result was already in the coordinator's hands,
-    /// so it wasn't handed back unfetched.
-    fn end_all_marked(&mut self, keys: Vec<InfoHash>) -> Vec<Ended> {
         let mut out = Vec::with_capacity(keys.len());
         for k in keys {
             if let Some(l) = self.take(&k) {
-                let fetched = self.fetched.contains_key(&l.token);
                 self.ended(l.token);
-                out.push((k, l, fetched));
+                out.push((k, l));
             }
         }
         out
@@ -315,15 +300,6 @@ impl LeaseTable {
     /// the TTL ago, its holder alive or not. The caller grants the keys
     /// again (see [`regrant`](Self::regrant)).
     pub fn expire(&mut self, now: i64) -> Vec<(InfoHash, Lease)> {
-        self.expire_marked(now)
-            .into_iter()
-            .map(|(k, l, _)| (k, l))
-            .collect()
-    }
-
-    /// [`expire`](Self::expire), saying of each lease whether it was
-    /// marked fetched.
-    fn expire_marked(&mut self, now: i64) -> Vec<Ended> {
         let ttl = self.ttl;
         let dead: Vec<WorkerId> = self
             .workers
@@ -354,7 +330,7 @@ impl LeaseTable {
                 .get(k)
                 .is_some_and(|l| !dead.contains(&l.holder))
         }));
-        self.end_all_marked(expired)
+        self.end_all(expired)
     }
 
     /// Grants an expired lease to another worker under a new token,
@@ -371,18 +347,9 @@ impl LeaseTable {
     /// revoked or finished draining (§19.6, "returns its leases"). The
     /// caller grants the keys again. Its late reports are stale from now on.
     pub fn evict(&mut self, worker: WorkerId) -> Vec<(InfoHash, Lease)> {
-        self.evict_marked(worker)
-            .into_iter()
-            .map(|(k, l, _)| (k, l))
-            .collect()
-    }
-
-    /// [`evict`](Self::evict), saying of each lease whether it was marked
-    /// fetched.
-    fn evict_marked(&mut self, worker: WorkerId) -> Vec<Ended> {
         self.workers.remove(&worker);
         let keys = self.keys_of(worker).collect();
-        self.end_all_marked(keys)
+        self.end_all(keys)
     }
 
     /// Records that `key`'s lease was handed to `worker` on `session`,
@@ -488,7 +455,7 @@ pub const RECENT_COMMITS: usize = 16_384;
 /// a re-grant reports it for a key the store check found held.
 pub(crate) const LOSS_BLOCKED: u8 = 7;
 
-/// `funnel::Loss::Evicted`: a key handed back unfetched that no longer fits
+/// `funnel::Loss::Evicted`: a key handed back that no longer fits
 /// the queue of keys waiting for a re-grant (past a worker's allowance, or
 /// past [`MAX_PENDING`]). It isn't granted again; a source finds it anew.
 pub(crate) const LOSS_EVICTED: u8 = 8;
@@ -506,8 +473,8 @@ pub const PENDING_HIGH_WATER: usize = MAX_PENDING / 2;
 /// The window a worker's return allowance counts over.
 pub const RETURN_WINDOW_SECS: i64 = 3600;
 
-/// A remote worker may hand back unfetched (expired, evicted, reconciled
-/// away or drained) this share of its lease cap per [`RETURN_WINDOW_SECS`]
+/// A remote worker may hand back (expired, evicted, reconciled away or
+/// drained, marked fetched or not) this share of its lease cap per [`RETURN_WINDOW_SECS`]
 /// for a re-grant, and at least [`MIN_RETURN_ALLOWANCE`] (never more than
 /// the cap). Past that its keys are dropped and it rests for a lease TTL.
 const RETURN_SHARE: usize = 8;
@@ -704,20 +671,24 @@ impl AuthorityState {
         Some(lease)
     }
 
-    /// Parks leases that ended without an outcome. One marked fetched, or
-    /// the built-in worker's, always waits (room permitting). Any other was
-    /// handed back unfetched by its holder, and counts against the
-    /// holder's allowance for the window: past it the key is dropped and
-    /// the holder rests for a lease TTL. Returns the keys dropped.
-    fn take_back_ended(&mut self, ended: Vec<Ended>, now: i64) -> Vec<(InfoHash, Lease)> {
+    /// Parks leases that ended without an outcome. A remote worker's count
+    /// against its allowance for the window, marked fetched or not (a mark
+    /// is the worker's own word): past it the key is dropped and the
+    /// worker rests for a lease TTL. The built-in worker's always wait
+    /// (room permitting). Returns the keys dropped.
+    fn take_back_ended(
+        &mut self,
+        ended: Vec<(InfoHash, Lease)>,
+        now: i64,
+    ) -> Vec<(InfoHash, Lease)> {
         let ttl = self.table.ttl_secs();
         let mut dropped = Vec::new();
-        for (key, lease, fetched) in ended {
+        for (key, lease) in ended {
             let w = lease.holder;
-            if !fetched && w != WorkerId::LOCAL {
+            if w != WorkerId::LOCAL {
                 let allowance = self.allowance(w);
                 let r = self.returns.entry(w).or_default();
-                if now < r.since || now.saturating_sub(r.since) >= RETURN_WINDOW_SECS {
+                if now.saturating_sub(r.since) >= RETURN_WINDOW_SECS {
                     r.since = now;
                     r.count = 0;
                 }
@@ -1214,7 +1185,7 @@ impl LeaseAuthority {
     pub fn expire(&self, now: i64) -> usize {
         let mut s = self.lock_at(now);
         s.table.heartbeat(WorkerId::LOCAL, now);
-        let expired = s.table.expire_marked(now);
+        let expired = s.table.expire(now);
         let n = expired.len();
         let dropped = s.take_back_ended(expired, now);
         self.gauge(&s);
@@ -1233,7 +1204,7 @@ impl LeaseAuthority {
     pub fn evict(&self, worker: WorkerId) -> usize {
         let mut s = self.lock();
         let now = s.latest;
-        let evicted = s.table.evict_marked(worker);
+        let evicted = s.table.evict(worker);
         let n = evicted.len();
         let dropped = s.take_back_ended(evicted, now);
         self.gauge(&s);
@@ -1265,8 +1236,10 @@ impl LeaseAuthority {
     /// whose check couldn't answer, which wait at the back), to `targets`,
     /// each time to the one
     /// holding the fewest leases, at most `per_target` keys each and never
-    /// past a target's lease cap (CLUSTER-02). Keys left over keep
-    /// waiting. Not a harvest.
+    /// past a target's lease cap (CLUSTER-02); a key's last holder may take
+    /// it back even at its cap, unless it rests. Keys left over keep
+    /// waiting, and one no target could take goes to the back. Not a
+    /// harvest.
     pub fn regrant_pending(
         &self,
         targets: &[WorkerId],
@@ -1292,7 +1265,22 @@ impl LeaseAuthority {
                 resting: s.resting(w, now),
             })
             .collect();
-        while let Some(key) = s.order.pop_front() {
+        // A key no target can take now goes to the back, so it never holds
+        // up the keys behind it; each key is looked at once per call.
+        let mut skipped = Vec::new();
+        let mut left = s.order.len();
+        while left > 0 {
+            left -= 1;
+            // Done once no target can take any key at all.
+            if load.iter().all(|t| {
+                t.got.len() >= per_target
+                    || (t.room == 0 && (t.resting || s.parked_by(t.worker) == 0))
+            }) {
+                break;
+            }
+            let Some(key) = s.order.pop_front() else {
+                break;
+            };
             let Some(last) = s.pending.get(&key).map(|l| l.holder) else {
                 continue;
             };
@@ -1303,8 +1291,8 @@ impl LeaseAuthority {
                 })
                 .min_by_key(|t| (t.held, t.worker))
             else {
-                s.order.push_front(key);
-                break;
+                skipped.push(key);
+                continue;
             };
             let Some(lease) = s.unpark(&key) else {
                 continue;
@@ -1315,6 +1303,9 @@ impl LeaseAuthority {
                 target.room = target.room.saturating_sub(1);
             }
             target.got.push((key, token));
+        }
+        if !s.pending.is_empty() {
+            s.order.extend(skipped);
         }
         self.gauge(&s);
         load.into_iter()
@@ -1405,9 +1396,7 @@ impl LeaseAuthority {
         let now = s.latest;
         let returned = s.table.reconcile(worker, session, listed);
         let n = returned.len();
-        // A reconcile never returns a lease marked fetched.
-        let ended = returned.into_iter().map(|(k, l)| (k, l, false)).collect();
-        let dropped = s.take_back_ended(ended, now);
+        let dropped = s.take_back_ended(returned, now);
         self.gauge(&s);
         drop(s);
         self.dropped(&dropped);
@@ -3020,35 +3009,63 @@ mod tests {
     }
 
     #[test]
-    fn leases_marked_fetched_never_count_as_handed_back() {
+    fn leases_marked_fetched_count_as_handed_back_too() {
         let (a, ev) = counted();
         a.set_lease_cap(Some(4));
-        let c: Vec<Claim> = (1..=4).map(|n| claim(n, 0)).collect();
-        let tokens: Vec<Token> = a
-            .claim_batch(A, &c, 1, None, None)
-            .iter()
-            .map(|x| match x {
-                BatchAnswer::Claimed {
+        let mark_all = |n0: u8, at: i64| {
+            let c: Vec<Claim> = (n0..n0 + 4).map(|n| claim(n, 0)).collect();
+            for (c, x) in c.iter().zip(a.claim_batch(A, &c, at, None, None)) {
+                let BatchAnswer::Claimed {
                     claimed: Claimed::Granted(t),
                     ..
-                } => *t,
-                other => panic!("{other:?}"),
-            })
-            .collect();
-        for (c, t) in c.iter().zip(&tokens) {
-            assert!(matches!(
-                a.fetched(A, &c.key, *t, 2),
-                FetchedReport::Marked(_)
-            ));
-        }
+                } = x
+                else {
+                    panic!("{x:?}");
+                };
+                assert!(matches!(
+                    a.fetched(A, &c.key, t, at),
+                    FetchedReport::Marked(_)
+                ));
+            }
+        };
+        mark_all(1, 1);
         a.evict(A);
-        assert_eq!(a.regrant_pending(&[B], 4, 3)[0].1.len(), 4);
-        // A full allowance is still left.
-        let c: Vec<Claim> = (11..=14).map(|n| claim(n, 0)).collect();
-        assert!(granted_all(&a.claim_batch(A, &c, 4, None, None)));
+        assert_eq!(a.regrant_pending(&[B], 4, 2)[0].1.len(), 4);
+        // Marked again, then left a TTL past the mark: the expiry counts.
+        mark_all(11, 3);
+        a.heartbeat(A, 700);
+        a.heartbeat(B, 700);
+        assert_eq!(a.expire(700), 4);
+        assert_eq!((a.pending(), get(&ev.evicted)), (0, 4));
+        assert!(a.resting(A, 700));
+    }
+
+    #[test]
+    fn a_key_no_target_can_take_never_holds_up_the_rest() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(4));
+        let c = WorkerId(3);
+        // C's key waits first, then A's four.
+        assert!(granted_all(&a.claim_batch(
+            c,
+            &[claim(1, 0)],
+            1,
+            None,
+            None
+        )));
+        a.evict(c);
+        let mine: Vec<Claim> = (2..=5).map(|n| claim(n, 0)).collect();
+        assert!(granted_all(&a.claim_batch(A, &mine, 1, None, None)));
         a.evict(A);
-        assert_eq!((a.pending(), get(&ev.evicted)), (4, 0));
-        assert!(!a.resting(A, 5));
+        // A is full (its four wait) and C is gone: A still gets its own.
+        let out = a.regrant_pending(&[A], 10, 2);
+        assert_eq!(out[0].1.len(), 4);
+        assert_eq!(a.pending(), 1);
+        // C's key now waits at the back, and goes once there's room.
+        assert_eq!(
+            a.regrant_pending(&[B], 10, 3)[0].1,
+            vec![(InfoHash([1; 20]), a.get(&InfoHash([1; 20])).unwrap().token)]
+        );
     }
 
     #[test]
