@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T07:27Z",
+  "updated_at": "2026-11-14T07:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8488,6 +8488,11 @@
       "from": "#857 review",
       "at": "2026-11-14T07:27Z",
       "note": "Runner call: the earlier core limits kept as constants in core.rs are acceptable; they were in public main history all along."
+    },
+    {
+      "id": "873-review-followups",
+      "added": "2026-11-14T07:41Z",
+      "note": "#873 review MERGE; one small fix round asked (IPv6 share keying, passive-token order, heading). Queued: per-responder offer limit goes into X-dht-timeout-cooldown notes; unproven-querier sample size; Answered turnover note in decisions file."
     }
   ],
   "main_health": [
@@ -9800,7 +9805,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T07:27Z",
+  "updated": "2026-11-14T07:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
