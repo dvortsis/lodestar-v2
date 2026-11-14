@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:12Z",
+  "updated_at": "2026-11-14T03:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8363,7 +8363,8 @@
         "metainfo: halved-caller path budgets",
         "owner call: delete old branch slice/X-metainfo01-fix"
       ]
-    }
+    },
+    "X-operator-tripwire-settle: operator tripwire settle wait and request budget (component level; detail by message); slot 15 session; before first-run check 8; record in next runner PR slices.yaml"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8759,13 +8760,6 @@
       "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
       "at": "2026-11-14T00:39Z",
       "status": "held-text fix push; then ready, fresh Opus + security review"
-    },
-    "859": {
-      "slice": "X-operator-hardening",
-      "slot": 15,
-      "state": "fix round (review items + owner rule A); held for owner rule build",
-      "head": "37c1ae03",
-      "status": "delta review CHANGES relayed (round 2); awaiting fix push"
     }
   },
   "merged_log": [
@@ -9412,7 +9406,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T03:12Z",
+    "updated": "2026-11-14T03:18Z",
     "items": [
       {
         "slot": 1,
@@ -9497,11 +9491,11 @@
       },
       {
         "slot": 15,
-        "slice": "X-operator-hardening",
+        "slice": "X-operator-tripwire-settle",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-14T00:49Z",
-        "doing": "OPERATOR-01..04, 06-08 fix (detail by message); before first-run check 8",
+        "since": "2026-11-14T03:18Z",
+        "doing": "#859 X-operator-hardening merged dab4d8ff; same session builds X-operator-tripwire-settle (operator tripwire: settle wait and request budget; detail by message) before first-run check 8",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -9683,7 +9677,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T03:12Z",
+  "updated": "2026-11-14T03:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10222,6 +10216,12 @@
       "slice": "X-metainfo01-fix",
       "merged": "0dc154ee",
       "at": "2026-11-14T03:10Z"
+    },
+    {
+      "pr": 859,
+      "slice": "X-operator-hardening",
+      "merged": "dab4d8ff",
+      "at": "2026-11-14T03:18Z"
     }
   ]
 }
