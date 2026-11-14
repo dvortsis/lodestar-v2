@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:02Z",
+  "updated_at": "2026-11-14T01:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8306,6 +8306,11 @@
       "id": "858-nits",
       "note": "#858 review nits for a later CI-filter touch: drift guard matches literal docs/user only; near-miss test docs/userguide.md; note that the guide check returns early until full-scrape is wired",
       "at": "2026-11-14T01:02Z"
+    },
+    {
+      "id": "rv-slices-1114",
+      "note": "Register in runner PR: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-filter02-fix (filter queue); hold #795 until X-rollback-scrub-fix lands; retire slot 7 after #856 merges (cap 4); SRC-02 to owner after verification.",
+      "at": "2026-11-14T01:18Z"
     }
   ],
   "main_health": [
@@ -9359,7 +9364,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:02Z",
+    "updated": "2026-11-14T01:18Z",
     "items": [
       {
         "slot": 1,
@@ -9538,6 +9543,14 @@
         "since": "2026-11-13T23:39Z",
         "doing": "#857 open; CI + fresh Opus/security review",
         "cap": "kept build (\u00a72.64 4+4)"
+      },
+      {
+        "slot": "rv",
+        "slice": "X-rollback-scrub-fix",
+        "role": "build (owner-started reviewer; one build slot, one fix at a time)",
+        "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
+        "doing": "Owner 2026-11-14 ~01:20Z: builds Track Q fixes outside filter. Queue: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-cluster06-fix (after #856). Verifies+briefs FILTER-02 (X-filter02-fix, filter queue) and SRC-02 (owner decision pending). Early M8-SEC-1/-8 first pass; fuzz gaps. PRs from its own branch, runner reviews.",
+        "since": "2026-11-14T01:18Z"
       }
     ]
   },
@@ -9622,7 +9635,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:02Z",
+  "updated": "2026-11-14T01:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
