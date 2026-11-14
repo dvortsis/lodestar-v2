@@ -29,6 +29,21 @@ pub(crate) fn network(ip: IpAddr) -> Network {
     }
 }
 
+/// `ip`'s wider IPv6 block, its /48, the size of one ordinary site
+/// allocation; `None` for IPv4 (its /24 is already one allocation).
+pub(crate) fn allocation(ip: IpAddr) -> Option<Network> {
+    match ip.to_canonical() {
+        IpAddr::V4(_) => None,
+        IpAddr::V6(v6) => {
+            let o = v6.octets();
+            Some(Network(
+                48,
+                u64::from_be_bytes([0, 0, o[0], o[1], o[2], o[3], o[4], o[5]]),
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Bucket {
     tokens: f64,

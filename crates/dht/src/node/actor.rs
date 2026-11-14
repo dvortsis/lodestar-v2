@@ -14,7 +14,7 @@ use tokio::time::Instant;
 use lodestar_metainfo::InfoHash;
 
 use super::hints::{self, Hint, Hints};
-use super::limits::{Answered, Network, SourceBuckets, network};
+use super::limits::{Answered, Network, SourceBuckets, allocation, network};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
 use super::prefixes::Prefixes;
@@ -236,16 +236,7 @@ impl TokenBucket {
 /// IPv6 is cut wider than [`network`]'s /64, because one site is commonly
 /// given a whole /48, so its many /64s are one voter.
 fn voter(ip: IpAddr) -> Network {
-    match ip.to_canonical() {
-        IpAddr::V6(v6) => {
-            let o = v6.octets();
-            Network(
-                48,
-                u64::from_be_bytes([0, 0, o[0], o[1], o[2], o[3], o[4], o[5]]),
-            )
-        }
-        v4 => network(v4),
-    }
+    allocation(ip).unwrap_or_else(|| network(ip))
 }
 
 /// Majority vote over the external address other nodes report (BEP 42).

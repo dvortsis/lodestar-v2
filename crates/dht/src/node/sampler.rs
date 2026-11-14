@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::limits::{Network, network};
+use super::limits::{Network, allocation, network};
 use super::transport::{Map, Set};
 
 use crate::compact::NodeInfo;
@@ -20,9 +20,15 @@ const RECLAIM_PER_TICK: usize = 1024;
 /// the fleet's DHT nodes per IP (`MAX_DHT_PER_IP`), so a host running
 /// several nodes still has each sampled.
 pub(crate) const MAX_PER_IP: u16 = 8;
-/// The most addresses one /24 (IPv6 /64) may hold across the frontier and
-/// the table, so no block takes more than a small share of either.
-pub(crate) const MAX_PER_NETWORK: u16 = 64;
+/// The most addresses one IPv4 /24 may hold across the frontier and the
+/// table, so no block takes more than a small share of either: filling
+/// the 200,000-record table takes about 3,100 of them.
+pub(crate) const MAX_PER_V4_NETWORK: u16 = 64;
+/// The same for one IPv6 /64...
+pub(crate) const MAX_PER_V6_NETWORK: u16 = 16;
+/// ...and for one IPv6 /48, an ordinary site's allocation, so filling the
+/// table takes as many allocations on IPv6 as on IPv4.
+pub(crate) const MAX_PER_V6_ALLOCATION: u16 = 64;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
@@ -53,6 +59,8 @@ pub(crate) struct Sampler {
     /// `states` (an address in both counts once).
     per_ip: Map<IpAddr, u16>,
     per_network: Map<Network, u16>,
+    /// IPv6 /48s ([`allocation`]).
+    per_allocation: Map<Network, u16>,
     capacity: usize,
     next_proof: u64,
     /// Restored records still cooling, and the running totals of
@@ -71,6 +79,7 @@ impl Default for Sampler {
             queued: Set::default(),
             per_ip: Map::default(),
             per_network: Map::default(),
+            per_allocation: Map::default(),
             capacity: MAX_KNOWN,
             next_proof: 0,
             restored_live: 0,
@@ -106,9 +115,16 @@ impl Sampler {
     /// it has no share: a local test network runs many nodes on it.
     fn has_room(&self, addr: &SocketAddr) -> bool {
         let ip = addr.ip().to_canonical();
+        let net_cap = if ip.is_ipv4() {
+            MAX_PER_V4_NETWORK
+        } else {
+            MAX_PER_V6_NETWORK
+        };
         ip.is_loopback()
-            || (self.per_ip.get(&ip).copied().unwrap_or(0) < MAX_PER_IP
-                && self.per_network.get(&network(ip)).copied().unwrap_or(0) < MAX_PER_NETWORK)
+            || (count(&self.per_ip, ip) < MAX_PER_IP
+                && count(&self.per_network, network(ip)) < net_cap
+                && allocation(ip)
+                    .is_none_or(|a| count(&self.per_allocation, a) < MAX_PER_V6_ALLOCATION))
     }
 
     /// Updates the shares after `addr` was (`was`) or wasn't tracked
@@ -120,12 +136,19 @@ impl Sampler {
         }
         let ip = addr.ip().to_canonical();
         let net = network(ip);
+        let alloc = allocation(ip);
         if now {
             *self.per_ip.entry(ip).or_default() += 1;
             *self.per_network.entry(net).or_default() += 1;
+            if let Some(a) = alloc {
+                *self.per_allocation.entry(a).or_default() += 1;
+            }
         } else {
             decrement(&mut self.per_ip, ip);
             decrement(&mut self.per_network, net);
+            if let Some(a) = alloc {
+                decrement(&mut self.per_allocation, a);
+            }
         }
     }
 
@@ -361,6 +384,11 @@ impl Sampler {
     }
 }
 
+/// A share's count; zero when the key holds nothing.
+fn count<K: Ord + std::hash::Hash>(map: &Map<K, u16>, key: K) -> u16 {
+    map.get(&key).copied().unwrap_or(0)
+}
+
 /// Lowers a share's count, dropping the key at zero so the maps hold only
 /// live IPs and blocks.
 fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u16>, key: K) {
@@ -559,65 +587,153 @@ mod tests {
         let _ = s.complete_scaled(n(1).addr, PROOF_TOKEN | 1, MAX_INTERVAL, 1, now);
     }
 
+    type Counts = (Map<IpAddr, u16>, Map<Network, u16>, Map<Network, u16>);
+
     /// The shares, recomputed from scratch.
-    fn recounted(s: &Sampler) -> (Map<IpAddr, u16>, Map<Network, u16>) {
+    fn recounted(s: &Sampler) -> Counts {
         let mut tracked: Set<SocketAddr> = s.queued.clone();
         tracked.extend(s.states.keys().copied());
-        let (mut ips, mut nets) = (Map::default(), Map::default());
+        let (mut ips, mut nets, mut allocs) = (Map::default(), Map::default(), Map::default());
         for a in tracked {
             let ip = a.ip().to_canonical();
             *ips.entry(ip).or_default() += 1;
             *nets.entry(network(ip)).or_default() += 1;
+            if let Some(al) = allocation(ip) {
+                *allocs.entry(al).or_default() += 1;
+            }
         }
-        (ips, nets)
+        (ips, nets, allocs)
+    }
+
+    fn node(addr: SocketAddr) -> NodeInfo {
+        NodeInfo {
+            id: NodeId([1; 20]),
+            addr,
+        }
+    }
+
+    /// Offers every address, sampling half of what's queued as it goes so
+    /// the table fills as well as the frontier, and returns how many of
+    /// them the sampler holds at the end.
+    fn push(s: &mut Sampler, addrs: impl Iterator<Item = SocketAddr>, now: Instant) -> usize {
+        let mut token = 0;
+        let mine: Vec<SocketAddr> = addrs.collect();
+        for (i, a) in mine.iter().enumerate() {
+            s.offer(node(*a), now);
+            if i % 2 == 1
+                && let Some(n) = s.next(now)
+            {
+                token += 1;
+                if s.reserve(n.addr, token, now) {
+                    s.complete(n.addr, token, MAX_INTERVAL, now);
+                }
+            }
+        }
+        mine.iter().filter(|a| s.tracked(a)).count()
     }
 
     #[test]
-    fn one_ip_and_one_block_get_a_bounded_share() {
+    fn one_ip_holds_at_most_its_share() {
+        for ip in ["10.0.0.1", "2001:db8::1"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            let mut s = Sampler::default();
+            let held = push(
+                &mut s,
+                (1..=2000).map(|p| SocketAddr::new(ip, p)),
+                Instant::now(),
+            );
+            assert_eq!(held, usize::from(MAX_PER_IP), "{ip}");
+        }
+    }
+
+    #[test]
+    fn one_v4_block_holds_at_most_its_share() {
+        let mut s = Sampler::default();
+        let addrs =
+            (0..=255u8).flat_map(|h| (1..=8u16).map(move |p| SocketAddr::from(([10, 0, 0, h], p))));
+        assert_eq!(
+            push(&mut s, addrs, Instant::now()),
+            usize::from(MAX_PER_V4_NETWORK)
+        );
+        // Another block isn't affected.
+        assert!(s.offer(node(SocketAddr::from(([10, 0, 1, 1], 1))), Instant::now()));
+    }
+
+    #[test]
+    fn one_v6_block_holds_at_most_its_share() {
+        let mut s = Sampler::default();
+        let addrs =
+            (1..=5000u16).map(|h| SocketAddr::from(([0x2001, 0xdb8, 0, 1, 0, 0, h, h], 6881)));
+        assert_eq!(
+            push(&mut s, addrs, Instant::now()),
+            usize::from(MAX_PER_V6_NETWORK)
+        );
+    }
+
+    #[test]
+    fn one_v6_allocation_holds_at_most_its_share_across_its_blocks() {
+        let mut s = Sampler::default();
+        // Many /64s of one /48, a few hosts each.
+        let addrs = (0..=4000u16).flat_map(|net| {
+            (1..=4u16).map(move |h| SocketAddr::from(([0x2001, 0xdb8, 7, net, 0, 0, 0, h], 6881)))
+        });
+        assert_eq!(
+            push(&mut s, addrs, Instant::now()),
+            usize::from(MAX_PER_V6_ALLOCATION)
+        );
+        // Another /48 isn't affected.
+        assert!(s.offer(
+            node(SocketAddr::from(([0x2001, 0xdb8, 8, 0, 0, 0, 0, 1], 6881))),
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn a_place_comes_back_when_its_record_leaves() {
         let mut s = Sampler::default();
         let now = Instant::now();
-        let at = |ip: [u8; 4], port| NodeInfo {
-            id: NodeId([1; 20]),
-            addr: SocketAddr::from((ip, port)),
-        };
-        let queued = (1..=100u16)
-            .filter(|p| s.offer(at([10, 0, 0, 1], *p), now))
-            .count();
-        assert_eq!(queued, usize::from(MAX_PER_IP));
-        let queued = (2..=255u8)
-            .flat_map(|h| [1u16, 2].map(move |p| (h, p)))
-            .filter(|(h, p)| s.offer(at([10, 0, 0, *h], *p), now))
-            .count();
-        assert_eq!(queued, usize::from(MAX_PER_NETWORK - MAX_PER_IP));
-        // Another block isn't affected.
-        assert!(s.offer(at([10, 0, 1, 1], 1), now));
+        let at = |h: u8, p| SocketAddr::from(([10, 0, 0, h], p));
+        for h in 1..=255u8 {
+            s.offer(node(at(h, 1)), now);
+        }
+        assert!(!s.offer(node(at(1, 99)), now));
         // Sampling one frees nothing while it's in flight or cooling...
         let first = s.next(now).unwrap();
         assert!(s.reserve(first.addr, 1, now));
-        assert!(!s.offer(at([10, 0, 0, 99], 9), now));
+        assert!(!s.offer(node(at(1, 99)), now));
         // ...and an expired cooldown gives its place back.
         assert!(s.complete(first.addr, 1, MIN_INTERVAL, now));
         s.prune(now + MIN_INTERVAL);
-        assert!(s.offer(at([10, 0, 0, 99], 9), now + MIN_INTERVAL));
+        assert!(s.offer(node(at(1, 99)), now + MIN_INTERVAL));
     }
 
     #[derive(Debug, Clone)]
     enum Op {
-        Offer(u8, u8, u16),
+        Offer(SocketAddr),
         Next,
         Complete(u8),
         Abort(u8),
-        Restore(u8, u8, u16),
+        Restore(SocketAddr),
         Advance(u16),
+    }
+
+    /// Addresses crowded into a few IPv4 /24s, IPv6 /64s and /48s.
+    fn arb_addr() -> impl Strategy<Value = SocketAddr> {
+        prop_oneof![
+            (0..3u8, any::<u8>(), 1..20u16)
+                .prop_map(|(b, h, p)| SocketAddr::from(([10, 0, b, h], p))),
+            (0..2u16, 0..40u16, 0..20u16, 1..4u16)
+                .prop_map(|(a, n, h, p)| SocketAddr::from(([0x2001, 0xdb8, a, n, 0, 0, 0, h], p))),
+        ]
     }
 
     fn arb_op() -> impl Strategy<Value = Op> {
         prop_oneof![
-            4 => (0..3u8, any::<u8>(), 1..20u16).prop_map(|(b, h, p)| Op::Offer(b, h, p)),
-            2 => Just(Op::Next),
+            6 => arb_addr().prop_map(Op::Offer),
+            3 => Just(Op::Next),
             1 => any::<u8>().prop_map(Op::Complete),
             1 => any::<u8>().prop_map(Op::Abort),
-            1 => (0..3u8, any::<u8>(), 1..20u16).prop_map(|(b, h, p)| Op::Restore(b, h, p)),
+            1 => arb_addr().prop_map(Op::Restore),
             1 => (0..400u16).prop_map(Op::Advance),
         ]
     }
@@ -626,10 +742,10 @@ mod tests {
 
     proptest! {
         /// Whatever the sequence, the share counts match the frontier and
-        /// table, and outside restored records no IP or block holds more
-        /// than its share.
+        /// table, and outside restored records no IP, block or IPv6
+        /// allocation holds more than its share.
         #[test]
-        fn shares_hold_under_any_sequence(ops in proptest::collection::vec(arb_op(), 1..400)) {
+        fn shares_hold_under_any_sequence(ops in proptest::collection::vec(arb_op(), 1..600)) {
             let mut s = Sampler::default();
             let mut now = Instant::now();
             let mut token = 0u64;
@@ -637,11 +753,8 @@ mod tests {
             let mut restored = false;
             for op in ops {
                 match op {
-                    Op::Offer(b, h, p) => {
-                        s.offer(NodeInfo {
-                            id: NodeId([1; 20]),
-                            addr: SocketAddr::from(([10, 0, b, h], p)),
-                        }, now);
+                    Op::Offer(a) => {
+                        s.offer(node(a), now);
                     }
                     Op::Next => {
                         if let Some(n) = s.next(now) {
@@ -659,9 +772,9 @@ mod tests {
                         let (a, t) = flying.remove(usize::from(i) % flying.len());
                         s.abort(a, t);
                     }
-                    Op::Restore(b, h, p) if flying.is_empty() => {
+                    Op::Restore(a) if flying.is_empty() => {
                         restored = true;
-                        s.restore(SocketAddr::from(([10, 0, b, h], p)), now + MIN_INTERVAL);
+                        s.restore(a, now + MIN_INTERVAL);
                     }
                     Op::Advance(secs) => {
                         now += Duration::from_secs(u64::from(secs));
@@ -669,12 +782,15 @@ mod tests {
                     }
                     _ => {}
                 }
-                let (ips, nets) = recounted(&s);
+                let (ips, nets, allocs) = recounted(&s);
                 prop_assert_eq!(&s.per_ip, &ips);
                 prop_assert_eq!(&s.per_network, &nets);
+                prop_assert_eq!(&s.per_allocation, &allocs);
                 if !restored {
                     prop_assert!(ips.values().all(|n| *n <= MAX_PER_IP));
-                    prop_assert!(nets.values().all(|n| *n <= MAX_PER_NETWORK));
+                    let cap = |k: &Network| if k.0 == 4 { MAX_PER_V4_NETWORK } else { MAX_PER_V6_NETWORK };
+                    prop_assert!(nets.iter().all(|(k, n)| *n <= cap(k)));
+                    prop_assert!(allocs.values().all(|n| *n <= MAX_PER_V6_ALLOCATION));
                 }
             }
         }
