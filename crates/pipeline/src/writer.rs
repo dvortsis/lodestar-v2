@@ -918,8 +918,11 @@ impl Writer {
                 if let Some(e) = o.failed.take() {
                     // The batch is lost but its promotions committed in
                     // their own transactions: they're accounted below.
-                    // Its holds are written again until they are.
-                    self.hold_retry.holds.extend(commit_holds(&committing));
+                    // Its holds are written again until they are, but
+                    // not a promotion's, written in its own transaction.
+                    self.hold_retry
+                        .holds
+                        .extend(commit_holds(&committing, &o.blocked));
                     self.stats.errors.fetch_add(1, Ordering::Relaxed);
                     let lost = |leased: bool| {
                         (0..committing.len())
@@ -944,7 +947,7 @@ impl Writer {
                 // The batch and its counters are lost; keep going. Its
                 // leases stay held, so the keys aren't fetched again in
                 // this run. Its holds are written again until they are.
-                self.hold_retry.holds.extend(commit_holds(&committing));
+                self.hold_retry.holds.extend(commit_holds(&committing, &[]));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 let cache = committing.iter().filter(|c| !c.leased).count() as u64;
                 self.gate
@@ -1430,39 +1433,45 @@ impl Writer {
     }
 
     /// Writes again the holds a failed commit decided
-    /// ([`HoldRetry`]): each with the stored torrent under its hashes
+    /// ([`HoldRetry`]): each with the stored torrents under its hashes
     /// deleted in its own transaction, marked for intake first. Those not
-    /// written wait out a backoff and are tried again.
+    /// written wait out a backoff and are all tried again.
     async fn retry_holds(&mut self) {
         let mut store = self.store.take().expect("store");
         let held = self.held.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
         let holds = std::mem::take(&mut self.hold_retry.holds);
-        let (store, left, result) = tokio::task::spawn_blocking(move || {
+        let (store, left, error) = tokio::task::spawn_blocking(move || {
             let now = unix_now();
             let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
             let pending = held.pend(&hashes);
-            // One transaction per hold: those before an error are written.
-            let mut written = 0;
-            let result = (|| {
-                for h in &holds {
-                    store.hold_claims(&[h.filtered(now, quarantine_secs)])?;
-                    written += 1;
+            // One transaction per hold, every hold each pass: one that
+            // keeps failing never holds up the rest. A write, as a commit
+            // writes a hold, deletes every stored torrent under its hashes.
+            let mut left = Vec::new();
+            let mut error = None;
+            for h in holds {
+                let f = h.filtered(now, quarantine_secs);
+                let written = store.write(&WriteBatch {
+                    filtered: std::slice::from_ref(&f),
+                    ..WriteBatch::default()
+                });
+                if let Err(e) = written {
+                    error.get_or_insert(e);
+                    left.push(h);
                 }
-                Ok::<_, lodestar_store::Error>(())
-            })();
+            }
             // Written or failed: the store says which hold.
             hold_committed(&store, Some(pending), true);
-            let left: Vec<_> = holds.into_iter().skip(written).collect();
-            (store, left, result)
+            (store, left, error)
         })
         .await
         .expect("hold retry task");
         self.store = Some(store);
         self.hold_retry.holds = left;
-        match result {
-            Ok(()) => self.hold_retry.backoff.succeeded(),
-            Err(e) => {
+        match error {
+            None => self.hold_retry.backoff.succeeded(),
+            Some(e) => {
                 self.hold_retry.backoff.failed(unix_now());
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
@@ -2548,13 +2557,15 @@ const CORE_REJUDGE_SINGLE: u32 = 3;
 const RETRY_FIRST: i64 = 5;
 const RETRY_MAX: i64 = 300;
 
-/// One store transaction (runs on the blocking pool).
 /// The holds a batch decided, as [`transaction`] writes them: for a
-/// commit that failed, so they're written again ([`HoldRetry`]).
-fn commit_holds(committing: &[Committing]) -> Vec<unverified::Hold> {
+/// commit that failed, so they're written again ([`HoldRetry`]). Those
+/// in `written` (a promotion's, in its own transaction) are left out.
+fn commit_holds(committing: &[Committing], written: &[usize]) -> Vec<unverified::Hold> {
     committing
         .iter()
-        .filter_map(|c| {
+        .enumerate()
+        .filter(|(i, _)| !written.contains(i))
+        .filter_map(|(_, c)| {
             let d = c.verdict.as_ref()?;
             let held = match d.action {
                 Action::Drop => Held::Tombstone,
@@ -2576,6 +2587,7 @@ fn commit_holds(committing: &[Committing]) -> Vec<unverified::Hold> {
         .collect()
 }
 
+/// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
 fn transaction(
     store: &mut Store,
@@ -2773,7 +2785,7 @@ fn transaction(
         Err(e) => return Err(e),
     };
     let mut refused = Vec::new();
-    let stored = rest
+    let stored: Vec<_> = rest
         .iter()
         .zip(&written.prepared)
         .filter_map(|(&i, ins)| match ins.stored() {
@@ -2788,6 +2800,12 @@ fn transaction(
         .chain(promoted)
         .map(|(i, id, new)| (i, id, new, hashes_of(i)))
         .collect();
+    // Stored, then deleted by a hold in the same batch: blocked, so it's
+    // neither counted stored nor learnt as had.
+    let (stored, gone): (Vec<_>, Vec<_>) = stored
+        .into_iter()
+        .partition(|s: &(usize, i64, bool, Vec<InfoHash>)| !written.deleted.contains(&s.1));
+    blocked.extend(gone.iter().map(|s| s.0));
     Ok(Outcome {
         stored,
         promoted_as,
@@ -6476,6 +6494,50 @@ mod tests {
             rule(&w.filter, "bunny", Action::Drop);
             w.commit_cache(vec![again], &retry).await;
             held_not_stored(&w, key, id);
+        }
+
+        /// Every waiting hold is tried on each pass: one that keeps failing
+        /// never holds up those behind it, and only it waits again.
+        #[tokio::test]
+        async fn a_failing_hold_doesnt_hold_up_the_rest() {
+            let (mut w, c, retry) = parts();
+            for name in ["Big Buck Bunny", "Bunny Returns"] {
+                commit(&mut w, &c, results_named(name), &retry).await;
+            }
+            let (stuck, freed) = (
+                results_named("Big Buck Bunny"),
+                results_named("Bunny Returns"),
+            );
+            let (stuck_id, freed_id) = (find(&w, stuck.key).unwrap(), find(&w, freed.key).unwrap());
+            let hold = |key: InfoHash| unverified::Hold {
+                hashes: vec![key.0],
+                rule: "U-1".into(),
+                action: Action::Drop.code(),
+                held: Held::Tombstone,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: false,
+            };
+            w.hold_retry.holds = vec![hold(stuck.key), hold(freed.key)];
+            // The first hold's write always fails (a trigger takes no
+            // parameter, so the hash is inlined).
+            let hex: String = stuck.key.0.iter().map(|b| format!("{b:02x}")).collect();
+            w.store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .execute_batch(&format!(
+                    "CREATE TEMP TRIGGER fail_one BEFORE INSERT ON tombstones
+                     WHEN NEW.hash = x'{hex}' BEGIN SELECT RAISE(ABORT, 'test'); END"
+                ))
+                .unwrap();
+            w.retry_holds().await;
+            held_not_stored(&w, freed.key, freed_id);
+            assert_eq!(find(&w, stuck.key), Some(stuck_id), "its write failed");
+            assert_eq!(w.hold_retry.holds.len(), 1, "only the failing hold waits");
+            assert_eq!(w.hold_retry.holds[0].hashes, vec![stuck.key.0]);
+            assert!(!w.hold_retry.ready(), "after a backoff");
         }
 
         /// A commit that fails keeps its holds: the stored row stays until

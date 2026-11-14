@@ -142,17 +142,19 @@ fn a_partial_row_under_a_held_hash_is_deleted() {
     assert!(!is_stored(&store, id));
 }
 
-/// A write that fails leaves the torrent stored and no hold: the two
-/// commit together or not at all.
+/// A write that fails after the delete leaves the torrent stored, no
+/// hold and no re-index entry: the hold and the delete commit together or
+/// not at all.
 #[test]
 fn a_failed_write_keeps_neither_the_hold_nor_the_delete() {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let (id, hash, _) = stored(&mut store, "a", false, 0);
     let before = reindexed(&store);
+    // Fails the transaction once the torrent is deleted, after the hold.
     store
         .connection()
         .execute_batch(
-            "CREATE TEMP TRIGGER fail_hold BEFORE INSERT ON tombstones
+            "CREATE TEMP TRIGGER fail_after_delete AFTER DELETE ON torrents
              BEGIN SELECT RAISE(ABORT, 'test'); END",
         )
         .unwrap();
