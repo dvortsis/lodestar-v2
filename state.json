@@ -8621,7 +8621,7 @@
     },
     {
       "id": "store-write-hold-check",
-      "note": "Store component: write path vs existing holds; asked slot 32 whether #879 covers it; else own slice. Held detail by message only.",
+      "note": "Store component: write path vs existing holds. Folded into #879 round (slot 32), with store and writer tests. Held detail by message only.",
       "at": "2026-11-14T10:25Z"
     }
   ],
@@ -9020,7 +9020,7 @@
     "879": {
       "slice": "X-filter15-fix",
       "head": "257cf4b2",
-      "status": "review CHANGES (3 blocking, 2 important); one round requested, then fresh review",
+      "status": "CHANGES round in progress (B1-B3, I1-I2, optional 6-10, plus write-path hold check); then fresh review",
       "at": "2026-11-14T09:58Z",
       "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
     },
