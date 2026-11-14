@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:21Z",
+  "updated_at": "2026-11-14T00:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8151,7 +8151,8 @@
     {
       "id": "ci-filter-docs-runs-rust",
       "note": "#854 (docs + one runner/dashboard.yaml line) ran the full Rust matrix (~55 min Windows); check the CI change filter for docs/decisions, docs/operations, runner/ paths",
-      "at": "2026-11-13T23:57Z"
+      "at": "2026-11-13T23:57Z",
+      "status": "X-ci-filter-docs-user (slot 30)"
     },
     {
       "id": "operator-check8-after-design-review",
@@ -9242,7 +9243,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:21Z",
+    "updated": "2026-11-14T00:24Z",
     "items": [
       {
         "slot": 1,
@@ -9401,13 +9402,13 @@
       },
       {
         "slot": 30,
-        "slice": "X-flake-scrape-udp-port",
+        "slice": "X-ci-filter-docs-user",
         "role": "build",
         "agent": "claude",
         "model": "sonnet",
         "status": "active",
-        "since": "2026-11-13T21:06Z",
-        "doing": "scrape.rs UDP drop-then-probe race",
+        "since": "2026-11-14T00:24Z",
+        "doing": "docs/user changes run only the guide-reading Rust test, not the full matrix",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9503,7 +9504,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:21Z",
+  "updated": "2026-11-14T00:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10006,6 +10007,12 @@
       "slice": "X-filter01-hardening",
       "merged": "c4f9710b",
       "at": "2026-11-13T23:39Z"
+    },
+    {
+      "pr": 850,
+      "slice": "X-flake-scrape-udp-port",
+      "merged": "652a2e18",
+      "at": "2026-11-14T00:24Z"
     }
   ]
 }
