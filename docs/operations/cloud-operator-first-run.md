@@ -60,6 +60,12 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
    - The App's token can't merge a PR, enable auto-merge or update a PR's branch from its base (`PUT /repos/{owner}/{repo}/pulls/{n}/update-branch`). It has Pull requests write and Metadata read, no Contents. **Verify the update-branch refusal; don't assume it.** If the call succeeds, the tripwire's `synchronize` trigger must trip on it. Record which you saw, and tell the runner if it succeeded.
    - The App submits a review on a test PR, and the next sweep reports it ("the operator's bot reviewed #…"). This checks that the reviews summary attributes the App's reviews to its bot user ID. If the sweep misses it, tell the runner. Re-enable `operator-wake.yml` afterwards.
    - A test edit by the App on another PR trips `operator-tripwire.yml`: an escalation on the channel, and `operator-wake.yml` disabled. Re-enable it afterwards.
+   - **When a sweep can't finish** (a list too long, a failed request, its deadline), it escalates "the sweep is incomplete … check by hand". Whether it also disables `operator-wake.yml` follows the owner's decision of 2026-11-14:
+     - it disables when an `operator-wake` run's `wake` job ran inside the sweep's lookback, when the sweep is the one at the end of a wake, or when the runs can't be read;
+     - otherwise it escalates without disabling;
+     - a finding attributed to the App's bot always disables.
+
+     The escalation names which case applied. Check the channel and the listed PRs by hand either way.
 8. **The injection test.** See the next section.
 9. **Results.** The runner records checks 1–8 in one decisions file, in the format the OP-5 decisions file gives.
 

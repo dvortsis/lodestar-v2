@@ -15,9 +15,14 @@ These are the fixes for the cloud operator findings the owner-started security r
 OPERATOR-05 is the runner's own handling of the channel; the runner fixed it outside this slice.
 
 ## OPERATOR-01: the tripwire sweep
-- **A sweep that can't finish escalates without disabling.** It still posts an escalation naming why it stopped, so it's checked by hand.
-  - **Why:** an incomplete sweep is no evidence that the operator's bot did anything, so it no longer disables `operator-wake.yml`. This supersedes the runner's 2026-11-11 call that an unfinished sweep counts as a trip (`2026-11-11-OP-4.md`).
-  - **What still disables:** only a finding attributed to the bot.
+- **A sweep that can't finish disables only when a wake session ran inside its lookback** (the owner's decision, 2026-11-14, option A). It always posts an escalation naming why it stopped, so it's checked by hand.
+  - **This supersedes the 2026-11-11 fail-closed call** that an unfinished sweep counts as a trip (`2026-11-11-OP-4.md`), by the owner's decision.
+  - **"A session ran" is read from the Actions API** with the sweep job's own token: the `operator-wake.yml` runs created in the lookback plus the wake job's 45-minute limit, and whether any run's `wake` job wasn't skipped. A comment alone creates only runs whose `wake` job is skipped.
+  - **It fails closed.** A failed read, an unexpected answer, or more than 100 runs in the window counts as a session, so the sweep disables. The escalation names which case applied.
+  - **The end-of-wake sweep in `operator-wake.yml` always counts as inside the lookback.** It's recognised by the workflow ref Actions sets for the job, so no workflow line changed.
+  - **No permission changed.** Both sweep jobs already hold `actions: write`, which covers reading runs and jobs.
+  - **The cost:** the check runs only for an incomplete sweep, at most 101 requests.
+  - **A finding attributed to the bot always disables**, whatever the check says.
   - **A failed request is a stop like the others.** A request that fails part way through a list, the reviews summary or any other stage read is recorded as incomplete, with a fixed label naming the list, never the error's text. The pages read before it are still checked. An error that still escapes the sweep keeps every finding already made: the escalation lists them, and a bot finding still disables.
   - **Each stage stands alone.** A list that stops part way (its page limit, an unreadable page, the deadline) is recorded as incomplete. The items it read are still checked, and every later stage still runs. So a stop in one list can't hide a bot finding in another, and a list filled by the bot's own actions still disables on what was read. One escalation names every stop, once each.
 - **PRs with few reviews cost no review pages.**

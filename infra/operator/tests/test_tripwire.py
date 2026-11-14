@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 from datetime import timedelta
 
-from tests.helpers import T0, FakeGitHub, graphql_reviews
+from tests.helpers import T0, FakeGitHub, graphql_reviews, no_runs
 import tripwire
 
 BOT, NOW = 555, T0
@@ -136,7 +136,7 @@ class Paging(unittest.TestCase):
             seen.append(path)
             if path.startswith("/repos/o/r/issues/events"):
                 return page1 if path.endswith("&page=1") else page2 if path.endswith("&page=2") else []
-            return [] if method == "GET" else None
+            return no_runs(path) if method == "GET" else None
         with redirect_stdout(io.StringIO()):
             findings, disable = tripwire.sweep(env(), gh, NOW)
         self.assertTrue(disable)  # the bot's event sat on page 2
@@ -146,12 +146,12 @@ class Paging(unittest.TestCase):
         recent = ISO(timedelta(minutes=5))
         full = [{"actor": {"id": 1}, "event": "labeled", "created_at": recent, "issue": {"number": 3}}] * 100
         gh = FakeGitHub()
-        gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (full if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
+        gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (full if p.startswith("/repos/o/r/issues/events") else no_runs(p)))  # noqa: E731
         run(["sweep"], env(), gh_full)
         self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
         self.assertNotIn(DISABLE, [c[:2] for c in gh.calls])  # escalated for a check by hand, not disabled
 
-    def test_failed_requests_escalate_each_list_without_disabling(self):
+    def test_failed_requests_escalate_each_list_and_the_failed_session_check_disables(self):
         posts = []
 
         def gh(method, path, body):
@@ -159,12 +159,14 @@ class Paging(unittest.TestCase):
                 raise RuntimeError("GitHub API GET failed")
             posts.append((method, path, body))
         run(["sweep"], env(), gh)
-        self.assertEqual(len(posts), 1)
-        body = posts[0][2]["body"]
+        bodies = [b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b]
+        self.assertEqual(len(bodies), 1)
+        body = bodies[0]
         for name in ("events", "pulls", "comments"):
             self.assertIn(f"the sweep is incomplete: a request for {name} failed; check by hand", body)
         self.assertNotIn("GitHub API", body)  # the error's own text is never echoed
-        self.assertNotIn("disable", posts[0][1])
+        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", body)
+        self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])  # the session check fails closed
 
 
 class Disable(unittest.TestCase):
@@ -210,7 +212,7 @@ class RestReviews:
         if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
             return [{"user": {"id": 1}, "number": 12, "updated_at": ISO(timedelta(minutes=5))}]
         if method == "GET":
-            return []
+            return no_runs(path)
         self.posts.append((method, path, body))
         return None
 
@@ -413,7 +415,7 @@ class ManyActivePRs(unittest.TestCase):
                 rest.append(path)  # a full first page, then an empty one: two pages a PR
                 return [review(1, timedelta(days=30))] * 100 if path.endswith("&page=1") else []
             if method == "GET":
-                return []
+                return no_runs(path)
             call.posts.append((method, path, body))
         call.posts, call.rest = [], rest
         return call
@@ -495,7 +497,7 @@ class StagesStandAlone(unittest.TestCase):
                 for prefix, page in lists.items():
                     if path.startswith(prefix):
                         return page
-                return []
+                return no_runs(path)
             posts.append((method, path, body))
         run(["sweep"], env(), gh)
         bodies = [b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b]
@@ -530,7 +532,7 @@ class StagesStandAlone(unittest.TestCase):
             if method == "GET" and path.startswith("/repos/o/r/pulls/12/reviews") and path.endswith("&page=1"):
                 return [review(BOT, timedelta(minutes=5))]
             if method == "GET":
-                return []
+                return no_runs(path)
             posts.append((method, path, body))
         run(["sweep"], env(), gh)
         body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
@@ -558,7 +560,7 @@ class FailedRequests(unittest.TestCase):
                 if path.startswith("/repos/o/r/pulls?"):
                     return [self.PR]
             if method == "GET":
-                return []
+                return no_runs(path)
             if path == "/graphql":
                 return graphql_reviews(body, lambda n: [])
             posts.append((method, path, body))
@@ -588,7 +590,7 @@ class FailedRequests(unittest.TestCase):
                     return full
                 raise RuntimeError("GitHub API failed")
             if method == "GET":
-                return []
+                return no_runs(path)
             posts.append((method, path, body))
         run(["sweep"], env(), gh)
         self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
@@ -603,7 +605,7 @@ class FailedRequests(unittest.TestCase):
                 return [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=5)),
                          "updated_at": ISO(timedelta(minutes=5)), "body": "x"}]
             if method == "GET":
-                return []
+                return no_runs(path)
             posts.append((method, path, body))
 
         def boom(_body):
@@ -619,3 +621,96 @@ class FailedRequests(unittest.TestCase):
         self.assertIn("the operator's bot: issue event `closed` on #9", body)
         self.assertIn("the sweep failed (ValueError) before it finished; check by hand", body)
         self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
+
+
+class IncompleteRule(unittest.TestCase):
+    """The owner's decision (2026-11-14): an incomplete sweep disables only when
+    a wake session ran inside the lookback; a bot finding always disables."""
+
+    RUNS = "/repos/o/r/actions/workflows/operator-wake.yml/runs"
+    NOISE = {"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}
+    BOT = {"actor": {"id": BOT}, "event": "closed", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 9}}
+
+    def sweep(self, runs, bot=False, complete=False, **over):
+        posts, seen = [], []
+        events = ([self.BOT] if bot else []) + ([] if complete else [self.NOISE] * (100 - bot))
+
+        def gh(method, path, body):
+            seen.append(path)
+            if method == "GET" and path.startswith(self.RUNS):
+                return runs("runs", path)
+            if method == "GET" and path.startswith("/repos/o/r/actions/runs/"):
+                return runs("jobs", path)
+            if method == "GET" and path.startswith("/repos/o/r/issues/events"):
+                return events  # every page full: incomplete, unless complete
+            if method == "GET":
+                return []
+            posts.append((method, path, body))
+        run(["sweep"], env(**over), gh)
+        bodies = [b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b]
+        return bodies, DISABLE in [(m, p) for m, p, _ in posts], seen
+
+    @staticmethod
+    def wake_runs(*conclusions):
+        def answer(kind, path):
+            if kind == "runs":
+                return {"total_count": len(conclusions), "workflow_runs": [{"id": i + 1} for i in range(len(conclusions))]}
+            i = int(path.split("/runs/")[1].split("/")[0]) - 1
+            return {"total_count": 2, "jobs": [{"name": "gate", "conclusion": "success"},
+                                               {"name": "wake", "conclusion": conclusions[i]}]}
+        return answer
+
+    @staticmethod
+    def failing(kind, path):
+        raise RuntimeError("GitHub API failed")
+
+    def test_no_session_in_the_lookback_escalates_only(self):
+        for runs in (self.wake_runs(), self.wake_runs("skipped", "skipped")):  # gate-only runs, from any comment
+            with self.subTest(runs=runs):
+                bodies, disabled, seen = self.sweep(runs)
+                self.assertFalse(disabled)
+                self.assertIn("the sweep is incomplete: events ran past 10 pages", bodies[0])
+                self.assertTrue(any(p.startswith(self.RUNS + "?created=%3E%3D") for p in seen))
+
+    def test_a_session_in_the_lookback_disables(self):
+        for conclusion in ("success", "failure", "cancelled", None):  # None: still running
+            with self.subTest(conclusion=conclusion):
+                bodies, disabled, _ = self.sweep(self.wake_runs("skipped", conclusion))
+                self.assertTrue(disabled)
+                self.assertIn(f"{tripwire.SESSION_RAN}, so an incomplete sweep disables", bodies[0])
+
+    def test_a_failed_session_check_disables(self):
+        bad = (self.failing,
+               lambda k, p: None,
+               lambda k, p: {"total_count": 101, "workflow_runs": [{"id": 1}] * 100},  # more runs than one page
+               lambda k, p: {"total_count": 1, "workflow_runs": [{"id": "x"}]},
+               lambda k, p: {"total_count": 1, "workflow_runs": [{"id": 1}]} if k == "runs" else {"jobs": []},
+               lambda k, p: {"total_count": 1, "workflow_runs": [{"id": 1}]} if k == "runs" else self.failing(k, p))
+        for runs in bad:
+            with self.subTest(runs=runs):
+                bodies, disabled, _ = self.sweep(runs)
+                self.assertTrue(disabled)
+                self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", bodies[0])
+                self.assertNotIn("GitHub API", bodies[0])
+
+    def test_the_end_of_wake_sweep_counts_as_inside_the_lookback(self):
+        ref = "o/r/.github/workflows/operator-wake.yml@refs/heads/main"
+        bodies, disabled, seen = self.sweep(self.failing, GITHUB_WORKFLOW_REF=ref)
+        self.assertTrue(disabled)
+        self.assertIn(f"{tripwire.END_OF_WAKE}, so an incomplete sweep disables", bodies[0])
+        self.assertFalse(any(p.startswith(self.RUNS) for p in seen))
+        tripwire_ref = "o/r/.github/workflows/operator-tripwire.yml@refs/heads/main"
+        self.assertFalse(self.sweep(self.wake_runs(), GITHUB_WORKFLOW_REF=tripwire_ref)[1])
+
+    def test_a_bot_finding_disables_in_every_case(self):
+        for runs in (self.wake_runs(), self.wake_runs("success"), self.failing):
+            with self.subTest(runs=runs):
+                bodies, disabled, _ = self.sweep(runs, bot=True)
+                self.assertTrue(disabled)
+                self.assertIn("the operator's bot: issue event `closed` on #9", bodies[0])
+
+    def test_a_complete_sweep_skips_the_session_check(self):
+        bodies, disabled, seen = self.sweep(self.failing, complete=True)
+        self.assertEqual(bodies, [])
+        self.assertFalse(disabled)
+        self.assertFalse(any(p.startswith(self.RUNS) for p in seen))

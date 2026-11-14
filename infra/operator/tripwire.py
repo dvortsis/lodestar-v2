@@ -11,8 +11,9 @@ The bot may do exactly one thing: post a new comment on the channel PR.
 Anything else it does is a trip: an escalation on the channel PR, then
 operator-wake.yml is disabled (never fleet.yml, which runs the reaper). A
 base-branch change or an edited review comment by anyone is escalated too,
-since the API can't say who edited it. A sweep that can't finish escalates
-without disabling (X-operator-hardening): only a finding attributed to the bot
+since the API can't say who edited it. A sweep that can't finish escalates;
+it disables only when a wake session ran inside its lookback, or that can't be
+read (the owner's decision, 2026-11-14). A finding attributed to the bot always
 disables. Only numbers and fixed labels reach a log or a comment; never a
 title, a body or a label name.
 """
@@ -47,6 +48,15 @@ REVIEW_PAGE_BUDGET = 60  # 7 sweeps x (60 + 42 other requests) = 714, leaving ~2
 # for time can neither escalate nor disable, so the sweep stops itself first and
 # escalates the unfinished run.
 SWEEP_DEADLINE_SECONDS = 360
+# An incomplete sweep disables only when a wake session ran inside its lookback
+# (the owner's decision, 2026-11-14). A wake job can run 45 minutes, so runs
+# created that much before the lookback still count. Past SESSION_RUNS runs in
+# that window, or on any unreadable answer, a session counts as having run.
+WAKE_JOB_MINUTES = 45
+SESSION_RUNS = 100
+SESSION_RAN = "a wake session ran inside the sweep's lookback"
+SESSION_UNKNOWN = "whether a wake session ran inside the sweep's lookback couldn't be read"
+END_OF_WAKE = "this is the end-of-wake sweep"
 
 
 def _digits(v) -> str | None:
@@ -324,6 +334,54 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
     return sorted(set(bot_hits)) + sorted(set(other)) + notes, bool(bot_hits)
 
 
+def _wake_session(env, transport, now: datetime) -> str | None:
+    """Why an incomplete sweep counts a wake session as having run, or None.
+
+    Read from the Actions API with the job's own token: the runs of
+    operator-wake.yml in the window, and whether any run's `wake` job wasn't
+    skipped (a comment alone creates only gate runs, whose `wake` job is
+    skipped). Fails closed: any error or unexpected answer counts as a session.
+    The end-of-wake sweep in operator-wake.yml always counts."""
+    if f"/.github/workflows/{WAKE_WORKFLOW}@" in str(env.get("GITHUB_WORKFLOW_REF", "")):
+        return END_OF_WAKE
+    try:
+        repo = env["GITHUB_REPOSITORY"]
+        since = (now - timedelta(minutes=LOOKBACK_MINUTES + WAKE_JOB_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = transport("GET", f"/repos/{repo}/actions/workflows/{WAKE_WORKFLOW}/runs"
+                             f"?created=%3E%3D{since}&per_page={SESSION_RUNS}", None)
+        runs, total = (r or {}).get("workflow_runs"), (r or {}).get("total_count")
+        if not isinstance(runs, list) or not isinstance(total, int) or isinstance(total, bool) \
+                or total > len(runs) or len(runs) > SESSION_RUNS:
+            return SESSION_UNKNOWN
+        for run in runs:
+            rid = _digits((run or {}).get("id")) if isinstance(run, dict) else None
+            if rid is None:
+                return SESSION_UNKNOWN
+            j = transport("GET", f"/repos/{repo}/actions/runs/{rid}/jobs?filter=all&per_page=100", None)
+            jobs, count = (j or {}).get("jobs"), (j or {}).get("total_count")
+            if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool) or count > len(jobs):
+                return SESSION_UNKNOWN
+            for job in jobs:
+                if not isinstance(job, dict):
+                    return SESSION_UNKNOWN
+                if job.get("name") == "wake" and job.get("conclusion") != "skipped":
+                    return SESSION_RAN
+        return None
+    except Exception:  # noqa: BLE001 - fail closed: an unreadable answer counts as a session
+        return SESSION_UNKNOWN
+
+
+def _incomplete_rule(env, transport, now, findings: list[str], disable: bool) -> tuple[list[str], bool]:
+    """The owner's rule (2026-11-14) for an incomplete sweep without a bot
+    finding: disable only when a wake session ran inside the lookback."""
+    if disable:
+        return findings, True
+    why = _wake_session(env, transport, now)
+    if why is None:
+        return findings, False
+    return findings + [f"{why}, so an incomplete sweep disables"], True
+
+
 def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
     """The sweep's transport: past the deadline, the next request raises Incomplete."""
     end = monotonic() + seconds
@@ -359,17 +417,23 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
         act(env, transport, ["OPERATOR_BOT_USER_ID isn't set; nothing was checked this run"], False)
         raise SystemExit("tripwire: OPERATOR_BOT_USER_ID isn't set")
     found = {"bot": [], "other": []}
+    # A sweep that can't finish escalates, so it's checked by hand. A bot finding
+    # disables; otherwise it disables only when a wake session ran inside the
+    # lookback (the owner's decision, 2026-11-14; _incomplete_rule). The session
+    # check uses the plain transport: the sweep's deadline doesn't cut it short.
     try:
         findings, disable = sweep(env, with_deadline(transport, monotonic), now, found)
+        if found.get("incomplete"):
+            findings, disable = _incomplete_rule(env, transport, now, findings, disable)
     except Incomplete as e:  # the sweep records its own stops; this is the backstop for any it doesn't
-        # A sweep that can't finish escalates, so it's checked by hand; only a bot
-        # finding disables (X-operator-hardening).
-        findings = sorted(set(found["bot"])) + sorted(set(found["other"])) + [describe(e)]
-        disable = bool(found["bot"])
+        findings, disable = _incomplete_rule(env, transport, now, sorted(set(found["bot"])) + sorted(set(found["other"]))
+                                             + [describe(e)], bool(found["bot"]))
     except Exception as e:  # noqa: BLE001 - say so (best effort), keep what was found, then fail the job
         # Findings made before the failure still count: a bot finding still disables.
         failed = f"the sweep failed ({type(e).__name__}) before it finished; check by hand"
-        act(env, transport, sorted(set(found["bot"])) + sorted(set(found["other"])) + [failed], bool(found["bot"]))
+        findings, disable = _incomplete_rule(env, transport, now, sorted(set(found["bot"])) + sorted(set(found["other"]))
+                                             + [failed], bool(found["bot"]))
+        act(env, transport, findings, disable)
         raise SystemExit("tripwire: the sweep failed") from None
     if findings:
         act(env, transport, findings, disable)

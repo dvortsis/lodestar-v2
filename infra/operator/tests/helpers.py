@@ -68,11 +68,19 @@ class FakeGitHub:
             for prefix, items in self.lists.items():
                 if path.startswith(prefix):
                     return items if path.endswith("&page=1") or "&page=" not in path else []
-            return []
+            return no_runs(path)
         return None
 
     def bodies(self):
         return [c[2]["body"] for c in self.calls if isinstance(c[2], dict) and "body" in c[2]]
+
+
+def no_runs(path):
+    """A GET answer for the tripwire's fakes: no operator-wake.yml runs in the
+    window for the session check, an empty page for anything else."""
+    if "/actions/workflows/operator-wake.yml/runs" in path:
+        return {"total_count": 0, "workflow_runs": []}
+    return []
 
 
 def graphql_reviews(body, reviews_of, total_of=None) -> dict:
