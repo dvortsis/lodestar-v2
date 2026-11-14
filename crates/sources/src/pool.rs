@@ -282,10 +282,10 @@ struct BudgetState {
     /// rule and only lacks room: it goes before whole first claims, and the
     /// pool starts no fetch, until it's granted or leaves.
     starved: Option<u64>,
-    /// Waiting growths that no cap holds back, oldest first, each with the
-    /// bytes it wants in all; they go before any first reservation outside
-    /// the floor.
-    growth: VecDeque<(u64, u64)>,
+    /// Waiting growths, oldest first, each with the bytes it wants in all
+    /// and its first window's bytes; they go before any first reservation
+    /// outside the floor.
+    growth: VecDeque<(u64, u64, u64)>,
     /// Bytes held by partial claims, and the growth each proven one still
     /// needs. A partial claim is proven once its first window is in (it
     /// asks to grow); until then its announced size doesn't count toward
@@ -345,7 +345,7 @@ impl BudgetState {
     fn small_room(&self, limit: u64) -> u64 {
         let floor = limit / FLOOR_SHARE;
         match self.growth.front() {
-            Some(&(_, want)) => floor.min(limit.saturating_sub(want)),
+            Some(&(_, want, _)) => floor.min(limit.saturating_sub(want)),
             None => floor,
         }
     }
@@ -625,12 +625,12 @@ impl Reservation {
             if need > 0 && !claim.proven.swap(true, Ordering::Relaxed) {
                 s.prove(need);
             }
-            let queued = s.growth.iter().any(|&(id, _)| id == claim.id);
+            let queued = s.growth.iter().any(|&(id, ..)| id == claim.id);
             if claim.net.is_some_and(|net| s.grown_nets.contains(&net)) {
                 // Its network has a grown claim: only that one holds it
                 // back, so it waits apart and holds up nothing.
                 if queued {
-                    s.growth.retain(|&(id, _)| id != claim.id);
+                    s.growth.retain(|&(id, ..)| id != claim.id);
                     budget.settled.notify_one();
                     budget.freed.notify_waiters();
                 }
@@ -641,18 +641,42 @@ impl Reservation {
             // floor. Held back by the cap, it keeps its turn: the growths
             // behind it wait, and the grown claims drain until it fits.
             let under_cap = s.grown == 0 || s.grown.saturating_add(want) <= budget.grown_cap();
-            let in_turn = s.growth.front().is_none_or(|&(id, _)| id == claim.id);
+            let in_turn = match s.growth.front() {
+                None => true,
+                Some(&(front, ..)) if front == claim.id => true,
+                Some(&(_, front_want, front_window)) => {
+                    // The front may be passed by a growth queued behind it
+                    // when only the first windows of the growths behind it
+                    // keep it from growing: it can't grow until one of them
+                    // does, and they wait for it, so the first of them that
+                    // fits goes. No new first window is let in while a
+                    // growth waits, so the claims that can pass are the
+                    // ones whose window was in when the front began to
+                    // wait, each once; and each that grows takes more room
+                    // than its window held, so the front then waits for it
+                    // to end, which the pace rule bounds.
+                    let extra = front_want - front_window;
+                    let short = (large + extra)
+                        .saturating_sub(limit - budget.floor())
+                        .max((used + extra).saturating_sub(limit));
+                    let front_capped =
+                        s.grown != 0 && s.grown.saturating_add(front_want) > budget.grown_cap();
+                    let behind: u64 = s.growth.iter().skip(1).map(|&(.., w)| w).sum::<u64>()
+                        + if queued { 0 } else { mine };
+                    short > 0 && short <= behind && !front_capped
+                }
+            };
             // With nothing else reserved or held, it is fetched alone,
             // whatever its size (a fetcher whose limit is over
             // `largest_dict`).
             let alone = others == 0;
             if !(in_turn && (alone || (under_cap && fits && beside_floor))) {
                 if !queued {
-                    s.growth.push_back((claim.id, want));
+                    s.growth.push_back((claim.id, want, mine));
                 }
                 return false;
             }
-            s.growth.retain(|&(id, _)| id != claim.id);
+            s.growth.retain(|&(id, ..)| id != claim.id);
         } else if partial {
             let room = limit - budget.floor();
             if s.net_partials_full(claim.net, want, room) {
@@ -809,7 +833,7 @@ impl Drop for Queued<'_> {
         let id = self.0.id;
         s.queue.retain(|&q| q != id);
         s.partials.retain(|&q| q != id);
-        s.growth.retain(|&(q, _)| q != id);
+        s.growth.retain(|&(q, ..)| q != id);
         if s.starved == Some(id) {
             s.starved = None;
         }
@@ -4422,6 +4446,60 @@ mod budget {
         drop(unproven);
         assert_eq!(used(&b), 0);
         assert!(b.lock().needs.is_empty());
+    }
+
+    /// Two large claims whose windows are both in, the first unable to
+    /// grow while the second's window is held: the second, queued behind
+    /// it, grows first, and the first grows once the second has ended.
+    #[tokio::test(start_paused = true)]
+    async fn a_growth_passes_a_front_its_own_window_blocks() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let front = window(&b, 1, 64 << 10, 698_698).await;
+        let behind = window(&b, 2, 64 << 10, 666_029).await;
+        let mut wait = growing(&front, 698_698);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(Duration::from_secs(1), behind.reserve(666_029, 666_029))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "the front waits for it to end");
+        drop(behind);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("the front grows once it has ended")
+            .unwrap();
+        drop(front);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front that has been passed grows as soon as the growths that
+    /// passed it end, ahead of a growth that asked later.
+    #[tokio::test(start_paused = true)]
+    async fn a_passed_front_grows_before_later_growths() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let front = window(&b, 1, 64 << 10, 698_698).await;
+        let passer = window(&b, 2, 64 << 10, 666_029).await;
+        let later = window(&b, 3, 1_000, 20_000).await;
+        let mut wait = growing(&front, 698_698);
+        queued(&b, |s| s.growth.len() == 1).await;
+        passer.reserve(666_029, 666_029).await;
+        let mut after = growing(&later, 20_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "it doesn't pass the front");
+        drop(passer);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("the front grows first")
+            .unwrap();
+        assert!(!after.is_finished(), "the later growth still waits");
+        drop(front);
+        tokio::time::timeout(Duration::from_secs(1), &mut after)
+            .await
+            .expect("then the later one grows")
+            .unwrap();
+        drop(later);
+        assert_eq!(used(&b), 0);
     }
 
     fn net(n: u8) -> Net {

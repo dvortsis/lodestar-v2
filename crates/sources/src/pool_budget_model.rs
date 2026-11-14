@@ -2,7 +2,8 @@
 //!
 //! Each seed runs a minute of claims against one [`Budget`]: small whole
 //! claims, and large ones that reserve a first window and then grow, some
-//! past the grown claims' cap. Every claim comes from one of a few
+//! past the grown claims' cap, and some whose first window never comes.
+//! Every claim comes from one of a few
 //! networks. Claims hold their room for a while, then become finished
 //! results or are dropped; a consumer that sometimes lags takes the
 //! results. Throughout, the budget's bounds are checked, and no wait for
@@ -143,6 +144,23 @@ async fn claim(b: Arc<Budget>, seed: u64, mut rng: Rng) {
     let (window, total) = if rng.chance(80) {
         let n = rng.range(1_000, 60_000) as usize;
         (n, n)
+    } else if rng.chance(15) {
+        // Announces close to the most a dict may be, and its first window
+        // never completes: it never asks to grow, and ends when the window
+        // is due.
+        let most = super::largest_dict(b.limit as usize) as u64;
+        let total = rng.range(most / 2, most) as usize;
+        let r = Reservation::for_peer(b.clone(), Some(net(rng.range(1, NETWORKS))));
+        granted(
+            "first reservation",
+            (seed, MAX_WAIT),
+            &b,
+            (64 << 10, total),
+            r.reserve(64 << 10, total),
+        )
+        .await;
+        sleep(lodestar_peer_wire::FIRST_WINDOW_DEADLINE).await;
+        return;
     } else if rng.chance(85) {
         (64 << 10, rng.range(100_000 * k, 400_000 * k) as usize)
     } else {
