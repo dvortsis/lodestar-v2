@@ -37,7 +37,7 @@
 	"settings_crawler_timeout_secs_label": "获取超时",
 	"settings_crawler_timeout_secs_help": "元数据获取允许的最长时间。",
 	"settings_crawler_max_metadata_mib_label": "元数据大小上限",
-	"settings_crawler_max_metadata_mib_help": "拒绝超过此大小的元数据。",
+	"settings_crawler_max_metadata_mib_help": "拒绝超过此大小的元数据。超过 47 的值按 47 处理。",
 	"settings_crawler_paused_label": "暂停爬取",
 	"settings_crawler_paused_help": "暂停新的爬取工作。",
 	"settings_transport_utp_label": "uTP（尚未生效）",

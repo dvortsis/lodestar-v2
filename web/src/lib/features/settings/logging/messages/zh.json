@@ -611,6 +611,8 @@
 	"settings_logging_ev_dht_key_harvested_h": "已从 DHT 收集到一个键。",
 	"settings_logging_ev_dht_harvest_summary_n": "DHT 收集摘要",
 	"settings_logging_ev_dht_harvest_summary_h": "DHT 收集内容的定期摘要。",
+	"settings_logging_ev_fetch_metadata_limit_clamped_n": "最大种子信息大小已降低",
+	"settings_logging_ev_fetch_metadata_limit_clamped_h": "元数据大小上限设置超过 47 MiB，因此按 47 MiB 处理。已保存的设置保持不变；大于 47 MiB 的种子信息不会被获取。",
 	"settings_logging_ev_fetch_failed_n": "获取失败",
 	"settings_logging_ev_fetch_failed_h": "从对等点获取种子详情失败。",
 	"settings_logging_ev_fetch_failed_summary_n": "获取失败摘要",
