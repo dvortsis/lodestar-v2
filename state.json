@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:29Z",
+  "updated_at": "2026-11-14T13:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8700,6 +8700,11 @@
       "id": "X-fetch-room-fix-owner-flags",
       "text": "At merge: flag the new fetch-pool limits and worker largest-dict change to the owner (\u00a72.19, \u00a72.26); give the known residual by message only.",
       "at": "2026-11-14T13:25Z"
+    },
+    {
+      "id": "X-worker-oversize-handback",
+      "text": "A worker reports a dict too large for it with its own code; the coordinator re-queues the key for the main node instead of counting a loss. Place after X-fetch-room-fix merges; check slot 30 owns (cluster proto, worker session, coordinator).",
+      "at": "2026-11-14T13:41Z"
     }
   ],
   "main_health": [
@@ -9106,6 +9111,12 @@
       "head": "a0607144",
       "status": "review CHANGES on a0607144 (1 blocking hold hygiene, 1 important test gap, 4 optional taken); one round, then fresh delta review",
       "at": "2026-11-14T12:32Z"
+    },
+    "884": {
+      "slice": "X-fuzz-gaps",
+      "slot": 33,
+      "head": "25694d7f",
+      "state": "CI running; awaiting ready"
     }
   },
   "merged_log": [
@@ -9752,7 +9763,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T13:29Z",
+    "updated": "2026-11-14T13:41Z",
     "items": [
       {
         "slot": 1,
@@ -9935,7 +9946,7 @@
         "slice": "X-fuzz-gaps",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "X-fuzz-gaps PR next; building X-fetch-room-fix locally",
+        "doing": "#884 X-fuzz-gaps CI; building X-fetch-room-fix (w1, m2) locally",
         "since": "2026-11-14T09:05Z"
       }
     ]
@@ -10021,7 +10032,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:29Z",
+  "updated": "2026-11-14T13:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
