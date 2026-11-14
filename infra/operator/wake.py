@@ -23,7 +23,8 @@
    call paused for approval is denied with a message to escalate; a budget
    stop, an error, a refusal, a stall or 30 minutes makes the bridge post the
    escalation itself, naming an error by the API's own type. So does a clean
-   finish in which the permission policy refused a tool call. Every session is
+   finish after an error the session didn't recover from, or in which the
+   permission policy refused a tool call. Every session is
    archived at the end, so none can be resumed later with a newer token.
 8. Always: the token revoked, the credential reset, the lock released.
 
@@ -75,7 +76,8 @@ ERROR_TYPES = frozenset((
     "repository_authentication_error", "repository_forbidden_error", "repository_not_found_error",
     "repository_checkout_error", "repository_clone_error"))
 RETRY_STATUSES = frozenset(("retrying", "exhausted", "terminal"))
-# Why the `auto` permission policy refused a call outright: judged high-risk, or
+# The reason codes on a call the `auto` permission policy refused outright (the
+# event's `evaluation.evaluated_permission`, type `deny`): judged high-risk, or
 # no judgement reached and the call not held for approval.
 POLICY_REASONS = frozenset(("high_risk", "indeterminate"))
 DENY = ("This call needs approval, which the bridge never gives. Don't retry or work around it: "
@@ -268,6 +270,14 @@ def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: 
     }
 
 
+def _events(call, sid: str) -> list[dict]:
+    """Every event of the session, oldest first. `_stop_reason` and the error
+    readers below take the last matching event as the latest, so the order is
+    asked for (the list's `order` parameter; `asc` is also its default) rather
+    than assumed."""
+    return pages(call, f"/v1/sessions/{sid}/events", {"order": "asc"})
+
+
 def _stop_reason(events: list[dict]) -> str | None:
     """Why the session is idle: the stop reason of its last status event, when
     that event is a `session.status_idle`. None when the list doesn't show the
@@ -281,18 +291,33 @@ def _stop_reason(events: list[dict]) -> str | None:
     return None
 
 
-def _error_words(events: list[dict]) -> str:
-    """The session's last `session.error` as fixed words, or "". Both values are
+def _error(event: dict) -> tuple[str, str]:
+    """A `session.error` as two fixed words (type, retry status). Both are
     checked against the API's own lists, so no text from the session reaches a
     log or a comment."""
+    err = event.get("error") if isinstance(event.get("error"), dict) else {}
+    kind, retry = err.get("type"), err.get("retry_status")
+    retry = retry.get("type") if isinstance(retry, dict) else None
+    return (kind if isinstance(kind, str) and kind in ERROR_TYPES else "an unlisted error type",
+            retry if isinstance(retry, str) and retry in RETRY_STATUSES else "an unlisted retry status")
+
+
+def _error_words(events: list[dict]) -> str:
+    """The session's last `session.error` as " (type, retry status)", or ""."""
     for e in reversed(events):
         if e.get("type") == "session.error":
-            err = e.get("error") if isinstance(e.get("error"), dict) else {}
-            kind, retry = err.get("type"), err.get("retry_status")
-            retry = retry.get("type") if isinstance(retry, dict) else None
-            kind = kind if isinstance(kind, str) and kind in ERROR_TYPES else "an unlisted error type"
-            retry = retry if isinstance(retry, str) and retry in RETRY_STATUSES else "an unlisted retry status"
-            return f" ({kind}, {retry})"
+            return " (%s, %s)" % _error(e)
+    return ""
+
+
+def unrecovered_error(events: list[dict]) -> str:
+    """The escalation line for a session that ended its turn after an error it
+    didn't recover from, or "". Only `retrying` is a recovery in progress:
+    `exhausted`, `terminal` and any status this bridge doesn't know all count,
+    so an unknown value fails closed. The last such error is the one named."""
+    for e in reversed(events):
+        if e.get("type") == "session.error" and _error(e)[1] != "retrying":
+            return "the session finished after an error it didn't recover from (%s, %s)" % _error(e)
     return ""
 
 
@@ -348,7 +373,20 @@ def _interrupt(call, sid: str, monotonic, sleep) -> None:
 
 
 def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=lambda: False) -> str:
-    """'done', or the escalation line for a session that couldn't escalate itself.
+    """'done', or the escalation line for a session that couldn't escalate itself."""
+    return watch_events(call, sid, monotonic, sleep, stopped)[0]
+
+
+def finish_problem(events: list[dict]) -> str:
+    """Why a session that ended its turn cleanly still needs an escalation, or
+    "": an error it didn't recover from, tool calls the policy refused, or both."""
+    return "; ".join(x for x in (unrecovered_error(events), policy_denials(events)) if x)
+
+
+def watch_events(call, sid: str, monotonic=time.monotonic, sleep=time.sleep,
+                 stopped=lambda: False) -> tuple[str, list[dict]]:
+    """`watch`, and the event list a "done" was read from (empty otherwise), so
+    what the bridge says about a finish comes from the same read that showed it.
 
     The session object carries a status and no stop reason, so an idle or
     terminated session is read from its event list. A session that finishes
@@ -363,22 +401,22 @@ def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=la
     while True:
         if monotonic() >= deadline:
             _interrupt(call, sid, monotonic, sleep)
-            return f"the session ran past {SESSION_MINUTES} minutes and was stopped"
+            return f"the session ran past {SESSION_MINUTES} minutes and was stopped", []
         if stopped():
             _interrupt(call, sid, monotonic, sleep)
-            return "operator-wake.yml was disabled, so the session was stopped"
+            return "operator-wake.yml was disabled, so the session was stopped", []
         status = (call("GET", f"/v1/sessions/{sid}", None) or {}).get("status")
         if status == "terminated":
-            return "the session was terminated" + _error_words(pages(call, f"/v1/sessions/{sid}/events", {}))
+            return "the session was terminated" + _error_words(_events(call, sid)), []
         if status == "idle":
-            events = pages(call, f"/v1/sessions/{sid}/events", {})
+            events = _events(call, sid)
             stop = _stop_reason(events)
             if stop == "end_turn":
-                return "done"
+                return "done", events
             if stop == "budget_reached":
-                return "the session reached its budget"
+                return "the session reached its budget", []
             if stop == "refusal":
-                return "the session stopped on a model refusal"
+                return "the session stopped on a model refusal", []
             if stop == "requires_action" and _deny_pending(call, sid, events, denied):
                 stalled = 0
             elif stop in ("requires_action", None):
@@ -388,9 +426,9 @@ def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=la
                     # so the archive that follows is never refused with the session still running.
                     _interrupt(call, sid, monotonic, sleep)
                     return ("the session stalled waiting for an action the bridge can't give" if stop
-                            else "the session went idle and its events show no stop reason")
+                            else "the session went idle and its events show no stop reason"), []
             else:  # retries_exhausted, or a reason this bridge doesn't know
-                return "the session ended with an error" + _error_words(events)
+                return "the session ended with an error" + _error_words(events), []
         else:
             stalled = 0
         sleep(POLL_SECONDS)
@@ -492,10 +530,10 @@ def cmd_wake(env, deps=None) -> int:
         print(f"operator-wake: session started ({msg.mode})")
         if not bridge.record_session(store, ids, etag, sid):
             escalate(env, msg.id, "couldn't record the session in claude-lock.json; the next wake will refuse", gh_post)
-        outcome = watch(call, sid, mono, sleep, wake_disabled(env, gh_post))
+        outcome, events = watch_events(call, sid, mono, sleep, wake_disabled(env, gh_post))
         print(f"operator-wake: session {'ended' if outcome == 'done' else 'stopped'}")
         if outcome == "done":
-            outcome = policy_denials(pages(call, f"/v1/sessions/{sid}/events", {})) or outcome
+            outcome = finish_problem(events) or outcome
         if outcome != "done":
             escalate(env, msg.id, outcome, gh_post)
         return 0

@@ -157,7 +157,7 @@ class Watch(unittest.TestCase):
         api, mono = Api(states=[{"status": "idle", "stop_reason": {"type": "end_turn"}}]), Mono()
         self.assertEqual(wake.watch(api, "sesn_1", mono, mono.sleep), "done")
         self.assertEqual(api.served, {"status": "idle"})  # the fake serves what the API serves
-        self.assertIn("/v1/sessions/sesn_1/events?limit=100", api.paths("GET"))
+        self.assertIn("/v1/sessions/sesn_1/events?order=asc&limit=100", api.paths("GET"))  # oldest first, asked for
 
     def test_an_error_is_named_by_its_listed_type_only(self):
         def err(kind, retry):
@@ -405,6 +405,87 @@ class Wake(unittest.TestCase):
                 self.setUp()
                 self.go(wake_env()[0], FakeAnthropic(events=quiet))
                 self.assertEqual(self.post.bodies(), [])
+
+    def test_a_finish_after_an_unrecovered_error_is_escalated(self):
+        # A session can end its turn cleanly after an error that sank its work (a credential
+        # host it couldn't reach, say). Only `retrying` is a recovery; anything else fails closed.
+        def err(kind, retry):
+            status = {"type": retry} if isinstance(retry, str) else retry
+            return {"type": "session.error", "id": "sevt_e",
+                    "error": {"type": kind, "message": "LEAKMARK free text", "retry_status": status}}
+        line = "the session finished after an error it didn't recover from "
+        cases = [([err("billing_error", "terminal")], line + "(billing_error, terminal)"),
+                 ([err("credential_host_unreachable_error", "exhausted")],
+                  line + "(credential_host_unreachable_error, exhausted)"),
+                 ([err("unknown_error", "LEAKMARK status")], line + "(unknown_error, an unlisted retry status)"),
+                 ([err("unknown_error", None)], line + "(unknown_error, an unlisted retry status)"),
+                 ([{"type": "session.error"}], line + "(an unlisted error type, an unlisted retry status)"),
+                 # The last unrecovered one is named; a later retry doesn't hide it.
+                 ([err("model_overloaded_error", "exhausted"), err("mcp_connection_failed_error", "exhausted"),
+                   err("model_rate_limited_error", "retrying")], line + "(mcp_connection_failed_error, exhausted)"),
+                 # With denied calls too, both are said, in one escalation.
+                 ([err("billing_error", "exhausted"), {"type": "agent.tool_use", "evaluated_permission": "deny"}],
+                  line + "(billing_error, exhausted); the session finished, but the permission policy denied 1")]
+        for events, want in cases:
+            with self.subTest(want=want):
+                self.setUp()
+                env, marks = wake_env()
+                api = FakeAnthropic(events=events)
+                rc, out = self.go(env, api)
+                self.assertEqual(rc, 0)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn(want, body)
+                self.assertIn("/v1/sessions/sesn_FAKE/archive", api.paths("POST"))
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+        # An error the session retried past is a recovery: a quiet finish.
+        self.setUp()
+        self.go(wake_env()[0], FakeAnthropic(events=[err("model_overloaded_error", "retrying")] * 2))
+        self.assertEqual(self.post.bodies(), [])
+
+    def test_a_finish_is_judged_from_the_read_that_showed_it(self):
+        # One events read for an end_turn: the stop reason, the errors and the denials
+        # all come from it, so no second read can fail or disagree after "done".
+        api = FakeAnthropic()
+        self.go(wake_env()[0], api)
+        self.assertEqual([p for p in api.paths("GET") if "/events" in p],
+                         ["/v1/sessions/sesn_FAKE/events?order=asc&limit=100"])
+        mono = Mono()
+        events = [{"type": "agent.tool_use", "evaluated_permission": "deny"}]
+        got = wake.watch_events(FakeAnthropic(events=events), "sesn_1", mono, mono.sleep)
+        self.assertEqual(got[0], "done")
+        self.assertEqual(got[1][:1], events)
+        for state in ({"status": "terminated"}, {"status": "idle", "stop_reason": {"type": "budget_reached"}}):
+            self.assertEqual(wake.watch_events(FakeAnthropic(states=[state], events=events), "sesn_1", mono, mono.sleep)[1], [])
+
+    def test_an_unreadable_event_list_is_never_a_quiet_success(self):
+        # The session is idle, but its events can't be read ({} or a failed call): the wake
+        # fails loudly (escalation, interrupt, archive, a failing job), whatever the session did.
+        class Empty(FakeAnthropic):
+            def __call__(self, method, path, body):
+                res = super().__call__(method, path, body)
+                return {} if method == "GET" and "/events" in path else res
+
+        class Down(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "GET" and "/events" in path:
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("LEAKMARK down")
+                return super().__call__(method, path, body)
+        for api, name in ((Empty(), "ApiError"), (Down(), "RuntimeError")):
+            with self.subTest(api=type(api).__name__):
+                self.setUp()
+                env, marks = wake_env()
+                rc, out = self.go(env, api)
+                self.assertIsInstance(rc, Exception)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn(f"the bridge failed ({name}); the session, if any, is archived", body)
+                posts = api.paths("POST")
+                self.assertIn("/v1/sessions/sesn_FAKE/archive", posts)
+                self.assertLess(posts.index("/v1/sessions/sesn_FAKE/events"), posts.index("/v1/sessions/sesn_FAKE/archive"))
+                self.assertNotIn(LOCK_KEY, self.store.objects)
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
 
     def test_every_listed_policy_reason_is_a_plain_word(self):
         for word in wake.POLICY_REASONS:
