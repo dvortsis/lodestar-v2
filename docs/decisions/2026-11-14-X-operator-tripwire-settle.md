@@ -1,4 +1,4 @@
-# X-operator-tripwire-settle decisions (PR to follow)
+# X-operator-tripwire-settle decisions (#865)
 
 This supersedes the session check's window and retry bullets in `2026-11-14-X-operator-hardening.md` (OPERATOR-01). These change the tripwire's wake-session check (`infra/operator/tripwire.py`, `_wake_session`), which decides whether an incomplete sweep disables `operator-wake.yml` under the owner's decision of 2026-11-14 (`2026-11-14-X-operator-hardening.md`). They come from the reviewer session's third delta on #859, at component level. The rule itself is unchanged: an incomplete sweep disables when a wake session ran inside its lookback, or that can't be read.
 
