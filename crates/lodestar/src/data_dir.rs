@@ -11,6 +11,7 @@ use std::io;
 use std::path::Path;
 
 /// The mode a new data folder gets on Unix.
+#[cfg(unix)]
 pub const MODE: u32 = 0o700;
 
 /// Creates `dir` if it's missing: its missing parents with the default
@@ -23,9 +24,14 @@ pub fn ensure(dir: &Path) -> io::Result<bool> {
     if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, MODE);
+    let builder = {
+        let mut builder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, MODE);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     match builder.create(dir) {
         Ok(()) => Ok(true),
         // Created meanwhile by another process: left as it is, like any existing folder.
