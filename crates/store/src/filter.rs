@@ -683,20 +683,21 @@ impl Store {
     /// is something the main node judges itself; a worker's report never
     /// removes one. The checks and the writes are one write transaction,
     /// so no commit lands between them, and a failure part way writes
-    /// nothing. Returns `(added, kept)`: rows added, and hashes skipped
-    /// because the store has something under them.
+    /// nothing. Returns the rows added and the hashes skipped because the
+    /// store has something under them (so a caller's in-memory hold on
+    /// them can go).
     pub fn tombstone_from_worker_unless_stored(
         &mut self,
         hashes: &[[u8; 20]],
         worker: u32,
         at: i64,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, Vec<[u8; 20]>)> {
         if hashes.is_empty() {
-            return Ok((0, 0));
+            return Ok((0, Vec::new()));
         }
         let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
         let tx = crate::begin_write(&mut self.conn)?;
-        let (mut added, mut stored) = (0, 0);
+        let (mut added, mut stored) = (0, Vec::new());
         {
             // What a hold's insert would otherwise take away (the
             // tombstone triggers): an unverified item or an import
@@ -716,7 +717,7 @@ impl Store {
             for h in hashes {
                 let awaiting: bool = pending.query_row([&h[..]], |r| r.get(0))?;
                 if awaiting || crate::find_any(&tx, std::iter::once(InfoHash(*h)))?.is_some() {
-                    stored += 1;
+                    stored.push(*h);
                     continue;
                 }
                 added += ins.execute(params![&h[..], rule, at])?;
@@ -1477,7 +1478,7 @@ mod tests {
             |s: &Store, sql: &str| -> i64 { s.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         let keys = [[0x51; 20], [0x52; 20], [0x54; 20], [0x55; 20]];
         let (added, kept) = s.tombstone_from_worker_unless_stored(&keys, 7, 10).unwrap();
-        assert_eq!((added, kept), (1, 3));
+        assert_eq!((added, kept), (1, keys[..3].to_vec()));
         assert_eq!(count(&s, "SELECT count(*) FROM unverified_items"), 1);
         assert_eq!(count(&s, "SELECT count(*) FROM import_candidates"), 2);
         assert_eq!(count(&s, "SELECT count(*) FROM snapshot_deletions"), 0);
@@ -1514,7 +1515,7 @@ mod tests {
         assert_eq!(
             s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
                 .unwrap(),
-            (2, 0)
+            (2, vec![])
         );
     }
 
@@ -1659,12 +1660,12 @@ mod tests {
         let (added, stored) = s
             .tombstone_from_worker_unless_stored(&[key, [6; 20]], 7, 10)
             .unwrap();
-        assert_eq!((added, stored), (1, 1));
+        assert_eq!((added, stored), (1, vec![key]));
         assert_eq!(s.held_among(&[key, [6; 20]]).unwrap(), vec![false, true]);
         assert!(s.find(&InfoHash(key)).unwrap().is_some(), "still stored");
         assert_eq!(
             s.tombstone_from_worker_unless_stored(&[], 7, 10).unwrap(),
-            (0, 0)
+            (0, vec![])
         );
     }
 
