@@ -1821,6 +1821,85 @@ impl StoredKeys for Gate {
     }
 }
 
+/// Keys a remote worker found too large go to the built-in worker's pool
+/// as parked keys do: keeping their privacy, ended as blocked if it refuses
+/// them, and left for a re-grant (`false`) when the pool is full.
+#[test]
+fn keys_handed_back_go_to_the_built_in_worker() {
+    use lodestar_cluster::HandBack;
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(2);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let (private, public, blocked, extra) = (
+        InfoHash([3; 20]),
+        InfoHash([1; 20]),
+        InfoHash([9; 20]),
+        InfoHash([4; 20]),
+    );
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 1 << 3,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(filter_blocking(&[])),
+        }),
+    });
+    held.insert(blocked.0);
+    let mut taken = HashMap::new();
+    for (key, s) in [(private, 3), (public, 1), (blocked, 1), (extra, 1)] {
+        let c = Claim {
+            key,
+            source: src(s),
+            strategy: 0,
+            at: now(),
+        };
+        let Claimed::Granted(t) = authority.claim(WorkerId(8), c, now()) else {
+            panic!("granted")
+        };
+        let HandBack::Handed(local, lease) = authority.hand_to_local(WorkerId(8), &key, t, now())
+        else {
+            panic!("handed")
+        };
+        taken.insert(key, intake.take_handed(key, local, lease));
+    }
+    // The pool takes two; the refused key is handled; the last finds it
+    // full and is left for a re-grant.
+    assert_eq!(
+        taken,
+        HashMap::from([
+            (private, true),
+            (public, true),
+            (blocked, true),
+            (extra, false)
+        ])
+    );
+    let mut handed = HashMap::new();
+    while let Ok(d) = to_pool.try_recv() {
+        assert!(!d.reply);
+        handed.insert(d.found.key, d.found.private_source);
+    }
+    assert_eq!(handed, HashMap::from([(private, true), (public, false)]));
+    assert!(!authority.in_flight(&blocked), "its lease ended as blocked");
+    assert_eq!(
+        authority.get(&extra).map(|l| l.holder),
+        Some(WorkerId::LOCAL),
+        "still leased to it, for the server to requeue"
+    );
+}
+
 /// Parked keys handed to the built-in worker keep their privacy (§18.7,
 /// BEP 27: a key every source of which is private never reaches public
 /// peer finding), and one it refuses (held, or on the filter's hash

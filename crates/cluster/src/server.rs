@@ -78,7 +78,7 @@ use zeroize::Zeroizing;
 
 use crate::clock::{Clock, ClockTime};
 use crate::frame::{self, MAX_JOIN_REQUEST};
-use crate::leases::{LOSS_BLOCKED, REST_AFTER_DRAIN_SECS};
+use crate::leases::{HandBack, LOSS_BLOCKED, LOSS_OVERSIZE, REST_AFTER_DRAIN_SECS};
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
@@ -221,6 +221,12 @@ pub trait InboundSink: Send + Sync + 'static {
     /// Hints a remote worker found for keys the built-in worker holds.
     /// In memory only (§18.7).
     fn local_hints(&self, _hints: Vec<HintItem>) {}
+    /// A key a remote worker found too large, now leased to the built-in
+    /// worker under `token`: start its fetch there. `false` if it can't be
+    /// taken now; the key then waits for a re-grant. Mustn't block.
+    fn handed_back(&self, _key: InfoHash, _token: Token, _lease: Lease) -> bool {
+        false
+    }
 }
 
 /// Whether grants may go out now (§19.5 backpressure): of `wanted` keys
@@ -404,6 +410,7 @@ struct Counters {
     harvested: AtomicU64,
     outcomes: AtomicU64,
     stale_reports: AtomicU64,
+    handed_back: AtomicU64,
     regrants: AtomicU64,
     busy: AtomicU64,
     hints_relayed: AtomicU64,
@@ -466,6 +473,8 @@ pub struct FleetSnapshot {
     pub fetched: u64,
     /// Reports with a stale fencing token, ignored.
     pub stale_reports: u64,
+    /// Keys a remote worker found too large, handed to the built-in worker.
+    pub handed_back: u64,
     pub regrants: u64,
     /// Claimed keys denied because grants were held back (§19.5).
     pub busy: u64,
@@ -972,6 +981,7 @@ impl ClusterServer {
             harvested: get(&c.harvested),
             outcomes: get(&c.outcomes),
             stale_reports: get(&c.stale_reports),
+            handed_back: get(&c.handed_back),
             regrants: get(&c.regrants),
             busy: get(&c.busy),
             fetched: get(&c.fetched),
@@ -2038,6 +2048,28 @@ impl ClusterServer {
                     FetchedReport::Committed => continue,
                     FetchedReport::Stale => None,
                 },
+                // Too large for that worker: the built-in worker, which
+                // fetches larger dicts, takes it instead (once per key).
+                Outcome::Lost { reason } if reason == LOSS_OVERSIZE && self.sink.is_some() => {
+                    match self.leases.hand_to_local(w, &key, token, now) {
+                        HandBack::Handed(local, lease) => {
+                            let taken = self
+                                .sink
+                                .as_ref()
+                                .is_some_and(|sink| sink.handed_back(key, local, lease));
+                            if !taken {
+                                self.leases.requeue(&key, local);
+                            }
+                            bump(&self.counters.handed_back);
+                            continue;
+                        }
+                        HandBack::Lost(lease) => {
+                            bump(&self.counters.outcomes);
+                            Some(lease)
+                        }
+                        HandBack::Stale => None,
+                    }
+                }
                 Outcome::PeerFound { reason } | Outcome::Lost { reason } => self
                     .leases
                     .report(w, &key, token, Some(reason))
@@ -2053,6 +2085,17 @@ impl ClusterServer {
         {
             sink.outcomes(w, accepted);
         }
+    }
+
+    /// [`outcome`](Self::outcome) as if from `worker`'s session.
+    #[cfg(test)]
+    pub(crate) fn outcome_as(&self, worker: WorkerId, items: &[OutcomeItem]) {
+        let peer = Peer {
+            worker,
+            identity: None,
+            session: 0,
+        };
+        self.outcome(&peer, items);
     }
 
     async fn renew(&self, identity: PeerIdentity, public_key: [u8; 32]) -> ToWorker {

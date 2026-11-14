@@ -460,6 +460,15 @@ pub(crate) const LOSS_BLOCKED: u8 = 7;
 /// past [`MAX_PENDING`]). It isn't granted again; a source finds it anew.
 pub(crate) const LOSS_EVICTED: u8 = 8;
 
+/// `funnel::Loss::Oversize`: the dict is larger than the reporter fetches.
+/// From a remote worker it hands the key to the built-in worker instead
+/// ([`LeaseAuthority::hand_to_local`]).
+pub const LOSS_OVERSIZE: u8 = 5;
+
+/// Keys handed to the built-in worker remembered at most, so none is
+/// handed back twice; the oldest is forgotten first.
+pub const HANDED_BACK: usize = 16_384;
+
 /// The most keys that wait for a re-grant at once. A key handed back past
 /// it is dropped ([`LOSS_EVICTED`]).
 pub const MAX_PENDING: usize = 262_144;
@@ -591,6 +600,9 @@ struct AuthorityState {
     /// calls that take none ([`LeaseAuthority::evict`],
     /// [`LeaseAuthority::reconcile`]).
     latest: i64,
+    /// Keys a remote worker found too large and handed to the built-in
+    /// worker, oldest first: each is handed back once.
+    handed: (HashSet<InfoHash>, VecDeque<InfoHash>),
 }
 
 /// A remote worker's keys handed back unfetched in the window that began at
@@ -794,6 +806,17 @@ impl AuthorityState {
 /// process and can't go silent, and never reports `Fetched` (its results
 /// go straight to the writer), so its leases never expire; they end only
 /// by commit, loss or eviction.
+/// What [`LeaseAuthority::hand_to_local`] did with a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandBack {
+    /// Granted to the built-in worker under this token.
+    Handed(Token, Lease),
+    /// Handed back before: ended as a loss.
+    Lost(Lease),
+    /// The reporter didn't hold the key under that token.
+    Stale,
+}
+
 pub struct LeaseAuthority {
     state: Mutex<AuthorityState>,
     events: Arc<dyn LeaseEvents>,
@@ -823,6 +846,7 @@ impl LeaseAuthority {
                 parked: HashMap::new(),
                 returns: HashMap::new(),
                 latest: 0,
+                handed: (HashSet::new(), VecDeque::new()),
             }),
             events,
         }
@@ -1199,6 +1223,58 @@ impl LeaseAuthority {
             self.events.lost(key, lease, reason);
         }
         lease
+    }
+
+    /// A remote worker's report that `key`'s dict is larger than it
+    /// fetches. Under one lock, if `worker` holds the key under `token`,
+    /// the lease is granted to the built-in worker under a new token,
+    /// keeping its cohort, sources and strategy: not a loss, and not a new
+    /// harvest. A key handed back before (within [`HANDED_BACK`] keys) is
+    /// ended as a loss instead, as [`report`](Self::report) would, so none
+    /// goes round twice.
+    pub fn hand_to_local(
+        &self,
+        worker: WorkerId,
+        key: &InfoHash,
+        token: Token,
+        now: i64,
+    ) -> HandBack {
+        if worker == WorkerId::LOCAL {
+            return match self.report(worker, key, token, Some(LOSS_OVERSIZE)) {
+                Some(lease) => HandBack::Lost(lease),
+                None => HandBack::Stale,
+            };
+        }
+        let mut s = self.lock();
+        let holds = s
+            .table
+            .get(key)
+            .is_some_and(|l| l.holder == worker && l.token == token);
+        if !holds {
+            return HandBack::Stale;
+        }
+        if s.handed.0.contains(key) {
+            drop(s);
+            return match self.report(worker, key, token, Some(LOSS_OVERSIZE)) {
+                Some(lease) => HandBack::Lost(lease),
+                None => HandBack::Stale,
+            };
+        }
+        let Some(lease) = s.table.release(key, token) else {
+            return HandBack::Stale;
+        };
+        let local = s.table.regrant(WorkerId::LOCAL, *key, lease, now);
+        let (set, order) = &mut s.handed;
+        set.insert(*key);
+        order.push_back(*key);
+        while order.len() > HANDED_BACK {
+            if let Some(old) = order.pop_front() {
+                set.remove(&old);
+            }
+        }
+        let granted = s.table.get(key).copied().unwrap_or(lease);
+        self.gauge(&s);
+        HandBack::Handed(local, granted)
     }
 
     /// Ends the leases of workers silent past the TTL, and leases marked
@@ -1812,6 +1888,84 @@ mod tests {
         assert_eq!(a.pending(), 1);
         assert_eq!(get(&ev.harvested), 5);
         assert_eq!(get(&ev.outstanding), 5);
+    }
+
+    /// A remote worker's report that a key is too large for it hands the
+    /// key to the built-in worker under a new token, keeping its lease's
+    /// cohort and sources, not as a loss; only from the holder, and only
+    /// once per key: the second time it's a loss.
+    #[test]
+    fn an_oversize_key_is_handed_to_the_built_in_worker_once() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        let before = a.get(&key).unwrap();
+        assert_eq!(
+            a.hand_to_local(B, &key, t, 1),
+            HandBack::Stale,
+            "not the holder"
+        );
+        assert_eq!(
+            a.hand_to_local(A, &key, Token(t.0 + 1), 1),
+            HandBack::Stale,
+            "a stale token"
+        );
+        let HandBack::Handed(local, lease) = a.hand_to_local(A, &key, t, 1) else {
+            panic!("handed")
+        };
+        assert_ne!(local, t);
+        assert_eq!(lease.holder, WorkerId::LOCAL);
+        assert_eq!(
+            (lease.source, lease.sources),
+            (before.source, before.sources)
+        );
+        assert_eq!(
+            a.current(&key, local).map(|l| l.holder),
+            Some(WorkerId::LOCAL)
+        );
+        assert_eq!(get(&ev.lost), 0, "not a loss");
+        assert_eq!(a.held_by(A), 0);
+        // The built-in worker's own oversize report is a loss as ever.
+        assert!(matches!(
+            a.hand_to_local(WorkerId::LOCAL, &key, local, 2),
+            HandBack::Lost(_)
+        ));
+        assert_eq!(get(&ev.lost), 1);
+        // Found again and given to a remote worker, it isn't handed back a
+        // second time.
+        let Claimed::Granted(t2) = a.claim(A, claim(1, 0), 3) else {
+            panic!()
+        };
+        assert!(matches!(a.hand_to_local(A, &key, t2, 4), HandBack::Lost(_)));
+        assert_eq!(get(&ev.lost), 2);
+    }
+
+    /// The keys remembered as handed back are bounded: past
+    /// [`HANDED_BACK`], the oldest can be handed back again.
+    #[test]
+    fn the_keys_handed_back_are_bounded() {
+        let (a, _) = counted();
+        let key = |n: u32| {
+            let mut k = [0u8; 20];
+            k[..4].copy_from_slice(&n.to_be_bytes());
+            InfoHash(k)
+        };
+        for n in 0..=HANDED_BACK as u32 {
+            let mut c = claim(1, 0);
+            c.key = key(n);
+            let Claimed::Granted(t) = a.claim(A, c, 0) else {
+                panic!()
+            };
+            assert!(matches!(
+                a.hand_to_local(A, &key(n), t, 0),
+                HandBack::Handed(..)
+            ));
+        }
+        let s = a.lock();
+        assert_eq!(s.handed.0.len(), HANDED_BACK);
+        assert!(!s.handed.0.contains(&key(0)), "the oldest went first");
     }
 
     #[test]
