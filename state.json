@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:24Z",
+  "updated_at": "2026-11-14T00:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8203,6 +8203,16 @@
       "id": "FILTER-03-owner",
       "note": "owner approved the security reviewer's recommended engineering action for FILTER-03 (relayed by the owner-started reviewer session); two owner questions still open; X-filter03-fix launches after both answers",
       "at": "2026-11-14T00:21Z"
+    },
+    {
+      "id": "cluster-claims-capped-log",
+      "note": "add a cluster.claims_capped log line next to the busy_capped cause (left out of #856 by runner choice, option 3)",
+      "at": "2026-11-14T00:29Z"
+    },
+    {
+      "id": "placement-x-flake-companions-loopback",
+      "note": "next runner PR: X-flake-companions-loopback (#847) has no runner/dashboard.yaml placement line; add it with the slices.yaml entry",
+      "at": "2026-11-14T00:29Z"
     }
   ],
   "main_health": [
@@ -8597,6 +8607,13 @@
       "head": "8d9b816e",
       "state": "Opus MERGE + nit round requested",
       "at": "2026-11-13T23:57Z"
+    },
+    "856": {
+      "slice": "X-worker-839-followups",
+      "head": "eac647c1",
+      "slot": 7,
+      "review": "fresh Opus running",
+      "at": "2026-11-14T00:29Z"
     }
   },
   "merged_log": [
@@ -9243,7 +9260,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:24Z",
+    "updated": "2026-11-14T00:29Z",
     "items": [
       {
         "slot": 1,
@@ -9280,7 +9297,7 @@
         "slice": "X-worker-839-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "building (brief sent)",
+        "doing": "#856 open; CI + fresh Opus review",
         "since": "2026-11-13T23:03Z",
         "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
@@ -9504,7 +9521,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:24Z",
+  "updated": "2026-11-14T00:29Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
