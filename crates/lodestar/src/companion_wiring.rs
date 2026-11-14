@@ -31,7 +31,7 @@ use lodestar_companions::adapter::{BoxFuture, GuardedHttp, Target};
 use lodestar_companions::configure::{
     ConfigSink, DownloadClientEntry, IndexerManagerEntry, SinkError,
 };
-use lodestar_companions::detect::{self, CompanionHttp};
+use lodestar_companions::detect;
 use lodestar_companions::manager::{self, Snapshot};
 use lodestar_companions::watch::{self, Seen, Watched};
 use lodestar_integrations::secret::Secret;
@@ -251,8 +251,8 @@ pub fn start(
     ops: Arc<dyn OpsApi>,
     store: Arc<Mutex<Store>>,
     gate: channel::Sender<requires::Snapshot>,
+    http: Arc<dyn GuardedHttp>,
 ) -> Result<Wired, &'static str> {
-    let http: Arc<dyn GuardedHttp> = Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
     let endpoints: Endpoints = Arc::new(move || {
         let (ops, store) = (ops.clone(), store.clone());
         Box::pin(async move {
@@ -308,12 +308,11 @@ pub async fn serve(
             reason = code
         );
     };
-    let http: Arc<dyn GuardedHttp> = match CompanionHttp::new() {
-        Ok(h) => Arc::new(h),
-        Err(_) => {
-            failed("companion_http");
-            return None;
-        }
+    // The companions' one client, shared with the managed path, so a
+    // managed companion's port is reached the same way from here.
+    let Some(http) = companions.http.clone().map(|h| h as Arc<dyn GuardedHttp>) else {
+        failed("companion_http");
+        return None;
     };
     let wired = match start(
         added_of(&stored),
@@ -322,6 +321,7 @@ pub async fn serve(
         ops.clone(),
         store.clone(),
         gate,
+        http.clone(),
     ) {
         Ok(w) => w,
         Err(code) => {

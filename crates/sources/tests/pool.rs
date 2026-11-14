@@ -12,7 +12,7 @@ use std::time::Duration;
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_sources::pool::{
-    MAX_VOUCHED_PER_IP, Reservation, SHUTDOWN_DRAIN, address_caps, spawn,
+    MAX_VOUCHED_PER_IP, Reservation, SHUTDOWN_DRAIN, address_caps, spawn, wait_caps,
 };
 use lodestar_sources::{
     BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PeerIpCap,
@@ -37,7 +37,7 @@ fn key(n: u32) -> InfoHash {
 }
 
 fn peer(ip: u8, port: u16) -> SocketAddr {
-    SocketAddr::from(([10, 0, 0, ip], port))
+    SocketAddr::from(([192, 0, 2, ip], port))
 }
 
 fn found(source: u8, n: u32, peers: Vec<SocketAddr>) -> Discovery {
@@ -1377,6 +1377,461 @@ async fn dropped_peers_give_their_places_back() {
     sleep(Duration::from_millis(10)).await;
     let looked = h.drain_lookups();
     assert!(new.iter().all(|k| !looked.contains(k)), "{looked:?}");
+    h.stop().await;
+}
+
+/// The keys fetches were started for at `peer`, in the order they started.
+fn started_at(h: &Harness, peer: SocketAddr) -> Vec<InfoHash> {
+    let started = h.fake.started.lock().unwrap();
+    started
+        .iter()
+        .filter(|s| s.1 == peer)
+        .map(|s| s.0)
+        .collect()
+}
+
+/// The keys lost so far, with the loss.
+fn lost(h: &Harness) -> Vec<(InfoHash, Loss)> {
+    let lost = h.causes.lost.lock().unwrap();
+    lost.iter().map(|l| (l.0, l.1)).collect()
+}
+
+/// A small queue, so a test can fill an address: 4 keys an address, and
+/// 32 waiting at one.
+fn small_queue() -> PoolConfig {
+    let queue = 2048;
+    assert_eq!(address_caps(queue).0, 4);
+    assert_eq!(wait_caps(queue), (32, 512));
+    PoolConfig {
+        max_pending: queue,
+        max_lookups: 4096,
+        ..config()
+    }
+}
+
+/// A peer that has been tried holds no place: keys whose fetch from an
+/// address failed, and which wait in back-off, don't keep another key's
+/// peer there out.
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_was_tried_holds_no_place() {
+    let mut h = Harness::start(small_queue(), &[], vec![]);
+    h.script(peer(1, 1), 1, Err(FailureKind::Refused));
+    h.script(peer(1, 2), 1, Ok(()));
+    for n in 1..=4 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    until("each has tried its peer", || {
+        h.fake.started.lock().unwrap().len() == 4 && h.fake.active.load(Ordering::SeqCst) == 0
+    })
+    .await;
+    // All four are still in the pool, backing off.
+    assert_eq!(h.handle.snapshot().await.len(), 4);
+    assert!(lost(&h).is_empty());
+    // Four more keep their peer at the address, and are fetched from it
+    // with no lookup.
+    for n in 11..=14 {
+        h.send(found(0, n, vec![peer(1, 2)]));
+    }
+    for _ in 0..4 {
+        let got = tokio::time::timeout(Duration::from_secs(10), h.out.recv()).await;
+        assert!(got.expect("fetched in time").is_some());
+    }
+    let looked = h.drain_lookups();
+    assert!((11..=14).all(|n| !looked.contains(&key(n))), "{looked:?}");
+    h.stop().await;
+}
+
+/// Keys found with a peer at a full address wait for a place there, and
+/// are fetched in the order they came as places free, ahead of everything
+/// that came after them, however often the keys ahead of them fail. A
+/// waiting key that uses up its lookups meanwhile is not given up while
+/// the address keeps giving places.
+#[tokio::test(start_paused = true)]
+async fn a_key_waiting_for_a_full_address_is_fetched_in_its_turn() {
+    // One lookup a key, so every waiting key runs out of them (after
+    // 10 s) long before its turn.
+    let cfg = PoolConfig {
+        max_attempts: 1,
+        ..small_queue()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    // Fetches from the first port fail, slowly; from the second, they work.
+    h.script(peer(1, 1), 50_000, Err(FailureKind::Refused));
+    h.script(peer(1, 2), 1, Ok(()));
+    // The address's places are taken by keys whose fetches will fail.
+    for n in 1..=4 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    // Ten keys whose only peer is at that address, then twenty more that
+    // will fail.
+    let waiting: Vec<InfoHash> = (101..=110).map(key).collect();
+    for n in 101..=110 {
+        h.send(found(0, n, vec![peer(1, 2)]));
+    }
+    for n in 201..=220 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    let mut fetched = Vec::new();
+    while fetched.len() < waiting.len() {
+        let got = tokio::time::timeout(Duration::from_secs(600), h.out.recv()).await;
+        fetched.push(got.expect("fetched in time").expect("a fetched key").key);
+    }
+    // In the order they came.
+    assert_eq!(fetched, waiting);
+    assert_eq!(started_at(&h, peer(1, 2)), waiting);
+    // Only the four keys ahead of them were tried before the last of
+    // them: none that came after took a place first.
+    let started: Vec<InfoHash> = h.fake.started.lock().unwrap().iter().map(|s| s.0).collect();
+    let last = started.iter().rposition(|k| waiting.contains(k)).unwrap();
+    let mut before_them = started[..last].to_vec();
+    before_them.retain(|k| !waiting.contains(k));
+    assert_eq!(before_them, (1..=4).map(key).collect::<Vec<_>>());
+    // Each had used its one lookup, and none was given up.
+    let looked = h.drain_lookups();
+    assert!(waiting.iter().all(|k| looked.contains(k)), "{looked:?}");
+    let lost = lost(&h);
+    assert!(waiting.iter().all(|k| lost.iter().all(|l| l.0 != *k)));
+    // The rest get their turns after them.
+    until_within("the later keys are tried", 3600, || {
+        started_at(&h, peer(1, 1)).len() == 24
+    })
+    .await;
+    h.stop().await;
+}
+
+/// An address's wait list is bounded: when it is full, the newest key is
+/// turned away, does without the peer as before, and the keys already
+/// waiting keep their turns.
+#[tokio::test(start_paused = true)]
+async fn a_full_wait_list_turns_the_newest_away() {
+    let mut h = Harness::start(small_queue(), &[], vec![]);
+    h.script(peer(1, 1), 5_000, Ok(()));
+    h.script(peer(1, 2), 1, Ok(()));
+    for n in 1..=4 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    // Forty-two keys for a list of thirty-two.
+    for n in 101..=142 {
+        h.send(found(0, n, vec![peer(1, 2)]));
+    }
+    let waited: Vec<InfoHash> = (101..=132).map(key).collect();
+    let turned_away: Vec<InfoHash> = (133..=142).map(key).collect();
+    for _ in 0..36 {
+        let got = tokio::time::timeout(Duration::from_secs(600), h.out.recv()).await;
+        assert!(got.expect("fetched in time").is_some());
+    }
+    assert_eq!(started_at(&h, peer(1, 2)), waited);
+    // The ten turned away are looked up like any key with no peer, and
+    // given up as one when no lookup finds them another.
+    until_within("the keys turned away are given up", 3600, || {
+        lost(&h).len() == turned_away.len()
+    })
+    .await;
+    let mut lost = lost(&h);
+    lost.sort_by_key(|l| l.0);
+    let want: Vec<(InfoHash, Loss)> = turned_away.iter().map(|k| (*k, Loss::NoPeers)).collect();
+    assert_eq!(lost, want);
+    assert_eq!(started_at(&h, peer(1, 2)), waited);
+    h.stop().await;
+}
+
+/// The wait lists are bounded together too: with a quarter of the queue
+/// waiting, a key at one more full address is turned away.
+#[tokio::test(start_paused = true)]
+async fn the_wait_lists_are_bounded_in_all() {
+    let cfg = PoolConfig {
+        per_ip: 4,
+        ..small_queue()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    // Each address in a network of its own (documentation addresses).
+    let at = |net: u8, port: u16| {
+        SocketAddr::from(([0x2001, 0xdb8, u16::from(net), 0, 0, 0, 0, 1], port))
+    };
+    // Addresses whose places are held by fetches that don't end while the
+    // test runs, each with a full list, up to the bound in all.
+    // (The first address's do end, after 5 s, to show its keys wait.)
+    for ip in 1..=16u8 {
+        h.script(at(ip, 1), if ip == 1 { 5_000 } else { 3_600_000 }, Ok(()));
+        for n in 0..36 {
+            let port = if n < 4 { 1 } else { 2 };
+            h.send(found(0, u32::from(ip) * 1000 + n, vec![at(ip, port)]));
+        }
+    }
+    // One more, whose places come free after 5 s.
+    h.script(at(17, 1), 5_000, Ok(()));
+    h.script(at(17, 2), 1, Ok(()));
+    h.script(at(1, 2), 1, Ok(()));
+    for n in 0..9 {
+        let port = if n < 4 { 1 } else { 2 };
+        h.send(found(0, 17_000 + n, vec![at(17, port)]));
+    }
+    // The keys at the first address waited, and all have their turns.
+    let waited: Vec<InfoHash> = (1004..1036).map(key).collect();
+    until("the first address's waiters are fetched", || {
+        started_at(&h, at(1, 2)).len() == waited.len()
+    })
+    .await;
+    assert_eq!(started_at(&h, at(1, 2)), waited);
+    // At the last address the places came free at the same time, and
+    // nobody was waiting for them.
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(started_at(&h, at(17, 1)).len(), 4);
+    assert!(started_at(&h, at(17, 2)).is_empty());
+    // A key found there now has room.
+    h.send(found(0, 17_100, vec![at(17, 2)]));
+    until("a new key is fetched there", || {
+        started_at(&h, at(17, 2)) == [key(17_100)]
+    })
+    .await;
+    h.stop().await;
+}
+
+/// A key a user asked for waits ahead of the others, whether it was asked
+/// for before it waited or while it did.
+#[tokio::test(start_paused = true)]
+async fn a_key_a_user_asked_for_waits_at_the_front() {
+    let h = Harness::start(small_queue(), &[], vec![]);
+    h.script(peer(1, 1), 5_000, Ok(()));
+    h.script(peer(1, 2), 1, Ok(()));
+    for n in 1..=4 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    for n in 101..=104 {
+        h.send(found(0, n, vec![peer(1, 2)]));
+    }
+    let mut asked = found(0, 105, vec![peer(1, 2)]);
+    asked.found.interest = true;
+    h.send(asked);
+    until("all are in", || {
+        h.handle.stats().pending.load(Ordering::Relaxed) == 9
+    })
+    .await;
+    assert!(h.handle.interest(key(103)).await);
+    until_within("all are fetched", 600, || {
+        started_at(&h, peer(1, 2)).len() == 5
+    })
+    .await;
+    assert_eq!(
+        started_at(&h, peer(1, 2)),
+        [105, 103, 101, 102, 104].map(key)
+    );
+    h.stop().await;
+}
+
+/// A waiting key that is out of lookups is kept only while its address
+/// gives places: once a whole back-off passes with none given, it is
+/// given up like any key with no peer.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_key_is_given_up_once_its_address_stops_giving_places() {
+    let cfg = PoolConfig {
+        max_attempts: 1,
+        ..small_queue()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    // The address's fetches don't end while the test runs.
+    h.script(peer(1, 1), 3_600_000, Ok(()));
+    for n in 1..=4 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    h.send(found(0, 101, vec![peer(1, 2)]));
+    // Its one lookup ends after 10 s. It is kept for one back-off (60 s)
+    // more, in which the address gives no place.
+    sleep(Duration::from_secs(60)).await;
+    assert!(lost(&h).is_empty());
+    until("it is given up", || !lost(&h).is_empty()).await;
+    assert_eq!(lost(&h), [(key(101), Loss::NoPeers)]);
+    assert!(started_at(&h, peer(1, 2)).is_empty());
+    h.stop().await;
+}
+
+/// A waiting key that turns private has the peers it waited with: a
+/// private key's peers are never limited.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_key_that_turns_private_gets_its_peer() {
+    let cfg = PoolConfig {
+        per_ip: 8,
+        ..small_queue()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 3_600_000, Ok(()));
+    h.script(peer(1, 2), 1, Ok(()));
+    for n in 1..=4 {
+        h.send(found(3, n, vec![peer(1, 1)]));
+    }
+    h.send(found(1, 101, vec![peer(1, 2)]));
+    let mut private = found(2, 101, vec![]);
+    private.found.private_source = true;
+    h.send(private);
+    sleep(Duration::from_secs(1)).await;
+    assert!(started_at(&h, peer(1, 2)).is_empty());
+    assert_eq!(h.handle.drop_source(src(1)).await, 0);
+    let got = tokio::time::timeout(Duration::from_secs(10), h.out.recv()).await;
+    assert_eq!(got.expect("fetched in time").expect("a key").key, key(101));
+    h.stop().await;
+}
+
+/// A waiter that needs a place in a full network too is passed over, and
+/// the next that can use the address's place gets it; the one passed over
+/// keeps its turn, and has it when the network has room.
+#[tokio::test(start_paused = true)]
+async fn a_waiter_its_network_has_no_room_for_is_passed_over() {
+    let queue = 12_800;
+    assert_eq!(address_caps(queue), (25, 100));
+    let cfg = PoolConfig {
+        max_pending: queue,
+        max_lookups: 4096,
+        per_ip: 64,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    let at = |host: u8, port: u16| SocketAddr::from(([192, 0, 2, host], port));
+    let never = 3_600_000;
+    // One address with 25 keys, one of which also has a peer at another
+    // address of the network; its fetch from this one fails after 1 s.
+    h.script(at(1, 1), 1_000, Err(FailureKind::Refused));
+    h.script(at(1, 2), 1, Ok(()));
+    h.script(at(1, 3), never, Ok(()));
+    h.script(at(2, 9), 30_000, Err(FailureKind::Refused));
+    for n in 1..=24 {
+        h.send(found(0, n, vec![at(1, 3)]));
+    }
+    h.send(found(0, 25, vec![at(1, 1), at(2, 9)]));
+    // A key with a peer elsewhere in the network, fetching from it.
+    h.send(found(0, 102, vec![at(2, 9)]));
+    // The rest of the network's hundred places.
+    let mut n = 1000;
+    for (host, keys) in [(2u8, 23), (3, 25), (4, 25), (5, 1)] {
+        h.script(at(host, 3), never, Ok(()));
+        for _ in 0..keys {
+            n += 1;
+            h.send(found(0, n, vec![at(host, 3)]));
+        }
+    }
+    sleep(Duration::from_millis(10)).await;
+    assert!(h.drain_lookups().is_empty(), "every key has a place");
+    // Two wait at the first address: one with no peer in the network,
+    // then the one that has a place in it already.
+    h.send(found(0, 101, vec![at(1, 2)]));
+    h.send(found(0, 102, vec![at(1, 2)]));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.drain_lookups(), [key(101)]);
+    // The address's place frees after 1 s, and the network is still full:
+    // the second waiter has the peer, and is fetched from it once its
+    // other fetch has failed.
+    let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv()).await;
+    assert_eq!(got.expect("fetched in time").expect("a key").key, key(102));
+    // Its places, and the network's, are free now: the first has its turn.
+    let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv()).await;
+    assert_eq!(got.expect("fetched in time").expect("a key").key, key(101));
+    assert_eq!(started_at(&h, at(1, 2)), [102, 101].map(key));
+    h.stop().await;
+}
+
+/// A place that frees while fetches are being started (here, as keys
+/// drop peers the policy no longer lets this install dial) goes to a
+/// waiter in the same step, with nothing else to wake the pool.
+#[tokio::test(start_paused = true)]
+async fn a_place_freed_as_fetches_start_goes_to_a_waiter_at_once() {
+    let cfg = PoolConfig {
+        max_attempts: 1,
+        ..small_queue()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    // Two IPs of one address (an IPv6 /64).
+    let held: SocketAddr = "[2001:db8::1]:6881".parse().unwrap();
+    let free: SocketAddr = "[2001:db8::2]:6881".parse().unwrap();
+    h.script(held, 3_600_000, Ok(()));
+    h.script(free, 1, Ok(()));
+    for n in 1..=4 {
+        h.send(found(0, n, vec![held]));
+    }
+    h.send(found(0, 101, vec![free]));
+    // The waiting key's one lookup has ended, and it rests until 70 s:
+    // nothing is due in the pool before then.
+    sleep(Duration::from_secs(20)).await;
+    assert!(lost(&h).is_empty() && started_at(&h, free).is_empty());
+    // The first IP is no longer ours to dial: the two keys not yet
+    // fetching from it drop it, and their places go to the waiter.
+    // (Sent alone: a second command would wake the pool again.)
+    let policy = ByIp(Mutex::new(HashMap::from([(held.ip(), 0)])));
+    h.handle.set_ip_cap(Some(Arc::new(policy))).await;
+    until_within("the waiter is fetched", 10, || {
+        started_at(&h, free) == [key(101)]
+    })
+    .await;
+    h.stop().await;
+}
+
+/// A key turned away from a full wait list tries again at its next
+/// lookup, and waits once the list has room.
+#[tokio::test(start_paused = true)]
+async fn a_key_turned_away_waits_once_the_list_has_room() {
+    let mut h = Harness::start(small_queue(), &[], vec![]);
+    // Slow fetches, so the address stays full while its list drains.
+    h.script(peer(1, 1), 40_000, Ok(()));
+    h.script(peer(1, 2), 40_000, Ok(()));
+    for n in 1..=4 {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    // A full list, and one key more.
+    let waited: Vec<InfoHash> = (101..=132).map(key).collect();
+    for n in 101..=133 {
+        h.send(found(0, n, vec![peer(1, 2)]));
+    }
+    // Its second lookup comes after its back-off, by when the first
+    // places have turned over and the list has room.
+    let mut lookups = 0;
+    until_within("its second lookup", 600, || {
+        lookups += h.drain_lookups().iter().filter(|k| **k == key(133)).count();
+        lookups == 2
+    })
+    .await;
+    let mut answer = found(0, 133, vec![peer(1, 2)]);
+    answer.reply = true;
+    h.send(answer);
+    // The address is still full: it waits, behind the others.
+    sleep(Duration::from_secs(1)).await;
+    assert!(!started_at(&h, peer(1, 2)).contains(&key(133)));
+    until_within("all are fetched", 3600, || {
+        started_at(&h, peer(1, 2)).len() == 33
+    })
+    .await;
+    let mut order = waited;
+    order.push(key(133));
+    assert_eq!(started_at(&h, peer(1, 2)), order);
+    assert!(lost(&h).is_empty());
+    h.stop().await;
+}
+
+/// A fetch's result is its own key's: if the key was lost while the fetch
+/// ran and has been found again since, the late result changes nothing
+/// about the new entry, its peers or its places.
+#[tokio::test(start_paused = true)]
+async fn a_late_result_leaves_a_key_found_again_alone() {
+    // Key 0 fills the budget and stays held; later fetches wait 2 s for
+    // a reservation and time out.
+    let h = reserving(4, MIB, MIB - 4096, 4, 1, 2_000);
+    until("key 0 held", || held(&h) > 0).await;
+    let (first, second) = (peer(50, 1), peer(51, 1));
+    let started = |h: &Harness, at: SocketAddr| started_at(h, at).contains(&key(500));
+    h.send(found(1, 500, vec![first]));
+    until("the first fetch starts", || started(&h, first)).await;
+    let first_started = Instant::now();
+    sleep(Duration::from_millis(60)).await;
+    // Its only source goes: the key is lost while the fetch still runs.
+    assert_eq!(h.handle.drop_source(src(1)).await, 1);
+    // Found again with another peer: a new entry, fetching from it.
+    h.send(found(2, 500, vec![second]));
+    until("the second fetch starts", || started(&h, second)).await;
+    // The first fetch ends, out of time: 100 ms to its reservation and
+    // 2 s waiting for it. The second is still waiting for its own. The
+    // key keeps its fetch and its place (the counts are compared with the
+    // entries at each snapshot).
+    tokio::time::sleep_until(first_started + Duration::from_millis(2_130)).await;
+    let queue = h.handle.snapshot().await;
+    assert!(queue.iter().any(|q| q.info_hash == key(500)));
+    assert_eq!(h.handle.stats().reserve_timeouts.load(Ordering::Relaxed), 0);
     h.stop().await;
 }
 

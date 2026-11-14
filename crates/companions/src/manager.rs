@@ -53,6 +53,7 @@ use crate::inputs::{CompanionId, Version};
 use crate::layout::{Install, LayoutError};
 use crate::log_events::{INSTALL_FAILED, INSTALLED, RECOVERED, REMOVED, ROLLED_BACK};
 use crate::state::{self, Op, OpKind, Record, StateError, Step};
+use crate::supervise::bind::Bindings;
 use crate::supervise::egress::{self, Follows, Gated, Route};
 use crate::supervise::{
     Companion, Confinement, EnvName, LogRing, Probe, Sandbox, SpawnSpec, State, Status, Supervisor,
@@ -315,6 +316,12 @@ pub trait Run: Send + Sync {
     /// into the snapshot after each start it makes. `None`: not followed.
     fn status(&self, _id: &CompanionId) -> Option<watch::Receiver<Status>> {
         None
+    }
+    /// The run ([`Status::run`]) its last passed health check found ready,
+    /// which the manager's follow starts from. By default the run current
+    /// now, for a runner that doesn't tie readiness to a run.
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        self.status(id).map(|s| s.borrow().run)
     }
 }
 
@@ -2093,10 +2100,18 @@ impl Manager {
             // A start that passed health was configured; one that didn't
             // (held for its route, say) is configured once it runs.
             let mut configured = now == Health::Healthy;
+            // The run last checked, from the one the start's check found
+            // ready: a new run of the process is checked again even when
+            // no other state was seen between (a restart with no back-off,
+            // or one before this follow began), so it's found ready
+            // (`bind`).
+            let mut checked = check.ready_run(id);
             loop {
-                let state = status.borrow_and_update().state;
+                let s = *status.borrow_and_update();
+                let state = s.state;
                 let next = match state {
-                    State::Running if last != Health::Healthy => {
+                    State::Running if last != Health::Healthy || checked != Some(s.run) => {
+                        checked = Some(s.run);
                         if !check.healthy(id, &target).await {
                             Some(Health::Unhealthy)
                         } else if configured {
@@ -2434,6 +2449,11 @@ pub struct Supervised {
     pub routes: Arc<dyn Routes>,
     /// Where qBittorrent saves, if set.
     pub downloads: Option<PathBuf>,
+    /// The ports of the companions it runs, shared with the client that
+    /// sends to them ([`crate::detect::CompanionHttp::with_bindings`]):
+    /// held at a start, ready once a health check passes in that run,
+    /// released at a stop.
+    bindings: Option<Arc<Bindings>>,
     live: Mutex<HashMap<CompanionId, Running>>,
     /// Set by [`Supervised::shutdown`]: nothing starts after it.
     closed: std::sync::atomic::AtomicBool,
@@ -2452,6 +2472,8 @@ struct Running {
     /// back by tests ([`Supervised::launched_env`]).
     #[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
     env: Vec<(EnvName, OsString)>,
+    /// The loopback port it listens on, held in [`Supervised::bindings`].
+    port: Option<u16>,
 }
 
 impl Supervised {
@@ -2470,8 +2492,24 @@ impl Supervised {
             http,
             routes,
             downloads,
+            bindings: None,
             live: Mutex::new(HashMap::new()),
             closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// With the ports it runs companions on shared with the client that
+    /// sends to them: what serve builds. Without it, nothing ties a
+    /// request to the child it started (tests of other things).
+    pub fn with_bindings(mut self, bindings: Arc<Bindings>) -> Supervised {
+        self.bindings = Some(bindings);
+        self
+    }
+
+    /// Forgets the child on a companion's port: its stop, or its removal.
+    fn release_port(&self, port: Option<u16>) {
+        if let (Some(b), Some(p)) = (&self.bindings, port) {
+            b.release(p);
         }
     }
 
@@ -2508,11 +2546,16 @@ impl Supervised {
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
         let ids: Vec<CompanionId> = self.running().keys().cloned().collect();
         for id in ids {
-            let gate = self.running().get_mut(&id).and_then(|r| {
-                r.status = None;
-                r.route = None;
-                r.gate.take()
-            });
+            let (gate, port) = self
+                .running()
+                .get_mut(&id)
+                .map(|r| {
+                    r.status = None;
+                    r.route = None;
+                    (r.gate.take(), r.port)
+                })
+                .unwrap_or((None, None));
+            self.release_port(port);
             drop(gate);
             sup.remove(&id).await;
         }
@@ -2564,6 +2607,10 @@ impl Run for Supervised {
                 })
                 .cloned()
                 .collect();
+            let port = match &l.target {
+                Target::Loopback(p) => Some(p.get()),
+                _ => None,
+            };
             let c = Companion {
                 spawn: spec,
                 depends_on: Vec::new(),
@@ -2580,15 +2627,34 @@ impl Run for Supervised {
             if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("shutting_down");
             }
+            // Its port is held from before its process can start: nothing
+            // that carries a credential goes there until this child is
+            // found ready, and no other companion may start on it.
+            let bound = self.bindings.as_ref().zip(port);
+            if let Some((b, p)) = bound
+                && !b.claim(p)
+            {
+                return Err("port_in_use");
+            }
             let state = route.state.clone();
-            let gated =
-                egress::add(&mut sup, c, Follows::of(&l.id), route).map_err(|e| e.code())?;
+            let gated = match egress::add(&mut sup, c, Follows::of(&l.id), route) {
+                Ok(g) => g,
+                Err(e) => {
+                    self.release_port(port);
+                    return Err(e.code());
+                }
+            };
+            let status = sup.status(&l.id);
+            if let (Some((b, p)), Some(s)) = (bound, &status) {
+                b.attach(p, s.clone());
+            }
             let running = Running {
                 gate: Some(gated),
                 route: Some(state),
-                status: sup.status(&l.id),
+                status,
                 logs: sup.logs(&l.id),
                 env,
+                port,
             };
             self.running().insert(l.id, running);
             Ok(())
@@ -2603,7 +2669,14 @@ impl Run for Supervised {
             let Some(h) = crate::detect::health(id) else {
                 return false;
             };
-            let route = self.running().get(id).and_then(|r| r.route.clone());
+            let (route, port) = self
+                .running()
+                .get(id)
+                .map(|r| (r.route.clone(), r.port))
+                .unwrap_or((None, None));
+            // Bound to its port: an answer counts only while the child it
+            // started there is running, and marks that run ready.
+            let bound = self.bindings.as_ref().zip(port);
             let deadline = tokio::time::Instant::now() + HEALTH_DEADLINE;
             while tokio::time::Instant::now() < deadline {
                 if route
@@ -2612,7 +2685,13 @@ impl Run for Supervised {
                 {
                     return false;
                 }
-                if h.check(&*self.http, target).await == HealthStatus::Healthy {
+                let check =
+                    || async { h.check(&*self.http, target).await == HealthStatus::Healthy };
+                let ok = match bound {
+                    Some((b, p)) => b.try_ready(p, check).await,
+                    None => check().await,
+                };
+                if ok {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -2625,11 +2704,16 @@ impl Run for Supervised {
         Box::pin(async move {
             // Dropping the gate holds it first, so it can't be released
             // while it's removed. Its logs stay until it starts again.
-            let gate = self.running().get_mut(id).and_then(|r| {
-                r.status = None;
-                r.route = None;
-                r.gate.take()
-            });
+            let (gate, port) = self
+                .running()
+                .get_mut(id)
+                .map(|r| {
+                    r.status = None;
+                    r.route = None;
+                    (r.gate.take(), r.port)
+                })
+                .unwrap_or((None, None));
+            self.release_port(port);
             drop(gate);
             self.supervisor.lock().await.remove(id).await;
         })
@@ -2637,6 +2721,20 @@ impl Run for Supervised {
 
     fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.running().get(id).and_then(|r| r.status.clone())
+    }
+
+    /// Bound to its port: the run found ready there, if any, so a restart
+    /// between that check and the follow is checked again.
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        let (status, port) = self
+            .running()
+            .get(id)
+            .map(|r| (r.status.clone(), r.port))
+            .unwrap_or((None, None));
+        match self.bindings.as_ref().zip(port) {
+            Some((b, p)) => b.ready_run(p),
+            None => status.map(|s| s.borrow().run),
+        }
     }
 }
 
