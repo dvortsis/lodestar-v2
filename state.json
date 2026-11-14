@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:18Z",
+  "updated_at": "2026-11-14T01:23Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8311,6 +8311,11 @@
       "id": "rv-slices-1114",
       "note": "Register in runner PR: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-filter02-fix (filter queue); hold #795 until X-rollback-scrub-fix lands; retire slot 7 after #856 merges (cap 4); SRC-02 to owner after verification.",
       "at": "2026-11-14T01:18Z"
+    },
+    {
+      "id": "857-merge-tell-rv",
+      "note": "On #857 merge: send merge SHA to slot 33 (reviewer); it waits on the store snapshot module until then. Slot 30 METAINFO review brief: add the reviewer checklist (local held file).",
+      "at": "2026-11-14T01:23Z"
     }
   ],
   "main_health": [
@@ -9364,7 +9369,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:18Z",
+    "updated": "2026-11-14T01:23Z",
     "items": [
       {
         "slot": 1,
@@ -9549,7 +9554,7 @@
         "slice": "X-rollback-scrub-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "Owner 2026-11-14 ~01:20Z: builds Track Q fixes outside filter. Queue: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-cluster06-fix (after #856). Verifies+briefs FILTER-02 (X-filter02-fix, filter queue) and SRC-02 (owner decision pending). Early M8-SEC-1/-8 first pass; fuzz gaps. PRs from its own branch, runner reviews.",
+        "doing": "X-rollback-scrub-fix started 01:23Z (PRs from its own branch, no stewards). Owner 2026-11-14 ~01:20Z: builds Track Q fixes outside filter. Queue: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-cluster06-fix (after #856). Verifies+briefs FILTER-02 (X-filter02-fix, filter queue) and SRC-02 (owner decision pending). Early M8-SEC-1/-8 first pass; fuzz gaps. PRs from its own branch, runner reviews.",
         "since": "2026-11-14T01:18Z"
       }
     ]
@@ -9635,7 +9640,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:18Z",
+  "updated": "2026-11-14T01:23Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
