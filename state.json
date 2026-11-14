@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T12:54Z",
+  "updated_at": "2026-11-14T13:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8666,13 +8666,18 @@
     },
     {
       "id": "slot33-order",
-      "note": "Slot 33 order: #882 -> X-fuzz-gaps -> X-pool-model-test -> X-cluster06-verify -> S1-11/S1-14 slice (+3 #882 optionals) -> store slices after #879. X-cluster06-fix parked (believed superseded).",
+      "note": "Slot 33 order: #882 -> X-fuzz-gaps -> X-pool-model-test -> X-cluster06-verify -> X-cluster-regrant-look -> S1-11/S1-14 slice (+3 #882 optionals) -> store slices after #879.",
       "at": "2026-11-14T12:42Z"
     },
     {
       "id": "X-cluster06-verify",
-      "note": "Slot 33: tests-only property test for lease re-grants on current main (one new file under crates/cluster/tests/). Slot 33 believes CLUSTER-06 (important) is closed on main by the lease-return work; X-cluster06-fix branch kept locally, no PR. On green merge, ask owner to close CLUSTER-06 with the test as evidence. Add slices.yaml entry.",
+      "note": "Slot 33: tests-only property test for lease re-grants (crates/cluster/tests/regrant_model.rs). Fails on pre-lease-return code, passes on main (check 4 in repeated form). CLUSTER-06 (important) stays open until X-cluster-regrant-look merges; then ask owner to close with evidence.",
       "at": "2026-11-14T12:54Z"
+    },
+    {
+      "id": "X-cluster-regrant-look",
+      "note": "Slot 33, after X-cluster06-verify: small re-grant liveness fix in crates/cluster/src/leases.rs (regrant_pending) + tighten regrant_model check 4. Component-level only. Add slices.yaml entry.",
+      "at": "2026-11-14T13:04Z"
     }
   ],
   "main_health": [
@@ -10000,7 +10005,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T12:54Z",
+  "updated": "2026-11-14T13:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
