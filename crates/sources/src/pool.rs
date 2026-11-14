@@ -1242,21 +1242,36 @@ impl Waits {
         parked.swap_remove(at);
         if parked.is_empty() {
             self.keys.remove(&ticket.key);
+            self.tidy_keys();
         }
         self.left(net_of(ticket.peer.ip()));
     }
 
-    /// One wait fewer at `address`.
+    /// One wait fewer at `address`. A line that has drained gives its
+    /// memory back: the turns left behind are cleared out before they
+    /// outnumber the waiters, and it keeps room for no more than about
+    /// twice the waiters it has.
     fn left(&mut self, address: Net) {
         self.live -= 1;
         let line = self.lines.get_mut(&address).expect("a wait has a line");
         line.live -= 1;
         if line.live == 0 {
             self.lines.remove(&address);
-        } else if line.asked.len() + line.rest.len() > 2 * line.live + 16 {
+        } else if line.asked.capacity() + line.rest.capacity() > 2 * line.live + 4 {
             let keys = &self.keys;
-            line.asked.retain(|t| Waits::is_live(keys, t));
-            line.rest.retain(|t| Waits::is_live(keys, t));
+            for turns in [&mut line.asked, &mut line.rest] {
+                turns.retain(|t| Waits::is_live(keys, t));
+                let room = if turns.is_empty() { 0 } else { turns.len() + 2 };
+                turns.shrink_to(room);
+            }
+        }
+    }
+
+    /// Gives the keys' map its memory back after a burst of waiters has
+    /// gone.
+    fn tidy_keys(&mut self) {
+        if self.keys.capacity() > 4096 && self.keys.len() * 8 < self.keys.capacity() {
+            self.keys.shrink_to(self.keys.len() * 2);
         }
     }
 
@@ -1266,6 +1281,7 @@ impl Waits {
         let Some(parked) = self.keys.remove(key) else {
             return Vec::new();
         };
+        self.tidy_keys();
         let peers: Vec<SocketAddr> = parked.iter().map(|p| p.peer).collect();
         for p in &peers {
             self.left(net_of(p.ip()));
@@ -1896,6 +1912,11 @@ impl Pool {
             self.lose_untracked(&key, cohort, d.source, Loss::Evicted, None);
             return;
         }
+        // A place the eviction freed goes to a waiter before the new key.
+        // Here, and when fetches are started, and nowhere inside the
+        // handling of a lookup's answer: a promotion can end a key's
+        // lookup, which must not happen under the code reading it.
+        self.promote_freed();
         let cohort = d.at.div_euclid(3600);
         self.funnel.admitted(&key, cohort, d.source);
         self.entries.insert(
@@ -1978,8 +1999,6 @@ impl Pool {
     /// Merges peers into a key; a key that was waiting becomes ready.
     /// Returns how many new peers the entry's cap turned away.
     fn add_peers(&mut self, key: InfoHash, peers: &[SocketAddr]) -> usize {
-        // A place freed in this step goes to a waiter before a newcomer.
-        self.promote_freed();
         let cap = self.cfg.max_peers_per_key;
         let Some(e) = self.entries.get_mut(&key) else {
             return 0;
@@ -2701,9 +2720,9 @@ impl Pool {
         self.stats
             .stream_peers_capped
             .fetch_add(capped as u64, Ordering::Relaxed);
-        if finished {
-            // Every finder is done: the logical lookup ends, once.
-            self.requests.remove(&key);
+        // Every finder is done: the logical lookup ends, once. (If the
+        // request is gone already, its lookup ended with it.)
+        if finished && self.requests.remove(&key).is_some() {
             self.lookups -= 1;
             self.stream_ended(key);
         }
@@ -4401,6 +4420,50 @@ mod vouch {
         assert!(held.asked.len() + held.rest.len() <= 2 * held.live + 17);
         assert_eq!(line(w, address(1)), [2, 1].map(key));
         w.check(|_| true);
+    }
+
+    /// A line that fills and drains gives its memory back: with a few
+    /// waiters left it keeps room for only a few turns, whichever end the
+    /// others left from.
+    #[test]
+    fn a_drained_line_gives_its_memory_back() {
+        let mut v = places(1, 1, 1024, 4096);
+        let w = &mut v.waits;
+        let at = a("203.0.113.1:1");
+        let address = net_of(at.ip());
+        let k = |n: u32| {
+            let mut k = [7; 20];
+            k[..4].copy_from_slice(&n.to_be_bytes());
+            InfoHash(k)
+        };
+        let room = |w: &Waits| {
+            let l = &w.lines[&address];
+            l.asked.capacity() + l.rest.capacity()
+        };
+        for from_the_front in [true, false] {
+            for n in 0..1024 {
+                assert!(w.park(k(n), at, n % 8 == 0));
+            }
+            assert!(room(w) >= 1024);
+            // All but two leave: served from the front, or gone.
+            for n in 0..1022 {
+                if from_the_front {
+                    let first = w.pop(address).unwrap();
+                    w.promoted(&first);
+                } else {
+                    w.forget(&k(n));
+                }
+            }
+            assert_eq!(w.lines[&address].live, 2);
+            assert!(room(w) <= 2 * 2 + 4, "{} turns kept", room(w));
+            w.check(|_| true);
+            let rest: Vec<InfoHash> = line(w, address);
+            assert_eq!(rest.len(), 2);
+            for key in rest {
+                w.forget(&key);
+            }
+            assert!(w.lines.is_empty() && w.keys.is_empty());
+        }
     }
 
     /// A key's lines "still move" the first time it is asked, and after

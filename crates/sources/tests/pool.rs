@@ -37,7 +37,7 @@ fn key(n: u32) -> InfoHash {
 }
 
 fn peer(ip: u8, port: u16) -> SocketAddr {
-    SocketAddr::from(([10, 0, 0, ip], port))
+    SocketAddr::from(([192, 0, 2, ip], port))
 }
 
 fn found(source: u8, n: u32, peers: Vec<SocketAddr>) -> Discovery {
@@ -1544,12 +1544,15 @@ async fn the_wait_lists_are_bounded_in_all() {
         ..small_queue()
     };
     let h = Harness::start(cfg, &[], vec![]);
-    // Each address in a network of its own.
-    let at = |net: u8, port: u16| SocketAddr::from(([10, net, 0, 1], port));
+    // Each address in a network of its own (documentation addresses).
+    let at = |net: u8, port: u16| {
+        SocketAddr::from(([0x2001, 0xdb8, u16::from(net), 0, 0, 0, 0, 1], port))
+    };
     // Addresses whose places are held by fetches that don't end while the
     // test runs, each with a full list, up to the bound in all.
+    // (The first address's do end, after 5 s, to show its keys wait.)
     for ip in 1..=16u8 {
-        h.script(at(ip, 1), 3_600_000, Ok(()));
+        h.script(at(ip, 1), if ip == 1 { 5_000 } else { 3_600_000 }, Ok(()));
         for n in 0..36 {
             let port = if n < 4 { 1 } else { 2 };
             h.send(found(0, u32::from(ip) * 1000 + n, vec![at(ip, port)]));
@@ -1558,16 +1561,22 @@ async fn the_wait_lists_are_bounded_in_all() {
     // One more, whose places come free after 5 s.
     h.script(at(17, 1), 5_000, Ok(()));
     h.script(at(17, 2), 1, Ok(()));
+    h.script(at(1, 2), 1, Ok(()));
     for n in 0..9 {
         let port = if n < 4 { 1 } else { 2 };
         h.send(found(0, 17_000 + n, vec![at(17, port)]));
     }
-    until("its places come free", || {
-        started_at(&h, at(17, 1)).len() == 4 && h.fake.active.load(Ordering::SeqCst) == 64
+    // The keys at the first address waited, and all have their turns.
+    let waited: Vec<InfoHash> = (1004..1036).map(key).collect();
+    until("the first address's waiters are fetched", || {
+        started_at(&h, at(1, 2)).len() == waited.len()
     })
     .await;
-    // Nobody was waiting for them.
+    assert_eq!(started_at(&h, at(1, 2)), waited);
+    // At the last address the places came free at the same time, and
+    // nobody was waiting for them.
     sleep(Duration::from_secs(1)).await;
+    assert_eq!(started_at(&h, at(17, 1)).len(), 4);
     assert!(started_at(&h, at(17, 2)).is_empty());
     // A key found there now has room.
     h.send(found(0, 17_100, vec![at(17, 2)]));
