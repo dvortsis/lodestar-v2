@@ -90,11 +90,26 @@ async fn nodes_find_each_other_through_one_bootstrap_node() {
     );
     let seed_stats = seed.stats();
     assert!(seed_stats.queries_in > 0 && seed_stats.packets_out > 0);
-    for n in &nodes {
+    for (i, n) in nodes.iter().enumerate() {
         let s = n.stats();
         assert_eq!(s.malformed_in, 0);
         assert_eq!(s.spoofed, 0);
-        assert!(s.reply_ratio() > 0.5, "reply ratio {:.2}", s.reply_ratio());
+        // Most queries that have an outcome were answered. A query still
+        // awaiting its reply has none yet: the tables converge while join
+        // and refresh lookups still have queries out, and on a slow runner
+        // many replies are still on their way when this reads.
+        let answered = s.responses_in + s.errors_in;
+        let resolved = answered + s.timeouts;
+        assert!(
+            resolved > 0 && answered * 2 > resolved,
+            "node {i}: {answered} of {resolved} resolved queries answered \
+             ({} sent, {} timed out, {} outstanding, {} throttled, {} send errors)",
+            s.queries_out,
+            s.timeouts,
+            s.outstanding,
+            s.throttled,
+            s.send_errors
+        );
     }
     for n in nodes {
         n.shutdown().await.unwrap();
