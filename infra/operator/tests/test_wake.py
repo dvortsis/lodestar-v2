@@ -340,6 +340,40 @@ class Wake(unittest.TestCase):
         self.assertEqual(api.calls, [])
         self.assertIn("the agent isn't applied yet", self.post.bodies()[0])
 
+    def started(self, api):
+        return any(m == "POST" and p == "/v1/sessions" for m, p, _ in api.calls)
+
+    def test_a_run_approved_too_late_starts_no_session(self):
+        import tripwire
+        limit = timedelta(minutes=tripwire.COMPLETED_EXTRA_MINUTES - tripwire.WAKE_JOB_MINUTES)
+        for created, starts in ((T0 - limit - timedelta(minutes=1), False), (T0 - limit + timedelta(minutes=1), True),
+                                (None, False)):  # None: the run's creation time can't be read
+            with self.subTest(created=created):
+                self.setUp()
+                self.post = FakeGitHub(run_created=created)
+                env, marks = wake_env()
+                api = FakeAnthropic(sessions=[session("100")])
+                self.go(env, api)
+                self.assertEqual(self.started(api), starts)
+                if not starts:
+                    self.assertIn("no session started: the instruction was approved too late", self.post.bodies()[0])
+                    self.assertFalse(any(p.endswith("/credentials/cred_C") for _, p, _ in api.calls))  # no token went in
+                self.assertTrue(any(p == f"/repos/o/r/actions/runs/{env['GITHUB_RUN_ID']}" for _, p, _, _ in self.post.calls))
+
+    def test_the_cut_off_matches_the_tripwires_window(self):
+        """By construction: a run at the cut-off, whose session runs the wake job's whole
+        timeout, is still inside the completed window of the last sweep whose lookback
+        reaches the session's end."""
+        import tripwire
+        start = T0
+        cut_off = start - timedelta(minutes=tripwire.COMPLETED_EXTRA_MINUTES - tripwire.WAKE_JOB_MINUTES)
+        self.assertFalse(tripwire.wake_run_too_old(cut_off, start))
+        self.assertTrue(tripwire.wake_run_too_old(cut_off - timedelta(seconds=1), start))
+        end = start + timedelta(minutes=tripwire.WAKE_JOB_MINUTES)
+        last_sweep = end + timedelta(minutes=tripwire.LOOKBACK_MINUTES)
+        window_from = last_sweep - timedelta(minutes=tripwire.LOOKBACK_MINUTES + tripwire.COMPLETED_EXTRA_MINUTES)
+        self.assertLessEqual(window_from, cut_off)
+
     def test_budget_stop_escalates_and_still_cleans_up(self):
         env, marks = wake_env()
         api = FakeAnthropic(states=[{"status": "idle", "stop_reason": {"type": "budget_reached"}}])

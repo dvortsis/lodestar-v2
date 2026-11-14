@@ -49,6 +49,9 @@ class Workflows(unittest.TestCase):
         job = self.wfs["operator-wake.yml"]["jobs"]["wake"]
         self.assertNotIn("name", job)
         self.assertEqual(job["environment"], "cloud-operator")
+        # The tripwire's window and the wake's own age check assume the job's longest run.
+        import tripwire
+        self.assertLessEqual(job["timeout-minutes"], tripwire.WAKE_JOB_MINUTES)
 
     def jobs(self):
         for n, wf in self.wfs.items():

@@ -44,6 +44,7 @@ sys.path.insert(0, str(HERE.parent / "fleet"))
 import bridge  # noqa: E402
 import ghapp  # noqa: E402
 import message  # noqa: E402
+import tripwire  # noqa: E402 - wake_run_too_old: the tripwire's own window
 from apiclient import anthropic, github, pages  # noqa: E402
 from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
@@ -328,6 +329,16 @@ def wake_disabled(env, transport) -> Callable[[], bool]:
     return check
 
 
+def _run_created(env, transport) -> datetime | None:
+    """This run's creation time, read with the job's token (actions: read), or
+    None when it can't be read (the caller refuses: fail closed)."""
+    try:
+        r = transport("GET", f"/repos/{env['GITHUB_REPOSITORY']}/actions/runs/{int(env['GITHUB_RUN_ID'])}", None)
+    except Exception:  # noqa: BLE001
+        return None
+    return tripwire._when(r.get("created_at")) if isinstance(r, dict) else None
+
+
 def stale_sessions(sessions: list[dict]) -> list[str]:
     """Bridge sessions an earlier wake never archived (a cancelled or lost job):
     still attached to the vault, so they're archived before a new token goes in."""
@@ -369,6 +380,12 @@ def cmd_wake(env, deps=None) -> int:
         ids, etag = bridge.read_claude_lock(store)
         if ids is None:
             escalate(env, msg.id, "the agent isn't applied yet (run operator-apply.yml)", gh_post)
+            return 0
+        # A run approved so late that a later sweep's window can't see it starts no session:
+        # the tripwire must be able to find every session (tripwire.wake_run_too_old).
+        if tripwire.wake_run_too_old(_run_created(env, gh_post), now()):
+            escalate(env, msg.id, "no session started: the instruction was approved too late for the "
+                     "tripwire to see its session; post it again", gh_post)
             return 0
         sessions = pages(call, "/v1/sessions", {"include_archived": "true"})
         for old in stale_sessions(sessions):

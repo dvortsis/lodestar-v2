@@ -14,27 +14,34 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 - **Runs in flight** (`in_progress`, `waiting`, `queued`, `pending`, `requested`) are still read from the last 30 days, the longest a job can wait for approval.
   - Their number is all runs minus `completed` ones, from two counts.
   - The status lists stop once they've found that many. With nothing in flight, which is usual, no list is read.
-- **Completed runs are listed by conclusion,** created from 180 minutes before the lookback (`COMPLETED_EXTRA_MINUTES`).
+- **Completed runs are listed by conclusion,** created from 72 hours before the lookback (`COMPLETED_EXTRA_MINUTES`).
   - **Never `skipped`:** a comment alone makes a skipped run, so any number of comments costs nothing.
   - **The common conclusions first:** `success`, `failure` and `cancelled`.
   - **The rare ones only when needed:** they're listed only while completed minus skipped runs are still unread.
-  - **Still unread after that** (a conclusion GitHub adds later, or runs still completing): the counts don't add up, so it fails closed.
+  - **Still unread after that** (a conclusion GitHub adds later, or runs still completing): the counts don't add up, so it fails closed. A count below zero, from an index that contradicts itself, is never settled on either.
   - **Passed over without reading its jobs:** a listed run last updated before the lookback.
-  - **No overflow from old runs:** this replaces eight conclusion lists over 30 days, so more than 1,000 old successful runs no longer overflow a list.
+  - **No overflow from old runs:** this replaces eight conclusion lists over 30 days. More than 1,000 completed runs that aren't skipped within 72 hours would overflow, and that fails closed.
   - **Counting order:** every count that's subtracted is read first. A run that moves between the two reads can then only make the check look for more runs, never fewer.
 - **A completed run's jobs are read once** and kept across the attempts.
-- **The cost:** a quiet pass is nine requests: the in-flight counts, the completed counts with the three common lists, and the in-flight counts again. Thirty of the runner's channel comments in the lookback fit under `SESSION_REQUESTS` (40), and a test checks it.
+- **The cost:**
+  - **A clean pass** is nine requests plus a page for every 100 completed runs past the first, plus a jobs read for each run updated inside the lookback.
+  - **One settle retry** repeats the counts and lists, but not the jobs reads.
+  - **What fits `SESSION_REQUESTS` (40):** with 300 completed runs in the 72-hour window and one settle retry, about 14 of the runner's channel comments in the lookback; a test checks 12. On a clean pass it's about 28. Past that, it counts as a session (fails closed).
 - **A run that just settled:** an in-flight list whose copy of a run already shows it completed and skipped passes over that run, and the counts decide. Before, it made a mismatch that could never count as settling.
-- **Reading of the brief:** the brief said to read completed runs "only from the lookback's start". Taken literally, that misses a run created a little before the lookback whose session ran inside it. Reading from 180 minutes earlier covers a wake approved up to about two hours late.
-- **Accepted residual, failing open:** a completed run approved later than that, whose session ended inside the lookback, isn't read.
-  - **Why it's accepted:** its own end-of-wake sweep ran after the session ended, and it disables if that sweep can't finish.
-  - **What's left uncovered:** only a later hourly sweep that can't finish misses it.
-  - While such a run is still in flight, it's read whatever its age.
 
-## Other accepted residuals
-- **A burst of others' runs in flight (fails closed).** Each run in flight costs a jobs read. About 25 or more strangers' runs in flight at the moment of the check pass the 40-request cap, which counts as a session. That needs a timed burst of comments. It was the same before this change.
-- **If GitHub caps totals at 1,000 (fails closed).** Then a window whose counts sit at the cap is split, which costs more requests and can reach the cap. The quiet-pass figure above assumes no cap; the first run verifies it.
-- **A late approval completing during the check (fails open).** A run in flight created before the completed window, which completes between the in-flight lists and the completed lists, is read in neither. It's the same residual as a completed late approval, reached through a race.
+## No session outside the window (the runner's call)
+- **A wake whose run is too old refuses to start a session.** `wake.py` reads its own run's creation time with the job's token (`actions: read`, which it already holds). It refuses when the run is older than `COMPLETED_EXTRA_MINUTES` minus `WAKE_JOB_MINUTES`, that is 72 hours less 45 minutes.
+  - **What the refusal does:** it posts the usual escalation, "no session started: the instruction was approved too late …; post it again", and starts no session. The runner posts the instruction again.
+  - **Fail closed:** a creation time that can't be read refuses too.
+  - **Why this closes it:** a session ends within the wake job's 45 minutes. Every sweep whose lookback reaches that end reads completed runs from `LOOKBACK_MINUTES` + `COMPLETED_EXTRA_MINUTES` back, so it finds the run.
+  - **In sync by construction:** `tripwire.wake_run_too_old` holds the cut-off, and `wake.py` calls it, so the two can't drift apart. A test checks the boundary against the window, and `test_workflows` pins the wake job's timeout to `WAKE_JOB_MINUTES`.
+- **This closes the late-approval residual,** which failed open. The runner decided to close it rather than ask the owner to accept it. It makes the check stricter: an instruction approved more than about 72 hours late is refused instead of run. The runner flags it to the owner (`docs/owner-decisions.md` §2.19).
+- **The same holds for a late approval completing during the check.** Its run can't be older than the window, so the completed list finds it.
+- **No workflow, permission or prompt change.** The agent's prompt and config are unchanged, so `operator-apply.yml` needs no re-dispatch. `wake.py` runs from `main`.
+
+## Other accepted residuals, failing closed
+- **A burst of others' runs in flight.** Each run in flight costs a jobs read, so a timed burst of comments in flight at the moment of the check can pass the request cap, which counts as a session. It was the same before this change.
+- **If GitHub caps totals at 1,000.** Then a window whose counts sit at the cap is split, which costs more requests and can reach the cap. The cost figures above assume no cap; the first run verifies it.
 
 ## A run in flight with no jobs listed yet
 - **Kept failing closed; recorded as an accepted residual.** A run in flight whose jobs, or whose `gate` job, aren't listed within the re-reads (five, two seconds apart) counts as a session, whoever started it.
@@ -43,5 +50,5 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 ## Unchanged
 - The gate-success rule and the exact workflow-ref match for the end-of-wake sweep.
 - The escalation posted before the check, and a failed post with nothing disabled failing the job.
-- The time budget's 60-second margin (the budget test now also counts the settle waits).
+- The time budget's 60-second margin (the budget test now also counts the settle waits and a last wait before the deadline).
 - No workflow, permission or prompt change, so `operator-apply.yml` needs no re-dispatch.

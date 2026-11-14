@@ -52,13 +52,16 @@ SWEEP_DEADLINE_SECONDS = 300  # with the session check's, leaves 60 s of the job
 # (the owner's decision, 2026-11-14; _wake_session). A job can wait up to 30
 # days for an environment's approval, so runs in flight created that far back
 # are read; completed runs are read from COMPLETED_EXTRA_MINUTES before the
-# lookback (a late approval's own end-of-wake sweep covers an older one).
+# lookback. A wake whose run is older than every later sweep's completed
+# window could see refuses to start a session (wake_run_too_old, in wake.py),
+# so no completed session falls outside it.
 # The escalation is posted before the check, which has its own deadline, and
 # the disable follows it: a timeout can miss the disable, never the post. Past
 # a list's SESSION_PAGES, past the deadline, or on any unreadable answer, a
 # session counts as having run.
 APPROVAL_WAIT_DAYS = 30
-COMPLETED_EXTRA_MINUTES = 180
+COMPLETED_EXTRA_MINUTES = 72 * 60
+WAKE_JOB_MINUTES = 45  # operator-wake.yml's wake job timeout (test_workflows pins it)
 SESSION_PAGES = 10  # GitHub lists at most 1,000 runs for a created= filter
 SESSION_DEADLINE_SECONDS = 45
 REQUEST_TIMEOUT_SECONDS = 30  # infra/fleet/comments.py's urlopen timeout, per socket operation
@@ -94,6 +97,18 @@ GATE_WAIT_SECONDS = 2
 SESSION_RAN = "a wake session ran inside the sweep's lookback"
 SESSION_UNKNOWN = "whether a wake session ran inside the sweep's lookback couldn't be read"
 END_OF_WAKE = "this is the end-of-wake sweep"
+
+
+def wake_run_too_old(created: datetime | None, now: datetime) -> bool:
+    """Whether a wake whose run was created at `created` must refuse to start
+    a session at `now`. Its session ends within WAKE_JOB_MINUTES; every sweep
+    up to LOOKBACK_MINUTES after that must still find the run in its completed
+    window, which reaches LOOKBACK_MINUTES + COMPLETED_EXTRA_MINUTES back. So
+    the run may be at most COMPLETED_EXTRA_MINUTES - WAKE_JOB_MINUTES old. An
+    unknown creation time refuses (fail closed)."""
+    if created is None:
+        return True
+    return created < now - timedelta(minutes=COMPLETED_EXTRA_MINUTES - WAKE_JOB_MINUTES)
 
 
 def _digits(v) -> str | None:
@@ -487,6 +502,8 @@ def _difference(call, repo: str, lo: datetime, hi: datetime, minuend: str, subtr
         mid = (lo + (hi - lo) / 2).replace(microsecond=0)
         return (_difference(call, repo, lo, mid, minuend, subtrahend, depth + 1)
                 + _difference(call, repo, mid + timedelta(seconds=1), hi, minuend, subtrahend, depth + 1))
+    if more < less:
+        raise _Unknown  # an index that contradicts itself: never settle on it
     return more - less
 
 
