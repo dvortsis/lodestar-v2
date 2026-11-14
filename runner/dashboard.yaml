@@ -645,6 +645,7 @@ placement:
   - X-gluetun-pin-ci-filter
   - X-ci-filter-fleet
   - X-ci-filter-rust-inputs
+  - X-ci-filter-docs-user
   - X-companions-mount-check
   - X-cmp-egress-ui
   - D-companions-guide
