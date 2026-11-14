@@ -1,0 +1,135 @@
+#cloud-config
+# The interactive Claude test VM (docs/decisions/2026-11-12-X-test-vm.md).
+# Based on infra/akamai/terraform/cloud-init/ubuntu24.yaml.tftpl, plus the
+# developer toolchain. devvm.py fills the three placeholders: the owner's PUBLIC
+# SSH key, and the VM's own ed25519 host key generated just before creation so
+# its fingerprint is known before first contact. No PIA, API or GitHub
+# credentials ever go in here: user data is readable by anyone holding the
+# account's API token and by any process on the VM through the metadata service.
+hostname: claude-dev
+manage_etc_hosts: true
+timezone: Etc/UTC
+ssh_pwauth: false
+disable_root: true
+package_update: true
+package_upgrade: true
+packages:
+  - build-essential
+  - ca-certificates
+  - clang
+  - curl
+  - dnsutils
+  - git
+  - gnupg
+  - htop
+  - jq
+  - pkg-config
+  - python3-pip
+  - python3-venv
+  - sysstat
+  - tcpdump
+  - tmux
+  - unattended-upgrades
+  - unzip
+  - wireguard-tools
+users:
+  - name: lodestar
+    gecos: Lodestar Test Administrator
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+# The pinned host key; other host key types are removed and not regenerated.
+ssh_deletekeys: true
+ssh_genkeytypes: []
+ssh_keys:
+  ed25519_private: |
+__HOST_KEY_PRIVATE_INDENTED__
+  ed25519_public: __HOST_KEY_PUBLIC__
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-lodestar.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # Offer only the pinned ed25519 key: a package upgrade during boot can
+      # recreate the RSA and ECDSA keys that ssh_deletekeys removed.
+      HostKey /etc/ssh/ssh_host_ed25519_key
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      AllowAgentForwarding no
+      ClientAliveInterval 60
+      ClientAliveCountMax 10
+  - path: /usr/local/sbin/devvm-bootstrap.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      umask 022
+      install -d -m 0750 /var/log/lodestar
+      exec > >(tee -a /var/log/lodestar/bootstrap.log) 2>&1
+      trap 'rc=$?; printf "bootstrap failure: exit=%s line=%s UTC=%s\n" "$rc" "$LINENO" "$(date -u +%FT%TZ)" >&2; echo "FAILED line $LINENO" > /var/lib/devvm-bootstrap.status' ERR
+      echo "running" > /var/lib/devvm-bootstrap.status
+      echo "Bootstrapping claude-dev, UTC=$(date -u +%FT%TZ)"
+      . /etc/os-release
+      [[ "$ID" == "ubuntu" && "$VERSION_ID" == "24.04" ]] || { echo "ERROR: expected Ubuntu 24.04" >&2; exit 1; }
+      export DEBIAN_FRONTEND=noninteractive
+      # A swap file: release builds with LTO can pass 8 GiB. A worker gets the
+      # test plan's 256 MB instead (Lane K), and no build toolchain.
+      if ! swapon --show | grep -q /swapfile; then
+        fallocate -l __SWAP_SIZE__ /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+      # Docker Engine and the Compose plugin from Docker's own repository.
+      install -m 0755 -d /etc/apt/keyrings
+      curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+        https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      cat > /etc/apt/sources.list.d/docker.sources <<DOCKEREOF
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: $VERSION_CODENAME
+      Components: stable
+      Architectures: $(dpkg --print-architecture)
+      Signed-By: /etc/apt/keyrings/docker.asc
+      DOCKEREOF
+      apt-get update -y
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+      # lodestar already has passwordless sudo, so the docker group adds no privilege.
+      usermod -aG docker lodestar
+      # BEGIN dev-toolchain (left out on a worker)
+      # Node.js 22 (web/ needs >=22), official tarball checked against its SHASUMS.
+      NODE_MAJOR=22
+      cd /tmp
+      curl -fsSLO --retry 5 "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt"
+      NODE_TGZ="$(grep -oE "node-v${NODE_MAJOR}\.[0-9]+\.[0-9]+-linux-x64\.tar\.xz" SHASUMS256.txt | head -1)"
+      curl -fsSLO --retry 5 "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/${NODE_TGZ}"
+      grep " ${NODE_TGZ}\$" SHASUMS256.txt | sha256sum -c -
+      tar -xJf "$NODE_TGZ" -C /usr/local --strip-components=1
+      rm -f "$NODE_TGZ" SHASUMS256.txt
+      node --version
+      # Per-user toolchain: Rust (the repo's rust-toolchain.toml picks stable +
+      # rustfmt + clippy), Claude Code, and the repository itself.
+      sudo -iu lodestar bash -euo pipefail <<'USEREOF'
+      curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path
+      grep -q cargo/env ~/.bashrc || echo '. "$HOME/.cargo/env"' >> ~/.bashrc
+      curl -fsSL https://claude.ai/install.sh | bash
+      grep -q '.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+      [ -d ~/lodestar-v2 ] || git clone https://github.com/dvortsis/lodestar-v2.git ~/lodestar-v2
+      install -d -m 0700 ~/secrets
+      USEREOF
+      # END dev-toolchain
+      rm -f /etc/ssh/ssh_host_rsa_key* /etc/ssh/ssh_host_ecdsa_key*
+      systemctl restart ssh
+      test -c /dev/net/tun || { echo "ERROR: /dev/net/tun unavailable" >&2; exit 1; }
+      docker --version; docker compose version
+      echo "ok $(date -u +%FT%TZ)" > /var/lib/devvm-bootstrap.status
+      echo "Bootstrap complete UTC=$(date -u +%FT%TZ)"
+runcmd:
+  - [bash, /usr/local/sbin/devvm-bootstrap.sh]
+final_message: "claude-dev bootstrap finished; see /var/lib/devvm-bootstrap.status and /var/log/lodestar/bootstrap.log."
