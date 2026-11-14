@@ -344,7 +344,7 @@ lodestar_log::catalogue! {
         id: "system.data_dir_open",
         component: System,
         level: Warn,
-        message: "The data folder can be read by other users on this computer, and Lodestar couldn't make it owner-only: Lodestar's user doesn't own it, it's a link, or it holds files that aren't Lodestar's. Point Lodestar at its own folder and give that folder to Lodestar's user (in Docker, set PUID and PGID instead of --user). Lodestar makes it owner-only at the next start.",
+        message: "The data folder can be read by other users on this computer, and Lodestar couldn't make it owner-only: Lodestar's user doesn't own it, it's a link, or it holds files that aren't Lodestar's. Point Lodestar at its own real folder (not a link) and give that folder to Lodestar's user (in Docker, set PUID and PGID instead of --user). Lodestar makes it owner-only at the next start.",
         fields: { path: Path },
     }
     /// The data directory is on Unraid's user share.

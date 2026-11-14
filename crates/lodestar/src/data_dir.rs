@@ -258,6 +258,19 @@ mod tests {
         assert!(log.contains("system.data_dir_open"), "{log}");
     }
 
+    /// Why the supervisor tightens before it creates `bin`: a folder
+    /// holding only `bin` isn't one `tighten` can vouch for.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_holding_only_bin_is_not_tightened() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("data");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        set_mode(&dir, 0o755);
+        assert_eq!(tighten(&dir), Action::Warn);
+        assert_eq!(mode_of(&dir), 0o755);
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_root_comparison_matches_only_the_same_folder() {

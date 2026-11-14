@@ -637,8 +637,9 @@ mod imp {
     }
 
     /// Whether a data directory owned by `owner` must be handed to `ids`
-    /// (walked and chowned). One already theirs is left as it is, and isn't
-    /// opened for reading.
+    /// (walked and chowned): only when the directory itself has another
+    /// owner. One already theirs is left as it is, and isn't opened for
+    /// reading.
     pub(super) fn needs_handing_over(owner: (u32, u32), ids: Ids) -> bool {
         owner != (ids.uid, ids.gid)
     }

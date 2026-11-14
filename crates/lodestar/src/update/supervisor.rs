@@ -59,11 +59,7 @@ pub fn run(
         .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
         .try_init();
     dropped.log(data_dir);
-    // The data folder is made owner-only here, before `bin` is created in
-    // it, while a newly handed-over folder is still empty and so plainly
-    // Lodestar's. The child's start warns if it's still open.
-    let _ = crate::data_dir::tighten(data_dir);
-    let bin = match Bin::open(data_dir) {
+    let bin = match open_data(data_dir) {
         Ok(b) => b,
         Err(e) => {
             say!("{e}");
@@ -123,6 +119,15 @@ pub fn run(
 /// The child's arguments, built from what was parsed rather than copied:
 /// `serve --child`, and the `--config` the supervisor was given (the
 /// environment is inherited).
+/// Makes the data folder owner-only, then opens its `bin`. The order
+/// matters: a newly handed-over folder is still empty here, so plainly
+/// Lodestar's, while one holding only `bin` isn't a folder `tighten` can
+/// vouch for. Silent: the child's start warns if the folder is still open.
+fn open_data(data_dir: &Path) -> std::io::Result<Bin> {
+    let _ = crate::data_dir::tighten(data_dir);
+    Bin::open(data_dir)
+}
+
 fn child_args(config: Option<&Path>) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     if let Some(c) = config {
@@ -1176,5 +1181,18 @@ mod tests {
             child_args(Some(Path::new("c.toml"))),
             ["--config", "c.toml", "serve", "--child"]
         );
+    }
+
+    #[test]
+    fn a_new_data_folder_is_made_owner_only_before_bin_is_created() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("data");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        open_data(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{mode:o}");
+        assert!(dir.join("bin").is_dir());
     }
 }

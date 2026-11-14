@@ -293,9 +293,9 @@ The data folder holds the store, the search index and your settings. Only Lodest
 
 If you see that warning, give the folder to Lodestar's user. Don't run `chmod 700` as the folder's owner instead. Lodestar reaches a folder it doesn't own through the group or other permissions, so that would lock it out.
 
-1. Find the folder in the warning, for example the folder you set in `LODESTAR_DATA_DIR`. Check it holds only Lodestar's files, not a whole share or a home folder. If it doesn't, point Lodestar at a folder of its own.
+1. Find the folder in the warning, for example the folder you set in `LODESTAR_DATA_DIR`. Check it holds only Lodestar's files, not a whole share or a home folder. If it doesn't, point Lodestar at a folder of its own. If the path is a link (`ls -ld` shows `->`), set `LODESTAR_DATA_DIR` to the folder it points to.
 2. Give the folder to Lodestar's user:
-   - **Docker or Unraid:** set `PUID` and `PGID` to the user and group Lodestar should run as, and don't use `--user`. Lodestar hands the folder over itself.
+   - **Docker or Unraid:** set `PUID` and `PGID` to the user and group Lodestar should run as, and don't use `--user`. Lodestar hands the folder over itself. If you must use `--user`, give the folder to that user ID instead.
    - **Linux without Docker:** run this in a terminal, with Lodestar's user and group and your folder's path:
      ```bash
      sudo chown lodestar:lodestar /path/to/lodestar-data
