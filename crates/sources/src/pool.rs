@@ -887,13 +887,13 @@ pub const MAX_VOUCHED_PER_IP: usize = 256;
 /// is taken as a peer is added and given back as the key leaves.
 #[derive(Default)]
 struct Vouched {
-    by_net: HashMap<u64, u32>,
+    by_net: HashMap<Net, u32>,
 }
 
 impl Vouched {
     /// A place for one more key at `net`, unless it has
     /// [`MAX_VOUCHED_PER_IP`] already.
-    fn take(&mut self, net: u64) -> bool {
+    fn take(&mut self, net: Net) -> bool {
         let keys = self.by_net.entry(net).or_default();
         if *keys as usize >= MAX_VOUCHED_PER_IP {
             return false;
@@ -904,12 +904,12 @@ impl Vouched {
 
     /// Counts a key that already has its peer at `net`, whatever the
     /// limit: a key that turns public keeps the peers it has.
-    fn count(&mut self, net: u64) {
+    fn count(&mut self, net: Net) {
         let keys = self.by_net.entry(net).or_default();
         *keys = keys.saturating_add(1);
     }
 
-    fn give_back(&mut self, net: u64) {
+    fn give_back(&mut self, net: Net) {
         let std::collections::hash_map::Entry::Occupied(mut keys) = self.by_net.entry(net) else {
             debug_assert!(false, "a place given back that wasn't taken");
             return;
@@ -925,41 +925,48 @@ impl Vouched {
     }
 
     #[cfg(test)]
-    fn keys(&self, net: u64) -> u32 {
+    fn keys(&self, net: Net) -> u32 {
         self.by_net.get(&net).copied().unwrap_or(0)
     }
 }
 
-/// The address a peer counts under: its IPv4 address (an IPv4-mapped or
-/// NAT64 /96 address as the IPv4 one inside it), or an IPv6 address's /64.
-/// The two can't meet: an IPv4 address sits under a prefix no /64 a peer
-/// may have starts with.
-fn net_of(ip: IpAddr) -> u64 {
-    const V4: u64 = 0xffff_ffff_0000_0000;
+/// The address a peer counts under: an IPv4 address, or the /64 of an
+/// IPv6 one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Net {
+    V4(u32),
+    V6(u64),
+}
+
+/// The address `ip` counts under. An IPv4-mapped or NAT64 /96 address
+/// counts as the IPv4 address inside it.
+fn net_of(ip: IpAddr) -> Net {
     match ip {
-        IpAddr::V4(v4) => V4 | u64::from(u32::from(v4)),
+        IpAddr::V4(v4) => Net::V4(u32::from(v4)),
         IpAddr::V6(v6) => {
             let s = v6.segments();
             if let Some(v4) = v6.to_ipv4_mapped() {
-                return V4 | u64::from(u32::from(v4));
+                return Net::V4(u32::from(v4));
             }
             let nat64 = s[0] == 0x64
                 && s[1] == 0xff9b
                 && (s[2..6] == [0; 4] || (s[2] == 1 && s[3..6] == [0; 3]));
             if nat64 {
-                return V4 | (u64::from(s[6]) << 16) | u64::from(s[7]);
+                return Net::V4((u32::from(s[6]) << 16) | u32::from(s[7]));
             }
-            (u64::from(s[0]) << 48)
-                | (u64::from(s[1]) << 32)
-                | (u64::from(s[2]) << 16)
-                | u64::from(s[3])
+            Net::V6(
+                (u64::from(s[0]) << 48)
+                    | (u64::from(s[1]) << 32)
+                    | (u64::from(s[2]) << 16)
+                    | u64::from(s[3]),
+            )
         }
     }
 }
 
 /// Each address `peers` are at, once.
-fn nets_of(peers: &[SocketAddr]) -> Vec<u64> {
-    let mut nets: Vec<u64> = peers.iter().map(|p| net_of(p.ip())).collect();
+fn nets_of(peers: &[SocketAddr]) -> Vec<Net> {
+    let mut nets: Vec<Net> = peers.iter().map(|p| net_of(p.ip())).collect();
     nets.sort_unstable();
     nets.dedup();
     nets
@@ -2341,7 +2348,12 @@ impl Pool {
                 // isn't put off for ever (WK-10e).
                 let tried = e.tried;
                 let mut at = 0;
-                let counted = self.limit_addresses && !e.private;
+                // Only when a peer is about to go: the addresses before.
+                let counted = self.limit_addresses
+                    && !e.private
+                    && e.peers[tried..]
+                        .iter()
+                        .any(|p| cap_for(policy, per_ip, p.ip()) == 0);
                 let before = if counted {
                     nets_of(&e.peers)
                 } else {
@@ -2720,8 +2732,8 @@ impl Pool {
 
     /// The count per address, taken afresh from the entries.
     #[cfg(debug_assertions)]
-    fn vouched_afresh(&self) -> HashMap<u64, u32> {
-        let mut afresh: HashMap<u64, u32> = HashMap::new();
+    fn vouched_afresh(&self) -> HashMap<Net, u32> {
+        let mut afresh: HashMap<Net, u32> = HashMap::new();
         if self.limit_addresses {
             for e in self.entries.values().filter(|e| !e.private) {
                 for net in nets_of(&e.peers) {
@@ -3495,7 +3507,7 @@ mod vouch {
     fn a_peer_counts_under_its_address() {
         let net = |s: &str| net_of(s.parse::<IpAddr>().unwrap());
         let one = net("203.0.113.7");
-        assert_eq!(nets_of(&[]), Vec::<u64>::new());
+        assert_eq!(nets_of(&[]), Vec::<Net>::new());
         let a = |s: &str| s.parse::<SocketAddr>().unwrap();
         assert_eq!(
             nets_of(&[a("203.0.113.7:1"), a("203.0.113.7:65535")]),
@@ -3511,7 +3523,7 @@ mod vouch {
         assert_ne!(net("2001:db8:1:2::1"), net("2001:db8:1:3::1"));
         // An IPv4 address and a /64 never share a count.
         assert_ne!(net("0.0.0.1"), net("0:0:0:1::"));
-        assert_ne!(net("203.0.113.7"), net("0:0:cb00:7107::"));
+        assert_ne!(net("203.0.113.7"), net("ffff:ffff:cb00:7107::"));
     }
 
     /// An address has places up to the limit and no more; a place given

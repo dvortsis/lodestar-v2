@@ -252,6 +252,23 @@ impl Harness {
         fake: Arc<FakeState>,
         capacity: usize,
     ) -> Harness {
+        Harness::with_parts(config, weights, restore, fake, capacity, true)
+    }
+
+    /// A pool with no peer finder, as a worker that runs no DHT has.
+    fn without_finders(config: PoolConfig) -> Harness {
+        let fake = Arc::new(FakeState::default());
+        Harness::with_parts(config, &[], vec![], fake, 4096, false)
+    }
+
+    fn with_parts(
+        config: PoolConfig,
+        weights: &[(u8, u32)],
+        restore: Vec<QueuedKey>,
+        fake: Arc<FakeState>,
+        capacity: usize,
+        finders: bool,
+    ) -> Harness {
         let (disc, discoveries) = mpsc::channel(4096);
         let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(4096);
         let (keys, lookups) = mpsc::channel(4096);
@@ -278,7 +295,7 @@ impl Harness {
             Arc::new(Fake(fake.clone())),
             PoolIo {
                 discoveries,
-                peer_finders: vec![finder],
+                peer_finders: if finders { vec![finder] } else { Vec::new() },
                 out: out_tx,
                 funnel: causes.clone(),
                 shutdown,
@@ -1226,6 +1243,104 @@ async fn a_private_keys_peers_count_once_it_is_public() {
     h.send(found(0, 700_002, vec![peer(1, 1)]));
     sleep(Duration::from_millis(10)).await;
     assert_eq!(h.drain_lookups(), vec![key(700_002)]);
+    h.stop().await;
+}
+
+/// A key that turns private gives its places back, and takes them again
+/// when a public source next finds it.
+#[tokio::test(start_paused = true)]
+async fn a_key_that_turns_private_gives_its_places_back() {
+    let max = MAX_VOUCHED_PER_IP as u32;
+    let cfg = PoolConfig {
+        max_lookups: 4096,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 3_600_000, Ok(()));
+    // Found by a public source with the peer, and by a private one.
+    for n in 1..=max {
+        h.send(found(1, n, vec![peer(1, 1)]));
+        let mut private = found(2, n, vec![]);
+        private.found.private_source = true;
+        h.send(private);
+    }
+    sleep(Duration::from_millis(10)).await;
+    assert!(h.drain_lookups().is_empty());
+    // The public source goes: the keys are private, and the address has
+    // room for a public key again.
+    assert_eq!(h.handle.drop_source(src(1)).await, 0);
+    h.send(found(3, 800_001, vec![peer(1, 1)]));
+    sleep(Duration::from_millis(10)).await;
+    assert!(h.drain_lookups().is_empty());
+    // A public sighting of each: they count again, and the address is
+    // full for the next key.
+    for n in 1..=max {
+        h.send(found(3, n, vec![]));
+    }
+    h.send(found(3, 800_002, vec![peer(1, 1)]));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.drain_lookups(), vec![key(800_002)]);
+    h.stop().await;
+}
+
+/// A key whose peers the policy no longer lets this install dial gives
+/// their places back with them.
+#[tokio::test(start_paused = true)]
+async fn dropped_peers_give_their_places_back() {
+    let max = MAX_VOUCHED_PER_IP as u32;
+    let cfg = PoolConfig {
+        max_lookups: 4096,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 5_000, Ok(()));
+    h.script(peer(1, 2), 3_600_000, Ok(()));
+    for n in 1..=max {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    until("two fetches out", || {
+        h.fake.active.load(Ordering::SeqCst) == 2
+    })
+    .await;
+    // The address is no longer ours to dial: once the two open fetches
+    // finish, every key still waiting drops its peer and asks for others.
+    set_cap(&h, Some(ByIp::new(&[(1, 0)]))).await;
+    let mut asked = 0;
+    // (After the retry back-off, which is why this waits longer.)
+    until_within("the waiting keys ask for peers", 600, || {
+        asked += h.drain_lookups().len();
+        asked >= max as usize - 2
+    })
+    .await;
+    // Ours again: new keys keep their peers there, more of them than the
+    // two finished fetches alone made room for.
+    set_cap(&h, None).await;
+    let new: Vec<InfoHash> = (0..10).map(|n| key(800_010 + n)).collect();
+    for n in 0..10 {
+        h.send(found(0, 800_010 + n, vec![peer(1, 2)]));
+    }
+    sleep(Duration::from_millis(10)).await;
+    let looked = h.drain_lookups();
+    assert!(new.iter().all(|k| !looked.contains(k)), "{looked:?}");
+    h.stop().await;
+}
+
+/// A pool with no peer finder can't look a key up, so it keeps the peers
+/// its keys came with, however many are at one address.
+#[tokio::test(start_paused = true)]
+async fn a_pool_with_no_finder_keeps_every_peer() {
+    let total = MAX_VOUCHED_PER_IP as u32 + 20;
+    let mut h = Harness::without_finders(config());
+    h.script(peer(1, 1), 1, Ok(()));
+    for n in 1..=total {
+        h.send(found(0, n, vec![peer(1, 1)]));
+    }
+    for n in 1..=total {
+        tokio::time::timeout(Duration::from_secs(600), h.out.recv())
+            .await
+            .unwrap_or_else(|_| panic!("key {n} of {total} fetched in time"))
+            .expect("a fetched key");
+    }
     h.stop().await;
 }
 
