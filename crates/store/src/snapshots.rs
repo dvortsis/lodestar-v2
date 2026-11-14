@@ -2144,6 +2144,51 @@ mod tests {
         .collect()
     }
 
+    /// Rolling back to a snapshot taken before another rule replaced a
+    /// worker's report keeps that rule, not the report: once the report's
+    /// time is up, the key is still held.
+    #[test]
+    fn a_rollback_keeps_the_rule_that_replaced_a_workers_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _db) = live(dir.path());
+        // Live: user, list and claim rules took the reports' place.
+        for (h, rule) in [(30u8, "user"), (31, "LIST-2"), (32, "SRC-2")] {
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                    params![&[h; 20][..], rule, T + DAY],
+                )
+                .unwrap();
+        }
+        // The snapshot still has the reports, older.
+        let copy = dir.path().join("before.tmp");
+        let conn = fixture(&copy, Plan::KNOWN_THROUGH);
+        for h in [30u8, 31, 32] {
+            conn.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'worker-floor:7', ?2)",
+                params![&[h; 20][..], T - DAY],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        purge_for_restore(store.connection(), &copy, T + DAY).unwrap();
+        assert_eq!(
+            rows(&copy, "SELECT hash, rule FROM tombstones ORDER BY hash"),
+            ["h30 user", "h31 LIST-2", "h32 SRC-2"]
+        );
+        // The reports' time passes, and the worker is revoked: still held.
+        let mut restored = Store::open(&copy, StoreConfig::default()).unwrap();
+        assert!(restored.expire_worker_floor(i64::MAX).unwrap().is_empty());
+        assert!(restored.purge_worker_floor(7).unwrap().is_empty());
+        assert_eq!(
+            restored
+                .held_among(&[[30; 20], [31; 20], [32; 20]])
+                .unwrap(),
+            vec![true, true, true]
+        );
+    }
+
     /// A rollback's merge ranks holds: the local floor, then a kept hold,
     /// then an adult hold, then any other, then a worker's floor report.
     #[test]
