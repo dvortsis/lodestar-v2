@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T10:24Z",
+  "updated_at": "2026-11-14T10:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8613,6 +8613,16 @@
       "id": "place-s1-11-s1-14",
       "note": "S1-11 and S1-14 are not in X-pipe01-followup; the runner places them as their own slice.",
       "at": "2026-11-14T10:24Z"
+    },
+    {
+      "id": "s6-02-part2b-owns-snapshots",
+      "note": "Part 2b may edit crates/store/src/snapshots.rs (hold rank + adult conversion only) after #879 merges; worker-floor yields to any other hold (runner, tightening).",
+      "at": "2026-11-14T10:25Z"
+    },
+    {
+      "id": "store-write-hold-check",
+      "note": "Store component: write path vs existing holds; asked slot 32 whether #879 covers it; else own slice. Held detail by message only.",
+      "at": "2026-11-14T10:25Z"
     }
   ],
   "main_health": [
@@ -9030,7 +9040,7 @@
     "881": {
       "slice": "X-gluetun-guard-stop",
       "head": "19e032e7",
-      "status": "fresh Opus code+security review MERGE (1 Important + nits); small round requested, then runner self-check delta and merge; owns widened to start-block timeout value in run.py too",
+      "status": "small round; start-block 2455 s (option a); then runner self-check delta and merge",
       "at": "2026-11-14T10:19Z"
     }
   },
@@ -9947,7 +9957,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T10:24Z",
+  "updated": "2026-11-14T10:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
