@@ -40,4 +40,4 @@
 ## Docs
 - `docs/operations/cloud-operator-first-run.md`: wakes run without approval; check 2 reads the gate summary after the fact, and the owner may re-add themselves as reviewer to restore the wait.
 - `docs/operations/fleet-control-bootstrap.md` and the plan's owner-setup step 4: `cloud-operator` needs no reviewer; `cloud-fleet` still does.
-- **Not changed here (outside this slice's paths):** `infra/aws/fleet-control/README.md` line 15 still says the operator environment needs the owner as sole reviewer. Named in the PR for the runner.
+- **Added in the review round (the runner's call: docs only, and they describe this change):** `infra/aws/fleet-control/README.md` names `cloud-operator` as the exception to the sole-reviewer rule, and the plan's table of named loosenings has a row for this one.
