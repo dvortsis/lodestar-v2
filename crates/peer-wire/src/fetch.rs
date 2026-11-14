@@ -1332,6 +1332,44 @@ mod tests {
         peer.abort();
     }
 
+    /// A real fetch over loopback TCP whose peer never sends its first
+    /// window ends at the bound and is counted under `tcp`. Real time: the
+    /// bound itself is the wait.
+    #[tokio::test]
+    async fn a_fetch_counts_its_first_window_timeout() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let info = vec![7u8; MIB];
+        let key = InfoHash(Sha1::digest(&info).into());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut theirs = [0u8; HANDSHAKE_LEN];
+            stream.read_exact(&mut theirs).await.unwrap();
+            let hello = message::handshake(&key.0, b"-SC0001-scriptscript", true);
+            stream.write_all(&hello).await.unwrap();
+            let ext = message::our_extended_handshake(Some(info.len()));
+            let mut f = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
+            f.extend([20, 0]);
+            f.extend(ext);
+            stream.write_all(&f).await.unwrap();
+            // Reads the requests and answers none.
+            let mut sink = [0u8; 1024];
+            while stream.read(&mut sink).await.is_ok_and(|n| n > 0) {}
+        });
+        let opts = FetchOptions {
+            allow_private: true,
+            ..plain(Duration::from_secs(8))
+        };
+        let got = timeout(Duration::from_secs(30), fetch(addr, key, &opts))
+            .await
+            .expect("it ends");
+        assert!(matches!(got, Err(Error::FirstWindow)), "{got:?}");
+        assert_eq!(opts.stats.first_window_timeouts(Transport::Tcp), 1);
+        assert_eq!(opts.stats.first_window_timeouts(Transport::Utp), 0);
+        peer.abort();
+    }
+
     /// A first-window timeout is counted by transport; other failures
     /// aren't.
     #[test]
