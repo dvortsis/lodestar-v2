@@ -94,6 +94,14 @@ fn check(b: &Budget, seed: u64) {
         s.partial,
         s.grown
     );
+    if let Some(w) = &s.wait {
+        assert!(
+            w.passes <= w.before,
+            "seed {seed}: a waiting growth passed {} times with {} windows in when it began",
+            w.passes,
+            w.before
+        );
+    }
     let share = beside / super::PARTIAL_NET_SHARE;
     for (n, held) in &s.partial_nets {
         assert!(
