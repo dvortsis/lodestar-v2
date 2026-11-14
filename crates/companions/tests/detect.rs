@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -627,8 +626,8 @@ async fn both_loopbacks(other: Handler) -> Option<(TcpListener, Server)> {
 }
 
 /// Once 127.0.0.1 has answered on a port, nothing for that port goes to
-/// ::1, a bare probe included, whatever 127.0.0.1 does with later
-/// connections and whatever is listening on ::1.
+/// ::1, a bare probe included, even when 127.0.0.1 has stopped listening
+/// and something still listens on ::1.
 #[tokio::test]
 async fn ipv4_loopback_keeps_the_port_once_it_has_answered() {
     let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
@@ -643,46 +642,103 @@ async fn ipv4_loopback_keeps_the_port_once_it_has_answered() {
         return;
     };
     let target = v6.loopback();
-    // 127.0.0.1 answers its first connection, then closes every later one
-    // unanswered. The port stays held throughout.
-    let accepted = Arc::new(AtomicUsize::new(0));
+    let port = target_port(&v6);
+    // 127.0.0.1 answers one connection and stops listening.
     let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
-    let log = Arc::new(Mutex::new(Vec::new()));
-    {
-        let (accepted, log) = (Arc::clone(&accepted), Arc::clone(&log));
-        tokio::spawn(async move {
-            while let Ok((sock, _)) = v4.accept().await {
-                if accepted.fetch_add(1, Ordering::SeqCst) == 0 {
-                    tokio::spawn(serve(sock, Arc::clone(&first), Arc::clone(&log)));
-                } else {
-                    drop(sock);
-                }
-            }
-        });
-    }
+    let served = tokio::spawn(async move {
+        let (sock, _) = v4.accept().await.unwrap();
+        drop(v4);
+        serve(sock, first, Arc::new(Mutex::new(Vec::new()))).await;
+    });
     let client = http();
     let got = client
         .send(ProbeRequest::new(&target, path(), limits()))
         .await
         .unwrap();
     assert_eq!(got.body(), b"first");
+    served.await.unwrap();
+    // The port is held closed from here, so nothing else can be handed it.
+    let _held = hold_closed(port).await;
     for req in [
         ProbeRequest::new(&target, path(), limits()),
         ProbeRequest::new(&target, path(), limits()).post(b"password=x".to_vec()),
     ] {
         let got = client.send(req).await;
-        assert!(got.is_err(), "{:?}", got.map(|r| r.status()));
+        assert!(
+            matches!(got, Err(AdapterError::Unreachable)),
+            "{:?}",
+            got.map(|r| r.status())
+        );
     }
-    assert!(
-        accepted.load(Ordering::SeqCst) >= 3,
-        "each went to 127.0.0.1"
-    );
     assert!(v6.seen().is_empty(), "nothing reached ::1");
 }
 
+fn target_port(server: &Server) -> u16 {
+    server.addr.port()
+}
+
+/// Holds 127.0.0.1:`port` bound and not listening, once the listener that
+/// had it is gone: connections to it are refused, and no other program
+/// can be handed the port. Waits for both.
+async fn hold_closed(port: u16) -> TcpSocket {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let held = loop {
+        let s = TcpSocket::new_v4().unwrap();
+        // A connection just closed on the port mustn't keep it from being
+        // bound again (Unix; Windows needs no option for that, and there
+        // the option would let the port be shared).
+        #[cfg(unix)]
+        s.set_reuseaddr(true).unwrap();
+        match s.bind(addr) {
+            Ok(()) => break s,
+            Err(e) if in_use(&e) && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(e) => panic!("holding 127.0.0.1:{port}: {e}"),
+        }
+    };
+    loop {
+        match TcpStream::connect(addr).await {
+            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => return held,
+            other => {
+                assert!(
+                    Instant::now() < deadline,
+                    "127.0.0.1:{port} still answers: {:?}",
+                    other.map(drop)
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+}
+
+/// The port is held closed on a machine with no IPv6 too: the helper the
+/// test above rests on, run everywhere.
+#[tokio::test]
+async fn a_port_is_held_closed_once_its_listener_is_gone() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut conn = TcpStream::connect(addr).await.unwrap();
+    let (mut sock, _) = listener.accept().await.unwrap();
+    drop(listener);
+    sock.write_all(b"x").await.unwrap();
+    drop(sock);
+    let mut got = Vec::new();
+    conn.read_to_end(&mut got).await.unwrap();
+    drop(conn);
+    let _held = hold_closed(port).await;
+    let again = TcpStream::connect(addr).await;
+    assert_eq!(
+        again.err().map(|e| e.kind()),
+        Some(io::ErrorKind::ConnectionRefused)
+    );
+}
+
 /// A port a bare probe found on ::1 isn't kept there for good: once
-/// 127.0.0.1 listens, the next bare probe finds it, and from then on the
-/// port's requests go to 127.0.0.1 alone.
+/// 127.0.0.1 listens, the next request finds it, whatever it carries, and
+/// from then on the port's requests go to 127.0.0.1 alone.
 #[tokio::test]
 async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
     let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
@@ -709,24 +765,18 @@ async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
     assert_eq!(client.send(carrying()).await.unwrap().body(), b"other");
     assert_eq!(v6.seen().len(), 2);
     // 127.0.0.1 starts listening, on the socket that held the port all
-    // along. What carries something still goes where the last probe found
-    // the companion; the next bare probe finds 127.0.0.1.
+    // along. The very next request finds it, though it carries something.
     let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
     let v4 = Server::serve(v4.listen(16).unwrap(), first).unwrap();
-    assert_eq!(client.send(carrying()).await.unwrap().body(), b"other");
-    let got = client
-        .send(ProbeRequest::new(&target, path(), limits()))
-        .await
-        .unwrap();
-    assert_eq!(got.body(), b"first");
-    // From here everything goes to 127.0.0.1.
     assert_eq!(client.send(carrying()).await.unwrap().body(), b"first");
+    // From here everything goes to 127.0.0.1.
     let got = client
         .send(ProbeRequest::new(&target, path(), limits()))
         .await
         .unwrap();
     assert_eq!(got.body(), b"first");
-    assert_eq!((v6.seen().len(), v4.seen().len()), (3, 3));
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"first");
+    assert_eq!((v6.seen().len(), v4.seen().len()), (2, 3));
 }
 
 /// A server on ::1, with 127.0.0.1 held closed on its port, so the probe's

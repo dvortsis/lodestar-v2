@@ -280,14 +280,15 @@ impl Resolve for LocalOnly {
 ///   itself (CMP-8b's qBittorrent sign-in).
 /// - **One loopback address a port:** a loopback target is tried on
 ///   `127.0.0.1`, and on `::1` only when nothing listens there and the
-///   request is a bare probe (a `GET` with no header and no body).
+///   request is a bare probe (a `GET` with no header, no body and no
+///   query).
 ///   - Once `127.0.0.1` has answered on a port, every later request to
 ///     that port goes to it alone, for as long as this value lives.
 ///   - A port a bare probe found on `::1` is remembered as that until
-///     `127.0.0.1` answers: each later bare probe still asks `127.0.0.1`
-///     first, and an answer there takes the port for good. Until then a
-///     request that carries a cookie, a key or a body goes to `::1`, the
-///     address the probe found the companion on.
+///     `127.0.0.1` answers. Every later request still asks `127.0.0.1`
+///     first, and an answer there takes the port for good. While nothing
+///     listens there, a request that carries a cookie, a key or a body
+///     goes on to `::1`, the address the probe found the companion on.
 ///   - Before any probe, a request that carries anything stops at
 ///     `127.0.0.1`.
 ///   - The memory is this value's own: another `CompanionHttp` starts
@@ -345,11 +346,7 @@ impl CompanionHttp {
         let headers = req.headers_mut();
         headers.insert(USER_AGENT, ReqHeaderValue::from_static(PROBE_USER_AGENT));
         for (name, value) in &request.headers {
-            let name = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
-                .map_err(|_| AdapterError::Protocol("header name"))?;
-            let mut v = ReqHeaderValue::from_bytes(value.expose().as_bytes())
-                .map_err(|_| AdapterError::Protocol("header value"))?;
-            v.set_sensitive(value.is_secret());
+            let (name, v) = wire_header(name, value)?;
             headers.append(name, v);
         }
         if let Some(body) = &request.body {
@@ -390,23 +387,22 @@ impl CompanionHttp {
                     let host = if v6 { "[::1]" } else { "127.0.0.1" };
                     parse(&format!("http://{host}:{p}{path}"))
                 };
+                // A request that can't be built never tells where the
+                // companion listens.
+                sendable(request)?;
                 let remembered = self.loopback_of(p);
-                // `127.0.0.1` keeps a port for good. A port found on `::1`
-                // takes what carries something straight there; a bare
-                // probe asks `127.0.0.1` again first.
-                match remembered {
-                    Some(false) => return self.once(&self.fixed, url(false)?, request).await,
-                    Some(true) if !bare(request) => {
-                        return self.once(&self.fixed, url(true)?, request).await;
-                    }
-                    _ => {}
+                // `127.0.0.1` keeps a port for good.
+                if remembered == Some(false) {
+                    return self.once(&self.fixed, url(false)?, request).await;
                 }
+                // Everything asks `127.0.0.1` first. With nothing there, a
+                // bare probe goes looking on `::1`, and what carries
+                // something follows only where a probe has found the port.
+                let look = bare(request) || remembered == Some(true);
                 match self.once(&self.fixed, url(false)?, request).await {
-                    // Nothing on IPv4 loopback: a companion may listen on
-                    // `::1` only. Only a bare probe goes looking for it.
-                    Err(AdapterError::Unreachable) if bare(request) => {
+                    Err(AdapterError::Unreachable) if look => {
                         let got = self.once(&self.fixed, url(true)?, request).await;
-                        if got.is_ok() {
+                        if got.is_ok() && bare(request) {
                             self.remember_loopback(p, true);
                         }
                         got
@@ -447,6 +443,28 @@ impl CompanionHttp {
             map.insert(port, false);
         }
     }
+}
+
+/// A request header as it goes on the wire, marked sensitive if secret.
+fn wire_header(
+    name: &crate::adapter::HeaderName,
+    value: &crate::adapter::HeaderValue,
+) -> Result<(reqwest::header::HeaderName, ReqHeaderValue), AdapterError> {
+    let name = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
+        .map_err(|_| AdapterError::Protocol("header name"))?;
+    let mut v = ReqHeaderValue::from_bytes(value.expose().as_bytes())
+        .map_err(|_| AdapterError::Protocol("header value"))?;
+    v.set_sensitive(value.is_secret());
+    Ok((name, v))
+}
+
+/// Whether every header of `request` can go on the wire: what
+/// [`CompanionHttp::once`] would refuse before it connects.
+fn sendable(request: &ProbeRequest<'_>) -> Result<(), AdapterError> {
+    request
+        .headers
+        .iter()
+        .try_for_each(|(name, value)| wire_header(name, value).map(drop))
 }
 
 /// A probe that carries nothing: no header (so no cookie and no key), no
