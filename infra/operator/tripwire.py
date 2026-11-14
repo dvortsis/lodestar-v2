@@ -68,6 +68,17 @@ RUN_STATES = ("queued", "in_progress", "pending", "requested")
 RUN_CONCLUSIONS = ("success", "failure", "cancelled", "timed_out", "action_required", "startup_failure",
                    "neutral", "stale")
 RUN_UNREAD = ("skipped", "waiting")
+# A comment arriving during the check moves a run between lists: a count that
+# doesn't add up is read again, up to SESSION_ATTEMPTS times, before it counts.
+SESSION_ATTEMPTS = 3
+# GitHub may cap a created= list's total_count at 1,000: a time range whose
+# total reaches it is split in two and counted again, up to COUNT_SPLITS deep.
+COUNT_CAP = 1000
+COUNT_SPLITS = 6
+# A run in flight whose gate job hasn't finished is read again, GATE_READS
+# times GATE_WAIT_SECONDS apart, all inside the check's deadline.
+GATE_READS = 5
+GATE_WAIT_SECONDS = 2
 SESSION_RAN = "a wake session ran inside the sweep's lookback"
 SESSION_UNKNOWN = "whether a wake session ran inside the sweep's lookback couldn't be read"
 END_OF_WAKE = "this is the end-of-wake sweep"
@@ -379,87 +390,137 @@ class _Unknown(Exception):
     """An answer the session check can't vouch for."""
 
 
-def _wake_session(env, transport, now: datetime, monotonic=time.monotonic) -> str | None:
+class _Mismatch(Exception):
+    """Counts that don't add up: read again (SESSION_ATTEMPTS)."""
+
+
+def _stamp(t: datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _wake_session(env, transport, now: datetime, monotonic=time.monotonic, sleep=time.sleep) -> str | None:
     """Why an incomplete sweep counts a wake session as having run, or None.
 
     Read from the Actions API with the job's own token: the runs of
     operator-wake.yml created in the last APPROVAL_WAIT_DAYS, listed by status
-    on the server (RUN_STATES, RUN_CONCLUSIONS), and in each the `wake` job.
-    A session counts when a `wake` job wasn't skipped, isn't waiting for
-    approval, and hadn't completed before the lookback: so a queued or running
-    one counts, and so does one refused or cancelled after it started (stricter
-    than the rule's wording). A completed run updated before the lookback is
-    passed over without reading its jobs. The first session found answers.
+    on the server (RUN_STATES, RUN_CONCLUSIONS), and in each its jobs.
+    A session counts only in a run whose `gate` job succeeded: the gate runs
+    only for the runner's instruction, so a run any other comment starts never
+    counts, even while in flight. Its `wake` job then counts when it wasn't
+    skipped, isn't waiting for approval, and hadn't completed before the
+    lookback: so a queued or running one counts, and so does one refused or
+    cancelled after it started (stricter than the rule's wording). A completed
+    run updated before the lookback is passed over without reading its jobs.
+    The first session found answers.
     Fails closed: any error, an unexpected answer, a list past SESSION_PAGES,
-    counts that don't add up, or SESSION_DEADLINE_SECONDS passing counts as a
-    session. The end-of-wake sweep is decided by the caller (END_OF_WAKE)."""
+    counts that still don't add up after SESSION_ATTEMPTS reads, or
+    SESSION_DEADLINE_SECONDS passing counts as a session. The end-of-wake sweep
+    is decided by the caller (END_OF_WAKE)."""
     call = with_deadline(transport, monotonic, SESSION_DEADLINE_SECONDS)
     since = now - timedelta(minutes=LOOKBACK_MINUTES)
     try:
         repo = env["GITHUB_REPOSITORY"]
-        oldest = (now - timedelta(days=APPROVAL_WAIT_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        base = f"/repos/{repo}/actions/workflows/{WAKE_WORKFLOW}/runs?created=%3E%3D{oldest}"
-
-        def runs_page(status: str, page: int, per: int) -> tuple[list, int]:
-            r = call("GET", f"{base}{'&status=' + status if status else ''}&per_page={per}&page={page}", None)
-            items, total = (r or {}).get("workflow_runs"), (r or {}).get("total_count")
-            if not isinstance(items, list) or not isinstance(total, int) or isinstance(total, bool) or total < 0:
-                raise _Unknown
-            return items, total
-
-        def counts() -> int:  # all runs in the window, minus those the check never reads
-            total = runs_page("", 1, 1)[1]
-            return total - sum(runs_page(st, 1, 1)[1] for st in RUN_UNREAD)
-
-        expected = counts()
-        read = 0
-        for status in RUN_STATES + RUN_CONCLUSIONS:
-            key = "status" if status in RUN_STATES else "conclusion"
-            seen = 0
-            for page in range(1, SESSION_PAGES + 1):
-                items, total = runs_page(status, page, 100)
-                for run in items:
-                    if not isinstance(run, dict) or _digits(run.get("id")) is None or run.get(key) != status:
-                        raise _Unknown  # includes a status filter the API didn't apply
-                    updated = _when(run.get("updated_at"))
-                    if run.get("status") == "completed" and updated is not None and updated < since:
-                        continue  # a run's update time is at or after its jobs' completion
-                    if _wake_ran(call, repo, _digits(run.get("id")), since):
-                        return SESSION_RAN
-                seen += len(items)
-                if len(items) < 100 or seen >= total:
-                    break
-            else:
-                raise _Unknown  # more than SESSION_PAGES pages
-            if seen < total:
-                raise _Unknown
-            read += total
-        if read != expected or counts() != expected:  # a status the lists don't cover, or the window moved
-            raise _Unknown
-        return None
+        lo, hi = now - timedelta(days=APPROVAL_WAIT_DAYS), now  # fixed: a run created during the check isn't in it
+        for _ in range(SESSION_ATTEMPTS):
+            try:
+                return _session_pass(call, repo, lo, hi, since, sleep)
+            except _Mismatch:
+                continue
+        return SESSION_UNKNOWN
     except Exception:  # noqa: BLE001 - fail closed (the deadline raises Incomplete, an Exception)
         return SESSION_UNKNOWN
 
 
-def _wake_ran(call, repo: str, rid: str, since: datetime) -> bool:
-    """Whether run `rid`'s `wake` job counts as a session in the lookback."""
-    seen = 0
+def _runs_page(call, repo: str, lo: datetime, hi: datetime, status: str, page: int, per: int) -> tuple[list, int]:
+    r = call("GET", f"/repos/{repo}/actions/workflows/{WAKE_WORKFLOW}/runs?created={_stamp(lo)}..{_stamp(hi)}"
+                    f"{'&status=' + status if status else ''}&per_page={per}&page={page}", None)
+    items, total = (r or {}).get("workflow_runs"), (r or {}).get("total_count")
+    if not isinstance(items, list) or not isinstance(total, int) or isinstance(total, bool) or total < 0:
+        raise _Unknown
+    return items, total
+
+
+def _counted(call, repo: str, lo: datetime, hi: datetime, depth: int = 0) -> int:
+    """All runs created in [lo, hi] minus those the check never reads
+    (RUN_UNREAD). A range whose total reaches COUNT_CAP is split in two."""
+    total = _runs_page(call, repo, lo, hi, "", 1, 1)[1]
+    if total >= COUNT_CAP:
+        if depth >= COUNT_SPLITS or hi - lo < timedelta(seconds=2):
+            raise _Unknown
+        mid = lo + (hi - lo) / 2
+        mid = mid.replace(microsecond=0)
+        return _counted(call, repo, lo, mid, depth + 1) + _counted(call, repo, mid + timedelta(seconds=1), hi, depth + 1)
+    return total - sum(_runs_page(call, repo, lo, hi, st, 1, 1)[1] for st in RUN_UNREAD)
+
+
+def _session_pass(call, repo: str, lo: datetime, hi: datetime, since: datetime, sleep) -> str | None:
+    expected = _counted(call, repo, lo, hi)
+    read = 0
+    for status in RUN_STATES + RUN_CONCLUSIONS:
+        key = "status" if status in RUN_STATES else "conclusion"
+        seen = 0
+        for page in range(1, SESSION_PAGES + 1):
+            items, total = _runs_page(call, repo, lo, hi, status, page, 100)
+            for run in items:
+                if not isinstance(run, dict) or _digits(run.get("id")) is None:
+                    raise _Unknown
+                if run.get(key) != status:
+                    raise _Mismatch  # moved on since it was listed, or a filter the API didn't apply
+                updated = _when(run.get("updated_at"))
+                if run.get("status") == "completed" and updated is not None and updated < since:
+                    continue  # a run's update time is at or after its jobs' completion
+                if _wake_ran(call, repo, _digits(run.get("id")), since, run.get("status") != "completed", sleep):
+                    return SESSION_RAN
+            seen += len(items)
+            if len(items) < 100 or seen >= total:
+                break
+        else:
+            raise _Unknown  # more than SESSION_PAGES pages
+        if seen < total:
+            raise _Mismatch
+        read += total
+    if read != expected or _counted(call, repo, lo, hi) != expected:  # a status no list covers, or runs moved
+        raise _Mismatch
+    return None
+
+
+def _jobs(call, repo: str, rid: str) -> list[dict]:
+    out: list[dict] = []
     for page in range(1, 4):
         j = call("GET", f"/repos/{repo}/actions/runs/{rid}/jobs?filter=all&per_page=100&page={page}", None)
         jobs, count = (j or {}).get("jobs"), (j or {}).get("total_count")
-        if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool):
+        if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool) \
+                or not all(isinstance(x, dict) for x in jobs):
             raise _Unknown
-        for job in jobs:
-            if not isinstance(job, dict):
-                raise _Unknown
-            if job.get("name") != "wake" or job.get("conclusion") == "skipped" or job.get("status") == "waiting":
+        out += jobs
+        if len(jobs) < 100 or len(out) >= count:
+            return out
+    raise _Unknown
+
+
+def _wake_ran(call, repo: str, rid: str, since: datetime, in_flight: bool, sleep) -> bool:
+    """Whether run `rid`'s `wake` job counts as a session in the lookback.
+    Only a run whose `gate` job succeeded can count; in flight, a gate that
+    hasn't finished (or a wake job not there yet) is read again."""
+    for _ in range(GATE_READS):
+        jobs = _jobs(call, repo, rid)
+        gate = [x for x in jobs if x.get("name") == "gate"]
+        wake = [x for x in jobs if x.get("name") == "wake"]
+        if gate and gate[0].get("status") == "completed" and gate[0].get("conclusion") != "success":
+            return False  # not the runner's instruction, or refused at the gate
+        settled = gate and gate[0].get("status") == "completed" and (wake or not in_flight)
+        if not settled:
+            if not in_flight:
+                raise _Unknown  # a finished run without a finished gate
+            sleep(GATE_WAIT_SECONDS)
+            continue
+        for job in wake:
+            if job.get("conclusion") == "skipped" or job.get("status") == "waiting":
                 continue
             done = _when(job.get("completed_at"))
             if job.get("completed_at") is None or done is None or done >= since:
                 return True
-        seen += len(jobs)
-        if len(jobs) < 100 or seen >= count:
-            return False
+        return False
     raise _Unknown
 
 
@@ -471,7 +532,7 @@ def _incomplete(env, transport, now, findings: list[str], monotonic) -> None:
     """The owner's rule (2026-11-14) for an incomplete sweep without a bot
     finding: the escalation first, then the session check, then the disable
     if a session ran. A timeout can then miss the disable, never the post."""
-    if f"/.github/workflows/{WAKE_WORKFLOW}@" in str(env.get("GITHUB_WORKFLOW_REF", "")):
+    if env.get("GITHUB_WORKFLOW_REF") == f"{env['GITHUB_REPOSITORY']}/.github/workflows/{WAKE_WORKFLOW}@refs/heads/main":
         act(env, transport, findings + [f"{END_OF_WAKE}, so an incomplete sweep disables"], True)
         return
     act(env, transport, findings + [PENDING], False)

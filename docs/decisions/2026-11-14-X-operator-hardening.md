@@ -21,13 +21,19 @@ OPERATOR-05 is the runner's own handling of the channel; the runner fixed it out
     - **Which runs:** `operator-wake.yml` runs created in the last 30 days, the longest a job can wait for an environment's approval. So a wake approved late still counts.
     - **Filtered on the server:** the check lists only runs in flight and runs with a completed conclusion other than `skipped`. A run whose jobs were all skipped, which is what a comment alone makes, is never listed, so the thousands of those a busy month makes cost nothing.
     - **The counts must add up:** all runs in the window, minus the `skipped` and `waiting` ones, must equal the runs listed. Otherwise the check can't vouch for the window, for example if GitHub adds a status.
-    - **Which count:** a run's `wake` job counts when it wasn't skipped, isn't waiting for approval, and hadn't completed before the lookback. A queued or running one counts. A wake still waiting for approval doesn't count until it's approved, and a later sweep sees it then.
+      - **The window's end is fixed** at the check's start, so a run created during the check isn't in it.
+      - **A mismatch is read again,** up to three times, because a comment's run moves between lists while it settles. Only after that does it count as a session.
+      - **In case `total_count` is capped at 1,000:** a time range whose total reaches 1,000 is split in two and counted again. The first run verifies whether the cap exists.
+    - **Only the runner's instruction can count.** A run counts only when its `gate` job succeeded. The gate runs only for the runner's comment on the channel PR, so a run started by anyone else's comment never counts, even while it's in flight.
+      - **A gate still running:** while the runner's run is in flight and its gate hasn't finished, the run is read again inside the check's deadline. If the gate still hasn't finished, that counts as a session.
+      - **Why not an actor filter:** the sweep jobs don't receive the runner's ID, and passing it would be a workflow change. The gate's own result is attested by GitHub, and it covers the same case.
+    - **Which count:** in such a run, the `wake` job counts when it wasn't skipped, isn't waiting for approval, and hadn't completed before the lookback. A queued or running one counts. A wake still waiting for approval doesn't count until it's approved, and a later sweep sees it then.
     - **Stricter than the rule's wording, which is safe:** a `wake` job refused or cancelled after it started counts as a session too.
     - **Runs passed over without reading their jobs:** a completed run last updated before the lookback. The first session found ends the check.
     - **Real runs agree:** `operator-wake.yml` runs on this repository report an all-skipped run as `skipped`, and a wake waiting for approval as `waiting`.
   - **It fails closed.** A failed read, an unexpected answer, a filter the API didn't apply, counts that don't add up, a list past GitHub's 1,000 runs, or the check's own 60-second deadline counts as a session, so the sweep disables.
   - **The escalation comes first.** An incomplete sweep without a bot finding posts its escalation, saying the disable may follow, before the session check runs. If a session ran, the disable follows, then a second comment names the case. A timeout can then miss the disable, never the escalation. The budget test counts start-up, both deadlines and a full request timeout past each against the 10-minute job timeout.
-  - **The end-of-wake sweep in `operator-wake.yml` always counts as inside the lookback.** It's recognised by the workflow ref Actions sets for the job, so no workflow line changed.
+  - **The end-of-wake sweep in `operator-wake.yml` always counts as inside the lookback.** It's recognised by the workflow ref Actions sets for the job, compared whole against `operator-wake.yml` on `main`, so no workflow line changed.
   - **No permission changed.** Both sweep jobs already hold `actions: write`, which covers reading runs and jobs.
   - **The cost:** the check runs only for an incomplete sweep: about 18 small requests, plus a jobs request for each listed run that wasn't passed over.
   - **A finding attributed to the bot always disables**, whatever the check says.

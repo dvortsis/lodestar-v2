@@ -745,6 +745,11 @@ class IncompleteRule(unittest.TestCase):
         self.assertFalse(any("/actions/workflows/operator-wake.yml/runs" in p for p in seen))
         tripwire_ref = "o/r/.github/workflows/operator-tripwire.yml@refs/heads/main"
         self.assertFalse(self.sweep(Actions([]), GITHUB_WORKFLOW_REF=tripwire_ref)[1])
+        for near in ("x/o/r/.github/workflows/operator-wake.yml@refs/heads/main",
+                     "o/r/.github/workflows/operator-wake.yml@refs/heads/main2",
+                     "o/r/.github/workflows/operator-wake.yml@refs/heads/other"):
+            with self.subTest(ref=near):  # the whole value, not a part of it
+                self.assertFalse(self.sweep(Actions([]), GITHUB_WORKFLOW_REF=near)[1])
 
     def test_a_bot_finding_disables_in_every_case(self):
         for actions in (Actions([]), Actions([wake_run(1)], {"1": wake_jobs()}), self.failing):
@@ -780,31 +785,36 @@ def wake_jobs(conclusion="success", completed=timedelta(minutes=5), status=None)
 
 class Actions:
     """The Actions API's run and job lists for operator-wake.yml, as GitHub
-    answers them: `created=>=` and `status=` applied on the server (a status
+    answers them: `created=A..B` and `status=` applied on the server (a status
     filter matches a run's status, or its conclusion), paged, at most 1,000 runs
-    a list, newest first. `ignore` lists statuses whose filter it ignores."""
+    a list, newest first. `ignore` lists statuses whose filter it ignores;
+    `cap` caps every total_count at 1,000; `before_call` runs before each answer
+    (a run changing state while the check reads)."""
 
     STATES = ("queued", "in_progress", "pending", "requested", "waiting", "completed")
 
-    def __init__(self, runs, jobs=None, ignore=()):
+    def __init__(self, runs, jobs=None, ignore=(), cap=False, before_call=None):
         self.runs, self.jobs, self.ignore, self.paths = runs, jobs or {}, ignore, []
+        self.cap, self.before_call = cap, before_call
 
     def __call__(self, path):
         self.paths.append(path)
+        if self.before_call:
+            self.before_call(self)
         from urllib.parse import parse_qs, unquote, urlsplit
         q = {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
         page, per = int(q.get("page", 1)), int(q.get("per_page", 30))
         if "/actions/runs/" in path:
             js = self.jobs.get(path.split("/actions/runs/")[1].split("/")[0], [])
             return {"total_count": len(js), "jobs": js[(page - 1) * per:page * per]}
-        created = unquote(q["created"])
-        assert created.startswith(">="), created
-        rs = [r for r in self.runs if r["created_at"] >= created[2:]]
+        lo, hi = unquote(q["created"]).split("..")
+        rs = [r for r in self.runs if lo <= r["created_at"] <= hi]
         st = q.get("status")
         if st and st not in self.ignore:
             rs = [r for r in rs if (r["status"] if st in self.STATES else r.get("conclusion")) == st]
         rs = sorted(rs, key=lambda r: r["created_at"], reverse=True)
-        return {"total_count": len(rs), "workflow_runs": rs[:1000][(page - 1) * per:page * per]}
+        total = min(len(rs), 1000) if self.cap else len(rs)
+        return {"total_count": total, "workflow_runs": rs[:1000][(page - 1) * per:page * per]}
 
 
 class SessionCheck(unittest.TestCase):
@@ -815,10 +825,91 @@ class SessionCheck(unittest.TestCase):
     cloud-operator approval reports status "waiting", its wake job status "waiting"
     with no completed_at (and a started_at that is only its creation time)."""
 
-    def check(self, actions, mono=None):
+    def check(self, actions, mono=None, sleep=None):
         def gh(method, path, body):
             return actions(path)
-        return tripwire._wake_session(env(), gh, NOW, mono or (lambda: 0.0))
+        return tripwire._wake_session(env(), gh, NOW, mono or (lambda: 0.0), sleep or (lambda s: None))
+
+    STRANGER_JOBS = [{"name": "gate", "status": "completed", "conclusion": "skipped"},
+                     {"name": "refuse", "status": "completed", "conclusion": "skipped"}]
+
+    def test_a_strangers_run_in_flight_never_counts(self):
+        # Any comment starts an operator-wake run; for a moment it's in flight.
+        for status in ("queued", "in_progress"):
+            with self.subTest(status=status):
+                r = dict(wake_run(1, None), status=status)
+                self.assertIsNone(self.check(Actions([r], {"1": self.STRANGER_JOBS})))
+
+    def test_a_strangers_run_in_flight_on_every_call_doesnt_disable(self):
+        n = [100]
+
+        def arrive(actions):  # a new comment's run, in flight, on every call (created after the check began)
+            n[0] += 1
+            actions.runs.append(dict(wake_run(n[0], None), created_at=ISO(timedelta(seconds=-n[0]))))
+            actions.jobs[str(n[0])] = self.STRANGER_JOBS
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET" and "/actions/" in path:
+                return actions(path)
+            noise = {"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}
+            if method == "GET":
+                return [noise] * 100 if path.startswith("/repos/o/r/issues/events") else []
+            posts.append((method, path, body))
+        in_flight = dict(wake_run(99, None), created_at=ISO(timedelta(seconds=20)))  # in flight throughout
+        actions = Actions([skipped_run(i) for i in range(1, 50)] + [in_flight], {"99": self.STRANGER_JOBS},
+                          before_call=arrive)
+        run(["sweep"], env(), gh)
+        self.assertNotIn(DISABLE, [(m, p) for m, p, _ in posts])
+
+    def test_a_run_that_settles_during_the_check_is_read_again(self):
+        flip = {"n": 0}
+
+        def settle(actions):  # in flight for the first few calls, then skipped
+            flip["n"] += 1
+            if flip["n"] == 4:
+                actions.runs[0].update(status="completed", conclusion="skipped")
+        r = dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))
+        self.assertIsNone(self.check(Actions([r], {"1": self.STRANGER_JOBS}, before_call=settle)))
+
+    def test_counts_that_never_settle_count_as_a_session(self):
+        def churn(actions):  # a run that changes state on every call
+            r = actions.runs[0]
+            r.update(status="in_progress", conclusion=None) if r["status"] == "completed" else \
+                r.update(status="completed", conclusion="skipped")
+        r = dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))
+        self.assertEqual(self.check(Actions([r], {"1": self.STRANGER_JOBS}, before_call=churn)), tripwire.SESSION_UNKNOWN)
+
+    def test_the_runners_run_in_flight_waits_for_its_gate(self):
+        pending = [{"name": "gate", "status": "in_progress", "conclusion": None}]
+        reads = {"n": 0}
+
+        def gate_finishes(actions):
+            if any("/actions/runs/1/jobs" in p for p in actions.paths):
+                reads["n"] += 1
+                if reads["n"] == 2:
+                    actions.jobs["1"] = wake_jobs(None, status="in_progress")
+        actions = Actions([dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))], {"1": pending},
+                          before_call=gate_finishes)
+        slept = []
+        self.assertEqual(self.check(actions, sleep=slept.append), tripwire.SESSION_RAN)
+        self.assertTrue(slept)
+        # A gate that never finishes inside the reads counts as a session too.
+        stuck = Actions([dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))], {"1": pending})
+        self.assertEqual(self.check(stuck), tripwire.SESSION_UNKNOWN)
+
+    def test_a_refused_instruction_doesnt_count(self):
+        refused = [{"name": "gate", "status": "completed", "conclusion": "success"},
+                   {"name": "wake", "status": "completed", "conclusion": "skipped"},
+                   {"name": "refuse", "status": "completed", "conclusion": "success"}]
+        self.assertIsNone(self.check(Actions([wake_run(1)], {"1": refused})))
+
+    def test_capped_totals_are_counted_by_splitting_the_window(self):
+        # 2,500 skipped runs over 30 days with every total_count capped at 1,000.
+        runs = [skipped_run(i, timedelta(minutes=17 * i)) for i in range(1, 2501)]
+        self.assertIsNone(self.check(Actions(runs, cap=True)))
+        runs.append(wake_run(9999))
+        self.assertEqual(self.check(Actions(runs, {"9999": wake_jobs()}, cap=True)), tripwire.SESSION_RAN)
 
     def test_thousands_of_skipped_runs_and_one_session(self):
         runs = [skipped_run(i, timedelta(minutes=i)) for i in range(1, 5001)]  # past GitHub's 1,000 a list
@@ -830,7 +921,9 @@ class SessionCheck(unittest.TestCase):
     def test_thousands_of_skipped_runs_and_no_session(self):
         actions = Actions([skipped_run(i, timedelta(minutes=i)) for i in range(1, 5001)])
         self.assertIsNone(self.check(actions))
-        self.assertLessEqual(len(actions.paths), 3 + len(tripwire.RUN_STATES + tripwire.RUN_CONCLUSIONS) + 3)
+        # Totals of 1,000 or more are counted by splitting the window (in case GitHub caps them).
+        self.assertLessEqual(len(actions.paths), 120)
+        self.assertFalse(any("/actions/runs/" in p for p in actions.paths))
 
     def test_the_window_is_thirty_days(self):
         actions = Actions([])
@@ -838,7 +931,7 @@ class SessionCheck(unittest.TestCase):
         want = (NOW - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
         lists = [p for p in actions.paths if "/actions/workflows/" in p]
         self.assertTrue(lists)
-        self.assertTrue(all(f"created=%3E%3D{want}&" in p for p in lists))
+        self.assertTrue(all(f"created={want}..{NOW.strftime('%Y-%m-%dT%H:%M:%SZ')}&" in p for p in lists))
 
     def test_a_late_approval_still_counts(self):
         # Created nine days ago, approved late: its wake job finished 5 minutes ago.
