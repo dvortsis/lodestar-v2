@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:11Z",
+  "updated_at": "2026-11-14T00:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8157,6 +8157,16 @@
       "id": "operator-check8-after-design-review",
       "note": "do not run first-run check 8 (injection) until the security review session reports on the operator design (owner step 2)",
       "at": "2026-11-14T00:11Z"
+    },
+    {
+      "id": "X-operator-hardening",
+      "note": "launch in the first free build slot (slot 15 after #854); OPERATOR-01..04, 06, 07, 08 (ids/severity/surface in briefs/X-operator-hardening.md; detail by message only); first-run check 8 waits for it (owner decides)",
+      "at": "2026-11-14T00:15Z"
+    },
+    {
+      "id": "OPERATOR-05",
+      "note": "runner: unsubscribed from #821 activity; #821 read as numbers and fixed words only via a local checker",
+      "at": "2026-11-14T00:15Z"
     }
   ],
   "main_health": [
@@ -9197,7 +9207,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:11Z",
+    "updated": "2026-11-14T00:15Z",
     "items": [
       {
         "slot": 1,
@@ -9458,7 +9468,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:11Z",
+  "updated": "2026-11-14T00:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
