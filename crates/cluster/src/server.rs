@@ -525,7 +525,14 @@ pub struct ClusterServer {
     counters: Counters,
     next_session: AtomicU64,
     shutdown: watch::Sender<bool>,
+    /// Whether a worker's pause is saved ([`ClusterServer::set_pause_source`]):
+    /// asked at every session start.
+    pause_source: Mutex<Option<PauseSource>>,
 }
+
+/// Says whether a worker is paused by a saved pause (WK-14). Called
+/// without the server's locks held; it must not call back into the server.
+pub type PauseSource = Arc<dyn Fn(WorkerId) -> bool + Send + Sync>;
 
 impl std::fmt::Debug for ClusterServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -720,7 +727,15 @@ impl ClusterServer {
             counters: Counters::default(),
             next_session: AtomicU64::new(1),
             shutdown: watch::channel(false).0,
+            pause_source: Mutex::new(None),
         }))
+    }
+
+    /// Sets where saved pauses are read: every session starts paused if
+    /// `source` says its worker is, whatever this server remembers, so a
+    /// saved pause stands across reconnects and certificate renewals.
+    pub fn set_pause_source(&self, source: PauseSource) {
+        *lock(&self.pause_source) = Some(source);
     }
 
     /// Runs `f` on the PKI on a blocking thread.
@@ -807,6 +822,12 @@ impl ClusterServer {
         self.with_pki(|p| p.pki.coordinator.certificates())
             .await
             .unwrap_or_default()
+    }
+
+    /// [`certificates`](Self::certificates), or `None` if the lookup
+    /// itself failed (an empty list means there are none).
+    pub async fn try_certificates(&self) -> Option<Vec<crate::IssuedCert>> {
+        self.with_pki(|p| p.pki.coordinator.certificates()).await
     }
 
     /// The heartbeat interval: a revoked worker's connection is closed
@@ -1339,6 +1360,9 @@ impl ClusterServer {
         let (stop_tx, mut stop) = mpsc::channel(1);
         let (drain_tx, mut drain) = mpsc::channel(1);
         let now_ms = self.clock.now_ms();
+        // Read before the fleet lock: the source takes locks of its own.
+        let source = lock(&self.pause_source).clone();
+        let saved_pause = source.is_some_and(|f| f(peer.worker));
         let state_draining;
         {
             let mut fleet = lock(&self.fleet);
@@ -1385,6 +1409,9 @@ impl ClusterServer {
             // would otherwise be refused and keep the leases it lost.
             state.last_round_ms = None;
             state.capabilities = hello.capabilities;
+            if saved_pause && peer.worker != WorkerId::LOCAL {
+                state.paused = true;
+            }
             self.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
             state_draining = fleet.workers.get(&peer.worker).is_some_and(|s| s.draining);
         }
@@ -2038,6 +2065,17 @@ impl ClusterServer {
                 .identity
                 .as_ref()
                 .is_none_or(|id| self.tls.still_valid(id));
+            if !standing && self.tls.worker_stands(w) {
+                // Only this session's certificate lapsed; a renewed one
+                // stands. The session ends and the worker reconnects with
+                // that, keeping its state (a pause or drain included) and
+                // its leases, which its reconnect lists.
+                if let Some(slot) = state.session.take() {
+                    slot.stop(StopReason::Shutdown);
+                }
+                state.holding = None;
+                continue;
+            }
             if !standing {
                 // Connected or not, a worker without a standing
                 // certificate loses its leases (§19.6).

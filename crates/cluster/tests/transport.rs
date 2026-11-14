@@ -669,6 +669,112 @@ async fn renewal_over_the_protocol_is_rate_limited() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pause_stands_when_the_sessions_certificate_expires_after_a_renewal() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[7])).await.unwrap()[0]);
+        assert!(c.server.pause(nas.worker()));
+        c.advance(RENEW_MIN_INTERVAL_SECS as u64);
+        let renewal = nas.begin_renewal().unwrap();
+        let grant = a.renew(renewal.public_key()).await.unwrap().unwrap();
+        let renewed = nas.renewed(renewal, grant, c.clock.now_secs()).unwrap();
+
+        // The session's own certificate expires; the renewed one stands.
+        let left = nas.not_after() - c.clock.now_secs() + 1;
+        c.advance(left.unsigned_abs());
+        assert!(c.clock.now_secs() <= renewed.not_after());
+        a.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert!(matches!(event(&mut a).await, WorkerEvent::Ended(_)));
+        let w = &c.server.snapshot().workers;
+        assert!(
+            w.iter().any(|s| s.worker == nas.worker() && s.paused),
+            "{w:?}"
+        );
+        assert_eq!(c.server.authority().held_by(nas.worker()), 1, "lease kept");
+
+        // Back with the renewed certificate: still paused.
+        let b = c.session(&renewed).await;
+        let denied = b.claim(found(&*c.clock, &[1])).await.unwrap();
+        assert!(
+            matches!(
+                denied[0],
+                GrantItem::Denied {
+                    reason: DenyReason::Draining,
+                    ..
+                }
+            ),
+            "{denied:?}"
+        );
+        assert_eq!(c.server.authority().held_by(nas.worker()), 1);
+
+        // Once no certificate stands, the worker is forgotten and its
+        // lease goes back.
+        let left = renewed.not_after() - c.clock.now_secs() + 1;
+        c.advance(left.unsigned_abs());
+        b.heartbeat().await.unwrap();
+        c.server.tick().await;
+        let s = c.server.snapshot();
+        assert!(!s.workers.iter().any(|x| x.worker == nas.worker()), "{s:?}");
+        assert_eq!(c.server.authority().held_by(nas.worker()), 0);
+        assert_eq!(s.leases + s.pending, 1);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revoked_worker_with_a_lapsed_session_is_forgotten() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[7])).await.unwrap()[0]);
+        c.advance(RENEW_MIN_INTERVAL_SECS as u64);
+        let renewal = nas.begin_renewal().unwrap();
+        let grant = a.renew(renewal.public_key()).await.unwrap().unwrap();
+        nas.renewed(renewal, grant, c.clock.now_secs()).unwrap();
+        let left = nas.not_after() - c.clock.now_secs() + 1;
+        c.advance(left.unsigned_abs());
+        a.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert!(matches!(event(&mut a).await, WorkerEvent::Ended(_)));
+        assert_eq!(c.server.authority().held_by(nas.worker()), 1);
+        // Revoked while away: every certificate goes, and so does it.
+        c.server.revoke(nas.worker()).await.unwrap();
+        let s = c.server.snapshot();
+        assert!(!s.workers.iter().any(|x| x.worker == nas.worker()), "{s:?}");
+        assert_eq!(c.server.authority().held_by(nas.worker()), 0);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_session_starts_paused_when_its_pause_is_saved() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let saved = nas.worker();
+        c.server
+            .set_pause_source(Arc::new(move |w: WorkerId| w == saved));
+        let a = c.session(&nas).await;
+        let denied = a.claim(found(&*c.clock, &[1])).await.unwrap();
+        assert!(matches!(
+            denied[0],
+            GrantItem::Denied {
+                reason: DenyReason::Draining,
+                ..
+            }
+        ));
+        // A live resume lifts it for this session.
+        assert!(c.server.resume(nas.worker()));
+        token_of(&a.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ticks_run_maintain_hourly_so_the_coordinator_certificate_renews() {
     guard(async {
         let c = coordinator(config()).await;
