@@ -529,10 +529,11 @@ fn the_repos_corpora_are_judged_whole() {
     assert_eq!(held, 0);
 }
 
-/// What the earlier core read whole is judged again in the re-judge's
-/// second phase: a short torrent is, and a long name or path, many files, a padding file or a text
-/// that reads as long only in the earlier reading is judged again. Sizes
-/// stay far from any limit; the exact-input tests land after the release
+/// What the earlier core read whole: a short torrent was, and the
+/// re-judge reads it in its second phase. A long name or path, many files,
+/// a padding file, or a text that reads as long only in the earlier
+/// reading wasn't, so the re-judge reads it first. Sizes stay far from any
+/// limit; the exact-input tests land after the release
 /// (docs/security/v1/README.md §5).
 #[test]
 fn what_the_earlier_core_read_whole() {
@@ -548,7 +549,7 @@ fn what_the_earlier_core_read_whole() {
     padded[1].padding = true;
     assert!(!whole("Title", &padded), "its path wasn't read");
     // One word in the reading now, many in the earlier one.
-    let marked = "word\u{2028}".repeat(5_000);
+    let marked = "word\u{FFF9}".repeat(5_000);
     assert!(!whole(&marked, &[]));
 }
 

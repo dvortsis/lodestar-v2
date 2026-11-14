@@ -496,7 +496,8 @@ fn a_batch_that_mostly_wont_read_holds_nothing() {
     let ids: Vec<i64> = (0..BREAKER_ROWS * 4)
         .map(|i| add(&mut store, &long(&format!("Plain.Film.{i}.mkv"))).0)
         .collect();
-    for &id in ids.iter().step_by(3) {
+    let bad: Vec<i64> = ids.iter().copied().step_by(3).collect();
+    for &id in &bad {
         store
             .connection()
             .execute(
@@ -505,8 +506,10 @@ fn a_batch_that_mostly_wont_read_holds_nothing() {
             )
             .unwrap();
     }
-    let b = batch(&mut store, &filter, &sealer, ids.len()).0.unwrap();
-    assert_eq!(b.after.unreadable as usize, ids.len().div_ceil(3));
+    run(&mut store, &filter, &sealer, ids.len());
+    for id in ids {
+        assert_eq!(stored(&store, id), !bad.contains(&id), "{id}");
+    }
 }
 
 /// A missing compression dictionary is the store's fault, not the

@@ -314,19 +314,28 @@ impl Store {
         id: i64,
         bound: &FilesBound,
     ) -> Result<Option<crate::FileTree>> {
-        let row: Option<(i64, Option<i64>, Vec<u8>)> = self
+        // Its size first, so a blob past the bound is never read.
+        let size: Option<i64> = self
             .conn
-            .prepare_cached("SELECT codec, dict_id, data FROM torrent_files WHERE torrent_id = ?1")?
-            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .prepare_cached("SELECT length(data) FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| r.get(0))
             .optional()?;
-        let Some((codec, dict_id, data)) = row else {
+        let Some(size) = size else {
             return Ok(None);
         };
+        if usize::try_from(size).map_or(true, |n| n > bound.raw_bytes) {
+            return Err(Error::Corrupt("file list over the bound"));
+        }
+        let (codec, dict_id, data): (i64, Option<i64>, Vec<u8>) = self
+            .conn
+            .prepare_cached("SELECT codec, dict_id, data FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         let codec = crate::Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
         let raw = self
             .codec
             .decompress_capped(codec, dict_id, &data, bound.raw_bytes)?;
         let shape = crate::filetree::shape(&raw, bound.files, bound.files)?;
+        crate::within_path_limits(&shape)?;
         if shape.path_bytes > bound.path_bytes || shape.components > bound.segments {
             return Err(Error::Corrupt("file list over the bound"));
         }
@@ -1387,6 +1396,70 @@ mod tests {
             assert!(s.files_bounded(id, &bound).is_err(), "{bound:?}");
         }
         assert_eq!(s.files_bounded(id + 1, &wide).unwrap(), None);
+    }
+
+    /// A path deeper than metainfo allows is refused before decoding,
+    /// however few bytes it takes.
+    #[test]
+    fn the_bounded_file_list_read_refuses_a_deep_path() {
+        use lodestar_metainfo::Info;
+        let raw = b"d6:lengthi1e4:name1:n12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let id = s
+            .insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        // 300 nested directories with empty names, and one file.
+        let dirs = 300u64;
+        let mut blob = vec![1, 0, 0];
+        let varint = |out: &mut Vec<u8>, mut v: u64| {
+            while v >= 0x80 {
+                out.push(v as u8 | 0x80);
+                v >>= 7;
+            }
+            out.push(v as u8);
+        };
+        varint(&mut blob, dirs);
+        varint(&mut blob, 1);
+        for i in 0..dirs {
+            varint(&mut blob, i);
+        }
+        blob.extend((0..dirs).map(|_| 0));
+        varint(&mut blob, dirs);
+        blob.extend([1, b'f', 1]);
+        assert!(crate::filetree::decode(&blob).is_ok(), "a valid blob");
+        s.conn
+            .execute(
+                "UPDATE torrent_files SET codec = 0, dict_id = NULL, data = ?2 WHERE torrent_id = ?1",
+                params![id, blob],
+            )
+            .unwrap();
+        let bound = FilesBound {
+            files: 1_000,
+            path_bytes: 1 << 20,
+            segments: 1 << 20,
+            raw_bytes: 1 << 20,
+        };
+        assert!(s.files_bounded(id, &bound).is_err());
+        // And one past the bound in stored bytes isn't read.
+        assert!(
+            s.files_bounded(
+                id,
+                &FilesBound {
+                    raw_bytes: 16,
+                    ..bound
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -391,10 +391,7 @@ impl Preparer {
             }
             other => other?,
         };
-        if shape.depth > limits.max_path_depth || shape.longest_path > limits.max_path_bytes as u64
-        {
-            return Err(Error::Corrupt("file tree over its limits"));
-        }
+        within_path_limits(&shape)?;
         if shape.components > max_components || shape.path_bytes > max_path_bytes {
             return Err(Error::Corrupt(OVER_BUDGET));
         }
@@ -411,6 +408,16 @@ impl Preparer {
     pub fn prepare(&mut self, info: &Info, raw_info: Option<&[u8]>) -> Result<Prepared> {
         prepare(&mut self.codec, self.archive_raw, info, raw_info)
     }
+}
+
+/// Refuses a file tree with a path deeper or longer than metainfo allows,
+/// which no writer stores: checked before anything decodes it.
+pub(crate) fn within_path_limits(shape: &filetree::Shape) -> Result<()> {
+    let limits = lodestar_metainfo::Limits::DEFAULT;
+    if shape.depth > limits.max_path_depth || shape.longest_path > limits.max_path_bytes as u64 {
+        return Err(Error::Corrupt("file tree over its limits"));
+    }
+    Ok(())
 }
 
 /// A prepared torrent to commit, with its provenance.

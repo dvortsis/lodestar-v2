@@ -152,10 +152,18 @@ pub(crate) fn rejudge_with(
     mark: &dyn Fn(&Store, &[[u8; 20]]),
     judge: &Judge<'_>,
 ) -> Result<Option<CoreRejudged>, Error> {
-    seed_if_empty(store)?;
-    let Some(before) = store.core_rejudge_due(CORE_VERSION)? else {
+    let Some(mut before) = store.core_rejudge_due(CORE_VERSION)? else {
         return Ok(None);
     };
+    // A pass about to start on an empty store has nothing to judge: mark
+    // it instead (only then, not on every batch).
+    if before == CorePass::starting(before.start) {
+        seed_if_empty(store)?;
+        match store.core_rejudge_due(CORE_VERSION)? {
+            Some(pass) => before = pass,
+            None => return Ok(None),
+        }
+    }
     // The generation first, then the rules, as the backfill reads them.
     let generation = store.class_gen()?;
     let engine = filter.current();
