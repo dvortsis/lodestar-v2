@@ -2748,10 +2748,17 @@ impl Run for Supervised {
     /// all ([`Run::recheck`]).
     fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
         Box::pin(async move {
-            // Not running: nothing to find ready.
-            let Some(port) = self.running().get(id).map(|r| r.port) else {
+            // Never started here, stopped, or its process isn't up:
+            // nothing to find ready.
+            let Some((port, up)) = self.running().get(id).map(|r| {
+                let up = r.status.as_ref().is_some_and(|s| s.borrow().up);
+                (r.port, up)
+            }) else {
                 return false;
             };
+            if !up {
+                return false;
+            }
             match self.bindings.as_ref().zip(port) {
                 Some((b, p)) => b.recheck(p, self.healthy(id, target)).await,
                 // No ports tied to runs (tests of other things): its health.

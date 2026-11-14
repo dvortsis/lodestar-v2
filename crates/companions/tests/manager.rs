@@ -318,10 +318,7 @@ impl Run for FakeRun {
             let bound = self.bound.lock().unwrap().clone();
             match bound {
                 // As `Supervised`'s: not ready until found so again.
-                Some((b, p)) => {
-                    b.unready(p);
-                    self.healthy(id, target).await
-                }
+                Some((b, p)) => b.recheck(p, self.healthy(id, target)).await,
                 None => true,
             }
         })
@@ -2557,7 +2554,9 @@ async fn a_restarts_configuration_is_followed_by_a_fresh_check() {
         ),
         "{got:?}"
     );
-    assert_eq!(asked.load(Ordering::SeqCst), 4);
+    // The failed restart is still followed, and the follow's health check
+    // asks once more (another's again): five in all.
+    until("the follow's check", || asked.load(Ordering::SeqCst) == 5).await;
     assert_eq!(w.api.calls.load(Ordering::SeqCst), 2);
     assert!(!bindings.ready(port));
 }
