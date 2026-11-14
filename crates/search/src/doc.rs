@@ -681,6 +681,33 @@ mod tests {
         assert_eq!(few.len(), MAX_EXTS);
     }
 
+    /// At the boundary: 1,024 distinct extensions are all kept, and with
+    /// 1,025 the one left out is the last first seen in file order, the
+    /// same on every build of the document.
+    #[test]
+    fn the_extension_first_seen_last_is_the_one_left_out() {
+        assert_eq!(MAX_EXTS, 1024);
+        let name = |i: usize| format!("f{i}.x{i}");
+        let at: Vec<String> = (0..MAX_EXTS).map(name).collect();
+        let kept = distinct_extensions(at.iter().map(String::as_str));
+        assert_eq!(kept.len(), MAX_EXTS);
+        assert!(kept.contains(&"x1023".to_string()));
+        let over: Vec<String> = (0..=MAX_EXTS).map(name).collect();
+        let got = distinct_extensions(over.iter().map(String::as_str));
+        assert_eq!(got, kept, "the first 1,024, in file order");
+        assert!(!got.contains(&"x1024".to_string()));
+        // File order decides, not the extension's own order: with the files
+        // reversed, the one left out is the other end's.
+        let got = distinct_extensions(over.iter().rev().map(String::as_str));
+        assert_eq!(got.len(), MAX_EXTS);
+        assert!(got.contains(&"x1024".to_string()) && !got.contains(&"x0".to_string()));
+        assert_eq!(
+            got,
+            distinct_extensions(over.iter().rev().map(String::as_str)),
+            "the same every time"
+        );
+    }
+
     #[test]
     fn path_offsets_slice_the_joined_text() {
         let p = paths_tokens(&["Season 1".into(), "E01.WEB-DL.mkv".into()]);
