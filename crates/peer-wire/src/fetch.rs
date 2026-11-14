@@ -379,7 +379,9 @@ async fn attempt(
                 })?;
             prepare_outbound(&tcp);
             connected.store(true, Ordering::Relaxed);
-            exchange(BufReader::new(tcp), info_hash, opts, encrypted, deadline).await
+            exchange(BufReader::new(tcp), info_hash, opts, encrypted, deadline)
+                .await
+                .inspect_err(|e| count_first_window(opts, transport, e))
         }
         Transport::Utp => {
             let Some(utp) = opts.utp.as_ref() else {
@@ -399,8 +401,16 @@ async fn attempt(
                 .map_err(|_| timed_out())?
                 .map_err(Error::Connect)?;
             connected.store(true, Ordering::Relaxed);
-            exchange(BufReader::new(stream), info_hash, opts, encrypted, deadline).await
+            exchange(BufReader::new(stream), info_hash, opts, encrypted, deadline)
+                .await
+                .inspect_err(|e| count_first_window(opts, transport, e))
         }
+    }
+}
+
+fn count_first_window(opts: &FetchOptions, transport: Transport, e: &Error) {
+    if matches!(e, Error::FirstWindow) {
+        opts.stats.first_window_timed_out(transport);
     }
 }
 
@@ -462,6 +472,12 @@ struct Pace {
 }
 
 const PACE_PARTS: u32 = 8;
+/// How long the first window of a dict larger than one window may take to
+/// arrive once it's asked for: twice [`PACE_FREE`]. Its requests go out
+/// together, so a slow peer isn't held to a round trip a piece. Past it
+/// the fetch ends ([`Error::FirstWindow`]), which fails that peer, never
+/// the key.
+pub const FIRST_WINDOW_DEADLINE: Duration = Duration::from_secs(4);
 /// The least time a peer has before its first pace check.
 const PACE_FREE: Duration = Duration::from_secs(2);
 
@@ -606,6 +622,8 @@ where
     // The result's bound, while only the first window is reserved.
     let mut unreserved: Option<usize> = None;
     let mut pace: Option<Pace> = None;
+    // While a large dict's first window is on its way: when it must be in.
+    let mut window_due: Option<Instant> = None;
     loop {
         let incoming = {
             let read = wire.read_message(MAX_EXTENDED, MAX_OTHER);
@@ -614,6 +632,13 @@ where
                 // Checked before every read as well as while one waits, so
                 // a peer can't put the checks off by sending other things.
                 let got = assembly.as_ref().map_or(0, |a| a.got);
+                if let Some(at) = window_due {
+                    if assembly.as_ref().is_some_and(Assembly::window_is_in) {
+                        window_due = None;
+                    } else if Instant::now() >= at {
+                        return Err(Error::FirstWindow);
+                    }
+                }
                 let due = match pace.as_mut() {
                     Some(p) => {
                         if !p.keeps_up(Instant::now(), got) {
@@ -623,6 +648,7 @@ where
                     }
                     None => None,
                 };
+                let due = due.into_iter().chain(window_due).min();
                 let Some(due) = due else {
                     break read.await?;
                 };
@@ -670,6 +696,9 @@ where
                 while let Some(piece) = a.next_request() {
                     let request = message::metadata_request(piece);
                     bounded(wire.send_extended(id, &request), &mut pace, a.got, deadline).await?;
+                }
+                if size > FIRST_WINDOW {
+                    window_due = Some(Instant::now() + FIRST_WINDOW_DEADLINE);
                 }
                 assembly = Some(a);
             }
@@ -968,6 +997,11 @@ mod tests {
             first: u64,
             each: u64,
         },
+        /// Serves every piece, each `each` ms after the last, the first
+        /// window's too.
+        Steady {
+            each: u64,
+        },
     }
 
     /// A plaintext peer on `stream`: announces `info`'s size, serves the
@@ -1041,6 +1075,9 @@ mod tests {
                 {
                     let wait = if served == FIRST_PIECES { first } else { each };
                     tokio::time::sleep(Duration::from_millis(wait)).await;
+                }
+                if let Then::Steady { each } = then {
+                    tokio::time::sleep(Duration::from_millis(each)).await;
                 }
                 if stream
                     .write_all(&frame(OUR_UT_METADATA, reply))
@@ -1242,6 +1279,72 @@ mod tests {
         .expect("fetched");
         assert_eq!(got.info, info);
         peer.abort();
+    }
+
+    /// A large dict's peer that stops inside its first window ends when the
+    /// window is due, as a first-window timeout; a small dict's is left to
+    /// the deadline (above).
+    #[tokio::test(start_paused = true)]
+    async fn a_first_window_that_stops_ends_when_due() {
+        let info = vec![7u8; MIB];
+        let key = InfoHash(Sha1::digest(&info).into());
+        let (ours, theirs) = tokio::io::duplex(1 << 16);
+        let peer = tokio::spawn(scripted(theirs, info, 2, Then::Silence));
+        let mut opts = plain(Duration::from_secs(8));
+        opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+        let started = Instant::now();
+        let got = timeout(
+            Duration::from_secs(8),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("it ends before the deadline");
+        assert!(matches!(got, Err(Error::FirstWindow)), "{got:?}");
+        assert_eq!(Error::FirstWindow.kind(), crate::FailureKind::TimedOut);
+        let took = started.elapsed();
+        assert!(
+            took >= FIRST_WINDOW_DEADLINE
+                && took <= FIRST_WINDOW_DEADLINE + Duration::from_millis(100),
+            "ended after {took:?}"
+        );
+        peer.abort();
+    }
+
+    /// An honest peer that is slow but steady, its first window in inside
+    /// the bound (four pieces, 900 ms apart), finishes.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_steady_peer_has_its_first_window_in_time() {
+        let info: Vec<u8> = (0..(FIRST_WINDOW * 2)).map(|i| (i % 251) as u8).collect();
+        let key = InfoHash(Sha1::digest(&info).into());
+        let (ours, theirs) = tokio::io::duplex(1 << 16);
+        let steady = Then::Steady { each: 900 };
+        let peer = tokio::spawn(scripted(theirs, info.clone(), usize::MAX, steady));
+        let mut opts = plain(Duration::from_secs(20));
+        opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+        let got = timeout(
+            Duration::from_secs(20),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("in time")
+        .expect("fetched");
+        assert_eq!(got.info, info);
+        peer.abort();
+    }
+
+    /// A first-window timeout is counted by transport; other failures
+    /// aren't.
+    #[test]
+    fn a_first_window_timeout_is_counted() {
+        let opts = FetchOptions::default();
+        count_first_window(&opts, Transport::Tcp, &Error::FirstWindow);
+        count_first_window(&opts, Transport::Tcp, &Error::Timeout);
+        assert_eq!(opts.stats.first_window_timeouts(Transport::Tcp), 1);
+        assert_eq!(opts.stats.first_window_timeouts(Transport::Utp), 0);
+        let mut out = String::new();
+        opts.stats.write_prometheus(None, &mut out);
+        let line = "lodestar_fetch_first_window_timeouts_total{transport=\"tcp\"} 1";
+        assert!(out.contains(line), "{out}");
     }
 
     /// With `route_backoff` on, a family whose probe found no route isn't

@@ -286,7 +286,10 @@ struct BudgetState {
     /// bytes it wants in all; they go before any first reservation outside
     /// the floor.
     growth: VecDeque<(u64, u64)>,
-    /// Bytes held by partial claims, and the growth each still needs.
+    /// Bytes held by partial claims, and the growth each proven one still
+    /// needs. A partial claim is proven once its first window is in (it
+    /// asks to grow); until then its announced size doesn't count toward
+    /// admission.
     partial: u64,
     needs: BTreeMap<u64, usize>,
     /// Bytes reserved by whole claims of [`SMALL_CLAIM`] or less.
@@ -300,16 +303,24 @@ struct BudgetState {
 }
 
 impl BudgetState {
-    fn add_need(&mut self, bytes: u64, need: u64) {
+    /// A partial claim's first window, its need not yet counted.
+    fn add_partial(&mut self, bytes: u64) {
         self.partial += bytes;
+    }
+
+    /// A partial claim's first window is in: its need counts from now.
+    fn prove(&mut self, need: u64) {
         *self.needs.entry(need).or_insert(0) += 1;
     }
 
-    fn remove_need(&mut self, bytes: u64, need: u64) {
+    fn remove_need(&mut self, bytes: u64, need: u64, proven: bool) {
         if need == 0 {
             return;
         }
         self.partial = self.partial.saturating_sub(bytes);
+        if !proven {
+            return;
+        }
         if let Some(n) = self.needs.get_mut(&need) {
             *n -= 1;
             if *n == 0 {
@@ -362,7 +373,8 @@ impl BudgetState {
                 held.remove();
             }
         }
-        self.remove_need(bytes, need);
+        let proven = need > 0 && claim.proven.swap(false, Ordering::Relaxed);
+        self.remove_need(bytes, need, proven);
         match claim.kind.swap(KIND_NONE, Ordering::Relaxed) {
             KIND_SMALL => self.small = self.small.saturating_sub(bytes),
             KIND_GROWN => {
@@ -480,6 +492,9 @@ struct Claim {
     /// Which of the budget's counts the bytes are in (`KIND_*`); changed
     /// only under the budget's lock.
     kind: AtomicU8,
+    /// A partial claim whose first window is in, so its need counts toward
+    /// admission; changed only under the budget's lock.
+    proven: AtomicBool,
 }
 
 impl Reservation {
@@ -503,6 +518,7 @@ impl Reservation {
             waited_out: AtomicBool::new(false),
             net,
             kind: AtomicU8::new(KIND_NONE),
+            proven: AtomicBool::new(false),
         }))
     }
 
@@ -603,6 +619,12 @@ impl Reservation {
                 claim.kind.load(Ordering::Relaxed) != KIND_GROWN,
                 "a grown claim grows again"
             );
+            // Asking to grow, it has its first window: its need counts
+            // toward admission from now.
+            let need = claim.need.load(Ordering::Relaxed);
+            if need > 0 && !claim.proven.swap(true, Ordering::Relaxed) {
+                s.prove(need);
+            }
             let queued = s.growth.iter().any(|&(id, _)| id == claim.id);
             if claim.net.is_some_and(|net| s.grown_nets.contains(&net)) {
                 // Its network has a grown claim: only that one holds it
@@ -656,10 +678,15 @@ impl Reservation {
             }
             if others > 0 {
                 let need = s.largest_need().max(want_total - want);
-                // Room for the largest growth beside the floor, as growths
-                // need: once grown claims and results drain (the pace and
-                // deadlines bound that), one of the partial claims can
-                // grow.
+                // Room for the largest proven growth beside the floor, as
+                // growths need: once grown claims and results drain (the
+                // pace and deadlines bound that), the proven claim with the
+                // largest need can grow. An unproven claim's announced size
+                // doesn't count toward admission until its first window is
+                // in. Claims that prove at once with needs that can't fit
+                // together wait at the front of the growth queue, where no
+                // new first window is let in, and their pace and deadlines
+                // bound that.
                 if s.partial.saturating_add(want).saturating_add(need) > room || !beside_floor {
                     // Held back by its own rule (perhaps a liar's claim): it
                     // holds up nothing else.
@@ -699,7 +726,7 @@ impl Reservation {
         s.uncount(claim, mine, old_need);
         let need = if partial { want_total - want } else { 0 };
         if partial {
-            s.add_need(want, need);
+            s.add_partial(want);
             if let Some(net) = claim.net {
                 *s.partial_nets.entry(net).or_insert(0) += want;
             }
@@ -4368,6 +4395,33 @@ mod budget {
         drop((held, d));
         assert_eq!(used(&b), 0);
         assert!(b.lock().partials.is_empty());
+    }
+
+    /// An unproven claim's announced size doesn't count toward admission:
+    /// a first window that hasn't completed doesn't keep another network's
+    /// first window out. Once a claim has its window in and asks to grow,
+    /// its need counts until it has grown.
+    #[tokio::test(start_paused = true)]
+    async fn an_unproven_claims_size_does_not_hold_up_admission() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let beside = (1_000_000 - b.floor()) as usize;
+        // A claim announcing nearly all the room beside the floor, whose
+        // window hasn't come.
+        let unproven = window(&b, 1, 1_000, beside - 1_500).await;
+        // Another network's first window is let in beside it.
+        let other = window(&b, 2, 10_000, 100_000).await;
+        // It proves itself: asks to grow, and waits for the other's window
+        // to leave the room it needs.
+        let mut grow = growing(&unproven, beside - 1_500);
+        queued(&b, |s| !s.growth.is_empty()).await;
+        assert_eq!(b.lock().largest_need(), (beside - 2_500) as u64);
+        drop(other);
+        (&mut grow).await.unwrap();
+        // Grown, it needs nothing more.
+        assert_eq!(b.lock().largest_need(), 0);
+        drop(unproven);
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().needs.is_empty());
     }
 
     fn net(n: u8) -> Net {
