@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T12:32Z",
+  "updated_at": "2026-11-14T12:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9056,9 +9056,9 @@
     },
     "882": {
       "slice": "X-pipe01-followup",
-      "head": "69689904",
-      "status": "review CHANGES on 69689904 (0 blocking, 2 important: lookups double-decrement, wait-list capacity never shrinks; 4 optional taken); one round, then fresh delta review",
-      "at": "2026-11-14T12:18Z"
+      "head": "9641c557",
+      "status": "round pushed; fresh Opus delta review running (CI in flight)",
+      "at": "2026-11-14T12:36Z"
     },
     "883": {
       "slice": "X-cmp-supervisor-bind",
@@ -9980,7 +9980,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T12:32Z",
+  "updated": "2026-11-14T12:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
