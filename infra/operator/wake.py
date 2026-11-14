@@ -15,10 +15,13 @@
    refuses.
 5. A 1-hour App installation token, this repository and Pull requests write
    + Metadata read only, into the vault's GITHUB_TOKEN credential.
-6. One session: the agent version from claude-lock.json (routine), or an
+6. The helper files (thread.py, reader.py) from this job's own checkout,
+   uploaded and mounted read-only into the session. The operator runs these
+   copies; it downloads no code. A failed upload starts no session.
+7. One session: the agent version from claude-lock.json (routine), or an
    override to OPERATOR_MODEL_TRIAGE at high effort (triage); a $3 or $15
    budget; the instruction comment as its only user.message.
-7. Watching it: the session object gives only the status, so why it went
+8. Watching it: the session object gives only the status, so why it went
    idle comes from its event list (the last status event's stop reason). A
    call paused for approval is denied with a message to escalate; a budget
    stop, an error, a refusal, a stall or 30 minutes makes the bridge post the
@@ -26,7 +29,8 @@
    finish after an error the session didn't recover from, or in which the
    permission policy refused a tool call. Every session is
    archived at the end, so none can be resumed later with a newer token.
-8. Always: the token revoked, the credential reset, the lock released.
+9. Always: the token revoked, the credential reset, the uploaded files
+   deleted, the lock released.
 
 Comment text arrives only through COMMENT_BODY. Logs and comments carry
 fixed lines; never a token, an ID from the vault or the lock, or the text.
@@ -35,9 +39,13 @@ fixed lines; never a token, an ID from the vault or the lock, or the text.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import secrets
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -49,7 +57,8 @@ import bridge  # noqa: E402
 import ghapp  # noqa: E402
 import message  # noqa: E402
 import tripwire  # noqa: E402 - wake_run_too_old: the tripwire's own window
-from apiclient import anthropic, github, pages  # noqa: E402
+from apiclient import (ANTHROPIC, ANTHROPIC_VERSION, MANAGED_AGENTS_BETA, ApiError,  # noqa: E402
+                       anthropic, check_url, github, opener, pages)
 from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
 from reader import CONTROL_PLANE_USER_ID  # noqa: E402
@@ -82,6 +91,13 @@ RETRY_STATUSES = frozenset(("retrying", "exhausted", "terminal"))
 POLICY_REASONS = frozenset(("high_risk", "indeterminate"))
 DENY = ("This call needs approval, which the bridge never gives. Don't retry or work around it: "
         "post an operator-report v1 with kind: escalation saying what you tried to do, then end your turn.")
+
+# The channel helper and the reader it imports, mounted into every session from
+# this checkout: the commit the workflow runs, never a branch read at run time.
+# A resource's mount_path lands under /mnt/session/uploads, so these are
+# /mnt/session/uploads/op/<name>; the system prompt copies that folder.
+MOUNT = "/op"
+HELPERS = {"thread.py": HERE / "thread.py", "reader.py": HERE.parent / "fleet" / "reader.py"}
 
 WAKE_SETTINGS = ("ANTHROPIC_API_KEY", "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "AWS_BRIDGE_ROLE_ARN",
                  "CONTROL_BUCKET", "FLEET_BUCKET_OWNER", "GITHUB_TOKEN", "GITHUB_REPOSITORY",
@@ -247,9 +263,49 @@ def ledger_refusal(sessions: list[dict], now: datetime, mode: str, inst_id: str,
     return None
 
 
+# ---- the helper files ----
+
+def upload(api_key: str):  # pragma: no cover - network
+    """POST /v1/files as multipart, through apiclient's host check and its
+    no-redirect opener. Returns a sender: (name, bytes) -> the file ID. The
+    injection harness uploads through this too."""
+    def send(name: str, data: bytes) -> str:
+        path = "/v1/files"
+        check_url(ANTHROPIC + path, path)
+        boundary = "lodestar" + secrets.token_hex(12)
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+                f"Content-Type: text/plain\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(ANTHROPIC + path, method="POST", data=body, headers={
+            "x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "anthropic-beta": MANAGED_AGENTS_BETA,
+            "content-type": f"multipart/form-data; boundary={boundary}", "User-Agent": "lodestar-operator"})
+        try:
+            with opener().open(req, timeout=30) as r:
+                fid = json.loads(r.read()).get("id")
+        except urllib.error.HTTPError as e:
+            raise ApiError("POST /v1/files", e.code) from None
+        except Exception:
+            raise ApiError("POST /v1/files", None) from None
+        if not isinstance(fid, str) or not fid:
+            raise ApiError("POST /v1/files", None)
+        return fid
+    return send
+
+
+def mount_helpers(send, files: list[str]) -> list[dict]:
+    """Uploads each helper as it is in this checkout and returns the session's
+    file resources. Every ID is appended to `files` as soon as it exists, so a
+    failure part-way still leaves the caller the IDs to delete."""
+    resources = []
+    for name, src in HELPERS.items():
+        fid = send(name, src.read_bytes())
+        files.append(fid)
+        resources.append({"type": "file", "file_id": fid, "mount_path": f"{MOUNT}/{name}"})
+    return resources
+
+
 # ---- the session ----
 
-def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: str) -> dict:
+def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: str, resources: list[dict]) -> dict:
     if msg.mode == "triage":
         triage = env.get("OPERATOR_MODEL_TRIAGE", "").strip()
         if not MODEL_ID.match(triage):
@@ -265,6 +321,7 @@ def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: 
         "title": f"wake {msg.id}",
         "metadata": {"instruction_id": msg.id, "kind": msg.kind, "mode": msg.mode, "run_id": run_id},
         "budget": {"type": "limit", "max_list_cost": {"amount": str(BUDGET_CENTS[msg.mode]), "currency": "USD"}},
+        "resources": resources,  # the helper files, read-only, under /mnt/session/uploads
         # Runner-authored text only: Managed Agents reads user.message as operator intent.
         "initial_events": [{"type": "user.message", "content": [{"type": "text", "text": body_text}]}],
     }
@@ -502,6 +559,7 @@ def cmd_wake(env, deps=None) -> int:
         post(env, f"busy, retry (instruction {msg.id})", gh_post)
         return 0
     token = cred = sid = None
+    files: list[str] = []
     try:
         ids, etag = bridge.read_claude_lock(store)
         if ids is None:
@@ -515,7 +573,13 @@ def cmd_wake(env, deps=None) -> int:
         if reason:
             escalate(env, msg.id, f"no session started: {reason}", gh_post)
             return 0
-        body = session_body(msg, ids, env, env["COMMENT_BODY"], run_id)
+        send = deps.get("upload") or upload(env["ANTHROPIC_API_KEY"])
+        try:  # before the token exists: a wake that can't mount its helpers holds nothing to revoke
+            resources = mount_helpers(send, files)
+        except Exception:  # noqa: BLE001 - a fixed line; the error may carry details
+            escalate(env, msg.id, "no session started: the helper files couldn't be uploaded", gh_post)
+            return 0
+        body = session_body(msg, ids, env, env["COMMENT_BODY"], run_id, resources)
         jwt = ghapp.app_jwt(env["OPERATOR_APP_ID"].strip(), env["OPERATOR_APP_PRIVATE_KEY"])
         token = ghapp.mint(gh, env["GITHUB_REPOSITORY"], jwt)
         cred = f"/v1/vaults/{ids['vault_id']}/credentials/{ids['credential_id']}"
@@ -543,10 +607,10 @@ def cmd_wake(env, deps=None) -> int:
         escalate(env, msg.id, f"the bridge failed ({type(e).__name__}); the session, if any, is archived", gh_post)
         raise
     finally:
-        _cleanup(env, call, gh, sid, token, cred, lock, run_id, msg.id, gh_post)
+        _cleanup(env, call, gh, sid, token, cred, files, lock, run_id, msg.id, gh_post)
 
 
-def _cleanup(env, call, gh, sid, token, cred, lock, run_id, inst_id, gh_post) -> None:
+def _cleanup(env, call, gh, sid, token, cred, files, lock, run_id, inst_id, gh_post) -> None:
     """Each step on its own: one failing never skips the next."""
     steps = []
     if sid:
@@ -556,6 +620,9 @@ def _cleanup(env, call, gh, sid, token, cred, lock, run_id, inst_id, gh_post) ->
     if cred:
         steps.append(("reset the vault credential",
                       lambda: call("POST", cred, {"auth": {"type": "environment_variable", "secret_value": UNSET_TOKEN}})))
+    for fid in files:  # after the archive: the session holds its own copies
+        steps.append(("delete a helper file", lambda fid=fid: call("DELETE", f"/v1/files/{fid}", None)))
+
     def release():
         if not lock.release(run_id):
             raise RuntimeError("lock not released")

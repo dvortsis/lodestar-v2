@@ -39,8 +39,6 @@ import signal
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,7 +51,7 @@ import bridge  # noqa: E402
 import corpus  # noqa: E402
 import detect  # noqa: E402
 import wake  # noqa: E402 - its watch loop, approval denial and interrupt
-from apiclient import ANTHROPIC, ANTHROPIC_VERSION, MANAGED_AGENTS_BETA, ApiError, anthropic, check_url, opener, pages  # noqa: E402
+from apiclient import anthropic, pages  # noqa: E402
 from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
 from state import FLEET_KEY, is_tombstone  # noqa: E402
@@ -79,19 +77,16 @@ SETTINGS = ("ANTHROPIC_API_KEY", "AWS_BRIDGE_ROLE_ARN", "CONTROL_BUCKET", "STATE
             "OPERATOR_MODEL_ROUTINE", "RUNNER_USER_ID", "OPERATOR_BOT_USER_ID", "CHANNEL_PR",
             "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "INJECTION_LEVEL")
 FORBIDDEN = ("OPERATOR_APP_PRIVATE_KEY", "OPERATOR_APP_ID")
-MOUNT = "/op"  # the files land in /mnt/session/uploads/op/
-FETCH = """  mkdir -p /tmp/op && cd /tmp/op
-  for f in infra/operator/thread.py infra/fleet/reader.py; do
-    curl -fsS -H "Accept: application/vnd.github.raw" \\
-      "https://api.github.com/repos/dvortsis/lodestar-v2/contents/$f?ref=main" -o "$(basename "$f")"
-  done
-"""
+MOUNT = wake.MOUNT  # the files land in /mnt/session/uploads/op/, as in a real wake
+# The block of the operator's prompt that copies the mounted helper. The test
+# mounts its own thread.py (the mock) into the same folder, so the prompt the
+# test judges is the prompt the operator runs, unchanged.
 COPY = """  mkdir -p /tmp/op && cd /tmp/op
   cp /mnt/session/uploads/op/* .
 """
 FIXTURE_MOUNT = "/cache/channel.json"  # ghmock.FIXTURE, outside the folder the prompt copies
 SETUP_WAVE = WORKERS  # if the first sessions all show the mock never ran, nothing more starts
-HELPERS = {"thread.py": HERE / "ghmock.py", "thread_real.py": OP / "thread.py", "reader.py": OP.parent / "fleet" / "reader.py"}
+HELPERS = {"thread.py": HERE / "ghmock.py", "thread_real.py": wake.HELPERS["thread.py"], "reader.py": wake.HELPERS["reader.py"]}
 
 
 def neutral(name: str, src: bytes) -> bytes:
@@ -134,11 +129,12 @@ def level_of(env) -> tuple[str, str, str]:
 
 
 def patch_prompt(system: str) -> str:
-    """The operator's prompt, with its helper fetch (no route here) swapped
-    for a copy of the mounted files. Nothing else changes."""
-    if system.count(FETCH) != 1:
-        raise Refusal("the system prompt's helper fetch changed; update FETCH in harness.py")
-    return system.replace(FETCH, COPY)
+    """The operator's prompt, as it is: it already copies the mounted helper,
+    and here the mount holds the mock. Refuses a prompt without that one copy
+    block, or with a fetch of its own, since the mock would then never run."""
+    if system.count(COPY) != 1 or "curl" in system.replace("curl -fsS -X POST", "") or "ref=main" in system:
+        raise Refusal("the system prompt's helper copy changed; update COPY in harness.py")
+    return system
 
 
 # ---- fleet.json and spend ----
@@ -202,29 +198,7 @@ class Spend:
 
 # ---- the API resources ----
 
-def upload(api_key: str):  # pragma: no cover - network
-    """POST /v1/files as multipart, through apiclient's host check and its
-    no-redirect opener. Returns the file ID."""
-    def send(name: str, data: bytes) -> str:
-        path = "/v1/files"
-        check_url(ANTHROPIC + path, path)
-        boundary = "lodestar" + secrets.token_hex(12)
-        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
-                f"Content-Type: text/plain\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
-        req = urllib.request.Request(ANTHROPIC + path, method="POST", data=body, headers={
-            "x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "anthropic-beta": MANAGED_AGENTS_BETA,
-            "content-type": f"multipart/form-data; boundary={boundary}", "User-Agent": "lodestar-operator"})
-        try:
-            with opener().open(req, timeout=30) as r:
-                fid = json.loads(r.read()).get("id")
-        except urllib.error.HTTPError as e:
-            raise ApiError("POST /v1/files", e.code) from None
-        except Exception:
-            raise ApiError("POST /v1/files", None) from None
-        if not isinstance(fid, str) or not fid:
-            raise ApiError("POST /v1/files", None)
-        return fid
-    return send
+upload = wake.upload  # one multipart upload for the bridge and the test
 
 
 def live_fleet_reader(env, run_id: str):  # pragma: no cover - live only

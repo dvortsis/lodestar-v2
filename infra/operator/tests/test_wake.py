@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 
-from tests.helpers import INSTRUCTION, T0, Clock, FakeAnthropic, FakeGitHub, Mono, event_env, rsa_key, session
+from tests.helpers import INSTRUCTION, OP, T0, Clock, FakeAnthropic, FakeGitHub, FakeUpload, Mono, event_env, rsa_key, session
 import wake
 from lock import MemoryStore
 from oplock import CLAUDE_LOCK_KEY, LOCK_KEY
@@ -331,12 +331,12 @@ class Wake(unittest.TestCase):
         self.store, self.gh, self.post = MemoryStore(), FakeGitHub(token="ghs_LEAKMARKTOKEN"), FakeGitHub()
         self.store.put(CLAUDE_LOCK_KEY, json.dumps(IDS).encode())
         self.store.calls.clear()
-        self.mono = Mono()
+        self.mono, self.upload = Mono(), FakeUpload()
 
     def go(self, env, api):
         out = io.StringIO()
         deps = {"store": self.store, "anthropic": api, "github": self.gh, "channel_transport": self.post,
-                "clock": Clock(), "monotonic": self.mono, "sleep": self.mono.sleep}
+                "clock": Clock(), "monotonic": self.mono, "sleep": self.mono.sleep, "upload": self.upload}
         with redirect_stdout(out), redirect_stderr(out):
             try:
                 rc = wake.main(["wake"], env=env, deps=deps)
@@ -368,6 +368,101 @@ class Wake(unittest.TestCase):
         self.assertNotIn(LOCK_KEY, self.store.objects)
         self.assertEqual(self.post.bodies(), [])
         self.assert_clean(out + "".join(self.post.bodies()), marks)
+
+    def test_the_session_mounts_the_helpers_from_this_checkout(self):
+        # The operator runs the helper the bridge mounts, byte for byte the reviewed
+        # files of this checkout; it downloads no code (X-operator-mount-helpers).
+        env, marks = wake_env()
+        api = FakeAnthropic()
+        rc, out = self.go(env, api)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.upload.files, [("thread.py", (OP / "thread.py").read_bytes()),
+                                             ("reader.py", (OP.parent / "fleet" / "reader.py").read_bytes())])
+        body = next(b for m, p, b in api.calls if m == "POST" and p == "/v1/sessions")
+        self.assertEqual(body["resources"], [{"type": "file", "file_id": "file_1", "mount_path": "/op/thread.py"},
+                                             {"type": "file", "file_id": "file_2", "mount_path": "/op/reader.py"}])
+        # Uploaded before the token exists; deleted after the archive, before the lock goes.
+        self.assertEqual(self.gh.calls[0][1], "/repos/o/r/installation")
+        self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
+        order = [(m, p) for m, p, _ in api.calls]
+        self.assertLess(order.index(("POST", "/v1/sessions/sesn_FAKE/archive")), order.index(("DELETE", "/v1/files/file_1")))
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assertEqual(self.post.bodies(), [])
+        self.assert_clean(out, marks)
+
+    def test_the_mounted_folder_is_the_one_the_prompt_copies(self):
+        prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("  mkdir -p /tmp/op && cd /tmp/op\n  cp /mnt/session/uploads" + wake.MOUNT + "/* .\n", prompt)
+        self.assertEqual(set(wake.HELPERS), {"thread.py", "reader.py"})  # thread.py imports reader beside it
+        for src in wake.HELPERS.values():
+            self.assertTrue(src.is_file())
+
+    def test_the_prompt_fetches_no_code(self):
+        prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
+        for gone in ("contents/", "vnd.github.raw", "ref=main", "-o \"$(basename", "wget", "git clone", "pip install"):
+            self.assertNotIn(gone, prompt)
+        # The one curl left is the last-resort escalation: a POST of a comment, never a download.
+        self.assertEqual(prompt.count("curl"), 1)
+        self.assertEqual(prompt.count("api.github.com"), 2)  # that POST, and the note on where the token is replaced
+        self.assertIn("curl -fsS -X POST -H \"Authorization: Bearer $GITHUB_TOKEN\" "
+                      "https://api.github.com/repos/dvortsis/lodestar-v2/issues/{{CHANNEL_PR}}/comments -d @report.json", prompt)
+
+    def test_a_failed_upload_starts_no_session(self):
+        for fail_at, uploaded in ((0, []), (1, ["/v1/files/file_1"])):
+            with self.subTest(fail_at=fail_at):
+                self.setUp()
+                self.upload = FakeUpload(fail_at=fail_at)
+                env, marks = wake_env()
+                api = FakeAnthropic()
+                rc, out = self.go(env, api)
+                self.assertEqual(rc, 0)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn("no session started: the helper files couldn't be uploaded", body)
+                self.assertNotIn("/v1/sessions", api.paths("POST"))            # no session
+                self.assertEqual(self.gh.calls, [])                             # no token minted
+                self.assertEqual([p for p in api.paths("POST") if "/credentials/" in p], [])  # nothing in the vault
+                self.assertEqual(api.paths("DELETE"), uploaded)                 # the part that went up is deleted
+                self.assertNotIn(LOCK_KEY, self.store.objects)
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+
+    def test_a_refused_attach_escalates_and_cleans_up(self):
+        # The API refuses the create (a bad file, a mount it won't take): no session to watch.
+        env, marks = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "POST" and path == "/v1/sessions":
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("LEAKMARK refused")
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, out = self.go(env, api)
+        self.assertIsInstance(rc, Exception)
+        self.assertIn("the bridge failed (RuntimeError); the session, if any, is archived", self.post.bodies()[-1])
+        self.assertNotIn("/v1/sessions/sesn_FAKE", " ".join(api.paths("GET")))
+        self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
+        self.assertIn(("DELETE", "/installation/token", None, "ghs_LEAKMARKTOKEN"), self.gh.calls)
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assert_clean(out + "".join(self.post.bodies()), marks + ["LEAKMARK"])
+
+    def test_a_failed_file_delete_is_escalated_and_the_rest_still_runs(self):
+        env, marks = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "DELETE" and path == "/v1/files/file_1":
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("LEAKMARK down")
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, out = self.go(env, api)
+        self.assertEqual(rc, 0)
+        self.assertEqual([b.split("`operator-wake.yml`: ")[1] for b in self.post.bodies()],
+                         ["couldn't delete a helper file; check it by hand"])
+        self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assert_clean(out + "".join(self.post.bodies()), marks + ["LEAKMARK", "file_1"])
 
     def test_a_finish_with_calls_the_policy_denied_is_escalated(self):
         # The first live wake: the session ended its turn cleanly, but `auto` had refused

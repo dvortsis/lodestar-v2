@@ -159,6 +159,21 @@ class FakeAnthropic:
         return [p for m, p, _ in self.calls if method is None or m == method]
 
 
+class FakeUpload:
+    """The bridge's file upload: records (name, bytes) and hands out IDs.
+    `fail_at` makes that upload (counting from 0) raise, as a refused or lost
+    request would."""
+
+    def __init__(self, fail_at=None):
+        self.files, self.fail_at = [], fail_at
+
+    def __call__(self, name: str, data: bytes) -> str:
+        if self.fail_at == len(self.files):
+            raise RuntimeError("LEAKMARK upload failed")
+        self.files.append((name, data))
+        return f"file_{len(self.files)}"
+
+
 _KEY = None
 
 
