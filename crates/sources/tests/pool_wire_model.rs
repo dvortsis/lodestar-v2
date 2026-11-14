@@ -168,10 +168,13 @@ async fn play(mut stream: DuplexStream, info: Arc<Vec<u8>>, key: InfoHash, peer:
     }
 }
 
+/// A scripted peer: the dict it has, under which key, and how it behaves.
+type Script = (Arc<Vec<u8>>, InfoHash, Peer);
+
 /// Fetches over in-memory pipes from the scripted peers, as
 /// `PeerWireFetcher` does over TCP.
 struct Wire {
-    peers: Mutex<HashMap<SocketAddr, (Arc<Vec<u8>>, InfoHash, Peer)>>,
+    peers: Mutex<HashMap<SocketAddr, Script>>,
     /// Each grown fetch from a peer that stalls after its first window:
     /// how long it held its grown room, and whether its end could be
     /// credited as late (room 4 s or more in all, a timeout, never
