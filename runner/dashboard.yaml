@@ -312,6 +312,7 @@ placement:
   - X-insights-story
   - X-charts
   - X-alert-noun
+  - X-alert-noun-text
   - S-alerts
   - S-insights-*
   - B9
@@ -1524,7 +1525,7 @@ roadmap:
     - G-v1
   - id: tracku
     label: 'Track U: UI review fixes'
-    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in. Then every other finding, grouped by cause: the §10 text for the moderate user, one page frame, control sizes, labels, the search toolbar and row, detail, safety switches, Settings search, the Insights story and charts, first run, alerts, help, and the review''s scripts kept as checks.'
+    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in. Then every other finding, grouped by cause: the §10 text for the moderate user, one page frame, control sizes, labels, the search toolbar and row, zero-result rescue, detail, safety switches, Settings search, the Insights story and charts, the setup-token check, first run, alerts, help, and the review''s scripts kept as checks.'
     col: 5
     row: 4
     members:
@@ -1554,6 +1555,7 @@ roadmap:
     - X-setup-token-boot
     - X-first-run
     - X-alert-noun
+    - X-alert-noun-text
     - X-client-handoff
     - X-help
     - X-ui-checks
@@ -1720,13 +1722,13 @@ owner_queue:
   unblocks: Nothing; this goes ahead unless you object
   when: Any time
 - n: 26
-  type: question
+  type: decision
   action: 'Will you, or someone like the intended user, walk first run → first search → copy a magnet and say where they got stuck? Nobody from that audience has used it yet (UI review 04 §6a)'
   unblocks: Confidence that the first-run and search fixes in Track U are the right ones
   when: Before the 1.0 design gate (M8-DR)
 - n: 27
-  type: question
-  action: 'A screen-reader run and a pass on a real phone or tablet need your hardware. Will you run them, or accept emulation for 1.0? (UI review 03-c, 03-e)'
+  type: decision
+  action: 'A screen-reader run and a pass on a real phone or tablet need your hardware. Will you run them, or accept emulation for 1.0? (UI review 03-c, 03-e, 02 §3f)'
   unblocks: The accessibility and touch checks the review could not make
   when: Before the 1.0 design gate (M8-DR)
 - n: 28

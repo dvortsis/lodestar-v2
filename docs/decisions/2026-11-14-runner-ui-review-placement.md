@@ -1,18 +1,18 @@
-# UI/UX review placement (runner)
+# UI/UX review placement (runner, #875)
 
 This file puts every finding of the 2026-11-13 UI/UX review in the plan. It builds on `2026-11-13-runner-ui-review-decisions.md` (#809), `2026-11-13-runner-tracks-q-u.md` and `2026-11-13-runner-owner-queue.md` (§2.69), and changes none of them.
 
 The review now lives on `main` at `docs/review/2026-11-13-ui-ux/`. It is copied over from branch `claude/codebase-review-bugs-x9ff7p` (5c3e447a) as it stands, not merged, as #809 said it would be. The screenshots stay out (about 500 files); its `scripts/` folder regenerates them.
 
 ## Summary
-- **About 125 distinct findings** come from 150 rows (01: 37, 02: 39, 03: 24, 04: 50) once duplicates are folded.
+- **About 125 distinct findings** come from 150 rows (01: 37, 02: 39, 03: 24, 04: 50) once duplicates are folded. The counts below are approximate: several rows are split across two homes, and the tables are the record.
 - **Status:**
   - 11 are done;
   - 7 were already placed in a slice not yet started;
   - every other finding now has a home: a new slice, or a note on an existing one;
   - 4 need the owner (devices, a screen reader, real users);
-  - 2 conflict with owner decisions and stay declined (U1, D7).
-- **New slices:** 22, all in Track U (build-plan §0, steps 5 to 8). The Sonnet helpers follow the delegation policy. Opus builds the query-language parser change (X-units-typed), the setup-token check (X-setup-token-boot) and the child-safety rule screen (X-safety-toggles). The last two also get `/security-review`.
+  - 1 conflicts with owner decisions and stays declined (U1, restated as D7).
+- **New slices:** 23, all in Track U (build-plan §0, steps 5 to 8). The Sonnet helpers follow the delegation policy. Opus builds the query-language parser change (X-units-typed), the setup-token check (X-setup-token-boot) and the child-safety rule screen (X-safety-toggles). The last two also get `/security-review`. So does X-alert-noun-text, which changes wording in `crates/integrations/src/notify/text.rs`: that file escapes untrusted names, so it stays on Opus.
 - **The I1 + I3 slice** that #809 promised already exists as X-results-drawer-adaptive (added in #813). It hasn't started. It gains a note below.
 - **Launch order:**
   - X-ui-guards owns `web/src/lib/**`, so every new web slice waits for it.
@@ -127,6 +127,8 @@ These are the "Decide" items in 02 §5.
 | §6.1–6.6 | The owner's decisions | done or placed | #809 |
 
 ### 03-not-done.md
+The review doesn't number 03's open checks; 03-a to 03-t letter them in reading order, starting with the "Still open" sentence.
+
 | id | check | status | home |
 |---|---|---|---|
 | L1 | Error 500 sticks after the server returns | done | #842, #844 |
@@ -183,4 +185,4 @@ These are the "Decide" items in 02 §5.
 | §6c | Phone flow: alerts and Send | new | X-ui-checks |
 | §6d | "Something's wrong" path | new | X-help |
 | §6e | Updates and backups off in the fixture | new | X-ui-checks (a fixture variant) |
-| §6f | Words in notifications, digest, RSS, /status | new | X-alert-noun |
+| §6f | Words in notifications, digest, RSS, /status | new | X-alert-noun-text (Opus) |
