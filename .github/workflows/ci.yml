@@ -548,6 +548,11 @@ jobs:
         run: |
           python -m pip install --no-deps --require-hashes -r infra/fleet/requirements-test.txt
           ./infra/fleet/run_tests.sh -v
+      # The PIA helper's cloud-init (X-pia-vm-helper, runner-approved): renders
+      # the template offline and ties its sudoers lines to every sudo command the
+      # fleet steps and deliver-pia run. No root, network, secrets or cloud.
+      - name: Cloud-init sudoers tie test and PIA helper checks
+        run: bash infra/akamai/terraform/tests/test_linux_privilege_boundary.sh --offline
       # The fleet's CloudFormation templates (OP-2a): built from build_templates.py,
       # then policy tests over the parsed JSON. Standard library only; no cloud call.
       - name: Fleet AWS templates
