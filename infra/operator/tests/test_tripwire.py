@@ -8,6 +8,7 @@ from tests.helpers import T0, FakeGitHub, graphql_reviews, no_runs
 import tripwire
 
 BOT, NOW = 555, T0
+MONTH = f"created={(T0 - timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ')}.."  # the in-flight window
 ISO = lambda d: (NOW - d).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
 DISABLE = ("PUT", "/repos/o/r/actions/workflows/operator-wake.yml/disable")
 
@@ -333,8 +334,9 @@ class ReviewBudget(unittest.TestCase):
         # at its request cap. Still inside the token's ~1,000 (decisions file).
         self.assertLessEqual((wake.PER_HOUR + 1) * (sweep + tripwire.SESSION_REQUESTS), 1000)
         # One full pass: two counts, every status list, two counts again, with room for jobs and a retry.
-        # One quiet pass: two counts, the completed list, two counts again.
-        self.assertGreaterEqual(tripwire.SESSION_REQUESTS, 3 * 5)
+        # Quiet passes: two counts, two counts and the common completed lists, two counts again.
+        quiet = 2 + 2 + len(tripwire.DONE_FIRST) + 2
+        self.assertGreaterEqual(tripwire.SESSION_REQUESTS, 3 * quiet)
 
     def test_exactly_the_budget_is_complete(self):
         gh = ManyPRs([2900, 2900])  # 30 pages each (29 full, then an empty one): 60
@@ -362,8 +364,9 @@ class Deadline(unittest.TestCase):
             tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
         self.assertIn("the sweep is incomplete: it ran past its 5-minute deadline", gh.bodies()[0])
         self.assertIn(tripwire.PENDING, gh.bodies()[0])  # posted before the session check
-        # A quiet window costs the check five requests: inside its own deadline even at 7 s each.
-        self.assertFalse(gh.disabled())
+        # At 7 s a request the check passes its own deadline: that counts as a session.
+        self.assertTrue(gh.disabled())
+        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", gh.bodies()[1])
 
     def test_the_deadline_sits_under_the_job_timeout(self):
         import yaml
@@ -948,7 +951,8 @@ class SessionCheck(unittest.TestCase):
         done = (NOW - timedelta(minutes=tripwire.LOOKBACK_MINUTES + tripwire.COMPLETED_EXTRA_MINUTES)
                 ).strftime("%Y-%m-%dT%H:%M:%SZ")
         lists = [p for p in actions.paths if "/actions/workflows/" in p]
-        completed = [p for p in lists if "&status=completed&per_page=100" in p]
+        completed = [p for p in lists if any(f"&status={c}&" in p for c in tripwire.DONE_FIRST + ("skipped",))
+                     or (f"created={done}" in p)]
         self.assertTrue(completed)
         self.assertTrue(all(f"created={done}..{end}&" in p for p in completed))
         self.assertTrue(all(f"created={month}..{end}&" in p for p in lists if p not in completed))
@@ -1002,7 +1006,7 @@ class SessionCheck(unittest.TestCase):
     def test_no_run_in_flight_costs_no_in_flight_list(self):
         actions = Actions([skipped_run(i) for i in range(1, 50)])
         self.assertIsNone(self.check(actions))
-        self.assertEqual(len(actions.paths), 5)  # two counts, the completed list, two counts again
+        self.assertEqual(len(actions.paths), 9)  # counts, the common completed lists, counts again
 
     def test_a_run_settling_between_attempts_is_read_again_after_a_wait(self):
         # A comment's run is in flight at the first count, then skipped before it's listed.
@@ -1049,7 +1053,7 @@ class SessionCheck(unittest.TestCase):
         state = {"n": 0}
 
         def answer(path):
-            if "&status=completed&per_page=1&" in path:  # the counts: flip the run each time
+            if "&status=completed&per_page=1&" in path and MONTH in path:  # the in-flight counts: flip each time
                 state["n"] += 1
                 r.update(status="in_progress" if state["n"] % 2 else "completed",
                          conclusion=None if state["n"] % 2 else "skipped")
@@ -1060,8 +1064,13 @@ class SessionCheck(unittest.TestCase):
 
     def test_any_other_final_mismatch_stays_unknown(self):
         # A run in flight in a status no list covers: the latest count leaves it unlisted.
+        # (The request cap is lifted so the settle rule, not the cap, decides.)
         odd = dict(wake_run(1, None), status="something-new")
-        self.assertEqual(self.check(Actions([odd], {"1": self.STRANGER_JOBS})), tripwire.SESSION_UNKNOWN)
+        cap, tripwire.SESSION_REQUESTS = tripwire.SESSION_REQUESTS, 1000
+        try:
+            self.assertEqual(self.check(Actions([odd], {"1": self.STRANGER_JOBS})), tripwire.SESSION_UNKNOWN)
+        finally:
+            tripwire.SESSION_REQUESTS = cap
         # The runner's run settling: its gate succeeded, so it isn't someone else's.
         r = dict(wake_run(2, None), created_at=ISO(timedelta(seconds=5)))
         jobs = [{"name": "gate", "status": "completed", "conclusion": "success"},
@@ -1071,7 +1080,7 @@ class SessionCheck(unittest.TestCase):
         state = {"n": 0}
 
         def answer(path):
-            if "&status=completed&per_page=1&" in path:
+            if "&status=completed&per_page=1&" in path and MONTH in path:
                 state["n"] += 1
                 r.update(status="in_progress" if state["n"] % 2 else "completed",
                          conclusion=None if state["n"] % 2 else "success")
@@ -1128,7 +1137,7 @@ class SessionCheck(unittest.TestCase):
         runs = [wake_run(i, created=old + timedelta(minutes=i), updated=old) for i in range(1, 1501)]
         actions = Actions(runs, {str(i): wake_jobs() for i in range(1, 1501)})
         self.assertIsNone(self.check(actions))
-        self.assertLessEqual(len(actions.paths), 5)
+        self.assertLessEqual(len(actions.paths), 9)
 
     def test_a_queued_or_running_wake_job_counts(self):
         for status in ("queued", "in_progress"):
@@ -1151,17 +1160,33 @@ class SessionCheck(unittest.TestCase):
         odd = dict(wake_run(1, None), status="something-new")
         self.assertEqual(self.check(Actions([odd])), tripwire.SESSION_UNKNOWN)
         # A status filter the API ignores: the list returns runs in other states.
-        runs = [dict(wake_run(1, None)), skipped_run(2)]
+        runs = [dict(wake_run(1, None)), wake_run(2, updated=timedelta(hours=4))]
         self.assertEqual(self.check(Actions(runs, {"1": self.STRANGER_JOBS}, ignore=("in_progress",))),
                          tripwire.SESSION_UNKNOWN)
 
-    def test_a_completed_run_with_an_unfamiliar_conclusion_is_read(self):
-        r = dict(wake_run(1), conclusion="something-new")
-        self.assertEqual(self.check(Actions([r], {"1": wake_jobs()})), tripwire.SESSION_RAN)
-        self.assertEqual(self.check(Actions([r], {"1": []})), tripwire.SESSION_UNKNOWN)  # no finished gate
+    def test_completed_runs_by_conclusion(self):
+        # A rare conclusion is listed once the counts say a completed run is still unread.
+        r = dict(wake_run(1), conclusion="timed_out")
+        actions = Actions([r], {"1": wake_jobs()})
+        self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
+        self.assertTrue(any("&status=timed_out&per_page=100" in p for p in actions.paths))
+        # An unfamiliar one no list covers: the counts don't add up, so it fails closed.
+        self.assertEqual(self.check(Actions([dict(wake_run(1), conclusion="something-new")], {"1": wake_jobs()})),
+                         tripwire.SESSION_UNKNOWN)
+        # The rare lists aren't read while the counts add up.
+        quiet = Actions([wake_run(1, updated=timedelta(hours=4))])
+        self.assertIsNone(self.check(quiet))
+        self.assertFalse(any("&status=timed_out" in p for p in quiet.paths))
+
+    def test_any_number_of_skipped_runs_costs_nothing(self):
+        runs = [skipped_run(i, timedelta(seconds=5 * i)) for i in range(1, 2501)]  # inside the completed window
+        actions = Actions(runs)
+        self.assertIsNone(self.check(actions))
+        self.assertLessEqual(len(actions.paths), 9)
 
     def test_more_runs_in_one_list_than_it_holds_counts_as_a_session(self):
-        runs = [skipped_run(i, timedelta(seconds=10 * i)) for i in range(1, 1102)]  # all inside the completed window
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
+        runs = [wake_run(i, created=timedelta(seconds=10 * i), updated=old) for i in range(1, 1102)]
         self.assertEqual(self.check(Actions(runs)), tripwire.SESSION_UNKNOWN)
 
     def test_the_check_stops_at_its_own_deadline(self):

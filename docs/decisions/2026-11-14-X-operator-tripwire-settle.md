@@ -14,17 +14,27 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 - **Runs in flight** (`in_progress`, `waiting`, `queued`, `pending`, `requested`) are still read from the last 30 days, the longest a job can wait for approval.
   - Their number is all runs minus `completed` ones, from two counts.
   - The status lists stop once they've found that many. With nothing in flight, which is usual, no list is read.
-- **Completed runs come from one `status=completed` list,** created from 180 minutes before the lookback (`COMPLETED_EXTRA_MINUTES`).
-  - A `skipped` run, or one last updated before the lookback, is passed over without reading its jobs.
-  - Any other conclusion, a new one included, has its jobs read, so it fails closed.
-  - This replaces eight conclusion lists over 30 days. So more than 1,000 old successful runs no longer overflow a list.
+- **Completed runs are listed by conclusion,** created from 180 minutes before the lookback (`COMPLETED_EXTRA_MINUTES`).
+  - **Never `skipped`:** a comment alone makes a skipped run, so any number of comments costs nothing.
+  - **The common conclusions first:** `success`, `failure` and `cancelled`.
+  - **The rare ones only when needed:** they're listed only while completed minus skipped runs are still unread.
+  - **Still unread after that** (a conclusion GitHub adds later, or runs still completing): the counts don't add up, so it fails closed.
+  - **Passed over without reading its jobs:** a listed run last updated before the lookback.
+  - **No overflow from old runs:** this replaces eight conclusion lists over 30 days, so more than 1,000 old successful runs no longer overflow a list.
+  - **Counting order:** every count that's subtracted is read first. A run that moves between the two reads can then only make the check look for more runs, never fewer.
 - **A completed run's jobs are read once** and kept across the attempts.
-- **The cost:** a quiet pass is five requests (two counts, the completed list, two counts again). Thirty of the runner's channel comments in the lookback fit under `SESSION_REQUESTS` (40), and a test checks it.
+- **The cost:** a quiet pass is nine requests: the in-flight counts, the completed counts with the three common lists, and the in-flight counts again. Thirty of the runner's channel comments in the lookback fit under `SESSION_REQUESTS` (40), and a test checks it.
+- **A run that just settled:** an in-flight list whose copy of a run already shows it completed and skipped passes over that run, and the counts decide. Before, it made a mismatch that could never count as settling.
 - **Reading of the brief:** the brief said to read completed runs "only from the lookback's start". Taken literally, that misses a run created a little before the lookback whose session ran inside it. Reading from 180 minutes earlier covers a wake approved up to about two hours late.
 - **Accepted residual, failing open:** a completed run approved later than that, whose session ended inside the lookback, isn't read.
   - **Why it's accepted:** its own end-of-wake sweep ran after the session ended, and it disables if that sweep can't finish.
   - **What's left uncovered:** only a later hourly sweep that can't finish misses it.
   - While such a run is still in flight, it's read whatever its age.
+
+## Other accepted residuals
+- **A burst of others' runs in flight (fails closed).** Each run in flight costs a jobs read. About 25 or more strangers' runs in flight at the moment of the check pass the 40-request cap, which counts as a session. That needs a timed burst of comments. It was the same before this change.
+- **If GitHub caps totals at 1,000 (fails closed).** Then a window whose counts sit at the cap is split, which costs more requests and can reach the cap. The quiet-pass figure above assumes no cap; the first run verifies it.
+- **A late approval completing during the check (fails open).** A run in flight created before the completed window, which completes between the in-flight lists and the completed lists, is read in neither. It's the same residual as a completed late approval, reached through a race.
 
 ## A run in flight with no jobs listed yet
 - **Kept failing closed; recorded as an accepted residual.** A run in flight whose jobs, or whose `gate` job, aren't listed within the re-reads (five, two seconds apart) counts as a session, whoever started it.

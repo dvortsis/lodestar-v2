@@ -66,10 +66,13 @@ REQUEST_TIMEOUT_SECONDS = 30  # infra/fleet/comments.py's urlopen timeout, per s
 # waiting for approval still holds its earlier attempts' jobs). Their number is
 # all runs minus `completed` ones; the lists must account for every one, or the
 # check can't vouch for the window (a status GitHub adds later). Completed runs
-# come from one `status=completed` list; a `skipped` one (every job skipped:
-# what a comment alone makes) is passed over, any other conclusion is read.
+# are listed by conclusion, never `skipped` (every job skipped: what a comment
+# alone makes, so any number of comments costs nothing): the common ones first,
+# the rest only while `completed` minus `skipped` runs are still unread.
 # Every list and count is of issue_comment runs, the event the sessions run on.
 RUN_STATES = ("in_progress", "waiting", "queued", "pending", "requested")
+DONE_FIRST = ("success", "failure", "cancelled")
+DONE_REST = ("timed_out", "action_required", "startup_failure", "neutral", "stale")
 # A comment's run moves from in flight to skipped within seconds: counts that
 # don't add up are read again, up to SESSION_ATTEMPTS times SETTLE_SECONDS
 # apart, all inside the check's deadline.
@@ -471,23 +474,26 @@ def _runs_page(call, repo: str, lo: datetime, hi: datetime, status: str, page: i
     return items, total
 
 
-def _in_flight(call, repo: str, lo: datetime, hi: datetime, depth: int = 0) -> int:
-    """Runs created in [lo, hi] that aren't completed. A range whose total is
-    exactly COUNT_CAP (perhaps capped) is split."""
-    total = _runs_page(call, repo, lo, hi, "", 1, 1)[1]
-    if total == COUNT_CAP:
+def _difference(call, repo: str, lo: datetime, hi: datetime, minuend: str, subtrahend: str, depth: int = 0) -> int:
+    """Runs created in [lo, hi] in `minuend` ("" for all) but not `subtrahend`.
+    The subtrahend is counted first, so a run moving between them meanwhile
+    can only make the difference larger (more runs to find: fail closed). A
+    range where either count is exactly COUNT_CAP (perhaps capped) is split."""
+    less = _runs_page(call, repo, lo, hi, subtrahend, 1, 1)[1]
+    more = _runs_page(call, repo, lo, hi, minuend, 1, 1)[1]
+    if COUNT_CAP in (less, more):
         if depth >= COUNT_SPLITS or hi - lo < timedelta(seconds=2):
             raise _Unknown
         mid = (lo + (hi - lo) / 2).replace(microsecond=0)
-        return _in_flight(call, repo, lo, mid, depth + 1) + _in_flight(call, repo, mid + timedelta(seconds=1), hi, depth + 1)
-    done = _runs_page(call, repo, lo, hi, "completed", 1, 1)[1]
-    if done == COUNT_CAP:  # perhaps capped, with the total under it: can't vouch
-        raise _Unknown
-    return total - done
+        return (_difference(call, repo, lo, mid, minuend, subtrahend, depth + 1)
+                + _difference(call, repo, mid + timedelta(seconds=1), hi, minuend, subtrahend, depth + 1))
+    return more - less
 
 
 def _listed(call, repo: str, lo: datetime, hi: datetime, status: str, key: str):
-    """Each run in a status list once, checked to be in that status."""
+    """Each run in a status list once, checked to be in that status. In an
+    in-flight list, a run whose copy already shows it completed and skipped
+    (a comment's run that just settled) is passed over: the counts decide."""
     ids: set[str] = set()  # paging over a list that moves can repeat a run: each counts once
     for page in range(1, SESSION_PAGES + 1):
         items, total = _runs_page(call, repo, lo, hi, status, page, 100)
@@ -499,6 +505,8 @@ def _listed(call, repo: str, lo: datetime, hi: datetime, status: str, key: str):
                 continue
             ids.add(rid)
             if run.get(key) != status:
+                if key == "status" and run.get("status") == "completed" and run.get("conclusion") == "skipped":
+                    continue
                 raise _Mismatch(False)  # moved on since it was listed, or a filter the API didn't apply
             yield rid, run
         if len(items) < 100 or len(ids) >= total:
@@ -507,7 +515,7 @@ def _listed(call, repo: str, lo: datetime, hi: datetime, status: str, key: str):
 
 
 def _session_pass(call, repo, lo, hi, done_from, since, sleep, cache) -> str | None:
-    expected = _in_flight(call, repo, lo, hi)
+    expected = _difference(call, repo, lo, hi, "", "completed")
     listed, cleared = 0, True
     for status in RUN_STATES:
         if listed >= expected:
@@ -518,15 +526,22 @@ def _session_pass(call, repo, lo, hi, done_from, since, sleep, cache) -> str | N
             if ran:
                 return SESSION_RAN
             cleared = cleared and stranger
-    for rid, run in _listed(call, repo, done_from, hi, "completed", "status"):
-        if run.get("conclusion") == "skipped":
-            continue
-        updated = _when(run.get("updated_at"))
-        if updated is not None and updated < since:
-            continue  # a run's update time is at or after its jobs' completion
-        if _wake_ran(call, repo, rid, since, False, sleep, cache)[0]:
-            return SESSION_RAN
-    latest = _in_flight(call, repo, lo, hi)
+    want = _difference(call, repo, done_from, hi, "completed", "skipped")
+    read = 0
+    for group in (DONE_FIRST, DONE_REST):
+        if group is DONE_REST and read >= want:
+            break  # every completed run that isn't skipped accounted for
+        for conclusion in group:
+            for rid, run in _listed(call, repo, done_from, hi, conclusion, "conclusion"):
+                read += 1
+                updated = _when(run.get("updated_at"))
+                if updated is not None and updated < since:
+                    continue  # a run's update time is at or after its jobs' completion
+                if _wake_ran(call, repo, rid, since, False, sleep, cache)[0]:
+                    return SESSION_RAN
+    if read < want:
+        raise _Mismatch(False)  # a conclusion no list covers, or runs still completing
+    latest = _difference(call, repo, lo, hi, "", "completed")
     if listed != expected or latest != expected:
         # Settling: every run listed in flight was someone else's, and none is left unlisted.
         raise _Mismatch(cleared and latest <= listed)
