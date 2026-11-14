@@ -18,10 +18,12 @@
 6. One session: the agent version from claude-lock.json (routine), or an
    override to OPERATOR_MODEL_TRIAGE at high effort (triage); a $3 or $15
    budget; the instruction comment as its only user.message.
-7. Watching it: a call paused for approval is denied with a message to
-   escalate; a budget stop, an error, a stall or 30 minutes makes the bridge
-   post the escalation itself. Every session is archived at the end, so none
-   can be resumed later with a newer token.
+7. Watching it: the session object gives only the status, so why it went
+   idle comes from its event list (the last status event's stop reason). A
+   call paused for approval is denied with a message to escalate; a budget
+   stop, an error, a refusal, a stall or 30 minutes makes the bridge post the
+   escalation itself, naming an error by the API's own type. Every session is
+   archived at the end, so none can be resumed later with a newer token.
 8. Always: the token revoked, the credential reset, the lock released.
 
 Comment text arrives only through COMMENT_BODY. Logs and comments carry
@@ -59,6 +61,19 @@ STALL_POLLS = 6  # a requires_action with nothing left to deny, a minute long
 INTERRUPT_SECONDS = 60  # after an interrupt, the wait for the session to stop before the archive
 TRIAGE_EFFORT = "high"  # an override replaces the model object, effort included
 UNSET_TOKEN = "revoked"
+# The session's own status events, in the event list. A session object has no
+# stop reason: only its last `session.status_idle` event does.
+STATUS_EVENTS = ("session.status_running", "session.status_idle", "session.status_rescheduled",
+                 "session.status_terminated")
+# `session.error`'s types and retry statuses, as the API lists them. An escalation
+# names only a value found here, never the error's free-text message.
+ERROR_TYPES = frozenset((
+    "unknown_error", "model_overloaded_error", "model_rate_limited_error", "model_request_failed_error",
+    "mcp_connection_failed_error", "mcp_authentication_failed_error", "billing_error",
+    "credential_host_unreachable_error", "tool_use_limit_reached_error", "compaction_limit_reached_error",
+    "repository_authentication_error", "repository_forbidden_error", "repository_not_found_error",
+    "repository_checkout_error", "repository_clone_error"))
+RETRY_STATUSES = frozenset(("retrying", "exhausted", "terminal"))
 DENY = ("This call needs approval, which the bridge never gives. Don't retry or work around it: "
         "post an operator-report v1 with kind: escalation saying what you tried to do, then end your turn.")
 
@@ -249,8 +264,35 @@ def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: 
     }
 
 
-def _deny_pending(call, sid: str, denied: set) -> int:
-    events = pages(call, f"/v1/sessions/{sid}/events", {})
+def _stop_reason(events: list[dict]) -> str | None:
+    """Why the session is idle: the stop reason of its last status event, when
+    that event is a `session.status_idle`. None when the list doesn't show the
+    idle yet (the status and the event list are written separately), or shows
+    no reason: the caller polls again rather than guess."""
+    for e in reversed(events):
+        if e.get("type") in STATUS_EVENTS:
+            reason = e.get("stop_reason") if e["type"] == "session.status_idle" else None
+            kind = reason.get("type") if isinstance(reason, dict) else None
+            return kind if isinstance(kind, str) and kind else None
+    return None
+
+
+def _error_words(events: list[dict]) -> str:
+    """The session's last `session.error` as fixed words, or "". Both values are
+    checked against the API's own lists, so no text from the session reaches a
+    log or a comment."""
+    for e in reversed(events):
+        if e.get("type") == "session.error":
+            err = e.get("error") if isinstance(e.get("error"), dict) else {}
+            kind, retry = err.get("type"), err.get("retry_status")
+            retry = retry.get("type") if isinstance(retry, dict) else None
+            kind = kind if isinstance(kind, str) and kind in ERROR_TYPES else "an unlisted error type"
+            retry = retry if isinstance(retry, str) and retry in RETRY_STATUSES else "an unlisted retry status"
+            return f" ({kind}, {retry})"
+    return ""
+
+
+def _deny_pending(call, sid: str, events: list[dict], denied: set) -> int:
     answered = {e.get("tool_use_id") for e in events if e.get("type") == "user.tool_confirmation"}
     ask = [e["id"] for e in events if e.get("type") in ("agent.tool_use", "agent.mcp_tool_use")
            and e.get("evaluated_permission") == "ask" and isinstance(e.get("id"), str)
@@ -282,6 +324,11 @@ def _interrupt(call, sid: str, monotonic, sleep) -> None:
 def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=lambda: False) -> str:
     """'done', or the escalation line for a session that couldn't escalate itself.
 
+    The session object carries a status and no stop reason, so an idle or
+    terminated session is read from its event list. A session that finishes
+    its work goes idle (`end_turn`); `terminated` is an unrecoverable error or
+    an archive from outside, never a finish.
+
     `stopped()` is true once operator-wake.yml is disabled (the tripwire, or the
     owner's kill switch): the live session is interrupted at the next poll."""
     deadline = monotonic() + SESSION_MINUTES * 60
@@ -294,24 +341,29 @@ def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=la
         if stopped():
             _interrupt(call, sid, monotonic, sleep)
             return "operator-wake.yml was disabled, so the session was stopped"
-        s = call("GET", f"/v1/sessions/{sid}", None) or {}
-        status, stop = s.get("status"), ((s.get("stop_reason") or {}).get("type"))
+        status = (call("GET", f"/v1/sessions/{sid}", None) or {}).get("status")
         if status == "terminated":
-            return "done" if stop in (None, "end_turn") else "the session ended with an error"
+            return "the session was terminated" + _error_words(pages(call, f"/v1/sessions/{sid}/events", {}))
         if status == "idle":
+            events = pages(call, f"/v1/sessions/{sid}/events", {})
+            stop = _stop_reason(events)
             if stop == "end_turn":
                 return "done"
             if stop == "budget_reached":
                 return "the session reached its budget"
-            if stop == "requires_action":
-                if _deny_pending(call, sid, denied):
-                    stalled = 0
-                else:
-                    stalled += 1
-                    if stalled >= STALL_POLLS:
-                        return "the session stalled waiting for an action the bridge can't give"
-            else:
-                return "the session ended with an error"
+            if stop == "refusal":
+                return "the session stopped on a model refusal"
+            if stop == "requires_action" and _deny_pending(call, sid, events, denied):
+                stalled = 0
+            elif stop in ("requires_action", None):
+                stalled += 1
+                if stalled >= STALL_POLLS:
+                    return ("the session stalled waiting for an action the bridge can't give" if stop
+                            else "the session went idle and its events show no stop reason")
+            else:  # retries_exhausted, or a reason this bridge doesn't know
+                return "the session ended with an error" + _error_words(events)
+        else:
+            stalled = 0
         sleep(POLL_SECONDS)
 
 

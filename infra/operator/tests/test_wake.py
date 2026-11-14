@@ -133,14 +133,93 @@ class Watch(unittest.TestCase):
     def test_outcomes(self):
         idle = lambda t: {"status": "idle", "stop_reason": {"type": t}}  # noqa: E731
         cases = [([{"status": "running"}, idle("end_turn")], "done"),
-                 ([{"status": "terminated"}], "done"),
-                 ([{"status": "terminated", "stop_reason": {"type": "retries_exhausted"}}], "the session ended with an error"),
+                 # A finished session goes idle; terminated is an error or an outside archive.
+                 ([{"status": "terminated"}], "the session was terminated"),
                  ([idle("budget_reached")], "the session reached its budget"),
                  ([idle("retries_exhausted")], "the session ended with an error"),
+                 ([idle("refusal")], "the session stopped on a model refusal"),
+                 ([idle("a_reason_from_the_future")], "the session ended with an error"),
                  ([{"status": "rescheduling"}, idle("end_turn")], "done")]
         for states, want in cases:
             with self.subTest(want=want, states=str(states)[:60]):
                 self.assertEqual(self.run_watch(states)[0], want)
+
+    def test_the_stop_reason_comes_from_the_events_not_the_session_object(self):
+        # The regression behind the first live wake: GET /v1/sessions/{id} has a
+        # status and no stop_reason, so a clean finish read as an error.
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                res = super().__call__(method, path, body)
+                if method == "GET" and path == "/v1/sessions/sesn_1":
+                    self.served = res
+                    res = dict(res, stop_reason={"type": "retries_exhausted"})  # a field the API doesn't have
+                return res
+        api, mono = Api(states=[{"status": "idle", "stop_reason": {"type": "end_turn"}}]), Mono()
+        self.assertEqual(wake.watch(api, "sesn_1", mono, mono.sleep), "done")
+        self.assertEqual(api.served, {"status": "idle"})  # the fake serves what the API serves
+        self.assertIn("/v1/sessions/sesn_1/events?limit=100", api.paths("GET"))
+
+    def test_an_error_is_named_by_its_listed_type_only(self):
+        def err(kind, retry, at="idle"):
+            return {"type": "session.error", "id": "sevt_e",
+                    "error": {"type": kind, "message": "LEAKMARK free text", "retry_status": {"type": retry}}}
+        idle = {"status": "idle", "stop_reason": {"type": "retries_exhausted"}}
+        cases = [(idle, [err("model_overloaded_error", "retrying"), err("billing_error", "exhausted")],
+                  "the session ended with an error (billing_error, exhausted)"),
+                 ({"status": "terminated"}, [err("unknown_error", "terminal")],
+                  "the session was terminated (unknown_error, terminal)"),
+                 (idle, [err("LEAKMARK_error", "LEAKMARK")],
+                  "the session ended with an error (an unlisted error type, an unlisted retry status)"),
+                 (idle, [{"type": "session.error", "error": ["LEAKMARK"]}, ],
+                  "the session ended with an error (an unlisted error type, an unlisted retry status)"),
+                 (idle, [{"type": "session.error", "error": {"type": ["billing_error"], "retry_status": "exhausted"}}],
+                  "the session ended with an error (an unlisted error type, an unlisted retry status)")]
+        for state, events, want in cases:
+            with self.subTest(want=want):
+                got, _ = self.run_watch([state], events)
+                self.assertEqual(got, want)
+                self.assertNotIn("LEAKMARK", got)
+        # An error the session recovered from isn't reported on a clean finish.
+        got, _ = self.run_watch([{"status": "idle", "stop_reason": {"type": "end_turn"}}],
+                                [err("model_overloaded_error", "retrying")])
+        self.assertEqual(got, "done")
+
+    def test_every_listed_error_type_is_a_plain_word(self):
+        for word in wake.ERROR_TYPES | wake.RETRY_STATUSES:
+            self.assertRegex(word, r"\A[a-z_]{1,40}\Z")
+
+    def test_an_idle_the_events_dont_show_yet_is_polled_again(self):
+        late = {"status": "idle", "unlisted": True}
+        got, api = self.run_watch([late, late, {"status": "idle", "stop_reason": {"type": "end_turn"}}])
+        self.assertEqual(got, "done")
+        self.assertEqual(sum(1 for m, p, _ in api.calls if m == "GET" and p == "/v1/sessions/sesn_1"), 3)
+
+    def test_an_idle_with_no_stop_reason_escalates_after_a_minute(self):
+        want = "the session went idle and its events show no stop reason"
+        for state in ({"status": "idle", "unlisted": True}, {"status": "idle"},
+                      {"status": "idle", "stop_reason": {"type": ""}}, {"status": "idle", "stop_reason": "end_turn"}):
+            with self.subTest(state=state):
+                got, api = self.run_watch([state])
+                self.assertEqual(got, want)
+                polls = sum(1 for m, p, _ in api.calls if m == "GET" and p == "/v1/sessions/sesn_1")
+                self.assertEqual(polls, wake.STALL_POLLS)
+
+    def test_only_the_last_status_event_counts(self):
+        # An earlier idle (a denied call, say) is not the reason for this one.
+        earlier = [{"type": "session.status_idle", "stop_reason": {"type": "end_turn"}},
+                   {"type": "session.thread_status_idle", "stop_reason": {"type": "end_turn"}}]
+        self.assertEqual(wake._stop_reason(earlier + [{"type": "session.status_running"}]), None)
+        self.assertEqual(wake._stop_reason(earlier + [{"type": "session.status_idle",
+                                                       "stop_reason": {"type": "budget_reached"}},
+                                                      {"type": "session.thread_status_idle",
+                                                       "stop_reason": {"type": "end_turn"}}]), "budget_reached")
+        self.assertEqual(wake._stop_reason([]), None)
+
+    def test_a_stall_counts_only_consecutive_idle_polls(self):
+        ra = {"status": "idle", "stop_reason": {"type": "requires_action"}}
+        states = ([ra] * (wake.STALL_POLLS - 1) + [{"status": "running"}]) * 2 + [
+            {"status": "idle", "stop_reason": {"type": "end_turn"}}]
+        self.assertEqual(self.run_watch(states)[0], "done")
 
     def test_paused_calls_are_denied_once_with_the_escalate_message(self):
         ask = [{"type": "agent.tool_use", "id": "sevt_1", "evaluated_permission": "ask"},
