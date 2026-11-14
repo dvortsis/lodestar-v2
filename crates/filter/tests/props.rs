@@ -2488,7 +2488,7 @@ fn runner_speed() -> f64 {
 #[test]
 #[ignore]
 fn budget_worst_case() {
-    use lodestar_filter::{BUDGET, Engine, PackSwitches, read_cost};
+    use lodestar_filter::{BUDGET, Engine, PackSwitches};
 
     struct Rng(u64);
     impl Rng {
@@ -2514,6 +2514,8 @@ fn budget_worst_case() {
         (0..n).map(|i| FileInfo::new(f(i), 1 << 20)).collect()
     }
     type Shape = Box<dyn Fn(usize) -> Vec<FileInfo>>;
+    /// A shape that grows the torrent's name, not its files.
+    type Named = Box<dyn Fn(usize) -> String>;
     let ascii: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
     let cjk: Vec<char> = ('\u{4E00}'..='\u{9FA5}').collect();
     let arabic: Vec<char> = ('\u{0627}'..='\u{064A}').collect();
@@ -2636,6 +2638,37 @@ fn budget_worst_case() {
             Box::new(|n| each(n, |i| vec![format!("dir {} word", i % 5), format!("{i}")])),
         ),
         (
+            "Hangul syllables sharing a slot",
+            Box::new(move |n| {
+                each(n, |i| {
+                    // Five syllables with a final consonant, all in one
+                    // slot of the tokenizer's cache.
+                    let base = 0xAC01 + (i as u32 % 7) * 28;
+                    let s: String = (0..5)
+                        .filter_map(|k| char::from_u32(base + k * 2048))
+                        .collect();
+                    vec![s]
+                })
+            }),
+        ),
+        (
+            "distinct letter-digit words",
+            Box::new(|n| {
+                each(n, |i| {
+                    let mut r = Rng(i as u64 * 2 + 1);
+                    let mix = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                    let mut s = String::new();
+                    while s.len() < 4_000 {
+                        for _ in 0..32 {
+                            s.push(mix[r.next() as usize % mix.len()] as char);
+                        }
+                        s.push(' ');
+                    }
+                    vec![s]
+                })
+            }),
+        ),
+        (
             "typical Latin",
             Box::new(|n| {
                 each(n, |i| {
@@ -2689,11 +2722,41 @@ fn budget_worst_case() {
             let t = apart("15 yo", "lexa").repeat(40);
             Box::new(move |n| each(n, |i| vec![format!("{t}{i}")]))
         }),
+        ("role terms, a gap, then sexual terms", {
+            let t = format!(
+                "{}{}{}",
+                "rolea ".repeat(200),
+                "w ".repeat(20),
+                "lexa ".repeat(200)
+            );
+            Box::new(move |n| each(n, |i| vec![format!("{t}{i}")]))
+        }),
+        ("an age in every short file", {
+            Box::new(|n| each(n, |i| vec![format!("15 yo {}", i % 10)]))
+        }),
         ("terms in a shared folder", {
             let t = apart("rolea", "lexa").repeat(40);
             Box::new(move |n| each(n, |i| vec![t.clone(), format!("{i}")]))
         }),
     ];
+    // A name of syllables with a final consonant, alternating between two
+    // that share a slot of the tokenizer's cache, many apart.
+    let named: Vec<(&str, Named)> = vec![(
+        "alternating Hangul syllables in the name",
+        Box::new(|n| {
+            let pair: Vec<char> = (0..2)
+                .filter_map(|k| char::from_u32(0xAC01 + 27 * 28 + k * 2048))
+                .collect();
+            let mut s = String::new();
+            for i in 0..n {
+                s.push(pair[i % 2]);
+                if i % 3 == 2 {
+                    s.push(' ');
+                }
+            }
+            s
+        }),
+    )];
     let speed = runner_speed();
     println!("calibration: {speed:.2}× the reference's time");
     let shipped = Core::new(
@@ -2704,23 +2767,33 @@ fn budget_worst_case() {
     let stand_in = Core::new(stand_ins(), CsList::default(), Switches::default());
     let mut over = Vec::new();
     let mut worst = 0f64;
-    let all = shapes
+    type Torrent = Box<dyn Fn(usize) -> (String, Vec<FileInfo>)>;
+    let title = |s: &'static Shape| -> Torrent { Box::new(move |n| ("Title".into(), s(n))) };
+    let shapes: &'static Vec<(&str, Shape)> = Box::leak(Box::new(shapes));
+    let terms: &'static Vec<(&str, Shape)> = Box::leak(Box::new(terms));
+    let named: &'static Vec<(&str, Named)> = Box::leak(Box::new(named));
+    let all: Vec<(&str, Torrent, &Core, ContentType)> = shapes
         .iter()
-        .map(|(l, s)| (*l, s, &shipped, ContentType::Video))
+        .map(|(l, s)| (*l, title(s), &shipped, ContentType::Video))
         .chain(
             terms
                 .iter()
-                .map(|(l, s)| (*l, s, &stand_in, ContentType::Adult)),
-        );
+                .map(|(l, s)| (*l, title(s), &stand_in, ContentType::Adult)),
+        )
+        .chain(named.iter().map(|(l, s)| {
+            let t: Torrent = Box::new(move |n| (s(n), vec![FileInfo::new(vec!["a".into()], 1)]));
+            (*l, t, &shipped, ContentType::Video)
+        }))
+        .collect();
     for (label, shape, core, content_type) in all {
         let mut engine = Engine::new(core.clone());
         engine.packs = PackSwitches::all();
         // The largest torrent of this shape the core still reads whole.
         let fits = |n: usize| {
-            let files = shape(n);
-            read_cost(&Item {
+            let (name, files) = shape(n);
+            core.read_cost(&Item {
                 hashes: &[],
-                name: "Title",
+                name: &name,
                 files: &files,
                 content_type,
             })
@@ -2735,14 +2808,14 @@ fn budget_worst_case() {
             let mid = (lo + hi) / 2;
             if fits(mid) { lo = mid } else { hi = mid }
         }
-        let files = shape(lo);
+        let (name, files) = shape(lo);
         let it = Item {
             hashes: &[],
-            name: "Title",
+            name: &name,
             files: &files,
             content_type,
         };
-        let units = read_cost(&it).expect("within the budget");
+        let units = core.read_cost(&it).expect("within the budget");
         let time = |f: &dyn Fn()| {
             f();
             let mut best = f64::MAX;
