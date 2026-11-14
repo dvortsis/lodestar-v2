@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:49Z",
+  "updated_at": "2026-11-14T04:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8396,6 +8396,10 @@
     {
       "at": "2026-11-14T04:49Z",
       "item": "Record in next runner PR (owner-decisions): the second Fable security session is an extra slot on top of preset limits (owner 2026-11-14, relayed)."
+    },
+    {
+      "at": "2026-11-14T04:50Z",
+      "item": "Second security pass ids (id, severity, surface only): S5-01 important (Windows updater), S3-01 important (source credentials), S3-02 important (Nostr feed), S3-03 important (tracker scrape), S6-01 important (cluster claims), S4-01 important (status page). New angles recorded on INFRA-01, INFRA-04, INFRA-07. Owner-queue item naming these ids in next runner PR; S5-01 fix needs an owner decision."
     }
   ],
   "main_health": [
@@ -9719,7 +9723,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:49Z",
+  "updated": "2026-11-14T04:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
