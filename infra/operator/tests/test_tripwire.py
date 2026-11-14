@@ -346,10 +346,10 @@ class Deadline(unittest.TestCase):
         def mono():
             tick[0] += 7.0  # every request seems to take 7 s
             return tick[0]
-        gh = ManyPRs([2000] * 3)  # 63 pages: past 360 s before the 60-page budget
+        gh = ManyPRs([2000] * 3)  # 63 pages: past 300 s before the 60-page budget
         with redirect_stdout(io.StringIO()):
             tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
-        self.assertIn("the sweep is incomplete: it ran past its 6-minute deadline", gh.bodies()[0])
+        self.assertIn("the sweep is incomplete: it ran past its 5-minute deadline", gh.bodies()[0])
         self.assertIn(tripwire.PENDING, gh.bodies()[0])  # posted before the session check
         # At 7 s a request the session check passes its own deadline too: that counts as a session.
         self.assertTrue(gh.disabled())
@@ -361,12 +361,14 @@ class Deadline(unittest.TestCase):
         for name, job in (("operator-tripwire.yml", "sweep"), ("operator-wake.yml", "sweep")):
             wf = yaml.safe_load((root / name).read_text())
             # Checkout and start-up, then the sweep's deadline with one request past it and the
-            # escalation; then the session check's deadline with one request past it and the
-            # disable. Each request can take a full timeout.
+            # escalation; then the session check's deadline (its retries and gate re-reads
+            # inside it) with one request past it and the disable. Each request can take a
+            # full timeout. At least 60 s of the job's timeout must be left over.
             t = tripwire.REQUEST_TIMEOUT_SECONDS
             escalated = 60 + tripwire.SWEEP_DEADLINE_SECONDS + t + t
-            self.assertLessEqual(escalated + tripwire.SESSION_DEADLINE_SECONDS + t + t,
-                                 wf["jobs"][job]["timeout-minutes"] * 60, name)
+            disabled = escalated + tripwire.SESSION_DEADLINE_SECONDS + t + t
+            self.assertGreaterEqual(wf["jobs"][job]["timeout-minutes"] * 60 - disabled, 60, name)
+            self.assertLess(tripwire.GATE_READS * tripwire.GATE_WAIT_SECONDS, tripwire.SESSION_DEADLINE_SECONDS)
         from comments import urllib_transport  # noqa: F401 - the timeout above is comments.py's
         src = (Path(tripwire.__file__).resolve().parents[1] / "fleet" / "comments.py").read_text()
         self.assertIn(f"timeout={tripwire.REQUEST_TIMEOUT_SECONDS})", src)
@@ -873,12 +875,9 @@ class SessionCheck(unittest.TestCase):
         self.assertIsNone(self.check(Actions([r], {"1": self.STRANGER_JOBS}, before_call=settle)))
 
     def test_counts_that_never_settle_count_as_a_session(self):
-        def churn(actions):  # a run that changes state on every call
-            r = actions.runs[0]
-            r.update(status="in_progress", conclusion=None) if r["status"] == "completed" else \
-                r.update(status="completed", conclusion="skipped")
-        r = dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))
-        self.assertEqual(self.check(Actions([r], {"1": self.STRANGER_JOBS}, before_call=churn)), tripwire.SESSION_UNKNOWN)
+        def churn(actions):  # a new run inside the window on every call
+            actions.runs.append(skipped_run(1000 + len(actions.paths), timedelta(minutes=3)))
+        self.assertEqual(self.check(Actions([skipped_run(1)], before_call=churn)), tripwire.SESSION_UNKNOWN)
 
     def test_the_runners_run_in_flight_waits_for_its_gate(self):
         pending = [{"name": "gate", "status": "in_progress", "conclusion": None}]
@@ -945,7 +944,46 @@ class SessionCheck(unittest.TestCase):
                 "updated_at": ISO(timedelta(hours=4))}
         actions = Actions([run_], {"1": wake_jobs(None, completed=None, status="waiting")})
         self.assertIsNone(self.check(actions))
-        self.assertFalse(any("/actions/runs/" in p for p in actions.paths))  # waiting runs are only counted
+        self.assertTrue(any("/actions/runs/1/jobs" in p for p in actions.paths))  # waiting runs' jobs are read
+
+    @staticmethod
+    def rerun_waiting(earlier_done):
+        """A run re-run after a session: attempt 1's gate and wake completed,
+        attempt 2's gate passed and its wake waits for approval."""
+        run_ = {"id": 1, "status": "waiting", "conclusion": None, "created_at": ISO(timedelta(hours=6)),
+                "updated_at": ISO(timedelta(minutes=2))}
+        jobs = [{"name": "gate", "run_attempt": 1, "status": "completed", "conclusion": "success",
+                 "completed_at": ISO(timedelta(hours=6))},
+                {"name": "wake", "run_attempt": 1, "status": "completed", "conclusion": "success",
+                 "completed_at": ISO(earlier_done)},
+                {"name": "gate", "run_attempt": 2, "status": "completed", "conclusion": "success",
+                 "completed_at": ISO(timedelta(minutes=2))},
+                {"name": "wake", "run_attempt": 2, "status": "waiting", "conclusion": None, "completed_at": None}]
+        return Actions([run_], {"1": jobs})
+
+    def test_a_rerun_waiting_for_approval_still_shows_the_earlier_session(self):
+        self.assertEqual(self.check(self.rerun_waiting(timedelta(minutes=20))), tripwire.SESSION_RAN)
+        # Its earlier session ended before the lookback, and the waiting wake job isn't one yet.
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
+        self.assertIsNone(self.check(self.rerun_waiting(old)))
+
+    def test_the_first_session_found_ends_the_check(self):
+        actions = Actions([dict(wake_run(1, None), status="queued")], {"1": wake_jobs(None, status="queued")})
+        self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
+        lists = [p for p in actions.paths if "/actions/workflows/" in p and "&per_page=100&" in p]
+        self.assertEqual(len(lists), 1)  # queued is the first list; nothing after the match is read
+        self.assertTrue(all("&event=issue_comment" in p for p in actions.paths if "/actions/workflows/" in p))
+
+    def test_a_run_added_between_queries_is_read_again(self):
+        added = {"done": False}
+
+        def late(actions):  # one run turns up inside the window between the counts and the lists, once
+            if not added["done"] and len(actions.paths) == 3:
+                added["done"] = True
+                actions.runs.append(skipped_run(77, timedelta(minutes=3)))
+        actions = Actions([skipped_run(1)], before_call=late)
+        self.assertIsNone(self.check(actions))
+        self.assertTrue(added["done"])
 
     def test_a_queued_or_running_wake_job_counts(self):
         for status in ("queued", "in_progress"):
@@ -984,3 +1022,43 @@ class SessionCheck(unittest.TestCase):
         actions = Actions([skipped_run(1)])
         self.assertEqual(self.check(actions, mono), tripwire.SESSION_UNKNOWN)
         self.assertLessEqual(len(actions.paths), tripwire.SESSION_DEADLINE_SECONDS // 10)
+
+
+class SilentFailure(unittest.TestCase):
+    """A failed escalation post with nothing disabled fails the job: never a
+    green, silent run."""
+
+    NOISE = {"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}
+
+    def sweep(self, events, actions):
+        calls = []
+
+        def gh(method, path, body):
+            calls.append((method, path))
+            if method == "POST":
+                raise RuntimeError("post failed")
+            if method == "GET" and "/actions/" in path:
+                return actions(path)
+            if method == "GET":
+                return events if path.startswith("/repos/o/r/issues/events") else []
+        return gh, calls
+
+    def test_an_incomplete_sweep_with_no_session_and_no_post_fails_the_job(self):
+        gh, calls = self.sweep([self.NOISE] * 100, Actions([]))
+        with self.assertRaises(SystemExit) as cm:
+            run(["sweep"], env(), gh)
+        self.assertIn("couldn't be posted", str(cm.exception))
+        self.assertNotIn(DISABLE, calls)
+
+    def test_a_finding_with_no_post_fails_the_job(self):
+        edited = [{"actor": {"id": 1}, "event": "base_ref_changed", "created_at": ISO(timedelta(minutes=5)),
+                   "issue": {"number": 3}}]
+        gh, calls = self.sweep(edited, Actions([]))
+        with self.assertRaises(SystemExit):
+            run(["sweep"], env(), gh)
+
+    def test_a_disable_without_a_post_still_passes(self):
+        bot = [{"actor": {"id": BOT}, "event": "closed", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 9}}]
+        gh, calls = self.sweep(bot, Actions([]))
+        self.assertEqual(run(["sweep"], env(), gh), 0)
+        self.assertIn(DISABLE, calls)

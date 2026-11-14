@@ -47,7 +47,7 @@ REVIEW_PAGE_BUDGET = 60  # 7 sweeps x (60 + 42 other requests) = 714, leaving ~2
 # The sweep's own deadline, under the jobs' 10-minute timeout: a job cancelled
 # for time can neither escalate nor disable, so the sweep stops itself first and
 # escalates the unfinished run.
-SWEEP_DEADLINE_SECONDS = 360
+SWEEP_DEADLINE_SECONDS = 300  # with the session check's, leaves 60 s of the job's timeout (budget test)
 # An incomplete sweep disables only when a wake session ran inside its lookback
 # (the owner's decision, 2026-11-14; _wake_session). A job can wait up to 30
 # days for an environment's approval, so runs created that far back count.
@@ -57,17 +57,19 @@ SWEEP_DEADLINE_SECONDS = 360
 # session counts as having run.
 APPROVAL_WAIT_DAYS = 30
 SESSION_PAGES = 10  # GitHub lists at most 1,000 runs for a created= filter
-SESSION_DEADLINE_SECONDS = 60
+SESSION_DEADLINE_SECONDS = 45
 REQUEST_TIMEOUT_SECONDS = 30  # infra/fleet/comments.py's urlopen timeout, per socket operation
-# The runs the check reads, by the API's status filter: in flight, and every
-# completed conclusion but `skipped` (every job skipped: what a comment alone
-# makes). `waiting` (a wake job waiting for approval: no session yet) and
-# `skipped` are only counted: all runs minus those two must equal the runs
-# read, or the check can't vouch for the window (a status GitHub adds later).
-RUN_STATES = ("queued", "in_progress", "pending", "requested")
+# The runs the check reads, by the API's status filter: in flight (`waiting`
+# included: a re-run waiting for approval still holds its earlier attempts'
+# jobs), and every completed conclusion but `skipped` (every job skipped: what
+# a comment alone makes). `skipped` runs are only counted: all runs minus those
+# must equal the runs read, or the check can't vouch for the window (a status
+# GitHub adds later). Every list and count is of issue_comment runs only, the
+# event operator-wake.yml's sessions run on.
+RUN_STATES = ("queued", "in_progress", "pending", "requested", "waiting")
 RUN_CONCLUSIONS = ("success", "failure", "cancelled", "timed_out", "action_required", "startup_failure",
                    "neutral", "stale")
-RUN_UNREAD = ("skipped", "waiting")
+RUN_UNREAD = ("skipped",)
 # A comment arriving during the check moves a run between lists: a count that
 # doesn't add up is read again, up to SESSION_ATTEMPTS times, before it counts.
 SESSION_ATTEMPTS = 3
@@ -108,21 +110,25 @@ def _channel(env, transport):
     return Channel(transport, env["GITHUB_REPOSITORY"], env["CHANNEL_PR"])
 
 
-def act(env, transport, findings: list[str], disable: bool) -> None:
-    """Post one escalation; disable the wake workflow on a bot-attributed finding."""
+def act(env, transport, findings: list[str], disable: bool) -> bool:
+    """Post one escalation; disable the wake workflow on a bot-attributed
+    finding. Returns whether the escalation was posted."""
     if not env.get("GITHUB_REPOSITORY"):
         raise SystemExit("tripwire: GITHUB_REPOSITORY isn't set; nothing posted or disabled")
     rid = "tripwire-" + "-".join(x for x in (env.get("GITHUB_RUN_ID", ""), env.get("GITHUB_RUN_ATTEMPT", "")) if _digits(x))
     lines = "\n".join(f"- {f}" for f in findings)
     tail = f"\n\n`{WAKE_WORKFLOW}` is disabled; re-enable it only after review." if disable else ""
     print(f"tripwire: {len(findings)} finding(s); disable={disable}")
+    posted = False
     try:
         if _digits(env.get("CHANNEL_PR")):
             _channel(env, transport).post(message.report(rid, "none", "escalation", f"Tripwire:\n{lines}{tail}"))
+            posted = True
     except Exception:  # noqa: BLE001 - the disable below still runs
         print("tripwire: couldn't post to the channel")
     if disable:
         _disable(env, transport)
+    return posted
 
 
 def _disable(env, transport) -> None:
@@ -433,7 +439,7 @@ def _wake_session(env, transport, now: datetime, monotonic=time.monotonic, sleep
 
 def _runs_page(call, repo: str, lo: datetime, hi: datetime, status: str, page: int, per: int) -> tuple[list, int]:
     r = call("GET", f"/repos/{repo}/actions/workflows/{WAKE_WORKFLOW}/runs?created={_stamp(lo)}..{_stamp(hi)}"
-                    f"{'&status=' + status if status else ''}&per_page={per}&page={page}", None)
+                    f"&event=issue_comment{'&status=' + status if status else ''}&per_page={per}&page={page}", None)
     items, total = (r or {}).get("workflow_runs"), (r or {}).get("total_count")
     if not isinstance(items, list) or not isinstance(total, int) or isinstance(total, bool) or total < 0:
         raise _Unknown
@@ -499,28 +505,36 @@ def _jobs(call, repo: str, rid: str) -> list[dict]:
 
 
 def _wake_ran(call, repo: str, rid: str, since: datetime, in_flight: bool, sleep) -> bool:
-    """Whether run `rid`'s `wake` job counts as a session in the lookback.
-    Only a run whose `gate` job succeeded can count; in flight, a gate that
-    hasn't finished (or a wake job not there yet) is read again."""
+    """Whether run `rid` holds a session in the lookback, across all its
+    attempts (`filter=all`: a re-run waiting for approval keeps its earlier
+    attempts' jobs).
+
+    Only a run with a `gate` job that succeeded can count. The gate runs only
+    for the runner's instruction and every attempt re-runs it on the same
+    event, and the `wake` job needs it to succeed, so this can't miss a
+    session. Then a `wake` job counts when it wasn't skipped, isn't waiting for
+    approval, and hadn't completed before the lookback. In flight, a gate that
+    hasn't finished (or a wake job not there yet) is read again; still so
+    after GATE_READS, or at the deadline, it counts as a session (_Unknown)."""
     for _ in range(GATE_READS):
         jobs = _jobs(call, repo, rid)
-        gate = [x for x in jobs if x.get("name") == "gate"]
-        wake = [x for x in jobs if x.get("name") == "wake"]
-        if gate and gate[0].get("status") == "completed" and gate[0].get("conclusion") != "success":
+        gates = [x for x in jobs if x.get("name") == "gate"]
+        wakes = [x for x in jobs if x.get("name") == "wake"]
+        passed = any(g.get("status") == "completed" and g.get("conclusion") == "success" for g in gates)
+        open_gate = not gates or any(g.get("status") != "completed" for g in gates)
+        if not passed and not open_gate:
             return False  # not the runner's instruction, or refused at the gate
-        settled = gate and gate[0].get("status") == "completed" and (wake or not in_flight)
-        if not settled:
-            if not in_flight:
-                raise _Unknown  # a finished run without a finished gate
-            sleep(GATE_WAIT_SECONDS)
-            continue
-        for job in wake:
-            if job.get("conclusion") == "skipped" or job.get("status") == "waiting":
-                continue
-            done = _when(job.get("completed_at"))
-            if job.get("completed_at") is None or done is None or done >= since:
-                return True
-        return False
+        if passed and (wakes or not in_flight):
+            for job in wakes:
+                if job.get("conclusion") == "skipped" or job.get("status") == "waiting":
+                    continue
+                done = _when(job.get("completed_at"))
+                if job.get("completed_at") is None or done is None or done >= since:
+                    return True
+            return False  # every wake job skipped, waiting for approval, or completed before the lookback
+        elif not in_flight:
+            raise _Unknown  # a finished run without a finished gate
+        sleep(GATE_WAIT_SECONDS)
     raise _Unknown
 
 
@@ -528,18 +542,18 @@ PENDING = (f"if a wake session ran inside the sweep's lookback, or that can't be
            "is disabled after this post; check whether it is")
 
 
-def _incomplete(env, transport, now, findings: list[str], monotonic) -> None:
+def _incomplete(env, transport, now, findings: list[str], monotonic) -> bool:
     """The owner's rule (2026-11-14) for an incomplete sweep without a bot
     finding: the escalation first, then the session check, then the disable
     if a session ran. A timeout can then miss the disable, never the post."""
     if env.get("GITHUB_WORKFLOW_REF") == f"{env['GITHUB_REPOSITORY']}/.github/workflows/{WAKE_WORKFLOW}@refs/heads/main":
         act(env, transport, findings + [f"{END_OF_WAKE}, so an incomplete sweep disables"], True)
-        return
-    act(env, transport, findings + [PENDING], False)
+        return True
+    posted = act(env, transport, findings + [PENDING], False)
     why = _wake_session(env, transport, now, monotonic)
     if why is None:
         print("tripwire: no wake session in the lookback; not disabled")
-        return
+        return posted
     _disable(env, transport)
     try:  # best effort: the disable is done
         if _digits(env.get("CHANNEL_PR")):
@@ -551,6 +565,7 @@ def _incomplete(env, transport, now, findings: list[str], monotonic) -> None:
                 "re-enable it only after review."))
     except Exception:  # noqa: BLE001
         print("tripwire: couldn't post to the channel")
+    return True  # disabled: someone will look
 
 
 def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
@@ -606,12 +621,15 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
                                          bool(found["bot"]), True)
     if not findings:
         print("tripwire: sweep clean")
+        seen = True
     elif incomplete and not disable:
-        _incomplete(env, transport, now, findings, monotonic)
+        seen = _incomplete(env, transport, now, findings, monotonic)
     else:
-        act(env, transport, findings, disable)
+        seen = act(env, transport, findings, disable) or disable
     if failed:
         raise SystemExit("tripwire: the sweep failed")
+    if not seen:  # nothing posted and nothing disabled: never a green, silent job
+        raise SystemExit("tripwire: the escalation couldn't be posted and nothing was disabled")
     return 0
 
 

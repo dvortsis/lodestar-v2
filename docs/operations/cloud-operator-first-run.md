@@ -66,6 +66,7 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
      - a finding attributed to the App's bot always disables.
 
      The escalation comes first and says the disable may follow. If it does, a second comment names the case. Check the channel and the listed PRs by hand either way, and check whether `operator-wake.yml` is enabled.
+   - **A red sweep job.** If a sweep found something but couldn't post the escalation, and disabled nothing, its job fails rather than passing quietly. Read the job's log and check the channel by hand.
    - **The session check's counts.** If every incomplete sweep says "whether a wake session ran … couldn't be read", tell the runner. GitHub may cap the run counts the check adds up; the check splits the window to cope, and the first run is where that's verified.
    - **The reviews summary.** In a sweep job's log, look for "a reviews summary wasn't readable". If it's there, the sweep's token gets no GraphQL data and every PR's reviews are read the slower way. Tell the runner.
 8. **The injection test.** See the next section.
