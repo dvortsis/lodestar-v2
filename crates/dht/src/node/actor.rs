@@ -14,6 +14,7 @@ use tokio::time::Instant;
 use lodestar_metainfo::InfoHash;
 
 use super::hints::{self, Hint, Hints};
+use super::limits::{Answered, Network, SourceBuckets, network};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
 use super::prefixes::Prefixes;
@@ -79,8 +80,25 @@ const MAX_SCRAPE_QUEUE: usize = 1024;
 const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 /// Below this frontier size, refill it and explore a random region.
 const LOW_FRONTIER: usize = 64;
-/// Backoff for a sample query that timed out (may be transient).
-const SAMPLE_TIMEOUT_BACKOFF: Duration = sampler::MAX_INTERVAL;
+/// Backoff for a sample query that timed out: short, so an address that
+/// never answers gives its place in the table back soon.
+const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(15 * 60);
+/// The most contacts one reply offers to sampling; an honest reply holds
+/// 8 per family. Ping replies offer none.
+const NODES_PER_REPLY: usize = 16;
+/// The most infohashes taken from one `sample_infohashes` reply; a full
+/// honest reply in one datagram holds well under this.
+const SAMPLES_PER_REPLY: usize = 100;
+/// The most peers one `get_peers` reply lists.
+const VALUES_PER_REPLY: usize = 16;
+/// Infohashes one block (/24, IPv6 /64) may hand the pipeline: from
+/// samples it answers and from queries it sends. Per second, and at once.
+const HARVEST_PER_NETWORK_RATE: f64 = 4.0;
+const HARVEST_PER_NETWORK_BURST: f64 = 400.0;
+/// Blocks remembered by each per-source table ([`SourceBuckets`]).
+const SOURCE_TABLE: usize = 4096;
+/// Addresses remembered as having answered us ([`Answered`]).
+const ANSWERED_TABLE: usize = 65_536;
 /// IPs we sent to (queries, replies, errors), remembered so a query from
 /// them isn't counted as unsolicited. One generation lasts at least ~3
 /// minutes at Aggressive even if every packet went to a new IP (1000
@@ -136,6 +154,27 @@ fn reply_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
     TokenBucket::new(intensity.queries_per_sec() * 2, now)
 }
 
+/// Each block's share of the reply rate, taken before the global bucket:
+/// a thirty-second of it, so one block can't spend it all.
+fn reply_sources(intensity: Intensity) -> SourceBuckets<Network> {
+    let rate = (f64::from(intensity.queries_per_sec()) * 2.0 / 32.0).max(2.0);
+    SourceBuckets::new(rate, (rate * 2.0).max(8.0), SOURCE_TABLE)
+}
+
+/// Passive harvest (get_peers and announces from others), outside the
+/// reply rate: the query rate overall, and a share per block.
+fn passive_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
+    TokenBucket::new(intensity.queries_per_sec(), now)
+}
+
+fn harvest_sources() -> SourceBuckets<Network> {
+    SourceBuckets::new(
+        HARVEST_PER_NETWORK_RATE,
+        HARVEST_PER_NETWORK_BURST,
+        SOURCE_TABLE,
+    )
+}
+
 /// The share of the query rate that pings to queriers may use. A querier's
 /// address isn't proven until it answers one, so what arrives decides how
 /// many are wanted; this is the most of our own budget it can spend.
@@ -188,24 +227,6 @@ impl TokenBucket {
             true
         } else {
             false
-        }
-    }
-}
-
-/// A reporter's network: its /24 (IPv4) or /64 (IPv6). One network
-/// gets one say, so a few hosts in one range can't outvote the rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Network(u8, u64);
-
-fn network(ip: IpAddr) -> Network {
-    match ip.to_canonical() {
-        IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            Network(4, u64::from_be_bytes([0, 0, 0, 0, 0, a, b, c]))
-        }
-        IpAddr::V6(v6) => {
-            let o = v6.octets();
-            Network(6, u64::from_be_bytes(o[..8].try_into().expect("8 bytes")))
         }
     }
 }
@@ -460,6 +481,14 @@ struct Actor {
     next_lookup: u32,
     query_rate: TokenBucket,
     reply_rate: TokenBucket,
+    /// Each block's share of the reply rate.
+    reply_sources: SourceBuckets<Network>,
+    /// Passive harvest's own rate, apart from replies.
+    passive_rate: TokenBucket,
+    /// Each block's share of what reaches the pipeline.
+    harvest_sources: SourceBuckets<Network>,
+    /// Addresses that answered a query of ours.
+    answered: Answered,
     /// Pings to queriers draw on this before the query rate, so inbound
     /// traffic never spends more than its share of it.
     verify_rate: TokenBucket,
@@ -751,6 +780,10 @@ impl Actor {
             tokens: Tokens::new(now, &mut rng),
             query_rate: query_bucket(cfg.intensity, now),
             reply_rate: reply_bucket(cfg.intensity, now),
+            reply_sources: reply_sources(cfg.intensity),
+            passive_rate: passive_bucket(cfg.intensity, now),
+            harvest_sources: harvest_sources(),
+            answered: Answered::new(ANSWERED_TABLE, now),
             verify_rate: verify_bucket(cfg.intensity, now),
             verify_tids: Set::default(),
             families,
@@ -898,6 +931,8 @@ impl Actor {
                 self.cfg.intensity = intensity;
                 self.query_rate = query_bucket(intensity, now);
                 self.reply_rate = reply_bucket(intensity, now);
+                self.reply_sources = reply_sources(intensity);
+                self.passive_rate = passive_bucket(intensity, now);
                 self.verify_rate = verify_bucket(intensity, now);
                 self.scrape_rate = scrape_bucket(intensity, now);
             }
@@ -1382,40 +1417,77 @@ impl Actor {
         if self.cfg.read_only {
             return;
         }
-        if !self.reply_rate.try_take(Instant::now()) {
+        let now_i = Instant::now();
+        // A block's own share first, so one block can't empty the global
+        // bucket for everyone else.
+        let may_reply = self.reply_sources.try_take(network(from.ip()), now_i)
+            && self.reply_rate.try_take(now_i);
+        let announced = match &q.method {
+            Method::AnnouncePeer { token, .. } => self.tokens.is_valid(&from.ip(), token),
+            _ => false,
+        };
+        if may_reply {
+            self.reply(sockets, family, msg, q, from, announced, now_i);
+        } else {
             Stats::inc(&self.stats.replies_dropped);
-            return;
         }
+        self.passive_harvest(q, from, announced, now_i);
+    }
+
+    /// Answers a query. Data that only helps the querier's own address
+    /// (BEP 33 filters, nodes of the other family) goes only to addresses
+    /// that have answered a query of ours, so a forged source gets little.
+    #[allow(clippy::too_many_arguments)]
+    fn reply(
+        &mut self,
+        sockets: &[SendSocket],
+        family: usize,
+        msg: &Message<'_>,
+        q: &Query<'_>,
+        from: SocketAddr,
+        announced: bool,
+        now_i: Instant,
+    ) {
+        let proven = self.answered.contains(from.ip());
         let id = self.id_for(&q.id);
         let target = match &q.method {
             Method::FindNode { target, .. } | Method::SampleInfohashes { target, .. } => *target,
             Method::GetPeers { info_hash, .. } => NodeId(info_hash.0),
             _ => q.id,
         };
+        // BEP 32: an unproven querier gets its own family's nodes only.
         let want = match &q.method {
             Method::FindNode { want, .. }
             | Method::GetPeers { want, .. }
-            | Method::SampleInfohashes { want, .. } => *want,
+            | Method::SampleInfohashes { want, .. }
+                if proven =>
+            {
+                *want
+            }
             _ => Want::default(),
         };
         let (v4, v6) = self.nodes_for(family, &target, want);
         let token;
-        let now_i = Instant::now();
         let values = match &q.method {
             Method::GetPeers {
                 info_hash, noseed, ..
-            } => self
-                .peer_store
-                .peers(info_hash, self.families[family].ipv6, *noseed, now_i),
+            } => {
+                let mut v =
+                    self.peer_store
+                        .peers(info_hash, self.families[family].ipv6, *noseed, now_i);
+                v.truncate(VALUES_PER_REPLY);
+                v
+            }
             _ => Vec::new(),
         };
-        // BEP 33: filters only when asked, and only for a hash we store.
+        // BEP 33: filters only when asked, only for a hash we store, and
+        // only to a proven querier.
         let blooms = match &q.method {
             Method::GetPeers {
                 info_hash,
                 scrape: true,
                 ..
-            } => self.peer_store.blooms(info_hash, now_i),
+            } if proven => self.peer_store.blooms(info_hash, now_i),
             _ => None,
         };
         let samples: Vec<u8> = match &q.method {
@@ -1446,8 +1518,8 @@ impl Actor {
                     ..Response::default()
                 })
             }
-            Method::AnnouncePeer { token, .. } => {
-                if self.tokens.is_valid(&from.ip(), token) {
+            Method::AnnouncePeer { .. } => {
+                if announced {
                     Body::Response(Response {
                         id,
                         ..Response::default()
@@ -1473,7 +1545,6 @@ impl Actor {
                 message: b"Method Unknown",
             }),
         };
-        let announced = matches!(body, Body::Response(_));
         let reply = Message {
             transaction_id: msg.transaction_id,
             version: Some(VERSION),
@@ -1482,11 +1553,23 @@ impl Actor {
             body,
         };
         self.send(sockets, family, from, &reply);
+    }
 
-        // Passive harvest, after replying so the querier isn't kept waiting.
+    /// Passive harvest and announce storage, under their own limits rather
+    /// than the reply rate's: the passive rate overall, and the querier's
+    /// block's harvest share.
+    fn passive_harvest(
+        &mut self,
+        q: &Query<'_>,
+        from: SocketAddr,
+        announced: bool,
+        now_i: Instant,
+    ) {
         match &q.method {
             Method::GetPeers { info_hash, .. } if self.cfg.harvest.passive => {
-                self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+                if self.may_harvest_passive(from, now_i) {
+                    self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+                }
             }
             Method::AnnouncePeer {
                 info_hash,
@@ -1499,13 +1582,18 @@ impl Actor {
                 if port != 0 {
                     let peer = SocketAddr::new(from.ip(), port);
                     self.peer_store.announce(*info_hash, peer, *seed, now_i);
-                    if self.cfg.harvest.passive {
+                    if self.cfg.harvest.passive && self.may_harvest_passive(from, now_i) {
                         self.harvest_hash(*info_hash, Source::Announce, vec![peer]);
                     }
                 }
             }
             _ => {}
         }
+    }
+
+    fn may_harvest_passive(&mut self, from: SocketAddr, now_i: Instant) -> bool {
+        self.harvest_sources.try_take(network(from.ip()), now_i)
+            && self.passive_rate.try_take(now_i)
     }
 
     fn on_response(
@@ -1537,6 +1625,8 @@ impl Actor {
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
         let now = self.now_secs();
+        // It carried an id only the address we asked could know.
+        self.answered.insert(from.ip(), Instant::now());
 
         if let Some(ip) = msg.ip {
             self.on_external_ip(from.ip(), ip);
@@ -1571,8 +1661,10 @@ impl Actor {
             }
         }
 
-        // Every node we hear about is a candidate for BEP 51 sampling.
-        if let (Some(r), true) = (r, consistent) {
+        // Nodes we hear about are candidates for BEP 51 sampling: a few
+        // from each reply, and none from a ping's.
+        let offers = !matches!(pending.purpose, Purpose::Ping);
+        if let (Some(r), true, true) = (r, consistent, offers) {
             let now_i = Instant::now();
             let nodes = if self.families[family].ipv6 {
                 r.nodes6
@@ -1589,7 +1681,7 @@ impl Actor {
                     .then_some(TargetKind::Explore),
                 Purpose::Ping => None,
             };
-            for n in nodes.iter() {
+            for n in nodes.iter().take(NODES_PER_REPLY) {
                 if endpoint_allowed(&self.cfg, n.addr)
                     && !Actor::is_self(&self.ids, &self.local_addrs, &n)
                     && self.sampler.offer(n, now_i)
@@ -1607,7 +1699,18 @@ impl Actor {
                     // A reply without any BEP 51 field means "not supported".
                     let supported =
                         r.samples.is_some() && r.interval.is_some_and(|i| i <= SAMPLE_INTERVAL);
-                    for h in r.samples.iter().flat_map(|s| s.iter()) {
+                    // A bounded number per reply, within the responder's
+                    // block's share of the pipeline.
+                    let net = network(from.ip());
+                    for h in r
+                        .samples
+                        .iter()
+                        .flat_map(|s| s.iter())
+                        .take(SAMPLES_PER_REPLY)
+                    {
+                        if !self.harvest_sources.try_take(net, now_i) {
+                            break;
+                        }
                         if self.harvest_hash(h, Source::Sample, Vec::new()) {
                             self.capture_hint(h, from);
                         }
@@ -4577,3 +4680,7 @@ mod join_tests;
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod verify_tests;
+
+#[cfg(test)]
+#[path = "limit_tests.rs"]
+mod limit_tests;

@@ -3,11 +3,12 @@
 //! records, compaction pauses, or per-packet scans of the address map.
 
 use std::collections::{BTreeSet, VecDeque};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::limits::{Network, network};
 use super::transport::{Map, Set};
 
 use crate::compact::NodeInfo;
@@ -15,6 +16,13 @@ use crate::compact::NodeInfo;
 const MAX_FRONTIER: usize = 20_000;
 const MAX_KNOWN: usize = crate::restart::MAX_ENTRIES;
 const RECLAIM_PER_TICK: usize = 1024;
+/// The most addresses one IP may hold across the frontier and the table:
+/// the fleet's DHT nodes per IP (`MAX_DHT_PER_IP`), so a host running
+/// several nodes still has each sampled.
+pub(crate) const MAX_PER_IP: u16 = 8;
+/// The most addresses one /24 (IPv6 /64) may hold across the frontier and
+/// the table, so no block takes more than a small share of either.
+pub(crate) const MAX_PER_NETWORK: u16 = 64;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
@@ -41,6 +49,10 @@ pub(crate) struct Sampler {
     expiry: BTreeSet<(Instant, u64, SocketAddr)>,
     frontier: VecDeque<NodeInfo>,
     queued: Set<SocketAddr>,
+    /// How many addresses each IP and each block holds, queued or in
+    /// `states` (an address in both counts once).
+    per_ip: Map<IpAddr, u16>,
+    per_network: Map<Network, u16>,
     capacity: usize,
     next_proof: u64,
     /// Restored records still cooling, and the running totals of
@@ -57,6 +69,8 @@ impl Default for Sampler {
             expiry: BTreeSet::new(),
             frontier: VecDeque::new(),
             queued: Set::default(),
+            per_ip: Map::default(),
+            per_network: Map::default(),
             capacity: MAX_KNOWN,
             next_proof: 0,
             restored_live: 0,
@@ -83,8 +97,41 @@ impl Sampler {
         }
     }
 
-    /// Queues `node` on the frontier if it's eligible and not already
-    /// queued. True when it was queued (CR-1b counts these as new).
+    fn tracked(&self, addr: &SocketAddr) -> bool {
+        self.queued.contains(addr) || self.states.contains_key(addr)
+    }
+
+    /// Whether a new address fits its IP's and its block's shares.
+    /// Loopback is never a remote node (the public policy refuses it), so
+    /// it has no share: a local test network runs many nodes on it.
+    fn has_room(&self, addr: &SocketAddr) -> bool {
+        let ip = addr.ip().to_canonical();
+        ip.is_loopback()
+            || (self.per_ip.get(&ip).copied().unwrap_or(0) < MAX_PER_IP
+                && self.per_network.get(&network(ip)).copied().unwrap_or(0) < MAX_PER_NETWORK)
+    }
+
+    /// Updates the shares after `addr` was (`was`) or wasn't tracked
+    /// before a change.
+    fn recount(&mut self, addr: &SocketAddr, was: bool) {
+        let now = self.tracked(addr);
+        if was == now {
+            return;
+        }
+        let ip = addr.ip().to_canonical();
+        let net = network(ip);
+        if now {
+            *self.per_ip.entry(ip).or_default() += 1;
+            *self.per_network.entry(net).or_default() += 1;
+        } else {
+            decrement(&mut self.per_ip, ip);
+            decrement(&mut self.per_network, net);
+        }
+    }
+
+    /// Queues `node` on the frontier if it's eligible, not already queued,
+    /// and a new address fits its IP's and block's shares. True when it was
+    /// queued (CR-1b counts these as new).
     pub fn offer(&mut self, mut node: NodeInfo, now: Instant) -> bool {
         node.addr = lodestar_network_policy::normalize(node.addr);
         if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token })
@@ -92,12 +139,15 @@ impl Sampler {
         {
             self.restored_refused += 1;
         }
+        let was = self.tracked(&node.addr);
         if self.frontier.len() < MAX_FRONTIER
             && !self.queued.contains(&node.addr)
             && self.eligible(&node.addr, now)
+            && (was || self.has_room(&node.addr))
         {
             self.queued.insert(node.addr);
             self.frontier.push_back(node);
+            self.recount(&node.addr, was);
             return true;
         }
         false
@@ -111,6 +161,7 @@ impl Sampler {
         }
         while let Some(n) = self.frontier.pop_front() {
             self.queued.remove(&n.addr);
+            self.recount(&n.addr, true);
             if self.eligible(&n.addr, now) {
                 return Some(n);
             }
@@ -122,20 +173,24 @@ impl Sampler {
         if !self.eligible(&addr, now) {
             return false;
         }
+        let was = self.tracked(&addr);
         if let Some(State::Cooling { until, token }) = self.states.remove(&addr) {
             self.expiry.remove(&(until, token, addr));
             self.retire(token);
         }
-        if self.states.len() >= self.capacity {
+        if self.states.len() >= self.capacity || !(was || self.has_room(&addr)) {
+            self.recount(&addr, was);
             return false;
         }
         self.states.insert(addr, State::InFlight(token));
+        self.recount(&addr, was);
         true
     }
 
     pub fn abort(&mut self, addr: SocketAddr, token: u64) -> bool {
         if matches!(self.states.get(&addr), Some(State::InFlight(t)) if *t == token) {
             self.states.remove(&addr);
+            self.recount(&addr, true);
             true
         } else {
             false
@@ -187,6 +242,7 @@ impl Sampler {
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
             {
                 self.states.remove(&addr);
+                self.recount(&addr, true);
                 self.retire(token);
             }
         }
@@ -227,10 +283,13 @@ impl Sampler {
             }
             None => {}
         }
+        let was = self.tracked(&addr);
         let token = self.proof_token(true);
         self.states.insert(addr, State::Cooling { until, token });
         self.expiry.insert((until, token, addr));
         self.restored_live += 1;
+        // Never refused for its shares, as for capacity; it still counts.
+        self.recount(&addr, was);
     }
 
     /// S8: every sample still in flight becomes a cooldown ending at
@@ -302,6 +361,17 @@ impl Sampler {
     }
 }
 
+/// Lowers a share's count, dropping the key at zero so the maps hold only
+/// live IPs and blocks.
+fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u16>, key: K) {
+    if let Some(n) = map.get_mut(&key) {
+        *n -= 1;
+        if *n == 0 {
+            map.remove(&key);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,22 +406,24 @@ mod tests {
 
     #[test]
     fn saturation_preserves_frontier_and_reclaims_in_bounded_steps() {
+        // One address per /24, so the blocks' shares don't bind first.
+        let wide = |i: u32| n(i << 8);
         let mut s = Sampler::default();
         let now = Instant::now();
         for i in 0..MAX_KNOWN as u32 {
-            assert!(s.reserve(n(i).addr, u64::from(i), now));
-            assert!(s.complete(n(i).addr, u64::from(i), MAX_INTERVAL, now));
+            assert!(s.reserve(wide(i).addr, u64::from(i), now));
+            assert!(s.complete(wide(i).addr, u64::from(i), MAX_INTERVAL, now));
         }
-        s.offer(n(MAX_KNOWN as u32), now);
+        s.offer(wide(MAX_KNOWN as u32), now);
         assert!(s.next(now).is_none());
-        assert!(!s.reserve(n(MAX_KNOWN as u32).addr, 999999, now));
+        assert!(!s.reserve(wide(MAX_KNOWN as u32).addr, 999999, now));
         assert_eq!(
             (s.known(), s.cooling(), s.frontier_len()),
             (MAX_KNOWN, MAX_KNOWN, 1)
         );
         s.prune(now + MAX_INTERVAL);
         assert_eq!(s.known(), MAX_KNOWN - RECLAIM_PER_TICK);
-        assert_eq!(s.next(now + MAX_INTERVAL), Some(n(MAX_KNOWN as u32)));
+        assert_eq!(s.next(now + MAX_INTERVAL), Some(wide(MAX_KNOWN as u32)));
     }
 
     #[test]
@@ -485,5 +557,126 @@ mod tests {
         let mut s = Sampler::default();
         let now = Instant::now();
         let _ = s.complete_scaled(n(1).addr, PROOF_TOKEN | 1, MAX_INTERVAL, 1, now);
+    }
+
+    /// The shares, recomputed from scratch.
+    fn recounted(s: &Sampler) -> (Map<IpAddr, u16>, Map<Network, u16>) {
+        let mut tracked: Set<SocketAddr> = s.queued.clone();
+        tracked.extend(s.states.keys().copied());
+        let (mut ips, mut nets) = (Map::default(), Map::default());
+        for a in tracked {
+            let ip = a.ip().to_canonical();
+            *ips.entry(ip).or_default() += 1;
+            *nets.entry(network(ip)).or_default() += 1;
+        }
+        (ips, nets)
+    }
+
+    #[test]
+    fn one_ip_and_one_block_get_a_bounded_share() {
+        let mut s = Sampler::default();
+        let now = Instant::now();
+        let at = |ip: [u8; 4], port| NodeInfo {
+            id: NodeId([1; 20]),
+            addr: SocketAddr::from((ip, port)),
+        };
+        let queued = (1..=100u16)
+            .filter(|p| s.offer(at([10, 0, 0, 1], *p), now))
+            .count();
+        assert_eq!(queued, usize::from(MAX_PER_IP));
+        let queued = (2..=255u8)
+            .flat_map(|h| [1u16, 2].map(move |p| (h, p)))
+            .filter(|(h, p)| s.offer(at([10, 0, 0, *h], *p), now))
+            .count();
+        assert_eq!(queued, usize::from(MAX_PER_NETWORK - MAX_PER_IP));
+        // Another block isn't affected.
+        assert!(s.offer(at([10, 0, 1, 1], 1), now));
+        // Sampling one frees nothing while it's in flight or cooling...
+        let first = s.next(now).unwrap();
+        assert!(s.reserve(first.addr, 1, now));
+        assert!(!s.offer(at([10, 0, 0, 99], 9), now));
+        // ...and an expired cooldown gives its place back.
+        assert!(s.complete(first.addr, 1, MIN_INTERVAL, now));
+        s.prune(now + MIN_INTERVAL);
+        assert!(s.offer(at([10, 0, 0, 99], 9), now + MIN_INTERVAL));
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Offer(u8, u8, u16),
+        Next,
+        Complete(u8),
+        Abort(u8),
+        Restore(u8, u8, u16),
+        Advance(u16),
+    }
+
+    fn arb_op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            4 => (0..3u8, any::<u8>(), 1..20u16).prop_map(|(b, h, p)| Op::Offer(b, h, p)),
+            2 => Just(Op::Next),
+            1 => any::<u8>().prop_map(Op::Complete),
+            1 => any::<u8>().prop_map(Op::Abort),
+            1 => (0..3u8, any::<u8>(), 1..20u16).prop_map(|(b, h, p)| Op::Restore(b, h, p)),
+            1 => (0..400u16).prop_map(Op::Advance),
+        ]
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Whatever the sequence, the share counts match the frontier and
+        /// table, and outside restored records no IP or block holds more
+        /// than its share.
+        #[test]
+        fn shares_hold_under_any_sequence(ops in proptest::collection::vec(arb_op(), 1..400)) {
+            let mut s = Sampler::default();
+            let mut now = Instant::now();
+            let mut token = 0u64;
+            let mut flying: Vec<(SocketAddr, u64)> = vec![];
+            let mut restored = false;
+            for op in ops {
+                match op {
+                    Op::Offer(b, h, p) => {
+                        s.offer(NodeInfo {
+                            id: NodeId([1; 20]),
+                            addr: SocketAddr::from(([10, 0, b, h], p)),
+                        }, now);
+                    }
+                    Op::Next => {
+                        if let Some(n) = s.next(now) {
+                            token += 1;
+                            if s.reserve(n.addr, token, now) {
+                                flying.push((n.addr, token));
+                            }
+                        }
+                    }
+                    Op::Complete(i) if !flying.is_empty() => {
+                        let (a, t) = flying.remove(usize::from(i) % flying.len());
+                        s.complete(a, t, MIN_INTERVAL, now);
+                    }
+                    Op::Abort(i) if !flying.is_empty() => {
+                        let (a, t) = flying.remove(usize::from(i) % flying.len());
+                        s.abort(a, t);
+                    }
+                    Op::Restore(b, h, p) if flying.is_empty() => {
+                        restored = true;
+                        s.restore(SocketAddr::from(([10, 0, b, h], p)), now + MIN_INTERVAL);
+                    }
+                    Op::Advance(secs) => {
+                        now += Duration::from_secs(u64::from(secs));
+                        s.prune(now);
+                    }
+                    _ => {}
+                }
+                let (ips, nets) = recounted(&s);
+                prop_assert_eq!(&s.per_ip, &ips);
+                prop_assert_eq!(&s.per_network, &nets);
+                if !restored {
+                    prop_assert!(ips.values().all(|n| *n <= MAX_PER_IP));
+                    prop_assert!(nets.values().all(|n| *n <= MAX_PER_NETWORK));
+                }
+            }
+        }
     }
 }
