@@ -2,7 +2,10 @@
 //! 2026-11-06-v06-companions §4 CMP-8a, Q12; architecture §18.9, §18.10).
 //!
 //! **Where detection looks (Q12), and nowhere else:**
-//! - loopback (`127.0.0.1`, then `::1`) on each catalogue port;
+//! - loopback (`127.0.0.1`, then `::1`) on each catalogue port. The first
+//!   loopback address that answers on a port is the only one that port's
+//!   requests go to from then on, and only a bare probe ever tries `::1`
+//!   ([`CompanionHttp`]);
 //! - each catalogue container name on Docker's network, on the same ports;
 //! - one URL you enter.
 //!
@@ -22,9 +25,10 @@
 //! set. No text a companion sent reaches anything Lodestar stores, shows or
 //! logs. Detection never sends a credential.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::{
@@ -274,9 +278,19 @@ impl Resolve for LocalOnly {
 ///   request's own headers and [`PROBE_USER_AGENT`]. The one session cookie
 ///   a request names is handed back in the answer, for the adapter to send
 ///   itself (CMP-8b's qBittorrent sign-in).
+/// - **One loopback address a port:** a loopback target is tried on
+///   `127.0.0.1`, and on `::1` only when nothing listens there and the
+///   request is a bare probe (a `GET` with no header and no body). The
+///   address that first answers on a port is remembered, and every later
+///   request to that port goes to it alone, for as long as this value
+///   lives. So a request that carries a cookie, a key or a body is sent
+///   only to the address a probe already found the companion on.
 pub struct CompanionHttp {
     fixed: GuardedClient,
     entered: GuardedClient,
+    /// The loopback address that answered first on each port: `true` for
+    /// `::1`. At most one entry a port.
+    loopback: Mutex<HashMap<u16, bool>>,
 }
 
 impl std::fmt::Debug for CompanionHttp {
@@ -302,6 +316,7 @@ impl CompanionHttp {
         Ok(CompanionHttp {
             fixed: build(Arc::new(LocalOnly(Arc::clone(&resolver))))?,
             entered: build(resolver)?,
+            loopback: Mutex::new(HashMap::new()),
         })
     }
 
@@ -363,15 +378,29 @@ impl CompanionHttp {
         match request.target {
             Target::Loopback(port) => {
                 let p = port.get();
-                let v4 = parse(&format!("http://127.0.0.1:{p}{path}"))?;
-                match self.once(&self.fixed, v4, request).await {
+                let url = |v6: bool| {
+                    let host = if v6 { "[::1]" } else { "127.0.0.1" };
+                    parse(&format!("http://{host}:{p}{path}"))
+                };
+                if let Some(v6) = self.loopback_of(p) {
+                    return self.once(&self.fixed, url(v6)?, request).await;
+                }
+                match self.once(&self.fixed, url(false)?, request).await {
                     // Nothing on IPv4 loopback: a companion may listen on
-                    // `::1` only.
-                    Err(AdapterError::Unreachable) => {
-                        let v6 = parse(&format!("http://[::1]:{p}{path}"))?;
-                        self.once(&self.fixed, v6, request).await
+                    // `::1` only. Only a bare probe goes looking for it.
+                    Err(AdapterError::Unreachable) if bare(request) => {
+                        let got = self.once(&self.fixed, url(true)?, request).await;
+                        if got.is_ok() {
+                            self.remember_loopback(p, true);
+                        }
+                        got
                     }
-                    other => other,
+                    got => {
+                        if listening(&got) {
+                            self.remember_loopback(p, false);
+                        }
+                        got
+                    }
                 }
             }
             Target::Container(name, port) => {
@@ -384,6 +413,34 @@ impl CompanionHttp {
             }
         }
     }
+}
+
+impl CompanionHttp {
+    fn loopback_of(&self, port: u16) -> Option<bool> {
+        let map = self.loopback.lock().unwrap_or_else(PoisonError::into_inner);
+        map.get(&port).copied()
+    }
+
+    /// The first address to answer keeps the port.
+    fn remember_loopback(&self, port: u16, v6: bool) {
+        let mut map = self.loopback.lock().unwrap_or_else(PoisonError::into_inner);
+        map.entry(port).or_insert(v6);
+    }
+}
+
+/// A probe that carries nothing: no header (so no cookie and no key) and no
+/// body. [`ProbeRequest::new`] builds exactly this.
+fn bare(request: &ProbeRequest<'_>) -> bool {
+    matches!(request.method, Method::Get) && request.headers.is_empty() && request.body.is_none()
+}
+
+/// Whether the outcome shows something accepted the connection: an answer,
+/// or a failure that can only follow one.
+fn listening(got: &Result<ProbeResponse, AdapterError>) -> bool {
+    !matches!(
+        got,
+        Err(AdapterError::Unreachable | AdapterError::Timeout | AdapterError::Blocked)
+    )
 }
 
 impl GuardedHttp for CompanionHttp {
@@ -445,6 +502,59 @@ fn net_error(e: NetError) -> AdapterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only [`ProbeRequest::new`]'s request is bare: anything that could
+    /// carry a key, a cookie or a password isn't, whatever its values.
+    #[test]
+    fn only_a_request_that_carries_nothing_is_bare() {
+        let t = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
+        let new = || ProbeRequest::new(&t, RequestPath::parse("/x").unwrap(), Limits::PROBE);
+        assert!(bare(&new()));
+        assert!(bare(&new().session_cookie(&[])));
+        let name = crate::adapter::HeaderName::new("X-Api-Key").unwrap();
+        let plain = crate::adapter::HeaderValue::plain("v").unwrap();
+        let secret = crate::adapter::HeaderValue::secret(Secret::new("k")).unwrap();
+        assert!(!bare(&new().header(name, plain)));
+        assert!(!bare(&new().header(name, secret)));
+        assert!(!bare(&new().post(Vec::new())));
+        assert!(!bare(&new().put(b"{}".to_vec())));
+    }
+
+    /// The first address remembered for a port stays, and ports don't mix.
+    #[test]
+    fn a_ports_loopback_address_is_remembered_once() {
+        let http = CompanionHttp::new().unwrap();
+        assert_eq!(http.loopback_of(8080), None);
+        http.remember_loopback(8080, false);
+        http.remember_loopback(8080, true);
+        assert_eq!(http.loopback_of(8080), Some(false));
+        http.remember_loopback(9696, true);
+        http.remember_loopback(9696, false);
+        assert_eq!(http.loopback_of(9696), Some(true));
+        assert_eq!(http.loopback_of(8081), None);
+    }
+
+    /// An answer, or a failure that only an answer can cause, shows a
+    /// listener; a refusal, a timeout or the guard's refusal doesn't.
+    #[test]
+    fn only_an_exchange_shows_a_listener() {
+        for e in [
+            AdapterError::Unreachable,
+            AdapterError::Timeout,
+            AdapterError::Blocked,
+        ] {
+            assert!(!listening(&Err(e)));
+        }
+        for e in [
+            AdapterError::TooLarge,
+            AdapterError::Protocol("x"),
+            AdapterError::NotThisCompanion,
+        ] {
+            assert!(listening(&Err(e)));
+        }
+        let ok = ProbeResponse::new(200, Vec::new(), &Limits::PROBE);
+        assert!(listening(&ok));
+    }
 
     #[test]
     fn entered_urls_join_on_the_same_host() {
