@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
-use lodestar_sources::pool::{Reservation, SHUTDOWN_DRAIN, spawn};
+use lodestar_sources::pool::{MAX_VOUCHED_PER_IP, Reservation, SHUTDOWN_DRAIN, spawn};
 use lodestar_sources::{
     BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PeerIpCap,
     PoolConfig, PoolHandle, PoolIo, Shutdown, Stage,
@@ -1060,6 +1060,173 @@ async fn a_full_queue_evicts_the_oldest_idle_key() {
     );
     let left: Vec<InfoHash> = h.stop().await.iter().map(|q| q.info_hash).collect();
     assert_eq!(left, vec![key(1), key(3), key(4)]);
+}
+
+/// One address has peers in a bounded number of keys at once. Past that, a
+/// key goes without its peer there, however often it is found with it, and
+/// is looked up like any other, so it gives way to newer keys when the
+/// queue is full.
+#[tokio::test(start_paused = true)]
+async fn one_address_has_peers_in_a_bounded_number_of_keys() {
+    let max = MAX_VOUCHED_PER_IP as u32;
+    let extra = 40u32;
+    let cfg = PoolConfig {
+        max_pending: (max + extra) as usize,
+        max_lookups: 4096,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    // The address never finishes a fetch while the test runs.
+    for port in 1..=4u16 {
+        h.script(peer(1, port), 3_600_000, Ok(()));
+    }
+    let at = |n: u32| vec![peer(1, 1 + (n % 4) as u16)];
+    for n in 1..=max {
+        h.send(found(0, n, at(n)));
+    }
+    // Past the limit: found with the peer twice, or first with none and
+    // then with it.
+    for n in max + 1..=max + extra {
+        h.send(found(0, n, if n % 2 == 0 { vec![] } else { at(n) }));
+        h.send(found(0, n, at(n)));
+    }
+    sleep(Duration::from_millis(10)).await;
+    // The keys past the limit, and only they, went to a lookup.
+    let mut looked = h.drain_lookups();
+    looked.sort();
+    looked.dedup();
+    let want: Vec<InfoHash> = (max + 1..=max + extra).map(key).collect();
+    assert_eq!(looked, want);
+    // The queue is full. Nearly all new keys still get in: the ones looked
+    // up make room, and none of the address's first keys is touched.
+    let new = extra;
+    for n in 0..new {
+        h.send(found(0, 900_000 + n, vec![]));
+    }
+    sleep(Duration::from_millis(10)).await;
+    // No fetch was started for a key past the limit.
+    let past: Vec<InfoHash> = h
+        .fake
+        .started
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|s| s.0)
+        .filter(|k| want.contains(k))
+        .collect();
+    assert!(past.is_empty(), "{past:?}");
+    let left: Vec<InfoHash> = h.stop().await.iter().map(|q| q.info_hash).collect();
+    for n in 1..=max {
+        assert!(left.contains(&key(n)), "key {n} kept");
+    }
+    let admitted = (0..new)
+        .filter(|n| left.contains(&key(900_000 + n)))
+        .count();
+    assert!(
+        admitted >= new as usize - 5,
+        "{admitted} of {new} new keys admitted"
+    );
+}
+
+/// A fetched key gives its place back, and a key counts at each address
+/// its peers are at.
+#[tokio::test(start_paused = true)]
+async fn a_finished_key_gives_its_place_back() {
+    let max = MAX_VOUCHED_PER_IP as u32;
+    let cfg = PoolConfig {
+        max_lookups: 4096,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 1, Ok(()));
+    for ip in 2..=4 {
+        h.script(peer(ip, 1), 3_600_000, Ok(()));
+    }
+    for round in 0..3u32 {
+        for n in 1..=max {
+            h.send(found(0, round * 10_000 + n, vec![peer(1, 1)]));
+        }
+        // Every one is fetched before the next round arrives.
+        let mut fetched = 0;
+        while fetched < max {
+            tokio::time::timeout(Duration::from_secs(600), h.out.recv())
+                .await
+                .expect("fetched in time")
+                .expect("a fetched key");
+            fetched += 1;
+        }
+    }
+    assert!(h.drain_lookups().is_empty(), "none was past the limit");
+    // Peers at two addresses take a place at each.
+    for n in 1..=max {
+        h.send(found(0, 500_000 + n, vec![peer(2, 1), peer(3, 1)]));
+    }
+    // One more keeps the peer it has at an address with room, and needs
+    // no lookup; one with a peer at a full address alone is looked up.
+    h.send(found(0, 600_001, vec![peer(2, 1), peer(4, 1)]));
+    h.send(found(0, 600_002, vec![peer(3, 1)]));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.drain_lookups(), vec![key(600_002)]);
+    h.stop().await;
+}
+
+/// A key that is lost gives its place back too.
+#[tokio::test(start_paused = true)]
+async fn a_lost_key_gives_its_place_back() {
+    let max = MAX_VOUCHED_PER_IP as u32;
+    let cfg = PoolConfig {
+        max_lookups: 4096,
+        max_attempts: 1,
+        ..config()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 1, Err(FailureKind::Refused));
+    for round in 0..2u32 {
+        for n in 1..=max {
+            h.send(found(0, round * 10_000 + n, vec![peer(1, 1)]));
+        }
+        // Every one is lost before the next round arrives.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+        while h.causes.lost.lock().unwrap().len() < ((round + 1) * max) as usize {
+            assert!(tokio::time::Instant::now() < deadline, "round {round}");
+            sleep(Duration::from_millis(5)).await;
+        }
+        // Each had its peer: none went without it to a lookup first.
+        let started = h.fake.started.lock().unwrap().len();
+        assert_eq!(started, ((round + 1) * max) as usize);
+    }
+    h.stop().await;
+}
+
+/// A private source's peers are the user's own: never counted. Once a
+/// public source finds the key too, the peers it has count like any other.
+#[tokio::test(start_paused = true)]
+async fn a_private_keys_peers_count_once_it_is_public() {
+    let max = MAX_VOUCHED_PER_IP as u32;
+    let cfg = PoolConfig {
+        max_lookups: 4096,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 3_600_000, Ok(()));
+    for n in 1..=max + 10 {
+        let mut d = found(0, n, vec![peer(1, 1)]);
+        d.found.private_source = true;
+        h.send(d);
+    }
+    // They took none of the address's places: a public key still has one.
+    h.send(found(0, 700_001, vec![peer(1, 1)]));
+    sleep(Duration::from_millis(10)).await;
+    assert!(h.drain_lookups().is_empty());
+    // A public source finds them too. They keep their peers, which count
+    // from here: the address is full for the next public key.
+    for n in 1..=max + 10 {
+        h.send(found(0, n, vec![]));
+    }
+    h.send(found(0, 700_002, vec![peer(1, 1)]));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.drain_lookups(), vec![key(700_002)]);
+    h.stop().await;
 }
 
 #[tokio::test(start_paused = true)]
