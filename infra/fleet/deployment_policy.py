@@ -58,14 +58,30 @@ def configuration_errors(get, environments=None) -> list[str]:
             env = get(root + f"/environments/{name}")
             if env.get("deployment_branch_policy") != {"protected_branches": False, "custom_branch_policies": True}:
                 problems.append(f"deployment: {name} requires selected main branch only")
-            reviewers = [r for r in env.get("protection_rules", []) if r.get("type") == "required_reviewers"]
+            rules_seen = env.get("protection_rules", [])
+            reviewers = [r for r in rules_seen if r.get("type") == "required_reviewers"]
             owner_review = (len(reviewers) == 1 and
                             [(r.get("type"), r.get("reviewer", {}).get("id"))
                              for r in reviewers[0].get("reviewers", [])] == [("User", POLICY["owner_id"])])
             independent = name in POLICY["owner_dispatch_environments"]
-            if independent and any(r.get("type") != "branch_policy" for r in env.get("protection_rules", [])):
+            # Owner's decision 2026-11-14: these run without a per-run approval,
+            # but the owner may restore their sole-reviewer rule at any time.
+            unattended = name in POLICY["unattended_environments"]
+            if independent and unattended:
+                problems.append(f"deployment: {name} has conflicting policy classes")
+                continue
+            if independent and any(r.get("type") != "branch_policy" for r in rules_seen):
                 problems.append(f"deployment: {name} must not queue behind environment approvals/timers")
-            if not independent and not owner_review:
+            if unattended:
+                if not isinstance(env.get("protection_rules"), list):
+                    # A partial response can't show a queuing rule is absent.
+                    raise ValueError
+                # A wait timer or any other rule type would silently queue wakes: drift.
+                if any(r.get("type") not in ("branch_policy", "required_reviewers") for r in rules_seen):
+                    problems.append(f"deployment: {name} must not queue behind environment timers or other rules")
+                if reviewers and not owner_review:
+                    problems.append(f"deployment: {name} allows no approval reviewer other than the owner alone")
+            elif not independent and not owner_review:
                 problems.append(f"deployment: {name} requires the owner as its sole approval reviewer")
             if not independent and owner_review and reviewers[0].get("prevent_self_review") is not False:
                 # With one eligible reviewer, blocking their own approval
@@ -148,7 +164,7 @@ def main(argv: list[str]) -> int:
     for error in errors:
         print(error)
     if not errors:
-        print("deployment: OIDC and owner-approved main-only environment settings match")
+        print("deployment: OIDC and main-only environment protection settings match")
     return int(bool(errors))
 
 

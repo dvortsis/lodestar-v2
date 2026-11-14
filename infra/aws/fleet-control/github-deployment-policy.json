@@ -13,5 +13,6 @@
     "cloud-operator": ["operator-wake.yml", "operator-apply.yml", "operator-injection.yml"],
     "fleet-cleanup": ["fleet-emergency-down.yml"]
   },
-  "owner_dispatch_environments": ["fleet-cleanup"]
+  "owner_dispatch_environments": ["fleet-cleanup"],
+  "unattended_environments": ["cloud-operator"]
 }
