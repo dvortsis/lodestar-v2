@@ -8321,6 +8321,11 @@
       "id": "metainfo01-after",
       "at": "2026-11-14T01:54Z",
       "what": "after #861: slice a per-batch byte budget for the worker prepare stage, and path budgets for the halved metainfo callers (local torrent, torrent cache); component level only"
+    },
+    {
+      "id": "metainfo01-owner-fyi",
+      "at": "2026-11-14T01:58Z",
+      "what": "after the X-metainfo01-fix merge: tell the owner one parse within the new budget can exceed the worker steady-state memory budget (an owner number); the follow-up slice adds a per-batch byte budget; old branch slice/X-metainfo01-fix deletion is the owner call"
     }
   ],
   "main_health": [
@@ -8734,7 +8739,7 @@
     "861": {
       "slice": "X-metainfo01-fix",
       "head": "a3f3bfc4",
-      "status": "ready; fresh Opus + security review running",
+      "status": "review CHANGES relayed (test input); to be superseded by a clean-history PR from slice/X-metainfo01-fix-2",
       "slot": 30
     }
   },
