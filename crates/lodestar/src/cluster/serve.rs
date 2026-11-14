@@ -494,19 +494,16 @@ impl FloorReports {
         let mut store = Store::open(db, config)?;
         let mut by_worker: BTreeMap<(u32, i64), Vec<[u8; 20]>> = BTreeMap::new();
         for (k, r) in &batch {
-            // A key stored already was judged by the coordinator's own
-            // filter when it was written (every remote result is judged
-            // again there): a worker's report never deletes it, nor holds
-            // it. The report only stops the key being granted again.
-            if store.find(&InfoHash(*k))?.is_some() {
-                continue;
-            }
             by_worker.entry((r.worker, r.at)).or_default().push(*k);
         }
         for ((w, at), keys) in &by_worker {
-            // A key already tombstoned (by its rule or an earlier report)
-            // keeps its row; either way it's held now.
-            store.tombstone_from_worker(keys, *w, *at)?;
+            // A key stored already was judged by the coordinator's own
+            // filter when it was written (every remote result is judged
+            // again there): a worker's report never deletes it, nor holds
+            // it; the check and the write are one transaction. A key
+            // already tombstoned (by its rule or an earlier report) keeps
+            // its row; either way it's held now.
+            store.tombstone_from_worker_unless_stored(keys, *w, *at)?;
         }
         let mut pending = self.pending();
         for (k, v) in &batch {

@@ -681,6 +681,40 @@ impl Store {
         Ok(added)
     }
 
+    /// [`tombstone_from_worker`](Self::tombstone_from_worker), only for
+    /// hashes not stored: the check and the write are one write
+    /// transaction, so no commit lands between them. A stored torrent
+    /// keeps the judgment the coordinator's own filter gave it. Returns
+    /// `(added, stored)`: rows added, and hashes skipped as stored.
+    pub fn tombstone_from_worker_unless_stored(
+        &mut self,
+        hashes: &[[u8; 20]],
+        worker: u32,
+        at: i64,
+    ) -> Result<(usize, usize)> {
+        if hashes.is_empty() {
+            return Ok((0, 0));
+        }
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        let tx = crate::begin_write(&mut self.conn)?;
+        let (mut added, mut stored) = (0, 0);
+        {
+            let mut ins = tx.prepare_cached(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (hash) DO NOTHING",
+            )?;
+            for h in hashes {
+                if crate::find_any(&tx, std::iter::once(InfoHash(*h)))?.is_some() {
+                    stored += 1;
+                    continue;
+                }
+                added += ins.execute(params![&h[..], rule, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok((added, stored))
+    }
+
     /// Releases a held hash (removes its tombstone or quarantine row), so
     /// it can be fetched again. Returns whether a row was removed. A
     /// worker's floor report is never removed, so a hash with one stays
@@ -1351,6 +1385,36 @@ impl Store {
 mod tests {
     use super::*;
     use crate::StoreConfig;
+
+    /// A worker's report holds only hashes not stored, checked and written
+    /// in one transaction; a stored torrent is neither held nor touched.
+    #[test]
+    fn a_worker_report_holds_only_hashes_not_stored() {
+        use lodestar_metainfo::Info;
+        let raw = b"d6:lengthi1048576e4:name9:floor.bin12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let key = info.v1.unwrap().0;
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.insert(&[crate::NewTorrent {
+            info: &info,
+            raw_info: Some(raw),
+            discovered_at: 1,
+            metadata_at: 1,
+            extra_flags: 0,
+            source: crate::SourceId::new(0).unwrap(),
+        }])
+        .unwrap();
+        let (added, stored) = s
+            .tombstone_from_worker_unless_stored(&[key, [6; 20]], 7, 10)
+            .unwrap();
+        assert_eq!((added, stored), (1, 1));
+        assert_eq!(s.held_among(&[key, [6; 20]]).unwrap(), vec![false, true]);
+        assert!(s.find(&InfoHash(key)).unwrap().is_some(), "still stored");
+        assert_eq!(
+            s.tombstone_from_worker_unless_stored(&[], 7, 10).unwrap(),
+            (0, 0)
+        );
+    }
 
     /// The bounded read gives the list `files` gives within the bound,
     /// and refuses one past it in files, path bytes or segments.
