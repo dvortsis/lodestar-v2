@@ -473,6 +473,8 @@
 	"settings_logging_ev_integrations_client_no_labels_h": "你的下载器不支持标签。",
 	"settings_logging_ev_integrations_client_label_failed_n": "标签设置失败",
 	"settings_logging_ev_integrations_client_label_failed_h": "无法在你的下载器中设置标签。",
+	"settings_logging_ev_integrations_companion_not_ready_n": "配套组件尚未就绪",
+	"settings_logging_ev_integrations_companion_not_ready_h": "Lodestar 暂缓了发往其某个配套组件的请求，因为该配套组件尚未就绪。配套组件启动后即会恢复；如果你已停止或移除它，请重启 Lodestar。",
 	"settings_logging_ev_integrations_notify_attempt_n": "通知发送尝试",
 	"settings_logging_ev_integrations_notify_attempt_h": "一次通知投递尝试。",
 	"settings_logging_ev_integrations_notify_retry_n": "通知重试",

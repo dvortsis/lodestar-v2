@@ -2412,7 +2412,7 @@
             }
           },
           "409": {
-            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).",
+            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_unauthorized`, `companion_protocol`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -23576,7 +23576,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "`bad_credentials`, `banned`, `origin_refused`, `session_refused`,\n`address_refused`, `unreachable`, `rejected`, `timeout`, `blocked`,\n`invalid`, `protocol` or `unsupported`."
+            "description": "`bad_credentials`, `banned`, `origin_refused`, `session_refused`,\n`address_refused`, `unreachable`, `companion_not_ready`, `rejected`,\n`timeout`, `blocked`, `invalid`, `protocol` or `unsupported`."
           },
           "message": {
             "type": "string",

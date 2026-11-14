@@ -728,6 +728,7 @@ fn test_failure(e: &ClientError) -> SettingsTestResult {
         ClientError::Auth(AuthFailure::SessionRefused) => "session_refused",
         ClientError::Auth(AuthFailure::AddressRefused) => "address_refused",
         ClientError::Unreachable => "unreachable",
+        ClientError::NotReady => "companion_not_ready",
         ClientError::Rejected(_) | ClientError::AlreadyThere => "rejected",
         ClientError::Unsupported(_) => "unsupported",
         ClientError::Timeout => "timeout",

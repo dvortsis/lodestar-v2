@@ -40,6 +40,7 @@ const CODES: Record<string, () => string> = {
 	bad_template_input: m.settings_companions_code_bad_template_input,
 	no_template: m.settings_companions_code_no_template,
 	companion_unreachable: m.settings_companions_code_unreachable,
+	companion_not_ready: m.settings_companions_code_not_ready,
 	companion_unauthorized: m.settings_companions_code_unauthorized,
 	companion_protocol: m.settings_companions_code_protocol,
 	network: m.settings_companions_code_network,

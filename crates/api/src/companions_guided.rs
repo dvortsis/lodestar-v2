@@ -224,7 +224,7 @@ pub(crate) async fn detect_companions(
         (status = 400, description = "`bad_template_input` with `field`: a port or address that can't be used.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
+        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),

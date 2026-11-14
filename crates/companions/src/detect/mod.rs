@@ -591,7 +591,8 @@ fn join(base: &EnteredUrl, path: &RequestPath) -> Result<Url, AdapterError> {
 fn net_error(e: NetError) -> AdapterError {
     match e {
         NetError::Blocked(_) => AdapterError::Blocked,
-        NetError::Resolve | NetError::Connect | NetError::NotReady => AdapterError::Unreachable,
+        NetError::Resolve | NetError::Connect => AdapterError::Unreachable,
+        NetError::NotReady => AdapterError::NotReady,
         NetError::Timeout => AdapterError::Timeout,
         NetError::TooLarge => AdapterError::TooLarge,
         NetError::InvalidUrl(_) => AdapterError::Protocol("URL"),
@@ -773,6 +774,8 @@ mod tests {
         );
         assert_eq!(net_error(NetError::Connect), AdapterError::Unreachable);
         assert_eq!(net_error(NetError::Resolve), AdapterError::Unreachable);
+        // Not ready is its own error, never unreachable.
+        assert_eq!(net_error(NetError::NotReady), AdapterError::NotReady);
         assert_eq!(net_error(NetError::Timeout), AdapterError::Timeout);
         assert_eq!(net_error(NetError::TooLarge), AdapterError::TooLarge);
         assert!(matches!(

@@ -110,6 +110,7 @@
 	"settings_companions_code_bad_template_input": "其中一个值无法用于模板。",
 	"settings_companions_code_no_template": "此配套组件没有模板。",
 	"settings_companions_code_unreachable": "配套组件没有应答。",
+	"settings_companions_code_not_ready": "Lodestar 自带的这个配套组件尚未就绪。如果你已停止或移除它，请重启 Lodestar 以使用你自己的。",
 	"settings_companions_code_unauthorized": "配套组件拒绝了已保存的密码。",
 	"settings_companions_code_protocol": "配套组件的应答方式 Lodestar 无法理解。",
 	"settings_companions_code_network": "Lodestar 无法连接到服务器。请检查网络后重试。",

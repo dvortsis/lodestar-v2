@@ -203,6 +203,8 @@ impl From<NetError> for AttemptError {
                 AttemptError::fatal(DeliveryError::Failed("the endpoint's answer was too large"))
             }
             NetError::Timeout => AttemptError::transient(DeliveryError::Timeout),
+            // `NotReady` can't happen here: a notification's policy never
+            // allows loopback, which the loopback gate alone refuses.
             NetError::Resolve | NetError::Connect | NetError::Http | NetError::NotReady => {
                 AttemptError::transient(DeliveryError::Unreachable)
             }

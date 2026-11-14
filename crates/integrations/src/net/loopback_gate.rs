@@ -49,6 +49,26 @@ pub(super) fn allows(port: u16) -> bool {
     GATE.get().is_none_or(|g| g.allow(port))
 }
 
+/// The ports a refusal has been logged for: once each per process.
+static LOGGED: Mutex<Option<std::collections::HashSet<u16>>> = Mutex::new(None);
+
+/// The gate's refusal of `port`: logged the first time in this process
+/// (`integrations.companion_not_ready`), then [`super::NetError::NotReady`].
+pub(super) fn refuse(port: u16) -> super::NetError {
+    let first = LOGGED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(Default::default)
+        .insert(port);
+    if first {
+        lodestar_log::log_event!(
+            crate::log_events::COMPANION_NOT_READY,
+            port = lodestar_log::Count(u64::from(port))
+        );
+    }
+    super::NetError::NotReady
+}
+
 /// The ports each host name is being sent to by one client's requests now,
 /// so its resolver can ask the gate about a name that resolves to loopback
 /// (the resolver sees only the name).
@@ -73,11 +93,11 @@ impl Pending {
         }
     }
 
-    /// Whether every port `host` is being sent to now is allowed. A name
-    /// no request has entered has none, so nothing to refuse.
-    pub(super) fn allowed(&self, host: &str) -> bool {
+    /// A port `host` is being sent to now that the gate refuses, if any. A
+    /// name no request has entered has none, so nothing to refuse.
+    pub(super) fn refused(&self, host: &str) -> Option<u16> {
         let ports = self.names().get(&normal(host)).cloned().unwrap_or_default();
-        ports.into_iter().all(allows)
+        ports.into_iter().find(|p| !allows(*p))
     }
 }
 
@@ -120,7 +140,7 @@ mod tests {
     #[test]
     fn pending_names_are_entered_and_left() {
         let p = Arc::new(Pending::default());
-        assert!(p.allowed("localhost"));
+        assert_eq!(p.refused("localhost"), None);
         let a = p.enter("LocalHost.", 8080);
         let b = p.enter("localhost", 9696);
         assert_eq!(p.names()["localhost"].len(), 2);

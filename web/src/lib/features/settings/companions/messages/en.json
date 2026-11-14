@@ -110,6 +110,7 @@
 	"settings_companions_code_bad_template_input": "One of the values can't be used in a template.",
 	"settings_companions_code_no_template": "This companion has no template.",
 	"settings_companions_code_unreachable": "The companion didn't answer.",
+	"settings_companions_code_not_ready": "Lodestar's own copy of this companion isn't ready yet. If you stopped or removed it, restart Lodestar to use your own.",
 	"settings_companions_code_unauthorized": "The companion refused the saved password.",
 	"settings_companions_code_protocol": "The companion answered in a way Lodestar doesn't understand.",
 	"settings_companions_code_network": "Lodestar couldn't reach its server. Check the connection and try again.",

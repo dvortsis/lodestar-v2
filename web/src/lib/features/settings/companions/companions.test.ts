@@ -486,6 +486,10 @@ describe('words and copy', () => {
 		expect(wordsFor('sink_refused')).toMatch(/download client refused/);
 		expect(wordsFor('timed_out')).toMatch(/too long/);
 	});
+	it('a companion that is not ready has its own words, not unreachable', () => {
+		expect(wordsFor('companion_not_ready')).toMatch(/isn't ready yet/);
+		expect(wordsFor('companion_not_ready')).not.toBe(wordsFor('companion_unreachable'));
+	});
 	it('an unexpected failure does not claim nothing changed', () => {
 		expect(wordsFor('internal')).not.toMatch(/Nothing was changed/);
 	});

@@ -301,6 +301,9 @@ pub async fn start(
     store: Arc<Mutex<Store>>,
     integrations: watch::Receiver<crate::settings::integrations::Integrations>,
 ) -> Option<Companions> {
+    // No catalogue, no companions this run: nothing is started, so no
+    // port is Lodestar's and no gate is needed. A companion you run
+    // yourself on a port the catalogue would use stays reachable.
     let catalogue = lodestar_companions::builtin().ok()?;
     start_with(data, store, integrations, catalogue, host()).await
 }
@@ -451,7 +454,7 @@ impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
 
 /// At serve, before recovery and before any start: the port of every
 /// catalogue companion with a folder here (installed, or left mid-install
-/// by a crash) is a managed port from now on, not ready, so neither the
+/// by a crash) or a hand-over marker is a managed port from now on, not ready, so neither the
 /// gate nor `CompanionHttp` treats it as a hand-run companion's. Only a
 /// start that claims it and is found ready opens it; a failed recovery or
 /// a start that fails first leaves it refused. A folder that can't be read
@@ -464,7 +467,7 @@ fn reserve_installed(bindings: &Bindings, data: &Path, catalogue: &Catalogue, ho
         let there = !matches!(
             lodestar_companions::layout::Install::existing(data, &entry.id),
             Ok(None)
-        );
+        ) || lodestar_companions::manager::handed_over(data, &entry.id);
         if let Some(p) = loopback_port(catalogue, &entry.id).filter(|_| there) {
             // Claimed and let go at once: managed, held by none, not ready.
             if bindings.claim(p) {
@@ -3607,6 +3610,26 @@ mod tests {
         // No folder: untouched, for a companion you run yourself.
         assert!(!c.bindings.managed(p) && gate.allow(p));
         c.shutdown().await;
+    }
+
+    /// X-cmp09-starting-status: a hand-over marker left with no folder
+    /// reserves the companion's port too; with neither, it's left alone.
+    #[test]
+    fn a_hand_over_marker_alone_reserves_the_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        std::fs::create_dir_all(dir.path().join("companions")).unwrap();
+        std::fs::write(dir.path().join("companions/.handed-over-qbittorrent"), b"").unwrap();
+        let bindings = Bindings::new();
+        reserve_installed(&bindings, dir.path(), cat, NATIVE);
+        let (q, p) = (
+            loopback_port(cat, &qbt).unwrap(),
+            loopback_port(cat, &prowlarr).unwrap(),
+        );
+        assert!(bindings.managed(q) && !bindings.ready(q));
+        assert!(!bindings.managed(p));
     }
 
     /// X-cmp09-fix: serve's runner answers the readiness methods from the

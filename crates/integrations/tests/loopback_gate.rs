@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_integrations::BoxFuture;
+use lodestar_integrations::clients::ClientError;
 use lodestar_integrations::net::{
     GuardedClient, LoopbackGate, NetError, NetPolicy, Resolve, Route, Socks5Route, SocksDns,
     loopback_gate_is_set, resolve_tcp, set_loopback_gate,
@@ -88,6 +89,31 @@ async fn server(location: Option<String>) -> Server {
     Server { port, hits }
 }
 
+/// Everything logged in this test binary, from a global subscriber.
+fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
+    struct W(Arc<Mutex<Vec<u8>>>);
+    impl io::Write for W {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buf);
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || W(Arc::clone(&sink)))
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    for e in lodestar_integrations::log_events::CATALOGUE.events {
+        e.set_on(true);
+    }
+    buf
+}
+
 fn client(resolver: Arc<dyn Resolve>) -> GuardedClient {
     GuardedClient::with_resolver(NetPolicy::download_client(), TIMEOUT, resolver).unwrap()
 }
@@ -105,6 +131,7 @@ async fn follow(c: &GuardedClient, url: &str) -> Result<u16, NetError> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_loopback_gate_refuses_a_port_until_allowed() {
+    let logs = capture_logs();
     let managed = server(None).await;
     let p = managed.port;
     let other = server(Some(format!("http://127.0.0.1:{p}/"))).await;
@@ -188,6 +215,20 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
         let got = resolve_tcp(&*names, host, p, NetPolicy::download_client()).await;
         assert_eq!(got, Err(NetError::NotReady), "{host}");
     }
+
+    // Each refusal reads as not ready, never as unreachable, and is logged
+    // once per port per process, with the port.
+    let words = ClientError::from(NetError::NotReady).to_string();
+    assert_eq!(words, lodestar_integrations::net::NOT_READY);
+    assert_ne!(words, ClientError::Unreachable.to_string());
+    assert!(words.contains("isn't ready yet"), "{words}");
+    let logged = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|l| l.contains("integrations.companion_not_ready"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{logged}");
+    assert!(lines[0].contains(&p.to_string()), "{}", lines[0]);
 
     // Another loopback port is untouched, and so is the same port on
     // another address.

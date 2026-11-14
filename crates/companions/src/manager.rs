@@ -446,6 +446,21 @@ pub struct Parts {
 /// `spawn_blocking`, off the async runtime, on that state.
 pub struct Manager(Arc<Inner>);
 
+/// Where a companion's hand-over marker is kept under the data folder.
+fn marker_path(data: &Path, id: &CompanionId) -> PathBuf {
+    data.join("companions").join(format!(".handed-over-{id}"))
+}
+
+/// Whether a companion's hand-over marker may be there, read-only, before
+/// any manager is opened: anything at its path, or a path that can't be
+/// looked at, counts as there. Serve reserves such a companion's port.
+pub fn handed_over(data: &Path, id: &CompanionId) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(marker_path(data, id)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 struct Inner {
     p: Parts,
     /// `<data>/companions/.lock`, held for the manager's life: one
@@ -709,10 +724,7 @@ impl Inner {
     /// companion's own folder (which a rollback deletes only if it holds
     /// nothing else).
     fn marker(&self, id: &CompanionId) -> PathBuf {
-        self.p
-            .data
-            .join("companions")
-            .join(format!(".handed-over-{id}"))
+        marker_path(&self.p.data, id)
     }
 
     /// Writes the marker durably before the hand-over is tried.

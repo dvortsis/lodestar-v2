@@ -527,8 +527,8 @@ pub struct UsageCleared {
 #[schema(example = json!({ "code": "bad_credentials", "message": "The client refused the user name or password." }))]
 pub struct SettingsTestFailure {
     /// `bad_credentials`, `banned`, `origin_refused`, `session_refused`,
-    /// `address_refused`, `unreachable`, `rejected`, `timeout`, `blocked`,
-    /// `invalid`, `protocol` or `unsupported`.
+    /// `address_refused`, `unreachable`, `companion_not_ready`, `rejected`,
+    /// `timeout`, `blocked`, `invalid`, `protocol` or `unsupported`.
     pub code: String,
     /// A sentence for people; never the URL or a credential.
     pub message: String,
