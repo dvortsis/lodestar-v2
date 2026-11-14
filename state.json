@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T08:38Z",
+  "updated_at": "2026-11-14T08:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8523,6 +8523,11 @@
       "id": "flake-bench-relevance-lock-load",
       "added": "2026-11-14T08:38Z",
       "note": "bench/tests/relevance_sets.rs refused_while_a_server_holds_it fails locally under heavy parallel load (two occurrences today, both with fuzzers running beside it; none alone, none in CI known). Watch; fix if it appears in CI."
+    },
+    {
+      "id": "fuzz-hour-m8-sec-1-network",
+      "added": "2026-11-14T08:41Z",
+      "note": "Slot 33: 1 h libFuzzer runs of 9 network-parser targets (metainfo, peer_wire, krpc, bencode, utp, tracker_scrape, full_scrape, dht_restart, filetree) all clean. Shared 4-core container, so lower exec counts. peer_wire to re-run with the BEP 3 handshake added. Query-language targets next."
     }
   ],
   "main_health": [
@@ -9842,7 +9847,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T08:38Z",
+  "updated": "2026-11-14T08:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
