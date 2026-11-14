@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:59Z",
+  "updated_at": "2026-11-14T05:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8809,11 +8809,6 @@
       "at": "2026-11-14T00:39Z",
       "status": "review CHANGES (2 blocking, 4 important) relayed by message; await ready -> fresh delta review"
     },
-    "866": {
-      "slice": "X-pia-vm-helper",
-      "head": "e70b3d40",
-      "status": "review MERGE + 2 important/polish folded into one push; await ready -> runner delta check"
-    },
     "867": {
       "slice": "X-cmp01-fix",
       "head": "bad86644",
@@ -9464,7 +9459,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T04:12Z",
+    "updated": "2026-11-14T05:07Z",
     "items": [
       {
         "slot": 1,
@@ -9625,13 +9620,12 @@
       },
       {
         "slot": 30,
-        "slice": "X-pia-vm-helper",
+        "slice": "X-sec-S6-02-03",
         "role": "build",
-        "agent": "session_01MMjhnAq2j9C5gsXKYX19E1",
+        "agent": "pending launch",
         "model": "opus",
-        "status": "active",
-        "since": "2026-11-14T03:12Z",
-        "doing": "#866 X-pia-vm-helper: review MERGE; fix round for 2 important + polish",
+        "since": "2026-11-14T05:07Z",
+        "doing": "cluster worker-report and lease hardening (S6-02, S6-03)",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9735,7 +9729,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:59Z",
+  "updated": "2026-11-14T05:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10292,6 +10286,12 @@
       "slice": "X-operator-tripwire-settle",
       "merged": "e16c8581",
       "at": "2026-11-14T04:12Z"
+    },
+    {
+      "pr": 866,
+      "slice": "X-pia-vm-helper",
+      "merged": "6a3f1eac",
+      "at": "2026-11-14T05:07Z"
     }
   ],
   "review_sessions": [
