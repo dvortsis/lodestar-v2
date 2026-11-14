@@ -13,16 +13,24 @@
    instruction's id is new, at most 6 wakes an hour and 60 a day, and the
    $200 total plus this session's budget isn't passed. Any unreadable entry
    refuses.
-5. A 1-hour App installation token, this repository and Pull requests write
+5. The helper files (thread.py, reader.py) from this job's own checkout,
+   uploaded, to be mounted read-only into the session. The operator runs
+   these copies; it downloads no code. A failed upload starts no session.
+6. A 1-hour App installation token, this repository and Pull requests write
    + Metadata read only, into the vault's GITHUB_TOKEN credential.
-6. One session: the agent version from claude-lock.json (routine), or an
+7. One session: the agent version from claude-lock.json (routine), or an
    override to OPERATOR_MODEL_TRIAGE at high effort (triage); a $3 or $15
    budget; the instruction comment as its only user.message.
-7. Watching it: a call paused for approval is denied with a message to
-   escalate; a budget stop, an error, a stall or 30 minutes makes the bridge
-   post the escalation itself. Every session is archived at the end, so none
-   can be resumed later with a newer token.
-8. Always: the token revoked, the credential reset, the lock released.
+8. Watching it: the session object gives only the status, so why it went
+   idle comes from its event list (the last status event's stop reason). A
+   call paused for approval is denied with a message to escalate; a budget
+   stop, an error, a refusal, a stall or 30 minutes makes the bridge post the
+   escalation itself, naming an error by the API's own type. So does a clean
+   finish after an error the session didn't recover from, or in which the
+   permission policy refused a tool call. Every session is
+   archived at the end, so none can be resumed later with a newer token.
+9. Always: the token revoked, the credential reset, the uploaded files
+   deleted, the lock released.
 
 Comment text arrives only through COMMENT_BODY. Logs and comments carry
 fixed lines; never a token, an ID from the vault or the lock, or the text.
@@ -31,9 +39,13 @@ fixed lines; never a token, an ID from the vault or the lock, or the text.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import secrets
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -45,7 +57,8 @@ import bridge  # noqa: E402
 import ghapp  # noqa: E402
 import message  # noqa: E402
 import tripwire  # noqa: E402 - wake_run_too_old: the tripwire's own window
-from apiclient import anthropic, github, pages  # noqa: E402
+from apiclient import (ANTHROPIC, ANTHROPIC_VERSION, MANAGED_AGENTS_BETA, ApiError,  # noqa: E402
+                       anthropic, check_url, github, opener, pages)
 from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
 from reader import CONTROL_PLANE_USER_ID  # noqa: E402
@@ -55,12 +68,36 @@ BUDGET_CENTS = {"routine": 300, "triage": 1500}  # per session (plan §1)
 PER_HOUR, PER_DAY = 6, 60
 SESSION_MINUTES = 30
 POLL_SECONDS = 10
-STALL_POLLS = 6  # a requires_action with nothing left to deny, a minute long
+STALL_POLLS = 6  # a minute of idle polls with nothing to deny, or with no stop reason in the events
 INTERRUPT_SECONDS = 60  # after an interrupt, the wait for the session to stop before the archive
 TRIAGE_EFFORT = "high"  # an override replaces the model object, effort included
 UNSET_TOKEN = "revoked"
+# The session's own status events, in the event list. A session object has no
+# stop reason: only its last `session.status_idle` event does.
+STATUS_EVENTS = ("session.status_running", "session.status_idle", "session.status_rescheduled",
+                 "session.status_terminated")
+# `session.error`'s types and retry statuses, as the API lists them. An escalation
+# names only a value found here, never the error's free-text message.
+ERROR_TYPES = frozenset((
+    "unknown_error", "model_overloaded_error", "model_rate_limited_error", "model_request_failed_error",
+    "mcp_connection_failed_error", "mcp_authentication_failed_error", "billing_error",
+    "credential_host_unreachable_error", "tool_use_limit_reached_error", "compaction_limit_reached_error",
+    "repository_authentication_error", "repository_forbidden_error", "repository_not_found_error",
+    "repository_checkout_error", "repository_clone_error"))
+RETRY_STATUSES = frozenset(("retrying", "exhausted", "terminal"))
+# The reason codes on a call the `auto` permission policy refused outright (the
+# event's `evaluation.evaluated_permission`, type `deny`): judged high-risk, or
+# no judgement reached and the call not held for approval.
+POLICY_REASONS = frozenset(("high_risk", "indeterminate"))
 DENY = ("This call needs approval, which the bridge never gives. Don't retry or work around it: "
         "post an operator-report v1 with kind: escalation saying what you tried to do, then end your turn.")
+
+# The channel helper and the reader it imports, mounted into every session from
+# this checkout: the commit the workflow runs, never a branch read at run time.
+# A resource's mount_path lands under /mnt/session/uploads, so these are
+# /mnt/session/uploads/op/<name>; the system prompt copies that folder.
+MOUNT = "/op"
+HELPERS = {"thread.py": HERE / "thread.py", "reader.py": HERE.parent / "fleet" / "reader.py"}
 
 WAKE_SETTINGS = ("ANTHROPIC_API_KEY", "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "AWS_BRIDGE_ROLE_ARN",
                  "CONTROL_BUCKET", "FLEET_BUCKET_OWNER", "GITHUB_TOKEN", "GITHUB_REPOSITORY",
@@ -226,9 +263,49 @@ def ledger_refusal(sessions: list[dict], now: datetime, mode: str, inst_id: str,
     return None
 
 
+# ---- the helper files ----
+
+def upload(api_key: str):  # pragma: no cover - network
+    """POST /v1/files as multipart, through apiclient's host check and its
+    no-redirect opener. Returns a sender: (name, bytes) -> the file ID. The
+    injection harness uploads through this too."""
+    def send(name: str, data: bytes) -> str:
+        path = "/v1/files"
+        check_url(ANTHROPIC + path, path)
+        boundary = "lodestar" + secrets.token_hex(12)
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+                f"Content-Type: text/plain\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(ANTHROPIC + path, method="POST", data=body, headers={
+            "x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "anthropic-beta": MANAGED_AGENTS_BETA,
+            "content-type": f"multipart/form-data; boundary={boundary}", "User-Agent": "lodestar-operator"})
+        try:
+            with opener().open(req, timeout=30) as r:
+                fid = json.loads(r.read()).get("id")
+        except urllib.error.HTTPError as e:
+            raise ApiError("POST /v1/files", e.code) from None
+        except Exception:
+            raise ApiError("POST /v1/files", None) from None
+        if not isinstance(fid, str) or not fid:
+            raise ApiError("POST /v1/files", None)
+        return fid
+    return send
+
+
+def mount_helpers(send, files: list[str]) -> list[dict]:
+    """Uploads each helper as it is in this checkout and returns the session's
+    file resources. Every ID is appended to `files` as soon as it exists, so a
+    failure part-way still leaves the caller the IDs to delete."""
+    resources = []
+    for name, src in HELPERS.items():
+        fid = send(name, src.read_bytes())
+        files.append(fid)
+        resources.append({"type": "file", "file_id": fid, "mount_path": f"{MOUNT}/{name}"})
+    return resources
+
+
 # ---- the session ----
 
-def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: str) -> dict:
+def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: str, resources: list[dict]) -> dict:
     if msg.mode == "triage":
         triage = env.get("OPERATOR_MODEL_TRIAGE", "").strip()
         if not MODEL_ID.match(triage):
@@ -244,13 +321,86 @@ def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: 
         "title": f"wake {msg.id}",
         "metadata": {"instruction_id": msg.id, "kind": msg.kind, "mode": msg.mode, "run_id": run_id},
         "budget": {"type": "limit", "max_list_cost": {"amount": str(BUDGET_CENTS[msg.mode]), "currency": "USD"}},
+        "resources": resources,  # the helper files, read-only, under /mnt/session/uploads
         # Runner-authored text only: Managed Agents reads user.message as operator intent.
         "initial_events": [{"type": "user.message", "content": [{"type": "text", "text": body_text}]}],
     }
 
 
-def _deny_pending(call, sid: str, denied: set) -> int:
-    events = pages(call, f"/v1/sessions/{sid}/events", {})
+def _events(call, sid: str) -> list[dict]:
+    """Every event of the session, oldest first. `_stop_reason` and the error
+    readers below take the last matching event as the latest, so the order is
+    asked for (the list's `order` parameter; `asc` is also its default) rather
+    than assumed."""
+    return pages(call, f"/v1/sessions/{sid}/events", {"order": "asc"})
+
+
+def _stop_reason(events: list[dict]) -> str | None:
+    """Why the session is idle: the stop reason of its last status event, when
+    that event is a `session.status_idle`. None when the list doesn't show the
+    idle yet (the status and the event list are written separately), or shows
+    no reason: the caller polls again rather than guess."""
+    for e in reversed(events):
+        if e.get("type") in STATUS_EVENTS:
+            reason = e.get("stop_reason") if e["type"] == "session.status_idle" else None
+            kind = reason.get("type") if isinstance(reason, dict) else None
+            return kind if isinstance(kind, str) and kind else None
+    return None
+
+
+def _error(event: dict) -> tuple[str, str]:
+    """A `session.error` as two fixed words (type, retry status). Both are
+    checked against the API's own lists, so no text from the session reaches a
+    log or a comment."""
+    err = event.get("error") if isinstance(event.get("error"), dict) else {}
+    kind, retry = err.get("type"), err.get("retry_status")
+    retry = retry.get("type") if isinstance(retry, dict) else None
+    return (kind if isinstance(kind, str) and kind in ERROR_TYPES else "an unlisted error type",
+            retry if isinstance(retry, str) and retry in RETRY_STATUSES else "an unlisted retry status")
+
+
+def _error_words(events: list[dict]) -> str:
+    """The session's last `session.error` as " (type, retry status)", or ""."""
+    for e in reversed(events):
+        if e.get("type") == "session.error":
+            return " (%s, %s)" % _error(e)
+    return ""
+
+
+def unrecovered_error(events: list[dict]) -> str:
+    """The escalation line for a session that ended its turn after an error it
+    didn't recover from, or "". Only `retrying` is a recovery in progress:
+    `exhausted`, `terminal` and any status this bridge doesn't know all count,
+    so an unknown value fails closed. The last such error is the one named."""
+    for e in reversed(events):
+        if e.get("type") == "session.error" and _error(e)[1] != "retrying":
+            return "the session finished after an error it didn't recover from (%s, %s)" % _error(e)
+    return ""
+
+
+def policy_denials(events: list[dict]) -> str:
+    """The escalation line for a session whose tool calls the permission policy
+    refused outright, or "". Such a session still ends its turn cleanly, but an
+    operator that can't run its tools can't read the channel or post a report,
+    so a finish with denied calls is never left silent. Calls the bridge itself
+    denied (paused for approval) aren't counted: those stay `ask`. The reason
+    is printed only when it's on the fixed list."""
+    reasons = set()
+    count = 0
+    for e in events:
+        if e.get("type") in ("agent.tool_use", "agent.mcp_tool_use") and e.get("evaluated_permission") == "deny":
+            count += 1
+            judged = e.get("evaluation") if isinstance(e.get("evaluation"), dict) else {}
+            judged = judged.get("evaluated_permission") if isinstance(judged.get("evaluated_permission"), dict) else {}
+            code = judged.get("reason_code")
+            reasons.add(code if isinstance(code, str) and code in POLICY_REASONS else "an unlisted reason")
+    if not count:
+        return ""
+    return (f"the session finished, but the permission policy denied {count} of its tool calls "
+            f"({', '.join(sorted(reasons))}); the operator may have posted no report")
+
+
+def _deny_pending(call, sid: str, events: list[dict], denied: set) -> int:
     answered = {e.get("tool_use_id") for e in events if e.get("type") == "user.tool_confirmation"}
     ask = [e["id"] for e in events if e.get("type") in ("agent.tool_use", "agent.mcp_tool_use")
            and e.get("evaluated_permission") == "ask" and isinstance(e.get("id"), str)
@@ -280,7 +430,25 @@ def _interrupt(call, sid: str, monotonic, sleep) -> None:
 
 
 def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=lambda: False) -> str:
-    """'done', or the escalation line for a session that couldn't escalate itself.
+    """'done', or the escalation line for a session that couldn't escalate itself."""
+    return watch_events(call, sid, monotonic, sleep, stopped)[0]
+
+
+def finish_problem(events: list[dict]) -> str:
+    """Why a session that ended its turn cleanly still needs an escalation, or
+    "": an error it didn't recover from, tool calls the policy refused, or both."""
+    return "; ".join(x for x in (unrecovered_error(events), policy_denials(events)) if x)
+
+
+def watch_events(call, sid: str, monotonic=time.monotonic, sleep=time.sleep,
+                 stopped=lambda: False) -> tuple[str, list[dict]]:
+    """`watch`, and the event list a "done" was read from (empty otherwise), so
+    what the bridge says about a finish comes from the same read that showed it.
+
+    The session object carries a status and no stop reason, so an idle or
+    terminated session is read from its event list. A session that finishes
+    its work goes idle (`end_turn`); `terminated` is an unrecoverable error or
+    an archive from outside, never a finish.
 
     `stopped()` is true once operator-wake.yml is disabled (the tripwire, or the
     owner's kill switch): the live session is interrupted at the next poll."""
@@ -290,28 +458,36 @@ def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=la
     while True:
         if monotonic() >= deadline:
             _interrupt(call, sid, monotonic, sleep)
-            return f"the session ran past {SESSION_MINUTES} minutes and was stopped"
+            return f"the session ran past {SESSION_MINUTES} minutes and was stopped", []
         if stopped():
             _interrupt(call, sid, monotonic, sleep)
-            return "operator-wake.yml was disabled, so the session was stopped"
-        s = call("GET", f"/v1/sessions/{sid}", None) or {}
-        status, stop = s.get("status"), ((s.get("stop_reason") or {}).get("type"))
+            return "operator-wake.yml was disabled, so the session was stopped", []
+        status = (call("GET", f"/v1/sessions/{sid}", None) or {}).get("status")
         if status == "terminated":
-            return "done" if stop in (None, "end_turn") else "the session ended with an error"
+            return "the session was terminated" + _error_words(_events(call, sid)), []
         if status == "idle":
+            events = _events(call, sid)
+            stop = _stop_reason(events)
             if stop == "end_turn":
-                return "done"
+                return "done", events
             if stop == "budget_reached":
-                return "the session reached its budget"
-            if stop == "requires_action":
-                if _deny_pending(call, sid, denied):
-                    stalled = 0
-                else:
-                    stalled += 1
-                    if stalled >= STALL_POLLS:
-                        return "the session stalled waiting for an action the bridge can't give"
-            else:
-                return "the session ended with an error"
+                return "the session reached its budget", []
+            if stop == "refusal":
+                return "the session stopped on a model refusal", []
+            if stop == "requires_action" and _deny_pending(call, sid, events, denied):
+                stalled = 0
+            elif stop in ("requires_action", None):
+                stalled += 1
+                if stalled >= STALL_POLLS:
+                    # A no-op on an idle session; it stops one whose status lagged behind a resume,
+                    # so the archive that follows is never refused with the session still running.
+                    _interrupt(call, sid, monotonic, sleep)
+                    return ("the session stalled waiting for an action the bridge can't give" if stop
+                            else "the session went idle and its events show no stop reason"), []
+            else:  # retries_exhausted, or a reason this bridge doesn't know
+                return "the session ended with an error" + _error_words(events), []
+        else:
+            stalled = 0
         sleep(POLL_SECONDS)
 
 
@@ -383,6 +559,7 @@ def cmd_wake(env, deps=None) -> int:
         post(env, f"busy, retry (instruction {msg.id})", gh_post)
         return 0
     token = cred = sid = None
+    files: list[str] = []
     try:
         ids, etag = bridge.read_claude_lock(store)
         if ids is None:
@@ -396,7 +573,13 @@ def cmd_wake(env, deps=None) -> int:
         if reason:
             escalate(env, msg.id, f"no session started: {reason}", gh_post)
             return 0
-        body = session_body(msg, ids, env, env["COMMENT_BODY"], run_id)
+        send = deps.get("upload") or upload(env["ANTHROPIC_API_KEY"])
+        try:  # before the token exists: a wake that can't mount its helpers holds nothing to revoke
+            resources = mount_helpers(send, files)
+        except Exception:  # noqa: BLE001 - a fixed line; the error may carry details
+            escalate(env, msg.id, "no session started: the helper files couldn't be uploaded", gh_post)
+            return 0
+        body = session_body(msg, ids, env, env["COMMENT_BODY"], run_id, resources)
         jwt = ghapp.app_jwt(env["OPERATOR_APP_ID"].strip(), env["OPERATOR_APP_PRIVATE_KEY"])
         token = ghapp.mint(gh, env["GITHUB_REPOSITORY"], jwt)
         cred = f"/v1/vaults/{ids['vault_id']}/credentials/{ids['credential_id']}"
@@ -411,8 +594,10 @@ def cmd_wake(env, deps=None) -> int:
         print(f"operator-wake: session started ({msg.mode})")
         if not bridge.record_session(store, ids, etag, sid):
             escalate(env, msg.id, "couldn't record the session in claude-lock.json; the next wake will refuse", gh_post)
-        outcome = watch(call, sid, mono, sleep, wake_disabled(env, gh_post))
+        outcome, events = watch_events(call, sid, mono, sleep, wake_disabled(env, gh_post))
         print(f"operator-wake: session {'ended' if outcome == 'done' else 'stopped'}")
+        if outcome == "done":
+            outcome = finish_problem(events) or outcome
         if outcome != "done":
             escalate(env, msg.id, outcome, gh_post)
         return 0
@@ -422,10 +607,10 @@ def cmd_wake(env, deps=None) -> int:
         escalate(env, msg.id, f"the bridge failed ({type(e).__name__}); the session, if any, is archived", gh_post)
         raise
     finally:
-        _cleanup(env, call, gh, sid, token, cred, lock, run_id, msg.id, gh_post)
+        _cleanup(env, call, gh, sid, token, cred, files, lock, run_id, msg.id, gh_post)
 
 
-def _cleanup(env, call, gh, sid, token, cred, lock, run_id, inst_id, gh_post) -> None:
+def _cleanup(env, call, gh, sid, token, cred, files, lock, run_id, inst_id, gh_post) -> None:
     """Each step on its own: one failing never skips the next."""
     steps = []
     if sid:
@@ -435,6 +620,9 @@ def _cleanup(env, call, gh, sid, token, cred, lock, run_id, inst_id, gh_post) ->
     if cred:
         steps.append(("reset the vault credential",
                       lambda: call("POST", cred, {"auth": {"type": "environment_variable", "secret_value": UNSET_TOKEN}})))
+    for fid in files:  # after the archive: the session holds its own copies
+        steps.append(("delete a helper file", lambda fid=fid: call("DELETE", f"/v1/files/{fid}", None)))
+
     def release():
         if not lock.release(run_id):
             raise RuntimeError("lock not released")

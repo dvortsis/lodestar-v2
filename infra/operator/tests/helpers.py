@@ -101,13 +101,33 @@ def graphql_reviews(body, reviews_of, total_of=None) -> dict:
     return {"data": {"repository": repo}}
 
 
+STATUS_EVENT = {"running": "session.status_running", "idle": "session.status_idle",
+                "rescheduling": "session.status_rescheduled", "terminated": "session.status_terminated"}
+
+
+def served(state: dict) -> tuple[dict, list[dict]]:
+    """A scripted state as the API serves it: (the session object, its status
+    event). The object carries the status and never a stop reason; the stop
+    reason is on the `session.status_idle` event only. `unlisted: True` is a
+    status the event list doesn't show yet."""
+    obj = {k: v for k, v in state.items() if k not in ("stop_reason", "unlisted")}
+    if state.get("unlisted"):
+        return obj, []
+    event = {"type": STATUS_EVENT[state["status"]], "id": "sevt_status"}
+    if "stop_reason" in state:
+        event["stop_reason"] = state["stop_reason"]
+    return obj, [event]
+
+
 class FakeAnthropic:
-    """The Managed Agents calls the bridge and apply make, with scripted session states."""
+    """The Managed Agents calls the bridge and apply make, with scripted session
+    states. Each state is split as the API splits it (see `served`)."""
 
     def __init__(self, sessions=None, states=None, events=None):
         self.calls, self.sessions = [], list(sessions or [])
         self.states = list(states or [{"status": "idle", "stop_reason": {"type": "end_turn"}}])
         self.events = list(events or [])
+        self.status_event: list[dict] = []
         self.agent_version = 1
 
     def __call__(self, method, path, body):
@@ -118,9 +138,10 @@ class FakeAnthropic:
         if method == "POST" and p == "/v1/sessions":
             return {"id": "sesn_FAKE", "status": "running"}
         if method == "GET" and p.endswith("/events"):
-            return {"data": self.events, "next_page": None}
+            return {"data": self.events + self.status_event, "next_page": None}
         if method == "GET" and p.startswith("/v1/sessions/"):
-            return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+            obj, self.status_event = served(self.states.pop(0) if len(self.states) > 1 else self.states[0])
+            return obj
         if method == "POST" and p == "/v1/environments":
             return {"id": "env_FAKE"}
         if method == "POST" and p == "/v1/agents":
@@ -136,6 +157,21 @@ class FakeAnthropic:
 
     def paths(self, method=None):
         return [p for m, p, _ in self.calls if method is None or m == method]
+
+
+class FakeUpload:
+    """The bridge's file upload: records (name, bytes) and hands out IDs.
+    `fail_at` makes that upload (counting from 0) raise, as a refused or lost
+    request would."""
+
+    def __init__(self, fail_at=None):
+        self.files, self.fail_at = [], fail_at
+
+    def __call__(self, name: str, data: bytes) -> str:
+        if self.fail_at == len(self.files):
+            raise RuntimeError("LEAKMARK upload failed")
+        self.files.append((name, data))
+        return f"file_{len(self.files)}"
 
 
 _KEY = None

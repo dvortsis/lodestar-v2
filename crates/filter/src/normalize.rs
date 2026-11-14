@@ -290,6 +290,10 @@ pub struct Tokenizer {
     /// Where reading stops: past it the rest of a text is skipped. Zero
     /// for no limit.
     limit: u64,
+    /// What the caches would have cost this read had every word and
+    /// character missed them, since [`Tokenizer::meter`]: charged again
+    /// for a text the core reads a second time, whose caches may be cold.
+    cold: u64,
     /// The metered read under way ([`Tokenizer::meter`]). Each cached word
     /// and character notes the round that last used it, so the meter
     /// charges as new whatever this read hasn't used yet in that slot, as
@@ -549,10 +553,14 @@ impl Tokenizer {
                     plan.key = c as u32;
                 }
                 self.saw_mark |= self.chars[slot].mark;
-                if self.limit != 0 && self.chars[slot].round != self.round {
-                    // The key is this character: new to this read here.
-                    self.chars[slot].round = self.round;
-                    self.work += cost::CHAR_PLAN + self.chars[slot].decomposed * cost::DECOMPOSED;
+                let planned = cost::CHAR_PLAN + self.chars[slot].decomposed * cost::DECOMPOSED;
+                if self.limit != 0 {
+                    self.cold += planned;
+                    if self.chars[slot].round != self.round {
+                        // The key is this character: new to this read here.
+                        self.chars[slot].round = self.round;
+                        self.work += planned;
+                    }
                 }
                 let n = self.chars[slot].ops.len();
                 self.work += cost::CHAR + n as u64 * cost::OP;
@@ -581,6 +589,7 @@ impl Tokenizer {
     /// after reads as nothing, and [`Tokenizer::over`] says so.
     pub(crate) fn meter(&mut self, limit: u64) {
         self.work = 0;
+        self.cold = 0;
         self.limit = limit;
         self.saw_mark = false;
         if limit != 0 {
@@ -634,6 +643,9 @@ impl Tokenizer {
             return;
         }
         self.work += cost::WORD;
+        if self.limit != 0 {
+            self.cold += cost::PLAN + word.len() as u64 * cost::PLANNED_BYTE;
+        }
         if self.plans.len() < PLANS {
             self.plans.resize_with(PLANS, Plan::default);
         }
@@ -874,7 +886,7 @@ impl Tokenizer {
     /// its own, and whether a run is open at each `/` noted.
     fn pause(&mut self, dirs: &[String], into: &mut Paused) {
         into.tokens.clear();
-        let before = self.work;
+        let (before, cold) = (self.work, self.cold);
         self.begin(0, 0);
         into.apart = true;
         for d in dirs {
@@ -882,7 +894,9 @@ impl Tokenizer {
             into.apart &= self.spelled.is_empty();
         }
         let bytes: usize = dirs.iter().map(String::len).sum();
-        into.cost = (self.work - before).max(bytes as u64 * cost::BYTE);
+        // What this read cost, and its caches again as if cold: the core's
+        // second read may miss them.
+        into.cost = (self.work - before + (self.cold - cold)).max(bytes as u64 * cost::BYTE);
         into.pos = self.pos;
         into.spelled.clear();
         into.spelled.push_str(&self.spelled);
@@ -1070,22 +1084,23 @@ fn paths_apart_with<'p>(
                             slot
                         }
                     };
-                    let before = tok.work;
+                    let (before, cold) = (tok.work, tok.cold);
                     tok.resume(&paused[slot], name, out);
                     if !paused[slot].apart {
                         // The core reads this path again with its segments
                         // apart (`Read::path`), so the meter counts that
                         // read too: its folder in full, its name as this
-                        // read of it cost (the second read's caches may be
-                        // cold, so it's counted in full again), its least,
-                        // and its tokens looked at. A read that can't fit
-                        // the text's cap is past the budget.
+                        // read of it cost and its caches again as if cold
+                        // (the second read may miss them), its least, and
+                        // its tokens looked at. A read that can't fit the
+                        // text's cap is past the budget.
                         let again = out.len() - ends.last().copied().unwrap_or(0);
                         if again + path.len() >= MAX_TOKENS {
                             tok.cut();
                         }
                         tok.work += paused[slot].cost
                             + (tok.work - before)
+                            + (tok.cold - cold)
                             + least_path_cost(path)
                             + again as u64 * cost::TOKEN;
                     }

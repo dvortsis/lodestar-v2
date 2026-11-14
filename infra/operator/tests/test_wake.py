@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 
-from tests.helpers import INSTRUCTION, T0, Clock, FakeAnthropic, FakeGitHub, Mono, event_env, rsa_key, session
+from tests.helpers import INSTRUCTION, OP, T0, Clock, FakeAnthropic, FakeGitHub, FakeUpload, Mono, event_env, rsa_key, session
 import wake
 from lock import MemoryStore
 from oplock import CLAUDE_LOCK_KEY, LOCK_KEY
@@ -133,14 +133,138 @@ class Watch(unittest.TestCase):
     def test_outcomes(self):
         idle = lambda t: {"status": "idle", "stop_reason": {"type": t}}  # noqa: E731
         cases = [([{"status": "running"}, idle("end_turn")], "done"),
-                 ([{"status": "terminated"}], "done"),
-                 ([{"status": "terminated", "stop_reason": {"type": "retries_exhausted"}}], "the session ended with an error"),
+                 # A finished session goes idle; terminated is an error or an outside archive.
+                 ([{"status": "terminated"}], "the session was terminated"),
                  ([idle("budget_reached")], "the session reached its budget"),
                  ([idle("retries_exhausted")], "the session ended with an error"),
+                 ([idle("refusal")], "the session stopped on a model refusal"),
+                 ([idle("a_reason_from_the_future")], "the session ended with an error"),
                  ([{"status": "rescheduling"}, idle("end_turn")], "done")]
         for states, want in cases:
             with self.subTest(want=want, states=str(states)[:60]):
                 self.assertEqual(self.run_watch(states)[0], want)
+
+    def test_the_stop_reason_comes_from_the_events_not_the_session_object(self):
+        # The regression behind the first live wake: GET /v1/sessions/{id} has a
+        # status and no stop_reason, so a clean finish read as an error.
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                res = super().__call__(method, path, body)
+                if method == "GET" and path == "/v1/sessions/sesn_1":
+                    self.served = res
+                    res = dict(res, stop_reason={"type": "retries_exhausted"})  # a field the API doesn't have
+                return res
+        api, mono = Api(states=[{"status": "idle", "stop_reason": {"type": "end_turn"}}]), Mono()
+        self.assertEqual(wake.watch(api, "sesn_1", mono, mono.sleep), "done")
+        self.assertEqual(api.served, {"status": "idle"})  # the fake serves what the API serves
+        self.assertIn("/v1/sessions/sesn_1/events?order=asc&limit=100", api.paths("GET"))  # oldest first, asked for
+
+    def test_an_error_is_named_by_its_listed_type_only(self):
+        def err(kind, retry):
+            return {"type": "session.error", "id": "sevt_e",
+                    "error": {"type": kind, "message": "LEAKMARK free text", "retry_status": {"type": retry}}}
+        idle = {"status": "idle", "stop_reason": {"type": "retries_exhausted"}}
+        cases = [(idle, [err("model_overloaded_error", "retrying"), err("billing_error", "exhausted")],
+                  "the session ended with an error (billing_error, exhausted)"),
+                 ({"status": "terminated"}, [err("unknown_error", "terminal")],
+                  "the session was terminated (unknown_error, terminal)"),
+                 (idle, [err("LEAKMARK_error", "LEAKMARK")],
+                  "the session ended with an error (an unlisted error type, an unlisted retry status)"),
+                 (idle, [{"type": "session.error", "error": ["LEAKMARK"]}, ],
+                  "the session ended with an error (an unlisted error type, an unlisted retry status)"),
+                 (idle, [{"type": "session.error", "error": {"type": ["billing_error"], "retry_status": "exhausted"}}],
+                  "the session ended with an error (an unlisted error type, an unlisted retry status)")]
+        for state, events, want in cases:
+            with self.subTest(want=want):
+                got, _ = self.run_watch([state], events)
+                self.assertEqual(got, want)
+                self.assertNotIn("LEAKMARK", got)
+        # An error the session recovered from isn't reported on a clean finish.
+        got, _ = self.run_watch([{"status": "idle", "stop_reason": {"type": "end_turn"}}],
+                                [err("model_overloaded_error", "retrying")])
+        self.assertEqual(got, "done")
+
+    def test_every_listed_error_type_is_a_plain_word(self):
+        for word in wake.ERROR_TYPES | wake.RETRY_STATUSES:
+            self.assertRegex(word, r"\A[a-z_]{1,40}\Z")
+
+    def test_an_idle_the_events_dont_show_yet_is_polled_again(self):
+        late = {"status": "idle", "unlisted": True}
+        got, api = self.run_watch([late, late, {"status": "idle", "stop_reason": {"type": "end_turn"}}])
+        self.assertEqual(got, "done")
+        self.assertEqual(sum(1 for m, p, _ in api.calls if m == "GET" and p == "/v1/sessions/sesn_1"), 3)
+
+    def test_an_idle_with_no_stop_reason_escalates_after_a_minute(self):
+        want = "the session went idle and its events show no stop reason"
+        for state in ({"status": "idle", "unlisted": True}, {"status": "idle"},
+                      {"status": "idle", "stop_reason": {"type": ""}}, {"status": "idle", "stop_reason": "end_turn"}):
+            with self.subTest(state=state):
+                got, api = self.run_watch([state])
+                self.assertEqual(got, want)
+                polls = sum(1 for m, p, _ in api.calls if m == "GET" and p == "/v1/sessions/sesn_1")
+                self.assertEqual(polls, wake.STALL_POLLS + 1)  # and the interrupt's one check that it stopped
+                self.assertEqual([b for m, _, b in api.calls if m == "POST"], [{"events": [{"type": "user.interrupt"}]}])
+
+    def test_a_missing_event_list_fails_the_wake_and_never_reads_as_done(self):
+        # No `data` at all (an error body, a changed reply): the bridge fails, and cmd_wake
+        # interrupts, escalates and archives. Nothing is guessed from the status alone.
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                res = super().__call__(method, path, body)
+                return {} if method == "GET" and path.split("?")[0].endswith("/events") else res
+        for state in ({"status": "idle", "stop_reason": {"type": "end_turn"}}, {"status": "terminated"}):
+            with self.subTest(state=state["status"]):
+                api, mono = Api(states=[state]), Mono()
+                with self.assertRaises(Exception) as caught:
+                    wake.watch(api, "sesn_1", mono, mono.sleep)
+                self.assertEqual(type(caught.exception).__name__, "ApiError")
+
+    def test_a_denied_call_then_a_finish_reads_the_whole_history(self):
+        # The event list as it grows: a paused call, the denial, the resume, the finish.
+        ask = {"type": "agent.tool_use", "id": "sevt_1", "evaluated_permission": "ask"}
+        paused = {"type": "session.status_idle", "stop_reason": {"type": "requires_action", "event_ids": ["sevt_1"]}}
+        denial = {"type": "user.tool_confirmation", "tool_use_id": "sevt_1", "result": "deny"}
+        resumed, finished = {"type": "session.status_running"}, {"type": "session.status_idle",
+                                                                 "stop_reason": {"type": "end_turn"}}
+        history = [("idle", [ask, paused]),                       # the pause: denied here
+                   ("idle", [ask, paused, denial]),               # the status hasn't caught up: not denied twice
+                   ("running", [ask, paused, denial, resumed]),
+                   ("idle", [ask, paused, denial, resumed]),      # idle before its event is listed: polled again
+                   ("idle", [ask, paused, denial, resumed, finished])]
+
+        class Api(FakeAnthropic):
+            step = -1
+
+            def __call__(self, method, path, body):
+                self.calls.append((method, path, body))
+                if method == "GET" and path == "/v1/sessions/sesn_1":
+                    self.step = min(self.step + 1, len(history) - 1)
+                    return {"status": history[self.step][0]}
+                if method == "GET" and path.split("?")[0].endswith("/events"):
+                    return {"data": history[self.step][1], "next_page": None}
+                return {}
+        api, mono = Api(), Mono()
+        self.assertEqual(wake.watch(api, "sesn_1", mono, mono.sleep), "done")
+        sends = [b["events"] for m, _, b in api.calls if m == "POST"]
+        self.assertEqual([[(e["tool_use_id"], e["result"]) for e in s] for s in sends], [[("sevt_1", "deny")]])
+        self.assertEqual(api.step, len(history) - 1)
+
+    def test_only_the_last_status_event_counts(self):
+        # An earlier idle (a denied call, say) is not the reason for this one.
+        earlier = [{"type": "session.status_idle", "stop_reason": {"type": "end_turn"}},
+                   {"type": "session.thread_status_idle", "stop_reason": {"type": "end_turn"}}]
+        self.assertEqual(wake._stop_reason(earlier + [{"type": "session.status_running"}]), None)
+        self.assertEqual(wake._stop_reason(earlier + [{"type": "session.status_idle",
+                                                       "stop_reason": {"type": "budget_reached"}},
+                                                      {"type": "session.thread_status_idle",
+                                                       "stop_reason": {"type": "end_turn"}}]), "budget_reached")
+        self.assertEqual(wake._stop_reason([]), None)
+
+    def test_a_stall_counts_only_consecutive_idle_polls(self):
+        ra = {"status": "idle", "stop_reason": {"type": "requires_action"}}
+        states = ([ra] * (wake.STALL_POLLS - 1) + [{"status": "running"}]) * 2 + [
+            {"status": "idle", "stop_reason": {"type": "end_turn"}}]
+        self.assertEqual(self.run_watch(states)[0], "done")
 
     def test_paused_calls_are_denied_once_with_the_escalate_message(self):
         ask = [{"type": "agent.tool_use", "id": "sevt_1", "evaluated_permission": "ask"},
@@ -207,12 +331,12 @@ class Wake(unittest.TestCase):
         self.store, self.gh, self.post = MemoryStore(), FakeGitHub(token="ghs_LEAKMARKTOKEN"), FakeGitHub()
         self.store.put(CLAUDE_LOCK_KEY, json.dumps(IDS).encode())
         self.store.calls.clear()
-        self.mono = Mono()
+        self.mono, self.upload = Mono(), FakeUpload()
 
     def go(self, env, api):
         out = io.StringIO()
         deps = {"store": self.store, "anthropic": api, "github": self.gh, "channel_transport": self.post,
-                "clock": Clock(), "monotonic": self.mono, "sleep": self.mono.sleep}
+                "clock": Clock(), "monotonic": self.mono, "sleep": self.mono.sleep, "upload": self.upload}
         with redirect_stdout(out), redirect_stderr(out):
             try:
                 rc = wake.main(["wake"], env=env, deps=deps)
@@ -244,6 +368,264 @@ class Wake(unittest.TestCase):
         self.assertNotIn(LOCK_KEY, self.store.objects)
         self.assertEqual(self.post.bodies(), [])
         self.assert_clean(out + "".join(self.post.bodies()), marks)
+
+    def test_the_session_mounts_the_helpers_from_this_checkout(self):
+        # The operator runs the helper the bridge mounts, byte for byte the reviewed
+        # files of this checkout; it downloads no code (X-operator-mount-helpers).
+        env, marks = wake_env()
+        api = FakeAnthropic()
+        rc, out = self.go(env, api)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.upload.files, [("thread.py", (OP / "thread.py").read_bytes()),
+                                             ("reader.py", (OP.parent / "fleet" / "reader.py").read_bytes())])
+        body = next(b for m, p, b in api.calls if m == "POST" and p == "/v1/sessions")
+        self.assertEqual(body["resources"], [{"type": "file", "file_id": "file_1", "mount_path": "/op/thread.py"},
+                                             {"type": "file", "file_id": "file_2", "mount_path": "/op/reader.py"}])
+        self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assertEqual(self.post.bodies(), [])
+        self.assert_clean(out, marks)
+
+    def test_the_helpers_go_up_before_the_token_and_come_down_before_the_lock(self):
+        # One log across the upload, GitHub, the API and the lock's store.
+        log = []
+
+        class Upload(FakeUpload):
+            def __call__(self, name, data):
+                log.append("upload")
+                return super().__call__(name, data)
+
+        class GitHub(FakeGitHub):
+            def __call__(self, method, path, body, bearer=None):
+                log.append("mint" if path.endswith("/access_tokens") else "github")
+                return super().__call__(method, path, body, bearer)
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                log.append("archive" if path.endswith("/archive") else "delete file" if method == "DELETE"
+                           else "session" if (method, path) == ("POST", "/v1/sessions") else "api")
+                return super().__call__(method, path, body)
+        release = self.store.delete_if_match
+        self.store.delete_if_match = lambda key, etag: (log.append("release"), release(key, etag))[1]
+        self.upload, self.gh = Upload(), GitHub(token="ghs_LEAKMARKTOKEN")
+        rc, _ = self.go(wake_env()[0], Api())
+        self.assertEqual(rc, 0)
+        steps = [x for x in log if x in ("upload", "mint", "session", "archive", "delete file", "release")]
+        self.assertEqual(steps, ["upload", "upload", "mint", "session", "archive", "delete file", "delete file", "release"])
+
+    def test_the_mounted_folder_is_the_one_the_prompt_copies(self):
+        prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("  mkdir -p /tmp/op && cd /tmp/op\n  cp -f /mnt/session/uploads" + wake.MOUNT + "/* .\n", prompt)
+        self.assertEqual(set(wake.HELPERS), {"thread.py", "reader.py"})  # thread.py imports reader beside it
+        for src in wake.HELPERS.values():
+            self.assertTrue(src.is_file())
+
+    def test_the_prompt_fetches_no_code(self):
+        prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
+        for gone in ("contents/", "vnd.github.raw", "ref=main", "-o \"$(basename", "wget", "git clone", "pip install",
+                     "urllib"):
+            self.assertNotIn(gone, prompt)
+        self.assertEqual(prompt.count("curl -"), 1)  # one command; the other mentions of curl are rules about it
+        self.assertEqual(prompt.count("api.github.com"), 2)  # that command, and the note on where the token is replaced
+
+    def test_the_one_curl_left_is_a_plain_post_of_a_fixed_escalation(self):
+        # The runner's conditions for keeping the last-resort escalation: it downloads and runs
+        # nothing, its reply goes nowhere, and its body is the operator's own fixed report.
+        prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
+        (line,) = [ln for ln in prompt.splitlines() if "curl -" in ln]
+        (command,) = [c for c in line.split("`") if c.startswith("curl ")]
+        self.assertEqual(command, "curl -fsS -X POST -H \"Authorization: Bearer $GITHUB_TOKEN\" "
+                                  "https://api.github.com/repos/dvortsis/lodestar-v2/issues/{{CHANNEL_PR}}/comments "
+                                  "-d @report.json")
+        for never in ("|", ">", "<", ";", "&", "$(", " -o", " -O", "--output", " sh", "bash", "python", "eval", "exec"):
+            self.assertNotIn(never, command)   # nothing piped, redirected, saved, chained or run
+        self.assertEqual(command.count("http"), 1)  # one URL: the channel's comments, to post, never to fetch
+        rules = prompt[prompt.index(line):prompt.index("- `read` returns only unedited comments")]
+        for rule in ("says only that the helper failed, and at which step",
+                     "Put nothing in it that you read from the channel, a file or command output",
+                     "Never pipe or redirect its reply into anything, and never run what it returns",
+                     "This is the only use of `curl` you have. Never download anything with it",
+                     "don't fetch the helper from anywhere"):
+            self.assertIn(rule, rules)
+
+    def test_a_failed_upload_starts_no_session(self):
+        for fail_at, uploaded in ((0, []), (1, ["/v1/files/file_1"])):
+            with self.subTest(fail_at=fail_at):
+                self.setUp()
+                self.upload = FakeUpload(fail_at=fail_at)
+                env, marks = wake_env()
+                api = FakeAnthropic()
+                rc, out = self.go(env, api)
+                self.assertEqual(rc, 0)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn("no session started: the helper files couldn't be uploaded", body)
+                self.assertNotIn("/v1/sessions", api.paths("POST"))            # no session
+                self.assertEqual(self.gh.calls, [])                             # no token minted
+                self.assertEqual([p for p in api.paths("POST") if "/credentials/" in p], [])  # nothing in the vault
+                self.assertEqual(api.paths("DELETE"), uploaded)                 # the part that went up is deleted
+                self.assertNotIn(LOCK_KEY, self.store.objects)
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+
+    def test_a_refused_attach_escalates_and_cleans_up(self):
+        # The API refuses the create (a bad file, a mount it won't take): no session to watch.
+        env, marks = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "POST" and path == "/v1/sessions":
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("LEAKMARK refused")
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, out = self.go(env, api)
+        self.assertIsInstance(rc, Exception)
+        self.assertIn("the bridge failed (RuntimeError); the session, if any, is archived", self.post.bodies()[-1])
+        self.assertNotIn("/v1/sessions/sesn_FAKE", " ".join(api.paths("GET")))
+        self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
+        self.assertIn(("DELETE", "/installation/token", None, "ghs_LEAKMARKTOKEN"), self.gh.calls)
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assert_clean(out + "".join(self.post.bodies()), marks + ["LEAKMARK"])
+
+    def test_a_failed_file_delete_is_escalated_and_the_rest_still_runs(self):
+        env, marks = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "DELETE" and path == "/v1/files/file_1":
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("LEAKMARK down")
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, out = self.go(env, api)
+        self.assertEqual(rc, 0)
+        self.assertEqual([b.split("`operator-wake.yml`: ")[1] for b in self.post.bodies()],
+                         ["couldn't delete a helper file; check it by hand"])
+        self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assert_clean(out + "".join(self.post.bodies()), marks + ["LEAKMARK", "file_1"])
+
+    def test_a_finish_with_calls_the_policy_denied_is_escalated(self):
+        # The first live wake: the session ended its turn cleanly, but `auto` had refused
+        # its bash call, so it read and posted nothing. A silent "done" would leave the runner waiting.
+        def denied(code, kind="agent.tool_use"):
+            return {"type": kind, "id": "sevt_d", "name": "bash", "input": {"command": "LEAKMARK curl"},
+                    "evaluated_permission": "deny",
+                    "evaluation": {"type": "auto", "evaluated_permission": {"type": "deny", "reason_code": code}}}
+        allowed = {"type": "agent.tool_use", "id": "sevt_a", "evaluated_permission": "allow"}
+        asked = {"type": "agent.tool_use", "id": "sevt_q", "evaluated_permission": "ask"}  # the bridge's own denial
+        answered = {"type": "user.tool_confirmation", "tool_use_id": "sevt_q", "result": "deny"}
+        cases = [([denied("high_risk")], "denied 1 of its tool calls (high_risk)"),
+                 ([denied("indeterminate"), denied("high_risk", "agent.mcp_tool_use"), allowed],
+                  "denied 2 of its tool calls (high_risk, indeterminate)"),
+                 ([denied("LEAKMARK reason")], "denied 1 of its tool calls (an unlisted reason)"),
+                 ([{"type": "agent.tool_use", "evaluated_permission": "deny", "evaluation": "LEAKMARK"}],
+                  "denied 1 of its tool calls (an unlisted reason)"),
+                 ([{"type": "agent.tool_use", "evaluated_permission": "deny"}],  # a tool that isn't enabled
+                  "denied 1 of its tool calls (an unlisted reason)")]
+        for events, want in cases:
+            with self.subTest(want=want):
+                self.setUp()
+                env, marks = wake_env()
+                api = FakeAnthropic(events=events)
+                rc, out = self.go(env, api)
+                self.assertEqual(rc, 0)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn("in-reply-to: ping-1", body)
+                self.assertIn("the session finished, but the permission policy " + want, body)
+                self.assertIn("/v1/sessions/sesn_FAKE/archive", api.paths("POST"))
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+        for quiet in ([allowed], [asked, answered], []):
+            with self.subTest(quiet=len(quiet)):
+                self.setUp()
+                self.go(wake_env()[0], FakeAnthropic(events=quiet))
+                self.assertEqual(self.post.bodies(), [])
+
+    def test_a_finish_after_an_unrecovered_error_is_escalated(self):
+        # A session can end its turn cleanly after an error that sank its work (a credential
+        # host it couldn't reach, say). Only `retrying` is a recovery; anything else fails closed.
+        def err(kind, retry):
+            status = {"type": retry} if isinstance(retry, str) else retry
+            return {"type": "session.error", "id": "sevt_e",
+                    "error": {"type": kind, "message": "LEAKMARK free text", "retry_status": status}}
+        line = "the session finished after an error it didn't recover from "
+        cases = [([err("billing_error", "terminal")], line + "(billing_error, terminal)"),
+                 ([err("credential_host_unreachable_error", "exhausted")],
+                  line + "(credential_host_unreachable_error, exhausted)"),
+                 ([err("unknown_error", "LEAKMARK status")], line + "(unknown_error, an unlisted retry status)"),
+                 ([err("unknown_error", None)], line + "(unknown_error, an unlisted retry status)"),
+                 ([{"type": "session.error"}], line + "(an unlisted error type, an unlisted retry status)"),
+                 # The last unrecovered one is named; a later retry doesn't hide it.
+                 ([err("model_overloaded_error", "exhausted"), err("mcp_connection_failed_error", "exhausted"),
+                   err("model_rate_limited_error", "retrying")], line + "(mcp_connection_failed_error, exhausted)"),
+                 # With denied calls too, both are said, in one escalation.
+                 ([err("billing_error", "exhausted"), {"type": "agent.tool_use", "evaluated_permission": "deny"}],
+                  line + "(billing_error, exhausted); the session finished, but the permission policy denied 1")]
+        for events, want in cases:
+            with self.subTest(want=want):
+                self.setUp()
+                env, marks = wake_env()
+                api = FakeAnthropic(events=events)
+                rc, out = self.go(env, api)
+                self.assertEqual(rc, 0)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn(want, body)
+                self.assertIn("/v1/sessions/sesn_FAKE/archive", api.paths("POST"))
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+        # An error the session retried past is a recovery: a quiet finish.
+        self.setUp()
+        self.go(wake_env()[0], FakeAnthropic(events=[err("model_overloaded_error", "retrying")] * 2))
+        self.assertEqual(self.post.bodies(), [])
+
+    def test_a_finish_is_judged_from_the_read_that_showed_it(self):
+        # One events read for an end_turn: the stop reason, the errors and the denials
+        # all come from it, so no second read can fail or disagree after "done".
+        api = FakeAnthropic()
+        self.go(wake_env()[0], api)
+        self.assertEqual([p for p in api.paths("GET") if "/events" in p],
+                         ["/v1/sessions/sesn_FAKE/events?order=asc&limit=100"])
+        mono = Mono()
+        events = [{"type": "agent.tool_use", "evaluated_permission": "deny"}]
+        got = wake.watch_events(FakeAnthropic(events=events), "sesn_1", mono, mono.sleep)
+        self.assertEqual(got[0], "done")
+        self.assertEqual(got[1][:1], events)
+        for state in ({"status": "terminated"}, {"status": "idle", "stop_reason": {"type": "budget_reached"}}):
+            self.assertEqual(wake.watch_events(FakeAnthropic(states=[state], events=events), "sesn_1", mono, mono.sleep)[1], [])
+
+    def test_an_unreadable_event_list_is_never_a_quiet_success(self):
+        # The session is idle, but its events can't be read ({} or a failed call): the wake
+        # fails loudly (escalation, interrupt, archive, a failing job), whatever the session did.
+        class Empty(FakeAnthropic):
+            def __call__(self, method, path, body):
+                res = super().__call__(method, path, body)
+                return {} if method == "GET" and "/events" in path else res
+
+        class Down(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "GET" and "/events" in path:
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("LEAKMARK down")
+                return super().__call__(method, path, body)
+        for api, name in ((Empty(), "ApiError"), (Down(), "RuntimeError")):
+            with self.subTest(api=type(api).__name__):
+                self.setUp()
+                env, marks = wake_env()
+                rc, out = self.go(env, api)
+                self.assertIsInstance(rc, Exception)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn(f"the bridge failed ({name}); the session, if any, is archived", body)
+                posts = api.paths("POST")
+                self.assertIn("/v1/sessions/sesn_FAKE/archive", posts)
+                self.assertLess(posts.index("/v1/sessions/sesn_FAKE/events"), posts.index("/v1/sessions/sesn_FAKE/archive"))
+                self.assertNotIn(LOCK_KEY, self.store.objects)
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+
+    def test_every_listed_policy_reason_is_a_plain_word(self):
+        for word in wake.POLICY_REASONS:
+            self.assertRegex(word, r"\A[a-z_]{1,40}\Z")
 
     def outputs(self, env, api):
         import os

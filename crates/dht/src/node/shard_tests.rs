@@ -103,10 +103,14 @@ fn public() -> IpAddr {
     PUBLIC.parse().unwrap()
 }
 
-/// Five votes from five networks: enough for a quorum on `ip`.
+/// Five votes from five networks of `ip`'s family: enough for a quorum.
 fn vote_for(a: &mut Actor, ip: IpAddr) {
     for n in 1..=5u8 {
-        let reporter = IpAddr::from([n, n, n, n]);
+        let reporter = if ip.is_ipv4() {
+            IpAddr::from([n, n, n, n])
+        } else {
+            IpAddr::from([0x2400, u16::from(n), 0, 0, 0, 0, 0, 1])
+        };
         a.on_external_ip(reporter, SocketAddr::new(ip, 6881));
     }
     assert_eq!(a.external.current, Some(ip), "the vote reached a quorum");

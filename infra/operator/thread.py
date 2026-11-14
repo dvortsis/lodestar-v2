@@ -4,7 +4,7 @@
     thread.py post --pr N --file F                  one report or /fleet command
 
 `read` reads the channel PR's comments newest page first (the list runs oldest
-first) and keeps only what the reader helper (infra/fleet/reader.py, fetched
+first) and keeps only what the reader helper (infra/fleet/reader.py, mounted
 beside this file) trusts: unedited, from the runner, the operator App's bot or
 the control plane. A comment by the operator's bot counts only in a shape the
 bot may post (channel_shape); any other is dropped. Past MAX_PAGES pages it

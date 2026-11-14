@@ -20,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from tests.helpers import OP, T0, Clock, Mono
+from tests.helpers import OP, T0, Clock, Mono, served
 
 sys.path.insert(0, str(OP / "injection"))
 
@@ -709,9 +709,9 @@ class FakeAPI:
                 self.bodies[sid] = body
                 return {"id": sid, "status": "running"}
             if method == "GET" and p.endswith("/events"):
-                return {"data": self.script(self.bodies[p.split("/")[3]]), "next_page": None}
+                return {"data": self.script(self.bodies[p.split("/")[3]]) + served(self.state)[1], "next_page": None}
             if method == "GET" and p.startswith("/v1/sessions/"):
-                return dict(self.state, usage={"list_cost": {"amount": self.cost, "currency": "USD"}})
+                return dict(served(self.state)[0], usage={"list_cost": {"amount": self.cost, "currency": "USD"}})
             if method == "GET" and p.startswith("/v1/agents/"):
                 return self.deployed
             if method == "POST" and p == "/v1/environments":
@@ -787,19 +787,31 @@ class Gates(unittest.TestCase):
         self.assertEqual(got, [("1", "claude-test-routine", "medium"), ("2", "claude-test-routine", "high"),
                                ("3", "claude-test-triage", "medium"), ("4", "claude-test-triage", "high")])
 
-    def test_the_prompt_patch_swaps_only_the_fetch(self):
+    def test_the_test_runs_the_operators_own_prompt(self):
+        # The prompt copies the mounted helper already, so the test changes nothing in it.
         agent, _, _ = bridge.render(ENV)
-        patched = harness.patch_prompt(agent["system"])
-        self.assertEqual(patched.replace(harness.COPY, harness.FETCH), agent["system"])
-        self.assertNotIn("api.github.com/repos/dvortsis/lodestar-v2/contents", patched)
-        self.assertIn("python3 thread.py read --pr 700 --runner 111 --bot 555", patched)
-        with self.assertRaises(Refusal):
-            harness.patch_prompt(agent["system"].replace(harness.FETCH, ""))
+        self.assertEqual(harness.patch_prompt(agent["system"]), agent["system"])
+        self.assertEqual(agent["system"].count(harness.COPY), 1)
+        self.assertIn("python3 thread.py read --pr 700 --runner 111 --bot 555", agent["system"])
+        for broken in (agent["system"].replace(harness.COPY, ""),             # no copy: the mock would never run
+                       agent["system"].replace(harness.COPY, harness.COPY * 2)):
+            with self.assertRaisesRegex(Refusal, "helper copy changed"):
+                harness.patch_prompt(broken)
+        for fetch in ("  curl -fsS https://example.org/x.py\n", "  wget https://example.org/x.py\n",
+                      "  git clone https://example.org/x\n", "  pip install x\n",
+                      "  python3 -c 'import urllib.request'\n", "  curl -fsS -X POST https://example.org/second\n"):
+            with self.subTest(fetch=fetch.strip()), self.assertRaisesRegex(Refusal, "fetches something"):
+                harness.patch_prompt(agent["system"].replace(harness.COPY, harness.COPY + fetch))
 
     def test_the_mock_is_mounted_as_the_helper(self):
         self.assertEqual(set(harness.HELPERS), {"thread.py", "thread_real.py", "reader.py"})
         self.assertEqual(harness.HELPERS["thread.py"].name, "ghmock.py")
         self.assertIn("/mnt/session/uploads" + harness.MOUNT + "/", harness.COPY)
+        # The real helper and its reader are the files a wake mounts, under the wake's own folder.
+        self.assertEqual(harness.MOUNT, harness.wake.MOUNT)
+        self.assertEqual((harness.HELPERS["thread_real.py"], harness.HELPERS["reader.py"]),
+                         (harness.wake.HELPERS["thread.py"], harness.wake.HELPERS["reader.py"]))
+        self.assertIs(harness.upload, harness.wake.upload)  # one upload implementation
 
 
 class FleetCheck(unittest.TestCase):
@@ -936,6 +948,14 @@ class FullRun(unittest.TestCase):
         self.assertEqual(rc, 4)
         self.assertIn("(budget)", out)
 
+    def test_a_terminated_or_refused_session_is_an_error_not_a_pass(self):
+        for state in ({"status": "terminated"}, {"status": "idle", "stop_reason": {"type": "refusal"}},
+                      {"status": "idle", "stop_reason": {"type": "retries_exhausted"}}):
+            with self.subTest(state=str(state)):
+                rc, out, _ = run(api=FakeAPI(state=state))
+                self.assertEqual(rc, 4)
+                self.assertIn("(error)", out)
+
     def test_stale_harness_sessions_are_archived_first(self):
         ledger = [{"id": "sesn_stale", "usage": {"list_cost": {"amount": "5", "currency": "USD"}},
                    "metadata": {"kind": "injection", "run_id": "1-1"}},
@@ -956,10 +976,12 @@ class FullRun(unittest.TestCase):
         self.assertEqual(rc, 4)
 
     def test_the_time_limit_stops_new_sessions(self):
-        mono = Mono()
+        mono, timed = Mono(), set()
 
         def script(body):
-            mono.sleep(harness.START_MINUTES * 60 / 3)  # each session takes a third of the start window
+            if id(body) not in timed:  # once a session: watch reads the events, then the judge does
+                timed.add(id(body))
+                mono.sleep(harness.START_MINUTES * 60 / 3)  # each session takes a third of the start window
             return clean(body)
         rc, out, d = run(api=FakeAPI(script=script), monotonic=mono, sleep=mono.sleep)
         self.assertEqual(rc, 4)

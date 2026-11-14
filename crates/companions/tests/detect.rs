@@ -542,6 +542,243 @@ async fn loopback_falls_back_to_ipv6() {
     assert_eq!(server.paths(), ["/api/v2/app/version"]);
 }
 
+/// A request that carries anything (a header, so a key or a cookie, or a
+/// body) goes only to the loopback address a bare probe found the companion
+/// on. Before any probe that is 127.0.0.1 alone; a companion a probe found
+/// on ::1 gets its requests there.
+#[tokio::test]
+async fn only_a_bare_probe_looks_on_ipv6_loopback() {
+    let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
+    let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
+    let path = || RequestPath::parse("/api/v2/app/version").unwrap();
+    let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "::1 can't be bound here, so the loopback rule is untested"
+        );
+        eprintln!("::1 unavailable here: the loopback rule wasn't exercised");
+        return;
+    };
+    let target = server.loopback();
+    let key = HeaderName::new("X-Api-Key").unwrap();
+    let cookie = HeaderName::new("Cookie").unwrap();
+    let carrying = |target| {
+        [
+            ProbeRequest::new(target, path(), limits())
+                .header(key, HeaderValue::secret(Secret::new("k")).unwrap()),
+            ProbeRequest::new(target, path(), limits())
+                .header(cookie, HeaderValue::plain("SID=abc").unwrap()),
+            ProbeRequest::new(target, path(), limits()).post(b"password=x".to_vec()),
+            ProbeRequest::new(target, path(), limits()).put(b"{}".to_vec()),
+        ]
+    };
+    // Nothing has probed this port: each stops at 127.0.0.1.
+    let client = http();
+    for req in carrying(&target) {
+        let got = client.send(req).await;
+        assert!(
+            matches!(got, Err(AdapterError::Unreachable)),
+            "{:?}",
+            got.map(|r| r.status())
+        );
+    }
+    assert!(server.seen().is_empty(), "nothing reached ::1");
+    // A bare probe finds the companion on ::1, and from then on the same
+    // client sends this port's requests there.
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.status(), 200);
+    for req in carrying(&target) {
+        assert_eq!(client.send(req).await.unwrap().status(), 200);
+    }
+    assert_eq!(server.seen().len(), 5);
+    // Another client has found nothing yet.
+    let got = http()
+        .send(ProbeRequest::new(&target, path(), limits()).post(b"x".to_vec()))
+        .await;
+    assert!(matches!(got, Err(AdapterError::Unreachable)));
+    assert_eq!(server.seen().len(), 5);
+}
+
+/// Both loopback addresses of one port, each held from the moment it's
+/// bound: `::1` served by `other`, 127.0.0.1 listening and handed back for
+/// the test to serve. `None` where ::1 can't be bound.
+async fn both_loopbacks(other: Handler) -> Option<(TcpListener, Server)> {
+    for _ in 0..64 {
+        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = v4.local_addr().unwrap().port();
+        let v6 = TcpSocket::new_v6().and_then(|s| {
+            s.bind((Ipv6Addr::LOCALHOST, port).into())?;
+            s.listen(16)
+        });
+        match v6 {
+            Ok(listener) => {
+                return Some((v4, Server::serve(listener, Arc::clone(&other)).unwrap()));
+            }
+            Err(e) if in_use(&e) => continue,
+            Err(e) if no_ipv6(&e) => return None,
+            Err(e) => panic!("listening on [::1]:{port}: {e}"),
+        }
+    }
+    panic!("no port free on both 127.0.0.1 and ::1");
+}
+
+/// Once 127.0.0.1 has answered on a port, nothing for that port goes to
+/// ::1, a bare probe included, even when 127.0.0.1 has stopped listening
+/// and something still listens on ::1.
+#[tokio::test]
+async fn ipv4_loopback_keeps_the_port_once_it_has_answered() {
+    let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
+    let path = || RequestPath::parse("/api/v2/app/version").unwrap();
+    let other: Handler = Arc::new(|_: &str| reply(200, b"other"));
+    let Some((v4, v6)) = both_loopbacks(other).await else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "::1 can't be bound here, so the loopback rule is untested"
+        );
+        eprintln!("::1 unavailable here: the loopback rule wasn't exercised");
+        return;
+    };
+    let target = v6.loopback();
+    let port = target_port(&v6);
+    // 127.0.0.1 answers one connection and stops listening.
+    let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
+    let served = tokio::spawn(async move {
+        let (sock, _) = v4.accept().await.unwrap();
+        drop(v4);
+        serve(sock, first, Arc::new(Mutex::new(Vec::new()))).await;
+    });
+    let client = http();
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.body(), b"first");
+    served.await.unwrap();
+    // The port is held closed from here, so nothing else can be handed it.
+    let _held = hold_closed(port).await;
+    for req in [
+        ProbeRequest::new(&target, path(), limits()),
+        ProbeRequest::new(&target, path(), limits()).post(b"password=x".to_vec()),
+    ] {
+        let got = client.send(req).await;
+        assert!(
+            matches!(got, Err(AdapterError::Unreachable)),
+            "{:?}",
+            got.map(|r| r.status())
+        );
+    }
+    assert!(v6.seen().is_empty(), "nothing reached ::1");
+}
+
+fn target_port(server: &Server) -> u16 {
+    server.addr.port()
+}
+
+/// Holds 127.0.0.1:`port` bound and not listening, once the listener that
+/// had it is gone: connections to it are refused, and no other program
+/// can be handed the port. Waits for both.
+async fn hold_closed(port: u16) -> TcpSocket {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let held = loop {
+        let s = TcpSocket::new_v4().unwrap();
+        // A connection just closed on the port mustn't keep it from being
+        // bound again (Unix; Windows needs no option for that, and there
+        // the option would let the port be shared).
+        #[cfg(unix)]
+        s.set_reuseaddr(true).unwrap();
+        match s.bind(addr) {
+            Ok(()) => break s,
+            Err(e) if in_use(&e) && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(e) => panic!("holding 127.0.0.1:{port}: {e}"),
+        }
+    };
+    loop {
+        match TcpStream::connect(addr).await {
+            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => return held,
+            other => {
+                assert!(
+                    Instant::now() < deadline,
+                    "127.0.0.1:{port} still answers: {:?}",
+                    other.map(drop)
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+}
+
+/// The port is held closed on a machine with no IPv6 too: the helper the
+/// test above rests on, run everywhere.
+#[tokio::test]
+async fn a_port_is_held_closed_once_its_listener_is_gone() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut conn = TcpStream::connect(addr).await.unwrap();
+    let (mut sock, _) = listener.accept().await.unwrap();
+    drop(listener);
+    sock.write_all(b"x").await.unwrap();
+    drop(sock);
+    let mut got = Vec::new();
+    conn.read_to_end(&mut got).await.unwrap();
+    drop(conn);
+    let _held = hold_closed(port).await;
+    let again = TcpStream::connect(addr).await;
+    assert_eq!(
+        again.err().map(|e| e.kind()),
+        Some(io::ErrorKind::ConnectionRefused)
+    );
+}
+
+/// A port a bare probe found on ::1 isn't kept there for good: once
+/// 127.0.0.1 listens, the next request finds it, whatever it carries, and
+/// from then on the port's requests go to 127.0.0.1 alone.
+#[tokio::test]
+async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
+    let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
+    let path = || RequestPath::parse("/api/v2/app/version").unwrap();
+    let other: Handler = Arc::new(|_: &str| reply(200, b"other"));
+    let Some((v6, v4)) = ipv6_with_ipv4_closed(other).await else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "::1 can't be bound here, so the loopback rule is untested"
+        );
+        eprintln!("::1 unavailable here: the loopback rule wasn't exercised");
+        return;
+    };
+    let target = v6.loopback();
+    let client = http();
+    let carrying = || ProbeRequest::new(&target, path(), limits()).post(b"password=x".to_vec());
+    // Nothing on 127.0.0.1 yet: a bare probe finds ::1, and what carries
+    // something follows it there.
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.body(), b"other");
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"other");
+    assert_eq!(v6.seen().len(), 2);
+    // 127.0.0.1 starts listening, on the socket that held the port all
+    // along. The very next request finds it, though it carries something.
+    let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
+    let v4 = Server::serve(v4.listen(16).unwrap(), first).unwrap();
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"first");
+    // From here everything goes to 127.0.0.1.
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.body(), b"first");
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"first");
+    assert_eq!((v6.seen().len(), v4.seen().len()), (2, 3));
+}
+
 /// A server on ::1, with 127.0.0.1 held closed on its port, so the probe's
 /// IPv4 attempt is always refused and never answered by another program.
 /// The port is picked on IPv4 first, as `ClosedPort` does. `None` where

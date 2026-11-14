@@ -679,6 +679,13 @@ impl Engine {
         self.judge_shadowed(item, facts, now).0
     }
 
+    /// CS-0a's decision, for a torrent that can't be judged at all (its
+    /// file list won't read, or judging it failed): held as too large to
+    /// judge, as one past the budget is.
+    pub fn unjudgeable(&self) -> Decision {
+        self.core.too_large_hit().into()
+    }
+
     /// [`Engine::judge`], with each pending pack version's result beside
     /// the applied one's where either holds the torrent ([`PackShadow`]):
     /// which side holds and whether the shadow action is heavier or
