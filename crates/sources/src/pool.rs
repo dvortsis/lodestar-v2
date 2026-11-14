@@ -26,7 +26,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
@@ -177,6 +177,15 @@ pub struct PoolConfig {
     pub max_held_bytes: usize,
 }
 
+/// The largest info dict a pool with a budget of `max_held_bytes` fetches:
+/// its reservation (the dict, the key, the client name and the PEX list,
+/// within a 32 KiB margin) must fit beside the floor, which small dicts
+/// keep. A [`FetchOptions::max_metadata`](lodestar_peer_wire::FetchOptions)
+/// above it is never granted room.
+pub const fn largest_dict(max_held_bytes: usize) -> usize {
+    (max_held_bytes - max_held_bytes / FLOOR_SHARE as usize).saturating_sub(32 << 10)
+}
+
 /// [`PoolConfig::max_held_bytes`]'s default: 64 MiB.
 pub const MAX_HELD_BYTES: usize = 64 << 20;
 
@@ -192,6 +201,13 @@ pub fn weigh(fetched: &Fetched) -> u64 {
 /// still holds. After that the rest go back into the saved queue, as they
 /// do when the consumer is gone.
 pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(5);
+
+/// Networks (an IPv4 /24, an IPv6 /48) whose peers must say a key's dict
+/// is over the size limit before the key is lost for it. A peer's
+/// `metadata_size` is its own claim, checked by nothing, so one peer or
+/// one network can't end a key; an oversize torrent gets the same answer
+/// from every peer, and each answer costs a handshake and no download.
+pub const OVERSIZE_AGREE: usize = 3;
 
 /// Reserve timeouts a key may have without one being charged as
 /// a failed fetch (runner, 2026-11-07): enough to ride out a burst, but a
@@ -221,8 +237,25 @@ pub const RESERVE_WAITS_FREE: u8 = 3;
 ///
 /// Partial claims wait in their own queue. One held back by its own rule
 /// holds up nothing else; the oldest, when it passes its rule and only
-/// lacks room, goes before new whole claims and stops dispatch, so steady
-/// small traffic can't keep a large dict out.
+/// lacks room, goes before new whole claims, so steady small traffic
+/// can't keep a large dict out.
+///
+/// Small dicts, which are most of them, keep room of their own
+/// (X-fetch-room-fix):
+/// - **A floor for small claims.** Partial and grown claims together stay
+///   within the budget less its floor ([`Budget::floor`]), so that much is
+///   always left for whole claims of [`SMALL_CLAIM`] or less and for
+///   finished results. While a growth or a room-starved partial claim
+///   waits, small claims are still granted, inside the floor only: what
+///   lies outside it then only comes free, which is what the waiting claim
+///   needs. So a waiting growth never stops a small fetch, or dispatch.
+/// - **Grown claims are capped.** Together they stay within
+///   [`Budget::grown_cap`], and one network (an IPv4 /24, an IPv6 /48) has
+///   one at a time. A growth held back by either cap waits apart, holding
+///   up nothing, as a partial claim held back by its own rule does. A
+///   growth with no other grown claim beside it is let past both the cap
+///   and the floor, so a pool can still fetch one dict larger than those
+///   leave; small claims then keep what is left of the floor.
 #[derive(Debug)]
 struct Budget {
     limit: u64,
@@ -249,11 +282,20 @@ struct BudgetState {
     /// rule and only lacks room: it goes before whole first claims, and the
     /// pool starts no fetch, until it's granted or leaves.
     starved: Option<u64>,
-    /// Waiting growths, oldest first; they go before any first reservation.
-    growth: VecDeque<u64>,
+    /// Waiting growths that no cap holds back, oldest first, each with the
+    /// bytes it wants in all; they go before any first reservation outside
+    /// the floor.
+    growth: VecDeque<(u64, u64)>,
     /// Bytes held by partial claims, and the growth each still needs.
     partial: u64,
     needs: BTreeMap<u64, usize>,
+    /// Bytes reserved by whole claims of [`SMALL_CLAIM`] or less.
+    small: u64,
+    /// Bytes reserved by grown claims, and the networks that have one.
+    grown: u64,
+    grown_nets: HashSet<Net>,
+    /// Bytes held by partial claims, by network.
+    partial_nets: HashMap<Net, u64>,
     next_id: u64,
 }
 
@@ -279,7 +321,80 @@ impl BudgetState {
     fn largest_need(&self) -> u64 {
         self.needs.last_key_value().map_or(0, |(need, _)| *need)
     }
+
+    /// Whether a claim that goes before small ones waits: a growth no cap
+    /// holds back, or a partial claim that only lacks room.
+    fn large_waits(&self) -> bool {
+        !self.growth.is_empty() || self.starved.is_some()
+    }
+
+    /// What small claims and finished results together may hold while a
+    /// large one waits: the floor, less whatever the oldest waiting growth
+    /// needs of it to fit the budget at all.
+    fn small_room(&self, limit: u64) -> u64 {
+        let floor = limit / FLOOR_SHARE;
+        match self.growth.front() {
+            Some(&(_, want)) => floor.min(limit.saturating_sub(want)),
+            None => floor,
+        }
+    }
+
+    /// Whether `net` already holds its share of the room for partial
+    /// claims, so another of its claims of `want` must wait. A network's
+    /// first partial claim is always let in.
+    fn net_partials_full(&self, net: Option<Net>, want: u64, room: u64) -> bool {
+        let Some(net) = net else {
+            return false;
+        };
+        let held = self.partial_nets.get(&net).copied().unwrap_or(0);
+        held > 0 && held.saturating_add(want) > room / PARTIAL_NET_SHARE
+    }
+
+    /// Takes a claim's bytes out of the counts of its kind.
+    fn uncount(&mut self, claim: &Claim, bytes: u64, need: u64) {
+        if need > 0
+            && let Some(net) = claim.net
+            && let std::collections::hash_map::Entry::Occupied(mut held) =
+                self.partial_nets.entry(net)
+        {
+            *held.get_mut() = held.get().saturating_sub(bytes);
+            if *held.get() == 0 {
+                held.remove();
+            }
+        }
+        self.remove_need(bytes, need);
+        match claim.kind.swap(KIND_NONE, Ordering::Relaxed) {
+            KIND_SMALL => self.small = self.small.saturating_sub(bytes),
+            KIND_GROWN => {
+                self.grown = self.grown.saturating_sub(bytes);
+                if let Some(net) = claim.net {
+                    self.grown_nets.remove(&net);
+                }
+            }
+            KIND_LARGE => self.grown = self.grown.saturating_sub(bytes),
+            _ => {}
+        }
+    }
 }
+
+/// A whole claim of at most this is a small one, with the floor's room: a
+/// dict of one request window (64 KiB) with its client name and PEX
+/// peers, as peer-wire bounds it, and the key.
+pub const SMALL_CLAIM: u64 = 80 << 10;
+
+/// The floor is this share of the budget (a quarter), and grown claims
+/// may hold [`GROWN_SHARE`] of it (a half).
+const FLOOR_SHARE: u64 = 4;
+const GROWN_SHARE: u64 = 2;
+/// A network's partial claims may hold this share of the room beside the
+/// floor (an eighth), so several networks share it.
+const PARTIAL_NET_SHARE: u64 = 8;
+
+const KIND_NONE: u8 = 0;
+const KIND_SMALL: u8 = 1;
+const KIND_GROWN: u8 = 2;
+/// Counted with the grown bytes, without a network's place.
+const KIND_LARGE: u8 = 3;
 
 impl Budget {
     fn new(limit: usize) -> Budget {
@@ -303,15 +418,28 @@ impl Budget {
         (s.held, s.reserved)
     }
 
-    /// Room for another fetch: under the budget, and no whole reservation,
-    /// growth or room-starved partial claim waiting. A partial claim held
-    /// back by its own rule doesn't stop dispatch: it may be a liar's.
+    /// The room kept for small claims and finished results.
+    fn floor(&self) -> u64 {
+        self.limit / FLOOR_SHARE
+    }
+
+    /// The most grown claims hold together. One alone may pass it, up to
+    /// the floor.
+    fn grown_cap(&self) -> u64 {
+        self.limit / GROWN_SHARE
+    }
+
+    /// Room for another fetch: under the budget, no whole reservation
+    /// waiting and, while a growth or a room-starved partial claim waits,
+    /// room left in the floor (a fetch of a small dict would be granted;
+    /// what a fetch will ask for isn't known before its handshake). A claim
+    /// held back by a rule of its own doesn't stop dispatch: it may be a
+    /// liar's.
     fn has_room(&self) -> bool {
         let s = self.lock();
         s.queue.is_empty()
-            && s.growth.is_empty()
-            && s.starved.is_none()
             && s.reserved.saturating_add(s.held) < self.limit
+            && (!s.large_waits() || s.small.saturating_add(s.held) < s.small_room(self.limit))
     }
 
     /// Bytes the pool no longer holds.
@@ -346,10 +474,22 @@ struct Claim {
     /// Set while waiting for room and left set if the wait never ended:
     /// the fetch ran out of time waiting, not because of its peer.
     waited_out: AtomicBool,
+    /// The peer's network, for the one grown claim a network may have;
+    /// `None`: not counted by network.
+    net: Option<Net>,
+    /// Which of the budget's counts the bytes are in (`KIND_*`); changed
+    /// only under the budget's lock.
+    kind: AtomicU8,
 }
 
 impl Reservation {
+    #[cfg(test)]
     fn new(budget: Arc<Budget>) -> Reservation {
+        Reservation::for_peer(budget, None)
+    }
+
+    /// A claim for a fetch from a peer in `net`.
+    fn for_peer(budget: Arc<Budget>, net: Option<Net>) -> Reservation {
         let id = {
             let mut s = budget.lock();
             s.next_id += 1;
@@ -361,6 +501,8 @@ impl Reservation {
             bytes: AtomicU64::new(0),
             need: AtomicU64::new(0),
             waited_out: AtomicBool::new(false),
+            net,
+            kind: AtomicU8::new(KIND_NONE),
         }))
     }
 
@@ -408,15 +550,26 @@ impl Reservation {
     /// [`Budget`] allow it now.
     fn try_grow(&self, want: u64, want_total: u64, enqueue: bool) -> bool {
         let claim = &*self.0;
-        let mut s = claim.budget.lock();
+        let budget = &*claim.budget;
+        let mut s = budget.lock();
+        let growing = claim.bytes.load(Ordering::Relaxed) > 0;
         if self.grant(&mut s, want, want_total) {
+            drop(s);
+            // A growth leaves the partial claims: its network's next may
+            // now be let in.
+            if growing {
+                budget.freed.notify_waiters();
+            }
             return true;
         }
-        if enqueue {
-            if claim.bytes.load(Ordering::Relaxed) > 0 {
-                s.growth.push_back(claim.id);
-            } else if want < want_total {
-                s.partials.push_back(claim.id);
+        // A growth joins and leaves its queue in `grant`, as the caps let
+        // it; so does a partial claim its network's share holds back.
+        if enqueue && claim.bytes.load(Ordering::Relaxed) == 0 {
+            if want < want_total {
+                let room = budget.limit - budget.floor();
+                if !s.net_partials_full(claim.net, want, room) {
+                    s.partials.push_back(claim.id);
+                }
             } else {
                 s.queue.push_back(claim.id);
             }
@@ -427,59 +580,130 @@ impl Reservation {
     /// [`try_grow`](Self::try_grow)'s rules, under the budget's lock.
     fn grant(&self, s: &mut BudgetState, want: u64, want_total: u64) -> bool {
         let claim = &*self.0;
-        let limit = claim.budget.limit;
+        let budget = &*claim.budget;
+        let limit = budget.limit;
         let mine = claim.bytes.load(Ordering::Relaxed);
         if mine >= want {
             return true;
         }
         let growing = mine > 0;
         let partial = want < want_total;
-        let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
-        let in_turn = if growing {
-            first_in(&s.growth)
-        } else if partial {
-            s.growth.is_empty() && first_in(&s.partials)
-        } else {
-            s.growth.is_empty() && s.starved.is_none() && first_in(&s.queue)
-        };
-        if !in_turn {
-            return false;
-        }
+        let small = !growing && !partial && want <= SMALL_CLAIM;
         let used = s.reserved.saturating_add(s.held);
         let others = used.saturating_sub(mine);
         let extra = want - mine;
-        let first_partial = partial && !growing;
-        if first_partial && others > 0 {
-            let need = s.largest_need().max(want_total - want);
-            if s.partial.saturating_add(want).saturating_add(need) > limit {
-                // Held back by its own rule (perhaps a liar's claim): it
-                // holds up nothing else.
-                if s.starved == Some(claim.id) {
-                    s.starved = None;
-                    claim.budget.settled.notify_one();
-                    claim.budget.freed.notify_waiters();
+        let fits = others == 0 || used.saturating_add(extra) <= limit;
+        // Partial and grown claims stay out of the floor.
+        let large = s.partial.saturating_add(s.grown);
+        let beside_floor = large.saturating_add(extra) <= limit - budget.floor();
+        let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
+        if growing {
+            let queued = s.growth.iter().any(|&(id, _)| id == claim.id);
+            if claim.net.is_some_and(|net| s.grown_nets.contains(&net)) {
+                // Its network has a grown claim: only that one holds it
+                // back, so it waits apart and holds up nothing.
+                if queued {
+                    s.growth.retain(|&(id, _)| id != claim.id);
+                    budget.settled.notify_one();
+                    budget.freed.notify_waiters();
                 }
                 return false;
             }
-        }
-        if others > 0 && used.saturating_add(extra) > limit {
-            if first_partial {
-                // An honest-looking large dict that only lacks room: it
-                // goes before new whole claims and stops dispatch, or
-                // steady small traffic could keep it out for ever.
-                s.starved = Some(claim.id);
+            // Alone among grown claims, it may pass their cap, so a dict
+            // larger than the cap is still fetched; nothing passes the
+            // floor. Held back by the cap, it keeps its turn: the growths
+            // behind it wait, and the grown claims drain until it fits.
+            let under_cap = s.grown == 0 || s.grown.saturating_add(want) <= budget.grown_cap();
+            let in_turn = s.growth.front().is_none_or(|&(id, _)| id == claim.id);
+            // With nothing else reserved or held, it is fetched alone,
+            // whatever its size (a fetcher whose limit is over
+            // `largest_dict`).
+            let alone = others == 0;
+            if !(in_turn && (alone || (under_cap && fits && beside_floor))) {
+                if !queued {
+                    s.growth.push_back((claim.id, want));
+                }
+                return false;
             }
-            return false;
+            s.growth.retain(|&(id, _)| id != claim.id);
+        } else if partial {
+            let room = limit - budget.floor();
+            if s.net_partials_full(claim.net, want, room) {
+                // Only its own network's partial claims hold it back: it
+                // waits apart and holds up nothing.
+                if s.partials.contains(&claim.id) || s.starved == Some(claim.id) {
+                    s.partials.retain(|&id| id != claim.id);
+                    if s.starved == Some(claim.id) {
+                        s.starved = None;
+                    }
+                    budget.settled.notify_one();
+                    budget.freed.notify_waiters();
+                }
+                return false;
+            }
+            if !(s.growth.is_empty() && first_in(&s.partials)) {
+                return false;
+            }
+            if others > 0 {
+                let need = s.largest_need().max(want_total - want);
+                // Room for the largest growth beside the floor, as growths
+                // need: one of the partial claims can always grow.
+                if s.partial.saturating_add(want).saturating_add(need) > room || !beside_floor {
+                    // Held back by its own rule (perhaps a liar's claim): it
+                    // holds up nothing else.
+                    if s.starved == Some(claim.id) {
+                        s.starved = None;
+                        budget.settled.notify_one();
+                        budget.freed.notify_waiters();
+                    }
+                    return false;
+                }
+            }
+            if !fits {
+                // An honest-looking large dict that only lacks room: it
+                // goes before new whole claims outside the floor, or steady
+                // small traffic could keep it out for ever.
+                s.starved = Some(claim.id);
+                return false;
+            }
+        } else {
+            // A whole claim. While a large one waits, a small one is
+            // granted inside the floor, which finished results share, and
+            // any other waits: room outside the floor then only comes free.
+            let in_floor = small
+                && s.small.saturating_add(s.held).saturating_add(extra) <= s.small_room(limit);
+            if !(first_in(&s.queue) && fits && (!s.large_waits() || in_floor)) {
+                return false;
+            }
         }
         if s.starved == Some(claim.id) {
             s.starved = None;
         }
         s.reserved += extra;
         let old_need = claim.need.load(Ordering::Relaxed);
-        s.remove_need(mine, old_need);
+        s.uncount(claim, mine, old_need);
         let need = if partial { want_total - want } else { 0 };
         if partial {
             s.add_need(want, need);
+            if let Some(net) = claim.net {
+                *s.partial_nets.entry(net).or_insert(0) += want;
+            }
+        } else if small {
+            s.small += want;
+            claim.kind.store(KIND_SMALL, Ordering::Relaxed);
+        } else {
+            // Grown, or a whole claim over the small size (peer-wire makes
+            // none): counted with the grown bytes. Only a grown claim takes
+            // its network's place.
+            s.grown += want;
+            let kind = match claim.net {
+                Some(net) if growing => {
+                    s.grown_nets.insert(net);
+                    KIND_GROWN
+                }
+                _ => KIND_LARGE,
+            };
+            claim.kind.store(kind, Ordering::Relaxed);
         }
         claim.need.store(need, Ordering::Relaxed);
         claim.bytes.store(want, Ordering::Relaxed);
@@ -499,11 +723,16 @@ impl Reservation {
         let mut s = claim.budget.lock();
         let mine = claim.bytes.swap(0, Ordering::Relaxed);
         let need = claim.need.swap(0, Ordering::Relaxed);
-        s.remove_need(mine, need);
+        // A grown or small claim's end changes what the caps and the floor
+        // let in.
+        let counted = claim.kind.load(Ordering::Relaxed) != KIND_NONE;
+        s.uncount(claim, mine, need);
         s.reserved = s.reserved.saturating_sub(mine);
         s.held = s.held.saturating_add(weight);
         drop(s);
-        if weight < mine {
+        // A grown claim's end also lets the next of its network, or one
+        // the cap held back, grow; a small claim's frees room in the floor.
+        if weight < mine || counted {
             claim.budget.freed.notify_waiters();
         }
     }
@@ -519,7 +748,7 @@ impl Drop for Claim {
         if mine > 0 {
             let need = *self.need.get_mut();
             let mut s = self.budget.lock();
-            s.remove_need(mine, need);
+            s.uncount(self, mine, need);
             s.reserved = s.reserved.saturating_sub(mine);
             drop(s);
             self.budget.freed.notify_waiters();
@@ -538,7 +767,7 @@ impl Drop for Queued<'_> {
         let id = self.0.id;
         s.queue.retain(|&q| q != id);
         s.partials.retain(|&q| q != id);
-        s.growth.retain(|&q| q != id);
+        s.growth.retain(|&(q, _)| q != id);
         if s.starved == Some(id) {
             s.starved = None;
         }
@@ -1248,20 +1477,21 @@ impl Waits {
     }
 
     /// One wait fewer at `address`. A line that has drained gives its
-    /// memory back: the turns left behind are cleared out before they
-    /// outnumber the waiters, and it keeps room for no more than about
-    /// twice the waiters it has.
+    /// memory back: once it has room for more than four times its waiters
+    /// (and 8 turns), the turns left behind are cleared out and it keeps
+    /// room for about twice the turns left. The gap between the two keeps
+    /// a line that shrinks and grows by one from reallocating each time.
     fn left(&mut self, address: Net) {
         self.live -= 1;
         let line = self.lines.get_mut(&address).expect("a wait has a line");
         line.live -= 1;
         if line.live == 0 {
             self.lines.remove(&address);
-        } else if line.asked.capacity() + line.rest.capacity() > 2 * line.live + 4 {
+        } else if line.asked.capacity() + line.rest.capacity() > 4 * line.live + 8 {
             let keys = &self.keys;
             for turns in [&mut line.asked, &mut line.rest] {
                 turns.retain(|t| Waits::is_live(keys, t));
-                let room = if turns.is_empty() { 0 } else { turns.len() + 2 };
+                let room = 2 * turns.len();
                 turns.shrink_to(room);
             }
         }
@@ -1478,6 +1708,10 @@ struct Entry {
     lookup_requested: bool,
     fetch_started: bool,
     last_failure: Option<FailureKind>,
+    /// The networks whose peers have said the dict is over the size limit,
+    /// while they are fewer than [`OVERSIZE_AGREE`]: `None` for nearly
+    /// every key, so it costs a pointer.
+    oversize_from: Option<Box<(Net, Option<Net>)>>,
     /// Fetches of this key that ran out of time waiting for a reservation
     /// (X-fetch-meta-reserve); the `RESERVE_WAITS_FREE`th is charged.
     reserve_waits: u8,
@@ -1491,6 +1725,27 @@ struct Entry {
 impl Entry {
     fn has_untried(&self) -> bool {
         self.tried < self.peers.len()
+    }
+
+    /// Notes that a peer in `network` said the dict is over the size
+    /// limit. `true` once peers in [`OVERSIZE_AGREE`] networks have.
+    fn oversize_said_by(&mut self, network: Net) -> bool {
+        match self.oversize_from.as_deref_mut() {
+            None => {
+                self.oversize_from = Some(Box::new((network, None)));
+                false
+            }
+            Some((first, second)) => {
+                if *first == network || *second == Some(network) {
+                    false
+                } else if second.is_none() {
+                    *second = Some(network);
+                    false
+                } else {
+                    true
+                }
+            }
+        }
     }
 
     /// The peers in use, which are the ones that hold places
@@ -1936,6 +2191,7 @@ impl Pool {
                 lookup_requested: false,
                 fetch_started: false,
                 last_failure: None,
+                oversize_from: None,
                 reserve_waits: 0,
                 state: State::Backoff,
                 generation: 0,
@@ -1987,6 +2243,7 @@ impl Pool {
                 lookup_requested: false,
                 fetch_started: false,
                 last_failure: None,
+                oversize_from: None,
                 reserve_waits: 0,
                 state: State::Backoff,
                 generation: 0,
@@ -2064,8 +2321,10 @@ impl Pool {
             // stream keeps its lookup slot until its terminal.
             State::Lookup if self.owns_stream(&key) => self.make_ready(key),
             State::Lookup => {
-                self.lookups -= 1;
-                self.requests.remove(&key);
+                if self.requests.remove(&key).is_some() {
+                    self.lookups -= 1;
+                }
+                debug_assert_eq!(self.lookups, self.requests.len());
                 self.make_ready(key);
             }
             State::LookupQueued | State::Backoff => self.make_ready(key),
@@ -3018,7 +3277,8 @@ impl Pool {
                     .fetch_add(1, Ordering::Relaxed);
             }
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
-            let reservation = Reservation::new(self.budget.clone());
+            let network = net_of(peer.ip()).network();
+            let reservation = Reservation::for_peer(self.budget.clone(), Some(network));
             let fetch = self.fetcher.fetch_reserving(peer, key, reservation.clone());
             let handle = self.tasks.spawn(async move {
                 let result = fetch.await;
@@ -3228,8 +3488,13 @@ impl Pool {
                         .give_back_dropped(&e.peers[from..], &e.peers[e.tried..]);
                 }
                 e.state = State::Backoff;
-                if kind == FailureKind::Oversize {
-                    // A property of the torrent, not the peer.
+                // One peer's word on the size is that peer's failure: the
+                // key goes on to its other peers. It is the torrent's once
+                // peers in enough networks agree, or when the key runs out
+                // of peers and attempts with this as its last failure.
+                let oversize = kind == FailureKind::Oversize
+                    && e.oversize_said_by(net_of(peer.ip()).network());
+                if oversize {
                     self.lose(key, Loss::Oversize);
                 } else if e.has_untried() {
                     self.make_ready(key);
@@ -3551,6 +3816,10 @@ mod diagnostic_cost {
         attempts: u16,
         had_peers: bool,
         last_failure: Option<FailureKind>,
+        // Not a diagnostic: the size rule's networks (X-fetch-room-fix),
+        // one pointer a key. Here so the bound below still measures only
+        // the diagnostics.
+        oversize_from: Option<Box<(Net, Option<Net>)>>,
         state: State,
         generation: u32,
     }
@@ -3891,8 +4160,12 @@ mod budget {
         assert!(n >= 2, "{n} admitted");
         let (_, reserved) = b.usage();
         assert_eq!(reserved, n * (KEY + 100));
-        assert!(reserved + 4_900 <= limit, "room left for any one to grow");
-        assert!(reserved + (KEY + 100) + 4_900 > limit, "and no more");
+        let beside = limit - b.floor();
+        assert!(
+            reserved + 4_900 <= beside,
+            "room left beside the floor for any one to grow"
+        );
+        assert!(reserved + (KEY + 100) + 4_900 > beside, "and no more");
         // One more keeps waiting, held back by its own rule...
         let blocked = Reservation::new(b.clone());
         let blocked_wait = tokio::spawn({
@@ -3919,16 +4192,17 @@ mod budget {
     }
 
     /// No deadlock: partial claims all asking to grow are served one at a
-    /// time, oldest first, as the ones ahead finish. While a growth waits,
-    /// no first reservation is granted and no fetch starts.
+    /// time as the ones ahead finish. A small claim is granted meanwhile.
     #[tokio::test(start_paused = true)]
-    async fn growths_go_first_and_always_complete() {
+    async fn growths_are_served_one_by_one_and_always_complete() {
         let (now, total) = (500usize, 2_000usize);
-        // Room for exactly one small claim beside three grown windows' worth,
-        // so only growth's priority holds the small one back.
-        let limit = 3 * (KEY + now as u64) + (total - now) as u64 + KEY + 1;
+        // Beside the floor, room for three windows and one growth, not a
+        // fourth window.
+        let beside = 3 * (KEY + now as u64) + (total - now) as u64;
+        let limit = 4 * beside.div_ceil(3);
+        assert!(limit - limit / 4 < beside + KEY + now as u64);
         let b = Arc::new(Budget::new(limit as usize));
-        let claims: Vec<Reservation> = (0..3).map(|_| Reservation::new(b.clone())).collect();
+        let mut claims: Vec<Reservation> = (0..3).map(|_| Reservation::new(b.clone())).collect();
         for c in &claims {
             tokio::time::timeout(Duration::from_secs(1), c.reserve(now, total))
                 .await
@@ -3942,37 +4216,380 @@ mod budget {
             "a fourth couldn't be sure to grow"
         );
         // All three grow: the first fits at once, the others wait for it.
-        claims[0].reserve(total, total).await;
-        let mut waits: Vec<_> = claims[1..]
-            .iter()
-            .map(|c| {
-                let c = c.clone();
-                tokio::spawn(async move { c.reserve(total, total).await })
-            })
-            .collect();
-        let small = Reservation::new(b.clone());
-        let mut small_wait = tokio::spawn({
-            let small = small.clone();
-            async move { small.reserve(1, 1).await }
-        });
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::timeout(Duration::from_secs(1), claims[0].reserve(total, total))
+            .await
+            .expect("one of the admitted claims can always grow");
+        let mut waits: Vec<_> = claims[1..].iter().map(|c| growing(c, total)).collect();
+        tokio::time::sleep(Duration::from_secs(5)).await;
         assert!(waits.iter().all(|w| !w.is_finished()));
-        assert!(
-            !small_wait.is_finished(),
-            "growth goes first, though it fits"
-        );
-        assert!(!b.has_room());
-        let mut claims = claims.into_iter();
-        drop(claims.next());
-        (&mut waits[0]).await.unwrap();
-        drop(claims.next());
-        (&mut waits[1]).await.unwrap();
-        (&mut small_wait).await.unwrap();
-        assert!(used(&b) <= limit);
-        drop((claims, small, fourth));
+        let small = Reservation::new(b.clone());
+        tokio::time::timeout(Duration::from_secs(1), small.reserve(1, 1))
+            .await
+            .expect("a waiting growth doesn't hold a small claim that fits");
+        // Each grows once the one before it has ended.
+        drop(claims.remove(0));
+        for left in [2usize, 1] {
+            until("the next growth", async || {
+                waits.iter().any(|w| w.is_finished())
+            })
+            .await;
+            assert_eq!(waits.iter().filter(|w| w.is_finished()).count(), 1);
+            let i = waits.iter().position(|w| w.is_finished()).expect("one");
+            waits.remove(i).await.unwrap();
+            assert!(used(&b) <= limit);
+            drop(claims.remove(i));
+            assert_eq!(claims.len(), left - 1);
+        }
+        drop((small, fourth));
         assert_eq!(used(&b), 0);
-        assert_eq!(b.lock().partial, 0);
-        assert!(b.lock().needs.is_empty());
+        let s = b.lock();
+        assert_eq!((s.partial, s.small, s.grown), (0, 0, 0));
+        assert!(s.needs.is_empty() && s.grown_nets.is_empty());
+    }
+
+    /// A large dict's first window is admitted only while the largest
+    /// growth still needed fits beside the floor: two claims whose growths
+    /// would each need the room the other holds aren't both let in, so the
+    /// one admitted grows at once and the other follows.
+    #[tokio::test(start_paused = true)]
+    async fn large_claims_are_admitted_only_while_one_can_grow() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let (now, total) = (64 << 10, 700_000usize);
+        let first = window(&b, 1, now, total).await;
+        let second = Reservation::for_peer(b.clone(), Some(net(2)));
+        let mut admitted = tokio::spawn({
+            let second = second.clone();
+            async move { second.reserve(now, total).await }
+        });
+        queued(&b, |s| s.partials.len() == 1).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(
+            !admitted.is_finished(),
+            "beside the first, it couldn't be sure to grow"
+        );
+        tokio::time::timeout(Duration::from_secs(1), first.reserve(total, total))
+            .await
+            .expect("the admitted claim grows at once");
+        drop(first);
+        (&mut admitted).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), second.reserve(total, total))
+            .await
+            .expect("then the other grows");
+        drop(second);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A network's partial claims hold at most an eighth of the room
+    /// beside the floor. One held back by that waits apart: another
+    /// network's claim is let in at once, and it follows when its own
+    /// network's claims make room.
+    #[tokio::test(start_paused = true)]
+    async fn one_networks_partial_claims_keep_to_their_share() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let share = (limit as u64 - b.floor()) / PARTIAL_NET_SHARE;
+        let (now, total) = (40_000usize, 50_000usize);
+        let mut mine = Vec::new();
+        while b.lock().partial_nets.get(&net(1)).copied().unwrap_or(0) + KEY + (now as u64) <= share
+        {
+            mine.push(window(&b, 1, now, total).await);
+        }
+        assert!(mine.len() >= 2, "{} let in", mine.len());
+        let next = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait = tokio::spawn({
+            let next = next.clone();
+            async move { next.reserve(now, total).await }
+        });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "past its network's share");
+        assert!(b.lock().partials.is_empty(), "it waits apart");
+        let other = window(&b, 2, now, total).await;
+        drop(mine.pop());
+        (&mut wait).await.unwrap();
+        drop((mine, next, other));
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().partial_nets.is_empty());
+    }
+
+    fn net(n: u8) -> Net {
+        net_of(IpAddr::from([198, 51, n, 1])).network()
+    }
+
+    /// A partial claim of `window` bytes, of `total`, from network `n`.
+    async fn window(b: &Arc<Budget>, n: u8, window: usize, total: usize) -> Reservation {
+        let r = Reservation::for_peer(b.clone(), Some(net(n)));
+        tokio::time::timeout(Duration::from_secs(1), r.reserve(window, total))
+            .await
+            .expect("the window fits");
+        r
+    }
+
+    fn growing(r: &Reservation, total: usize) -> tokio::task::JoinHandle<()> {
+        let r = r.clone();
+        tokio::spawn(async move { r.reserve(total, total).await })
+    }
+
+    /// While a growth waits, small claims are granted inside the floor and
+    /// no further: what lies outside it only comes free, so they never keep
+    /// the growth out.
+    #[tokio::test(start_paused = true)]
+    async fn small_claims_keep_to_the_floor_while_a_growth_waits() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let floor = b.floor();
+        // A grown claim holds 400,000; a second claim's growth to 350,000
+        // would pass the cap, so it waits its turn.
+        let grown = window(&b, 1, 1_000, 400_000).await;
+        grown.reserve(400_000, 400_000).await;
+        let large = window(&b, 2, 1_000, 350_000).await;
+        let mut grow = growing(&large, 350_000);
+        queued(&b, |s| !s.growth.is_empty()).await;
+        // Five small claims fit the floor, and fetches go on starting.
+        let one = 45_000usize;
+        let mut smalls = Vec::new();
+        for _ in 0..5 {
+            let r = Reservation::new(b.clone());
+            tokio::time::timeout(Duration::from_secs(1), r.reserve(one, one))
+                .await
+                .expect("a small claim inside the floor");
+            smalls.push(r);
+            assert!(b.has_room() || smalls.len() == 5);
+        }
+        // A sixth would pass the floor, though the budget has the room.
+        let sixth = Reservation::new(b.clone());
+        let mut wait = tokio::spawn({
+            let r = sixth.clone();
+            async move { r.reserve(one, one).await }
+        });
+        queued(&b, |s| !s.queue.is_empty()).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "past the floor while a growth waits");
+        {
+            let s = b.lock();
+            assert!(s.small <= floor && s.small + KEY + one as u64 > floor);
+            assert!(s.reserved + s.held + KEY + one as u64 <= limit as u64);
+        }
+        assert!(!b.has_room(), "a claim waits");
+        // A small claim ends: the sixth takes its place in the floor. The
+        // growth still waits.
+        drop(smalls.pop());
+        (&mut wait).await.unwrap();
+        assert!(!grow.is_finished());
+        // The grown claim ends: the growth has its room.
+        drop(grown);
+        (&mut grow).await.unwrap();
+        drop((smalls, sixth, large));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// While a growth waits for room, finished results share the floor
+    /// with small claims: results the consumer hasn't taken yet keep new
+    /// small claims out, so the room they free goes to the growth.
+    #[tokio::test(start_paused = true)]
+    async fn finished_results_share_the_floor_while_a_growth_waits() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let result = Reservation::new(b.clone());
+        result.reserve(1, 1).await;
+        result.settle(600_000);
+        let large = window(&b, 1, 1_000, 500_000).await;
+        let mut grow = growing(&large, 500_000);
+        queued(&b, |s| !s.growth.is_empty()).await;
+        // The consumer takes 40,000 at a time, and small claims keep
+        // asking: none is granted, and the growth has its room once enough
+        // is free.
+        let one = 40_000usize;
+        for _ in 0..20 {
+            if grow.is_finished() {
+                break;
+            }
+            let small = Reservation::new(b.clone());
+            let got =
+                tokio::time::timeout(Duration::from_millis(100), small.reserve(one, one)).await;
+            assert!(got.is_err(), "a small claim beside unconsumed results");
+            drop(small);
+            b.release_held(one as u64);
+            tokio::task::yield_now().await;
+        }
+        (&mut grow).await.unwrap();
+        drop((large, result));
+    }
+
+    /// Grown claims together stay within their cap. One held back by it
+    /// keeps its turn: a later growth that would fit waits behind it, and
+    /// it grows once enough grown claims end.
+    #[tokio::test(start_paused = true)]
+    async fn grown_claims_stay_within_their_cap() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let cap = b.grown_cap();
+        let total = 200_000usize;
+        let mut claims = Vec::new();
+        for n in 1..=3 {
+            claims.push(window(&b, n, 1_000, total).await);
+        }
+        let later = window(&b, 9, 1_000, 50_000).await;
+        claims[0].reserve(total, total).await;
+        claims[1].reserve(total, total).await;
+        let mut third = growing(&claims[2], total);
+        queued(&b, |s| s.growth.len() == 1).await;
+        let mut behind = growing(&later, 50_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!third.is_finished(), "a third would pass the cap");
+        assert!(!behind.is_finished(), "a later growth waits its turn");
+        {
+            let s = b.lock();
+            assert!(s.grown <= cap && s.grown + KEY + total as u64 > cap);
+        }
+        // A small claim still has the floor, and fetches go on starting.
+        assert!(b.has_room());
+        let small = Reservation::new(b.clone());
+        small.reserve(1_000, 1_000).await;
+        drop(claims.remove(0));
+        (&mut third).await.unwrap();
+        (&mut behind).await.unwrap();
+        assert!(b.lock().grown <= cap);
+        drop((claims, later, small));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A network has one grown claim at a time; its next waits apart until
+    /// that one ends, while another network's grows.
+    #[tokio::test(start_paused = true)]
+    async fn a_network_has_one_grown_claim_at_a_time() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let total = 100_000usize;
+        let first = window(&b, 1, 1_000, total).await;
+        let second = window(&b, 1, 1_000, total).await;
+        let elsewhere = window(&b, 2, 1_000, total).await;
+        first.reserve(total, total).await;
+        let mut wait = growing(&second, total);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "its network has a grown claim");
+        assert!(b.lock().growth.is_empty());
+        tokio::time::timeout(Duration::from_secs(1), elsewhere.reserve(total, total))
+            .await
+            .expect("another network's claim grows");
+        drop(first);
+        (&mut wait).await.unwrap();
+        assert_eq!(b.lock().grown_nets.len(), 2);
+        drop((second, elsewhere));
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().grown_nets.is_empty());
+    }
+
+    /// Partial and grown claims together stay out of the floor, whatever
+    /// room the budget has.
+    #[tokio::test(start_paused = true)]
+    async fn large_claims_stay_out_of_the_floor() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let beside = limit as u64 - b.floor();
+        // One grown claim under the cap, then windows up to the floor's
+        // edge.
+        let grown = window(&b, 1, 1_000, 400_000).await;
+        grown.reserve(400_000, 400_000).await;
+        let mut windows = Vec::new();
+        for n in 2..60 {
+            let r = Reservation::for_peer(b.clone(), Some(net(n)));
+            let got = tokio::time::timeout(Duration::from_secs(1), r.reserve(60_000, 70_000)).await;
+            if got.is_err() {
+                break;
+            }
+            windows.push(r);
+        }
+        let s = b.lock();
+        assert!(s.partial + s.grown <= beside);
+        assert!(
+            s.partial + s.grown + KEY + 60_000 > beside,
+            "they went up to the edge"
+        );
+        assert!(
+            s.reserved + s.held < limit as u64 - KEY - 60_000,
+            "with room to spare"
+        );
+    }
+
+    /// A growth with no other grown claim beside it passes the cap, so one
+    /// dict larger than the cap is still fetched. Beside other claims it
+    /// stays out of the floor, which small claims keep whole; alone, a
+    /// dict of any size is fetched.
+    #[tokio::test(start_paused = true)]
+    async fn a_lone_growth_passes_the_cap_and_not_the_floor() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let beside = (limit as u64 - b.floor()) as usize;
+        // Up to the floor's edge, it grows.
+        let total = beside - KEY as usize;
+        let lone = window(&b, 1, 1_000, total).await;
+        tokio::time::timeout(Duration::from_secs(1), lone.reserve(total, total))
+            .await
+            .expect("alone, it grows past the cap");
+        assert!(b.lock().grown > b.grown_cap());
+        assert_eq!(b.lock().grown, limit as u64 - b.floor());
+        drop(lone);
+        // One byte more would reach into the floor: beside anything else
+        // it isn't let in, and small claims keep the floor.
+        let first = Reservation::new(b.clone());
+        first.reserve(1_000, 1_000).await;
+        let over = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait = tokio::spawn({
+            let over = over.clone();
+            async move {
+                over.reserve(1_000, total + 1).await;
+                over.reserve(total + 1, total + 1).await;
+            }
+        });
+        queued(&b, |s| s.partials.len() == 1).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(
+            !wait.is_finished(),
+            "nothing passes the floor beside others"
+        );
+        let small = Reservation::new(b.clone());
+        tokio::time::timeout(Duration::from_secs(1), small.reserve(50_000, 50_000))
+            .await
+            .expect("a small claim has the floor");
+        // With nothing else reserved or held, it is fetched alone.
+        drop((first, small));
+        (&mut wait).await.unwrap();
+        drop(over);
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().growth.is_empty() && b.lock().partials.is_empty());
+    }
+
+    /// While one dict above the grown cap grows, small claims still get
+    /// the whole floor, and a second growth waits until it ends.
+    #[tokio::test(start_paused = true)]
+    async fn beside_a_lone_growth_small_claims_keep_the_floor_and_others_wait() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let floor = b.floor();
+        let total = 600_000usize;
+        assert!(total as u64 > b.grown_cap());
+        let lone = window(&b, 1, 1_000, total).await;
+        lone.reserve(total, total).await;
+        let second = window(&b, 2, 1_000, 50_000).await;
+        let mut wait = growing(&second, 50_000);
+        // The floor fills with small claims, all granted.
+        let one = 40_000usize;
+        let mut smalls = Vec::new();
+        while b.lock().small + KEY + one as u64 <= floor {
+            let r = Reservation::new(b.clone());
+            tokio::time::timeout(Duration::from_secs(1), r.reserve(one, one))
+                .await
+                .expect("a small claim in the floor");
+            smalls.push(r);
+        }
+        assert!(smalls.len() >= 5, "{} small claims", smalls.len());
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "a second growth waits");
+        drop(lone);
+        (&mut wait).await.unwrap();
+        drop((second, smalls));
+        assert_eq!(used(&b), 0);
     }
 
     /// A raw plaintext peer for one fetch: it announces `info`'s size and
@@ -4108,6 +4725,94 @@ mod budget {
             0,
             "a peer timeout, not a wait"
         );
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    /// An info dict of exactly `len` bytes, and its key.
+    fn dict_of(len: usize) -> (Vec<u8>, InfoHash) {
+        let head =
+            b"d6:lengthi1e4:name4:test12:piece lengthi16384e6:pieces20:AAAAAAAAAAAAAAAAAAAA5:x-pad";
+        let mut pad = len - head.len() - 2;
+        // The pad's length prefix takes some of the room itself.
+        while pad.to_string().len() + 1 + pad + head.len() + 1 > len {
+            pad -= 1;
+        }
+        let mut info = head.to_vec();
+        info.extend(format!("{pad}:").bytes());
+        info.resize(info.len() + pad, b'0');
+        info.push(b'e');
+        assert_eq!(info.len(), len);
+        let key = lodestar_metainfo::Info::parse(&info)
+            .unwrap()
+            .primary_hash();
+        (info, key)
+    }
+
+    /// With a worker's budget, the real fetcher fetches a dict of the
+    /// largest size the pool gives room ([`largest_dict`]) and refuses one
+    /// byte more at the handshake, before reserving anything. Real time and
+    /// TCP, with condition waits.
+    #[tokio::test]
+    async fn a_pool_fetches_its_largest_dict_and_refuses_one_byte_more() {
+        let budget = 4 << 20;
+        let largest = largest_dict(budget);
+        let (info, key) = dict_of(largest);
+        let (over_info, over_key) = dict_of(largest + 1);
+        let fits = raw_peer(info.clone(), key.0, false).await;
+        let over = raw_peer(over_info, over_key.0, false).await;
+
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out_tx, mut out) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let fetcher = PeerWireFetcher(FetchOptions {
+            allow_private: true,
+            encryption: lodestar_peer_wire::Encryption::Disable,
+            timeout: Duration::from_secs(30),
+            max_metadata: largest,
+            ..FetchOptions::default()
+        });
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: budget,
+                ..PoolConfig::default()
+            },
+            Arc::new(fetcher),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let source = SourceId::new(0).unwrap();
+        for (k, peer) in [(over_key, over), (key, fits)] {
+            disc_tx
+                .send(Discovery {
+                    source,
+                    found: crate::Found::key(k, 0).with_peers(vec![peer]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+        }
+        let stats = handle.stats();
+        let got = tokio::time::timeout(Duration::from_secs(60), out.recv())
+            .await
+            .expect("the largest dict")
+            .unwrap();
+        assert_eq!(got.key, key);
+        assert_eq!(got.fetched.info.len(), largest);
+        until("the larger one refused", async || {
+            handle.queued().await;
+            stats.failure_count(FailureKind::Oversize) == 1
+        })
+        .await;
+        assert_eq!(stats.reserve_timeouts.load(Ordering::Relaxed), 0);
         stop.send(true).unwrap();
         task.await.unwrap();
     }
@@ -4455,7 +5160,7 @@ mod vouch {
                 }
             }
             assert_eq!(w.lines[&address].live, 2);
-            assert!(room(w) <= 2 * 2 + 4, "{} turns kept", room(w));
+            assert!(room(w) <= 4 * 2 + 8, "{} turns kept", room(w));
             w.check(|_| true);
             let rest: Vec<InfoHash> = line(w, address);
             assert_eq!(rest.len(), 2);
