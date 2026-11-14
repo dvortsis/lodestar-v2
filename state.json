@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:10Z",
+  "updated_at": "2026-11-14T03:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9412,7 +9412,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T03:10Z",
+    "updated": "2026-11-14T03:12Z",
     "items": [
       {
         "slot": 1,
@@ -9573,13 +9573,13 @@
       },
       {
         "slot": 30,
-        "slice": "X-metainfo01-fix",
+        "slice": "X-pia-vm-helper",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "status": "idle",
-        "since": "2026-11-14T00:43Z",
-        "doing": "#862 merged (0dc154ee); slot free",
+        "status": "active",
+        "since": "2026-11-14T03:12Z",
+        "doing": "launching (brief briefs/X-pia-vm-helper.md)",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9683,7 +9683,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T03:10Z",
+  "updated": "2026-11-14T03:12Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
