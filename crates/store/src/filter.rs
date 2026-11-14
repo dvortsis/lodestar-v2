@@ -678,10 +678,13 @@ impl Store {
     }
 
     /// [`tombstone_from_worker`](Self::tombstone_from_worker), only for
-    /// hashes not stored: the check and the write are one write
-    /// transaction, so no commit lands between them. A stored torrent
-    /// keeps the judgment the coordinator's own filter gave it. Returns
-    /// `(added, stored)`: rows added, and hashes skipped as stored.
+    /// hashes the store has nothing under: no stored torrent, no item
+    /// awaiting verification and no import candidate. A row under a hold
+    /// is something the main node judges itself; a worker's report never
+    /// removes one. The checks and the writes are one write transaction,
+    /// so no commit lands between them, and a failure part way writes
+    /// nothing. Returns `(added, kept)`: rows added, and hashes skipped
+    /// because the store has something under them.
     pub fn tombstone_from_worker_unless_stored(
         &mut self,
         hashes: &[[u8; 20]],
@@ -695,12 +698,24 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let (mut added, mut stored) = (0, 0);
         {
+            // What a hold's insert would otherwise take away (the
+            // tombstone triggers): an unverified item or an import
+            // candidate under the hash.
+            let mut pending = tx.prepare_cached(
+                "SELECT EXISTS (
+                     SELECT 1 FROM unverified_items WHERE network = 0 AND key = ?1
+                 ) OR EXISTS (
+                     SELECT 1 FROM import_candidates WHERE hash = ?1
+                         OR (hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1)
+                 )",
+            )?;
             let mut ins = tx.prepare_cached(
                 "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)
                  ON CONFLICT (hash) DO NOTHING",
             )?;
             for h in hashes {
-                if crate::find_any(&tx, std::iter::once(InfoHash(*h)))?.is_some() {
+                let awaiting: bool = pending.query_row([&h[..]], |r| r.get(0))?;
+                if awaiting || crate::find_any(&tx, std::iter::once(InfoHash(*h)))?.is_some() {
                     stored += 1;
                     continue;
                 }
@@ -1430,6 +1445,78 @@ impl Store {
 mod tests {
     use super::*;
     use crate::StoreConfig;
+
+    /// A worker's report on a key the store has anything under (an item
+    /// awaiting verification, an import candidate by either hash) leaves
+    /// that row in place, journals no deletion, and holds nothing; a key
+    /// with nothing under it is held.
+    #[test]
+    fn a_worker_report_leaves_unverified_and_import_rows_alone() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.conn
+            .execute_batch(&format!(
+                "INSERT OR IGNORE INTO sources (id, plugin, version, state, added_at)
+                     VALUES (0, 'dht', '1', 0, 0);
+                 INSERT INTO unverified_items (network, key, source_id, sources, flags, claims,
+                     first_at, last_at) VALUES (0, x'{u}', 0, 1, 0, x'01000000000000', 0, 0);
+                 INSERT INTO import_sources (id, adapter, dataset, schema_sig)
+                     VALUES (1, 'magnetico', x'01', x'02');
+                 INSERT INTO import_jobs (id, source, adapter_ver, contract_ver, phase, control,
+                     options, created_at, updated_at) VALUES (1, 1, 1, 1, 2, 0, x'', 0, 0);
+                 INSERT INTO import_candidates (hash, job, name, missing, privacy, at)
+                     VALUES (x'{c}', 1, CAST('a' AS BLOB), 6, 0, 0);
+                 INSERT INTO import_candidates (hash, hash_v2, job, name, missing, privacy, at)
+                     VALUES (x'{d}', x'{v2}', 1, CAST('b' AS BLOB), 6, 0, 0);",
+                u = "51".repeat(20),
+                c = "52".repeat(20),
+                d = "53".repeat(20),
+                v2 = format!("{}{}", "54".repeat(20), "00".repeat(12)),
+            ))
+            .unwrap();
+        let count =
+            |s: &Store, sql: &str| -> i64 { s.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        let keys = [[0x51; 20], [0x52; 20], [0x54; 20], [0x55; 20]];
+        let (added, kept) = s.tombstone_from_worker_unless_stored(&keys, 7, 10).unwrap();
+        assert_eq!((added, kept), (1, 3));
+        assert_eq!(count(&s, "SELECT count(*) FROM unverified_items"), 1);
+        assert_eq!(count(&s, "SELECT count(*) FROM import_candidates"), 2);
+        assert_eq!(count(&s, "SELECT count(*) FROM snapshot_deletions"), 0);
+        assert_eq!(
+            s.held_among(&keys).unwrap(),
+            vec![false, false, false, true]
+        );
+    }
+
+    /// The checks and the writes are one transaction: a write that fails
+    /// part way leaves nothing written.
+    #[test]
+    fn a_worker_report_that_fails_part_way_writes_nothing() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.conn
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER fail_second BEFORE INSERT ON main.tombstones
+                     WHEN new.hash = x'{}' BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                "62".repeat(20)
+            ))
+            .unwrap();
+        assert!(
+            s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
+                .is_err()
+        );
+        assert_eq!(
+            s.held_among(&[[0x61; 20]]).unwrap(),
+            vec![false],
+            "rolled back"
+        );
+        s.conn
+            .execute_batch("DROP TRIGGER temp.fail_second")
+            .unwrap();
+        assert_eq!(
+            s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
+                .unwrap(),
+            (2, 0)
+        );
+    }
 
     /// Rows of other kinds, written as their own paths write them.
     fn put_row(s: &Store, hash: u8, rule: &str, at: i64) {

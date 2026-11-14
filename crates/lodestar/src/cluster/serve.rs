@@ -328,6 +328,8 @@ pub(crate) struct FloorReports {
     /// Held across a whole flush and a revoke's purge, so a purge never
     /// lands while a batch it should cover is being written.
     writing: Mutex<()>,
+    /// Workers revoked in this run: their reports are refused.
+    revoked: Mutex<std::collections::HashSet<u32>>,
     /// Revoked workers whose written reports are still to be deleted (a
     /// purge that failed): every flush tries them first.
     to_purge: Mutex<std::collections::BTreeSet<u32>>,
@@ -360,6 +362,8 @@ enum Reported {
     /// Within its budget, but the map is full: counted, nothing else, and
     /// no budget slot used.
     TurnedAway,
+    /// From a revoked worker: dropped, nothing held.
+    Revoked,
 }
 
 /// A worker's floor reports per rolling window before it's paused. An
@@ -388,6 +392,7 @@ impl FloorReports {
             held,
             cap,
             writing: Mutex::new(()),
+            revoked: Mutex::default(),
             to_purge: Mutex::default(),
             wake: tokio::sync::Notify::new(),
             reported: AtomicU64::new(0),
@@ -415,6 +420,17 @@ impl FloorReports {
     fn report(&self, worker: WorkerId, key: &InfoHash, at: i64, now: Instant) -> Reported {
         self.reported.fetch_add(1, Ordering::Relaxed);
         let mut recent = self.recent();
+        // Under `recent`, as `forget_worker` marks a worker revoked: a
+        // report lands either before the revoke (and goes with it) or is
+        // refused.
+        if self
+            .revoked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&worker.0)
+        {
+            return Reported::Revoked;
+        }
         let q = recent.entry(worker.0).or_default();
         while q
             .front()
@@ -449,26 +465,38 @@ impl FloorReports {
             }
         }
         q.push_back(now);
-        drop(recent);
+        // Before `recent` goes, so a revoke right after finds the key held
+        // and can let it go.
         if let Some(held) = &self.held {
             held.insert(key.0);
         }
+        drop(recent);
         self.wake.notify_one();
         Reported::Taken
     }
 
-    /// Forgets a revoked worker: its reports not written yet and its
-    /// budget window (#607's review). The written ones go with
-    /// [`revoke`](Self::revoke); the built-in worker's held set keeps the
-    /// dropped keys until the next start, refusing more, never less.
-    /// Returns how many reports it dropped.
-    pub(crate) fn forget_worker(&self, worker: WorkerId) -> usize {
+    /// Forgets a revoked worker: marks it revoked (its later reports are
+    /// refused), and drops its budget window and its reports not written
+    /// yet (#607's review). Returns the dropped reports' keys; the written
+    /// ones go with [`revoke`](Self::revoke), which lets the built-in
+    /// worker's held set go of both.
+    pub(crate) fn forget_worker(&self, worker: WorkerId) -> Vec<[u8; 20]> {
         let mut recent = self.recent();
+        self.revoked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(worker.0);
         recent.remove(&worker.0);
         let mut pending = self.pending();
-        let before = pending.len();
-        pending.retain(|_, r| r.worker != worker.0);
-        before - pending.len()
+        let mut dropped = Vec::new();
+        pending.retain(|k, r| {
+            let mine = r.worker == worker.0;
+            if mine {
+                dropped.push(*k);
+            }
+            !mine
+        });
+        dropped
     }
 
     /// A revoke: forgets the worker's reports not written yet and deletes
@@ -485,7 +513,7 @@ impl FloorReports {
         config: StoreConfig,
     ) -> Result<usize, lodestar_store::Error> {
         let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        self.forget_worker(worker);
+        let dropped = self.forget_worker(worker);
         self.to_purge
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -493,6 +521,7 @@ impl FloorReports {
         let done = Store::open(db, config).and_then(|mut s| {
             let gone = s.purge_worker_floor(worker.0)?;
             self.release_held(&s, &gone);
+            self.release_held(&s, &dropped);
             Ok(gone.len())
         });
         match &done {
@@ -3387,6 +3416,39 @@ mod tests {
         assert!(held.contains(&key_n(2).0), "another worker's report stays");
     }
 
+    /// A revoke lets the built-in held set go of the worker's reports not
+    /// written yet, and a report from that worker arriving after the
+    /// revoke (an outcome already past its lease check) is refused: never
+    /// held, never written.
+    #[test]
+    fn a_revoked_workers_late_report_is_refused_and_its_unwritten_ones_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        let at = SystemClock.now_secs();
+        floor.report(WorkerId(5), &key_n(1), at, Instant::now());
+        floor.report(WorkerId(6), &key_n(2), at, Instant::now());
+        assert!(held.contains(&key_n(1).0));
+        floor
+            .revoke(WorkerId(5), &db, StoreConfig::default())
+            .unwrap();
+        assert!(!held.contains(&key_n(1).0), "unwritten, let go");
+        assert!(held.contains(&key_n(2).0), "another worker's stays");
+        // The late report.
+        assert_eq!(
+            floor.report(WorkerId(5), &key_n(3), at, Instant::now()),
+            Reported::Revoked
+        );
+        assert!(!held.contains(&key_n(3).0) && !floor.holds(&key_n(3)));
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        let rows = Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .held_among(&[key_n(1).0, key_n(2).0, key_n(3).0])
+            .unwrap();
+        assert_eq!(rows, vec![false, true, false]);
+    }
+
     /// A flush keeps the writer's lock from taking its batch to removing
     /// it, so a revoke can't land in between.
     #[test]
@@ -3531,12 +3593,13 @@ mod tests {
             Reported::Taken
         );
         assert_eq!(floor.turned_away.load(Ordering::Relaxed), 0);
-        // Revoked, it's forgotten: its unwritten reports and its window.
-        assert_eq!(floor.forget_worker(WorkerId(9)), FLOOR_BUDGET);
+        // Revoked, it's forgotten: its unwritten reports and its window,
+        // and its later reports are refused.
+        assert_eq!(floor.forget_worker(WorkerId(9)).len(), FLOOR_BUDGET);
         assert_eq!(floor.len(), 1);
         assert_eq!(
             floor.report(WorkerId(9), &key_n(1), 1, now),
-            Reported::Taken
+            Reported::Revoked
         );
     }
 

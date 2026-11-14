@@ -1253,7 +1253,7 @@ mod tests {
     }
 
     /// #607's delta review: revoking a worker forgets its floor reports not
-    /// written yet and its budget window.
+    /// written yet and its budget window, and refuses its later reports.
     #[tokio::test]
     async fn revoking_a_worker_forgets_its_floor_reports() {
         let dir = tempfile::tempdir().unwrap();
@@ -1268,7 +1268,8 @@ mod tests {
         assert!(!h.floor_report_for_test(w, 255, 999));
         c.workers.revoke(w.0).await.unwrap();
         assert_eq!(h.floor_pending_for_test(w), 0);
-        assert!(h.floor_report_for_test(w, 1, 1000), "a fresh window");
+        assert!(!h.floor_report_for_test(w, 1, 1000), "refused from now on");
+        assert_eq!(h.floor_pending_for_test(w), 0);
         c.stop().await;
     }
 
