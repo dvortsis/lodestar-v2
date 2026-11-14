@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T02:20Z",
+  "updated_at": "2026-11-14T02:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8326,6 +8326,11 @@
       "id": "metainfo01-owner-fyi",
       "at": "2026-11-14T01:58Z",
       "what": "after the X-metainfo01-fix merge: tell the owner one parse within the new budget can exceed the worker steady-state memory budget (an owner number); the follow-up slice adds a per-batch byte budget; old branch slice/X-metainfo01-fix deletion is the owner call"
+    },
+    {
+      "id": "856-polish",
+      "at": "2026-11-14T02:29Z",
+      "what": "X-worker-839-followups polish (runner waived the old-decisions-file edit rule for the one superseded line): decisions file heading (#856), repeated lines 19/21, flush-loop bullet nesting; runtime.rs test filler polled once with timeout(ZERO) -> spawn it; detect.rs comment both Unix and Windows reasons; plus follow-up slice: a coordinator-requested drain reads no events while sending Drained (session.rs ~681-688)"
     }
   ],
   "main_health": [
@@ -8714,13 +8719,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "856": {
-      "slice": "X-worker-839-followups",
-      "head": "eac647c1",
-      "slot": 7,
-      "review": "CHANGES r1 relayed (flush-loop test not deterministic + 3 nits)",
-      "at": "2026-11-14T00:34Z"
     },
     "857": {
       "slice": "X-filter01-rejudge",
@@ -9388,7 +9386,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T02:20Z",
+    "updated": "2026-11-14T02:29Z",
     "items": [
       {
         "slot": 1,
@@ -9422,12 +9420,12 @@
       },
       {
         "slot": 7,
-        "slice": "X-worker-839-followups",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "#856 open; CI + fresh Opus review",
-        "since": "2026-11-13T23:03Z",
-        "status": "active",
+        "doing": "retired after #856 merged; CLUSTER-06 goes to the reviewer session",
+        "since": "2026-11-14T02:29Z",
+        "status": "idle",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
       },
@@ -9659,7 +9657,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T02:20Z",
+  "updated": "2026-11-14T02:29Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10186,6 +10184,12 @@
       "slice": "runner Track Q order",
       "merged": "080c8335",
       "at": "2026-11-14T01:56Z"
+    },
+    {
+      "pr": 856,
+      "slice": "X-worker-839-followups",
+      "merged": "d649932e",
+      "at": "2026-11-14T02:29Z"
     }
   ]
 }
