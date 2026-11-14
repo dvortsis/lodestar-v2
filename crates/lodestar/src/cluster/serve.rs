@@ -1754,9 +1754,6 @@ impl std::fmt::Debug for ClusterHandle {
 }
 
 impl ClusterHandle {
-    /// Registers what to do when a worker first goes over its floor
-    /// budget (`Workers` saves the pause). One hook; a later call replaces
-    /// it.
     /// Sets `Workers`' pause source: on the server serving now, and on
     /// every server started from here on, before it serves anyone.
     pub(crate) fn set_pause_source(&self, source: PauseSource) {
@@ -1766,6 +1763,14 @@ impl ClusterHandle {
         }
     }
 
+    /// The pause source `Workers` set, if any.
+    pub(crate) fn pause_source(&self) -> Option<PauseSource> {
+        lock(&self.0.pause_source).clone()
+    }
+
+    /// Registers what to do when a worker first goes over its floor
+    /// budget (`Workers` saves the pause). One hook; a later call replaces
+    /// it.
     pub(crate) fn on_floor_over_budget(&self, hook: OverBudgetHook) {
         *self
             .0
