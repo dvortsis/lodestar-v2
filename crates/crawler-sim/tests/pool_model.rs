@@ -5,12 +5,17 @@
 //! evictions, dropped sources, policy changes, a user's interest and time
 //! passing. The queue is small, so every address and network is full most
 //! of the time and keys are evicted throughout. After every step the queue
-//! is snapshotted, which in a debug build compares the places per address
-//! and network, and the wait lists, with what the entries say. At the end
-//! every key taken in must have ended once: fetched, lost, or still queued.
+//! is snapshotted, which compares the places per address and network, and
+//! the wait lists, with what the entries say: in a debug build only, as
+//! `cargo test` builds it, since the recount is a debug assertion in the
+//! pool. At the end every key taken in must have ended once: fetched,
+//! lost, or still queued.
 //!
-//! The seeds are fixed, so a run is the same every time; a failure names
-//! its seed and step. Every wait is the paused clock's: nothing sleeps.
+//! It lives here, beside the simulator, for the pool's `testing` seam:
+//! with it the pool's own maps are ordered, so with the seeds fixed a run
+//! is the same every time (each seed prints its totals) and a failure,
+//! which names its seed and step, reproduces. Each seed has a runtime of
+//! its own. Every wait is the paused clock's: nothing sleeps.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -270,8 +275,8 @@ async fn run(seed: u64) {
         while let Ok(got) = out.try_recv() {
             *fetched.entry(got.key).or_default() += 1;
         }
-        // The recount runs in the snapshot; a pool that died answers
-        // nothing and has finished.
+        // The recount runs in the snapshot (in a debug build); a pool that
+        // died answers nothing and has finished.
         let queue = handle.snapshot().await;
         assert!(
             !task.is_finished(),
@@ -292,6 +297,14 @@ async fn run(seed: u64) {
     }
     // Every stay ended once: fetched, lost, or still queued at the end.
     let (taken, lost) = (ends.taken.lock().unwrap(), ends.lost.lock().unwrap());
+    let total = |m: &HashMap<InfoHash, u32>| m.values().sum::<u32>();
+    eprintln!(
+        "seed {seed}: taken {} fetched {} lost {} left {}",
+        total(&taken),
+        total(&fetched),
+        total(&lost),
+        left.len()
+    );
     for n in 0..KEYS {
         let k = key(n);
         let get = |m: &HashMap<InfoHash, u32>| m.get(&k).copied().unwrap_or(0);
@@ -308,9 +321,14 @@ async fn run(seed: u64) {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn random_traffic_keeps_the_pool_consistent() {
+#[test]
+fn random_traffic_keeps_the_pool_consistent() {
     for seed in SEEDS {
-        run(seed).await;
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap()
+            .block_on(run(seed));
     }
 }

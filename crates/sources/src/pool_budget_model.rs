@@ -6,7 +6,9 @@
 //! networks. Claims hold their room for a while, then become finished
 //! results or are dropped; a consumer that sometimes lags takes the
 //! results. Throughout, the budget's bounds are checked, and no wait for
-//! room may last longer than [`MAX_WAIT`] while traffic goes on. At the
+//! room may last longer than [`MAX_WAIT`] while traffic goes on, nor a
+//! large claim's first window longer than [`CHURN_WAIT`] while small claims
+//! churn. At the
 //! end every count is back to zero.
 //!
 //! The seeds are fixed, so a run is the same every time; a failure names
@@ -29,6 +31,10 @@ const WORKER: usize = 4 << 20;
 const TRAFFIC: Duration = Duration::from_secs(60);
 /// The longest any wait for room may take while claims come and go.
 const MAX_WAIT: Duration = Duration::from_secs(30);
+/// The longest a large claim's first window may wait while small claims
+/// churn: a fetch's deadline. Steady small traffic mustn't keep it out
+/// (the budget's `starved` rule).
+const CHURN_WAIT: Duration = Duration::from_secs(8);
 const NETWORKS: u64 = 6;
 
 /// xorshift64*.
@@ -64,6 +70,16 @@ fn net(n: u64) -> super::Net {
 /// The budget's bounds, read together.
 fn check(b: &Budget, seed: u64) {
     let s = b.lock();
+    // Within the budget. A lone claim may pass it (`grant`'s `others ==
+    // 0`), so one dict larger than the budget is still fetched; no claim
+    // here is that large.
+    assert!(
+        s.reserved + s.held <= b.limit,
+        "seed {seed}: {} reserved + {} held over {}",
+        s.reserved,
+        s.held,
+        b.limit
+    );
     let beside = b.limit - b.floor();
     assert!(
         s.grown <= b.grown_cap() || s.grown_nets.len() <= 1,
@@ -86,18 +102,18 @@ fn check(b: &Budget, seed: u64) {
     }
 }
 
-/// Waits for `reserve`, failing the seed if it takes past [`MAX_WAIT`].
+/// Waits for `reserve`, failing the seed if it takes past `bound`.
 async fn granted(
     what: &str,
-    seed: u64,
+    (seed, bound): (u64, Duration),
     b: &Budget,
     sizes: (usize, usize),
     reserve: impl std::future::Future<Output = ()>,
 ) {
-    if timeout(MAX_WAIT, reserve).await.is_err() {
+    if timeout(bound, reserve).await.is_err() {
         let s = b.lock();
         panic!(
-            "seed {seed}: a {what} of {sizes:?} waited past {MAX_WAIT:?}: reserved {} held {} \
+            "seed {seed}: a {what} of {sizes:?} waited past {bound:?}: reserved {} held {} \
              partial {} small {} grown {} nets {:?} partial_nets {:?} queue {} partials {} \
              growth {:?} starved {:?} needs {:?}",
             s.reserved,
@@ -136,14 +152,15 @@ async fn claim(b: Arc<Budget>, seed: u64, mut rng: Rng) {
     let net = rng.range(1, NETWORKS);
     let hold = Duration::from_millis(rng.range(50, 1_000));
     let settle = rng.chance(60);
-    life(b, seed, rng, net, (window, total), hold, settle).await;
+    life(b, (seed, MAX_WAIT), rng, net, (window, total), hold, settle).await;
 }
 
 /// A claim from `net` of `sizes` (first window, whole), held for `hold`
-/// once it has all its room, then settled as a result or dropped.
+/// once it has all its room, then settled as a result or dropped. Its
+/// first reservation may wait up to `first_wait`; any other, [`MAX_WAIT`].
 async fn life(
     b: Arc<Budget>,
-    seed: u64,
+    (seed, first_wait): (u64, Duration),
     mut rng: Rng,
     net_id: u64,
     (window, total): (usize, usize),
@@ -153,7 +170,7 @@ async fn life(
     let r = Reservation::for_peer(b.clone(), Some(net(net_id)));
     granted(
         "first reservation",
-        seed,
+        (seed, first_wait),
         &b,
         (window, total),
         r.reserve(window, total),
@@ -161,7 +178,14 @@ async fn life(
     .await;
     if window < total {
         sleep(Duration::from_millis(rng.range(50, 800))).await;
-        granted("growth", seed, &b, (total, total), r.reserve(total, total)).await;
+        granted(
+            "growth",
+            (seed, MAX_WAIT),
+            &b,
+            (total, total),
+            r.reserve(total, total),
+        )
+        .await;
     }
     sleep(hold).await;
     if settle {
@@ -187,7 +211,7 @@ async fn growth_pressure(b: Arc<Budget>, seed: u64, mut rng: Rng, length: Durati
         let hold = Duration::from_millis(rng.range(1_000, 1_600));
         claims.spawn(life(
             b.clone(),
-            seed,
+            (seed, MAX_WAIT),
             Rng::new(rng.next()),
             n % NETWORKS + 1,
             (64 << 10, total),
@@ -211,18 +235,19 @@ async fn small_churn(b: Arc<Budget>, seed: u64, mut rng: Rng, length: Duration) 
     let start = tokio::time::Instant::now();
     let mut claims = tokio::task::JoinSet::new();
     while start.elapsed() < length {
-        let (sizes, hold) = if rng.chance(3) {
+        let (sizes, hold, first_wait) = if rng.chance(3) {
             (
                 (64 << 10, rng.range(300_000, 500_000) as usize),
                 Duration::from_millis(500),
+                CHURN_WAIT,
             )
         } else {
             let n = rng.range(20_000, 60_000) as usize;
-            ((n, n), Duration::from_millis(rng.range(100, 300)))
+            ((n, n), Duration::from_millis(rng.range(100, 300)), MAX_WAIT)
         };
         claims.spawn(life(
             b.clone(),
-            seed,
+            (seed, first_wait),
             Rng::new(rng.next()),
             rng.range(1, NETWORKS),
             sizes,
