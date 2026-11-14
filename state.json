@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T15:38Z",
+  "updated_at": "2026-11-14T15:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8742,6 +8742,16 @@
       "id": "X-gluetun-recover",
       "note": "X-test-vm finding 4 (twice): after gluetun restarts and is healthy, Lodestar API stays down (>60 s) until docker restart; data intact. Fix the network-namespace rejoin/restart policy so it recovers alone.",
       "at": "2026-11-14T15:18Z"
+    },
+    {
+      "id": "X-fetch-junk-backoff",
+      "note": "Fetch pool hardening after X-fetch-room-fix; slot 33 order: X-pool-model-test, X-fetch-first-window, X-fetch-junk-backoff. Detail by message only.",
+      "at": "2026-11-14T15:48Z"
+    },
+    {
+      "id": "X-fetch-preempt",
+      "note": "Parked: decide after X-fetch-junk-backoff with numbers.",
+      "at": "2026-11-14T15:48Z"
     }
   ],
   "main_health": [
@@ -10052,7 +10062,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T15:38Z",
+  "updated": "2026-11-14T15:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
