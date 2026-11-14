@@ -356,6 +356,13 @@ class Unreadable(Exception):
 PROSE_NEXT = {"access", "rights", "privileges", "permission", "permissions"}
 
 
+def is_prose(after):
+    """The text after a sudo marks it as prose: the next word is on the list
+    and is a whole word, never NAME=value (sudo's own variable syntax)."""
+    nxt = re.match(r"\s+([A-Za-z]+)(?![\w=])", after)
+    return bool(nxt and nxt.group(1).lower() in PROSE_NEXT)
+
+
 def sudo_argv(where, s, consts):
     """argv after `sudo -n` in a command string. {NAME} resolves to a module
     constant; any other {...} stands as <arg>."""
@@ -385,8 +392,7 @@ def judge_string(where, s, consts):
         if m.start() == 0:
             found.append((where, sudo_argv(where, s, consts)))
             continue
-        nxt = re.match(r"\s+([A-Za-z]+)", s[m.end():])
-        if not (nxt and nxt.group(1).lower() in PROSE_NEXT):
+        if not is_prose(s[m.end():]):
             raise Unreadable(f"{where}: sudo inside a longer string the tie test can't read: {s.strip()!r}")
     return found
 
@@ -444,11 +450,14 @@ def shell_code(line):
     return line
 
 
-def scan_shell(text, rel):
+def scan_shell(text, rel, powershell=False):
     """A quoted string that starts with sudo, or a sudo command word, is a
-    command. sudo held in a variable, or anywhere else but prose, is refused."""
+    command. sudo held in a variable, or anywhere else but prose, is refused.
+    Escapes that stand for whitespace (PowerShell's `n, a shell string's \\n)
+    count as whitespace, so they can't glue a word onto sudo."""
     found = []
     for n, line in enumerate(text.splitlines(), 1):
+        line = re.sub(r"`[0abfnrtv]" if powershell else r"\\[nrt]", " ", line)
         code, where = shell_code(line), f"{rel}:{n}"
         if re.search(r"=\s*[\"']?sudo\b", code):
             raise Unreadable(f"{where}: sudo kept in a variable the tie test can't follow: {code.strip()}")
@@ -463,8 +472,8 @@ def scan_shell(text, rel):
             elif (not before or before.isspace() or before in ";|&(") and re.match(r"sudo(\s|$)", code[i:]):
                 found.append((where, sudo_argv(where, re.split(r"[;&|)]", code[i:])[0], {})))
             else:
-                nxt = re.match(r"\s+([A-Za-z]+)", code[m.end():])
-                if not (nxt and nxt.group(1).lower() in PROSE_NEXT):
+                # A path or command substitution before it is never prose.
+                if before in "/`" or not is_prose(code[m.end():]):
                     raise Unreadable(f"{where}: a sudo use the tie test can't read: {code.strip()}")
     return found
 
@@ -477,7 +486,7 @@ def scan_file(p, rel):
         raise Unreadable(f"{rel}: not UTF-8, so the tie test can't read it")
     if p.suffix == ".py":
         return scan_python(text, rel)
-    return scan_shell(text, rel)
+    return scan_shell(text, rel, powershell=p.suffix == ".ps1")
 
 
 def privileged_commands(tops):
@@ -546,6 +555,14 @@ for name, body in {"list.py": 'X = ["sudo", "-n", "id"]\n', "no_n.py": 'X = "sud
                    "mid_semicolon.py": 'X = f"test -d {d}; sudo tee /etc/sudoers.d/x"\n',
                    "variable.sh": "SUDO=sudo\n$SUDO -n systemctl stop docker\n",
                    "name.py": "cmd = [sudo, '-n', 'id']\n",
+                   # The runner's delta probes: NAME=value after sudo is not prose.
+                   "py_access.py": "X = 'cd /; sudo access=1 /bin/sh -c id'\n",
+                   "py_fstring_env.py": 'X = f"cd {d}; sudo PERMISSION=1 reboot"\n',
+                   "backtick_access.sh": "x=`sudo access=1 reboot`\n",
+                   "abs_access.sh": "/usr/bin/sudo access=1 reboot\n",
+                   "abs_n.sh": "/usr/bin/sudo -n reboot\n",
+                   "ps_access.ps1": '$x = "x;`nsudo access=1 reboot"\n',
+                   "sh_escape.sh": "printf 'x;\\nsudo -n reboot'\n",
                    "not_utf8.sh": None}.items():
     if body is None:
         (sc / name).write_bytes(b"sudo -n id \xff\xfe\n")
@@ -877,6 +894,7 @@ if [[ "\$1" == inspect && "\$2" == -f ]]; then
   esac
   exit 1
 fi
+if [[ "\$1" == ps ]]; then echo "\${MOCK_CRAWLER:-}"; exit 0; fi
 if [[ "\$1" == exec && "\$2" == gluetun ]]; then
   shift 2
   # A kernel built without IPv6 has no switch to read: IPv6 is off there.
@@ -950,6 +968,10 @@ for verb in verify-dns-firewall wg-endpoints query-egress inspect-firewall; do
   grep -q "is not this stack's gluetun service" <<<"$out" || fail "$verb read another project's gluetun: $out"
 done
 pass "verbs that read gluetun refuse the fleet's (another project's) container"
+
+out="$(MOCK_CRAWLER=0123456789ab PATH="$MOCK:$PATH" "$HELPER_BIN" start-vpn 2>&1 || true)"
+grep -q "crawler is running; run stop-vpn before start-vpn" <<<"$out" || fail "start-vpn with a running crawler: $out"
+pass "start-vpn refuses while this stack's crawler runs"
 
 if PATH="$MOCK:$PATH" "$HELPER_BIN" cleanup >/dev/null 2>&1; then fail "cleanup passed although compose down failed"; fi
 [[ -f "$RUN_DIR/wg0.conf" ]] || fail "cleanup deleted wg0.conf although the containers weren't verifiably down"

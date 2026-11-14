@@ -34,10 +34,11 @@ Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split
     - In shell and PowerShell, a quoted string that starts with `sudo`, or a `sudo` command word. Comments are cut only at a word-starting `#` outside quotes and `${...}`.
   - **What fails it:**
     - a `sudo` without `-n`, or with another option;
-    - a `sudo` anywhere else in a string (`"cd /x && sudo …"`, `f"…; sudo tee …"`), unless the next word marks prose (`access`, `rights`, `privileges`, `permission`);
+    - a `sudo` anywhere else in a string (`"cd /x && sudo …"`, `f"…; sudo tee …"`), unless the next word marks prose (`access`, `rights`, `privileges`, `permission`) as a whole word. `sudo access=1 cmd` is sudo's own variable syntax, never prose, and a path or backtick before `sudo` (`/usr/bin/sudo`, `` `sudo … ` ``) never counts as prose either. Escapes that stand for whitespace (PowerShell's `` `n ``, a shell string's `\n`) count as whitespace, so they can't glue a word onto `sudo`;
     - `sudo` kept in a shell variable (`SUDO=sudo`), a Python name `sudo`, or a list form;
     - a file that isn't UTF-8.
-  - **Self-checks:** they cover each form, the self-review's two comment bypasses and the runner's four probes.
+  - **Self-checks:** they cover each form, the self-review's two comment bypasses, the runner's four probes and its five `NAME=value` and path probes.
+  - **Not covered:** deliberate evasion (`'su' + 'do'`, `doas`). Once X-fleet-sudo-narrow drops the broad grant, sudoers itself is the boundary (runner, 2026-11-14).
   - **Today:** that's `bash` (fleet steps and deliver-pia) and `flock` (deliver-pia's clean check). Under the `ALL` grant, coverage is total by construction, so the test's live value now is the pin on the grant and the refusal of forms it can't read. A self-check proves the matcher fails with the helper rule alone. visudo checks the lines too.
   - **For X-fleet-sudo-narrow:** `sudo -n bash -c` hides its inner commands from this test, so that slice replaces it with helper verbs rather than listing `bash` in sudoers.
 - **Follow-up: X-fleet-sudo-narrow** moves every fleet step and deliver-pia behind root-owned fixed-verb helpers, then drops the broad grant. Then the tie test proves nothing still needs it.
@@ -50,7 +51,7 @@ Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split
 - **gluetun's digest** is main's v3.41.3 (`fa19cc76…`), and the test ties the helper's, the compose file's and the fleet's together.
 - **`write-config` reads at most 4 KiB from stdin,** writes to a `mktemp` file, refuses control characters (the old check missed them, despite its comment), and replaces the target with `mv -T`, so a symlink there is replaced, never followed. A directory in its place is refused with a pointer to `cleanup`.
   - It runs as `write_config || exit 1`, so `set -e` is off inside it. Every step checks its own result, and a trap removes the temp file on any exit. The test checks that none is left.
-- **`start-vpn` recreates gluetun** (`--force-recreate`), so a running one picks up a new `wg0.conf`.
+- **`start-vpn` recreates gluetun** (`--force-recreate`), so a running one picks up a new `wg0.conf`. It refuses while this stack's crawler runs: the crawler would stay in the old gluetun's namespace, which the gate's compose check can't see. `stop-vpn` comes first.
 - **Every verb that reads or enters gluetun checks it's this stack's first:** `wg-*`, `query-*`, `inspect-*` and `verify-dns-firewall`, as well as the gate.
 - **No directory where wg0.conf goes after a reboot.** /run is empty after a reboot; with the short bind syntax Docker would restart gluetun and create `wg0.conf` as a directory. The compose file uses the long syntax with `create_host_path: false`, so gluetun fails to start instead.
 - **The leak check fails closed when the host's address is unknown** (#632 skipped it).

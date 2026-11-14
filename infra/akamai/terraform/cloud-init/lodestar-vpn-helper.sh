@@ -631,6 +631,17 @@ main() {
     start-vpn)
       require_compose_file || exit 1
       require_config_file || exit 1
+      # A running crawler would stay in the old gluetun's namespace after the
+      # recreate, which the gate can't see: stop-vpn first.
+      if ! running_crawler="$(docker ps -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
+          --filter label=com.docker.compose.service=crawler 2>/dev/null)"; then
+        echo "ERROR: cannot tell whether this stack's crawler is running" >&2
+        exit 1
+      fi
+      if [ -n "$running_crawler" ]; then
+        echo "ERROR: this stack's crawler is running; run stop-vpn before start-vpn" >&2
+        exit 1
+      fi
       require_kernel_wireguard || exit 1
       verify_pia_endpoint_binding "$CONFIG_FILE" || exit 1
       # Recreate, so a running gluetun picks up a new wg0.conf.
