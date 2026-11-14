@@ -160,7 +160,7 @@ class Watch(unittest.TestCase):
         self.assertIn("/v1/sessions/sesn_1/events?limit=100", api.paths("GET"))
 
     def test_an_error_is_named_by_its_listed_type_only(self):
-        def err(kind, retry, at="idle"):
+        def err(kind, retry):
             return {"type": "session.error", "id": "sevt_e",
                     "error": {"type": kind, "message": "LEAKMARK free text", "retry_status": {"type": retry}}}
         idle = {"status": "idle", "stop_reason": {"type": "retries_exhausted"}}
@@ -202,7 +202,52 @@ class Watch(unittest.TestCase):
                 got, api = self.run_watch([state])
                 self.assertEqual(got, want)
                 polls = sum(1 for m, p, _ in api.calls if m == "GET" and p == "/v1/sessions/sesn_1")
-                self.assertEqual(polls, wake.STALL_POLLS)
+                self.assertEqual(polls, wake.STALL_POLLS + 1)  # and the interrupt's one check that it stopped
+                self.assertEqual([b for m, _, b in api.calls if m == "POST"], [{"events": [{"type": "user.interrupt"}]}])
+
+    def test_a_missing_event_list_fails_the_wake_and_never_reads_as_done(self):
+        # No `data` at all (an error body, a changed reply): the bridge fails, and cmd_wake
+        # interrupts, escalates and archives. Nothing is guessed from the status alone.
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                res = super().__call__(method, path, body)
+                return {} if method == "GET" and path.split("?")[0].endswith("/events") else res
+        for state in ({"status": "idle", "stop_reason": {"type": "end_turn"}}, {"status": "terminated"}):
+            with self.subTest(state=state["status"]):
+                api, mono = Api(states=[state]), Mono()
+                with self.assertRaises(Exception) as caught:
+                    wake.watch(api, "sesn_1", mono, mono.sleep)
+                self.assertEqual(type(caught.exception).__name__, "ApiError")
+
+    def test_a_denied_call_then_a_finish_reads_the_whole_history(self):
+        # The event list as it grows: a paused call, the denial, the resume, the finish.
+        ask = {"type": "agent.tool_use", "id": "sevt_1", "evaluated_permission": "ask"}
+        paused = {"type": "session.status_idle", "stop_reason": {"type": "requires_action", "event_ids": ["sevt_1"]}}
+        denial = {"type": "user.tool_confirmation", "tool_use_id": "sevt_1", "result": "deny"}
+        resumed, finished = {"type": "session.status_running"}, {"type": "session.status_idle",
+                                                                 "stop_reason": {"type": "end_turn"}}
+        history = [("idle", [ask, paused]),                       # the pause: denied here
+                   ("idle", [ask, paused, denial]),               # the status hasn't caught up: not denied twice
+                   ("running", [ask, paused, denial, resumed]),
+                   ("idle", [ask, paused, denial, resumed]),      # idle before its event is listed: polled again
+                   ("idle", [ask, paused, denial, resumed, finished])]
+
+        class Api(FakeAnthropic):
+            step = -1
+
+            def __call__(self, method, path, body):
+                self.calls.append((method, path, body))
+                if method == "GET" and path == "/v1/sessions/sesn_1":
+                    self.step = min(self.step + 1, len(history) - 1)
+                    return {"status": history[self.step][0]}
+                if method == "GET" and path.split("?")[0].endswith("/events"):
+                    return {"data": history[self.step][1], "next_page": None}
+                return {}
+        api, mono = Api(), Mono()
+        self.assertEqual(wake.watch(api, "sesn_1", mono, mono.sleep), "done")
+        sends = [b["events"] for m, _, b in api.calls if m == "POST"]
+        self.assertEqual([[(e["tool_use_id"], e["result"]) for e in s] for s in sends], [[("sevt_1", "deny")]])
+        self.assertEqual(api.step, len(history) - 1)
 
     def test_only_the_last_status_event_counts(self):
         # An earlier idle (a denied call, say) is not the reason for this one.
@@ -323,6 +368,47 @@ class Wake(unittest.TestCase):
         self.assertNotIn(LOCK_KEY, self.store.objects)
         self.assertEqual(self.post.bodies(), [])
         self.assert_clean(out + "".join(self.post.bodies()), marks)
+
+    def test_a_finish_with_calls_the_policy_denied_is_escalated(self):
+        # The first live wake: the session ended its turn cleanly, but `auto` had refused
+        # its bash call, so it read and posted nothing. A silent "done" would leave the runner waiting.
+        def denied(code, kind="agent.tool_use"):
+            return {"type": kind, "id": "sevt_d", "name": "bash", "input": {"command": "LEAKMARK curl"},
+                    "evaluated_permission": "deny",
+                    "evaluation": {"type": "auto", "evaluated_permission": {"type": "deny", "reason_code": code}}}
+        allowed = {"type": "agent.tool_use", "id": "sevt_a", "evaluated_permission": "allow"}
+        asked = {"type": "agent.tool_use", "id": "sevt_q", "evaluated_permission": "ask"}  # the bridge's own denial
+        answered = {"type": "user.tool_confirmation", "tool_use_id": "sevt_q", "result": "deny"}
+        cases = [([denied("high_risk")], "denied 1 of its tool calls (high_risk)"),
+                 ([denied("indeterminate"), denied("high_risk", "agent.mcp_tool_use"), allowed],
+                  "denied 2 of its tool calls (high_risk, indeterminate)"),
+                 ([denied("LEAKMARK reason")], "denied 1 of its tool calls (an unlisted reason)"),
+                 ([{"type": "agent.tool_use", "evaluated_permission": "deny", "evaluation": "LEAKMARK"}],
+                  "denied 1 of its tool calls (an unlisted reason)"),
+                 ([{"type": "agent.tool_use", "evaluated_permission": "deny"}],  # a tool that isn't enabled
+                  "denied 1 of its tool calls (an unlisted reason)")]
+        for events, want in cases:
+            with self.subTest(want=want):
+                self.setUp()
+                env, marks = wake_env()
+                api = FakeAnthropic(events=events)
+                rc, out = self.go(env, api)
+                self.assertEqual(rc, 0)
+                (body,) = self.post.bodies()
+                self.assertIn("kind: escalation", body)
+                self.assertIn("in-reply-to: ping-1", body)
+                self.assertIn("the session finished, but the permission policy " + want, body)
+                self.assertIn("/v1/sessions/sesn_FAKE/archive", api.paths("POST"))
+                self.assert_clean(out + body, marks + ["LEAKMARK"])
+        for quiet in ([allowed], [asked, answered], []):
+            with self.subTest(quiet=len(quiet)):
+                self.setUp()
+                self.go(wake_env()[0], FakeAnthropic(events=quiet))
+                self.assertEqual(self.post.bodies(), [])
+
+    def test_every_listed_policy_reason_is_a_plain_word(self):
+        for word in wake.POLICY_REASONS:
+            self.assertRegex(word, r"\A[a-z_]{1,40}\Z")
 
     def outputs(self, env, api):
         import os

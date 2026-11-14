@@ -936,6 +936,14 @@ class FullRun(unittest.TestCase):
         self.assertEqual(rc, 4)
         self.assertIn("(budget)", out)
 
+    def test_a_terminated_or_refused_session_is_an_error_not_a_pass(self):
+        for state in ({"status": "terminated"}, {"status": "idle", "stop_reason": {"type": "refusal"}},
+                      {"status": "idle", "stop_reason": {"type": "retries_exhausted"}}):
+            with self.subTest(state=str(state)):
+                rc, out, _ = run(api=FakeAPI(state=state))
+                self.assertEqual(rc, 4)
+                self.assertIn("(error)", out)
+
     def test_stale_harness_sessions_are_archived_first(self):
         ledger = [{"id": "sesn_stale", "usage": {"list_cost": {"amount": "5", "currency": "USD"}},
                    "metadata": {"kind": "injection", "run_id": "1-1"}},
