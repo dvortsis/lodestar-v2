@@ -313,6 +313,18 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         get(&w.enriched),
     );
     o.one(
+        "core_rejudge_stalled_ranges",
+        "gauge",
+        "Ranges of stored torrents the core re-judge skipped because most wouldn't read, still to judge again.",
+        get(&w.core_stalled_ranges),
+    );
+    o.one(
+        "core_rejudge_stalled_rows",
+        "gauge",
+        "Stored torrents in the core re-judge's skipped ranges.",
+        get(&w.core_stalled_rows),
+    );
+    o.one(
         "writer_last_commit_seconds",
         "gauge",
         "Unix time of the last commit.",
