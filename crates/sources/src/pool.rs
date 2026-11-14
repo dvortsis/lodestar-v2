@@ -4972,6 +4972,62 @@ mod budget {
         tokio::spawn(async move { r.reserve(total, total).await })
     }
 
+    /// Room for a large claim in net `n`: its window waits `first` behind
+    /// a whole claim, then its growth waits `then` behind another.
+    async fn room_after(b: &Arc<Budget>, n: u8, first: Duration, then: Duration) -> Reservation {
+        let (now, total) = (64 << 10, 400_000usize);
+        let within = Duration::from_secs(10);
+        let blocker = Reservation::for_peer(b.clone(), Some(net(100)));
+        tokio::time::timeout(within, blocker.reserve(700_000, 700_000))
+            .await
+            .expect("alone, it fits");
+        let r = Reservation::for_peer(b.clone(), Some(net(n)));
+        let mut admitted = tokio::spawn({
+            let r = r.clone();
+            async move { r.reserve(now, total).await }
+        });
+        tokio::time::sleep(first).await;
+        assert!(!admitted.is_finished(), "no room beside the blocker");
+        drop(blocker);
+        tokio::time::timeout(within, &mut admitted)
+            .await
+            .expect("let in once the blocker ends")
+            .unwrap();
+        let blocker = Reservation::for_peer(b.clone(), Some(net(101)));
+        let mut grows = growing(&r, total);
+        tokio::time::timeout(within, blocker.reserve(500_000, 500_000))
+            .await
+            .expect("the second blocker fits");
+        tokio::time::sleep(then).await;
+        assert!(!grows.is_finished(), "no room to grow beside the blocker");
+        drop(blocker);
+        tokio::time::timeout(within, &mut grows)
+            .await
+            .expect("grows once the blocker ends")
+            .unwrap();
+        r
+    }
+
+    /// A large claim whose room took [`LATE_ROOM`] or more in all, its
+    /// first window's wait and its growth's together, is late: a timeout
+    /// after it isn't its peer's. One that waited less isn't, and neither
+    /// is one whose peer fell behind its pace.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_is_late_once_its_room_took_long_in_all() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let s = Duration::from_secs(1);
+        let soon = room_after(&b, 1, s, s).await;
+        assert!(!soon.late(), "2 s in all");
+        drop(soon);
+        // Neither wait alone is `LATE_ROOM`; together they are.
+        let late = room_after(&b, 2, 2 * s, 2 * s + s / 2).await;
+        assert!(late.late(), "4.5 s in all");
+        late.behind();
+        assert!(!late.late(), "behind its pace: always the peer's");
+        drop(late);
+        assert_eq!(used(&b), 0);
+    }
+
     /// While a growth waits, small claims are granted inside the floor and
     /// no further: what lies outside it only comes free, so they never keep
     /// the growth out.
