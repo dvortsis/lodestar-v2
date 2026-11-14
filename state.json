@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T15:53Z",
+  "updated_at": "2026-11-14T16:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8752,6 +8752,11 @@
       "id": "X-fetch-preempt",
       "note": "Parked: decide after X-fetch-junk-backoff with numbers.",
       "at": "2026-11-14T15:48Z"
+    },
+    {
+      "id": "X-flake-dataset-macos",
+      "at": "2026-11-14T16:00Z",
+      "text": "main test (macos-latest) red on 9e6cd86f, 6f36bc7d, 19041df6, 92b181bd: bench/tests/dataset.rs an_interrupted_build_resumes_to_the_same_dataset (and once the_same_key_builds_the_same_bytes) - dataset::digest differs between builds on macOS only. Root-cause fix (no skip/gate) assigned to slot 15 as its own PR with full-ci, alongside X-rejudge-stall."
     }
   ],
   "main_health": [
@@ -9793,7 +9798,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T15:53Z",
+    "updated": "2026-11-14T16:00Z",
     "items": [
       {
         "slot": 1,
@@ -9881,7 +9886,7 @@
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
         "since": "2026-11-14T10:55Z",
-        "doing": "#869 merged 9e6cd86f; X-rejudge-stall briefed; builds locally, pushes after #879 merges (tell it)",
+        "doing": "X-rejudge-stall builds locally, pushes after #879 merges; plus X-flake-dataset-macos (own PR, full-ci) now",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -10068,7 +10073,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T15:53Z",
+  "updated": "2026-11-14T16:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
