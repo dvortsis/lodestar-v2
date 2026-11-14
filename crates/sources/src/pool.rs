@@ -111,6 +111,7 @@ impl Fetcher for PeerWireFetcher {
         reservation: Reservation,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         let mut opts = self.0.clone();
+        let behind = reservation.clone();
         opts.reserve = Some(Reserve(Arc::new(move |now, total| {
             let r = reservation.clone();
             Box::pin(async move { r.reserve(now, total).await })
@@ -118,7 +119,12 @@ impl Fetcher for PeerWireFetcher {
         Box::pin(async move {
             lodestar_peer_wire::fetch(peer, key, &opts)
                 .await
-                .map_err(|e| e.kind())
+                .map_err(|e| {
+                    if matches!(e, lodestar_peer_wire::Error::Behind) {
+                        behind.behind();
+                    }
+                    e.kind()
+                })
         })
     }
 }
@@ -185,6 +191,16 @@ pub struct PoolConfig {
 pub const fn largest_dict(max_held_bytes: usize) -> usize {
     (max_held_bytes - max_held_bytes / FLOOR_SHARE as usize).saturating_sub(32 << 10)
 }
+
+/// A large claim whose room took this long in all, its first window's and
+/// its growth's (half the default fetch timeout), leaves its peer too
+/// little time: a timeout after it, if the peer never
+/// fell behind its pace, isn't the peer's ([`LATE_WAITS_FREE`]).
+const LATE_ROOM: Duration = Duration::from_secs(4);
+
+/// Late wait-outs a key may have uncharged, apart from
+/// [`RESERVE_WAITS_FREE`]; the next is charged.
+pub const LATE_WAITS_FREE: u8 = 4;
 
 /// [`PoolConfig::max_held_bytes`]'s default: 64 MiB.
 pub const MAX_HELD_BYTES: usize = 64 << 20;
@@ -286,7 +302,7 @@ struct BudgetState {
     /// Waiting growths, oldest first, each with the bytes it wants in all
     /// and its first window's bytes; they go before any first reservation
     /// outside the floor.
-    growth: VecDeque<(u64, u64, u64)>,
+    growth: VecDeque<(u64, u64, u64, bool)>,
     /// Bytes held by partial claims, and the growth each proven one still
     /// needs. A partial claim is proven once its first window is in (it
     /// asks to grow); until then its announced size doesn't count toward
@@ -383,7 +399,7 @@ impl BudgetState {
     fn small_room(&self, limit: u64) -> u64 {
         let floor = limit / FLOOR_SHARE;
         match self.growth.front() {
-            Some(&(_, want, _)) => floor.min(limit.saturating_sub(want)),
+            Some(&(_, want, ..)) => floor.min(limit.saturating_sub(want)),
             None => floor,
         }
     }
@@ -533,6 +549,15 @@ struct Claim {
     /// A partial claim whose first window is in, so its need counts toward
     /// admission; changed only under the budget's lock.
     proven: AtomicBool,
+    /// A retry whose last attempt waited out late: its growth goes ahead of
+    /// growths without credit.
+    credit: bool,
+    /// How long its reservations have waited for room, in ms.
+    room_wait_ms: AtomicU64,
+    /// It grew after waiting [`LATE_ROOM`] or longer for room in all.
+    long_wait: AtomicBool,
+    /// Its fetch ended for falling behind the pace a large dict must keep.
+    behind: AtomicBool,
 }
 
 impl Reservation {
@@ -542,7 +567,14 @@ impl Reservation {
     }
 
     /// A claim for a fetch from a peer in `net`.
+    #[cfg(test)]
     fn for_peer(budget: Arc<Budget>, net: Option<Net>) -> Reservation {
+        Reservation::for_retry(budget, net, false)
+    }
+
+    /// A claim for a fetch from a peer in `net`; `credit` for a retry whose
+    /// last attempt waited out late.
+    fn for_retry(budget: Arc<Budget>, net: Option<Net>, credit: bool) -> Reservation {
         let id = {
             let mut s = budget.lock();
             s.next_id += 1;
@@ -557,6 +589,10 @@ impl Reservation {
             net,
             kind: AtomicU8::new(KIND_NONE),
             proven: AtomicBool::new(false),
+            credit,
+            room_wait_ms: AtomicU64::new(0),
+            long_wait: AtomicBool::new(false),
+            behind: AtomicBool::new(false),
         }))
     }
 
@@ -579,6 +615,8 @@ impl Reservation {
         let claim = &*self.0;
         let budget = &*claim.budget;
         let mut queued: Option<Queued<'_>> = None;
+        let growing = claim.bytes.load(Ordering::Relaxed) > 0;
+        let asked = tokio::time::Instant::now();
         loop {
             let freed = budget.freed.notified();
             tokio::pin!(freed);
@@ -589,6 +627,13 @@ impl Reservation {
                 if let Some(q) = queued.take() {
                     claim.waited_out.store(false, Ordering::Relaxed);
                     drop(q);
+                }
+                // Both steps' waits count: together they leave the peer
+                // its time.
+                let waited = u64::try_from(asked.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let total = claim.room_wait_ms.fetch_add(waited, Ordering::Relaxed) + waited;
+                if growing && total >= LATE_ROOM.as_millis() as u64 {
+                    claim.long_wait.store(true, Ordering::Relaxed);
                 }
                 return;
             }
@@ -699,7 +744,7 @@ impl Reservation {
                 Some(&(front, ..)) if front == claim.id => true,
                 // A first window let in during this wait never passes it.
                 Some(_) if admitted_during_wait => false,
-                Some(&(_, front_want, front_window)) => {
+                Some(&(_, front_want, front_window, _)) => {
                     // The front may be passed by a growth queued behind it
                     // when only the first windows of the growths behind it
                     // keep it from growing: it can't grow until one of them
@@ -718,7 +763,7 @@ impl Reservation {
                         .max(used.saturating_add(extra).saturating_sub(limit));
                     let front_capped =
                         s.grown != 0 && s.grown.saturating_add(front_want) > budget.grown_cap();
-                    let behind: u64 = s.growth.iter().skip(1).map(|&(.., w)| w).sum::<u64>()
+                    let behind: u64 = s.growth.iter().skip(1).map(|&(_, _, w, _)| w).sum::<u64>()
                         + if queued { 0 } else { mine };
                     passing = short > 0 && short <= behind && !front_capped;
                     passing
@@ -730,7 +775,17 @@ impl Reservation {
             let alone = others == 0;
             if !(in_turn && (alone || (under_cap && fits && beside_floor))) {
                 if !queued {
-                    s.growth.push_back((claim.id, want, mine));
+                    // A retry with credit goes ahead of growths without
+                    // it, behind any credited one already waiting.
+                    let at = if claim.credit {
+                        s.growth
+                            .iter()
+                            .position(|&(.., c)| !c)
+                            .unwrap_or(s.growth.len())
+                    } else {
+                        s.growth.len()
+                    };
+                    s.growth.insert(at, (claim.id, want, mine, claim.credit));
                 }
                 return false;
             }
@@ -774,7 +829,7 @@ impl Reservation {
             // front.
             s.refresh_wait();
             let front = s.growth.front().copied();
-            if let Some((_, front_want, front_window)) = front {
+            if let Some((_, front_want, front_window, _)) = front {
                 let extra_f = front_want.saturating_sub(front_window);
                 let fits_front = large.saturating_add(want).saturating_add(extra_f)
                     <= limit - budget.floor()
@@ -892,6 +947,17 @@ impl Reservation {
 
     fn waited_out(&self) -> bool {
         self.0.waited_out.load(Ordering::Relaxed)
+    }
+
+    /// The fetch ended for falling behind its pace: always the peer's.
+    pub fn behind(&self) {
+        self.0.behind.store(true, Ordering::Relaxed);
+    }
+
+    /// Its growth's room came late (after [`LATE_ROOM`]) and the peer never
+    /// fell behind: a timeout from here is the wait's, not the peer's.
+    fn late(&self) -> bool {
+        self.0.long_wait.load(Ordering::Relaxed) && !self.0.behind.load(Ordering::Relaxed)
     }
 }
 
@@ -1032,6 +1098,9 @@ pub struct PoolStats {
     /// Fetches whose deadline ran out while they waited for a reservation.
     /// The peer isn't charged: it's tried again later.
     pub reserve_timeouts: AtomicU64,
+    /// Timeouts after a growth's room came late, not charged to the peer
+    /// ([`LATE_WAITS_FREE`]).
+    pub late_waits: AtomicU64,
 }
 
 impl PoolStats {
@@ -1868,6 +1937,10 @@ struct Entry {
     /// Fetches of this key that ran out of time waiting for a reservation
     /// (X-fetch-meta-reserve); the `RESERVE_WAITS_FREE`th is charged.
     reserve_waits: u8,
+    /// Timeouts after a late room that weren't charged ([`LATE_WAITS_FREE`]).
+    late_waits: u8,
+    /// Its next fetch's growth goes ahead of growths without credit.
+    credit: bool,
     state: State,
     /// Set from the pool's counter on every state change, to invalidate
     /// old timers and requests. Pool-wide, so a key evicted and found again
@@ -1991,7 +2064,7 @@ struct Pool {
     limit_addresses: bool,
     /// Each fetch's result, and whether it ran out of time waiting for a
     /// reservation.
-    tasks: JoinSet<(Result<Fetched, FailureKind>, bool)>,
+    tasks: JoinSet<(Result<Fetched, FailureKind>, bool, bool)>,
     /// What each fetch task is fetching, so even a panicked task is
     /// accounted for.
     /// With the entry's generation when the fetch started, so a result
@@ -2071,10 +2144,10 @@ impl Pool {
                 _ = shutdown.requested() => break,
                 Some(joined) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     match joined {
-                        Ok((id, (result, waited_out))) => self.joined(id, result, waited_out),
+                        Ok((id, (result, waited_out, late))) => self.joined(id, result, waited_out, late),
                         // Only a panic ends a fetch task early: a bug, but
                         // one peer's bytes mustn't take the pool down.
-                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false),
+                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false, false),
                     }
                 }
                 // A reservation stopped waiting: dispatch may start again.
@@ -2120,12 +2193,12 @@ impl Pool {
         // with the queue.
         while let Some(joined) = self.tasks.join_next_with_id().await {
             match joined {
-                Ok((id, (result, waited_out))) => self.joined(id, result, waited_out),
+                Ok((id, (result, waited_out, late))) => self.joined(id, result, waited_out, late),
                 // Its reservation went with the task.
                 Err(e) if e.is_cancelled() => {
                     self.task_keys.remove(&e.id());
                 }
-                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false),
+                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false, false),
             }
         }
         if let Some(a) = &mut self.admission {
@@ -2169,10 +2242,16 @@ impl Pool {
 
     /// Handles a joined fetch's result. Its bytes are already held in the
     /// budget (the task settled its reservation as it finished).
-    fn joined(&mut self, id: Id, result: Result<Fetched, FailureKind>, waited_out: bool) {
+    fn joined(
+        &mut self,
+        id: Id,
+        result: Result<Fetched, FailureKind>,
+        waited_out: bool,
+        late: bool,
+    ) {
         match self.task_keys.remove(&id) {
             Some((key, peer, generation)) => {
-                self.on_result(key, peer, generation, result, waited_out);
+                self.on_result(key, peer, generation, result, waited_out, late);
             }
             None => {
                 if let Ok(fetched) = &result {
@@ -2346,6 +2425,8 @@ impl Pool {
                 last_failure: None,
                 oversize_from: None,
                 reserve_waits: 0,
+                late_waits: 0,
+                credit: false,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -2398,6 +2479,8 @@ impl Pool {
                 last_failure: None,
                 oversize_from: None,
                 reserve_waits: 0,
+                late_waits: 0,
+                credit: false,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -3431,7 +3514,11 @@ impl Pool {
             }
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
             let network = net_of(peer.ip()).network();
-            let reservation = Reservation::for_peer(self.budget.clone(), Some(network));
+            let credit = self
+                .entries
+                .get_mut(&key)
+                .is_some_and(|e| std::mem::take(&mut e.credit));
+            let reservation = Reservation::for_retry(self.budget.clone(), Some(network), credit);
             let fetch = self.fetcher.fetch_reserving(peer, key, reservation.clone());
             let handle = self.tasks.spawn(async move {
                 let result = fetch.await;
@@ -3441,7 +3528,10 @@ impl Pool {
                     reservation.settle(weigh(fetched));
                 }
                 let waited_out = result.is_err() && reservation.waited_out();
-                (result, waited_out)
+                let late = !waited_out
+                    && matches!(result, Err(FailureKind::TimedOut))
+                    && reservation.late();
+                (result, waited_out, late)
             });
             self.task_keys.insert(handle.id(), (key, peer, generation));
         }
@@ -3538,6 +3628,7 @@ impl Pool {
         generation: u64,
         result: Result<Fetched, FailureKind>,
         waited_out: bool,
+        late: bool,
     ) {
         if let Some(n) = self.per_ip.get_mut(&peer.ip()) {
             *n -= 1;
@@ -3571,7 +3662,21 @@ impl Pool {
                 true
             }
         };
-        if waited_out {
+        // Its room came so late the peer had too little time, and the peer
+        // never fell behind: not its failure either, up to
+        // `LATE_WAITS_FREE` times for a key, apart from the waits above.
+        // The retry's growth goes ahead of growths without credit.
+        let late = late && {
+            if e.late_waits < LATE_WAITS_FREE {
+                e.late_waits += 1;
+                e.credit = true;
+                self.stats.late_waits.fetch_add(1, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        };
+        if waited_out || late {
             // The peer goes last among its untried peers, so the others go
             // first, and no attempt is used.
             let others = e.has_untried();

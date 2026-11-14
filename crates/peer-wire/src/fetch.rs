@@ -545,7 +545,7 @@ async fn bounded<T>(
         let due = match pace.as_mut() {
             Some(p) => {
                 if !p.keeps_up(Instant::now(), got) {
-                    return Err(Error::Timeout);
+                    return Err(Error::Behind);
                 }
                 p.next_check().unwrap_or(deadline)
             }
@@ -642,7 +642,7 @@ where
                 let due = match pace.as_mut() {
                     Some(p) => {
                         if !p.keeps_up(Instant::now(), got) {
-                            return Err(Error::Timeout);
+                            return Err(Error::Behind);
                         }
                         p.next_check()
                     }
@@ -1118,7 +1118,7 @@ mod tests {
             )
             .await
             .expect("it ends before the deadline");
-            assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+            assert!(matches!(got, Err(Error::Behind)), "{got:?}");
             let took = started.elapsed();
             assert!(
                 took >= Duration::from_millis(1_900) && took <= Duration::from_millis(2_100),
@@ -1146,7 +1146,7 @@ mod tests {
         )
         .await
         .expect("it ends");
-        assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
         // The first check is a quarter of the way in, at two seconds; the
         // deadline is the slack either side.
         let took = started.elapsed();
@@ -1239,7 +1239,7 @@ mod tests {
         )
         .await
         .expect("it ends before the deadline");
-        assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
         let took = started.elapsed();
         assert!(
             took >= Duration::from_millis(1_900) && took <= Duration::from_millis(2_100),
