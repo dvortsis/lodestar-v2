@@ -10,7 +10,10 @@ One AWS Windows Server instance that Claude creates, tests on and deletes. It ru
 | Backstop | `lodestar-expiration-guard` terminates it at `min(ExpiresAt, start + 48 h)`. Its deletion path is unproven, so Claude deletes it itself and checks |
 | Access | SSM Run Command (`AWS-RunPowerShellScript`) only. No RDP, no key pair, no inbound port |
 
-**The AWS connector's sign-in lasts at most 12 h** (AWS Sign-in's limit, not configurable). Plan each Windows lane to finish, teardown included, within 12 h of the owner's sign-in; after that every call fails until the owner reconnects.
+**The AWS connector's sign-in lasts 12 h by default.** AWS Sign-In's *sign-in session duration* is set on the IAM user, up to 90 days. The connector keeps refreshing one-hour tokens for that long, and no long-lived key is created.
+- **To lengthen it:** the owner sets it on `lodestar-claude-testvm` in the IAM console, then disconnects and reconnects the connector. The new length applies only to sign-ins made after the change.
+- **To cut it short:** disconnect the connector, or revoke the session with `aws signin batch-revoke-sessions`.
+- **Without the longer setting:** plan each Windows lane to finish, teardown included, within one sign-in. After it expires, every call fails until the owner reconnects.
 
 **The AWS connector's tool gives up on a script after 60 s.** Keep each call short: send a create, then check its status in separate calls. Never loop inside one call for longer than about 45 s.
 
