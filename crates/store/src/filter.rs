@@ -734,12 +734,26 @@ impl Store {
     /// it was (`None` for a rule whose id doesn't parse), for the caller
     /// to reconcile its in-memory state.
     pub fn expire_worker_floor(&mut self, before: i64) -> Result<Vec<([u8; 20], Option<u32>)>> {
+        self.expire_worker_floor_with(before, |_| {})
+    }
+
+    /// [`expire_worker_floor`](Self::expire_worker_floor), with
+    /// `before_commit` given the rows deleted inside the write transaction,
+    /// before it commits: until then every other connection still reads
+    /// those keys as held. If the commit fails nothing is deleted, though
+    /// `before_commit` has run.
+    pub fn expire_worker_floor_with(
+        &mut self,
+        before: i64,
+        before_commit: impl FnOnce(&[([u8; 20], Option<u32>)]),
+    ) -> Result<Vec<([u8; 20], Option<u32>)>> {
         let sql = format!(
             "DELETE FROM tombstones WHERE at < ?1 AND {} RETURNING hash, rule",
             worker_floor_sql("rule")
         );
+        let tx = crate::begin_write(&mut self.conn)?;
         let gone: Vec<([u8; 20], Option<u32>)> = {
-            let mut stmt = self.conn.prepare(&sql)?;
+            let mut stmt = tx.prepare(&sql)?;
             let rows = stmt.query_map(params![before], |r| {
                 Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))
             })?;
@@ -753,6 +767,8 @@ impl Store {
             }
             out
         };
+        before_commit(&gone);
+        tx.commit()?;
         if !gone.is_empty() {
             self.scrub_wal();
         }
@@ -1585,6 +1601,27 @@ mod tests {
         // Held again by the next report.
         s.tombstone_from_worker(&[[1; 20]], 8, 60).unwrap();
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// Expiry's hook runs before its delete commits: another connection
+    /// still reads the key as held then, and free after.
+    #[test]
+    fn expirys_hook_runs_before_the_delete_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let mut seen = Vec::new();
+        let gone = s
+            .expire_worker_floor_with(20, |rows| {
+                seen = rows.to_vec();
+                assert_eq!(reader.held_among(&[[1; 20]]).unwrap(), vec![true]);
+            })
+            .unwrap();
+        assert_eq!(seen, vec![([1; 20], Some(7))]);
+        assert_eq!(gone, seen);
+        assert_eq!(reader.held_among(&[[1; 20]]).unwrap(), vec![false]);
     }
 
     /// The main node's own judgement, as its writer records a floor hit:

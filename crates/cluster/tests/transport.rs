@@ -1049,6 +1049,39 @@ async fn an_excluded_key_waits_for_another_target() {
     .await;
 }
 
+/// A key that becomes excluded for its target while the re-grant's store
+/// check runs isn't sent to it: it waits again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_excluded_during_the_regrant_check_waits() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let pi = c.join("pi").await;
+        let x = c.session(&pi).await;
+        leases_left_by_a_silent_worker(&c, &x, &[1]).await;
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let ticking = {
+            let server = c.server.clone();
+            tokio::spawn(async move { server.tick().await })
+        };
+        entered.await.unwrap();
+        // Reserved for x before the exclusion lands.
+        assert_eq!(
+            c.server.lease(&InfoHash(key(1))).unwrap().holder,
+            pi.worker()
+        );
+        check.excluded.lock().unwrap().push((pi.worker(), key(1)));
+        release.send(()).unwrap();
+        ticking.await.unwrap();
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 1));
+        assert_eq!(x.leases(), 0);
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_regrant_whose_check_fails_grants_nothing() {
     guard(async {

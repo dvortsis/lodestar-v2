@@ -4,10 +4,11 @@ A follow-up to `2026-11-14-X-sec-S6-02-03-r3.md`, on what happens after a worker
 
 ## Worker floor reports (WK-10d; architecture §19.3)
 
-- **Expiry says whose rows it deleted.** `Store::expire_worker_floor` now returns each hash with the worker of its `worker-floor:<id>` row (`None` for an id that doesn't parse). Nothing else in the store changed. This is the runner's call (2026-11-14).
-- **The floor writer remembers each lapsed key's worker.** `FloorReports` keeps the keys whose report lapsed, each with the worker whose report it was.
-  - It holds at most `LAPSED_CAP` (65,536) keys, about 4 MB. Past that the oldest is forgotten, and that key is treated as before this change. This is the runner's call (2026-11-14).
-  - A key that lapses again moves to the newest place under its new worker.
+- **Expiry says whose rows it deleted, before they go.** `Store::expire_worker_floor` now returns each hash with the worker of its `worker-floor:<id>` row (`None` for an id that doesn't parse). `Store::expire_worker_floor_with` also hands those rows to the caller inside the write transaction, before it commits. Nothing else in the store changed. This is the runner's call (2026-11-14).
+- **The floor writer remembers each lapsed key's workers.** `FloorReports` keeps the keys whose report lapsed, each with the last four workers whose report of it lapsed (`LAPSED_WORKERS`). This is the runner's call (2026-11-14).
+  - **Recorded before the store lets the key go.** The writer records a lapsing row's key and worker inside expiry's write transaction, before the delete commits. Until the commit, every other connection still reads the key as held, so no check reads it free before it's excluded.
+  - **Bounded.** It holds at most `LAPSED_CAP` (65,536) keys, at most about 9 MB. Past that the oldest key is forgotten, and that key is treated as before this change. This is the runner's call (2026-11-14). The map is global, so the oldest key is forgotten once 65,536 newer distinct keys have lapsed (a key lapsing again pushes nothing out): at the floor budget of 100 reports an hour per worker, at least about 27 days divided by the number of workers reporting.
+  - A key that lapses again moves to the newest place and adds its worker; a fifth worker drops the oldest. **Remaining limit:** a key whose reports lapse from more than four workers in turn is remembered only under its last four.
   - A revoke clears that worker's keys, along with its reports. A revoked worker's rows that lapse later (after a failed purge) aren't added.
   - The worker comes from the store's row, so a report written before a restart and lapsing after it is remembered (the writer expires at start). The map itself lives in memory: a restart forgets keys that lapsed before it, which are then treated as before this change.
 - **A lapsed key isn't given back to the worker whose report lapsed.**
