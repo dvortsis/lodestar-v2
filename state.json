@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:50Z",
+  "updated_at": "2026-11-14T04:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8400,6 +8400,14 @@
     {
       "at": "2026-11-14T04:50Z",
       "item": "Second security pass ids (id, severity, surface only): S5-01 important (Windows updater), S3-01 important (source credentials), S3-02 important (Nostr feed), S3-03 important (tracker scrape), S6-01 important (cluster claims), S4-01 important (status page). New angles recorded on INFRA-01, INFRA-04, INFRA-07. Owner-queue item naming these ids in next runner PR; S5-01 fix needs an owner decision."
+    },
+    {
+      "at": "2026-11-14T04:53Z",
+      "what": "Second pass SEC-4/SEC-2 ids: S4-02 blocking (filter core), S2-01 blocking (HTTP server), S2-02/S2-03 important (search), S2-04 important (export), S2-05 important (API state). APISEC-02 re-graded blocking. Angles folded into FILTER-02, APIFEAT-01, APISEC-03, SEARCH-05. Need fix slices at component level; owner told in chat."
+    },
+    {
+      "at": "2026-11-14T04:53Z",
+      "what": "#867 review CHANGES relayed to the reviewer session (docs window wording, a missing test). New follow-up slice X-cmp-entered-loopback (companions, entered loopback hosts)."
     }
   ],
   "main_health": [
@@ -9723,7 +9731,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:50Z",
+  "updated": "2026-11-14T04:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
