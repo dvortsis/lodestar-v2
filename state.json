@@ -9973,12 +9973,6 @@
       "slice": "X-upd-stop-races",
       "sha": "cd2b7eb4026abc0368f5d6c2abfe34d55db4eb0c",
       "at": "2026-11-11T23:09:03Z"
-    },
-    {
-      "pr": 867,
-      "slice": "X-cmp01-fix",
-      "merged": "d3f33891",
-      "at": "2026-11-14T06:58Z"
     }
   ],
   "cloud_tester": {
@@ -10355,6 +10349,12 @@
       "slice": "X-operator-mount-helpers",
       "merged": "c73c8b5d",
       "at": "2026-11-14T06:53Z"
+    },
+    {
+      "pr": 867,
+      "slice": "X-cmp01-fix",
+      "merged": "d3f33891",
+      "at": "2026-11-14T06:58Z"
     }
   ],
   "review_sessions": []
