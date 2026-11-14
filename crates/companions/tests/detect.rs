@@ -1183,11 +1183,13 @@ mod bound {
     use tokio::sync::watch;
 
     fn status(state: State, run: u64) -> Status {
+        let up = matches!(state, State::Running | State::Unhealthy { .. });
         Status {
             state,
             restarts: 0,
             last_exit: None,
             run,
+            up,
         }
     }
 
@@ -1295,8 +1297,13 @@ mod bound {
             assert_eq!(client.send(req).await.unwrap().status(), 200);
         }
         assert_eq!(server.seen().len(), 5);
-        // The child exits and starts again: held until the new run is
-        // found ready, though something still answers on the port.
+        // The child is found gone: held at once, before its state moves
+        // on, though something still answers on the port.
+        tx.send_modify(|s| s.up = false);
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        // It starts again: held until the new run is found ready.
         tx.send_replace(status(
             State::BackingOff {
                 delay: Duration::from_secs(1),

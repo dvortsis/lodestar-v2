@@ -61,6 +61,30 @@ fn fake_companion() {
             hang()
         }
         "crash" => std::process::exit(3),
+        // Answers HTTP on 127.0.0.1:`FAKE_PORT`, and exits at `GET /exit`.
+        "serve" => {
+            use std::io::Read;
+            let port: u16 = std::env::var("FAKE_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or_else(|| panic!("FAKE_PORT"));
+            let listener =
+                std::net::TcpListener::bind(("127.0.0.1", port)).unwrap_or_else(|e| panic!("{e}"));
+            let _ = writeln!(out, "READY");
+            let _ = out.flush();
+            for sock in listener.incoming() {
+                let Ok(mut sock) = sock else { continue };
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let _ = sock.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+                if buf[..n].starts_with(b"GET /exit ") {
+                    std::process::exit(9);
+                }
+            }
+            hang()
+        }
         // Starts a grandchild of its own, as FlareSolverr starts a browser.
         "parent" => {
             let child = std::process::Command::new(std::env::current_exe().unwrap_or_default())
@@ -816,4 +840,122 @@ fn no_companion_survives_a_killed_work_child() {
         !Path::new(&format!("/proc/{}", rec.pid)).exists(),
         "a companion survived"
     );
+}
+
+/// X-cmp-supervisor-bind, against a real child: a request that carries
+/// something reaches the companion only once the run that's up has been
+/// found ready on 127.0.0.1. When the child dies, such requests are held
+/// at once, and stay held through its restart until the new run is found
+/// ready, though the new child answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn credentialed_requests_follow_the_run_found_ready() {
+    use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
+    use lodestar_companions::detect::CompanionHttp;
+    use lodestar_companions::supervise::bind::Bindings;
+
+    let port = {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+        l.local_addr().unwrap_or_else(|e| panic!("{e}")).port()
+    };
+    let port_s = port.to_string();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let bindings = Arc::new(Bindings::new());
+    assert!(bindings.claim(port));
+    sup.add(companion(
+        data.path(),
+        "prowlarr",
+        "serve",
+        &[("FAKE_PORT", &port_s)],
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    bindings.attach(port, rx.clone());
+    let client = CompanionHttp::new()
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .with_bindings(bindings.clone());
+    let target = Target::Loopback(PortNumber::new(port).unwrap_or_else(|e| panic!("{e:?}")));
+    let limits =
+        || ProbeLimits::new(Duration::from_secs(15), 1024).unwrap_or_else(|e| panic!("{e:?}"));
+    let at = |p: &str| RequestPath::parse(p).unwrap_or_else(|e| panic!("{e:?}"));
+    let carrying = || ProbeRequest::new(&target, at("/api"), limits()).post(b"key=x".to_vec());
+    // What Supervised's health check does: a bare probe on 127.0.0.1
+    // that answers while a run is up marks that run ready.
+    let found_ready = |want: u64| {
+        let (client, bindings, target) = (&client, &bindings, &target);
+        async move {
+            let until = Instant::now() + DEADLINE;
+            loop {
+                let run = bindings.running_run(port);
+                if run == Some(want)
+                    && client
+                        .send(ProbeRequest::new(target, at("/"), limits()))
+                        .await
+                        .is_ok_and(|r| r.status() == 200)
+                {
+                    bindings.mark_ready(port, want);
+                    if bindings.ready(port) {
+                        return;
+                    }
+                }
+                assert!(
+                    Instant::now() < until,
+                    "run {want} never found ready; {run:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    };
+    wait_status(&mut rx, "the first run", |s| s.up && s.run == 1).await;
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Unreachable)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    found_ready(1).await;
+    assert_eq!(
+        client.send(carrying()).await.map(|r| r.status()).ok(),
+        Some(200)
+    );
+    // The child exits: held from then on, through its restart.
+    let _ = client
+        .send(ProbeRequest::new(&target, at("/exit"), limits()))
+        .await;
+    wait_status(&mut rx, "the exit seen", |s| !(s.up && s.run == 1)).await;
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Unreachable)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    wait_status(&mut rx, "the second run", |s| s.up && s.run == 2).await;
+    // The new child answers a bare probe, but nothing that carries
+    // something goes to it before its run is found ready.
+    let until = Instant::now() + DEADLINE;
+    while client
+        .send(ProbeRequest::new(&target, at("/"), limits()))
+        .await
+        .is_err()
+    {
+        assert!(Instant::now() < until, "the second run never listened");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Unreachable)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    found_ready(2).await;
+    assert_eq!(
+        client.send(carrying()).await.map(|r| r.status()).ok(),
+        Some(200)
+    );
+    sup.shutdown().await;
+    assert!(!bindings.ready(port));
 }

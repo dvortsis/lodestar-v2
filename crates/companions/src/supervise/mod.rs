@@ -171,8 +171,14 @@ pub struct Status {
     /// How its last run ended: its exit code, or 128 + the signal.
     pub last_exit: Option<i32>,
     /// Which run of it this is: one more at each start of the process, so
-    /// a restart is told apart from the run before (`bind`).
+    /// a restart is told apart from the run before (`bind`). Its own
+    /// health checks moving it between running and unhealthy don't change
+    /// it.
     pub run: u64,
+    /// Whether run `run`'s process is up: set as it starts, cleared the
+    /// moment it's found gone or is told to stop, before the stop and the
+    /// clean-up that follow (`bind`).
+    pub up: bool,
 }
 
 /// A companion's health check: the adapter (CMP-8a), the guarded client
@@ -362,6 +368,7 @@ impl Supervisor {
             restarts: 0,
             last_exit: None,
             run: 0,
+            up: false,
         });
         let (control, control_rx) = mpsc::unbounded_channel();
         let logs = LogRing::default();
@@ -654,7 +661,10 @@ async fn run(
     status.send_modify(|s| {
         s.state = State::Running;
         s.run += 1;
+        s.up = true;
     });
+    // Down from the moment it's found gone or told to stop.
+    let down = || status.send_modify(|s| s.up = false);
     let began = Instant::now();
     let mut tick = tokio::time::interval_at(began + t.health_every, t.health_every);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -663,6 +673,7 @@ async fn run(
     let (ended, exit) = loop {
         tokio::select! {
             r = child.wait() => {
+                down();
                 break (Ended::Crashed { ran: began.elapsed() }, r.ok().map(exit_code));
             }
             _ = tick.tick(), if c.probe.is_some() && check.is_none() => {
@@ -689,6 +700,7 @@ async fn run(
                 failures += 1;
                 status.send_modify(|s| s.state = State::Unhealthy { failures });
                 if failures >= t.health_failures {
+                    down();
                     let exit = stop_child(&mut child, c.stop.as_deref(), t.stop_deadline).await;
                     break (Ended::Crashed { ran: began.elapsed() }, exit);
                 }
@@ -701,6 +713,7 @@ async fn run(
                     Some(Control::Hold) => Ended::Held,
                     Some(Control::Stop) | None => Ended::Stopped,
                 };
+                down();
                 let exit = stop_child(&mut child, c.stop.as_deref(), t.stop_deadline).await;
                 break (ended, exit);
             }

@@ -2094,10 +2094,16 @@ impl Manager {
             // A start that passed health was configured; one that didn't
             // (held for its route, say) is configured once it runs.
             let mut configured = now == Health::Healthy;
+            // The run last checked: a new run of the process is checked
+            // again even when no other state was seen between (a restart
+            // with no back-off), so it's found ready (`bind`).
+            let mut checked = status.borrow().run;
             loop {
-                let state = status.borrow_and_update().state;
+                let s = *status.borrow_and_update();
+                let state = s.state;
                 let next = match state {
-                    State::Running if last != Health::Healthy => {
+                    State::Running if last != Health::Healthy || s.run != checked => {
+                        checked = s.run;
                         if !check.healthy(id, &target).await {
                             Some(Health::Unhealthy)
                         } else if configured {
@@ -2613,14 +2619,26 @@ impl Run for Supervised {
             if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("shutting_down");
             }
+            // Its port is held from before its process can start: nothing
+            // that carries a credential goes there until this child is
+            // found ready, and no other companion may start on it.
+            let bound = self.bindings.as_ref().zip(port);
+            if let Some((b, p)) = bound
+                && !b.claim(p)
+            {
+                return Err("port_in_use");
+            }
             let state = route.state.clone();
-            let gated =
-                egress::add(&mut sup, c, Follows::of(&l.id), route).map_err(|e| e.code())?;
+            let gated = match egress::add(&mut sup, c, Follows::of(&l.id), route) {
+                Ok(g) => g,
+                Err(e) => {
+                    self.release_port(port);
+                    return Err(e.code());
+                }
+            };
             let status = sup.status(&l.id);
-            // Its port is held from now on: nothing that carries a
-            // credential goes there until this child is found ready.
-            if let (Some(b), Some(p), Some(s)) = (&self.bindings, port, &status) {
-                b.hold(p, s.clone());
+            if let (Some((b, p)), Some(s)) = (bound, &status) {
+                b.attach(p, s.clone());
             }
             let running = Running {
                 gate: Some(gated),
