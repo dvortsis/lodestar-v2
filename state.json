@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T09:17Z",
+  "updated_at": "2026-11-14T09:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8568,6 +8568,11 @@
       "id": "pipe01-followup-owner-flag",
       "added": "2026-11-14T09:17Z",
       "note": "At X-pipe01-followup merge, flag to owner (\u00a72.19): per-address place now held only while a peer is untried or fetching (refines #877 counting rule); wait list bounds and turn-away-newest choice."
+    },
+    {
+      "id": "notify-slot30-on-874-879",
+      "added": "2026-11-14T09:33Z",
+      "note": "Message slot 30 (session_01MMjhn9hfwMf4Ydg4La5rEh) when #874 and #879 each merge; it then brings main in and pushes part 2b once."
     }
   ],
   "main_health": [
@@ -8970,7 +8975,7 @@
     "879": {
       "slice": "X-filter15-fix",
       "head": "257cf4b2",
-      "status": "CI running; review on ready"
+      "status": "ready 257cf4b2, CI green; fresh Opus code+security review running"
     },
     "880": {
       "slice": "X-search01-fix",
@@ -9788,8 +9793,8 @@
         "role": "build",
         "agent": "pending launch",
         "model": "opus",
-        "since": "2026-11-14T05:07Z",
-        "doing": "cluster worker-report and lease hardening (S6-02, S6-03)",
+        "since": "2026-11-14T09:33Z",
+        "doing": "X-sec-S6-02-03 part 2b (store side + #871 optional items) building locally; push held until #874 and #879 merge (runner to message)",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9893,7 +9898,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T09:17Z",
+  "updated": "2026-11-14T09:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
