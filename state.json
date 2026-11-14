@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T06:06Z",
+  "updated_at": "2026-11-14T06:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8434,6 +8434,12 @@
       "from": "X-sec-S1-03-04",
       "at": "2026-11-14T06:06Z",
       "note": "Runner to decide: shorter DHT timeout backoff. Needs the CR-0 rule, the CR-0d restart proof and the crawler-sim restart harness changed together; ask the owner if the number is owner-set."
+    },
+    {
+      "id": "X-operator-mount-helpers",
+      "from": "X-operator-wake-outcome",
+      "at": "2026-11-14T06:14Z",
+      "note": "Approved by runner; built by the owner operator session after #870 merges. Mount the operator helpers as session files from the reviewed checkout instead of fetching them at run time; the policy stays auto. ping-2 after operator-apply deploys it. Needs a slices.yaml entry in the next runner PR."
     }
   ],
   "main_health": [
@@ -9751,7 +9757,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T06:06Z",
+  "updated": "2026-11-14T06:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
