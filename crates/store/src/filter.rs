@@ -388,8 +388,9 @@ pub fn is_kept_hold(rule: &str) -> bool {
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
 /// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
 /// replaces it, a rollback keeps it over a weaker hold, and no release
-/// removes it. The only way out is WK-13's purge-by-worker, which deletes
-/// a removed worker's rows by rule.
+/// removes it. It goes only when it expires
+/// ([`Store::expire_worker_floor`]) or its worker is revoked
+/// ([`Store::purge_worker_floor`]).
 pub const WORKER_FLOOR_PREFIX: &str = "worker-floor:";
 
 /// Whether a stored tombstone rule is a floor hold: the locked floor's
@@ -653,8 +654,8 @@ impl Store {
 
     /// Records a remote worker's floor drops (CS-1a, CS-1b, CS-8a or a
     /// hash list, reported as `Lost(Blocked)`) as tombstones under
-    /// `worker-floor:<worker>` (WK-10d), so the keys are never claimed,
-    /// fetched or stored again. A hash already tombstoned keeps its row (a
+    /// `worker-floor:<worker>` (WK-10d), so the keys aren't claimed,
+    /// fetched or stored again while the row holds them. A hash already tombstoned keeps its row (a
     /// local floor row is never renamed). Returns how many rows were added.
     pub fn tombstone_from_worker(
         &mut self,
@@ -902,8 +903,9 @@ impl Store {
     ) -> Result<usize> {
         let mut total = 0;
         let mut deleted_any = false;
-        // A worker's floor report isn't released by rule here: only WK-13's
-        // purge-by-worker removes it. Nor is a kept hold: only `release`.
+        // A worker's floor report isn't released by rule here: only its
+        // expiry or its worker's revoke removes it. Nor is a kept hold:
+        // only `release`.
         for rule in rules
             .iter()
             .filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX) && !is_kept_hold(r))

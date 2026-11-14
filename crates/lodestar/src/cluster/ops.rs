@@ -430,15 +430,6 @@ impl Workers {
     }
 
     /// Writes (or with `None`, deletes) a worker's row.
-    /// Deletes `w`'s written floor reports (`worker-floor:<w>`).
-    async fn purge_floor_holds(&self, w: WorkerId) -> Result<usize, WorkersError> {
-        let store = self.store.clone();
-        tokio::task::spawn_blocking(move || lock(&store).purge_worker_floor(w.0))
-            .await
-            .map_err(failed)?
-            .map_err(failed)
-    }
-
     async fn persist(&self, w: WorkerId, s: Option<Saved>) -> Result<(), WorkersError> {
         let store = self.store.clone();
         let key = prefs_key(w);
@@ -686,10 +677,10 @@ impl Workers {
         // do the ones written: an owner-approved choice
         // (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`). Each key is
         // judged under the floor again by whoever fetches it next. A
-        // failed delete leaves the holds in place, and the revocation
-        // stands either way.
-        self.cluster.forget_floor_reports(w);
-        let _ = self.purge_floor_holds(w).await;
+        // delete that fails is tried again by the floor writer until it
+        // lands; the revocation stands either way.
+        let cluster = self.cluster.clone();
+        let _ = tokio::task::spawn_blocking(move || cluster.revoke_floor_reports(w)).await;
         self.placement.forget(w);
         lock(&self.saved).remove(&w);
         lock(&self.unsaved).remove(&w);
