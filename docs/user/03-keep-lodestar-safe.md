@@ -285,7 +285,7 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 ### Keep the data folder owner-only
 <!-- index: data folder permissions; chmod; folder mode -->
 
-The data folder holds the store, the search index and your settings. Only Lodestar's own user should be able to open it. When Lodestar creates the folder, it makes it owner-only. A folder that existed before isn't changed. If other users on the computer could read it, Lodestar logs one warning at start, "the data folder can be read by other users on this computer", with the folder's path.
+The data folder holds the store, the search index and your settings. Only Lodestar's own user should be able to open it. When Lodestar creates the folder, it makes it owner-only. A folder that existed before isn't changed. If other users on the computer could read it, Lodestar logs one warning at start. The warning gives the folder's path and says "the data folder can be read by other users".
 
 **Recommended:** make the folder owner-only (mode 700: only the owner can read, write or open it). It's the safe choice because the folder holds your library, settings and keys, and no other account needs it. Lodestar's own user owns the folder, so Lodestar keeps working, and Docker hands the folder to the `PUID` user at every start.
 
