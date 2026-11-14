@@ -359,7 +359,11 @@ impl CompanionHttp {
                 .map_err(|_| AdapterError::Protocol("HTTP client"))
         };
         Ok(CompanionHttp {
-            fixed: build(Arc::new(LocalOnly(Arc::clone(&resolver))))?,
+            // The loopback and container targets: this client applies the
+            // managed-port rule itself (bare probes before a companion is
+            // ready included), so the process's loopback gate is off for
+            // it alone (X-cmp09-fix-2). Entered URLs keep the gate.
+            fixed: build(Arc::new(LocalOnly(Arc::clone(&resolver))))?.without_loopback_gate(),
             entered: build(Arc::new(LocalhostIsV4(resolver)))?,
             bindings: None,
             loopback: Mutex::new(HashMap::new()),
@@ -587,7 +591,7 @@ fn join(base: &EnteredUrl, path: &RequestPath) -> Result<Url, AdapterError> {
 fn net_error(e: NetError) -> AdapterError {
     match e {
         NetError::Blocked(_) => AdapterError::Blocked,
-        NetError::Resolve | NetError::Connect => AdapterError::Unreachable,
+        NetError::Resolve | NetError::Connect | NetError::NotReady => AdapterError::Unreachable,
         NetError::Timeout => AdapterError::Timeout,
         NetError::TooLarge => AdapterError::TooLarge,
         NetError::InvalidUrl(_) => AdapterError::Protocol("URL"),

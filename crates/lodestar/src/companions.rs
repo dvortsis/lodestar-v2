@@ -305,6 +305,13 @@ async fn start_with(
     let routes = Arc::new(CompanionRoutes::new(store.clone()));
     let (run, api) = (wiring.clone(), wiring.clone());
     let bindings = Arc::new(Bindings::new());
+    // Before any source or download client is built (serve starts the
+    // companions first): from here, a request through any guarded client
+    // to a companion's port waits for that companion to be ready.
+    // `CompanionHttp`'s own loopback client applies its finer rule instead.
+    // Set once per process; a later start in the same process (tests)
+    // keeps the first.
+    let _ = lodestar_integrations::net::set_loopback_gate(Arc::new(ReadyPorts(bindings.clone())));
     let http = CompanionHttp::new()
         .ok()
         .map(|h| Arc::new(h.with_bindings(bindings.clone())));
@@ -413,6 +420,17 @@ async fn start_with(
         release: Mutex::new(None),
         http,
     })
+}
+
+/// The process's loopback gate (X-cmp09-fix-2): a port Lodestar runs a
+/// companion on is allowed only while that companion is ready; every
+/// other port always.
+struct ReadyPorts(Arc<Bindings>);
+
+impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
+    fn allow(&self, port: u16) -> bool {
+        !self.0.managed(port) || self.0.ready(port)
+    }
 }
 
 /// The supervisor in its sandbox, with the guarded client, and CMP-8b's
@@ -3444,6 +3462,47 @@ mod tests {
         assert_eq!(routes.configured(&prowlarr), None);
         let gluetun = CompanionId::parse("gluetun").unwrap();
         assert!(routes.route(&gluetun).await.is_none());
+    }
+
+    /// X-cmp09-fix-2: serve's start of the companions sets the process's
+    /// loopback gate.
+    #[tokio::test]
+    async fn the_start_sets_the_loopback_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        // Set by this start or an earlier one in this process; nothing
+        // else sets it.
+        assert!(lodestar_integrations::net::loopback_gate_is_set());
+        c.shutdown().await;
+    }
+
+    /// The gate allows a port no companion holds, and not a held one
+    /// that isn't ready.
+    #[test]
+    fn the_gate_refuses_a_companions_port_until_ready() {
+        use lodestar_integrations::net::LoopbackGate;
+        let bindings = Arc::new(Bindings::new());
+        let gate = ReadyPorts(bindings.clone());
+        assert!(gate.allow(8080));
+        let (_tx, rx) = tokio::sync::watch::channel(lodestar_companions::supervise::Status {
+            state: lodestar_companions::supervise::State::Running,
+            restarts: 0,
+            last_exit: None,
+            run: 1,
+            up: true,
+        });
+        assert!(bindings.hold(8080, rx));
+        assert!(!gate.allow(8080) && gate.allow(9696));
     }
 
     /// At serve, a native run hands the manager a supervisor, and shutdown
