@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T02:29Z",
+  "updated_at": "2026-11-14T02:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8331,6 +8331,18 @@
       "id": "856-polish",
       "at": "2026-11-14T02:29Z",
       "what": "X-worker-839-followups polish (runner waived the old-decisions-file edit rule for the one superseded line): decisions file heading (#856), repeated lines 19/21, flush-loop bullet nesting; runtime.rs test filler polled once with timeout(ZERO) -> spawn it; detect.rs comment both Unix and Windows reasons; plus follow-up slice: a coordinator-requested drain reads no events while sending Drained (session.rs ~681-688)"
+    },
+    {
+      "at": "2026-11-14T02:34Z",
+      "from": "X-test-vm Windows lane phase 3b (leads, not budget evidence)",
+      "items": [
+        "/suggest title-prefix p95 at the 15 ms limit at 1M on Windows (over in 2 of 3 runs): slice a perf look",
+        "Magnetico import per-torrent time about 2.3x slower at 1M than at 200k: slice an import-scaling look",
+        "two Chromium e2e tests fail on Windows (boot-shell non-English no-flash/no-shift; keyboard-only j/k alert rows): slice a fix",
+        "Edge will not start under SYSTEM: note in windows.md",
+        "windows.md: Node download single-file match, PATH reload after Run Command installs, time with perf_counter",
+        "owner 2026-11-14 (relayed by the X-test-vm coordinator): the real Magnetico import test moves to the owner Unraid server; record in the next runner PR"
+      ]
     }
   ],
   "main_health": [
@@ -9386,7 +9398,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T02:29Z",
+    "updated": "2026-11-14T02:34Z",
     "items": [
       {
         "slot": 1,
@@ -9657,7 +9669,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T02:29Z",
+  "updated": "2026-11-14T02:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
