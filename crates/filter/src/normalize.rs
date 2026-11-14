@@ -270,17 +270,18 @@ struct Plan {
 /// two trade places, so the slot holds the latest and nothing this read
 /// has used is lost. A word goes here only where its place in
 /// [`Tokenizer::kept`] is taken too. The map's hash is keyed at random
-/// (std's), so no
-/// choice of words makes its look-ups slow, and each look-up is charged
-/// the same ([`cost::PROBED`]). Buffers are kept from read to read.
+/// (std's), so no choice of words makes its look-ups slow, and each
+/// look-up is charged the same ([`cost::PROBED`]). Buffers are kept from
+/// read to read.
 ///
 /// Bounded by charges already paid: every entry was charged as new in
 /// this read, at least [`cost::PLAN`] for a word and [`cost::CHAR_PLAN`]
 /// for a character, so a read within the budget keeps at most about
 /// `BUDGET / PLAN` words and `BUDGET / CHAR_PLAN` characters, counting
-/// [`Tokenizer::kept`]'s words too (checked in debug builds). [`Tokenizer::meter`] empties it at the start of every
-/// read, and the meter's guard (`Unmeter`) at its end, a panic included,
-/// so nothing carries over between torrents.
+/// [`Tokenizer::kept`]'s words too (checked in debug builds).
+/// [`Tokenizer::meter`] empties it at the start of every read, and the
+/// meter's guard (`Unmeter`) at its end, a panic included, so nothing
+/// carries over between torrents.
 #[derive(Debug)]
 struct Spill<K, P> {
     map: std::collections::HashMap<K, P>,
@@ -866,13 +867,13 @@ impl Tokenizer {
         let back = if self.plan_spill.map.is_empty() {
             None
         } else {
-            self.plan_spill.map.remove(word)
+            self.plan_spill.map.remove_entry(word)
         };
         match back {
-            Some(plan) => {
+            Some((key, plan)) => {
                 self.kept_words -= 1;
                 let held = std::mem::replace(&mut self.plans[at], plan);
-                self.keep(held);
+                self.keep(held, Some(key));
             }
             None => {
                 // New to this read: the one displaced is kept, and the
@@ -884,7 +885,7 @@ impl Tokenizer {
                 } else {
                     let spare = self.plan_spill.spare.pop().unwrap_or_default();
                     let held = std::mem::replace(&mut self.plans[at], spare);
-                    self.spill(held);
+                    self.spill(held, None);
                 }
                 let plan = &mut self.plans[at];
                 plan.round = 0;
@@ -918,13 +919,14 @@ impl Tokenizer {
             let held = std::mem::replace(&mut self.kept[from], spare);
             self.kept[from].round = 0;
             self.kept_words -= 1;
-            self.spill(held);
+            self.spill(held, None);
         }
     }
 
     /// Keeps `held`, a word this read has used, in its place or in
-    /// [`Tokenizer::plan_spill`].
-    fn keep(&mut self, held: Plan) {
+    /// [`Tokenizer::plan_spill`]; `key` is a buffer to reuse for its key
+    /// there.
+    fn keep(&mut self, held: Plan, key: Option<String>) {
         let to = slot2(&held.key);
         if self.kept[to].round != self.round {
             let free = std::mem::replace(&mut self.kept[to], held);
@@ -933,14 +935,23 @@ impl Tokenizer {
             }
             self.kept_words += 1;
         } else {
-            self.spill(held);
+            self.spill(held, key);
         }
     }
 
-    /// Keeps `held` in [`Tokenizer::plan_spill`].
-    fn spill(&mut self, held: Plan) {
+    /// Keeps `held` in [`Tokenizer::plan_spill`], its key in `key`'s
+    /// buffer where one is given.
+    fn spill(&mut self, held: Plan, key: Option<String>) {
         self.kept_words += 1;
-        self.plan_spill.map.insert(held.key.clone(), held);
+        let key = match key {
+            Some(mut k) => {
+                k.clear();
+                k.push_str(&held.key);
+                k
+            }
+            None => held.key.clone(),
+        };
+        self.plan_spill.map.insert(key, held);
     }
 
     #[inline]
@@ -1366,6 +1377,91 @@ fn paths_apart_with<'p>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A metered read of `name` and `paths`: its work, its cold work and
+    /// its tokens, the tokenizer left unmetered after.
+    fn metered(tok: &mut Tokenizer, name: &str, paths: &[Vec<String>]) -> (u64, u64, Vec<Token>) {
+        let (mut out, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+        tok.meter(crate::core::BUDGET);
+        tok.text(name, &mut out);
+        ends.push(out.len());
+        paths_apart_with(
+            tok,
+            paths.iter().map(|p| &p[..]),
+            &mut out,
+            &mut ends,
+            &mut apart,
+        );
+        let read = (tok.work, tok.cold, out);
+        tok.meter(0);
+        read
+    }
+
+    /// Random text from a small vocabulary, so its words and characters
+    /// keep meeting in the tokenizer's caches: a name and some paths.
+    fn colliding(seed: u64) -> (String, Vec<Vec<String>>) {
+        let mut x = seed | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let letters: Vec<char> = "abcdefghij0123"
+            .chars()
+            .chain((0..6).filter_map(|k| char::from_u32(0x4E00 + k * 2048)))
+            .collect();
+        let size = 200 + (next() % 3_000) as usize;
+        let vocabulary: Vec<String> = (0..size)
+            .map(|_| {
+                let len = 1 + next() % 6;
+                (0..len)
+                    .map(|_| letters[next() as usize % letters.len()])
+                    .collect()
+            })
+            .collect();
+        let mut words = |n: usize| {
+            let mut s = String::new();
+            for _ in 0..n {
+                s.push_str(&vocabulary[next() as usize % vocabulary.len()]);
+                s.push(' ');
+            }
+            s
+        };
+        let name = words(400);
+        let folders: Vec<String> = (0..3).map(|_| words(4)).collect();
+        let paths = (0..40)
+            .map(|i| vec![folders[i % 3].clone(), words(30)])
+            .collect();
+        (name, paths)
+    }
+
+    /// A read costs the same, and reads the same, on a tokenizer that
+    /// earlier reads left in any state as on a new one: its caches and
+    /// what it keeps between reads change how fast it reads, never what a
+    /// read is charged.
+    #[test]
+    fn a_read_costs_the_same_whatever_came_before() {
+        for case in 0..48u64 {
+            let (name, paths) = colliding(case * 7 + 1);
+            let fresh = metered(&mut Tokenizer::default(), &name, &paths);
+            let mut used = Tokenizer::default();
+            for earlier in 0..(1 + case % 4) {
+                let (n, p) = colliding(case * 131 + earlier * 17 + 3);
+                metered(&mut used, &n, &p);
+                // An unmetered read between them, too.
+                let mut out = Vec::new();
+                used.text(&n, &mut out);
+            }
+            assert_eq!(metered(&mut used, &name, &paths), fresh, "case {case}");
+            // And again, right after the same read.
+            assert_eq!(
+                metered(&mut used, &name, &paths),
+                fresh,
+                "case {case} again"
+            );
+        }
+    }
 
     fn toks(text: &str) -> Vec<Token> {
         let mut out = Vec::new();

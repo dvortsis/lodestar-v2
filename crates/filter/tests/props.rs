@@ -3036,3 +3036,28 @@ const CAP_6: usize = 130;
 
 /// [`generated_inputs_reach_the_budget`]'s cap on shape 5's size.
 const CAP_NAME: usize = 101_000;
+
+/// The charges, pinned: what reading the per-torrent budget's typical
+/// torrents costs, in work units. A change to any charge changes this, so
+/// it's made on purpose and recorded with its reason.
+#[test]
+fn typical_torrents_cost_what_they_did() {
+    let core = Core::new(
+        Lists::shipped().unwrap(),
+        CsList::default(),
+        Switches::default(),
+    );
+    let total: u64 = torrents(512)
+        .iter()
+        .map(|(name, files)| {
+            core.read_cost(&Item {
+                hashes: &[],
+                name,
+                files,
+                content_type: ContentType::Video,
+            })
+            .expect("within the budget")
+        })
+        .sum();
+    assert_eq!(total, 9_768_557);
+}

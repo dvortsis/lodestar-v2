@@ -35,5 +35,7 @@ Worst-case core judge time at the budget, scaled to the reference runner by the 
 ## Tests
 - `budget_worst_case` (`crates/filter/tests/props.rs`, ignored in debug, run by CI's `filter budget (§20.8)` job) adds generated inputs for the charges above. It fails on the code before this change and passes after. It now sizes each input with the core-aware `Core::read_cost`.
 - `generated_inputs_reach_the_budget` (`crates/filter/tests/props.rs`, runs in CI with no clock) covers the same generated inputs in work units, plus a sixth that pins the overflow store's charge. Each must reach the budget, and be held as CS-0a, at no more than a cap set about a quarter above today's fit. Every one fitted past its cap before these charges. It also checks that a torrent the read alone fits is held when judging its signals passes the budget.
+- `a_read_costs_the_same_whatever_came_before` (`crates/filter/src/normalize.rs`) reads random text whose words keep meeting in the caches. Each read must give the same work, cold work and tokens on a tokenizer used by earlier reads, metered or not, as on a new one.
+- `typical_torrents_cost_what_they_did` (`crates/filter/tests/props.rs`) pins the units charged for the per-torrent budget's typical torrents (9,768,557), so any change to a charge is made on purpose.
 - `varied_collections_in_each_script_are_judged` (`crates/filter/tests/judged_whole.rs`) pins each script's fit with the deterministic budget meter, so no timing is involved.
 - The CS-0a property in `every_reading_reaches_the_end_or_holds` uses `Core::too_large`.
