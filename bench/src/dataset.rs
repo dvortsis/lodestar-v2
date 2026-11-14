@@ -861,19 +861,73 @@ fn read_rows(
     Ok(())
 }
 
+/// The store's dictionaries, to decode its file-tree blobs with.
+fn dictionaries(
+    c: &lodestar_store::rusqlite::Connection,
+) -> Result<lodestar_store::BlobCodec, Box<dyn std::error::Error>> {
+    let mut codec = lodestar_store::BlobCodec::new(0);
+    let mut stmt = c.prepare("SELECT id, data FROM zstd_dicts")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+    for row in rows {
+        let (id, data) = row?;
+        codec.add_dict(id, data);
+    }
+    Ok(codec)
+}
+
+/// A `torrent_files` row's blob as the digest reads it: the tree it
+/// decodes to, so two encodings of one tree are the same (zstd at the
+/// store's settings has given two encodings of one tree on macOS arm64;
+/// see `docs/decisions/2026-11-14-X-flake-dataset-macos.md`). A blob that
+/// won't decode is read as its bytes, marked apart.
+fn file_tree(
+    codec: &mut lodestar_store::BlobCodec,
+    row: &lodestar_store::rusqlite::Row<'_>,
+) -> lodestar_store::rusqlite::Result<Vec<u8>> {
+    let id: i64 = row.get(1)?;
+    let dict: Option<i64> = row.get(2)?;
+    let data: Vec<u8> = row.get(3)?;
+    let tree =
+        lodestar_store::Codec::from_id(id).and_then(|c| codec.decompress(c, dict, &data).ok());
+    Ok(match tree {
+        Some(tree) => [b"T".as_slice(), &tree].concat(),
+        None => [b"X".as_slice(), &data].concat(),
+    })
+}
+
+/// The digest's reading of one column: `torrent_files.data` as its tree,
+/// every other column as it is.
+fn column(
+    table: &str,
+    i: usize,
+    codec: &mut lodestar_store::BlobCodec,
+    row: &lodestar_store::rusqlite::Row<'_>,
+    h: &mut Fnv,
+) -> lodestar_store::rusqlite::Result<()> {
+    if table == "torrent_files" && i == 3 {
+        h.eat(&file_tree(codec, row)?);
+    } else {
+        h.value(row.get_ref(i)?);
+    }
+    Ok(())
+}
+
 /// A digest of the dataset's content: every torrent row, file tree and
 /// swarm row in id order, the dictionary, and the rollups, by FNV-1a.
 /// Equal for two builds with the same key; it names no file's bytes, so
-/// it also checks a copy.
+/// it also checks a copy. A file tree counts by its torrent, codec,
+/// dictionary and the tree it decodes to, not its compressed bytes; the
+/// dictionaries count by their bytes.
 pub fn digest(db: &Path) -> Result<u64, Box<dyn std::error::Error>> {
     use lodestar_store::rusqlite::{Connection, OpenFlags};
     let c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut codec = dictionaries(&c)?;
     let mut h = Fnv::new();
     for table in DIGESTED {
         h.eat(table.as_bytes());
         read_rows(&c, table, &mut |row, cols| {
             for i in 0..cols {
-                h.value(row.get_ref(i)?);
+                column(table, i, &mut codec, row, &mut h)?;
             }
             Ok(())
         })?;
@@ -896,6 +950,7 @@ pub fn explain_difference(
     let open = |p: &Path| Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY);
     let (ca, cb) = (open(a)?, open(b)?);
     let rows = |c: &Connection, table: &str| -> Result<Vec<KeyedRow>, Box<dyn std::error::Error>> {
+        let mut codec = dictionaries(c)?;
         let mut out = Vec::new();
         read_rows(c, table, &mut |row, cols| {
             let text = |i: usize| -> String {
@@ -915,7 +970,7 @@ pub fn explain_difference(
             let mut each = Vec::with_capacity(cols);
             for i in 0..cols {
                 let mut h = Fnv::new();
-                h.value(row.get_ref(i)?);
+                column(table, i, &mut codec, row, &mut h)?;
                 each.push(h.0);
             }
             out.push((key, each));
