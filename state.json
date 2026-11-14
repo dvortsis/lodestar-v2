@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T14:56Z",
+  "updated_at": "2026-11-14T15:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8732,6 +8732,16 @@
       "id": "X-fetch-first-window",
       "note": "S1-15, important, fetch pool. Follow-up after X-fetch-room-fix; detail by message only.",
       "at": "2026-11-14T14:56Z"
+    },
+    {
+      "id": "X-gluetun-icmp-guard",
+      "note": "X-test-vm D3/D4: after gluetun stops, the host forwards ICMP unreachable to the VPN endpoint outside the tunnel; guard counter stays 0. Fix: drop in DOCKER-USER/raw for forwarded traffic to the endpoint, host OUTPUT ICMP drop to the endpoint, conntrack flush on guard engage; test on the test VM. #845 boot guard itself passed.",
+      "at": "2026-11-14T15:18Z"
+    },
+    {
+      "id": "X-gluetun-recover",
+      "note": "X-test-vm finding 4 (twice): after gluetun restarts and is healthy, Lodestar API stays down (>60 s) until docker restart; data intact. Fix the network-namespace rejoin/restart policy so it recovers alone.",
+      "at": "2026-11-14T15:18Z"
     }
   ],
   "main_health": [
@@ -10042,7 +10052,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T14:56Z",
+  "updated": "2026-11-14T15:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
