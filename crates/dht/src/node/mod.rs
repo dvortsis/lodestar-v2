@@ -796,14 +796,16 @@ pub struct StatsSnapshot {
 }
 
 impl StatsSnapshot {
-    /// Responses per query sent. A collapsing ratio is the symptom of NAT
-    /// saturation the dashboard warns about (§5).
-    pub fn reply_ratio(&self) -> f64 {
-        if self.queries_out == 0 {
-            0.0
-        } else {
-            (self.responses_in + self.errors_in) as f64 / self.queries_out as f64
-        }
+    /// The share of resolved queries that were answered: responses and
+    /// errors over those plus timeouts. A collapsing ratio is the symptom
+    /// of NAT saturation the dashboard warns about (§5). Queries still
+    /// awaiting their reply have no outcome yet and don't count, so the
+    /// ratio doesn't dip while lookups are under way. `None` until a
+    /// query has resolved: unknown, not 0%.
+    pub fn reply_ratio(&self) -> Option<f64> {
+        let answered = self.responses_in + self.errors_in;
+        let resolved = answered + self.timeouts;
+        (resolved > 0).then(|| answered as f64 / resolved as f64)
     }
 }
 
@@ -1174,5 +1176,47 @@ impl Node {
             Ok(result) => result,
             Err(e) => Err(StateError::Io(io::Error::other(e))),
         }
+    }
+}
+
+#[cfg(test)]
+mod reply_ratio_tests {
+    use super::StatsSnapshot;
+
+    fn stats(sent: u64, responses: u64, errors: u64, timeouts: u64) -> StatsSnapshot {
+        StatsSnapshot {
+            queries_out: sent,
+            responses_in: responses,
+            errors_in: errors,
+            timeouts,
+            outstanding: sent - responses - errors - timeouts,
+            ..StatsSnapshot::default()
+        }
+    }
+
+    /// Unknown until a query has resolved, however many are out.
+    #[test]
+    fn nothing_resolved_is_unknown() {
+        assert_eq!(StatsSnapshot::default().reply_ratio(), None);
+        assert_eq!(stats(40, 0, 0, 0).reply_ratio(), None);
+    }
+
+    /// Queries still awaiting their reply don't lower the ratio: the same
+    /// answers and timeouts give the same ratio whatever is in flight.
+    #[test]
+    fn queries_in_flight_dont_lower_it() {
+        let settled = stats(10, 9, 0, 1).reply_ratio();
+        assert_eq!(settled, Some(0.9));
+        for in_flight in [1, 10, 1_000] {
+            assert_eq!(stats(10 + in_flight, 9, 0, 1).reply_ratio(), settled);
+        }
+    }
+
+    /// Errors are answers; timeouts lower it.
+    #[test]
+    fn errors_answer_and_timeouts_lower_it() {
+        assert_eq!(stats(4, 2, 2, 0).reply_ratio(), Some(1.0));
+        assert_eq!(stats(4, 1, 0, 3).reply_ratio(), Some(0.25));
+        assert_eq!(stats(4, 0, 0, 4).reply_ratio(), Some(0.0));
     }
 }

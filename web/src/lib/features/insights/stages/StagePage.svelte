@@ -399,6 +399,9 @@
 								>{m.insights_stage_na()}</span
 							>
 						{/if}
+						{#if x.help}
+							<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-help">{x.help}</span>
+						{/if}
 					</div>
 				{/each}
 			</div>

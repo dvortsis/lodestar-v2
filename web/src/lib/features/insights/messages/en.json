@@ -293,6 +293,7 @@
 	"insights_stage_discover_reported": "Reported by the DHT",
 	"insights_stage_discover_nodes": "DHT nodes",
 	"insights_stage_discover_reply": "Reply ratio",
+	"insights_stage_discover_reply_help": "Share of DHT queries answered, among those that got an answer or timed out. Shows — until the first one resolves.",
 	"insights_stage_discover_rediscovered": "Rediscovered",
 	"insights_stage_discover_dropped": "Dropped",
 	"insights_stage_discover_bep51": "BEP 51 sample yield",

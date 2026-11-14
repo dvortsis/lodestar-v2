@@ -544,8 +544,7 @@ impl Services {
         if let Some(dht) = dht_stats.clone() {
             insights.set_snapshot(Box::new(move || lodestar_api::insights::StageSnapshot {
                 dht_reply_ratio: (*dht.lock().unwrap_or_else(|e| e.into_inner()))
-                    .filter(|d| d.queries_out > 0)
-                    .map(|d| d.reply_ratio()),
+                    .and_then(|d| d.reply_ratio()),
             }));
         }
         let (stop_insights, insights_stopped) = watch::channel(false);

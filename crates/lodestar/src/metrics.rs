@@ -478,12 +478,15 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Queries awaiting a reply.",
             d.outstanding,
         );
-        o.one(
-            "dht_reply_ratio",
-            "gauge",
-            "Responses per query sent (collapses under NAT saturation).",
-            d.reply_ratio(),
-        );
+        // Left out until a query has resolved: unknown, not 0.
+        if let Some(ratio) = d.reply_ratio() {
+            o.one(
+                "dht_reply_ratio",
+                "gauge",
+                "Share of resolved queries answered: responses and errors over those plus timeouts (collapses under NAT saturation).",
+                ratio,
+            );
+        }
         o.one(
             "dht_packets_in_total",
             "counter",

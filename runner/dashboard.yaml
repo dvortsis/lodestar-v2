@@ -472,6 +472,7 @@ placement:
   - X-flake-scrape-udp-port
   - X-flake-companions-loopback
   - X-flake-dht-bootstrap
+  - X-dht-reply-ratio-resolved
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
