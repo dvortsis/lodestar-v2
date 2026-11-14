@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:50Z",
+  "updated_at": "2026-11-14T03:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8373,7 +8373,8 @@
     "X-fuzz-gaps (slot 33 reviewer session): peer-wire fuzz target + parser seeds; owns fuzz/fuzz_targets/peer_wire.rs, fuzz/seeds/{bencode,krpc,tokenizer,peer_wire}/**, fuzz/Cargo.toml, fuzz/Cargo.lock, fuzz/README.md, its decisions file; after X-cmp01-fix; add to slices.yaml in next runner PR",
     "Fuzz dictionaries need a ci.yml flag change: runner follow-up slice later",
     "M8-SEC-1 hour-per-target fuzz running in the reviewer session container (results as numbers)",
-    "Owner \u00a72.19 flag at #857 merge: re-judge now judges every stored row (no shortcut); first real per-1M timing still owed from a real store"
+    "Owner \u00a72.19 flag at #857 merge: re-judge now judges every stored row (no shortcut); first real per-1M timing still owed from a real store",
+    "Owner \u00a72.19 FYI for #863 X-dht01-fix sent via dashboard session"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9420,7 +9421,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T03:50Z",
+    "updated": "2026-11-14T03:52Z",
     "items": [
       {
         "slot": 1,
@@ -9454,12 +9455,12 @@
       },
       {
         "slot": 7,
-        "slice": null,
+        "slice": "X-sec-S1-01-02",
         "role": "build",
-        "agent": "claude",
-        "doing": "retired after #856 merged; CLUSTER-06 goes to the reviewer session",
-        "since": "2026-11-14T02:29Z",
-        "status": "idle",
+        "agent": "session_01MMjhn8LCZuDPeXwdBzodLH",
+        "doing": "X-sec-S1-01-02 dht node fix (S1-01, S1-02); detail by message; then X-sec-S1-03-04",
+        "since": "2026-11-14T03:52Z",
+        "status": "active",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
       },
@@ -9602,10 +9603,10 @@
       },
       {
         "slot": 33,
-        "slice": "X-dht01-fix",
+        "slice": "X-cmp01-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "X-dht01-fix built first (dht node only); PR from its own branch next. X-update01-store01-fix waits on #857 (store snapshot module). Queue after: X-search01-fix, X-pipe01-fix, X-store02-pipe02-fix, X-cmp01-fix, X-cluster06-fix (after #856).",
+        "doing": "#863 X-dht01-fix merged 503d4dd1; next X-cmp01-fix, then X-fuzz-gaps, X-cluster06-fix, X-search01-fix, X-pipe01-fix; X-update01-store01-fix and X-store02-pipe02-fix after #857",
         "since": "2026-11-14T01:45Z"
       }
     ]
@@ -9691,7 +9692,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T03:50Z",
+  "updated": "2026-11-14T03:52Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10236,6 +10237,12 @@
       "slice": "X-operator-hardening",
       "merged": "dab4d8ff",
       "at": "2026-11-14T03:18Z"
+    },
+    {
+      "pr": 863,
+      "slice": "X-dht01-fix",
+      "merged": "503d4dd1",
+      "at": "2026-11-14T03:52Z"
     }
   ]
 }
