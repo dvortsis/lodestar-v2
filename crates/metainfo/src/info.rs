@@ -751,7 +751,9 @@ fn parse_v1_files<'a>(
 }
 
 /// Charges the path a draft will be stored under (its `path.utf-8` when it
-/// has one) and its symlink target.
+/// has one) and its symlink target. A legacy `path` kept beside a
+/// `path.utf-8` is only a list of slices into the input, one bencode item
+/// each, so the item budget bounds it.
 fn charge_draft(budget: &mut PathBudget, d: &Draft<'_>) -> Result<(), Error> {
     budget.charge_path(d.path_utf8.as_ref().unwrap_or(&d.path))?;
     if let Some(t) = &d.symlink_target {
