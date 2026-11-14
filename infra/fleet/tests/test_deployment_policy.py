@@ -64,7 +64,8 @@ class DeploymentBoundary(unittest.TestCase):
                      "include_claim_keys": ["repo", "context", "workflow_ref"]},
             "environments": {"cloud-fleet": ["fleet.yml"], "pia-delivery": ["fleet.yml"],
                              "cloud-operator": ["operator-wake.yml", "operator-apply.yml", "operator-injection.yml"],
-                             "fleet-cleanup": ["fleet-emergency-down.yml"]}, "owner_dispatch_environments": ["fleet-cleanup"]})
+                             "fleet-cleanup": ["fleet-emergency-down.yml"]}, "owner_dispatch_environments": ["fleet-cleanup"],
+            "unattended_environments": ["cloud-operator"]})
         self.assertEqual(dp.configuration_errors(settings().__getitem__), [])
         for role, environment in dp.ROLE_ENVIRONMENTS.items():
             for workflow in dp.POLICY["environments"][environment]:
@@ -239,11 +240,14 @@ class DeploymentBoundary(unittest.TestCase):
     def test_tokenless_injection_audits_identically_before_oidc_and_sts(self):
         env = {**job("operator-injection.yml"), "ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.invalid/token?x=1",
                "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "fake-oidc", "AWS_BRIDGE_ROLE_ARN": "fake-role"}
-        for state in ("protected", "missing-reviewer", "unreadable"):
+        for state in ("protected", "unattended", "other-reviewer", "unreadable"):
             with self.subTest(state=state):
                 data = settings()
-                if state == "missing-reviewer":
+                if state == "unattended":
                     data[f"/repos/{REPO}/environments/cloud-operator"]["protection_rules"] = []
+                if state == "other-reviewer":
+                    data[f"/repos/{REPO}/environments/cloud-operator"]["protection_rules"][0]["reviewers"] = [
+                        {"type": "User", "reviewer": {"id": 1}}]
                 def get(value, path):
                     self.assertEqual(value, "")
                     if state == "unreadable":
@@ -257,7 +261,7 @@ class DeploymentBoundary(unittest.TestCase):
                 with mock.patch.object(apply, "github_json", side_effect=get) as metadata, \
                         mock.patch("urllib.request.urlopen", return_value=response) as http, \
                         mock.patch.object(apply, "aws_config"), mock.patch.dict(sys.modules, {"boto3": boto}):
-                    if state == "protected":
+                    if state in ("protected", "unattended"):
                         apply.oidc_session(env, "1-1", role_env="AWS_BRIDGE_ROLE_ARN")
                         boto.client.return_value.assume_role_with_web_identity.assert_called_once()
                     else:
@@ -266,6 +270,166 @@ class DeploymentBoundary(unittest.TestCase):
                         http.assert_not_called()
                         boto.client.assert_not_called()
                     self.assertTrue(metadata.called)
+
+
+OPERATOR = f"/repos/{REPO}/environments/cloud-operator"
+OWNER_RULE = {"type": "required_reviewers", "prevent_self_review": False,
+              "reviewers": [{"type": "User", "reviewer": {"id": 83323977}}]}
+
+
+class UnattendedOperatorEnvironment(unittest.TestCase):
+    """Owner's decision 2026-11-14: operator wakes need no per-wake approval."""
+
+    def audit(self, data, environment="cloud-operator"):
+        return dp.configuration_errors(data.__getitem__, [environment])
+
+    def assert_operator_blocked(self, data):
+        self.assertTrue(self.audit(data))
+        for workflow in dp.POLICY["environments"]["cloud-operator"]:
+            with self.assertRaises(dp.DeploymentBlocked):
+                dp.require_for_run(job(workflow), "AWS_BRIDGE_ROLE_ARN", data.__getitem__)
+
+    def test_only_cloud_operator_is_unattended(self):
+        self.assertEqual(dp.POLICY["unattended_environments"], ["cloud-operator"])
+
+    def test_operator_passes_with_no_reviewer_rule(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"] = []
+        self.assertEqual(self.audit(data), [])
+        for workflow in dp.POLICY["environments"]["cloud-operator"]:
+            with self.subTest(workflow=workflow):
+                self.assertEqual(dp.require_for_run(job(workflow), "AWS_BRIDGE_ROLE_ARN", data.__getitem__),
+                                 "cloud-operator")
+
+    def test_operator_passes_with_no_rules_field_at_all(self):
+        data = settings()
+        data[OPERATOR].pop("protection_rules")
+        self.assertEqual(self.audit(data), [])
+
+    def test_operator_passes_with_branch_policy_rule_only(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"] = [{"type": "branch_policy"}]
+        self.assertEqual(self.audit(data), [])
+
+    def test_operator_passes_with_owner_only_rule(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"] = [dict(OWNER_RULE), {"type": "branch_policy"}]
+        self.assertEqual(self.audit(data), [])
+
+    def test_operator_owner_rule_still_needs_self_review_allowed(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"] = [{**OWNER_RULE, "prevent_self_review": True}]
+        self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_another_reviewer(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"][0]["reviewers"] = [{"type": "User", "reviewer": {"id": 1}}]
+        self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_a_team_reviewer(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"][0]["reviewers"] = [{"type": "Team", "reviewer": {"id": 83323977}}]
+        self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_two_reviewers(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"][0]["reviewers"].append({"type": "User", "reviewer": {"id": 1}})
+        self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_an_empty_reviewer_rule(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"][0]["reviewers"] = []
+        self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_two_reviewer_rules(self):
+        data = settings()
+        data[OPERATOR]["protection_rules"] = [dict(OWNER_RULE), dict(OWNER_RULE)]
+        self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_a_wait_timer(self):
+        for rules in ([{"type": "wait_timer", "wait_timer": 5}],
+                      [dict(OWNER_RULE), {"type": "wait_timer", "wait_timer": 5}]):
+            with self.subTest(rules=rules):
+                data = settings()
+                data[OPERATOR]["protection_rules"] = rules
+                self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_an_unknown_rule_type(self):
+        for rule in ({"type": "custom_protection_rule"}, {}):
+            with self.subTest(rule=rule):
+                data = settings()
+                data[OPERATOR]["protection_rules"] = [rule]
+                self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_admin_bypass(self):
+        for value in (True, None, "false"):
+            with self.subTest(value=value):
+                data = settings()
+                data[OPERATOR]["protection_rules"] = []
+                data[OPERATOR]["can_admins_bypass"] = value
+                self.assert_operator_blocked(data)
+
+    def test_operator_fails_with_a_non_main_branch_rule(self):
+        branches = OPERATOR + "/deployment-branch-policies?per_page=100"
+        mutations = {
+            "feature branch": lambda d: d[branches]["branch_policies"][0].update(name="feature"),
+            "main wildcard": lambda d: d[branches]["branch_policies"][0].update(name="main*"),
+            "main tag": lambda d: d[branches]["branch_policies"][0].update(type="tag"),
+            "extra rule": lambda d: (d[branches]["branch_policies"].append({"name": "dev", "type": "branch"}),
+                                     d[branches].update(total_count=2)),
+            "no rule": lambda d: d[branches].update(total_count=0, branch_policies=[]),
+            "all protected branches": lambda d: d[OPERATOR].update(
+                deployment_branch_policy={"protected_branches": True, "custom_branch_policies": False}),
+            "any branch": lambda d: d[OPERATOR].update(deployment_branch_policy=None),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(case=label):
+                data = settings()
+                data[OPERATOR]["protection_rules"] = []
+                mutate(data)
+                self.assert_operator_blocked(data)
+
+    def test_operator_fails_closed_when_missing_or_unreadable(self):
+        missing = settings()
+        del missing[OPERATOR]
+        malformed = settings()
+        malformed[OPERATOR]["protection_rules"] = None
+        garbage = settings()
+        garbage[OPERATOR]["protection_rules"] = ["required_reviewers"]
+        for label, data in (("missing", missing), ("null rules", malformed), ("non-object rule", garbage)):
+            with self.subTest(case=label):
+                self.assertIn("deployment: cloud-operator protection settings unreadable", self.audit(data))
+                self.assert_operator_blocked(data)
+
+        def denied(_):
+            raise RuntimeError("LEAKMARK-private-http-body")
+        errors = dp.configuration_errors(denied, ["cloud-operator"])
+        self.assertIn("deployment: cloud-operator protection settings unreadable", errors)
+        self.assertNotIn("LEAKMARK", str(errors))
+
+    def test_fleet_and_pia_still_require_the_owner_reviewer(self):
+        for environment, role in (("cloud-fleet", "AWS_FLEET_ROLE_ARN"), ("pia-delivery", "AWS_PIA_ROLE_ARN")):
+            for rules in ([], [{"type": "branch_policy"}]):
+                with self.subTest(environment=environment, rules=rules):
+                    data = settings()
+                    data[f"/repos/{REPO}/environments/{environment}"]["protection_rules"] = rules
+                    self.assertIn(f"deployment: {environment} requires the owner as its sole approval reviewer",
+                                  self.audit(data, environment))
+                    with self.assertRaises(dp.DeploymentBlocked):
+                        dp.require_for_run(job(), role, data.__getitem__)
+
+    def test_cleanup_still_admits_no_reviewer_or_timer(self):
+        data = settings()
+        data[f"/repos/{REPO}/environments/fleet-cleanup"]["protection_rules"] = [dict(OWNER_RULE)]
+        self.assertIn("deployment: fleet-cleanup must not queue behind environment approvals/timers",
+                      self.audit(data, "fleet-cleanup"))
+
+    def test_a_class_conflict_fails_closed(self):
+        policy = {**dp.POLICY, "owner_dispatch_environments": ["fleet-cleanup", "cloud-operator"]}
+        data = settings()
+        data[OPERATOR]["protection_rules"] = []
+        with mock.patch.object(dp, "POLICY", policy):
+            self.assertIn("deployment: cloud-operator has conflicting policy classes", self.audit(data))
 
 
 if __name__ == "__main__":
