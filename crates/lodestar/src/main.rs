@@ -8,6 +8,7 @@ mod cluster;
 mod companion_wiring;
 mod companions;
 mod config;
+mod data_dir;
 mod filter_load;
 mod fixture;
 mod floor;

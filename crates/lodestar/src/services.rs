@@ -100,8 +100,11 @@ impl Services {
     /// Opens the data directory and starts every service. The HTTP
     /// listener is bound but serves nothing until [`Services::run`].
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
-        std::fs::create_dir_all(&config.data_dir)
+        // Owner-only: created so, or tightened when Lodestar's user owns
+        // it; one it doesn't own is warned about, never changed (S8-01).
+        crate::data_dir::ensure(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        crate::data_dir::secure(&config.data_dir);
         // `/system`'s start time, whichever entry point runs this (B2c).
         system::Restart::global().started();
         // A pending HTTP-address change, before the registry loads (B2c).

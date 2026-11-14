@@ -11,9 +11,12 @@ use std::time::Duration;
 use lodestar_companions::adapter::{
     AdapterError, BoxFuture, GuardedHttp, ProbeRequest, ProbeResponse, Target,
 };
+use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
 use lodestar_companions::configure::Socks5Proxy;
+use lodestar_companions::detect::CompanionHttp;
 use lodestar_companions::inputs::{CompanionId, PortNumber};
 use lodestar_companions::manager::{Launch, Prelaunch, Routes, Run, Supervised, launch_env};
+use lodestar_companions::supervise::bind::Bindings;
 use lodestar_companions::supervise::egress::Route;
 use lodestar_companions::supervise::{Launcher, Limits, Sandbox, State, Supervisor, Timings};
 use lodestar_sources::egress::{DownReason, RouteKind, RouteState};
@@ -71,6 +74,10 @@ impl World {
     }
 
     async fn supervised(&self) -> Supervised {
+        self.supervised_with(None).await
+    }
+
+    async fn supervised_with(&self, bindings: Option<Arc<Bindings>>) -> Supervised {
         let launcher = Launcher {
             exe: std::env::current_exe().unwrap(),
             args: Vec::new(),
@@ -80,14 +87,18 @@ impl World {
         let sup = Supervisor::new(data.clone(), sandbox.hook(), Timings::default())
             .await
             .unwrap();
-        Supervised::new(
+        let s = Supervised::new(
             data,
             sup,
             sandbox,
             Arc::new(NoHttp),
             self.routes.clone(),
             None,
-        )
+        );
+        match bindings {
+            Some(b) => s.with_bindings(b),
+            None => s,
+        }
     }
 
     /// An installed version's program for `id`, as the manager launches it.
@@ -289,4 +300,72 @@ async fn cant_follow_comes_before_cant_launch() {
     let s = w.supervised().await;
     let l = w.launch("qbittorrent", 8080);
     assert_eq!(s.start(l).await, Err("cant_follow_route"));
+}
+
+/// Answers every request on 127.0.0.1 with `200 ok`, counting them.
+async fn answering() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// X-cmp-supervisor-bind: a companion Lodestar runs owns its port from its
+/// start. While its child isn't running (here, held for its route), an
+/// answer on 127.0.0.1 from another process doesn't let a request that
+/// carries something through, and the port stays Lodestar's after the
+/// stop: nothing for it is sent to anything else.
+#[tokio::test]
+async fn a_companion_not_running_gets_no_credentialed_request() {
+    let (port, seen) = answering().await;
+    let bindings = Arc::new(Bindings::new());
+    let w = World::new(Some(RouteKind::Socks5));
+    let s = w.supervised_with(Some(bindings.clone())).await;
+    let l = w.launch("prowlarr", port);
+    let (id, target) = (l.id.clone(), l.target.clone());
+    assert!(!bindings.managed(port));
+    s.start(l).await.unwrap();
+    assert_eq!(s.status(&id).unwrap().borrow().state, State::Held);
+    assert!(bindings.managed(port) && !bindings.ready(port));
+    let client = CompanionHttp::new()
+        .unwrap()
+        .with_bindings(bindings.clone());
+    let limits = || ProbeLimits::new(Duration::from_secs(15), 1024).unwrap();
+    let path = || RequestPath::parse("/api/v1/system/status").unwrap();
+    let carrying = || ProbeRequest::new(&target, path(), limits()).post(b"x".to_vec());
+    let got = client.send(carrying()).await;
+    assert!(matches!(got, Err(AdapterError::Unreachable)), "{got:?}");
+    // The health check never counts that answer.
+    let healthy = tokio::time::timeout(WAIT, s.healthy(&id, &target)).await;
+    assert_eq!(healthy, Ok(false));
+    assert!(!bindings.ready(port));
+    s.stop(&id).await;
+    assert!(bindings.managed(port) && !bindings.ready(port));
+    let got = client.send(carrying()).await;
+    assert!(matches!(got, Err(AdapterError::Unreachable)), "{got:?}");
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // A bare probe still reaches 127.0.0.1 alone.
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.status(), 200);
 }

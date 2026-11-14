@@ -150,9 +150,9 @@ impl Worker {
     async fn found(&self, key: InfoHash, token: u64) {
         self.leases.insert(key, Token(token));
         let mut found = Found::key(key, 0);
-        // A peer in a network of its own for each key (documentation
-        // addresses): the pool takes only so many keys at once with a peer
-        // at one address or in one network.
+        // A peer of its own for each key (documentation addresses), so
+        // fetches aren't held by the per-address connection cap. This pool
+        // has no peer finder, so the pool's address limits don't apply.
         let net = token as u16;
         found.peers = vec![std::net::SocketAddr::from((
             [0x2001, 0xdb8, net, 0, 0, 0, 0, 1],

@@ -373,8 +373,36 @@ fn a_held_hash_never_comes_back() {
             store.promote(id, &pt(&p, dht), CODES, T).unwrap(),
             lodestar_store::unverified::Promoted::Gone
         );
-        // A torrent the writer stored before the hold (or by mistake).
-        let tid = store_torrent(&mut store, &p, dht);
+        // The write path reads a tombstone or quarantine row in its own
+        // transaction: a fetch under the held hash isn't stored. (A CS hash
+        // list entry is the filter's to judge at commit.)
+        if !matches!(how, Hold::CsHash) {
+            let written = store
+                .write(&WriteBatch {
+                    prepared: &[pt(&p, dht)],
+                    ..WriteBatch::default()
+                })
+                .unwrap();
+            assert_eq!(
+                written.prepared,
+                [lodestar_store::Inserted::Held],
+                "{how:?}"
+            );
+        }
+        // A torrent stored anyway (by mistake), outside the write path.
+        let raw = info_bytes("held again");
+        let info = Info::parse(&raw).unwrap();
+        let tid = store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: T,
+                metadata_at: T,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap()[0]
+            .id();
         assert!(!store.put_claims(tid, nyaa, &c, false).unwrap(), "{how:?}");
         assert_eq!(count(&store, "SELECT count(*) FROM unverified_items"), 0);
         assert_eq!(count(&store, "SELECT count(*) FROM torrent_claims"), 0);

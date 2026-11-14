@@ -47,6 +47,7 @@ use crate::adapter::{
 use crate::catalogue::{Catalogue, Entry, Exposure, Proto};
 use crate::flaresolverr;
 use crate::inputs::CompanionId;
+use crate::supervise::bind::Bindings;
 
 pub mod gluetun;
 pub mod prowlarr;
@@ -260,6 +261,30 @@ impl Resolve for LocalOnly {
     }
 }
 
+/// The resolver for entered URLs: `localhost` is `127.0.0.1` alone, never
+/// `::1`, which the system resolver may hand back first (Windows does), so
+/// a companion you named as `localhost` is asked where Lodestar's own
+/// companions listen. Every other name goes to the system.
+struct LocalhostIsV4(Arc<dyn Resolve>);
+
+impl Resolve for LocalhostIsV4 {
+    fn resolve<'a>(&'a self, host: &'a str) -> NetFuture<'a, io::Result<Vec<IpAddr>>> {
+        Box::pin(async move {
+            if is_localhost(host) {
+                return Ok(vec![IpAddr::from([127, 0, 0, 1])]);
+            }
+            self.0.resolve(host).await
+        })
+    }
+}
+
+/// `localhost`, in any case, with or without the root's trailing dot.
+fn is_localhost(host: &str) -> bool {
+    host.strip_suffix('.')
+        .unwrap_or(host)
+        .eq_ignore_ascii_case("localhost")
+}
+
 /// The [`GuardedHttp`] that `crates/lodestar` hands the adapters (CMP-5g).
 ///
 /// - **Policy:** the SSRF guard's download-client mode: public and private
@@ -293,9 +318,20 @@ impl Resolve for LocalOnly {
 ///     `127.0.0.1`.
 ///   - The memory is this value's own: another `CompanionHttp` starts
 ///     with none.
+/// - **A companion Lodestar runs** (X-cmp-supervisor-bind): a port the
+///   supervisor holds a child on ([`Bindings`]) is asked on `127.0.0.1`
+///   alone, never on `::1`, and a request that carries anything goes out
+///   only while that child is running and was found ready in its current
+///   run. Otherwise it's refused as [`AdapterError::Unreachable`] before
+///   any connection. Bare probes still go (they find it ready), to
+///   `127.0.0.1` alone.
+/// - **`localhost` in a URL you entered** is `127.0.0.1` alone.
 pub struct CompanionHttp {
     fixed: GuardedClient,
     entered: GuardedClient,
+    /// The ports of companions Lodestar runs, when this client serves the
+    /// supervisor too.
+    bindings: Option<Arc<Bindings>>,
     /// The loopback address each port's requests go to: `false` once
     /// `127.0.0.1` has answered (for good), `true` while only `::1` has.
     /// At most one entry a port.
@@ -324,9 +360,18 @@ impl CompanionHttp {
         };
         Ok(CompanionHttp {
             fixed: build(Arc::new(LocalOnly(Arc::clone(&resolver))))?,
-            entered: build(resolver)?,
+            entered: build(Arc::new(LocalhostIsV4(resolver)))?,
+            bindings: None,
             loopback: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The same, serving the supervisor too: the ports in `bindings` are
+    /// companions Lodestar runs (see the type's notes). One such client is
+    /// shared by every path, so a probe by any of them serves the rest.
+    pub fn with_bindings(mut self, bindings: Arc<Bindings>) -> CompanionHttp {
+        self.bindings = Some(bindings);
+        self
     }
 
     async fn once(
@@ -390,6 +435,14 @@ impl CompanionHttp {
                 // A request that can't be built never tells where the
                 // companion listens.
                 sendable(request)?;
+                // A companion Lodestar runs: `127.0.0.1` alone, and what
+                // carries something only to the child that's ready there.
+                if let Some(b) = self.bindings.as_ref().filter(|b| b.managed(p)) {
+                    if !bare(request) && !b.ready(p) {
+                        return Err(AdapterError::Unreachable);
+                    }
+                    return self.once(&self.fixed, url(false)?, request).await;
+                }
                 let remembered = self.loopback_of(p);
                 // `127.0.0.1` keeps a port for good.
                 if remembered == Some(false) {
