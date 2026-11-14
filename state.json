@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T15:48Z",
+  "updated_at": "2026-11-14T15:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9793,7 +9793,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T15:38Z",
+    "updated": "2026-11-14T15:53Z",
     "items": [
       {
         "slot": 1,
@@ -10059,10 +10059,16 @@
       "at": "2026-11-13T21:15Z",
       "answer": "Asked for method and cost; runner recommended exports first, then a 20-session sample in a separate session.",
       "via": "dashboard session"
+    },
+    {
+      "id": "aws-quota-1000",
+      "at": "2026-11-14T15:53Z",
+      "answer": "Owner: AWS quota raised to 1000 (in chat; assumed EC2 vCPU, region and on-demand/spot not stated). Planning fact for cloud-testing and fleet sizing only; runner makes no AWS calls, spend stays the owner's decision.",
+      "via": "runner chat"
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T15:48Z",
+  "updated": "2026-11-14T15:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
