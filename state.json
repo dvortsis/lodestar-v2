@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:41Z",
+  "updated_at": "2026-11-14T00:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8152,7 +8152,7 @@
       "id": "ci-filter-docs-runs-rust",
       "note": "#854 (docs + one runner/dashboard.yaml line) ran the full Rust matrix (~55 min Windows); check the CI change filter for docs/decisions, docs/operations, runner/ paths",
       "at": "2026-11-13T23:57Z",
-      "status": "X-ci-filter-docs-user (slot 30)"
+      "status": "X-ci-filter-docs-user parked (brief kept); slot 30 taken by METAINFO-01 fix"
     },
     {
       "id": "operator-check8-after-design-review",
@@ -8234,7 +8234,7 @@
       "id": "METAINFO-01",
       "severity": "blocking",
       "surface": "metainfo parser (network input)",
-      "status": "fix slice next free build slot, Opus + /security-review",
+      "status": "X-metainfo01-fix launching in slot 30 (fresh Opus)",
       "track": "Q (held: id/severity/surface only)",
       "at": "2026-11-14T00:41Z"
     },
@@ -9325,7 +9325,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:41Z",
+    "updated": "2026-11-14T00:42Z",
     "items": [
       {
         "slot": 1,
@@ -9586,7 +9586,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:41Z",
+  "updated": "2026-11-14T00:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
