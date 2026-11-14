@@ -108,12 +108,18 @@ impl<K: Copy + Eq + Ord + std::hash::Hash> SourceBuckets<K> {
     }
 }
 
+/// The unit a per-source share is keyed on: an IPv4 /24, or an IPv6 /48
+/// (one site's allocation, so its many /64s share one budget).
+pub(crate) fn source(ip: IpAddr) -> Network {
+    allocation(ip).unwrap_or_else(|| network(ip))
+}
+
 impl SourceBuckets<Network> {
-    /// [`SourceBuckets::try_take`] for `ip`'s block. Loopback has no share:
-    /// no packet from off the host carries a loopback source, and a local
-    /// test network runs many nodes on it.
+    /// [`SourceBuckets::try_take`] for `ip`'s [`source`]. Loopback has no
+    /// share: no packet from off the host carries a loopback source, and a
+    /// local test network runs many nodes on it.
     pub fn try_take_from(&mut self, ip: IpAddr, now: Instant) -> bool {
-        ip.to_canonical().is_loopback() || self.try_take(network(ip), now)
+        ip.to_canonical().is_loopback() || self.try_take(source(ip), now)
     }
 }
 

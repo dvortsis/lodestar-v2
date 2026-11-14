@@ -205,6 +205,42 @@ proptest! {
     }
 }
 
+/// On IPv6 the shares are per /48: many /64s of one allocation draw on
+/// one sample budget, while another /48 keeps its own.
+#[test]
+fn many_v6_blocks_of_one_allocation_share_one_sample_budget() {
+    let (mut a, sockets, mut rx) = actor();
+    let t0 = Instant::now();
+    let mut total = 0;
+    for net in 0..20u16 {
+        let from = SocketAddr::from(([0x2001, 0xdb8, 5, net, 0, 0, 0, 1], 6881));
+        let tid = pretend_sent(&mut a, from, Purpose::Sample);
+        let raw = hashes(SAMPLES_PER_REPLY, u32::from(net));
+        let r = Response {
+            id: NodeId([7; 20]),
+            samples: Samples::new(&raw),
+            interval: Some(60),
+            ..Default::default()
+        };
+        respond(&mut a, &sockets, from, tid, &r);
+        total += drain(&mut rx);
+    }
+    let share = SAMPLES_PER_NETWORK_BURST + SAMPLES_PER_NETWORK_RATE * t0.elapsed().as_secs_f64();
+    assert!(total as f64 <= share + 1.0, "{total} > {share}");
+    // Another /48 still has its own.
+    let from = SocketAddr::from(([0x2001, 0xdb8, 6, 0, 0, 0, 0, 1], 6881));
+    let tid = pretend_sent(&mut a, from, Purpose::Sample);
+    let raw = hashes(10, 999);
+    let r = Response {
+        id: NodeId([7; 20]),
+        samples: Samples::new(&raw),
+        interval: Some(60),
+        ..Default::default()
+    };
+    respond(&mut a, &sockets, from, tid, &r);
+    assert_eq!(drain(&mut rx), 10);
+}
+
 #[test]
 fn passive_harvest_goes_on_when_replies_are_limited() {
     let (mut a, sockets, mut rx) = actor();

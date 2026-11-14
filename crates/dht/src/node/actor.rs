@@ -8,13 +8,14 @@ use std::time::Duration;
 
 use rand::RngExt;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use lodestar_metainfo::InfoHash;
 
 use super::hints::{self, Hint, Hints};
-use super::limits::{Answered, Network, SourceBuckets, allocation, network};
+use super::limits::{Answered, Network, SourceBuckets, network, source};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
 use super::prefixes::Prefixes;
@@ -247,7 +248,7 @@ impl TokenBucket {
 /// IPv6 is cut wider than [`network`]'s /64, because one site is commonly
 /// given a whole /48, so its many /64s are one voter.
 fn voter(ip: IpAddr) -> Network {
-    allocation(ip).unwrap_or_else(|| network(ip))
+    source(ip)
 }
 
 /// Majority vote over the external address other nodes report (BEP 42).
@@ -1485,6 +1486,8 @@ impl Actor {
                 let mut v =
                     self.peer_store
                         .peers(info_hash, self.families[family].ipv6, *noseed, now_i);
+                // A random few, so every stored peer gets listed in turn.
+                v.shuffle(&mut self.rng);
                 v.truncate(VALUES_PER_REPLY);
                 v
             }
@@ -1577,10 +1580,14 @@ impl Actor {
     ) {
         match &q.method {
             Method::GetPeers { info_hash, .. } if self.cfg.harvest.passive => {
-                if self.passive_sources.try_take_from(from.ip(), now_i)
-                    && self.passive_rate.try_take(now_i)
-                {
-                    self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+                // The global rate first, so a block's token isn't spent
+                // when nothing could be harvested anyway.
+                if self.passive_rate.try_take(now_i) {
+                    if self.passive_sources.try_take_from(from.ip(), now_i) {
+                        self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+                    } else {
+                        self.passive_rate.refund();
+                    }
                 }
             }
             Method::AnnouncePeer {
