@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:33Z",
+  "updated_at": "2026-11-14T04:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8384,6 +8384,10 @@
     {
       "at": "2026-11-14T04:33Z",
       "item": "Operator check 2 (ping-1) NOT passed: owner approved the wake 04:29Z; session created (API key, vault and App token worked) but ended with an error on the first poll (~0 s); reply kind escalation \"the session ended with an error\", no pong. End-of-wake sweep green; 03:32Z scheduled sweep green. Ran on 592fd0b8 (pre-#859/#865). Owner to read the error on Console > Managed Agents > Sessions \"wake ping-1\" and check Billing; then runner posts ping-2 on current main."
+    },
+    {
+      "at": "2026-11-14T04:38Z",
+      "item": "Register slices from X-cmp01-fix: X-cmp-supervisor-bind (companions: tie the loopback listener to the supervised process; condition of the first managed pin) and X-cmp-managed-client (lodestar: one shared companion HTTP client, loopback-v4-only on the managed path). Next runner PR."
     }
   ],
   "main_health": [
@@ -8785,6 +8789,11 @@
       "slice": "X-pia-vm-helper",
       "head": "e70b3d40",
       "status": "review MERGE + 2 important/polish folded into one push; await ready -> runner delta check"
+    },
+    "867": {
+      "slice": "X-cmp01-fix",
+      "head": "bad86644",
+      "status": "review (Opus+security) running"
     }
   },
   "merged_log": [
@@ -9702,7 +9711,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:33Z",
+  "updated": "2026-11-14T04:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
