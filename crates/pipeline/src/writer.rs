@@ -293,12 +293,12 @@ impl HoldRetry {
     }
 
     /// Queues `holds` for writing again. A waiting hold is replaced only
-    /// by a newer one of the same kind, rule and adult flag whose hashes
-    /// cover all of its own, so the same hold failing again keeps one
-    /// entry. Any other hold waits beside it and both are written: holds
-    /// are never merged, so no hash is ever written under another hold's
-    /// rule, kind or sealed name, and the store's precedence decides
-    /// between them.
+    /// by a newer hold of the same kind, rule and adult flag that covers
+    /// all its hashes: those are then written under the newer hold's
+    /// sealed name and evidence, and only the replaced hold's own filter
+    /// hit isn't written. So the same hold failing again keeps one entry.
+    /// Any other hold waits beside it and both are written, leaving the
+    /// store's precedence to decide; holds are never merged.
     fn queue(&mut self, holds: impl IntoIterator<Item = unverified::Hold>) {
         let key = |h: &unverified::Hold| (h.held, h.rule.clone(), h.adult_hold);
         for h in holds {
@@ -6640,6 +6640,44 @@ mod tests {
             first_rule_kept((q, "CS-0a", true), (q, "CS-4a", true)).await;
             first_rule_kept((t, "CS-8a", true), (t, "CS-4a", true)).await;
             first_rule_kept((q, "CS-2a", true), (q, "CS-4a", true)).await;
+        }
+
+        /// Two holds under different rules for the same hashes are never
+        /// collapsed into one: the rule is part of what a replacement must
+        /// match. A kept quarantine stays the never-expiring row when a
+        /// core one follows it, and a floor tombstone waits beside a
+        /// pattern one.
+        #[tokio::test]
+        async fn holds_for_the_same_hashes_under_different_rules_both_wait() {
+            let hold = |held, rule: &str| unverified::Hold {
+                hashes: vec![[1; 20], [2; 20]],
+                rule: rule.into(),
+                action: if held == Held::Tombstone {
+                    Action::Drop.code()
+                } else {
+                    Action::Quarantine.code()
+                },
+                held,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: true,
+            };
+            let mut q = HoldRetry::default();
+            q.queue([hold(Held::Tombstone, "CS-8a")]);
+            q.queue([hold(Held::Tombstone, "CS-4a")]);
+            assert_eq!(q.holds.len(), 2, "a floor and a pattern tombstone");
+
+            let (mut w, _c, _retry) = parts();
+            w.hold_retry.queue([hold(Held::Quarantine, "CS-0a")]);
+            w.hold_retry.queue([hold(Held::Quarantine, "CS-4a")]);
+            assert_eq!(w.hold_retry.holds.len(), 2, "a kept and a core quarantine");
+            w.retry_holds().await;
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(
+                store.quarantine_rule(&[1; 20]).unwrap().as_deref(),
+                Some("CS-0a")
+            );
         }
 
         /// The same hold failing again keeps one entry, and so does one
