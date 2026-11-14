@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T20:26Z",
+  "updated_at": "2026-11-14T21:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-14T20:26Z",
+  "last_heartbeat": "2026-11-14T21:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8842,6 +8842,36 @@
       "id": "aws-quota-denied",
       "note": "owner 2026-11-14T19:17Z: AWS quota increase denied; earlier 1000 report superseded; size cloud tests and fleet to the current quota; record in next runner docs PR",
       "added": "2026-11-14T20:26Z"
+    },
+    {
+      "id": "X-flake-detect-macos",
+      "note": "macOS companions detect loopback-probe tests time out (previously hidden behind dataset failure); slot 15, tests only",
+      "added": "2026-11-14T21:38Z"
+    },
+    {
+      "id": "X-import-rate-1m",
+      "note": "import end to end below IMP-4b at 1M scale (budget unchanged)",
+      "added": "2026-11-14T21:38Z"
+    },
+    {
+      "id": "X-index-bytes-1m",
+      "note": "torrent index bytes per torrent over budget at 1M; needs index-stats tool",
+      "added": "2026-11-14T21:38Z"
+    },
+    {
+      "id": "X-import-status-lock",
+      "note": "import status fails while import start runs, despite help text; fix behaviour",
+      "added": "2026-11-14T21:38Z"
+    },
+    {
+      "id": "X-bitmagnet-pieces-warn",
+      "note": "checker warns when torrent_pieces empty; adapter reports 0/0 fill",
+      "added": "2026-11-14T21:38Z"
+    },
+    {
+      "id": "owner-zstd-upstream",
+      "note": "optional owner item: report macOS zstd output variance upstream",
+      "added": "2026-11-14T21:38Z"
     }
   ],
   "main_health": [
@@ -9237,27 +9267,17 @@
       "review": "await ready; fresh Opus + /security-review",
       "at": "2026-11-14T17:00Z"
     },
-    "889": {
-      "slice": "X-sec-S6-02-03",
-      "head": "fe35b217",
-      "review": "fresh Opus + security: CHANGES (2 blocking, 2 important, store/cluster). Relayed; fresh delta review after the fix push.",
-      "at": "2026-11-14T17:21Z"
-    },
-    "887": {
-      "slice": "X-cmp09-fix",
-      "added": "2026-11-14T20:26Z"
-    },
     "893": {
       "slice": "X-cmp09-fix-2",
-      "added": "2026-11-14T20:26Z"
-    },
-    "894": {
-      "slice": "X-pool-model-test",
       "added": "2026-11-14T20:26Z"
     },
     "895": {
       "slice": "X-filter-budget-fix",
       "added": "2026-11-14T20:26Z"
+    },
+    "896": {
+      "slice": "X-flake-dataset-macos",
+      "added": "2026-11-14T21:38Z"
     }
   },
   "merged_log": [
@@ -9684,6 +9704,24 @@
       "sha": "f186458f",
       "id": "X-operator-unattended-docs",
       "at": "2026-11-14T18:12Z"
+    },
+    {
+      "pr": 889,
+      "sha": "c3256eba",
+      "slice": "X-sec-S6-02-03 part 2b",
+      "merged": "2026-11-14T21:38Z"
+    },
+    {
+      "pr": 887,
+      "sha": "05c91116",
+      "slice": "X-cmp09-fix",
+      "merged": "2026-11-14T21:38Z"
+    },
+    {
+      "pr": 894,
+      "sha": "daf3ef7b",
+      "slice": "X-pool-model-test",
+      "merged": "2026-11-14T21:38Z"
     }
   ],
   "active_sessions": {
@@ -9922,7 +9960,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T20:26Z",
+    "updated": "2026-11-14T21:38Z",
     "items": [
       {
         "slot": 1,
@@ -9959,7 +9997,7 @@
         "slice": "X-cmp09-fix",
         "role": "build",
         "agent": "session_01MMjhn8LCZuDPeXwdBzodLH",
-        "doing": "#887 X-cmp09-fix r3 (1ca46589) self-checked OK; unrelated search-latency red, runner re-runs once; then #893 X-cmp09-fix-2 fix round (main in after #887) and fresh delta review with security pass",
+        "doing": "#887 merged 05c91116; #893 X-cmp09-fix-2 r2 (977b7bb5) under fresh delta+security review",
         "since": "2026-11-14T10:37Z",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
@@ -10013,7 +10051,7 @@
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
         "since": "2026-11-14T10:55Z",
-        "doing": "#888 X-rejudge-stall round 2 awaited; X-flake-dataset-macos evidence run",
+        "doing": "#888 re-run of unrelated reds; #896 X-flake-dataset-macos (full-ci); next X-flake-detect-macos",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -10085,12 +10123,12 @@
       },
       {
         "slot": 30,
-        "slice": "X-sec-S6-02-03",
+        "slice": "X-floor-renew",
         "role": "build",
         "agent": "session_01MMjhn9hfwMf4Ydg4La5rEh",
         "model": "opus",
         "since": "2026-11-14T09:33Z",
-        "doing": "#889 r3 (e46fd315) self-checked OK, merge on green; then X-floor-renew",
+        "doing": "#889 merged c3256eba; X-floor-renew building (store expiry returns worker; approved)",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -10100,15 +10138,15 @@
         "agent": "session_01MMjhn8URRT9adbFfM1zGi1",
         "status": "active",
         "since": "2026-11-14T07:27Z",
-        "doing": "#895 X-filter-budget-fix: filter budget test red (runner speed ~1.10x; ~1-3% normalized); match main's normalized figure with callgrind counts, then fresh delta review",
+        "doing": "#895 delta MERGE + 1 IMPORTANT (charge-history test) in progress; self-check then merge",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
         "slot": 33,
-        "slice": "X-pool-model-test",
+        "slice": "X-fetch-first-window",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "#894 X-pool-model-test fix round (2 IMPORTANT); queue: X-fetch-first-window, X-fetch-wait-credit, X-worker-oversize-handback, junk back-off, X-fuzz-peer-fetch+mse, peer model, X-cluster-model-test later",
+        "doing": "#894 merged daf3ef7b; opening A (X-fetch-first-window); queue as before",
         "since": "2026-11-14T14:34Z"
       }
     ]
@@ -10199,8 +10237,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-14T20:26Z",
-  "updated": "2026-11-14T20:26Z",
+  "heartbeat": "2026-11-14T21:38Z",
+  "updated": "2026-11-14T21:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
