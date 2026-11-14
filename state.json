@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:53Z",
+  "updated_at": "2026-11-14T01:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8316,6 +8316,11 @@
       "id": "857-merge-tell-rv",
       "note": "On #857 merge: send merge SHA to slot 33 (reviewer); it waits on the store snapshot module until then. Slot 30 METAINFO review brief: add the reviewer checklist (local held file).",
       "at": "2026-11-14T01:23Z"
+    },
+    {
+      "id": "metainfo01-after",
+      "at": "2026-11-14T01:54Z",
+      "what": "after #861: slice a per-batch byte budget for the worker prepare stage, and path budgets for the halved metainfo callers (local torrent, torrent cache); component level only"
     }
   ],
   "main_health": [
@@ -8731,6 +8736,12 @@
       "state": "review CHANGES fixed at 89629350; fresh delta review running",
       "head": "90c25743",
       "status": "delta fixes pushed; awaiting CI"
+    },
+    "861": {
+      "slice": "X-metainfo01-fix",
+      "head": "a3f3bfc4",
+      "status": "ready; fresh Opus + security review running",
+      "slot": 30
     }
   },
   "merged_log": [
@@ -9377,7 +9388,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:53Z",
+    "updated": "2026-11-14T01:54Z",
     "items": [
       {
         "slot": 1,
@@ -9648,7 +9659,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:53Z",
+  "updated": "2026-11-14T01:54Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
