@@ -1101,17 +1101,42 @@ impl Actor {
         method: Method<'_>,
         purpose: Purpose,
     ) -> Result<u64, Sent> {
+        let now = Instant::now();
+        self.admit_query(family, to, now)?;
+        self.send_admitted(sockets, family, to, node, method, purpose, now)
+    }
+
+    /// Whether a query to `to` may go out now: the right family, room under
+    /// the outstanding cap, and a token from the query rate, which this
+    /// takes. An `Err` has taken nothing.
+    fn admit_query(&mut self, family: usize, to: SocketAddr, now: Instant) -> Result<(), Sent> {
         if self.families[family].ipv6 != to.is_ipv6() {
             Stats::inc(&self.stats.denied);
             return Err(Sent::Failed);
         }
-        let now = Instant::now();
         if self.pending.len() >= self.cfg.intensity.max_outstanding()
             || !self.query_rate.try_take(now)
         {
             Stats::inc(&self.stats.throttled);
             return Err(Sent::Throttled);
         }
+        Ok(())
+    }
+
+    /// Sends a query [`admit_query`](Self::admit_query) let through, and
+    /// returns its transaction id. The query rate's token is spent whether
+    /// or not the packet leaves.
+    #[allow(clippy::too_many_arguments)]
+    fn send_admitted(
+        &mut self,
+        sockets: &[SendSocket],
+        family: usize,
+        to: SocketAddr,
+        node: Option<NodeId>,
+        method: Method<'_>,
+        purpose: Purpose,
+        now: Instant,
+    ) -> Result<u64, Sent> {
         // Never reuse a wire token in this process, even after success.
         // Wire tokens stay below the sampler's proof-token bit (CR-0d):
         // exhaustion comes 2^63 tokens early, which never happens.
@@ -1282,13 +1307,26 @@ impl Actor {
             Stats::inc(&self.stats.throttled);
             return;
         }
-        match self.dispatch_query(sockets, family, to, Some(id), Method::Ping, Purpose::Ping) {
-            Ok(tid) => {
-                self.verify_tids.insert(tid);
-            }
-            // Nothing left the host, so the share isn't spent: with the
-            // query rate in use elsewhere it would drain for nothing.
-            Err(_) => self.verify_rate.refund(),
+        let now = Instant::now();
+        if self.admit_query(family, to, now).is_err() {
+            // Refused before the shared rate gave anything: the share's
+            // token goes back, or it would drain while the query rate is
+            // in use elsewhere.
+            self.verify_rate.refund();
+            return;
+        }
+        // From here the shared rate's token is spent, so the share's is
+        // too, whether or not the packet leaves.
+        if let Ok(tid) = self.send_admitted(
+            sockets,
+            family,
+            to,
+            Some(id),
+            Method::Ping,
+            Purpose::Ping,
+            now,
+        ) {
+            self.verify_tids.insert(tid);
         }
     }
 
@@ -2839,7 +2877,7 @@ mod tests {
         deliver_reply(a, sockets, tid, family, addr, id, peers);
     }
 
-    fn deliver_reply(
+    pub(super) fn deliver_reply(
         a: &mut Actor,
         sockets: &[SendSocket],
         tid: u64,

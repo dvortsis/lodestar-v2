@@ -4,7 +4,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use super::tests::fixture;
+use super::tests::{deliver_reply, fixture};
 use super::*;
 
 /// A ping query from the `n`th querier, under a node id the table would
@@ -89,16 +89,22 @@ fn queriers_hold_only_their_share_of_the_outstanding_cap() {
     }
     assert_eq!(a.verify_tids.len(), cap);
     assert_eq!(a.pending.len(), cap);
-    // An answered or timed-out ping gives its place back.
+    // An answered ping gives its place back.
     let tids: Vec<u64> = a.verify_tids.iter().copied().collect();
     for tid in &tids[..cap / 2] {
-        a.take_pending(*tid);
+        let p = &a.pending[tid];
+        let (to, id) = (p.to, p.id.expect("a ping to a known id"));
+        deliver_reply(&mut a, &sockets, *tid, 0, to, id, Vec::new());
     }
     assert_eq!(a.verify_tids.len(), cap - cap / 2);
-    for i in 0..(cap as u32) {
+    // The places are free again: more queriers are pinged, and never past
+    // the cap. (How many depends on what the table still has room for.)
+    let before = a.stats.snapshot().queries_out;
+    for i in 0..(cap as u32 * 8) {
         querier(&mut a, &sockets, 1_000_000 + i);
     }
-    assert_eq!(a.verify_tids.len(), cap);
+    assert!(a.stats.snapshot().queries_out > before);
+    assert!(a.verify_tids.len() > cap - cap / 2 && a.verify_tids.len() <= cap);
     for tid in a.verify_tids.clone() {
         a.take_pending(tid);
     }
@@ -119,6 +125,54 @@ fn an_unsent_ping_keeps_its_token() {
     let s = a.stats.snapshot();
     assert_eq!(s.queries_out + s.send_errors, 0);
     assert!((a.verify_rate.tokens - held).abs() < 1e-9);
+    assert!(a.verify_tids.is_empty() && a.pending.is_empty());
+}
+
+/// A ping the shared rate let through spends the share's token too, even
+/// when the packet then can't be sent: only a refusal gives it back.
+#[test]
+fn a_ping_that_fails_to_send_still_spends_the_share() {
+    let (mut a, sockets) = fixture();
+    // The socket is IPv4; a family marked IPv6 passes the family check and
+    // then every send fails in the OS.
+    a.families[0].ipv6 = true;
+    // No refill of either bucket, so what was taken can be read exactly.
+    a.verify_rate.rate = 0.0;
+    a.query_rate.rate = 0.0;
+    let share = share(&a);
+    let full = a.query_rate.tokens;
+    let n = a.cfg.intensity.queries_per_sec() * 20;
+    for i in 0..n {
+        let from = SocketAddr::from((
+            std::net::Ipv6Addr::new(0x2606, 0x4700, 0, 0, 0, 0, 1, i as u16 + 1),
+            6881,
+        ));
+        let mut id = [0u8; 20];
+        id[..4].copy_from_slice(&(i + 1).wrapping_mul(0x9e37_79b9).to_be_bytes());
+        let q = Query {
+            id: NodeId(id),
+            method: Method::Ping,
+        };
+        let msg = Message {
+            transaction_id: b"aa",
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Query(q.clone()),
+        };
+        a.on_query(&sockets, 0, &msg, &q, from);
+    }
+    let s = a.stats.snapshot();
+    assert_eq!(s.queries_out, 0, "nothing can leave");
+    // Replies fail on this socket too, so the errors count more than the
+    // pings; the shared rate's own tokens say how many pings were tried.
+    assert!(s.send_errors >= 1, "the sends were tried and failed");
+    let tried = full - a.query_rate.tokens;
+    assert!(tried >= 1.0 && tried <= share + 1e-9, "{tried} tries");
+    assert!(
+        a.verify_rate.tokens < 1.0,
+        "the share is spent, not given back"
+    );
     assert!(a.verify_tids.is_empty() && a.pending.is_empty());
 }
 
