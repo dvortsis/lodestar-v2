@@ -44,6 +44,7 @@ use lodestar_companions::manager::{
     Parts, Prelaunch, Refusal, Routes, RowError, Rows, Run, Snapshot, Supervised, field_of,
     monitored,
 };
+use lodestar_companions::supervise::bind::Bindings;
 use lodestar_companions::supervise::logs::Redactor;
 use lodestar_companions::supervise::{Launcher, Limits, Sandbox, Status, Supervisor, Timings};
 use lodestar_companions::{Catalogue, CompanionId, Entry, Version, unraid};
@@ -231,6 +232,13 @@ pub struct Companions {
     tasks: Vec<tokio::task::JoinHandle<()>>,
     /// Releasing what crashes left handed over, once the sink is wired.
     release: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The one client every companion request goes through: the managed
+    /// path's, the watch's and the guided path's. It knows the ports of
+    /// the companions Lodestar runs ([`Bindings`]), so a request to one
+    /// goes only to `127.0.0.1`, and one that carries anything only while
+    /// the child started there is running and was found ready. `None`
+    /// when it couldn't be built (logged as `companion_http`).
+    pub(crate) http: Option<Arc<CompanionHttp>>,
 }
 
 impl Companions {
@@ -296,6 +304,10 @@ async fn start_with(
     let wiring = Arc::new(Wiring::default());
     let routes = Arc::new(CompanionRoutes::new(store.clone()));
     let (run, api) = (wiring.clone(), wiring.clone());
+    let bindings = Arc::new(Bindings::new());
+    let http = CompanionHttp::new()
+        .ok()
+        .map(|h| Arc::new(h.with_bindings(bindings.clone())));
     let opened =
         tokio::task::spawn_blocking(move || manager_with(data, store, catalogue, host, run, api))
             .await
@@ -323,7 +335,7 @@ async fn start_with(
     // kills companions an earlier run left behind. Nothing is native in a
     // container (Q17).
     if !host.in_container {
-        match supervise(&folder, routes).await {
+        match supervise(&folder, routes, http.clone(), bindings).await {
             Ok((supervised, api)) => wiring.wire(supervised, api),
             Err(code) => lodestar_log::log_event!(
                 INSTALL_FAILED,
@@ -399,6 +411,7 @@ async fn start_with(
         wiring,
         tasks,
         release: Mutex::new(None),
+        http,
     })
 }
 
@@ -407,14 +420,15 @@ async fn start_with(
 async fn supervise(
     data: &Path,
     routes: Arc<CompanionRoutes>,
+    http: Option<Arc<CompanionHttp>>,
+    bindings: Arc<Bindings>,
 ) -> Result<(Arc<Supervised>, Api), &'static str> {
+    let http: Arc<dyn lodestar_companions::adapter::GuardedHttp> = http.ok_or("companion_http")?;
     let launcher = Launcher::lodestar().map_err(|e| e.code())?;
     let sandbox = Sandbox::new(Limits::default(), launcher).map_err(|e| e.code())?;
     let supervisor = Supervisor::new(data.to_path_buf(), sandbox.hook(), Timings::default())
         .await
         .map_err(|e| e.code())?;
-    let http: Arc<dyn lodestar_companions::adapter::GuardedHttp> =
-        Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
     let api = Api {
         http: http.clone(),
         route: Arc::new({
@@ -422,7 +436,8 @@ async fn supervise(
             move |id: &CompanionId| routes.configured(id)
         }),
     };
-    let supervised = Supervised::new(data.to_path_buf(), supervisor, sandbox, http, routes, None);
+    let supervised = Supervised::new(data.to_path_buf(), supervisor, sandbox, http, routes, None)
+        .with_bindings(bindings);
     Ok((Arc::new(supervised), api))
 }
 
