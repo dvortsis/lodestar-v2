@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T06:53Z",
+  "updated_at": "2026-11-14T06:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8843,15 +8843,10 @@
       "at": "2026-11-14T00:39Z",
       "status": "review CHANGES (2 blocking, 4 important) relayed by message; await ready -> fresh delta review"
     },
-    "867": {
-      "slice": "X-cmp01-fix",
-      "head": "bad86644",
-      "status": "review (Opus+security) running"
-    },
     "875": {
       "slice": "runner-ui-review-placement",
       "head": "92d30c1a",
-      "status": "fresh Opus review running"
+      "status": "CI on 3d12a8f6 (review fixes done)"
     },
     "874": {
       "slice": "X-sec-S6-02-03 (part)",
@@ -9503,7 +9498,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T06:49Z",
+    "updated": "2026-11-14T06:58Z",
     "items": [
       {
         "slot": 1,
@@ -9687,8 +9682,8 @@
         "slice": "X-cmp01-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "#863 X-dht01-fix merged 503d4dd1; next X-cmp01-fix, then X-fuzz-gaps, X-cluster06-fix, X-search01-fix, X-pipe01-fix; X-update01-store01-fix and X-store02-pipe02-fix after #857",
-        "since": "2026-11-14T01:45Z"
+        "doing": "#867 X-cmp01-fix merged d3f33891; next X-fuzz-gaps, X-cluster06-fix, X-search01-fix, X-pipe01-fix; X-update01-store01-fix and X-store02-pipe02-fix after #857",
+        "since": "2026-11-14T06:58Z"
       }
     ]
   },
@@ -9773,7 +9768,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T06:53Z",
+  "updated": "2026-11-14T06:58Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -9978,6 +9973,12 @@
       "slice": "X-upd-stop-races",
       "sha": "cd2b7eb4026abc0368f5d6c2abfe34d55db4eb0c",
       "at": "2026-11-11T23:09:03Z"
+    },
+    {
+      "pr": 867,
+      "slice": "X-cmp01-fix",
+      "merged": "d3f33891",
+      "at": "2026-11-14T06:58Z"
     }
   ],
   "cloud_tester": {
