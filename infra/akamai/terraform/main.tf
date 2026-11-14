@@ -9,6 +9,11 @@ locals {
   # Main's SSH allowlist: the primary admin /32 plus any extra /32s (OP-2's
   # firewall audit reads this list).
   main_admin_ipv4_cidrs = distinct(concat([var.ssh_admin_ipv4_cidr], var.main_extra_admin_ipv4_cidrs))
+
+  # The PIA helper's stack (X-pia-vm-helper): its Compose file and PIA's CA,
+  # the same pinned file deliver-pia uses (one copy, its hash pinned by a test).
+  compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
+  pia_ca_cert_content = file("${path.module}/../../pia-bridge/vm/pia-ca.rsa.4096.crt")
 }
 
 # Separate main and worker firewalls, so all rules are in place
@@ -75,10 +80,12 @@ resource "linode_instance" "main" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/cloud-init/ubuntu24.yaml.tftpl", {
-      ssh_public_keys  = local.ssh_authorized_keys
-      role_label       = "main"
-      host_key_private = try(var.host_keys["main"].private_key, "")
-      host_key_public  = try(var.host_keys["main"].public_key, "")
+      ssh_public_keys     = local.ssh_authorized_keys
+      role_label          = "main"
+      host_key_private    = try(var.host_keys["main"].private_key, "")
+      host_key_public     = try(var.host_keys["main"].public_key, "")
+      compose_vpn_content = local.compose_vpn_content
+      pia_ca_cert_content = local.pia_ca_cert_content
     }))
   }
 
@@ -107,10 +114,12 @@ resource "linode_instance" "workers" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/cloud-init/ubuntu24.yaml.tftpl", {
-      ssh_public_keys  = local.ssh_authorized_keys
-      role_label       = "worker-${format("%02d", count.index + 1)}"
-      host_key_private = try(var.host_keys[format("worker-%02d", count.index + 1)].private_key, "")
-      host_key_public  = try(var.host_keys[format("worker-%02d", count.index + 1)].public_key, "")
+      ssh_public_keys     = local.ssh_authorized_keys
+      role_label          = "worker-${format("%02d", count.index + 1)}"
+      host_key_private    = try(var.host_keys[format("worker-%02d", count.index + 1)].private_key, "")
+      host_key_public     = try(var.host_keys[format("worker-%02d", count.index + 1)].public_key, "")
+      compose_vpn_content = local.compose_vpn_content
+      pia_ca_cert_content = local.pia_ca_cert_content
     }))
   }
 
