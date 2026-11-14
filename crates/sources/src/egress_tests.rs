@@ -2361,3 +2361,24 @@ async fn a_companion_that_isnt_ready_is_its_own_paced_error() {
     assert_eq!(start.elapsed(), Duration::from_millis(10));
     assert_eq!(egress.status().counters.policy_refusals, 3);
 }
+
+/// An answered request ends the loopback gate's streak, so the next
+/// refusal is paced from the start again.
+#[tokio::test]
+async fn an_answer_ends_the_not_ready_streak() {
+    let server = serve(|_| ok("hi")).await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    for _ in 0..2 {
+        // Cut short at once: only the streak is looked at.
+        egress
+            .failed(NetError::NotReady, Some(Instant::now()))
+            .await;
+    }
+    assert_eq!(egress.not_ready_streak.load(Ordering::Relaxed), 2);
+    within(egress.fetch(&Request::get(server.url("/"))))
+        .await
+        .unwrap();
+    assert_eq!(egress.not_ready_streak.load(Ordering::Relaxed), 0);
+}

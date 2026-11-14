@@ -12,8 +12,8 @@ use std::time::Duration;
 use lodestar_integrations::BoxFuture;
 use lodestar_integrations::clients::ClientError;
 use lodestar_integrations::net::{
-    GuardedClient, LoopbackGate, NetError, NetPolicy, Resolve, Route, Socks5Route, SocksDns,
-    loopback_gate_is_set, resolve_tcp, set_loopback_gate,
+    AddrClass, GuardedClient, LoopbackGate, NetError, NetPolicy, Resolve, Route, Socks5Route,
+    SocksDns, loopback_gate_is_set, resolve_tcp, set_loopback_gate,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -164,10 +164,28 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
         format!("http://localhost:{p}/"),
         format!("http://svc.test:{p}/"),
         format!("http://127.0.0.2:{p}/"),
-        // A name that doesn't resolve now, on a refused port.
-        format!("http://nowhere.test:{p}/"),
     ] {
         assert_eq!(get(&c, &url).await, Err(NetError::NotReady), "{url}");
+    }
+    // A name that doesn't resolve now, on a refused port: refused as the
+    // failed lookup it is, not as not ready.
+    assert_eq!(
+        get(&c, &format!("http://nowhere.test:{p}/")).await,
+        Err(NetError::Resolve)
+    );
+    // A client whose policy never allows loopback is refused as blocked.
+    let public =
+        GuardedClient::with_resolver(NetPolicy::notification(false), TIMEOUT, names.clone())
+            .unwrap();
+    for url in [
+        format!("http://localhost:{p}/"),
+        format!("http://svc.test:{p}/"),
+    ] {
+        assert_eq!(
+            get(&public, &url).await,
+            Err(NetError::Blocked(AddrClass::Loopback)),
+            "{url}"
+        );
     }
     // A name that turns to loopback between the request's check and its
     // connection is refused at the connection.
@@ -228,7 +246,7 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
         .filter(|l| l.contains("integrations.companion_not_ready"))
         .collect();
     assert_eq!(lines.len(), 1, "{logged}");
-    assert!(lines[0].contains(&p.to_string()), "{}", lines[0]);
+    assert!(lines[0].contains(&format!("port={p}")), "{}", lines[0]);
 
     // Another loopback port is untouched, and so is the same port on
     // another address.

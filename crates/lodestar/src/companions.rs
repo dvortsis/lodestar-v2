@@ -454,11 +454,12 @@ impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
 
 /// At serve, before recovery and before any start: the port of every
 /// catalogue companion with a folder here (installed, or left mid-install
-/// by a crash) or a hand-over marker is a managed port from now on, not ready, so neither the
-/// gate nor `CompanionHttp` treats it as a hand-run companion's. Only a
-/// start that claims it and is found ready opens it; a failed recovery or
-/// a start that fails first leaves it refused. A folder that can't be read
-/// counts as there. Nothing is native in a container (Q17).
+/// by a crash) or a hand-over marker is a managed port from now on, not
+/// ready, so neither the gate nor `CompanionHttp` treats it as a hand-run
+/// companion's. Only a start that claims it and is found ready opens it; a
+/// failed recovery or a start that fails first leaves it refused. A folder
+/// or marker that can't be read counts as there. Nothing is native in a
+/// container (Q17).
 fn reserve_installed(bindings: &Bindings, data: &Path, catalogue: &Catalogue, host: Host) {
     if host.in_container {
         return;

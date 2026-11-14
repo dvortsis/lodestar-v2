@@ -189,9 +189,10 @@ pub(crate) fn not_found_or(
 /// is unreachable; an answer that broke a rule is unhealthy.
 pub(crate) fn health_of(e: AdapterError) -> HealthStatus {
     match e {
-        AdapterError::Timeout | AdapterError::Unreachable | AdapterError::Blocked => {
-            HealthStatus::Unreachable
-        }
+        AdapterError::Timeout
+        | AdapterError::Unreachable
+        | AdapterError::NotReady
+        | AdapterError::Blocked => HealthStatus::Unreachable,
         _ => HealthStatus::Unhealthy,
     }
 }
@@ -788,6 +789,7 @@ mod tests {
     fn health_and_detection_read_errors_the_same_way() {
         assert_eq!(health_of(AdapterError::Blocked), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::Timeout), HealthStatus::Unreachable);
+        assert_eq!(health_of(AdapterError::NotReady), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::TooLarge), HealthStatus::Unhealthy);
         let lo = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
         let entered = Target::Entered(EnteredUrl::parse("http://10.0.0.2").unwrap());
@@ -800,6 +802,11 @@ mod tests {
         assert_eq!(
             not_found_or(AdapterError::Blocked, &lo),
             Err(AdapterError::Blocked)
+        );
+        // Not ready is said, not read as "not here".
+        assert_eq!(
+            not_found_or(AdapterError::NotReady, &entered),
+            Err(AdapterError::NotReady)
         );
     }
 

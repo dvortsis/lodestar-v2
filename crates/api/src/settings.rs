@@ -750,7 +750,11 @@ fn test_failure(e: &ClientError) -> SettingsTestResult {
             let text = e.to_string();
             let mut chars = text.chars();
             match chars.next() {
-                Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+                // A text that is already a sentence keeps its own stop.
+                Some(first) => {
+                    let stop = if text.ends_with('.') { "" } else { "." };
+                    format!("{}{}{stop}", first.to_uppercase(), chars.as_str())
+                }
                 None => "The test failed.".to_string(),
             }
         }
@@ -1029,6 +1033,10 @@ mod tests {
             test_failure(&ClientError::Timeout).error.unwrap().code,
             "timeout"
         );
+        // Not ready: its own code, and the sentence as it is (one stop).
+        let e = test_failure(&ClientError::NotReady).error.unwrap();
+        assert_eq!(e.code, "companion_not_ready");
+        assert_eq!(e.message, lodestar_integrations::net::NOT_READY);
         // A refusal never repeats what the server said.
         for (why, want) in [
             (

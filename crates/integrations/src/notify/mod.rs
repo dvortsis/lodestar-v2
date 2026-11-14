@@ -204,7 +204,8 @@ impl From<NetError> for AttemptError {
             }
             NetError::Timeout => AttemptError::transient(DeliveryError::Timeout),
             // `NotReady` can't happen here: a notification's policy never
-            // allows loopback, which the loopback gate alone refuses.
+            // allows loopback, so the guard refuses a loopback destination
+            // as blocked, never as not ready.
             NetError::Resolve | NetError::Connect | NetError::Http | NetError::NotReady => {
                 AttemptError::transient(DeliveryError::Unreachable)
             }

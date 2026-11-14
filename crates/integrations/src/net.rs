@@ -783,24 +783,24 @@ impl GuardedClient {
         let literal = literal_ip(url);
         if literal.is_none() && self.remote_dns {
             if local_name_class(host) == Some(AddrClass::Loopback) && !loopback_gate::allows(port) {
-                return Err(loopback_gate::refuse(port));
+                return Err(self.refuse_loopback(port));
             }
             return Ok(None);
         }
         if !loopback_gate::allows(port) {
             let loopback = match literal {
                 Some(ip) => classify(ip) == AddrClass::Loopback,
-                // A name that doesn't resolve now is refused too: it could
-                // only have failed anyway, and nothing is left to chance.
-                None => {
-                    local_name_class(host) == Some(AddrClass::Loopback)
-                        || self.resolver.resolve(host).await.map_or(true, |addrs| {
-                            addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback)
-                        })
-                }
+                None if local_name_class(host) == Some(AddrClass::Loopback) => true,
+                // A name that doesn't resolve now is refused too, as the
+                // failed lookup it is: it could only have failed anyway, and
+                // nothing is left to chance.
+                None => match self.resolver.resolve(host).await {
+                    Ok(addrs) => addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback),
+                    Err(_) => return Err(NetError::Resolve),
+                },
             };
             if loopback {
-                return Err(loopback_gate::refuse(port));
+                return Err(self.refuse_loopback(port));
             }
         }
         Ok(Some(self.pending.enter(host, port)))
@@ -808,6 +808,16 @@ impl GuardedClient {
 
     pub fn policy(&self) -> NetPolicy {
         self.policy
+    }
+
+    /// A loopback destination on a port the gate refuses: blocked, if this
+    /// client's policy never allows loopback (so it isn't a companion that
+    /// isn't ready), and otherwise not ready.
+    fn refuse_loopback(&self, port: u16) -> NetError {
+        match self.policy.check(IpAddr::V4(Ipv4Addr::LOCALHOST)) {
+            Err(blocked) => blocked,
+            Ok(()) => loopback_gate::refuse(port),
+        }
     }
 
     /// A request builder, for adapters in this crate. Finish it with

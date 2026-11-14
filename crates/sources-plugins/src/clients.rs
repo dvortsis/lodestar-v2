@@ -252,6 +252,8 @@ impl Wire for KitWire {
                     tokio::time::sleep_until(until).await;
                     Err(ClientError::Unreachable)
                 }
+                // Refused before sending: its own error, not "unreachable".
+                Err(HttpError::NotReady(_)) => Err(ClientError::NotReady),
                 Err(_) => Err(ClientError::Unreachable),
             }
         })
@@ -377,6 +379,13 @@ impl Clients {
                     match lister.export(&t.hash).await {
                         Ok(bytes) => (Some(bytes), true),
                         Err(e @ ClientError::Auth(_)) => return on_error(&e),
+                        // Nothing was sent, so it isn't a try, and no other
+                        // export is asked for this poll: each refusal is
+                        // paced, and the client is the same.
+                        Err(ClientError::NotReady) => {
+                            budget = 0;
+                            (None, false)
+                        }
                         Err(_) => (None, true),
                     }
                 };
