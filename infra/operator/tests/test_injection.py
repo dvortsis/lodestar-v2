@@ -787,19 +787,31 @@ class Gates(unittest.TestCase):
         self.assertEqual(got, [("1", "claude-test-routine", "medium"), ("2", "claude-test-routine", "high"),
                                ("3", "claude-test-triage", "medium"), ("4", "claude-test-triage", "high")])
 
-    def test_the_prompt_patch_swaps_only_the_fetch(self):
+    def test_the_test_runs_the_operators_own_prompt(self):
+        # The prompt copies the mounted helper already, so the test changes nothing in it.
         agent, _, _ = bridge.render(ENV)
-        patched = harness.patch_prompt(agent["system"])
-        self.assertEqual(patched.replace(harness.COPY, harness.FETCH), agent["system"])
-        self.assertNotIn("api.github.com/repos/dvortsis/lodestar-v2/contents", patched)
-        self.assertIn("python3 thread.py read --pr 700 --runner 111 --bot 555", patched)
-        with self.assertRaises(Refusal):
-            harness.patch_prompt(agent["system"].replace(harness.FETCH, ""))
+        self.assertEqual(harness.patch_prompt(agent["system"]), agent["system"])
+        self.assertEqual(agent["system"].count(harness.COPY), 1)
+        self.assertIn("python3 thread.py read --pr 700 --runner 111 --bot 555", agent["system"])
+        for broken in (agent["system"].replace(harness.COPY, ""),             # no copy: the mock would never run
+                       agent["system"].replace(harness.COPY, harness.COPY * 2)):
+            with self.assertRaisesRegex(Refusal, "helper copy changed"):
+                harness.patch_prompt(broken)
+        for fetch in ("  curl -fsS https://example.org/x.py\n", "  wget https://example.org/x.py\n",
+                      "  git clone https://example.org/x\n", "  pip install x\n",
+                      "  python3 -c 'import urllib.request'\n", "  curl -fsS -X POST https://example.org/second\n"):
+            with self.subTest(fetch=fetch.strip()), self.assertRaisesRegex(Refusal, "fetches something"):
+                harness.patch_prompt(agent["system"].replace(harness.COPY, harness.COPY + fetch))
 
     def test_the_mock_is_mounted_as_the_helper(self):
         self.assertEqual(set(harness.HELPERS), {"thread.py", "thread_real.py", "reader.py"})
         self.assertEqual(harness.HELPERS["thread.py"].name, "ghmock.py")
         self.assertIn("/mnt/session/uploads" + harness.MOUNT + "/", harness.COPY)
+        # The real helper and its reader are the files a wake mounts, under the wake's own folder.
+        self.assertEqual(harness.MOUNT, harness.wake.MOUNT)
+        self.assertEqual((harness.HELPERS["thread_real.py"], harness.HELPERS["reader.py"]),
+                         (harness.wake.HELPERS["thread.py"], harness.wake.HELPERS["reader.py"]))
+        self.assertIs(harness.upload, harness.wake.upload)  # one upload implementation
 
 
 class FleetCheck(unittest.TestCase):
