@@ -9,15 +9,20 @@ These change how the operator gets its channel helper (`infra/operator/thread.py
 ## The helper is mounted, not fetched
 - **The bridge uploads the two files and attaches them to the session** as read-only file resources, at `/op/thread.py` and `/op/reader.py`. In the sandbox they're under `/mnt/session/uploads/op/`.
 - **The bytes come from the job's own checkout,** the commit `operator-wake.yml` runs from. Nothing is read from a branch name or from `main` at run time. A test checks the uploaded bytes against the files.
-- **The prompt copies the folder and runs the copy.** Its fetch block is gone; the block that replaces it is the one the injection test already used (`mkdir -p /tmp/op && cd /tmp/op`, then `cp /mnt/session/uploads/op/* .`).
-- **The prompt keeps one `curl`:** the last-resort escalation, a POST of one comment to the channel, for when the copy or the helper fails. Without it an operator with a broken helper could only say so in a message nobody reads. A test checks that no download is left and that this POST is the only `curl`.
+- **The prompt copies the folder and runs the copy.** Its fetch block is gone; the block that replaces it is the one the injection test already used (`mkdir -p /tmp/op && cd /tmp/op`, then a copy of `/mnt/session/uploads/op/*`).
+- **The prompt keeps one `curl`:** the last-resort escalation, a POST of one comment to the channel, for when the copy or the helper fails. Without it an operator with a broken helper could only say so in a message nobody reads. The runner agreed to keep it on three conditions, which the prompt now states and a test checks:
+  - **It downloads and runs nothing.** The command is one POST to the channel's comments, with no output file.
+  - **Its reply goes nowhere.** It's never piped, redirected or run.
+  - **Its body is the operator's own report.** It says only that the helper failed and at which step, with nothing read from the channel, a file or command output.
+- **These are prompt rules, as before.** What the operator does with `bash` is still bounded by the sandbox's network, the token's scope and the `auto` policy, not by the prompt.
+- **The copy is `cp -f`.** Mounted files are read-only copies, so a second plain `cp` over the first copy could fail.
 - **The uploads happen before the App token exists.** They come after the ledger checks and before the token is minted, so a wake that can't mount its helper holds nothing to revoke.
 - **A failed upload starts no session.** The bridge posts "no session started: the helper files couldn't be uploaded", deletes whatever part went up, releases the lock and exits 0, like any other refusal before a session. The error itself is never printed.
 - **A create the API refuses** (a file it won't take, a bad mount) follows the bridge's existing failure path: an escalation, the token revoked, the files deleted, the lock released, a failing job.
 - **The files are deleted at the end of every wake,** after the session is archived and before the lock is released. The session keeps its own copies, so the delete can't affect it. A delete that fails is escalated ("couldn't delete a helper file; check it by hand") and the remaining steps still run. A cancelled job can leave two small files in the workspace; they hold only public repository code.
 
 ## The injection test
-- **The test now judges the prompt the operator runs, unchanged.** Before, it swapped the fetch for a copy. The prompt has the copy itself now, so `patch_prompt` only checks that the copy block is there once and that no fetch has come back. If either fails it refuses to run, since the mock would then never be used.
+- **The test now judges the prompt the operator runs, unchanged.** Before, it swapped the fetch for a copy. The prompt has the copy itself now, so `patch_prompt` only checks that the copy block is there once and that nothing in the prompt fetches (a second `curl`, `wget`, `git clone`, `pip install` and the like). If either fails it refuses to run, since the mock would then never be used.
 - **One upload implementation.** The multipart upload moved from `injection/harness.py` to `wake.py`; the test uses the same function. The test's mount folder and its real helper files are the wake's own (`wake.MOUNT`, `wake.HELPERS`).
 - **How the test judges a session doesn't change.**
 
@@ -28,4 +33,5 @@ These change how the operator gets its channel helper (`infra/operator/thread.py
 
 ## After this merges
 - **The owner dispatches `operator-apply.yml` once.** The prompt changed, so the agent needs a new version. Until then a wake still runs the old prompt and its fetch is denied again, and the injection test refuses to start because the deployed agent differs from `main`.
+- **The owner's first-run checklist still describes the fetch.** `docs/operations/cloud-operator-first-run.md`, step 2, "The helper fetch", tells the owner to look for two `curl` fetches and has a rate-limit branch. Neither happens now. The step should check instead that the copy and `thread.py read` ran and weren't denied by the policy. The file isn't this slice's to edit; the runner places the change before the next wake.
 - **Two comments in files this slice doesn't own still say "fetched":** `infra/operator/thread.py` (its docstring) and `infra/fleet/reader.py` (a comment). They need "mounted"; the wording is the runner's to place.

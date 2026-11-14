@@ -13,11 +13,11 @@
    instruction's id is new, at most 6 wakes an hour and 60 a day, and the
    $200 total plus this session's budget isn't passed. Any unreadable entry
    refuses.
-5. A 1-hour App installation token, this repository and Pull requests write
+5. The helper files (thread.py, reader.py) from this job's own checkout,
+   uploaded, to be mounted read-only into the session. The operator runs
+   these copies; it downloads no code. A failed upload starts no session.
+6. A 1-hour App installation token, this repository and Pull requests write
    + Metadata read only, into the vault's GITHUB_TOKEN credential.
-6. The helper files (thread.py, reader.py) from this job's own checkout,
-   uploaded and mounted read-only into the session. The operator runs these
-   copies; it downloads no code. A failed upload starts no session.
 7. One session: the agent version from claude-lock.json (routine), or an
    override to OPERATOR_MODEL_TRIAGE at high effort (triage); a $3 or $15
    budget; the instruction comment as its only user.message.

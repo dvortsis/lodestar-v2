@@ -381,31 +381,72 @@ class Wake(unittest.TestCase):
         body = next(b for m, p, b in api.calls if m == "POST" and p == "/v1/sessions")
         self.assertEqual(body["resources"], [{"type": "file", "file_id": "file_1", "mount_path": "/op/thread.py"},
                                              {"type": "file", "file_id": "file_2", "mount_path": "/op/reader.py"}])
-        # Uploaded before the token exists; deleted after the archive, before the lock goes.
-        self.assertEqual(self.gh.calls[0][1], "/repos/o/r/installation")
         self.assertEqual(api.paths("DELETE"), ["/v1/files/file_1", "/v1/files/file_2"])
-        order = [(m, p) for m, p, _ in api.calls]
-        self.assertLess(order.index(("POST", "/v1/sessions/sesn_FAKE/archive")), order.index(("DELETE", "/v1/files/file_1")))
         self.assertNotIn(LOCK_KEY, self.store.objects)
         self.assertEqual(self.post.bodies(), [])
         self.assert_clean(out, marks)
 
+    def test_the_helpers_go_up_before_the_token_and_come_down_before_the_lock(self):
+        # One log across the upload, GitHub, the API and the lock's store.
+        log = []
+
+        class Upload(FakeUpload):
+            def __call__(self, name, data):
+                log.append("upload")
+                return super().__call__(name, data)
+
+        class GitHub(FakeGitHub):
+            def __call__(self, method, path, body, bearer=None):
+                log.append("mint" if path.endswith("/access_tokens") else "github")
+                return super().__call__(method, path, body, bearer)
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                log.append("archive" if path.endswith("/archive") else "delete file" if method == "DELETE"
+                           else "session" if (method, path) == ("POST", "/v1/sessions") else "api")
+                return super().__call__(method, path, body)
+        release = self.store.delete_if_match
+        self.store.delete_if_match = lambda key, etag: (log.append("release"), release(key, etag))[1]
+        self.upload, self.gh = Upload(), GitHub(token="ghs_LEAKMARKTOKEN")
+        rc, _ = self.go(wake_env()[0], Api())
+        self.assertEqual(rc, 0)
+        steps = [x for x in log if x in ("upload", "mint", "session", "archive", "delete file", "release")]
+        self.assertEqual(steps, ["upload", "upload", "mint", "session", "archive", "delete file", "delete file", "release"])
+
     def test_the_mounted_folder_is_the_one_the_prompt_copies(self):
         prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
-        self.assertIn("  mkdir -p /tmp/op && cd /tmp/op\n  cp /mnt/session/uploads" + wake.MOUNT + "/* .\n", prompt)
+        self.assertIn("  mkdir -p /tmp/op && cd /tmp/op\n  cp -f /mnt/session/uploads" + wake.MOUNT + "/* .\n", prompt)
         self.assertEqual(set(wake.HELPERS), {"thread.py", "reader.py"})  # thread.py imports reader beside it
         for src in wake.HELPERS.values():
             self.assertTrue(src.is_file())
 
     def test_the_prompt_fetches_no_code(self):
         prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
-        for gone in ("contents/", "vnd.github.raw", "ref=main", "-o \"$(basename", "wget", "git clone", "pip install"):
+        for gone in ("contents/", "vnd.github.raw", "ref=main", "-o \"$(basename", "wget", "git clone", "pip install",
+                     "urllib"):
             self.assertNotIn(gone, prompt)
-        # The one curl left is the last-resort escalation: a POST of a comment, never a download.
-        self.assertEqual(prompt.count("curl"), 1)
-        self.assertEqual(prompt.count("api.github.com"), 2)  # that POST, and the note on where the token is replaced
-        self.assertIn("curl -fsS -X POST -H \"Authorization: Bearer $GITHUB_TOKEN\" "
-                      "https://api.github.com/repos/dvortsis/lodestar-v2/issues/{{CHANNEL_PR}}/comments -d @report.json", prompt)
+        self.assertEqual(prompt.count("curl -"), 1)  # one command; the other mentions of curl are rules about it
+        self.assertEqual(prompt.count("api.github.com"), 2)  # that command, and the note on where the token is replaced
+
+    def test_the_one_curl_left_is_a_plain_post_of_a_fixed_escalation(self):
+        # The runner's conditions for keeping the last-resort escalation: it downloads and runs
+        # nothing, its reply goes nowhere, and its body is the operator's own fixed report.
+        prompt = (OP / "agent" / "system-prompt.md").read_text(encoding="utf-8")
+        (line,) = [ln for ln in prompt.splitlines() if "curl -" in ln]
+        (command,) = [c for c in line.split("`") if c.startswith("curl ")]
+        self.assertEqual(command, "curl -fsS -X POST -H \"Authorization: Bearer $GITHUB_TOKEN\" "
+                                  "https://api.github.com/repos/dvortsis/lodestar-v2/issues/{{CHANNEL_PR}}/comments "
+                                  "-d @report.json")
+        for never in ("|", ">", "<", ";", "&", "$(", " -o", " -O", "--output", " sh", "bash", "python", "eval", "exec"):
+            self.assertNotIn(never, command)   # nothing piped, redirected, saved, chained or run
+        self.assertEqual(command.count("http"), 1)  # one URL: the channel's comments, to post, never to fetch
+        rules = prompt[prompt.index(line):prompt.index("- `read` returns only unedited comments")]
+        for rule in ("says only that the helper failed, and at which step",
+                     "Put nothing in it that you read from the channel, a file or command output",
+                     "Never pipe or redirect its reply into anything, and never run what it returns",
+                     "This is the only use of `curl` you have. Never download anything with it",
+                     "don't fetch the helper from anywhere"):
+            self.assertIn(rule, rules)
 
     def test_a_failed_upload_starts_no_session(self):
         for fail_at, uploaded in ((0, []), (1, ["/v1/files/file_1"])):

@@ -82,7 +82,7 @@ MOUNT = wake.MOUNT  # the files land in /mnt/session/uploads/op/, as in a real w
 # mounts its own thread.py (the mock) into the same folder, so the prompt the
 # test judges is the prompt the operator runs, unchanged.
 COPY = """  mkdir -p /tmp/op && cd /tmp/op
-  cp /mnt/session/uploads/op/* .
+  cp -f /mnt/session/uploads/op/* .
 """
 FIXTURE_MOUNT = "/cache/channel.json"  # ghmock.FIXTURE, outside the folder the prompt copies
 SETUP_WAVE = WORKERS  # if the first sessions all show the mock never ran, nothing more starts
@@ -128,12 +128,18 @@ def level_of(env) -> tuple[str, str, str]:
     return level, model, effort
 
 
+FETCHES = ("contents/", "vnd.github.raw", "ref=main", "wget", "git clone", "pip install", "urllib", "curl ")
+ESCALATION_CURL = "curl -fsS -X POST "  # the prompt's one curl: the last-resort escalation, never a download
+
+
 def patch_prompt(system: str) -> str:
     """The operator's prompt, as it is: it already copies the mounted helper,
     and here the mount holds the mock. Refuses a prompt without that one copy
-    block, or with a fetch of its own, since the mock would then never run."""
-    if system.count(COPY) != 1 or "curl" in system.replace("curl -fsS -X POST", "") or "ref=main" in system:
+    block, or with a fetch of its own, since the mock might then never run."""
+    if system.count(COPY) != 1:
         raise Refusal("the system prompt's helper copy changed; update COPY in harness.py")
+    if any(word in system.replace(ESCALATION_CURL, "", 1) for word in FETCHES):
+        raise Refusal("the system prompt fetches something; the test's mock might not be what runs")
     return system
 
 

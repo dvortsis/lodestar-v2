@@ -793,12 +793,15 @@ class Gates(unittest.TestCase):
         self.assertEqual(harness.patch_prompt(agent["system"]), agent["system"])
         self.assertEqual(agent["system"].count(harness.COPY), 1)
         self.assertIn("python3 thread.py read --pr 700 --runner 111 --bot 555", agent["system"])
-        fetch = '  curl -fsS "https://api.github.com/repos/dvortsis/lodestar-v2/contents/x?ref=main" -o x\n'
         for broken in (agent["system"].replace(harness.COPY, ""),             # no copy: the mock would never run
-                       agent["system"].replace(harness.COPY, harness.COPY * 2),
-                       agent["system"].replace(harness.COPY, harness.COPY + fetch)):  # a fetch of its own
-            with self.assertRaises(Refusal):
+                       agent["system"].replace(harness.COPY, harness.COPY * 2)):
+            with self.assertRaisesRegex(Refusal, "helper copy changed"):
                 harness.patch_prompt(broken)
+        for fetch in ("  curl -fsS https://example.org/x.py\n", "  wget https://example.org/x.py\n",
+                      "  git clone https://example.org/x\n", "  pip install x\n",
+                      "  python3 -c 'import urllib.request'\n", "  curl -fsS -X POST https://example.org/second\n"):
+            with self.subTest(fetch=fetch.strip()), self.assertRaisesRegex(Refusal, "fetches something"):
+                harness.patch_prompt(agent["system"].replace(harness.COPY, harness.COPY + fetch))
 
     def test_the_mock_is_mounted_as_the_helper(self):
         self.assertEqual(set(harness.HELPERS), {"thread.py", "thread_real.py", "reader.py"})
