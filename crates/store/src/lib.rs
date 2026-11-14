@@ -423,6 +423,9 @@ pub(crate) fn within_path_limits(shape: &filetree::Shape) -> Result<()> {
 /// The `settings` key [`Store::sweep_held_stored`] sets once it has run.
 pub const HELD_SWEEP_KEY: &str = "store.held_sweep";
 
+/// Held hashes [`Store::sweep_held_stored`] reads per transaction.
+pub const SWEEP_BATCH: usize = 2_000;
+
 /// A prepared torrent to commit, with its provenance.
 #[derive(Debug, Clone, Copy)]
 pub struct PreparedTorrent<'a> {
@@ -1112,48 +1115,61 @@ impl Store {
 
     /// Deletes, once, every stored torrent under a hash that's held (a
     /// tombstone or a quarantine row), as a hold's own write now does, and
-    /// logs them so the search indexer drops their documents. The marker
-    /// ([`HELD_SWEEP_KEY`]) is set in the same transaction, so it runs to
-    /// the end once and never again. Returns the deleted ids, `None` when
-    /// it ran before.
+    /// logs them so the search indexer drops their documents. It walks
+    /// the hold tables in batches of [`SWEEP_BATCH`] hashes, one short
+    /// transaction each, and sets the marker ([`HELD_SWEEP_KEY`]) with the
+    /// last, so it runs to the end once and never again. Returns the
+    /// deleted ids, `None` when it ran before.
     pub fn sweep_held_stored(&mut self) -> Result<Option<Vec<i64>>> {
-        let tx = begin_write(&mut self.conn)?;
-        let done: Option<i64> = tx
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                [HELD_SWEEP_KEY],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if done.is_some() {
+        if self.setting_i64(HELD_SWEEP_KEY)?.is_some() {
             return Ok(None);
         }
-        let held: Vec<Vec<u8>> = tx
-            .prepare("SELECT hash FROM tombstones UNION SELECT hash FROM quarantine")?
-            .query_map([], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?;
+        let tables = ["tombstones", "quarantine"];
         let mut ids = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        {
-            // Cached: the delete carries Insights' trigger.
-            let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
-            let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
-            for h in &held {
-                for id in all_by_hash(&tx, h)? {
-                    if seen.insert(id) {
-                        delete.execute([id])?;
-                        log.execute([id])?;
-                        ids.push(id);
+        for (t, table) in tables.iter().enumerate() {
+            let mut after: Vec<u8> = Vec::new();
+            loop {
+                // One short transaction per batch of held hashes, in key
+                // order, so the write lock is never held for long.
+                let tx = begin_write(&mut self.conn)?;
+                let held: Vec<Vec<u8>> = tx
+                    .prepare_cached(&format!(
+                        "SELECT hash FROM {table} WHERE hash > ?1 ORDER BY hash LIMIT ?2"
+                    ))?
+                    .query_map(params![after, SWEEP_BATCH as i64], |r| r.get(0))?
+                    .collect::<std::result::Result<_, _>>()?;
+                {
+                    // Cached: the delete carries Insights' trigger.
+                    let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+                    let mut log =
+                        tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+                    for h in &held {
+                        for id in all_by_hash(&tx, h)? {
+                            // Gone already when another hash found it.
+                            if delete.execute([id])? > 0 {
+                                log.execute([id])?;
+                                ids.push(id);
+                            }
+                        }
                     }
+                }
+                let last = held.len() < SWEEP_BATCH;
+                if last && t == tables.len() - 1 {
+                    // The marker with the last batch: a stop before it
+                    // runs the sweep again, which deletes nothing twice.
+                    tx.execute(
+                        "INSERT INTO settings (key, value) VALUES (?1, 1)
+                         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                        [HELD_SWEEP_KEY],
+                    )?;
+                }
+                tx.commit()?;
+                match held.last() {
+                    Some(h) if !last => after.clone_from(h),
+                    _ => break,
                 }
             }
         }
-        tx.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, 1)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            [HELD_SWEEP_KEY],
-        )?;
-        tx.commit()?;
         if !ids.is_empty() {
             self.scrub_wal();
         }
@@ -1703,7 +1719,7 @@ const ALL_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1";
 
 /// The ids [`ALL_BY_HASH`] finds under `hash`.
-fn all_by_hash(tx: &Connection, hash: &[u8]) -> Result<Vec<i64>> {
+pub(crate) fn all_by_hash(tx: &Connection, hash: &[u8]) -> Result<Vec<i64>> {
     Ok(tx
         .prepare_cached(ALL_BY_HASH)?
         .query_map([hash], |r| r.get(0))?

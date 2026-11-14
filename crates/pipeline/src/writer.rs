@@ -291,6 +291,17 @@ impl HoldRetry {
     fn ready(&self) -> bool {
         !self.holds.is_empty() && self.backoff.ready()
     }
+
+    /// Queues `holds`, one per hash: a later hold for a hash already
+    /// waiting takes its place, so commits that keep failing never grow
+    /// the queue past the hashes they hold.
+    fn queue(&mut self, holds: impl IntoIterator<Item = unverified::Hold>) {
+        for h in holds {
+            let shares = |q: &unverified::Hold| q.hashes.iter().any(|x| h.hashes.contains(x));
+            self.holds.retain(|q| !shares(q));
+            self.holds.push(h);
+        }
+    }
 }
 
 /// A result under a current lease, ready to commit, or verified metadata
@@ -920,9 +931,7 @@ impl Writer {
                     // their own transactions: they're accounted below.
                     // Its holds are written again until they are, but
                     // not a promotion's, written in its own transaction.
-                    self.hold_retry
-                        .holds
-                        .extend(commit_holds(&committing, &o.blocked));
+                    self.hold_retry.queue(commit_holds(&committing, &o.blocked));
                     self.stats.errors.fetch_add(1, Ordering::Relaxed);
                     let lost = |leased: bool| {
                         (0..committing.len())
@@ -947,7 +956,7 @@ impl Writer {
                 // The batch and its counters are lost; keep going. Its
                 // leases stay held, so the keys aren't fetched again in
                 // this run. Its holds are written again until they are.
-                self.hold_retry.holds.extend(commit_holds(&committing, &[]));
+                self.hold_retry.queue(commit_holds(&committing, &[]));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 let cache = committing.iter().filter(|c| !c.leased).count() as u64;
                 self.gate
@@ -1420,8 +1429,7 @@ impl Writer {
             Err(e) => {
                 // Those not written are written again until they are.
                 self.hold_retry
-                    .holds
-                    .extend(holds.into_iter().skip(written as usize));
+                    .queue(holds.into_iter().skip(written as usize));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 cs.errors.fetch_add(n - written, Ordering::Relaxed);
                 lodestar_log::log_event!(
@@ -6528,6 +6536,30 @@ mod tests {
             assert_eq!(find(&w, key), None);
             assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
             assert_eq!(w.stats.blocked.load(Ordering::Relaxed), 1);
+        }
+
+        /// Commits that keep failing queue one hold per hash, not one per
+        /// failure.
+        #[test]
+        fn the_retry_queue_keeps_one_hold_per_hash() {
+            let hold = |h: u8, rule: &str| unverified::Hold {
+                hashes: vec![[h; 20]],
+                rule: rule.into(),
+                action: Action::Drop.code(),
+                held: Held::Tombstone,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: false,
+            };
+            let mut q = HoldRetry::default();
+            for _ in 0..3 {
+                q.queue([hold(1, "U-1"), hold(2, "U-1")]);
+            }
+            q.queue([hold(1, "U-2")]);
+            assert_eq!(q.holds.len(), 2);
+            let one = q.holds.iter().find(|h| h.hashes == [[1; 20]]).unwrap();
+            assert_eq!(one.rule, "U-2", "the latest hold for a hash");
         }
 
         /// Every waiting hold is tried on each pass: one that keeps failing

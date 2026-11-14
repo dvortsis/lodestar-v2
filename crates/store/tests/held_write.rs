@@ -298,3 +298,90 @@ fn a_fetch_under_a_hash_held_since_is_never_stored() {
     let row = store.torrent(stored_id).unwrap().unwrap();
     assert_ne!(row.flags & flags::FILES_PARTIAL, 0);
 }
+
+/// Two stored torrents under one swarm hash, one by its v1 hash and one by
+/// its truncated v2 hash: the claims hold and the abuse delete each take
+/// both, as a held write does.
+#[test]
+fn every_path_deletes_both_rows_under_a_shared_hash() {
+    for path in ["hold_claims", "delete_torrents"] {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let (hybrid, _, shared) = stored(&mut store, "a", true, 0);
+        let (plain, _, _) = stored(&mut store, "b", false, 0);
+        // The plain torrent's v1 hash is the hybrid's truncated v2 one.
+        store
+            .connection()
+            .execute(
+                "UPDATE torrents SET info_hash = ?1 WHERE id = ?2",
+                lodestar_store::rusqlite::params![&shared[..], plain],
+            )
+            .unwrap();
+        let mut deleted = match path {
+            "hold_claims" => store
+                .hold_claims(&[hold(&[shared], Some(Held::Tombstone))])
+                .unwrap(),
+            _ => store.delete_torrents(&[shared]).unwrap(),
+        };
+        deleted.sort_unstable();
+        assert_eq!(deleted, [hybrid, plain], "{path}");
+        assert!(
+            !is_stored(&store, hybrid) && !is_stored(&store, plain),
+            "{path}"
+        );
+    }
+}
+
+/// The sweep walks every held hash in batches: thousands of holds in each
+/// table, a few with a torrent stored under them, all deleted, and the
+/// rest of the store left.
+#[test]
+fn the_sweep_covers_thousands_of_holds() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let names: Vec<String> = (0..12).map(|i| format!("t{i}")).collect();
+    let rows: Vec<(i64, [u8; 20])> = names
+        .iter()
+        .map(|n| {
+            let (id, h, _) = stored(&mut store, n, false, 0);
+            (id, h)
+        })
+        .collect();
+    let n = 3 * lodestar_store::SWEEP_BATCH as u32;
+    let filler = |i: u32| {
+        let mut h = [0u8; 20];
+        h[..4].copy_from_slice(&i.to_be_bytes());
+        h[19] = 0xee;
+        h
+    };
+    {
+        let c = store.connection();
+        for i in 0..n {
+            c.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'U-1', 1)",
+                [&filler(i)[..]],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO quarantine (hash, rule, at, expires_at) VALUES (?1, 'U-1', 1, 2)",
+                [&filler(n + i)[..]],
+            )
+            .unwrap();
+        }
+        // Every other stored torrent is held, half by each table.
+        for (k, (_, h)) in rows.iter().enumerate().filter(|(k, _)| k % 2 == 0) {
+            let sql = if k % 4 == 0 {
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'U-1', 1)"
+            } else {
+                "INSERT INTO quarantine (hash, rule, at, expires_at) VALUES (?1, 'U-1', 1, 2)"
+            };
+            c.execute(sql, [&h[..]]).unwrap();
+        }
+    }
+    let mut deleted = store.sweep_held_stored().unwrap().unwrap();
+    deleted.sort_unstable();
+    let want: Vec<i64> = rows.iter().step_by(2).map(|(id, _)| *id).collect();
+    assert_eq!(deleted, want);
+    for (k, (id, _)) in rows.iter().enumerate() {
+        assert_eq!(is_stored(&store, *id), k % 2 == 1, "{k}");
+    }
+    assert_eq!(store.sweep_held_stored().unwrap(), None);
+}
