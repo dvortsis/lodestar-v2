@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:54Z",
+  "updated_at": "2026-11-14T01:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8731,12 +8731,6 @@
       "head": "1e39409b",
       "status": "ready; fresh Opus + security review running"
     },
-    "860": {
-      "slice": "runner",
-      "state": "review CHANGES fixed at 89629350; fresh delta review running",
-      "head": "90c25743",
-      "status": "delta fixes pushed; awaiting CI"
-    },
     "861": {
       "slice": "X-metainfo01-fix",
       "head": "a3f3bfc4",
@@ -9388,7 +9382,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:54Z",
+    "updated": "2026-11-14T01:56Z",
     "items": [
       {
         "slot": 1,
@@ -9659,7 +9653,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:54Z",
+  "updated": "2026-11-14T01:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10180,6 +10174,12 @@
       "slice": "X-ci-filter-docs-user",
       "merged": "c9c1b2c2",
       "at": "2026-11-14T01:41Z"
+    },
+    {
+      "pr": 860,
+      "slice": "runner Track Q order",
+      "merged": "080c8335",
+      "at": "2026-11-14T01:56Z"
     }
   ]
 }
