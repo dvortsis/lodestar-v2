@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T16:08Z",
+  "updated_at": "2026-11-14T16:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8250,7 +8250,7 @@
       "id": "FILTER-13",
       "severity": "important",
       "surface": "filter budget bound",
-      "status": "fix slice in slot 32 after #857 (one filter slice at a time)",
+      "status": "fix slice X-filter-budget-fix in slot 32 (with FILTER-14)",
       "track": "Q (held: id/severity/surface only)",
       "at": "2026-11-14T00:41Z"
     },
@@ -8258,7 +8258,7 @@
       "id": "FILTER-14",
       "severity": "important",
       "surface": "filter budget (over-holding)",
-      "status": "owner decision (options via the owner-started reviewer); fix after",
+      "status": "owner decided 2026-11-14; fix in X-filter-budget-fix (slot 32)",
       "track": "Q (held: id/severity/surface only)",
       "at": "2026-11-14T00:41Z"
     },
@@ -9151,13 +9151,6 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "879": {
-      "slice": "X-filter15-fix",
-      "head": "9baaf526",
-      "status": "delta review CHANGES on 9baaf526 (1 blocking hygiene leftover in bench fixture, 1 important: retry-queue merge could weaken hold strength; 1 optional test); round 4 requested",
-      "at": "2026-11-14T13:09Z",
-      "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
-    },
     "886": {
       "slice": "X-fetch-room-fix",
       "head": "ab11a9fc",
@@ -9809,7 +9802,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T16:08Z",
+    "updated": "2026-11-14T16:11Z",
     "items": [
       {
         "slot": 1,
@@ -9897,7 +9890,7 @@
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
         "since": "2026-11-14T10:55Z",
-        "doing": "X-rejudge-stall builds locally, pushes after #879 merges; plus X-flake-dataset-macos (own PR, full-ci) now",
+        "doing": "X-rejudge-stall (told #879 merged; bring main in, PR) + X-flake-dataset-macos (own PR, full-ci)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -9974,17 +9967,17 @@
         "agent": "pending launch",
         "model": "opus",
         "since": "2026-11-14T09:33Z",
-        "doing": "X-sec-S6-02-03 part 2b (store side + #871 optional items) building locally; push held until #874 and #879 merge (runner to message)",
+        "doing": "X-sec-S6-02-03 part 2b: told 16:1xZ to bring main in and open PR (#874, #879 merged)",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
         "slot": 32,
-        "slice": "X-filter15-fix",
+        "slice": "X-filter-budget-fix",
         "role": "build",
         "agent": "claude",
         "status": "active",
         "since": "2026-11-14T07:27Z",
-        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #879 X-filter15-fix fix round",
+        "doing": "X-filter-budget-fix (FILTER-13 + FILTER-14, owner FILTER-14 decision; detail by message); approach to runner first",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -10084,7 +10077,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T16:08Z",
+  "updated": "2026-11-14T16:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10761,6 +10754,12 @@
       "slice": "X-fuzz-gaps",
       "merged": "92b181bd",
       "at": "2026-11-14T14:34Z"
+    },
+    {
+      "pr": 879,
+      "slice": "X-filter15-fix",
+      "merged": "d56d0f6d",
+      "at": "2026-11-14T16:11Z"
     }
   ],
   "review_sessions": []
