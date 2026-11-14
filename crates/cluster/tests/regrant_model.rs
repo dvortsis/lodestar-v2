@@ -6,9 +6,8 @@
 //!
 //! - a remote worker's leases, held and waiting, stay within its cap;
 //! - a resting worker gains no lease;
-//! - re-granting with no limit per worker, until nothing more is given,
-//!   leaves no waiting key that one of the targets could take, within a
-//!   few calls;
+//! - a re-grant with no limit per worker leaves no waiting key that one of
+//!   its targets could take;
 //! - every key that stops being in flight was ended by the test or
 //!   reported lost, once, and a worker whose key was dropped rests.
 //!
@@ -29,9 +28,6 @@ const TTL_SECS: i64 = 600;
 /// More than every key at once, so a re-grant with this limit is bounded
 /// only by what its targets may take.
 const NO_LIMIT: usize = 256;
-/// Calls after the first that a re-grant with no limit may need before
-/// nothing more is given.
-const MAX_ROUNDS: usize = 3;
 const REMOTE: [WorkerId; 4] = [WorkerId(1), WorkerId(2), WorkerId(3), WorkerId(4)];
 
 /// xorshift64*: small, seeded, the same on every platform.
@@ -385,29 +381,7 @@ impl Model {
         if per_target != NO_LIMIT {
             return;
         }
-        // One call may pass over a key that a place freed during the call
-        // would have let a target take; calling again gives it.
-        let mut rounds = 0;
-        loop {
-            let more = self.a.regrant_pending(&targets, per_target, self.now);
-            if more.is_empty() {
-                break;
-            }
-            rounds += 1;
-            assert!(
-                rounds <= MAX_ROUNDS,
-                "{ctx}: still giving keys after {rounds} more calls"
-            );
-            for (w, got) in &more {
-                assert!(
-                    !resting.contains(w),
-                    "{ctx}: {w:?} rests and was given keys"
-                );
-                self.undelivered.extend(got.iter().copied());
-            }
-            self.recount(step, "re-grant again", &HashSet::new());
-        }
-        // After that, a key still waiting is one no target can take: the
+        // With no limit, a key still waiting is one no target can take: the
         // target rests, or has no room and didn't hold the key last.
         for (k, at) in &self.at {
             let At::Waiting(last) = at else { continue };

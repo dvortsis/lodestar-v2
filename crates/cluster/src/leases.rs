@@ -1293,7 +1293,11 @@ impl LeaseAuthority {
         // A key no target can take now goes to the back, so it never holds
         // up the keys behind it. Each key is looked at once per call, and
         // at most `REGRANT_LOOK` per key the targets may take.
-        let mut skipped = Vec::new();
+        let mut skipped: Vec<InfoHash> = Vec::new();
+        // The keys passed over, to tell a second place of one from a new
+        // key: a key parked, claimed and parked again can stand in `order`
+        // twice.
+        let mut passed: HashSet<InfoHash> = HashSet::new();
         let mut left = targets
             .len()
             .saturating_mul(per_target)
@@ -1314,6 +1318,12 @@ impl LeaseAuthority {
             let Some(last) = s.pending.get(&key).map(|l| l.holder) else {
                 continue;
             };
+            // A key passed over already has had its look: its second place
+            // is dropped and costs nothing, so it never uses up the look of
+            // a key behind it.
+            if passed.contains(&key) {
+                continue;
+            }
             left -= 1;
             let Some(target) = load
                 .iter_mut()
@@ -1322,18 +1332,29 @@ impl LeaseAuthority {
                 })
                 .min_by_key(|t| (t.held, t.worker))
             else {
+                passed.insert(key);
                 skipped.push(key);
                 continue;
             };
             let Some(lease) = s.unpark(&key) else {
                 continue;
             };
-            let token = s.table.regrant(target.worker, key, lease, now);
+            let taker = target.worker;
+            let token = s.table.regrant(taker, key, lease, now);
             target.held += 1;
-            if target.worker != last {
-                target.room = target.room.saturating_sub(1);
-            }
             target.got.push((key, token));
+            if taker != last {
+                // The taker used a place, and the key no longer counts
+                // against the worker that held it last: if that one is a
+                // target too, it has a place more for the keys still to
+                // come.
+                for t in load
+                    .iter_mut()
+                    .filter(|t| t.worker == taker || t.worker == last)
+                {
+                    t.room = s.room(t.worker, now);
+                }
+            }
         }
         if !s.pending.is_empty() {
             s.order.extend(skipped);
@@ -2877,6 +2898,59 @@ mod tests {
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!((out[0].0, out[0].1.len()), (B, 2));
         assert_eq!((a.held_by(A), a.held_by(B), a.pending()), (3, 3, 1));
+    }
+
+    fn token_of(a: &LeaseAuthority, n: u8) -> Token {
+        a.get(&InfoHash([n; 20])).expect("held").token
+    }
+
+    /// A target whose waiting key another target takes has a place more,
+    /// in the same call, for a key that comes after.
+    #[test]
+    fn a_place_freed_during_a_regrant_is_used_in_the_same_call() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(2));
+        let c = WorkerId(3);
+        a.set_worker_cap(c, Some(1));
+        let _ = a.claim_batch(A, &[claim(1, 0), claim(2, 0)], 1, None, None);
+        let _ = a.claim_batch(B, &[claim(3, 0)], 1, None, None);
+        // A's key 1 waits first, then B's key 3. A is at its cap (one held,
+        // one waiting); C holds nothing and may take one.
+        assert!(a.requeue_back(&InfoHash([1; 20]), token_of(&a, 1)));
+        assert!(a.requeue_back(&InfoHash([3; 20]), token_of(&a, 3)));
+        let out = a.regrant_pending(&[A, c], 10, 2);
+        // C, holding less, takes key 1; that frees a place at A, which
+        // takes key 3.
+        assert_eq!(a.pending(), 0, "{out:?}");
+        assert_eq!((a.held_by(A), a.held_by(c)), (2, 1));
+        assert_eq!(a.get(&InfoHash([3; 20])).map(|l| l.holder), Some(A));
+    }
+
+    /// A key that stands in the waiting order twice is looked at once, so
+    /// the key behind it still gets its look.
+    #[test]
+    fn a_key_waiting_in_two_places_takes_one_look() {
+        let (a, _) = counted();
+        a.set_lease_cap(Some(3));
+        let _ = a.claim_batch(A, &[claim(1, 0), claim(2, 0), claim(9, 0)], 1, None, None);
+        let _ = a.claim_batch(B, &[claim(5, 0), claim(6, 0)], 1, None, None);
+        // B's keys 5 and 6 wait; B claims 5 again and hands it back, which
+        // leaves 5 standing before and after 6. A's key 9 waits last.
+        assert!(a.requeue_back(&InfoHash([5; 20]), token_of(&a, 5)));
+        assert!(a.requeue_back(&InfoHash([6; 20]), token_of(&a, 6)));
+        let _ = a.claim_batch(B, &[claim(5, 0)], 1, None, None);
+        assert!(a.requeue_back(&InfoHash([5; 20]), token_of(&a, 5)));
+        assert!(a.requeue_back(&InfoHash([9; 20]), token_of(&a, 9)));
+        assert_eq!(a.pending(), 3);
+        // A has no room for B's keys, and takes its own back.
+        let out = a.regrant_pending(&[A], 10, 2);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].1.len(), 1);
+        assert_eq!((a.held_by(A), a.pending()), (3, 2));
+        // B's keys keep their order and are given once each.
+        let out = a.regrant_pending(&[B], 10, 2);
+        let got: Vec<u8> = out[0].1.iter().map(|(k, _)| k.0[0]).collect();
+        assert_eq!(got, vec![5, 6], "{out:?}");
     }
 
     /// At the largest pool an assignment allows, the cap is within what a
