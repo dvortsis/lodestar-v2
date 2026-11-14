@@ -6,9 +6,11 @@ One AWS Windows Server instance that Claude creates, tests on and deletes. It ru
 |---|---|
 | Machine | `c6a.xlarge` (4 vCPU on 2 cores, 8 GiB), us-east-1, the Lodestar subnet and security group (no inbound), encrypted 100 GiB root, IMDSv2 |
 | Image | the latest `Windows_Server-2022-English-Full-Base` from AWS's public parameter `/aws/service/ami-windows-latest/` |
-| Cost | about $0.337/h with the licence: about $16.20 for 48 h, plus about $0.60 of disk. At most $100 in total for this cloud (owner) |
+| Cost | about $0.337/h with the licence: about $16.20 for 48 h, plus about $0.60 of disk. At most $50 in total for this cloud over the whole testing period (owner, 2026-11-12T16:58Z) |
 | Backstop | `lodestar-expiration-guard` terminates it at `min(ExpiresAt, start + 48 h)`. Its deletion path is unproven, so Claude deletes it itself and checks |
 | Access | SSM Run Command (`AWS-RunPowerShellScript`) only. No RDP, no key pair, no inbound port |
+
+**The AWS connector's sign-in lasts at most 12 h** (AWS Sign-in's limit, not configurable). Plan each Windows lane to finish, teardown included, within 12 h of the owner's sign-in; after that every call fails until the owner reconnects.
 
 **The AWS connector's tool gives up on a script after 60 s.** Keep each call short: send a create, then check its status in separate calls. Never loop inside one call for longer than about 45 s.
 
@@ -51,7 +53,7 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
    - Record the instance ID locally only.
 3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
 4. **Bootstrap with Run Command** (`executionTimeout` up to 7200 s per step):
-   - Git for Windows, rustup with stable MSVC, the Visual Studio 2022 Build Tools (`Microsoft.VisualStudio.Workload.VCTools`, `--quiet --wait`), and Node 22;
+   - Git for Windows, the Visual Studio 2022 Build Tools (`Microsoft.VisualStudio.Workload.VCTools`, `--quiet --wait`), rustup with stable MSVC, and Node 22;
    - a clone of `https://github.com/dvortsis/lodestar-v2` to `C:\src\lodestar-v2`.
    - Record `rustc -V`, `node -v` and the free disk space.
 5. **The runner's Windows checks, in order:**
@@ -60,6 +62,13 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
    - **c.** The update helper's upgrade and rollback, and its Application event-log lines (PK-win-upd, X-event-log-notice).
    - **d.** Service stop timing during an update, once #734 has merged.
    - **No crawl on Windows** (plan Lane W, item 5). Numbers only leave the VM: no torrent names, IDs or IPs.
+   - **Bootstrap pitfalls found on the first runs:**
+     - install the Visual Studio Build Tools before rustup;
+     - Run Command doesn't see tools installed earlier in the session until `PATH` is reloaded from the registry;
+     - when picking the Node download from SHASUMS, index the matched line as a list: a single match is a string, and indexing it picks one character;
+     - run `smoke.ps1` as administrator under PowerShell 7;
+     - Edge won't start under SYSTEM, which Run Command uses, so browser suites use Playwright's own Chromium;
+     - time with Python's `perf_counter`, never `monotonic`, which ticks every 15.6 ms on Windows.
 6. **Report each finding to the runner before writing any fix.**
 7. **Teardown:**
    - `TerminateInstances`, then wait for `terminated`.
