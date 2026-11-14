@@ -12,6 +12,7 @@
 
 mod actor;
 mod hints;
+mod limits;
 mod lookup;
 mod peers;
 mod prefixes;
