@@ -221,7 +221,7 @@ fn a_short_torrent_read_differently_is_judged_first() {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let (filter, sealer) = (stand_in(), Sealer::new(&[9; 32]));
     let (plain, _) = add(&mut store, "rolea lexa.mkv");
-    let (marked, hash) = add(&mut store, "rol\u{2028}ea lexa.mkv");
+    let (marked, hash) = add(&mut store, "rol\u{FFF9}ea lexa.mkv");
     let (b, _) = batch(&mut store, &filter, &sealer, 10);
     let b = b.unwrap();
     assert_eq!((b.before.phase, b.judged, b.left), (1, 1, 1));
