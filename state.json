@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T07:50Z",
+  "updated_at": "2026-11-14T08:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8503,6 +8503,11 @@
       "id": "871-optional-to-part2",
       "added": "2026-11-14T07:50Z",
       "note": "#871 delta MERGE; two optional items (lease waiting-order dedupe, doc nits) go to part 2."
+    },
+    {
+      "id": "check8-deployed-compare",
+      "added": "2026-11-14T08:17Z",
+      "note": "Operator harness check_deployed compares deployed tools to agent.json by exact equality; the API may return the resolved toolset, so check 8 could refuse. Suspected, unconfirmed; needs one read of the deployed agent by a job with the key. Place as a small slice before check 8."
     }
   ],
   "main_health": [
@@ -8899,6 +8904,11 @@
     },
     "871": {
       "status": "review CHANGES on 24e4516a relayed (2 blocking, 2 important); await fix round, then fresh delta review"
+    },
+    "878": {
+      "slice": "X-operator-bash-allow",
+      "head": "15ee6a31",
+      "status": "CI running; merge only after owner confirms the decision directly with the runner"
     }
   },
   "merged_log": [
@@ -9815,7 +9825,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T07:50Z",
+  "updated": "2026-11-14T08:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
