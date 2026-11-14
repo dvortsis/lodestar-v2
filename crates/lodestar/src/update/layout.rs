@@ -713,6 +713,15 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_data_folder_is_created_owner_only() {
+        let base = tempfile::tempdir().unwrap();
+        let data = base.path().join("data");
+        Bin::open(&data).unwrap();
+        let mode = fs::metadata(&data).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "mode {:o}", mode & 0o777);
+    }
+
+    #[test]
     fn writes_are_atomic_and_never_follow_a_link() {
         let data = tempfile::tempdir().unwrap();
         let bin = Bin::open(data.path()).unwrap();
