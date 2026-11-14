@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:49Z",
+  "updated_at": "2026-11-14T00:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8274,8 +8274,8 @@
     },
     {
       "id": "FILTER-15",
-      "note": "high, content safety, store/writer ingest hold path (provisional id; detail held). Fix slice in slot 32 right after #857 merges, ahead of FILTER-13 (owns overlap with #857).",
-      "at": "2026-11-14T00:49Z"
+      "note": "BLOCKING (reviewer, 00:50Z), content safety, store/writer ingest hold path (detail held). Fix slice in slot 32 right after #857 merges, ahead of FILTER-13 (owns overlap with #857).",
+      "at": "2026-11-14T00:50Z"
     },
     {
       "id": "856-r2-items",
@@ -8286,6 +8286,11 @@
       "id": "owner-fyi-632",
       "note": "#632 summary + split recommendation sent to dashboard session for the owner queue",
       "at": "2026-11-14T00:49Z"
+    },
+    {
+      "id": "owner-queue-632-857",
+      "note": "dashboard session cannot edit owner_queue; add #632 split go-ahead and #857 retroactive-holds flag to runner/dashboard.yaml owner_queue in the next runner PR (dashboard relayed both to owner in chat meanwhile)",
+      "at": "2026-11-14T00:50Z"
     }
   ],
   "main_health": [
@@ -9339,7 +9344,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:49Z",
+    "updated": "2026-11-14T00:50Z",
     "items": [
       {
         "slot": 1,
@@ -9602,7 +9607,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:49Z",
+  "updated": "2026-11-14T00:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
