@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T16:00Z",
+  "updated_at": "2026-11-14T16:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8757,6 +8757,11 @@
       "id": "X-flake-dataset-macos",
       "at": "2026-11-14T16:00Z",
       "text": "main test (macos-latest) red on 9e6cd86f, 6f36bc7d, 19041df6, 92b181bd: bench/tests/dataset.rs an_interrupted_build_resumes_to_the_same_dataset (and once the_same_key_builds_the_same_bytes) - dataset::digest differs between builds on macOS only. Root-cause fix (no skip/gate) assigned to slot 15 as its own PR with full-ci, alongside X-rejudge-stall."
+    },
+    {
+      "id": "unraid-import-run",
+      "at": "2026-11-14T16:03Z",
+      "text": "X-test-vm coordinator 16:02Z: owner approved the access path and ran the #864 Unraid import box script (read-only dumps, empty work folder, no Docker socket, unprivileged, no credentials, memory cap). Tester lodestar-import-unraid on main 92b181bd: IMP-0 Bitmagnet restore, G-import-1M (pause/resume), search p50/p95, Magnetico 1M + overlap, 10M only if clean and under ~6 h. One numbers message at the end. Runner does not touch the box."
     }
   ],
   "main_health": [
@@ -9798,7 +9803,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T16:00Z",
+    "updated": "2026-11-14T16:03Z",
     "items": [
       {
         "slot": 1,
@@ -10073,7 +10078,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T16:00Z",
+  "updated": "2026-11-14T16:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
