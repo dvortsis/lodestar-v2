@@ -329,6 +329,7 @@ placement:
   match:
   - X-ui-guards
   - X-offline-retry
+  - X-offline-retry-nits
   - W*
   - C0
   - C1
@@ -432,6 +433,7 @@ placement:
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
+  - X-operator-hardening
   - X-op4-polish
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
@@ -441,10 +443,16 @@ placement:
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
   - X-companions-loopback-nits
+  - X-worker-839-followups
   - X-svc-eventcreate-bounded
   - X-win-fs-followups
   - X-flake-portable-restart-3
   - X-flake-scrape-udp-port
+  - X-flake-companions-loopback
+  - X-pia-vm-helper
+  - X-fleet-sudo-narrow
+  - X-pia-bridge-manual
+  - X-pia-bridge-docs
   - X-restart-banner-polish
   - X-restart-save-lag
   - X-win-upd-history-polish
@@ -731,8 +739,25 @@ placement:
   - X-fixed-sleep-asserts
   - X-rusqlite-041
   - X-filter01-fix
+  - X-filter01-rejudge
   - X-filter03-fix
   - X-apifeat01-fix
+  - X-filter01-hardening
+  - X-rejudge-pending-gate
+  - X-filter15-fix
+  - X-filter13-fix
+  - X-filter14-fix
+  - X-filter12-fix
+  - X-fixed-sleep-nits
+  - X-cluster06-fix
+  - X-metainfo01-fix
+  - X-filter02-fix
+  - X-update01-store01-fix
+  - X-dht01-fix
+  - X-search01-fix
+  - X-pipe01-fix
+  - X-store02-pipe02-fix
+  - X-cmp01-fix
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -748,6 +773,7 @@ pinned:
   i9-stage2: ws-small
   openapi-example-size: ws-small
 held:
+- X-rejudge-pending-gate  # held (owner-decisions §2.71)
 - PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
 - E-v06-sources
@@ -1034,6 +1060,11 @@ conditions:
     who: you
     label: You choose between the two held options for APIFEAT-01 (the runner gives you the detail directly)
     note: 'Decided by the runner on your delegation, §2.69 (docs/decisions/2026-11-13-runner-owner-queue.md)'
+  owner-pia-sudo-model:
+    met: true
+    who: runner
+    label: The VM sudo model for the PIA bridge helper (#632 split, part b)
+    note: 'Delegated to the runner by you on 2026-11-14 (§2.71); decided in docs/decisions/2026-11-14-runner-trackq-order.md'
   owner-filter03-choice:
     met: true
     who: you
@@ -1495,8 +1526,21 @@ roadmap:
     - X-ci-advisories
     - X-fixed-sleep-asserts
     - X-filter01-fix
-    - X-apifeat01-fix
     - X-filter03-fix
+    - X-apifeat01-fix
+    - X-filter15-fix
+    - X-filter13-fix
+    - X-filter14-fix
+    - X-filter12-fix
+    - X-metainfo01-fix
+    - X-filter02-fix
+    - X-update01-store01-fix
+    - X-dht01-fix
+    - X-search01-fix
+    - X-pipe01-fix
+    - X-store02-pipe02-fix
+    - X-cmp01-fix
+    - X-cluster06-fix
   arrows:
   - - soak
     - gluetun
@@ -1625,6 +1669,11 @@ owner_queue:
   type: action
   action: Set the repository variables `OWNER_USER_ID` (your numeric GitHub ID) and `OPERATOR_STOP=false` so operator-apply can run (§2.67)
   unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
+  when: Any time
+- n: 25
+  type: review
+  action: 'Runner call you may want to veto (§2.19; you delegated it on 2026-11-14, §2.71): the PIA bridge helper keeps main''s VM sudo model for now, with a test tying the sudoers lines to what the fleet steps run, and a separate slice (X-fleet-sudo-narrow) then narrows sudo to root-owned fixed-verb helpers for every fleet step'
+  unblocks: Nothing; this goes ahead unless you object
   when: Any time
 
 gates:
