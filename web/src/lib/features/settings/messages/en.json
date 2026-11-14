@@ -123,7 +123,7 @@
 	"settings_crawler_timeout_secs_label": "Fetch timeout",
 	"settings_crawler_timeout_secs_help": "Maximum time allowed for a metadata fetch.",
 	"settings_crawler_max_metadata_mib_label": "Metadata size limit",
-	"settings_crawler_max_metadata_mib_help": "Reject metadata larger than this limit. Values above 47 are treated as 47.",
+	"settings_crawler_max_metadata_mib_help": "Reject metadata larger than this limit (47 at most).",
 	"settings_crawler_paused_label": "Pause crawling",
 	"settings_crawler_paused_help": "Pause new crawler work.",
 	"settings_transport_utp_label": "uTP (not active yet)",
