@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T18:12Z",
+  "updated_at": "2026-11-14T18:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8807,6 +8807,11 @@
       "id": "owner-branch-cleanup",
       "note": "slice/X-operator-unattended-wake (#890 merged) left on remote; branch deletion is the owner's call",
       "added": "2026-11-14T18:12Z"
+    },
+    {
+      "id": "X-floor-rollback-carry",
+      "note": "store snapshot rollback and worker floor holds (component level; detail by message)",
+      "added": "2026-11-14T18:29Z"
     }
   ],
   "main_health": [
@@ -9871,7 +9876,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T18:12Z",
+    "updated": "2026-11-14T18:29Z",
     "items": [
       {
         "slot": 1,
@@ -10149,7 +10154,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T18:12Z",
+  "updated": "2026-11-14T18:29Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
