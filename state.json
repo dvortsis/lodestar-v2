@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T17:21Z",
+  "updated_at": "2026-11-14T17:23Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8787,6 +8787,11 @@
       "id": "operator-check5",
       "at": "2026-11-14T17:21Z",
       "note": "Operator check 5 posted on the channel as status-1 (read-only status + token-prefix item), first wake without per-wake approval. Owner asked to rerun operator-apply for the new model vars. FLEET_LIVE stays false until OP-G (canary, kill-switch drill, dry up/down cycle)."
+    },
+    {
+      "id": "operator-wake-failclosed",
+      "at": "2026-11-14T17:23Z",
+      "note": "status-1 wake ran without approval but the bridge failed closed: deployment audit requires owner as sole reviewer on cloud-operator. Fix in X-operator-unattended-wake (slot 14); then re-post check 5 as status-2. No owner action needed."
     }
   ],
   "main_health": [
@@ -9839,7 +9844,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T17:21Z",
+    "updated": "2026-11-14T17:23Z",
     "items": [
       {
         "slot": 1,
@@ -9918,8 +9923,11 @@
       },
       {
         "slot": 14,
-        "status": "idle",
-        "doing": "X-import-pilot-fixes #840 merged b4813b50; session archived; cloud-testing slot idle until the AWS connector is reconnected"
+        "doing": "deployment audit accepts no reviewer on cloud-operator (owner decision 2026-11-14); fail-closed wake fixed",
+        "slice": "X-operator-unattended-wake",
+        "role": "cloud-testing",
+        "agent": "session_01MMjhnAKMHA7ivZA8V6FnWJ",
+        "since": "2026-11-14T17:23Z"
       },
       {
         "slot": 15,
@@ -10114,7 +10122,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T17:21Z",
+  "updated": "2026-11-14T17:23Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
