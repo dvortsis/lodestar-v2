@@ -337,3 +337,4 @@ name = "peer_wire"
 path = "fuzz_targets/peer_wire.rs"
 test = false
 doc = false
+bench = false
