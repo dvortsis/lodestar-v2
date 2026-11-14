@@ -1,0 +1,28 @@
+import { launch, context, watch, settle, wake, shot, probe } from './lib.mjs';
+const browser = await launch();
+const ctx = await context(browser, { width: 390, height: 800, coarse: true });
+const page = await ctx.newPage();
+const log = watch(page);
+const step = async (name, fn, full=false) => { try { await fn(); await settle(page, 400); await shot(page, 'f2-' + name, full); console.log('ok', name); } catch (e) { console.log('FAIL', name, String(e).slice(0, 200)); } };
+await page.goto('/search?q=lantern'); await settle(page); await wake(page);
+await step('01-nav-open', async () => { await page.getByTestId('menu-button').tap(); });
+await page.getByTestId('menu-button').tap();
+await step('02-filters-sheet', async () => { await page.getByTestId('facet-open').tap(); await settle(page, 800); });
+await step('03-filters-staged', async () => { await page.getByRole('checkbox', { name: /Movie/ }).first().tap(); await settle(page, 800); });
+await step('04-filters-scrolled', async () => { const s = page.getByTestId('facet-rail'); await s.evaluate((el) => { let e = el; while (e && getComputedStyle(e).overflowY !== 'auto' && getComputedStyle(e).overflowY !== 'scroll') e = e.parentElement; (e || el).scrollTop = 600; }); });
+await step('05-filters-applied', async () => { await page.getByTestId('facet-show').tap(); await settle(page, 800); });
+// sticky query bar?
+await step('06-scrolled-list', async () => { await page.goto('/search?browse=1'); await settle(page); await wake(page); await page.mouse.wheel(0, 2500); await settle(page, 600); });
+console.log('sticky?', await page.evaluate(() => { const q = document.querySelector('[data-testid=query-editor]'); const r = q?.getBoundingClientRect(); return r ? [r.top, r.bottom] : null; }));
+await step('07-row-tap-detail', async () => { await page.locator('[role=row]').nth(3).tap(); await settle(page, 1000); });
+console.log('url', page.url());
+console.log('detail controls', await page.evaluate(() => [...document.querySelectorAll('button,a')].filter(e => e.getBoundingClientRect().top < 200 && e.getBoundingClientRect().width > 0).map(e => (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 30))));
+await step('08-detail-scroll', async () => { await page.mouse.wheel(0, 1200); });
+await step('09-select-mode', async () => { await page.goto('/search?q=lantern'); await settle(page); await wake(page); await page.getByRole('button', { name: 'Select' }).tap(); await settle(page, 400); const cb = page.locator('[role=row] [role=checkbox], [role=row] input[type=checkbox]'); console.log('row checkboxes', await cb.count()); if (await cb.count()) { await cb.nth(0).tap(); await cb.nth(1).tap(); } });
+await step('10-cards', async () => { await page.goto('/search?q=lantern&density=cards'); await settle(page); await wake(page); });
+await step('11-table', async () => { await page.goto('/search?q=lantern&view=table'); await settle(page); await wake(page); });
+console.log('url11', page.url());
+await step('12-save-search', async () => { await page.goto('/search?q=lantern'); await settle(page); await wake(page); await page.getByRole('button', { name: 'Save search' }).tap(); await settle(page, 600); });
+await step('13-alerts-delete', async () => { await page.goto('/alerts'); await settle(page); await wake(page); await page.getByRole('button', { name: /Delete/ }).first().tap(); await settle(page, 600); });
+console.log(JSON.stringify(log).slice(0, 800));
+await browser.close();

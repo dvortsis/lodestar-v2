@@ -280,9 +280,14 @@ placement:
   - X-settings-followups
   - X-wizard-labels-signout
   - X-session-draft-keep
+  - X-settings-find
+  - X-setup-token-boot
+  - X-first-run
+  - X-client-handoff
 - ws: ws-filters
   match:
   - M-filters-dialogs
+  - X-safety-toggles
   - S-filters
   - S-blocklists
   - B-subscriptions-api
@@ -291,6 +296,11 @@ placement:
 - ws: ws-search-ui
   match:
   - X-results-drawer-adaptive
+  - X-search-toolbar
+  - X-row-rail
+  - X-zero-rescue
+  - X-detail-depth
+  - X-units-typed
   - S-search-*
   - S-detail
   - S-compare
@@ -299,6 +309,9 @@ placement:
   match:
   - X-insights-funnel-fixture
   - X-insights-scroll-a11y
+  - X-insights-story
+  - X-charts
+  - X-alert-noun
   - S-alerts
   - S-insights-*
   - B9
@@ -328,6 +341,14 @@ placement:
 - ws: ws-web
   match:
   - X-ui-guards
+  - X-ui-plan-r5
+  - X-page-frame
+  - X-ctl-geometry
+  - X-labels
+  - X-shell-home
+  - X-narrow-states
+  - X-help
+  - X-ui-checks
   - X-offline-retry
   - X-offline-retry-nits
   - W*
@@ -581,6 +602,7 @@ placement:
 - ws: ws-m7-w4
   match:
   - RX-1
+  - RX-2
   - GS-3
   - ENR-12
   - UP-2
@@ -1375,6 +1397,7 @@ roadmap:
     - GS-5
     - RX-0
     - RX-1
+    - RX-2
     - TZ-0
     - OUT-0
     - OUT-1
@@ -1501,7 +1524,7 @@ roadmap:
     - G-v1
   - id: tracku
     label: 'Track U: UI review fixes'
-    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in.'
+    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in. Then every other finding, grouped by cause: the §10 text for the moderate user, one page frame, control sizes, labels, the search toolbar and row, detail, safety switches, Settings search, the Insights story and charts, first run, alerts, help, and the review''s scripts kept as checks.'
     col: 5
     row: 4
     members:
@@ -1513,6 +1536,27 @@ roadmap:
     - X-insights-scroll-a11y
     - X-offline-retry
     - X-session-draft-keep
+    - X-ui-plan-r5
+    - X-page-frame
+    - X-ctl-geometry
+    - X-labels
+    - X-search-toolbar
+    - X-shell-home
+    - X-row-rail
+    - X-zero-rescue
+    - X-units-typed
+    - X-detail-depth
+    - X-safety-toggles
+    - X-settings-find
+    - X-insights-story
+    - X-charts
+    - X-narrow-states
+    - X-setup-token-boot
+    - X-first-run
+    - X-alert-noun
+    - X-client-handoff
+    - X-help
+    - X-ui-checks
   - id: trackq
     label: 'Track Q: code-review fixes'
     plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'
@@ -1674,6 +1718,21 @@ owner_queue:
   type: review
   action: 'Runner call you may want to veto (§2.19; you delegated it on 2026-11-14, §2.71): the PIA bridge helper keeps main''s VM sudo model for now, with a test tying the sudoers lines to what the fleet steps run, and a separate slice (X-fleet-sudo-narrow) then narrows sudo to root-owned fixed-verb helpers for every fleet step'
   unblocks: Nothing; this goes ahead unless you object
+  when: Any time
+- n: 26
+  type: question
+  action: 'Will you, or someone like the intended user, walk first run → first search → copy a magnet and say where they got stuck? Nobody from that audience has used it yet (UI review 04 §6a)'
+  unblocks: Confidence that the first-run and search fixes in Track U are the right ones
+  when: Before the 1.0 design gate (M8-DR)
+- n: 27
+  type: question
+  action: 'A screen-reader run and a pass on a real phone or tablet need your hardware. Will you run them, or accept emulation for 1.0? (UI review 03-c, 03-e)'
+  unblocks: The accessibility and touch checks the review could not make
+  when: Before the 1.0 design gate (M8-DR)
+- n: 28
+  type: review
+  action: 'Runner calls you may want to veto (§2.19, §2.26; docs/decisions/2026-11-14-runner-ui-review-placement.md): the three-step setup with a checklist instead of the nine-step wizard stays declined (U1, D7; §2.9, §2.13, §2.39); failed watch-folder files get Retry in the UI; with five badges on a row, safety and verification stay and the rest collapse into +N; worker display names are editable; where a platform cannot update itself, Workers shows that platform''s steps, not a button; the Insights intensity click gets Undo for 10 s'
+  unblocks: Nothing; these go ahead unless you object
   when: Any time
 
 gates:
