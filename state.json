@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T17:50Z",
+  "updated_at": "2026-11-14T18:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8797,6 +8797,11 @@
       "id": "X-worker-oversize-handback",
       "note": "no-wire-change route approved; handed-back counter + metrics row; once-only per key; refusal check before local grant; after slot 33 queue",
       "added": "2026-11-14T17:50Z"
+    },
+    {
+      "id": "flake-fleet-post-rules",
+      "note": "infra/fleet test_steps.VMScripts post_rules-after-start failed once under load (reviewer, local); watch CI",
+      "added": "2026-11-14T18:00Z"
     }
   ],
   "main_health": [
@@ -9611,6 +9616,12 @@
       "sha": "312aeebd",
       "id": "X-fetch-room-fix",
       "at": "2026-11-14T17:50Z"
+    },
+    {
+      "pr": 890,
+      "sha": "fd4ba0fc",
+      "id": "X-operator-unattended-wake",
+      "at": "2026-11-14T18:00Z"
     }
   ],
   "active_sessions": {
@@ -9849,7 +9860,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T17:50Z",
+    "updated": "2026-11-14T18:00Z",
     "items": [
       {
         "slot": 1,
@@ -9928,7 +9939,7 @@
       },
       {
         "slot": 14,
-        "doing": "deployment audit accepts no reviewer on cloud-operator (owner decision 2026-11-14); fail-closed wake fixed",
+        "doing": "#890 merged (fd4ba0fc); X-operator-unattended-docs follow-up PR; runner posts status-2 after owner apply rerun",
         "slice": "X-operator-unattended-wake",
         "role": "cloud-testing",
         "agent": "session_01MMjhnAKMHA7ivZA8V6FnWJ",
@@ -10127,7 +10138,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T17:50Z",
+  "updated": "2026-11-14T18:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
