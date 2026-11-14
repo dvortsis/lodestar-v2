@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T12:18Z",
+  "updated_at": "2026-11-14T12:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8638,6 +8638,21 @@
       "id": "nit-supervisor-child-args-doc",
       "note": "update/supervisor.rs child_args doc comment sits above open_data after #869; slot 15 fixes it in its next PR.",
       "at": "2026-11-14T10:55Z"
+    },
+    {
+      "id": "X-cmp09-fix",
+      "note": "CMP-09, important, companions (held, \u00a75). Own slice in slot 7 after #883 merges; condition of the first managed pin, like CMP-01. Detail by message only.",
+      "at": "2026-11-14T12:32Z"
+    },
+    {
+      "id": "owner-fyi-cmp09",
+      "note": "Tell owner at component level: new held finding CMP-09 (important, companions), found in #883 review; not a regression; fix slice queued.",
+      "at": "2026-11-14T12:32Z"
+    },
+    {
+      "id": "security-index-cmp09",
+      "note": "Next runner PR: add CMP-09 (important, companions) to the held-findings index by id, severity, surface only.",
+      "at": "2026-11-14T12:32Z"
     }
   ],
   "main_health": [
@@ -9048,8 +9063,8 @@
     "883": {
       "slice": "X-cmp-supervisor-bind",
       "head": "a0607144",
-      "status": "ready; fresh Opus code+security review running (folds X-cmp-managed-client + X-cmp-entered-loopback small option)",
-      "at": "2026-11-14T12:14Z"
+      "status": "review CHANGES on a0607144 (1 blocking hold hygiene, 1 important test gap, 4 optional taken); one round, then fresh delta review",
+      "at": "2026-11-14T12:32Z"
     }
   },
   "merged_log": [
@@ -9965,7 +9980,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T12:18Z",
+  "updated": "2026-11-14T12:32Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
