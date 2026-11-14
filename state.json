@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:09Z",
+  "updated_at": "2026-11-14T13:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8607,7 +8607,8 @@
     {
       "id": "place-s1-11-s1-14",
       "note": "Assigned to slot 33 after X-pool-model-test; id + held detail by message then.",
-      "at": "2026-11-14T10:24Z"
+      "at": "2026-11-14T13:19Z",
+      "text": "Placed as X-fetch-room-fix in slot 33 (brief sent 13:2xZ)."
     },
     {
       "id": "s6-02-part2b-owns-snapshots",
@@ -8667,7 +8668,8 @@
     {
       "id": "slot33-order",
       "note": "Slot 33 order: #882 -> X-fuzz-gaps -> X-pool-model-test -> X-cluster06-verify -> X-cluster-regrant-look -> S1-11/S1-14 slice (+3 #882 optionals) -> store slices after #879.",
-      "at": "2026-11-14T12:42Z"
+      "at": "2026-11-14T13:19Z",
+      "text": "#882, X-fuzz-gaps, X-pool-model-test, X-cluster06-verify, X-cluster-regrant-look; X-fetch-room-fix as soon as ready (ahead of unpushed ones); X-peerwire-model-test; store slices after #879; then A."
     },
     {
       "id": "X-cluster06-verify",
@@ -8678,6 +8680,21 @@
       "id": "X-cluster-regrant-look",
       "note": "Slot 33, after X-cluster06-verify: small re-grant liveness fix in crates/cluster/src/leases.rs (regrant_pending) + tighten regrant_model check 4. Component-level only. Add slices.yaml entry.",
       "at": "2026-11-14T13:04Z"
+    },
+    {
+      "id": "X-fetch-room-fix",
+      "text": "Slot 33: fetch pool keeps room for new metadata fetches (S1-11 blocking, S1-14 important; detail by message only). Owns pool.rs, fetch.rs if needed, their tests, decisions file. Pushes ahead of any unpushed test-only slice.",
+      "at": "2026-11-14T13:19Z"
+    },
+    {
+      "id": "X-peerwire-model-test",
+      "text": "Slot 33: scripted-peer model test for metadata fetches, one new file crates/peer-wire/tests/peer_model.rs; after X-fetch-room-fix; hostile cases described generally until it merges.",
+      "at": "2026-11-14T13:19Z"
+    },
+    {
+      "id": "X-dht-routing-model-test",
+      "text": "Slot 33 candidate A approved: start after X-fetch-room-fix is built; store slices go first. B (utp) and C (sources admission) not now.",
+      "at": "2026-11-14T13:19Z"
     }
   ],
   "main_health": [
@@ -9736,7 +9753,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T12:39Z",
+    "updated": "2026-11-14T13:19Z",
     "items": [
       {
         "slot": 1,
@@ -9919,7 +9936,7 @@
         "slice": "X-pipe01-followup",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "session_01MMjhnBh7zpNQt1KJTfEEZk: #882 X-pipe01-followup delta review; fuzz hours",
+        "doing": "#882 merging on green; building X-fetch-room-fix locally; 4 test/fix slices ready locally",
         "since": "2026-11-14T09:05Z"
       }
     ]
@@ -10005,7 +10022,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:09Z",
+  "updated": "2026-11-14T13:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
