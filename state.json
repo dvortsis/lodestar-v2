@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T12:53Z",
+  "updated_at": "2026-11-14T12:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8666,8 +8666,13 @@
     },
     {
       "id": "slot33-order",
-      "note": "Slot 33 order: #882 -> X-cluster06-fix -> X-fuzz-gaps -> X-pool-model-test -> S1-11/S1-14 slice (id + detail by message) -> X-update01-store01-fix, X-store02-pipe02-fix after #879.",
+      "note": "Slot 33 order: #882 -> X-fuzz-gaps -> X-pool-model-test -> X-cluster06-verify -> S1-11/S1-14 slice (+3 #882 optionals) -> store slices after #879. X-cluster06-fix parked (believed superseded).",
       "at": "2026-11-14T12:42Z"
+    },
+    {
+      "id": "X-cluster06-verify",
+      "note": "Slot 33: tests-only property test for lease re-grants on current main (one new file under crates/cluster/tests/). Slot 33 believes CLUSTER-06 (important) is closed on main by the lease-return work; X-cluster06-fix branch kept locally, no PR. On green merge, ask owner to close CLUSTER-06 with the test as evidence. Add slices.yaml entry.",
+      "at": "2026-11-14T12:54Z"
     }
   ],
   "main_health": [
@@ -9995,7 +10000,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T12:53Z",
+  "updated": "2026-11-14T12:54Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
