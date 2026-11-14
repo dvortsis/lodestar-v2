@@ -23,7 +23,7 @@
 //! waits for a channel slot.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -903,6 +903,10 @@ pub fn address_caps(max_pending: usize) -> (usize, usize) {
 /// The most addresses one key waits at ([`Waits`]).
 pub const MAX_WAITS_PER_KEY: usize = 4;
 
+/// The most waiters passed over for their network when one place is
+/// given away ([`Pool::promote`]).
+const MAX_PASSED_OVER: usize = 16;
+
 /// The wait lists' bounds for a queue of `max_pending` keys: the most
 /// peers waiting at one address, and in all. Eight times the address's
 /// places, so the last in line waits eight rounds of them; and a quarter
@@ -999,6 +1003,15 @@ struct Places {
     /// network has one free, since the last promotion
     /// ([`Pool::promote_freed`]).
     freed: Vec<Net>,
+    /// Networks where a place has come free since then, if a waiter was
+    /// passed over for a network.
+    freed_networks: Vec<Net>,
+    /// Addresses whose line had a waiter passed over for its network at
+    /// the last promotion there: the ones a network's free place wakes.
+    blocked: BTreeSet<Net>,
+    /// The address last promoted at for a network's place, so its lines
+    /// take turns.
+    last_woken: Option<Net>,
 }
 
 impl Places {
@@ -1009,6 +1022,9 @@ impl Places {
             networks: Vouched::new(network),
             waits: Waits::new(max_pending),
             freed: Vec::new(),
+            freed_networks: Vec::new(),
+            blocked: BTreeSet::new(),
+            last_woken: None,
         }
     }
 
@@ -1069,11 +1085,8 @@ impl Places {
         for n in had_networks {
             if networks.binary_search(&n).is_err() {
                 self.networks.give_back(n);
-                if waited {
-                    // A waiter at any address in it may have been waiting
-                    // on the network's place.
-                    self.freed
-                        .extend(self.waits.lines.range(n..=n.last()).map(|(a, _)| *a));
+                if !self.blocked.is_empty() {
+                    self.freed_networks.push(n);
                 }
             }
         }
@@ -1158,7 +1171,8 @@ impl Waits {
     fn park(&mut self, key: InfoHash, peer: SocketAddr, asked: bool) -> bool {
         let address = net_of(peer.ip());
         let parked = self.keys.get(&key).map_or(&[][..], Vec::as_slice);
-        if parked.iter().any(|p| p.peer == peer) {
+        // One turn a key at an address, whichever of its ports came first.
+        if parked.iter().any(|p| net_of(p.peer.ip()) == address) {
             return true;
         }
         if parked.len() >= MAX_WAITS_PER_KEY {
@@ -1187,11 +1201,14 @@ impl Waits {
         }
         line.live += 1;
         self.live += 1;
-        self.keys.entry(key).or_default().push(Parked {
-            peer,
-            seq: self.seq,
-            seen: u64::MAX,
-        });
+        let parked = self.keys.entry(key);
+        parked
+            .or_insert_with(|| Vec::with_capacity(1))
+            .push(Parked {
+                peer,
+                seq: self.seq,
+                seen: u64::MAX,
+            });
         true
     }
 
@@ -1553,7 +1570,9 @@ struct Pool {
     tasks: JoinSet<(Result<Fetched, FailureKind>, bool)>,
     /// What each fetch task is fetching, so even a panicked task is
     /// accounted for.
-    task_keys: HashMap<Id, (InfoHash, SocketAddr)>,
+    /// With the entry's generation when the fetch started, so a result
+    /// can't touch an entry made after its own was lost.
+    task_keys: HashMap<Id, (InfoHash, SocketAddr, u64)>,
     recent: HashSet<InfoHash>,
     recent_order: VecDeque<InfoHash>,
     /// Streaming peers: when keys not yet fetched got their first batch,
@@ -1728,7 +1747,9 @@ impl Pool {
     /// budget (the task settled its reservation as it finished).
     fn joined(&mut self, id: Id, result: Result<Fetched, FailureKind>, waited_out: bool) {
         match self.task_keys.remove(&id) {
-            Some((key, peer)) => self.on_result(key, peer, result, waited_out),
+            Some((key, peer, generation)) => {
+                self.on_result(key, peer, generation, result, waited_out);
+            }
             None => {
                 if let Ok(fetched) = &result {
                     self.budget.release_held(weigh(fetched));
@@ -2035,7 +2056,7 @@ impl Pool {
     /// Gives the places freed since the last call to the peers waiting
     /// for them.
     fn promote_freed(&mut self) {
-        if self.vouched.freed.is_empty() {
+        if self.vouched.freed.is_empty() && self.vouched.freed_networks.is_empty() {
             return;
         }
         let mut freed = std::mem::take(&mut self.vouched.freed);
@@ -2044,16 +2065,39 @@ impl Pool {
         for address in freed {
             self.promote(address);
         }
+        // A network's free places go to the lines with a waiter passed
+        // over for it, in turn from the one after the last served, for as
+        // long as the network has room.
+        let mut networks = std::mem::take(&mut self.vouched.freed_networks);
+        networks.sort_unstable();
+        networks.dedup();
+        for network in networks {
+            let v = &self.vouched;
+            let from = v.last_woken.filter(|a| a.network() == network);
+            let lines = v.blocked.range(network..=network.last()).copied();
+            let (mut after, mut before): (Vec<Net>, Vec<Net>) =
+                lines.partition(|a| from.is_none_or(|from| *a > from));
+            after.append(&mut before);
+            for address in after {
+                if !self.vouched.networks.has_room(network) {
+                    break;
+                }
+                self.promote(address);
+                self.vouched.last_woken = Some(address);
+            }
+        }
     }
 
     /// Gives `address`'s free places to its waiters, first come first
     /// served. A waiter that also needs a place in a full network is
     /// passed over, and keeps its turn; one whose key can't use the peer
-    /// any more stops waiting.
+    /// any more stops waiting. At most [`MAX_PASSED_OVER`] are passed
+    /// over at a time, so a place nobody can take costs a bounded look.
     fn promote(&mut self, address: Net) {
         let (cap, per_ip) = (self.cfg.max_peers_per_key, self.cfg.per_ip);
         let mut passed = Vec::new();
-        while self.vouched.addresses.has_room(address) {
+        let mut blocked = false;
+        while self.vouched.addresses.has_room(address) && passed.len() < MAX_PASSED_OVER {
             let Some(ticket) = self.vouched.waits.pop(address) else {
                 break;
             };
@@ -2078,7 +2122,10 @@ impl Pool {
                     self.vouched.waits.promoted(&ticket);
                     self.gained(ticket.key);
                 }
-                Err(Full::Network) => passed.push(ticket),
+                Err(Full::Network) => {
+                    blocked = true;
+                    passed.push(ticket);
+                }
                 Err(Full::Address) => {
                     passed.push(ticket);
                     break;
@@ -2086,6 +2133,12 @@ impl Pool {
             }
         }
         self.vouched.waits.put_back(address, passed);
+        // Woken again when its network has a place.
+        if blocked {
+            self.vouched.blocked.insert(address);
+        } else {
+            self.vouched.blocked.remove(&address);
+        }
     }
 
     /// An accepted streaming request holds this key's lookup (CR-1a-S).
@@ -2852,7 +2905,7 @@ impl Pool {
         loop {
             self.promote_freed();
             self.dispatch_round();
-            if self.vouched.freed.is_empty() {
+            if self.vouched.freed.is_empty() && self.vouched.freed_networks.is_empty() {
                 break;
             }
         }
@@ -2935,6 +2988,7 @@ impl Pool {
             e.state = State::Fetching;
             e.fetch_started = true;
             e.generation = next_generation(&mut self.generations);
+            let generation = e.generation;
             if let Some(at) = self.first_batch.remove(&key) {
                 let ms = Instant::now().duration_since(at).as_millis();
                 self.stats
@@ -2957,7 +3011,7 @@ impl Pool {
                 let waited_out = result.is_err() && reservation.waited_out();
                 (result, waited_out)
             });
-            self.task_keys.insert(handle.id(), (key, peer));
+            self.task_keys.insert(handle.id(), (key, peer, generation));
         }
         if full && !self.full {
             self.stats.held_full.fetch_add(1, Ordering::Relaxed);
@@ -3049,6 +3103,7 @@ impl Pool {
         &mut self,
         key: InfoHash,
         peer: SocketAddr,
+        generation: u64,
         result: Result<Fetched, FailureKind>,
         waited_out: bool,
     ) {
@@ -3059,8 +3114,14 @@ impl Pool {
             }
         }
         let weight = result.as_ref().map_or(0, weigh);
-        let Some(e) = self.entries.get_mut(&key) else {
-            // Abandoned (a purge): its bytes go with it.
+        // Abandoned: its key was purged, or lost and found again since (the
+        // entry there now is another's, with its own peers and places).
+        // Its bytes go with it.
+        let Some(e) = self
+            .entries
+            .get_mut(&key)
+            .filter(|e| e.state == State::Fetching && e.generation == generation)
+        else {
             self.budget.release_held(weight);
             return;
         };
@@ -3140,16 +3201,14 @@ impl Pool {
             Err(kind) => {
                 self.stats.failures[failure_index(kind)].fetch_add(1, Ordering::Relaxed);
                 e.last_failure = Some(kind);
-                if e.state == State::Fetching {
-                    // The fetch is over, and the peer it tried holds no
-                    // place from here.
-                    if self.limit_addresses && !e.private {
-                        let from = e.tried.saturating_sub(1);
-                        self.vouched
-                            .give_back_dropped(&e.peers[from..], &e.peers[e.tried..]);
-                    }
-                    e.state = State::Backoff;
+                // The fetch is over, and the peer it tried holds no place
+                // from here.
+                if self.limit_addresses && !e.private {
+                    let from = e.tried.saturating_sub(1);
+                    self.vouched
+                        .give_back_dropped(&e.peers[from..], &e.peers[e.tried..]);
                 }
+                e.state = State::Backoff;
                 if kind == FailureKind::Oversize {
                     // A property of the torrent, not the peer.
                     self.lose(key, Loss::Oversize);
@@ -4248,8 +4307,10 @@ mod vouch {
             assert!(w.park(key(n), at, false));
         }
         assert!(w.park(key(4), at, true) && w.park(key(5), at, true));
-        // Parking the same peer again changes nothing.
+        // Parking the same peer again, or another port of its address,
+        // changes nothing.
         assert!(w.park(key(2), at, false));
+        assert!(w.park(key(2), a("203.0.113.1:9"), false));
         assert_eq!(w.live, 5);
         assert_eq!(line(w, address), [4, 5, 1, 2, 3].map(key));
         // A key asked for later joins the asked keys, behind them.
@@ -4365,8 +4426,8 @@ mod vouch {
     }
 
     /// A place given back is noted for the address's line, and a
-    /// network's place for every line in the network; nothing is noted
-    /// where nobody waits.
+    /// network's place once a waiter has been passed over for a network;
+    /// nothing is noted where nobody waits.
     #[test]
     fn a_freed_place_is_noted_for_its_waiters() {
         let mut v = places(1, 2, 8, 8);
@@ -4382,14 +4443,14 @@ mod vouch {
         assert!(v.waits.park(key(1), p(1), false));
         assert!(v.waits.park(key(2), p(3), false));
         assert!(v.waits.park(key(3), other, false));
-        // The key at .2 leaves: its address has no line, but its network
-        // place frees, which the lines at .1 and .3 may be waiting on.
+        // The key at .2 leaves: its address has no line, and no waiter
+        // has been passed over for a network.
         v.give_back(&[p(2)]);
-        assert_eq!(v.freed, [address(1), address(3)]);
-        v.freed.clear();
+        assert!(v.freed.is_empty() && v.freed_networks.is_empty());
+        // With one passed over, a network's place is noted too.
+        v.blocked.insert(address(3));
         v.give_back(&[p(1)]);
-        v.freed.sort_unstable();
-        v.freed.dedup();
-        assert_eq!(v.freed, [address(1), address(3)]);
+        assert_eq!(v.freed, [address(1)]);
+        assert_eq!(v.freed_networks, [address(1).network()]);
     }
 }

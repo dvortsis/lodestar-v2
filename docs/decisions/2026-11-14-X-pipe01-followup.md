@@ -9,7 +9,8 @@ A follow-up to X-pipe01-fix (#877, `2026-11-14-X-pipe01-fix.md`), which bounded 
 - **A peer past its address's limit waits for a place** instead of being dropped. The key is still taken, with its other peers or with none, and looked up as before. The peer it was found with is kept in a wait list for that address.
 - **First come, first served.** When a place frees at an address, the peer that has waited longest there is added to its key, and the key is ready to fetch from it. A place freed in a step goes to a waiter before any key that arrives in the same step.
 - **A key a user asked for waits ahead of the others,** whether it was asked for before it waited or while it did. Asked keys are served in the order they came.
-- **A waiter that also needs a place in a full network is passed over** and keeps its turn. It is tried again whenever a place frees at its address or in its network.
+- **A waiter that also needs a place in a full network is passed over** and keeps its turn. It is tried again whenever a place frees at its address or in its network. When a network's place frees, the lines with a waiter passed over for it are served in turn. At most 16 waiters are passed over when one place is given away (`MAX_PASSED_OVER`), so a place nobody can take costs a bounded look.
+- **A key takes one turn at an address,** whichever of its ports it was found with first.
 - **The wait lists are bounded** (`wait_caps`, `MAX_WAITS_PER_KEY`):
   - per address: 8 times the address's limit, so at most 2,048;
   - in all: a quarter of the queue;
@@ -25,8 +26,10 @@ A follow-up to X-pipe01-fix (#877, `2026-11-14-X-pipe01-fix.md`), which bounded 
   - A quarter of the queue keeps the lists' memory small beside the queue's own (below).
   - Four addresses a key: a key rarely has peers at more full addresses than that, and one key can't take a turn in many lists.
 - **A full list turns the newest arrival away.** That key goes without the peer, as every key past the limit did before this change, and may wait at its next sighting or lookup if there is room then. The keys already waiting keep their turns. Reason: a waiter's turn then comes within the number of turnovers ahead of it when it joined, whatever arrives later. Pushing out the oldest would let later arrivals take turns away from keys that had waited longest.
+- **What that leaves:** forged peer claims against one address can keep that address's list full, and an honest key that arrives meanwhile is turned away. It tries again at each lookup, and waits once the list has room. The delay is bounded: a tried peer holds no place (above), so the keys with forged claims turn over at fetch speed, and the list drains as fast as the address answers.
 - **A key a user asked for is not turned away for a key nobody asked for:** at a full list it takes the place of the newest waiter that wasn't asked for. If every waiter there was asked for, it is turned away too.
 - **A waiting key that has used its lookups is not given up while its address keeps giving places.** Before, a key out of attempts with no peer ended as `no_peers`. Now, if it waits in a list, it rests for its usual back-off and is asked again: it is kept if any list it waits in has given a place since the last time, and given up if none has. It makes no more lookups meanwhile.
+- **A waiter passed over for its network is kept like any other waiter** while its line gives places, even if they go to the keys behind it. It is bounded by the wait bounds, and by the queue (next).
 - **A waiting key holds no place.** With no other peer it is a key without one: it gives way to newer keys when the queue is full, as before.
 - **A key that leaves the pool stops waiting.** A key that turns private (its public source was dropped) gets the peers it waited with at once: a private key's peers are never limited.
 - **Only public keys in a pool with a peer finder wait,** as only they are limited (#877).
@@ -34,8 +37,15 @@ A follow-up to X-pipe01-fix (#877, `2026-11-14-X-pipe01-fix.md`), which bounded 
 - **No new counters or metrics.** `docs/metrics.md` is unchanged.
 
 ## What it costs
-- **Memory:** a few hundred bytes at most for each waiting peer, so at the very most about 25 MB if the default queue's whole bound of 50,000 were waiting, and nothing where no address is full. A key that leaves frees its waits at once; the turn it leaves behind in a line is skipped, and cleared out before such turns outnumber the waiters. No field was added to an entry, so `diagnostic_entry_storage_is_bounded` holds as before.
-- **Time:** giving a freed place away looks at the waiters ahead of the one that takes it, which are only those passed over for their network.
+- **Memory:** about 180 bytes for each waiting peer as a rule (a 64-byte turn in its line, 48 bytes with its key, and the key's map entry), and under 500 with every list and map at its slackest. Nothing where no address is full.
+
+  | Queue | Waiting at the bound | As a rule | At the slackest |
+  |---|---|---|---|
+  | 200,000 (the default) | 50,000 | about 9 MB | under 25 MB |
+  | 50,000 | 12,500 | about 2.3 MB | under 6.3 MB |
+
+  A key that leaves frees its waits at once; the turn it leaves behind in a line is skipped, and cleared out before such turns outnumber the waiters. No field was added to an entry, so `diagnostic_entry_storage_is_bounded` holds as before.
+- **Time:** giving a freed place away looks at the waiters ahead of the one that takes it, which are only those passed over for their network, and at most 16 of them.
 - **An address with waiters is fetched from continuously,** within its per-address connection cap, which is unchanged. Before, keys past the limit never dialled it.
 - **A large honest seeder** that is the only peer of more keys than its limit now has the rest wait their turn (up to the bound) instead of ending with no peers.
 
@@ -43,7 +53,9 @@ A follow-up to X-pipe01-fix (#877, `2026-11-14-X-pipe01-fix.md`), which bounded 
 - `crates/sources/tests/pool.rs`:
   - `a_key_waiting_for_a_full_address_is_fetched_in_its_turn`: an address's places are taken by keys whose fetches fail; ten keys whose only peer is there, and twenty more failing keys after them. The ten are fetched in the order they came, with only the keys that were ahead of them tried first, and none is given up, though each used its one lookup while it waited.
   - `a_peer_that_was_tried_holds_no_place`.
-  - `a_full_wait_list_turns_the_newest_away`: 42 keys for a list of 32; the first 32 are fetched in order, and the last ten end with no peers.
+  - `a_full_wait_list_turns_the_newest_away`: more keys than the list holds; the ones that fit are fetched in order, and the rest end with no peers.
+  - `a_key_turned_away_waits_once_the_list_has_room`: a key turned away is found with the same peer by its next lookup, waits behind the others and is fetched after them.
+  - `a_late_result_leaves_a_key_found_again_alone` (below).
   - `the_wait_lists_are_bounded_in_all`.
   - `a_key_a_user_asked_for_waits_at_the_front`.
   - `a_waiting_key_is_given_up_once_its_address_stops_giving_places`.
@@ -54,6 +66,9 @@ A follow-up to X-pipe01-fix (#877, `2026-11-14-X-pipe01-fix.md`), which bounded 
 - **The check in debug builds** (#877) now also compares the wait lists' counts with their contents and bounds, and checks that only public keys in the pool wait, at every snapshot of the queue.
 - **Each new test fails with its part of the change taken out,** except one line: giving freed places to waiters before a newcomer's peers are added. The orders that reach it need a fetch that ran out of time waiting for a reservation, and no test sets that up.
 - The tests run on tokio's paused clock, as the pool's other tests do: their waits are virtual time, not sleeps.
+
+## A fetch's result is its own key's
+- **A result is dropped if its key's entry is not the one the fetch started for.** A fetch isn't stopped when its key is lost, so its result could arrive after the key was found again, and was then applied to the new entry. Places are now worked out from an entry's state and the peers it has tried, so that late result would have left the counts wrong. Each fetch now carries its entry's generation, and a result for another generation only releases its bytes. A late success is dropped too; the key's new fetch goes on.
 
 ## Also in this PR (from the #877 review)
 - `2026-11-14-X-pipe01-fix.md`: the reason given for the `stages.rs` helper was wrong (that pool has no peer finder, so the limits don't apply to it) and is corrected there and in the helper's comment; the NAT64 bullet's bold is closed; the table has a row for a queue of 1,000; one sentence under "What it costs" is smoothed. Its line about a follow-up now names this file.
