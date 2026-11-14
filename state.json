@@ -8593,6 +8593,21 @@
       "id": "typeahead-delete-lag",
       "note": "The title suggestion set rebuilds at most every 60 s, so a deleted torrent title can still be suggested until then; affects every delete path. Runner to decide whether to tighten (\u00a72.26).",
       "at": "2026-11-14T09:58Z"
+    },
+    {
+      "id": "vpn-retest-1114-local-image-nopull",
+      "note": "Re-test after #881: compose accepts a local sha256 image id for a LOCAL_IMAGE_ID run without pulling.",
+      "at": "2026-11-14T09:58Z"
+    },
+    {
+      "id": "vpn-retest-1114-icmp-negative",
+      "note": "Re-test after #881: one run with the new ICMP rule removed by hand; leak test reports fail no_host_icmp_to_endpoint; stop_window_exercised ok on both runs.",
+      "at": "2026-11-14T09:58Z"
+    },
+    {
+      "id": "watcher-midsegment-stale-ns",
+      "note": "Only if the re-test shows a segment starting in a stale namespace after #881: a watcher follow-up. Otherwise the mid-segment gluetun restart voids the segment and the next start recovers.",
+      "at": "2026-11-14T09:58Z"
     }
   ],
   "main_health": [
@@ -9006,6 +9021,12 @@
       "head": "a8aa48c2",
       "status": "delta review MERGE at a8aa48c2 (+2 Important: link-case guide step, supervisor ordering test); small round requested, then runner self-check; flag fchmod-on-upgrade to owner at merge",
       "at": "2026-11-14T09:48Z"
+    },
+    "881": {
+      "slice": "X-gluetun-guard-stop",
+      "head": "83691736",
+      "status": "CI running; security review next; owns widened to the leak-test timeout value in infra/fleet/steps/run.py (900 s)",
+      "at": "2026-11-14T09:58Z"
     }
   },
   "merged_log": [
