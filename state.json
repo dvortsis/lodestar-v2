@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:25Z",
+  "updated_at": "2026-11-14T13:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9101,12 +9101,6 @@
       "at": "2026-11-14T13:09Z",
       "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
     },
-    "882": {
-      "slice": "X-pipe01-followup",
-      "head": "9641c557",
-      "status": "delta review MERGE on 9641c557; merge on green (ubuntu+windows test pending); optionals 1-3 carried into S1-11/S1-14 slice",
-      "at": "2026-11-14T12:48Z"
-    },
     "883": {
       "slice": "X-cmp-supervisor-bind",
       "head": "a0607144",
@@ -9758,7 +9752,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T13:19Z",
+    "updated": "2026-11-14T13:29Z",
     "items": [
       {
         "slot": 1,
@@ -9938,10 +9932,10 @@
       },
       {
         "slot": 33,
-        "slice": "X-pipe01-followup",
+        "slice": "X-fuzz-gaps",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "#882 merging on green; building X-fetch-room-fix locally; 4 test/fix slices ready locally",
+        "doing": "X-fuzz-gaps PR next; building X-fetch-room-fix locally",
         "since": "2026-11-14T09:05Z"
       }
     ]
@@ -10027,7 +10021,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:25Z",
+  "updated": "2026-11-14T13:29Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10674,6 +10668,12 @@
       "slice": "X-sec-S8-01",
       "merged": "9e6cd86f",
       "at": "2026-11-14T10:55Z"
+    },
+    {
+      "pr": 882,
+      "slice": "X-pipe01-followup",
+      "merged": "6f36bc7d",
+      "at": "2026-11-14T13:29Z"
     }
   ],
   "review_sessions": []
