@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T12:39Z",
+  "updated_at": "2026-11-14T12:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8606,7 +8606,7 @@
     },
     {
       "id": "place-s1-11-s1-14",
-      "note": "S1-11 and S1-14 are not in X-pipe01-followup; the runner places them as their own slice.",
+      "note": "Assigned to slot 33 after X-pool-model-test; id + held detail by message then.",
       "at": "2026-11-14T10:24Z"
     },
     {
@@ -8653,6 +8653,21 @@
       "id": "security-index-cmp09",
       "note": "Next runner PR: add CMP-09 (important, companions) to the held-findings index by id, severity, surface only.",
       "at": "2026-11-14T12:32Z"
+    },
+    {
+      "id": "X-pool-model-test",
+      "note": "Slot 33 (approved 2026-11-14): randomised state-machine test for fetch pool places and wait lists; one new file under crates/sources/tests/; after #882, X-cluster06-fix, X-fuzz-gaps. Add slices.yaml entry in next runner PR.",
+      "at": "2026-11-14T12:42Z"
+    },
+    {
+      "id": "878-check7-app-approvals",
+      "note": "Relay to #878 author: first-run checklist check 7 line - the App approvals must never count toward a required review if a ruleset on main ever requires one.",
+      "at": "2026-11-14T12:42Z"
+    },
+    {
+      "id": "slot33-order",
+      "note": "Slot 33 order: #882 -> X-cluster06-fix -> X-fuzz-gaps -> X-pool-model-test -> S1-11/S1-14 slice (id + detail by message) -> X-update01-store01-fix, X-store02-pipe02-fix after #879.",
+      "at": "2026-11-14T12:42Z"
     }
   ],
   "main_health": [
@@ -9980,7 +9995,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T12:39Z",
+  "updated": "2026-11-14T12:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
