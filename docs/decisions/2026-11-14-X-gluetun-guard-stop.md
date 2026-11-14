@@ -32,7 +32,7 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
 - **The leak test takes about two minutes longer** in a normal run: the stop, the window, the start and the health wait.
   - The added worst case is about 7 minutes: stop 60 s, window 75 s, start 60 s, health 120 s, and the interface check's deadline with a probe in flight. A loaded host could push a whole run past 600 s.
   - start-block's inner limit on the leak test is raised from 600 to 900 s, within start-block's own 2,400 s.
-  - The standalone leak-test step's 600 s is in `steps/run.py`, outside this slice. The runner is asked to raise it to 900 s.
+  - The standalone leak-test step's limit in `steps/run.py` is raised from 600 to 900 s too. The runner widened this slice's owns to that one value.
 
 ## Data folder modes
 - **The problem:** Lodestar starts as root with only CHOWN, SETGID and SETUID (compose `cap_drop: ALL`), so root can't override file modes. On every start it opens `/data` to check the owner. A 0700 folder owned by 65532 refuses that on every start after the first: `PUID/PGID: opening /data: Permission denied`.
@@ -67,7 +67,7 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
   - The scripts compare the two containers' namespace inodes (through their main processes) after Lodestar starts.
   - start-block and arm-switch restart Lodestar when they differ, then check again (`network_parent`). At those points Lodestar has just started, so this only catches a gluetun that restarted in the seconds between.
   - The leak test never runs with Lodestar up (it refuses), so it has nothing to restart.
-  - The case the test VM hit, gluetun coming back while a segment runs, is the outage watcher's to handle. That file isn't part of this slice, and it never touches Lodestar today, because an outage already makes the segment invalid. Whether it should restart Lodestar is the runner's call.
+  - The case the test VM hit, gluetun coming back while a segment runs, stays as it is (the runner's decision): the outage watcher never touches Lodestar, because a gluetun restart mid-segment already voids that segment. The next segment's start (arm-switch) is the recovery: it starts Lodestar into gluetun's current namespace and checks it. A follow-up applies only if the re-test shows a segment starting in a stale namespace despite this.
 - **Follow-up (product):** Lodestar in a shared namespace has no way to rejoin a restarted gluetun on its own. Whether the product, the Unraid template or the compose file should restart it is a separate decision.
 
 ## Tests

@@ -41,8 +41,9 @@ STEPS_PATH = "infra/fleet/steps/vm"
 # travel beside it. Every limits.yaml step but renew-vpn (deliver-pia's) is here.
 BUILT = {
     "vm-status": {"files": ("vm-status.sh", "block-lib.sh"), "timeout": 60},
-    "leak-test": {"files": ("leak-test.sh", "block-lib.sh", "compose.yaml"), "timeout": 600},
-    # The leak test (600 s) runs inside it; then the pulls (300 + 120 + 120 s),
+    # The stop window (X-gluetun-guard-stop) adds up to about 7 minutes on a loaded host.
+    "leak-test": {"files": ("leak-test.sh", "block-lib.sh", "compose.yaml"), "timeout": 900},
+    # The leak test (900 s) runs inside it; then the pulls (300 + 120 + 120 s),
     # Lodestar's start (240 s), the proxy (about 200 s), the API wait (180 s),
     # the token (90 s), the collector's start (120 s), and the rest.
     "start-block": {"files": ("start-block.sh", "block-lib.sh", "leak-test.sh", "compose.yaml", "watcher.sh",
