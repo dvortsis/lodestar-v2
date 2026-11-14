@@ -758,7 +758,8 @@ impl Reservation {
             // which are already counted). Such a window never passes that
             // front.
             s.refresh_wait();
-            let during_wait = if let Some(&(_, front_want, front_window)) = s.growth.front() {
+            let front = s.growth.front().copied();
+            if let Some((_, front_want, front_window)) = front {
                 let extra_f = front_want - front_window;
                 let fits_front = large.saturating_add(want).saturating_add(extra_f)
                     <= limit - budget.floor()
@@ -766,11 +767,8 @@ impl Reservation {
                 if !fits_front {
                     return false;
                 }
-                true
-            } else {
-                false
-            };
-            during_wait_admit = during_wait;
+            }
+            during_wait_admit = front.is_some();
             if others > 0 {
                 let need = s.largest_need().max(want_total - want);
                 // Room for the largest proven growth beside the floor, as
