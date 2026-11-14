@@ -770,10 +770,14 @@ impl GuardedClient {
         let (Some(port), Some(host)) = (url.port_or_known_default(), url.host_str()) else {
             return Ok(None);
         };
-        // A name a SOCKS5 proxy resolves never reaches this machine's
-        // loopback.
+        // A name a SOCKS5 proxy resolves is resolved there: only a
+        // `localhost` name is known to mean the proxy's own loopback, which
+        // may be this machine's.
         let literal = literal_ip(url);
         if literal.is_none() && self.remote_dns {
+            if local_name_class(host) == Some(AddrClass::Loopback) && !loopback_gate::allows(port) {
+                return Err(NetError::NotReady);
+            }
             return Ok(None);
         }
         if !loopback_gate::allows(port) {

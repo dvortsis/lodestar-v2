@@ -239,6 +239,10 @@ pub struct Companions {
     /// the child started there is running and was found ready. `None`
     /// when it couldn't be built (logged as `companion_http`).
     pub(crate) http: Option<Arc<CompanionHttp>>,
+    /// The companions' ports and readiness, behind the loopback gate and
+    /// `http`: read by tests.
+    #[cfg(test)]
+    pub(crate) bindings: Arc<Bindings>,
 }
 
 impl Companions {
@@ -311,8 +315,8 @@ async fn start_with(
     // `CompanionHttp`'s own loopback client applies its finer rule instead.
     // Set once per process; a later start in the same process (tests)
     // keeps the first.
-    let gate = Arc::new(ReadyPorts::new(bindings.clone()));
-    let _ = lodestar_integrations::net::set_loopback_gate(gate.clone());
+    reserve_installed(&bindings, &data, catalogue, host);
+    let _ = lodestar_integrations::net::set_loopback_gate(Arc::new(ReadyPorts(bindings.clone())));
     let http = CompanionHttp::new()
         .ok()
         .map(|h| Arc::new(h.with_bindings(bindings.clone())));
@@ -343,7 +347,7 @@ async fn start_with(
     // kills companions an earlier run left behind. Nothing is native in a
     // container (Q17).
     if !host.in_container {
-        match supervise(&folder, routes, http.clone(), bindings).await {
+        match supervise(&folder, routes, http.clone(), bindings.clone()).await {
             Ok((supervised, api)) => wiring.wire(supervised, api),
             Err(code) => lodestar_log::log_event!(
                 INSTALL_FAILED,
@@ -375,30 +379,12 @@ async fn start_with(
     }
     let mut tasks = Vec::new();
     if wiring.supervised.get().is_some() {
-        // Each port held by the gate from now, while its companion waits
-        // its turn, as once it's started.
-        let ports: Vec<(CompanionId, Option<u16>)> = started
-            .into_iter()
-            .map(|id| {
-                let port = loopback_port(catalogue, &id);
-                if let Some(p) = port {
-                    gate.expect(p);
-                }
-                (id, port)
-            })
-            .collect();
         // One at a time, in the background: each waits for its health.
         // A failure is logged by the manager (step `start`).
         let m = manager.clone();
-        let gate = gate.clone();
         tasks.push(tokio::spawn(async move {
-            for (id, port) in ports {
+            for id in started {
                 let _ = m.start(&id).await;
-                // Started, it's the bindings' now; not started, it's no
-                // companion's.
-                if let Some(p) = port {
-                    gate.settle(p);
-                }
             }
         }));
     }
@@ -438,51 +424,43 @@ async fn start_with(
         tasks,
         release: Mutex::new(None),
         http,
+        #[cfg(test)]
+        bindings,
     })
 }
 
 /// The process's loopback gate (X-cmp09-fix-2): a port Lodestar runs a
 /// companion on is allowed only while that companion is ready; every
 /// other port always.
-///
-/// A port whose companion is queued to start at serve is held too, from
-/// before its turn until its start is done.
-struct ReadyPorts {
-    bindings: Arc<Bindings>,
-    expected: std::sync::Mutex<std::collections::HashSet<u16>>,
-}
-
-impl ReadyPorts {
-    fn new(bindings: Arc<Bindings>) -> ReadyPorts {
-        ReadyPorts {
-            bindings,
-            expected: std::sync::Mutex::default(),
-        }
-    }
-
-    fn expected(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<u16>> {
-        self.expected
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// A companion will be started on `port`: held until [`settle`].
-    fn expect(&self, port: u16) {
-        self.expected().insert(port);
-    }
-
-    /// Its start is done: the bindings decide from here.
-    fn settle(&self, port: u16) {
-        self.expected().remove(&port);
-    }
-}
+struct ReadyPorts(Arc<Bindings>);
 
 impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
     fn allow(&self, port: u16) -> bool {
-        if self.bindings.managed(port) {
-            self.bindings.ready(port)
-        } else {
-            !self.expected().contains(&port)
+        !self.0.managed(port) || self.0.ready(port)
+    }
+}
+
+/// At serve, before recovery and before any start: the port of every
+/// catalogue companion with a folder here (installed, or left mid-install
+/// by a crash) is a managed port from now on, not ready, so neither the
+/// gate nor `CompanionHttp` treats it as a hand-run companion's. Only a
+/// start that claims it and is found ready opens it; a failed recovery or
+/// a start that fails first leaves it refused. A folder that can't be read
+/// counts as there. Nothing is native in a container (Q17).
+fn reserve_installed(bindings: &Bindings, data: &Path, catalogue: &Catalogue, host: Host) {
+    if host.in_container {
+        return;
+    }
+    for entry in catalogue.entries() {
+        let there = !matches!(
+            lodestar_companions::layout::Install::existing(data, &entry.id),
+            Ok(None)
+        );
+        if let Some(p) = loopback_port(catalogue, &entry.id).filter(|_| there) {
+            // Claimed and let go at once: managed, held by none, not ready.
+            if bindings.claim(p) {
+                bindings.release(p);
+            }
         }
     }
 }
@@ -3554,7 +3532,7 @@ mod tests {
     fn the_gate_refuses_a_companions_port_until_ready() {
         use lodestar_integrations::net::LoopbackGate;
         let bindings = Arc::new(Bindings::new());
-        let gate = ReadyPorts::new(bindings.clone());
+        let gate = ReadyPorts(bindings.clone());
         assert!(gate.allow(8080));
         let (_tx, rx) = tokio::sync::watch::channel(lodestar_companions::supervise::Status {
             state: lodestar_companions::supervise::State::Running,
@@ -3565,16 +3543,48 @@ mod tests {
         });
         assert!(bindings.hold(8080, rx));
         assert!(!gate.allow(8080) && gate.allow(9696));
-        // A port whose companion waits its turn to start is held too, until
-        // its start is done.
-        gate.expect(9696);
-        assert!(!gate.allow(9696));
-        gate.settle(9696);
-        assert!(gate.allow(9696));
         // The catalogue's ports, as the manager starts them.
         let cat = lodestar_companions::builtin().unwrap();
         let qbt = CompanionId::parse("qbittorrent").unwrap();
         assert_eq!(loopback_port(cat, &qbt), Some(8080));
+    }
+
+    /// X-cmp09-fix-2: an installed companion's port is refused from serve's
+    /// start, whatever its recovery or its start make of it, until a start
+    /// finds it ready; a companion with no folder leaves its port alone.
+    #[tokio::test]
+    async fn an_installed_companions_port_is_refused_until_it_is_ready() {
+        use lodestar_integrations::net::LoopbackGate;
+        let dir = tempfile::tempdir().unwrap();
+        // A folder that isn't a valid install: its recovery fails, and so
+        // would its start.
+        std::fs::create_dir_all(dir.path().join("companions/qbittorrent/9.9.9")).unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        let (q, p) = (
+            loopback_port(cat, &qbt).unwrap(),
+            loopback_port(cat, &prowlarr).unwrap(),
+        );
+        let gate = ReadyPorts(c.bindings.clone());
+        assert!(c.bindings.managed(q) && !c.bindings.ready(q));
+        assert!(!gate.allow(q));
+        // A start that fails leaves it refused.
+        assert!(c.api.manager.start(&qbt).await.is_err());
+        assert!(!gate.allow(q));
+        // No folder: untouched, for a companion you run yourself.
+        assert!(!c.bindings.managed(p) && gate.allow(p));
+        c.shutdown().await;
     }
 
     /// At serve, a native run hands the manager a supervisor, and shutdown

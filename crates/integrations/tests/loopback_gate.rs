@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use lodestar_integrations::BoxFuture;
 use lodestar_integrations::net::{
-    GuardedClient, LoopbackGate, NetError, NetPolicy, Resolve, loopback_gate_is_set, resolve_tcp,
-    set_loopback_gate,
+    GuardedClient, LoopbackGate, NetError, NetPolicy, Resolve, Route, Socks5Route, SocksDns,
+    loopback_gate_is_set, resolve_tcp, set_loopback_gate,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -158,6 +158,31 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
         before,
         "nothing reached it"
     );
+    // Through a SOCKS5 proxy that resolves names: `localhost` is the
+    // proxy's loopback, which may be this machine's, so it's refused too;
+    // any other name is the proxy's to resolve. Refused before the proxy
+    // is ever contacted (nothing listens at its address).
+    let socks = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        TIMEOUT,
+        names.clone(),
+        &Route::Socks5(Socks5Route {
+            proxy: "127.0.0.1:9".parse().unwrap(),
+            dns: SocksDns::Proxy,
+            auth: None,
+        }),
+    )
+    .unwrap();
+    for url in [
+        format!("http://localhost:{p}/"),
+        format!("http://svc.localhost:{p}/"),
+    ] {
+        assert_eq!(get(&socks, &url).await, Err(NetError::NotReady), "{url}");
+    }
+    assert_ne!(
+        get(&socks, &format!("http://svc.test:{p}/")).await,
+        Err(NetError::NotReady)
+    );
     // Raw TCP names and literals alike.
     for host in ["127.0.0.1", "::1", "localhost"] {
         let got = resolve_tcp(&*names, host, p, NetPolicy::download_client()).await;
@@ -190,7 +215,12 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
 fn only_the_companions_client_opts_out_of_the_gate() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut callers = Vec::new();
-    let mut stack = vec![root.join("crates"), root.join("fuzz"), root.join("tools")];
+    let mut stack = vec![
+        root.join("crates"),
+        root.join("fuzz"),
+        root.join("tools"),
+        root.join("bench"),
+    ];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
