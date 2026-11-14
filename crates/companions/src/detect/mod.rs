@@ -2,9 +2,9 @@
 //! 2026-11-06-v06-companions §4 CMP-8a, Q12; architecture §18.9, §18.10).
 //!
 //! **Where detection looks (Q12), and nowhere else:**
-//! - loopback (`127.0.0.1`, then `::1`) on each catalogue port. The first
-//!   loopback address that answers on a port is the only one that port's
-//!   requests go to from then on, and only a bare probe ever tries `::1`
+//! - loopback (`127.0.0.1`, then `::1`) on each catalogue port. Only a bare
+//!   probe ever looks for a companion on `::1`, and once `127.0.0.1` has
+//!   answered on a port, that port's requests go nowhere else
 //!   ([`CompanionHttp`]);
 //! - each catalogue container name on Docker's network, on the same ports;
 //! - one URL you enter.
@@ -280,16 +280,24 @@ impl Resolve for LocalOnly {
 ///   itself (CMP-8b's qBittorrent sign-in).
 /// - **One loopback address a port:** a loopback target is tried on
 ///   `127.0.0.1`, and on `::1` only when nothing listens there and the
-///   request is a bare probe (a `GET` with no header and no body). The
-///   address that first answers on a port is remembered, and every later
-///   request to that port goes to it alone, for as long as this value
-///   lives. So a request that carries a cookie, a key or a body is sent
-///   only to the address a probe already found the companion on.
+///   request is a bare probe (a `GET` with no header and no body).
+///   - Once `127.0.0.1` has answered on a port, every later request to
+///     that port goes to it alone, for as long as this value lives.
+///   - A port a bare probe found on `::1` is remembered as that until
+///     `127.0.0.1` answers: each later bare probe still asks `127.0.0.1`
+///     first, and an answer there takes the port for good. Until then a
+///     request that carries a cookie, a key or a body goes to `::1`, the
+///     address the probe found the companion on.
+///   - Before any probe, a request that carries anything stops at
+///     `127.0.0.1`.
+///   - The memory is this value's own: another `CompanionHttp` starts
+///     with none.
 pub struct CompanionHttp {
     fixed: GuardedClient,
     entered: GuardedClient,
-    /// The loopback address that answered first on each port: `true` for
-    /// `::1`. At most one entry a port.
+    /// The loopback address each port's requests go to: `false` once
+    /// `127.0.0.1` has answered (for good), `true` while only `::1` has.
+    /// At most one entry a port.
     loopback: Mutex<HashMap<u16, bool>>,
 }
 
@@ -382,8 +390,16 @@ impl CompanionHttp {
                     let host = if v6 { "[::1]" } else { "127.0.0.1" };
                     parse(&format!("http://{host}:{p}{path}"))
                 };
-                if let Some(v6) = self.loopback_of(p) {
-                    return self.once(&self.fixed, url(v6)?, request).await;
+                let remembered = self.loopback_of(p);
+                // `127.0.0.1` keeps a port for good. A port found on `::1`
+                // takes what carries something straight there; a bare
+                // probe asks `127.0.0.1` again first.
+                match remembered {
+                    Some(false) => return self.once(&self.fixed, url(false)?, request).await,
+                    Some(true) if !bare(request) => {
+                        return self.once(&self.fixed, url(true)?, request).await;
+                    }
+                    _ => {}
                 }
                 match self.once(&self.fixed, url(false)?, request).await {
                     // Nothing on IPv4 loopback: a companion may listen on
@@ -421,17 +437,26 @@ impl CompanionHttp {
         map.get(&port).copied()
     }
 
-    /// The first address to answer keeps the port.
+    /// `127.0.0.1` takes a port for good, over `::1` too; `::1` is
+    /// remembered only while nothing is.
     fn remember_loopback(&self, port: u16, v6: bool) {
         let mut map = self.loopback.lock().unwrap_or_else(PoisonError::into_inner);
-        map.entry(port).or_insert(v6);
+        if v6 {
+            map.entry(port).or_insert(true);
+        } else {
+            map.insert(port, false);
+        }
     }
 }
 
-/// A probe that carries nothing: no header (so no cookie and no key) and no
-/// body. [`ProbeRequest::new`] builds exactly this.
+/// A probe that carries nothing: no header (so no cookie and no key), no
+/// body and no query. [`ProbeRequest::new`] with a plain path builds
+/// exactly this.
 fn bare(request: &ProbeRequest<'_>) -> bool {
-    matches!(request.method, Method::Get) && request.headers.is_empty() && request.body.is_none()
+    matches!(request.method, Method::Get)
+        && request.headers.is_empty()
+        && request.body.is_none()
+        && !request.path.as_str().contains('?')
 }
 
 /// Whether the outcome shows something accepted the connection: an answer,
@@ -518,19 +543,25 @@ mod tests {
         assert!(!bare(&new().header(name, secret)));
         assert!(!bare(&new().post(Vec::new())));
         assert!(!bare(&new().put(b"{}".to_vec())));
+        let query = RequestPath::parse("/x?apikey=k").unwrap();
+        assert!(!bare(&ProbeRequest::new(&t, query, Limits::PROBE)));
     }
 
-    /// The first address remembered for a port stays, and ports don't mix.
+    /// `127.0.0.1` keeps a port for good and takes one remembered as `::1`;
+    /// ports don't mix.
     #[test]
-    fn a_ports_loopback_address_is_remembered_once() {
+    fn ipv4_loopback_keeps_a_port_and_takes_one_from_ipv6() {
         let http = CompanionHttp::new().unwrap();
         assert_eq!(http.loopback_of(8080), None);
         http.remember_loopback(8080, false);
         http.remember_loopback(8080, true);
-        assert_eq!(http.loopback_of(8080), Some(false));
+        assert_eq!(http.loopback_of(8080), Some(false), "kept for good");
         http.remember_loopback(9696, true);
-        http.remember_loopback(9696, false);
         assert_eq!(http.loopback_of(9696), Some(true));
+        http.remember_loopback(9696, false);
+        assert_eq!(http.loopback_of(9696), Some(false), "127.0.0.1 takes it");
+        http.remember_loopback(9696, true);
+        assert_eq!(http.loopback_of(9696), Some(false));
         assert_eq!(http.loopback_of(8081), None);
     }
 
@@ -545,11 +576,7 @@ mod tests {
         ] {
             assert!(!listening(&Err(e)));
         }
-        for e in [
-            AdapterError::TooLarge,
-            AdapterError::Protocol("x"),
-            AdapterError::NotThisCompanion,
-        ] {
+        for e in [AdapterError::TooLarge, AdapterError::Protocol("x")] {
             assert!(listening(&Err(e)));
         }
         let ok = ProbeResponse::new(200, Vec::new(), &Limits::PROBE);

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -602,17 +603,10 @@ async fn only_a_bare_probe_looks_on_ipv6_loopback() {
     assert_eq!(server.seen().len(), 5);
 }
 
-/// The loopback address that first answers on a port keeps it: once
-/// 127.0.0.1 has answered, nothing for that port goes to ::1, a bare probe
-/// included, whatever is listening there later.
-#[tokio::test]
-async fn the_first_loopback_address_to_answer_keeps_the_port() {
-    let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
-    let path = || RequestPath::parse("/api/v2/app/version").unwrap();
-    // Both loopback addresses on one port: ::1 served for the whole test,
-    // 127.0.0.1 only at first.
-    let other: Handler = Arc::new(|_: &str| reply(200, b"other"));
-    let mut pair = None;
+/// Both loopback addresses of one port, each held from the moment it's
+/// bound: `::1` served by `other`, 127.0.0.1 listening and handed back for
+/// the test to serve. `None` where ::1 can't be bound.
+async fn both_loopbacks(other: Handler) -> Option<(TcpListener, Server)> {
     for _ in 0..64 {
         let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = v4.local_addr().unwrap().port();
@@ -622,15 +616,25 @@ async fn the_first_loopback_address_to_answer_keeps_the_port() {
         });
         match v6 {
             Ok(listener) => {
-                pair = Some((v4, Server::serve(listener, Arc::clone(&other)).unwrap()));
-                break;
+                return Some((v4, Server::serve(listener, Arc::clone(&other)).unwrap()));
             }
             Err(e) if in_use(&e) => continue,
-            Err(e) if no_ipv6(&e) => break,
+            Err(e) if no_ipv6(&e) => return None,
             Err(e) => panic!("listening on [::1]:{port}: {e}"),
         }
     }
-    let Some((v4, v6)) = pair else {
+    panic!("no port free on both 127.0.0.1 and ::1");
+}
+
+/// Once 127.0.0.1 has answered on a port, nothing for that port goes to
+/// ::1, a bare probe included, whatever 127.0.0.1 does with later
+/// connections and whatever is listening on ::1.
+#[tokio::test]
+async fn ipv4_loopback_keeps_the_port_once_it_has_answered() {
+    let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
+    let path = || RequestPath::parse("/api/v2/app/version").unwrap();
+    let other: Handler = Arc::new(|_: &str| reply(200, b"other"));
+    let Some((v4, v6)) = both_loopbacks(other).await else {
         assert!(
             std::env::var_os("CI").is_none(),
             "::1 can't be bound here, so the loopback rule is untested"
@@ -639,56 +643,90 @@ async fn the_first_loopback_address_to_answer_keeps_the_port() {
         return;
     };
     let target = v6.loopback();
+    // 127.0.0.1 answers its first connection, then closes every later one
+    // unanswered. The port stays held throughout.
+    let accepted = Arc::new(AtomicUsize::new(0));
     let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
     let log = Arc::new(Mutex::new(Vec::new()));
-    let accept = {
-        let log = Arc::clone(&log);
+    {
+        let (accepted, log) = (Arc::clone(&accepted), Arc::clone(&log));
         tokio::spawn(async move {
             while let Ok((sock, _)) = v4.accept().await {
-                tokio::spawn(serve(sock, Arc::clone(&first), Arc::clone(&log)));
+                if accepted.fetch_add(1, Ordering::SeqCst) == 0 {
+                    tokio::spawn(serve(sock, Arc::clone(&first), Arc::clone(&log)));
+                } else {
+                    drop(sock);
+                }
             }
-        })
-    };
+        });
+    }
     let client = http();
     let got = client
         .send(ProbeRequest::new(&target, path(), limits()))
         .await
         .unwrap();
     assert_eq!(got.body(), b"first");
-    // 127.0.0.1 stops listening; ::1 still answers anyone who asks it.
-    accept.abort();
-    let _ = accept.await;
-    let stopped = Instant::now() + Duration::from_secs(20);
-    while TcpStream::connect((Ipv4Addr::LOCALHOST, target_port(&target)))
-        .await
-        .is_ok()
-    {
-        assert!(
-            Instant::now() < stopped,
-            "127.0.0.1 never stopped listening"
-        );
-        tokio::task::yield_now().await;
-    }
     for req in [
         ProbeRequest::new(&target, path(), limits()),
         ProbeRequest::new(&target, path(), limits()).post(b"password=x".to_vec()),
     ] {
         let got = client.send(req).await;
-        assert!(
-            matches!(got, Err(AdapterError::Unreachable)),
-            "{:?}",
-            got.map(|r| r.status())
-        );
+        assert!(got.is_err(), "{:?}", got.map(|r| r.status()));
     }
+    assert!(
+        accepted.load(Ordering::SeqCst) >= 3,
+        "each went to 127.0.0.1"
+    );
     assert!(v6.seen().is_empty(), "nothing reached ::1");
-    assert_eq!(log.lock().unwrap().len(), 1);
 }
 
-fn target_port(target: &Target) -> u16 {
-    match target {
-        Target::Loopback(p) => p.get(),
-        other => panic!("a loopback target: {other:?}"),
-    }
+/// A port a bare probe found on ::1 isn't kept there for good: once
+/// 127.0.0.1 listens, the next bare probe finds it, and from then on the
+/// port's requests go to 127.0.0.1 alone.
+#[tokio::test]
+async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
+    let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
+    let path = || RequestPath::parse("/api/v2/app/version").unwrap();
+    let other: Handler = Arc::new(|_: &str| reply(200, b"other"));
+    let Some((v6, v4)) = ipv6_with_ipv4_closed(other).await else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "::1 can't be bound here, so the loopback rule is untested"
+        );
+        eprintln!("::1 unavailable here: the loopback rule wasn't exercised");
+        return;
+    };
+    let target = v6.loopback();
+    let client = http();
+    let carrying = || ProbeRequest::new(&target, path(), limits()).post(b"password=x".to_vec());
+    // Nothing on 127.0.0.1 yet: a bare probe finds ::1, and what carries
+    // something follows it there.
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.body(), b"other");
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"other");
+    assert_eq!(v6.seen().len(), 2);
+    // 127.0.0.1 starts listening, on the socket that held the port all
+    // along. What carries something still goes where the last probe found
+    // the companion; the next bare probe finds 127.0.0.1.
+    let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
+    let v4 = Server::serve(v4.listen(16).unwrap(), first).unwrap();
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"other");
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.body(), b"first");
+    // From here everything goes to 127.0.0.1.
+    assert_eq!(client.send(carrying()).await.unwrap().body(), b"first");
+    let got = client
+        .send(ProbeRequest::new(&target, path(), limits()))
+        .await
+        .unwrap();
+    assert_eq!(got.body(), b"first");
+    assert_eq!((v6.seen().len(), v4.seen().len()), (3, 3));
 }
 
 /// A server on ::1, with 127.0.0.1 held closed on its port, so the probe's
