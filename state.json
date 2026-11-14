@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:19Z",
+  "updated_at": "2026-11-14T13:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8692,9 +8692,14 @@
       "at": "2026-11-14T13:19Z"
     },
     {
-      "id": "X-dht-routing-model-test",
-      "text": "Slot 33 candidate A approved: start after X-fetch-room-fix is built; store slices go first. B (utp) and C (sources admission) not now.",
-      "at": "2026-11-14T13:19Z"
+      "id": "X-fuzz-peer-fetch",
+      "text": "Slot 33: fuzz target for the metadata fetch loop; own small slice after X-fuzz-gaps and after X-fetch-room-fix merges. A/B/C model tests dropped (already covered).",
+      "at": "2026-11-14T13:25Z"
+    },
+    {
+      "id": "X-fetch-room-fix-owner-flags",
+      "text": "At merge: flag the new fetch-pool limits and worker largest-dict change to the owner (\u00a72.19, \u00a72.26); give the known residual by message only.",
+      "at": "2026-11-14T13:25Z"
     }
   ],
   "main_health": [
@@ -10022,7 +10027,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:19Z",
+  "updated": "2026-11-14T13:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
