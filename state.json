@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T13:56Z",
+  "updated_at": "2026-11-14T13:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8644,7 +8644,8 @@
     {
       "id": "X-cmp09-fix",
       "note": "CMP-09, important, companions (held, \u00a75). Own slice in slot 7 after #883 merges; condition of the first managed pin, like CMP-01. Detail by message only.",
-      "at": "2026-11-14T12:32Z"
+      "at": "2026-11-14T13:57Z",
+      "text": " | Briefed to slot 7 after #883 merged; awaiting plan."
     },
     {
       "id": "owner-fyi-cmp09",
@@ -8711,6 +8712,11 @@
       "id": "import-host-booking-1114",
       "text": "Owner go-ahead (given in the X-test-vm coordinator session) for one ext:import-host run: G-import-1M by the coordinator, 10M only if time allows. Runner answered in chat (coordinator reads the transcript). Access path is the owner's to set up; runner never touches the box.",
       "at": "2026-11-14T13:42Z"
+    },
+    {
+      "id": "operator-apply-ping4",
+      "text": "#878 merged (owner confirmed in runner chat). Author runs operator-apply, then drafts ping-4 (plus token presence/length check); runner relays via dashboard.",
+      "at": "2026-11-14T13:57Z"
     }
   ],
   "main_health": [
@@ -9100,23 +9106,12 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "878": {
-      "slice": "X-operator-bash-allow",
-      "head": "15ee6a31",
-      "status": "CI running; merge only after owner confirms the decision directly with the runner"
-    },
     "879": {
       "slice": "X-filter15-fix",
       "head": "9baaf526",
       "status": "delta review CHANGES on 9baaf526 (1 blocking hygiene leftover in bench fixture, 1 important: retry-queue merge could weaken hold strength; 1 optional test); round 4 requested",
       "at": "2026-11-14T13:09Z",
       "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
-    },
-    "883": {
-      "slice": "X-cmp-supervisor-bind",
-      "head": "a0607144",
-      "status": "review CHANGES on a0607144 (1 blocking hold hygiene, 1 important test gap, 4 optional taken); one round, then fresh delta review",
-      "at": "2026-11-14T12:32Z"
     },
     "884": {
       "slice": "X-fuzz-gaps",
@@ -9769,7 +9764,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T13:41Z",
+    "updated": "2026-11-14T13:57Z",
     "items": [
       {
         "slot": 1,
@@ -9803,10 +9798,10 @@
       },
       {
         "slot": 7,
-        "slice": "X-cmp-supervisor-bind",
+        "slice": "X-cmp09-fix",
         "role": "build",
         "agent": "session_01MMjhn8LCZuDPeXwdBzodLH",
-        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #883 X-cmp-supervisor-bind fix round; then X-cmp09-fix",
+        "doing": "X-cmp09-fix plan (briefed by message)",
         "since": "2026-11-14T10:37Z",
         "cap": "kept build (\u00a72.64 4+4)",
         "model": "opus"
@@ -10038,7 +10033,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T13:56Z",
+  "updated": "2026-11-14T13:57Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10691,6 +10686,18 @@
       "slice": "X-pipe01-followup",
       "merged": "6f36bc7d",
       "at": "2026-11-14T13:29Z"
+    },
+    {
+      "pr": 878,
+      "slice": "X-operator-bash-allow",
+      "merged": "d865d9da",
+      "at": "2026-11-14T13:57Z"
+    },
+    {
+      "pr": 883,
+      "slice": "X-cmp-supervisor-bind",
+      "merged": "17c8f30d",
+      "at": "2026-11-14T13:57Z"
     }
   ],
   "review_sessions": []
