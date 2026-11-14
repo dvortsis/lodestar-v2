@@ -21,6 +21,15 @@
 #     bridge forwards out of the host's egress interface, just below the
 #     endpoint block, so only the endpoint's own UDP is left out (and dropped).
 #
+# A third judge runs for the whole test (X-gluetun-guard-stop): a capture on
+# the host's egress interface of any ICMP to the VPN endpoint, which only the
+# host guard's ICMP rule (block-lib.sh) keeps off the wire. It covers the
+# recreates, and a stop window near the end: gluetun stopped while the
+# endpoint still sends the old session (conntrack keeps forwarding it towards
+# the gone container, and the host answers "host unreachable"), then started
+# again (a new gluetun can answer "port unreachable" before its firewall is
+# up). It must read zero.
+#
 # Run as root by the step bootstrap: step.sh <workdir> [stack] [pia-run] [block]
 # (tests and start-block pass the last three). start-block adds a fifth,
 # `held`: it already holds the host guard for its block, so the test checks
@@ -49,6 +58,7 @@ fails=0
 block=""
 guard_rule=()   # the recreate guard (DOCKER-USER), once the endpoint is known
 host_rule=()    # the host's own guard (INPUT, block-lib.sh), once the endpoint is known
+icmp_rule=()    # and its ICMP rule (mangle POSTROUTING)
 guard_set=""
 guard_held=""
 released_bad=""
@@ -56,7 +66,14 @@ host_set=""
 counter=""
 flow=""
 FLOW=lodestar-leak-flow
+DRIVE=lodestar-leak-drive
+# The stop window's traffic: a slow download through the tunnel, so the far
+# side keeps sending (and resending) through the stop.
+DRIVE_URL=https://speed.cloudflare.com/__down?bytes=200000000
 cap_pid=""
+host_cap_pid=""
+in_cap_pid=""
+drive=""
 not_run=""
 
 pass() { echo "ok $1"; }
@@ -72,6 +89,9 @@ finish() {
 cleanup() {
   trap '' HUP INT TERM  # a second signal must not cut the release short
   [[ -n $cap_pid ]] && kill "$cap_pid" 2>/dev/null
+  [[ -n $host_cap_pid ]] && kill "$host_cap_pid" 2>/dev/null
+  [[ -n $in_cap_pid ]] && kill "$in_cap_pid" 2>/dev/null
+  [[ -n $drive ]] && timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
   # The endpoint block never outlives the test, whatever ended it.
   [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
   # A failed delete in a phase can leave a counter behind; remove every copy.
@@ -90,7 +110,10 @@ release_guards() {  # remove both guards, every copy; fails when one won't come 
     if drop_all DOCKER-USER "${guard_rule[@]}"; then guard_set=""; else rc=1; fi
   fi
   if [[ -n $host_set ]]; then
-    if drop_all INPUT "${host_rule[@]}"; then host_set=""; else rc=1; fi
+    local both=0  # both rules are tried, whatever the first does
+    drop_all INPUT "${host_rule[@]}" || both=1
+    drop_all_t "$ICMP_TABLE" "$ICMP_CHAIN" "${icmp_rule[@]}" || both=1
+    if ((both == 0)); then host_set=""; else rc=1; fi
   fi
   return "$rc"
 }
@@ -318,6 +341,80 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
   probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53' >/dev/null 2>&1  # the capture judges it
 }
 iface_up() { probe sh -c 'ip -o link show up dev "$1" | grep -q .' iface "$iface"; }
+# iface_seen_up: iface_up, read by a probe that really ran. Under load a probe
+# container can take a long time to start; one that never ran its command is
+# tried again until IFACE_WAIT seconds (at least 10) have passed, and is never
+# taken as a verdict. Past the deadline it's still NOT_RUN, which fails.
+iface_seen_up() {
+  local wait=${IFACE_WAIT:-120} until rc saved=$not_run
+  [[ $wait =~ ^[0-9]{1,5}$ ]] && ((wait >= 10)) || wait=10
+  until=$((SECONDS + wait))
+  while :; do
+    not_run=""
+    iface_up >/dev/null 2>&1; rc=$?
+    if ((rc != NOT_RUN)); then not_run=$saved; return "$rc"; fi
+    if ((SECONDS >= until)); then not_run=1; return "$NOT_RUN"; fi
+    sleep 1
+  done
+}
+# The host-side ICMP judge: a capture on the host's egress interface of any
+# ICMP to the endpoint, from before the first recreate to the end of the stop
+# window. PCAP_COUNT (python3 -I) prints its packet count; exit 2 when the file
+# isn't a readable pcap, which is never read as zero.
+PCAP_COUNT='
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+magics = {b"\xd4\xc3\xb2\xa1": "<", b"\xa1\xb2\xc3\xd4": ">", b"\x4d\x3c\xb2\xa1": "<", b"\xa1\xb2\x3c\x4d": ">"}
+if len(data) < 24 or data[:4] not in magics:
+    sys.exit(2)
+e, off, n = magics[data[:4]], 24, 0
+while off < len(data):
+    if off + 16 > len(data):
+        sys.exit(2)
+    off += 16 + struct.unpack(e + "I", data[off + 8:off + 12])[0]
+    n += 1
+if off != len(data):
+    sys.exit(2)
+print(n)
+'
+start_host_capture() {  # fails when the capture isn't writing within 10 s
+  tcpdump -i "$host_egress" -n -U -w "$work/cap-host.pcap" "icmp and dst host $ep_ip" >/dev/null 2>&1 &
+  host_cap_pid=$!
+  for ((i = 0; i < 20; i++)); do [[ -s $work/cap-host.pcap ]] && return 0; sleep 0.5; done
+  return 1
+}
+# The stop window's precondition: the endpoint really kept sending the old
+# session to the host while gluetun was stopped. Without that, nothing could
+# have drawn the leak, so the window proves nothing and fails.
+start_inbound_capture() {
+  tcpdump -i "$host_egress" -n -U -w "$work/cap-inbound.pcap" \
+    "udp and src host $ep_ip and src port $ep_port" >/dev/null 2>&1 &
+  in_cap_pid=$!
+  for ((i = 0; i < 20; i++)); do [[ -s $work/cap-inbound.pcap ]] && return 0; sleep 0.5; done
+  return 1
+}
+judge_inbound_capture() {
+  local n=""
+  kill -0 "$in_cap_pid" 2>/dev/null || n=dead
+  kill "$in_cap_pid" 2>/dev/null; wait "$in_cap_pid" 2>/dev/null; in_cap_pid=""
+  if [[ -n $n ]]; then bad stop_window_exercised; return; fi
+  n=$(timeout 30 python3 -I -c "$PCAP_COUNT" "$work/cap-inbound.pcap" 2>/dev/null)
+  [[ $n =~ ^[0-9]{1,9}$ ]] && echo "count stop_window_endpoint_packets $n"
+  if [[ $n =~ ^[0-9]{1,9}$ ]] && ((n > 0)); then pass stop_window_exercised; else bad stop_window_exercised; fi
+}
+judge_host_capture() {
+  local alive="" n=""
+  if kill -0 "$host_cap_pid" 2>/dev/null; then alive=1; pass capture_alive_host; else bad capture_alive_host; fi
+  kill "$host_cap_pid" 2>/dev/null; wait "$host_cap_pid" 2>/dev/null; host_cap_pid=""
+  if n=$(timeout 30 python3 -I -c "$PCAP_COUNT" "$work/cap-host.pcap" 2>/dev/null) && [[ $n =~ ^[0-9]{1,9}$ ]]; then
+    pass capture_read_host
+    echo "count host_icmp_to_endpoint $n"
+  else
+    n=""
+    bad capture_read_host
+  fi
+  if [[ -n $alive && $n == 0 ]]; then pass no_host_icmp_to_endpoint; else bad no_host_icmp_to_endpoint; fi
+}
 
 # Inputs. The endpoint is read from the root-only wg0.conf and validated; it
 # never leaves this VM.
@@ -351,13 +448,18 @@ clear_tagged DOCKER-USER lodestar-leak-guard || { bad recreate_guard_lifted; fin
 if [[ -n $HOST_HELD ]]; then
   # start-block's guard for its block, for this same endpoint: checked, never
   # duplicated, and left in place when the test ends.
-  iptables -C INPUT "${host_rule[@]}" 2>/dev/null || { bad host_guarded; finish; }
+  host_guard_held || { bad host_guarded; finish; }
 else
   # On its own, the test holds its own copy for its run. Leftovers (a killed
   # run's, an earlier endpoint's) come out once the new copy is in.
   host_set=1  # before the insert: a signal in between still has cleanup look for it
   host_guard_hold || { bad host_guarded; finish; }
 fi
+# The host's egress interface towards the endpoint, for the host-side ICMP judge.
+IFNAME='^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,14}$'
+host_egress=$(ip -4 route get "$ep_ip" 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p' | head -n 1)
+[[ $host_egress =~ $IFNAME ]] || { bad host_egress_found; finish; }
+start_host_capture || bad capture_ready_host
 tunnel_up || { bad tunnel_started; finish; }
 wait_healthy; up=$?
 unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so
@@ -438,7 +540,6 @@ cmac=$(docker exec gluetun cat /sys/class/net/eth0/address 2>/dev/null | tr -d '
 # The compose bridge (the veth's master) and the host's egress interface.
 bridge=$(ip -o link show dev "$veth" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p' | head -n 1)
 egress=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p' | head -n 1)
-IFNAME='^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,14}$'
 if [[ ! $bridge =~ $IFNAME || ! $egress =~ $IFNAME || $bridge == "$egress" ]]; then bad egress_found; finish; fi
 pass egress_found
 block="-d $ep_ip/32 -p udp --dport $ep_port -j DROP"
@@ -462,7 +563,7 @@ check vpn_interface_down probe_in --cap-add NET_ADMIN -- ip link set dev "$iface
 down_probes ifdown example.edu
 # gluetun's own VPN restart could bring the interface back mid-phase: fail
 # closed unless it's still down (or gone) after the last probe.
-refute vpn_interface_stayed_down iface_up
+refute vpn_interface_stayed_down iface_seen_up
 judge_capture ifdown
 judge_counter ifdown
 # The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules
@@ -482,6 +583,56 @@ elif tunnel_up && wait_healthy && [[ -n $exit_ip && $(echo_ip 15) == "$exit_ip" 
 else
   bad tunnel_recovers
 fi
+
+# The stop window: gluetun stopped while the endpoint still sends the old
+# session, as an operator's `docker stop` or a crash would, then started again
+# (not recreated: the recreate guard isn't there, as it wouldn't be then).
+# STOP_WINDOW is an observation window, not a wait for anything: the leftover
+# session's packets kept coming for up to a minute after a stop. The host-side
+# capture judges both, and the tunnel must come back.
+# A slow download runs through the stop, so the far side keeps sending; a
+# capture of the endpoint's packets to the host shows it did.
+stopped=""
+# At least 60 s, whatever STOP_WINDOW says: the leak ran to 58 s after a stop.
+win=${STOP_WINDOW:-75}
+[[ $win =~ ^[0-9]{1,4}$ ]] && ((win >= 60)) || win=60
+timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
+if timeout 60 docker run -d --rm --name "$DRIVE" --network container:gluetun --cap-drop ALL "$PROBE_IMAGE" \
+  curl -s -o /dev/null --limit-rate 64k --max-time 600 "$DRIVE_URL" >/dev/null 2>&1; then
+  drive=1
+fi
+if timeout 60 docker stop -t 10 gluetun >/dev/null 2>&1; then stopped=1; pass gluetun_stopped; else bad gluetun_stopped; fi
+# Counted only from after the stop: the download's own packets before it
+# don't show that the endpoint kept sending to a stopped gluetun.
+if [[ -n $stopped ]]; then
+  start_inbound_capture || bad capture_ready_inbound
+  sleep "$win"  # the observation window: a fixed length is the point here
+fi
+if [[ -z $stopped ]]; then
+  :  # no window
+elif [[ -n $no_handshake ]]; then
+  kill "$in_cap_pid" 2>/dev/null; wait "$in_cap_pid" 2>/dev/null; in_cap_pid=""
+  echo "skip stop_window_exercised"  # no session, so nothing to leave over
+else
+  judge_inbound_capture
+fi
+if [[ -n $drive ]] && timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1; then drive=""; fi
+if [[ -z $stopped ]]; then
+  :  # already failed; a gluetun that wouldn't stop isn't started again
+elif ! timeout 60 docker start gluetun >/dev/null 2>&1; then
+  bad gluetun_started
+elif [[ -n $no_handshake ]]; then
+  pass gluetun_started; echo "skip tunnel_back_after_stop"
+elif wait_healthy; then
+  pass gluetun_started; pass tunnel_back_after_stop
+else
+  pass gluetun_started; bad tunnel_back_after_stop
+fi
+if [[ -n $stopped ]]; then  # a started gluetun loaded its post-rules again
+  check post_rules_after_start_ipv4 post_rules_on iptables "$iface"
+  check post_rules_after_start_ipv6 post_rules_on ip6tables "$iface"
+fi
+judge_host_capture
 
 # The host's own IPv6 (0d's separate check): the host doesn't route IPv6, the
 # stack's Docker network has none, and gluetun's namespace holds no global

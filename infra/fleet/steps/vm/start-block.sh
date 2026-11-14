@@ -15,7 +15,8 @@
 # 3. The boot guard (block-lib.sh boot_guard_install), then the durable block
 #    marker, before Lodestar or a collector starts.
 # 4. Stage the tools from the rules commit, start Lodestar on the screen's image
-#    (by digest), accept the Legal Notice version the rules name and set a
+#    (by registry digest; a test run may name a locally built image by its
+#    image ID instead, LOCAL_IMAGE_ID, never pulled), accept the Legal Notice version the rules name and set a
 #    random admin password (it stays in a root-only file here), then start
 #    segment 1's collector and the outage watcher.
 # Output is fixed names only. Run as root by the step bootstrap:
@@ -36,9 +37,11 @@ fail() {
 }
 
 # The arguments, already checked by the control side; checked again here.
+# Only the arguments' image pin counts, never one from the environment.
+unset IMAGE_DIGEST LOCAL_IMAGE_ID
 while IFS='=' read -r k v; do
   case $k in
-    IMAGE_DIGEST) [[ $v =~ ^[0-9a-f]{64}$ ]] ;;
+    IMAGE_DIGEST | LOCAL_IMAGE_ID) [[ $v =~ ^[0-9a-f]{64}$ ]] ;;
     LODESTAR_COMMIT | SPEC_COMMIT | RULES_COMMIT) [[ $v =~ ^[0-9a-f]{40}$ ]] ;;
     TREATMENT) [[ $v =~ ^(adm|utp|route)$ ]] ;;
     SEGMENT_HOURS) [[ $v =~ ^[23]$ ]] ;;
@@ -49,9 +52,11 @@ while IFS='=' read -r k v; do
   esac || fail args_valid
   printf -v "$k" '%s' "$v"
 done <"$work/args"
-for k in IMAGE_DIGEST LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT_HOURS ROLE NOTICE_VERSION BLOCK_ID; do
+for k in LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT_HOURS ROLE NOTICE_VERSION BLOCK_ID; do
   [[ -n ${!k:-} ]] || fail args_valid
 done
+# Exactly one image pin: the registry digest (the default) or a local image ID.
+[[ -n ${IMAGE_DIGEST:-} && -z ${LOCAL_IMAGE_ID:-} || -z ${IMAGE_DIGEST:-} && -n ${LOCAL_IMAGE_ID:-} ]] || fail args_valid
 echo "ok args_valid"
 for tool in docker systemctl iptables flock; do
   command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_${tool//-/_}"
@@ -79,7 +84,7 @@ endpoint_read "$STACK/secrets/wg0.conf" || fail endpoint_valid
 host_guard_rule
 host_guard_hold || fail host_guarded
 echo "ok host_guarded"
-out=$(timeout 600 bash "$work/leak-test.sh" "$work" "$STACK" "$PIA_RUN" "$BLOCK" held); rc=$?
+out=$(timeout 900 bash "$work/leak-test.sh" "$work" "$STACK" "$PIA_RUN" "$BLOCK" held); rc=$?
 printf '%s\n' "$out"
 [[ $rc -eq 0 && $(printf '%s\n' "$out" | tail -n 1) == "ok leak_test" ]] || fail leak_test_passed
 echo "ok leak_test_passed"
@@ -88,6 +93,7 @@ echo "ok leak_test_passed"
 # A past block's directory (its evidence) is kept beside the new one, never wiped.
 if [[ -d $BLOCK ]]; then mv -- "$BLOCK" "$BLOCK.$(date -u +%Y%m%dT%H%M%SZ)" || fail block_dir; fi
 mkdir -m 0700 -- "$BLOCK" || fail block_dir
+: >"$BLOCK/guard-icmp" || fail block_dir  # this block holds the guard's ICMP rule (block-lib.sh guard_resume)
 # The boot guard (X-gluetun-guard-reboot), before the marker: from the moment
 # a block is recorded, a reboot holds the host guard before Docker starts.
 # Failing here leaves no marker, so the next start-block sets this one aside.
@@ -96,8 +102,8 @@ echo "ok boot_guard_installed"
 printf 'block=%s\nsegment=1\nstate=starting\n' "$BLOCK_ID" | marker_write || fail marker_written
 echo "ok marker_written"
 {
-  for k in IMAGE_DIGEST LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT_HOURS ROLE; do
-    printf '%s=%s\n' "$k" "${!k}"
+  for k in IMAGE_DIGEST LOCAL_IMAGE_ID LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT_HOURS ROLE; do
+    if [[ -n ${!k:-} ]]; then printf '%s=%s\n' "$k" "${!k}"; fi
   done
 } >"$BLOCK/block.env" && load_block_env || fail block_env
 
@@ -108,13 +114,13 @@ mkdir -m 0700 -p -- "$BLOCK/tools/linux" "$BLOCK/evidence" "$BLOCK/witness" \
   && install -m 0600 -- "$work/scrub.py" "$BLOCK/tools/scrub.py" \
   && install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || fail tools_staged
 for n in 1 2 3 4; do timeout 60 docker rm "lodestar-collector-$n" >/dev/null 2>&1; done  # a past block's, stopped
-rm -rf -- "$STACK/data" "$STACK/witness" && mkdir -m 0700 -- "$STACK/data" "$STACK/witness" || fail fresh_data
-timeout 300 docker pull "$LODESTAR_REPO@sha256:$IMAGE_DIGEST" >/dev/null 2>&1 || fail lodestar_image
+data_dirs_ready fresh || fail fresh_data
+lodestar_image_ready || fail lodestar_image
 timeout 120 docker pull "$COLLECTOR_IMAGE" >/dev/null 2>&1 || fail collector_image
 timeout 120 docker pull "$PROXY_IMAGE" >/dev/null 2>&1 || fail proxy_image
 started=1
 start_lodestar 1 fresh || fail lodestar_started
-network_parent_ok || fail network_parent
+{ network_parent_ok && lodestar_follows_gluetun; } || fail network_parent
 start_proxy || fail docker_proxy
 wait_api || fail api_up
 echo "ok lodestar_started"
