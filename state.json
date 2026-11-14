@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-13T23:57Z",
+  "updated_at": "2026-11-14T00:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4411,7 +4411,16 @@
     "main_red": "2026-10-24T01:25Z main web size red since #139 (Compare 28.06>28) -> runner #160 (31 KB, measured+10%). macOS tests/supervisor failed on 004e710 (#156 merge): 7 tests 'no child started (after 120 s)' - watching 54c7dd2 run | 2026-10-24T01:35Z #160 merged f3b9d23 (web size fixed)",
     "csp_test": "2026-10-23T21:53Z runner PR #153: CSP test expected 2 inline scripts, boot-nav made 3 (only with real web/build; prod CSP derived, unaffected) | 2026-10-23T22:47Z #153 merged 21cff90"
   },
-  "registered_sessions": {},
+  "registered_sessions": {
+    "session_01MMjhnBh7zpNQt1KJTfEEZk": {
+      "session": "session_01MMjhnBh7zpNQt1KJTfEEZk",
+      "title": "Security review checklist",
+      "role": "read-only security reviewer (owner-started, desktop app)",
+      "scope": "owner steps 1-5: Track Q fix re-read, operator injection design review before check 8, filter fixes review, parsers, riskiest PRs",
+      "reports": "held detail to runner by message only",
+      "at": "2026-11-14T00:11Z"
+    }
+  },
   "landing_lane": null,
   "landing_order_web": [
     "S-compare",
@@ -8143,6 +8152,11 @@
       "id": "ci-filter-docs-runs-rust",
       "note": "#854 (docs + one runner/dashboard.yaml line) ran the full Rust matrix (~55 min Windows); check the CI change filter for docs/decisions, docs/operations, runner/ paths",
       "at": "2026-11-13T23:57Z"
+    },
+    {
+      "id": "operator-check8-after-design-review",
+      "note": "do not run first-run check 8 (injection) until the security review session reports on the operator design (owner step 2)",
+      "at": "2026-11-14T00:11Z"
     }
   ],
   "main_health": [
@@ -9183,7 +9197,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-13T23:57Z",
+    "updated": "2026-11-14T00:11Z",
     "items": [
       {
         "slot": 1,
@@ -9444,7 +9458,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-13T23:57Z",
+  "updated": "2026-11-14T00:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
