@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:31Z",
+  "updated_at": "2026-11-14T00:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8213,6 +8213,12 @@
       "id": "placement-x-flake-companions-loopback",
       "note": "next runner PR: X-flake-companions-loopback (#847) has no runner/dashboard.yaml placement line; add it with the slices.yaml entry",
       "at": "2026-11-14T00:29Z"
+    },
+    {
+      "id": "X-rejudge-pending-gate",
+      "note": "filter: a pending-re-judge flag honoured by every output gate (search, export, Torznab, feeds/alerts, detail, discover, collections). Held until the owner answers the re-judge visibility-window question; #857 ships the prioritised pass without hiding (runner call, flag to owner per 2.19)",
+      "status": "held: owner question",
+      "at": "2026-11-14T00:32Z"
     }
   ],
   "main_health": [
@@ -9267,7 +9273,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:31Z",
+    "updated": "2026-11-14T00:32Z",
     "items": [
       {
         "slot": 1,
@@ -9528,7 +9534,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:31Z",
+  "updated": "2026-11-14T00:32Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
