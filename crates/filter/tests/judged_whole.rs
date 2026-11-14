@@ -497,7 +497,7 @@ fn the_repos_corpora_are_judged_whole() {
             files: &ex.files,
             content_type: ex.content_type.unwrap_or(ContentType::Other),
         };
-        held += usize::from(read_cost(&it).is_none());
+        held += usize::from(too_large(&it));
     }
     let golden =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../release-parser/tests/golden");
@@ -513,14 +513,15 @@ fn the_repos_corpora_are_judged_whole() {
             .filter(|l| !l.is_empty() && !l.starts_with([' ', '#']))
         {
             names += 1;
-            held += usize::from(read_cost(&item(name, &[])).is_none());
+            held += usize::from(too_large(&item(name, &[])));
         }
     }
     println!(
         "held: {held} of {} pack-corpus torrents and {names} release names",
         examples.len()
     );
-    assert!(examples.len() > 100 && names > 100, "the corpora were read");
+    // Every example was read: a corpus that grows changes these.
+    assert_eq!((examples.len(), names), (198, 317));
     assert_eq!(held, 0);
 }
 
@@ -561,32 +562,25 @@ fn a_stored_exception_to_a_locked_rule_is_skipped() {
     );
 }
 
-/// An engine given an exception to a locked rule directly, past both
-/// validation and loading, still doesn't apply it; the same exception to
-/// a rule that isn't locked does.
+/// An exception set on an engine directly, past validation and loading,
+/// applies to a rule that isn't locked: the control for the engine's own
+/// locked-rule guard, which is tested in `engine.rs` (no public judgment
+/// reaches it, since every one holds an over-budget torrent first).
 #[test]
-fn an_engine_applies_no_exception_to_a_locked_rule() {
-    let to = |rule| {
-        let mut e = Engine::new(core());
-        e.exceptions.push(Exception {
-            id: 1,
-            rule: RuleRef::Core(rule),
-            what: Match::Hashes(vec![H]),
-        });
-        e
-    };
-    let files = too_many_files();
-    assert_eq!(
-        judge(&to(CoreRule::Cs0a), "Title", &files),
-        Some(RuleRef::Core(CoreRule::Cs0a))
-    );
+fn an_engine_applies_an_exception_to_a_rule_that_isnt_locked() {
     let pair = [file("rolea lexa")];
     assert_eq!(
         judge(&Engine::new(core()), "Title", &pair),
         Some(RuleRef::Core(CoreRule::Cs4a))
     );
+    let mut e = Engine::new(core());
+    e.exceptions.push(Exception {
+        id: 1,
+        rule: RuleRef::Core(CoreRule::Cs4a),
+        what: Match::Hashes(vec![H]),
+    });
     assert_ne!(
-        judge(&to(CoreRule::Cs4a), "Title", &pair),
+        judge(&e, "Title", &pair),
         Some(RuleRef::Core(CoreRule::Cs4a))
     );
 }

@@ -130,6 +130,41 @@ pub fn reclassify_row(
     }
 }
 
+/// What today's core makes of stored torrent `row` (§20.5), judged as
+/// ingest judges it: on detection's own classification, so a Not adult
+/// correction or rule never takes it out of the Adult-only core checks,
+/// and as Adult too where your correction, your rules or an always-adult
+/// source make it adult (`also_adult` for the first and last), the
+/// stricter verdict kept. The decision is applied when it holds the
+/// torrent back, whatever rule decided, or when it's the core's: the
+/// packs' and your rules' marks have their own re-evaluation (§20.3).
+/// With it, whether the hold is an adult hold (as [`Reclassified`]'s).
+pub fn rejudge_core(
+    row: &TorrentRow,
+    files: &[FileInfo],
+    also_adult: bool,
+    engine: &Engine,
+    now: i64,
+) -> Option<(Decision, bool)> {
+    let (_, class) = enrich_corrected(&row.name, files, Correction::default());
+    let hashes = row_hashes(row);
+    let item = Item {
+        hashes: &hashes,
+        name: &row.name,
+        files,
+        content_type: class.content_type,
+    };
+    let facts = facts(row, &class, now);
+    let (v, _) = engine.judge_classified_with(&item, Some(&facts), now, also_adult, None);
+    let d = v.decision.filter(|d| {
+        matches!(d.action, Action::Drop | Action::Quarantine) || matches!(d.rule, RuleRef::Core(_))
+    })?;
+    // Held only because it was read as adult, which detection didn't say.
+    let relabelled = class.content_type != ContentType::Adult;
+    let held_as_adult = relabelled && adult_hold(&d);
+    Some((d, held_as_adult))
+}
+
 /// Whether holding a torrent relabelled adult on decision `d` is an adult
 /// hold: one by the Adult-only core, which only checks it because it's
 /// adult. Any other rule would hold it as not adult too.

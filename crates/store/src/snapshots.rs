@@ -1351,15 +1351,18 @@ fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> 
 }
 
 /// How strong a tombstone or quarantine hold under `rule` is, in SQL with
-/// the adult mark as `?4` (`?1`–`?3` are still bound but unused): the
-/// locked floor's own rules first, then a worker's floor report (so a
-/// carry never renames a local floor row to one, which WK-13's purge
-/// could later delete), then an adult hold (the one filtering can't
-/// rebuild, see `Store::purge_filter`), then any other.
+/// the adult mark as `?4` (`?1`–`?3` are still bound but unused): a kept
+/// hold first ([`KEPT_RULES`](crate::KEPT_RULES), which only its own
+/// release lifts, so no carry replaces it with a hold a release by rule
+/// could free), then the locked floor's own rules, then a worker's floor
+/// report (so a carry never renames a local floor row to one, which
+/// WK-13's purge could later delete), then an adult hold (the one
+/// filtering can't rebuild, see `Store::purge_filter`), then any other.
 fn hold_rank(rule: &str) -> String {
     format!(
-        "CASE WHEN {} THEN 3 WHEN {} THEN 2 \
+        "CASE WHEN {} THEN 4 WHEN {} THEN 3 WHEN {} THEN 2 \
          WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END",
+        crate::filter::kept_hold_sql(rule),
         crate::filter::local_floor_sql(rule),
         crate::filter::worker_floor_sql(rule)
     )
@@ -2027,6 +2030,37 @@ mod tests {
                 assert!(rows.is_empty(), "v{live_version}");
             }
         }
+    }
+
+    /// A rollback's merge never replaces a kept hold with another, even a
+    /// later adult one, whichever side holds it: only the kept hold's own
+    /// release lifts it, and a release by rule could free the other.
+    #[test]
+    fn a_rollback_keeps_a_kept_hold_over_any_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _db) = live(dir.path());
+        let [kept] = crate::KEPT_RULES;
+        let c = store.connection();
+        // In the store: a kept hold the copy has a later adult one for,
+        // and a later adult hold over the copy's kept one.
+        quarantine(c, [30; 20], kept, b"kept-live", T + 400 * DAY);
+        quarantine(c, [31; 20], "U-1+adult", b"adult-live", T + 400 * DAY);
+        let copy = dir.path().join("kept.tmp");
+        let conn = fixture(&copy, Plan::KNOWN_THROUGH);
+        quarantine(&conn, [30; 20], "U-1+adult", b"adult-copy", T + 500 * DAY);
+        quarantine(
+            &conn,
+            [31; 20],
+            &format!("{kept}+adult"),
+            b"kept-copy",
+            T + 300 * DAY,
+        );
+        drop(conn);
+        purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
+        assert_eq!(
+            rows(&copy, "SELECT hash, rule FROM quarantine ORDER BY hash"),
+            [format!("h30 {kept}"), format!("h31 {kept}+adult")]
+        );
     }
 
     /// Every table's rows, for comparing a copy's holds.

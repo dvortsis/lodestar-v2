@@ -539,10 +539,17 @@ const ADULT_WINDOW: u32 = 12;
 /// characters, and how much each costs the first time). A torrent past it
 /// is held as too large to judge (CS-0a); every torrent within it is read
 /// whole. The core's time to judge one at the budget, whatever its
-/// text, is held under 15 ms on the reference runner, with 2-12 ms
+/// text, is held under 15 ms on the reference runner, with 2–12 ms
 /// measured across every input shape (`budget_worst_case` in
 /// `tests/props.rs`).
 pub const BUDGET: u64 = 9_000_000;
+
+/// The core's version: what a stored torrent was judged by. It goes up
+/// whenever a change to the core could judge a stored torrent differently,
+/// so the store re-judges every torrent judged by an older one (§20.5).
+/// 1 is the core before it read torrents whole within [`BUDGET`]; a store
+/// that records none was judged by that one.
+pub const CORE_VERSION: i64 = 2;
 
 /// The most files a torrent within the budget can have: each costs some
 /// of it, however short its path. Every file of a torrent the core judges

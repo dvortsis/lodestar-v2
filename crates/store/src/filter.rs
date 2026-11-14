@@ -104,6 +104,63 @@ pub(crate) fn kept_hold_sql(col: &str) -> String {
     )
 }
 
+/// The core version the stored torrents were all judged by (the filter's
+/// `CORE_VERSION`), once a re-judge finishes. A store without it was
+/// judged by version 1.
+pub const CORE_JUDGED_KEY: &str = "filter.core.judged";
+/// A core re-judge under way: the version it judges by...
+pub const CORE_PASS_KEY: &str = "filter.core.pass";
+/// ...and the last torrent id it finished, so a restart resumes there.
+pub const CORE_AFTER_KEY: &str = "filter.core.after";
+
+impl Store {
+    /// Where a core re-judge to `version` resumes: after this torrent id
+    /// (0 to start), or `None` when the store was already judged by
+    /// `version` or a newer one (a downgrade judges nothing again).
+    pub fn core_rejudge_due(&self, version: i64) -> Result<Option<i64>> {
+        if self.setting_i64(CORE_JUDGED_KEY)?.unwrap_or(1) >= version {
+            return Ok(None);
+        }
+        Ok(Some(match self.setting_i64(CORE_PASS_KEY)? {
+            Some(v) if v == version => self.setting_i64(CORE_AFTER_KEY)?.unwrap_or(0),
+            // Another version's pass, or none: from the start.
+            _ => 0,
+        }))
+    }
+
+    /// Records that a core re-judge to `version` finished every torrent up
+    /// to id `after`.
+    pub fn set_core_rejudge_after(&mut self, version: i64, after: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        for (key, value) in [(CORE_PASS_KEY, version), (CORE_AFTER_KEY, after)] {
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that every stored torrent was judged by `version`: the
+    /// marker only rises, and the pass's cursor goes.
+    pub fn finish_core_rejudge(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = max(value, excluded.value)",
+            params![CORE_JUDGED_KEY, version],
+        )?;
+        tx.execute(
+            "DELETE FROM settings WHERE key IN (?1, ?2)",
+            params![CORE_PASS_KEY, CORE_AFTER_KEY],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 /// Whether a stored rule is one of [`KEPT_RULES`], with or without a
 /// suffix: [`kept_hold_sql`] in Rust. Only [`Store::release`] lifts such a
 /// hold, never a release by rule or a batch.
@@ -244,10 +301,17 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
         local_floor_sql("?2"),
         worker_floor_sql("rule")
     ))?;
-    let mut quarantine = tx.prepare_cached(
+    // A later quarantine replaces an earlier one, except over a kept hold
+    // (`KEPT_RULES`), which only another kept hold takes over: otherwise a
+    // weaker rule there could later be released by rule and free the hash.
+    let mut quarantine = tx.prepare_cached(&format!(
         "INSERT OR REPLACE INTO quarantine (hash, rule, sealed, at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE {} OR NOT EXISTS (
+             SELECT 1 FROM quarantine WHERE hash = ?1 AND {}
+         )",
+        kept_hold_sql("?2"),
+        kept_hold_sql("rule")
+    ))?;
     for f in filtered {
         let Some(first) = f.hashes.first() else {
             continue;
@@ -1131,6 +1195,47 @@ mod tests {
         }
     }
 
+    /// A later quarantine never replaces a kept hold unless it's kept too;
+    /// it replaces any other, as before.
+    #[test]
+    fn a_later_quarantine_leaves_a_kept_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        let f = |rule, at, adult_hold| Filtered {
+            hashes: &[[1; 20]],
+            rule,
+            action: 4,
+            held: Some(Held::Quarantine),
+            sealed: None,
+            evidence: &[],
+            at,
+            expires_at: at + 10,
+            adult_hold,
+        };
+        let rule = |s: &Store| -> (String, i64) {
+            s.conn
+                .query_row(
+                    "SELECT rule, at FROM quarantine WHERE hash = ?1",
+                    [&[1u8; 20][..]],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        let put = |s: &mut Store, row: Filtered<'_>| {
+            let tx = s.conn.transaction().unwrap();
+            write(&tx, &[row]).unwrap();
+            tx.commit().unwrap();
+        };
+        put(&mut s, f("U-1", 10, false));
+        put(&mut s, f(kept, 20, false));
+        assert_eq!(rule(&s), (kept.to_owned(), 20), "a kept hold takes over");
+        put(&mut s, f("U-1", 30, true));
+        put(&mut s, f("CS-3", 40, false));
+        assert_eq!(rule(&s), (kept.to_owned(), 20), "and nothing else does");
+        put(&mut s, f(kept, 50, true));
+        assert_eq!(rule(&s), (format!("{kept}+adult"), 50), "but a kept one");
+    }
+
     /// The adult-hold mark is a suffix on the stored rule id; reads strip
     /// it. Pinned because no migration records it (§20.7).
     #[test]
@@ -1311,9 +1416,9 @@ mod tests {
     fn a_release_of_a_rules_hashes_leaves_a_kept_hold() {
         let mut s = with_kept_holds("L-1");
         let [kept] = KEPT_RULES;
-        for rule in [kept, "CS-0a+adult"] {
+        for rule in [kept.to_owned(), format!("{kept}+adult")] {
             assert_eq!(
-                s.release_rule_hashes(rule, &KEPT_AND_OTHER, |_| {})
+                s.release_rule_hashes(&rule, &KEPT_AND_OTHER, |_| {})
                     .unwrap(),
                 0
             );
@@ -1360,6 +1465,11 @@ mod tests {
         for rule in [
             "CS-0a",
             "CS-0a+adult",
+            "CS-0a+",
+            "xCS-0a",
+            "CS-0a ",
+            "CS-0a\u{00e9}",
+            "CS-0a+\u{00e9}",
             "CS-0ab",
             "CS-0",
             "cs-0a",

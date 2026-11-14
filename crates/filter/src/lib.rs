@@ -37,8 +37,8 @@ pub mod strictness;
 mod work;
 
 pub use crate::core::{
-    Action, BUDGET, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked,
-    MAX_FILES, Origin, Switches, read_cost, too_large,
+    Action, BUDGET, CORE_VERSION, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item,
+    Lists, Locked, MAX_FILES, Origin, Switches, read_cost, too_large,
 };
 pub use engine::{Decision, Engine, Handle, ListLayer, RuleRef, Trail, Verdict};
 pub use hash::{TermSet, TermSetError, term_hash};

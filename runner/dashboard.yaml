@@ -728,6 +728,7 @@ placement:
   - X-fixed-sleep-asserts
   - X-rusqlite-041
   - X-filter01-fix
+  - X-filter01-rejudge
   - X-filter03-fix
   - X-apifeat01-fix
 unplaced_workstream: ws-small

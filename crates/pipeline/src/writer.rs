@@ -141,6 +141,8 @@ pub(crate) struct Writer {
     pub health: Option<HealthHandle>,
     /// The import-candidate refile sweep.
     pub candidates: CandidateSweep,
+    /// The core re-judge of stored torrents after a core change.
+    pub core_rejudge: CoreSweep,
     /// The unverified-item and claims refile sweep (SRC-2).
     pub sweep: unverified::Sweep,
     /// The verification cursor (`sources.verify_unverified`).
@@ -238,6 +240,23 @@ pub(crate) struct CandidateSweep {
 }
 
 impl CandidateSweep {
+    /// Has a batch to judge now.
+    fn ready(&self) -> bool {
+        !self.done && self.backoff.ready()
+    }
+}
+
+/// The core re-judge's progress this run ([`crate::core_rejudge`]): its
+/// place is in the store, so a restart resumes it there.
+#[derive(Debug, Default)]
+pub(crate) struct CoreSweep {
+    /// Nothing is left to judge again: done, or judged already.
+    pub done: bool,
+    /// The wait after a store error.
+    pub backoff: Backoff,
+}
+
+impl CoreSweep {
     /// Has a batch to judge now.
     fn ready(&self) -> bool {
         !self.done && self.backoff.ready()
@@ -408,6 +427,7 @@ impl Writer {
                 // fair share between ingest batches.
                 () = std::future::ready(()), if self.backfill_ready() => self.backfill().await,
                 () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
+                () = std::future::ready(()), if self.core_rejudge.ready() => self.rejudge_core().await,
                 () = std::future::ready(()), if self.sweep.ready() => self.refile_unverified().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
@@ -416,6 +436,7 @@ impl Writer {
                     }
                     self.note_engine();
                     self.candidates.backoff.retry_due(unix_now());
+                    self.core_rejudge.backoff.retry_due(unix_now());
                     self.sweep.backoff.retry_due(unix_now());
                     self.backfill_backoff.retry_due(unix_now());
                     self.verify(&io.retry).await;
@@ -1783,6 +1804,63 @@ impl Writer {
         }
     }
 
+    /// Judges the next batch of stored torrents again by today's core, if
+    /// the store was judged by an older one ([`crate::core_rejudge`]).
+    /// What it holds is marked for intake before the write, as the
+    /// backfill's holds are.
+    async fn rejudge_core(&mut self) {
+        let store = self.store.take().expect("store");
+        let filter = self.filter.clone();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        let adult = self.adult;
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let ctx = crate::enrich::Backfill {
+                filter: Some(&filter),
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+                adult,
+            };
+            let pending = std::cell::RefCell::new(None);
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
+            };
+            let result = crate::core_rejudge::rejudge_stored(
+                &mut store,
+                &filter,
+                CORE_REJUDGE_BATCH,
+                &ctx,
+                &mark,
+            );
+            // Committed, rejected or failed: the store says which hold.
+            hold_committed(&store, pending.into_inner(), false);
+            (store, result)
+        })
+        .await
+        .expect("core rejudge task");
+        self.store = Some(store);
+        match result {
+            // The rules changed under the batch: the same batch again.
+            Ok(Some(_)) => self.core_rejudge.backoff.succeeded(),
+            Ok(None) => {
+                self.core_rejudge.done = true;
+                self.core_rejudge.backoff.succeeded();
+            }
+            Err(e) => {
+                // The same batch again after a backoff; the error carries
+                // no name.
+                self.core_rejudge.backoff.failed(unix_now());
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
     /// Rebuilds the have-filter at twice the size from the store.
     async fn rebuild_have(&mut self) {
         let store = self.store.take().expect("store");
@@ -2301,6 +2379,9 @@ const BACKFILL_BATCH: usize = 256;
 
 /// Import candidates judged per refile step: one short transaction each.
 const REFILE_BATCH: usize = 512;
+/// Stored torrents the core re-judge judges per batch: each is read whole
+/// within the core's budget, so a batch stays a short step.
+const CORE_REJUDGE_BATCH: usize = 256;
 /// The wait after a sweep's first store error in a row, doubling after
 /// each further one up to the cap (seconds).
 const RETRY_FIRST: i64 = 5;
@@ -2800,6 +2881,10 @@ mod tests {
             health: None,
             candidates: Default::default(),
             // Off unless a test starts it.
+            core_rejudge: CoreSweep {
+                done: true,
+                ..Default::default()
+            },
             sweep: unverified::Sweep {
                 done: true,
                 ..Default::default()
@@ -3146,6 +3231,57 @@ mod tests {
         e.load_class_rules(&[]);
         assert_eq!(rejudge(&e, &mut r, 0, 1000).decision, None);
         assert_eq!((r.fix, stored_type(&r)), (None, detected));
+    }
+
+    /// The writer runs the core re-judge to its end: a stored torrent
+    /// today's core holds is held, intake refuses its hash, and the store
+    /// is marked as judged by today's core.
+    #[tokio::test]
+    async fn the_writer_rejudges_stored_torrents_by_a_newer_core() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"name".to_vec(),
+                    OwnedValue::Bytes(b"rolea lexa.mp4".to_vec()),
+                ),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = Info::parse(&raw).unwrap();
+        let id = store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.core_rejudge.done = false;
+        let mut steps = 0;
+        while w.core_rejudge.ready() {
+            w.rejudge_core().await;
+            steps += 1;
+            assert!(steps < 10, "the re-judge ends");
+        }
+        let hash = info.primary_hash().0;
+        assert!(w.held.contains(&hash));
+        let store = w.store.as_ref().unwrap();
+        assert!(store.torrent(id).unwrap().is_none());
+        assert_eq!(
+            store.setting_i64(lodestar_store::CORE_JUDGED_KEY).unwrap(),
+            Some(lodestar_filter::CORE_VERSION)
+        );
     }
 
     /// The writer's sweep holds back a waiting import candidate the core
