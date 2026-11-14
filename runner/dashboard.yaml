@@ -329,6 +329,7 @@ placement:
   match:
   - X-ui-guards
   - X-offline-retry
+  - X-offline-retry-nits
   - W*
   - C0
   - C1
@@ -432,6 +433,7 @@ placement:
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
+  - X-operator-hardening
   - X-op4-polish
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
@@ -441,10 +443,12 @@ placement:
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
   - X-companions-loopback-nits
+  - X-worker-839-followups
   - X-svc-eventcreate-bounded
   - X-win-fs-followups
   - X-flake-portable-restart-3
   - X-flake-scrape-udp-port
+  - X-flake-companions-loopback
   - X-restart-banner-polish
   - X-restart-save-lag
   - X-win-upd-history-polish
@@ -730,8 +734,17 @@ placement:
   - X-fixed-sleep-asserts
   - X-rusqlite-041
   - X-filter01-fix
+  - X-filter01-rejudge
   - X-filter03-fix
   - X-apifeat01-fix
+  - X-filter01-hardening
+  - X-rejudge-pending-gate
+  - X-filter15-fix
+  - X-filter13-fix
+  - X-filter12-fix
+  - X-fixed-sleep-nits
+  - X-cluster06-fix
+  - X-metainfo01-fix
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -747,6 +760,7 @@ pinned:
   i9-stage2: ws-small
   openapi-example-size: ws-small
 held:
+- X-rejudge-pending-gate  # runner 2026-11-14: launches only if the owner asks for the held-until-re-judged gate (§2.19 flag on X-filter01-rejudge)
 - PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
 - E-v06-sources
@@ -1496,6 +1510,11 @@ roadmap:
     - X-filter01-fix
     - X-apifeat01-fix
     - X-filter03-fix
+    - X-filter15-fix
+    - X-filter13-fix
+    - X-filter12-fix
+    - X-metainfo01-fix
+    - X-cluster06-fix
   arrows:
   - - soak
     - gluetun
@@ -1624,6 +1643,21 @@ owner_queue:
   type: action
   action: Set the repository variables `OWNER_USER_ID` (your numeric GitHub ID) and `OPERATOR_STOP=false` so operator-apply can run (§2.67)
   unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
+  when: Any time
+- n: 25
+  type: decision
+  action: 'PR #632 (your branch, the PIA bridge): a security read found no blocking flaw, but it cannot merge as it stands: it conflicts with the fleet setup on main, carries older copies of main''s control-plane files and has no CI run (the runner has the detail). The runner recommends splitting it into four PRs: take main''s control-plane files; the helper, compose and cloud-init once the sudo model is settled; the manual bridge script, tests and PowerShell verbs; the docs. Also yours: whether the new vpn-* PowerShell verbs need a typed confirmation phrase like Deploy.ps1 has'
+  unblocks: The PIA bridge on main
+  when: When you next work on #632
+- n: 26
+  type: decision
+  action: 'Operator first-run check 8 (the injection test): run it now, or wait for X-operator-hardening, which fixes four important findings in the operator channel and the test corpus first. The runner recommends waiting: a corpus change costs nothing before the first run, and each rerun draws on the same $50'
+  unblocks: Check 8 and the operator going live
+  when: Before check 8
+- n: 27
+  type: review
+  action: 'Runner call you may want to veto (§2.19): when the child-safety core changes, stored torrents are re-judged in the background and stay visible until the re-judge reaches them, so some may become held after they were shown (X-filter01-rejudge). A gate that hides them until re-judged is planned as X-rejudge-pending-gate and launches only if you ask'
+  unblocks: Nothing; this goes ahead unless you object
   when: Any time
 
 gates:
