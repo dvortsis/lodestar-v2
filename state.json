@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:41Z",
+  "updated_at": "2026-11-14T01:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9373,7 +9373,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:41Z",
+    "updated": "2026-11-14T01:45Z",
     "items": [
       {
         "slot": 1,
@@ -9555,11 +9555,11 @@
       },
       {
         "slot": 33,
-        "slice": "X-rollback-scrub-fix",
+        "slice": "X-dht01-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "X-rollback-scrub-fix started 01:23Z (PRs from its own branch, no stewards). Owner 2026-11-14 ~01:20Z: builds Track Q fixes outside filter. Queue: X-rollback-scrub-fix, X-dht01-fix, X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-cluster06-fix (after #856). Verifies+briefs FILTER-02 (X-filter02-fix, filter queue) and SRC-02 (owner decision pending). Early M8-SEC-1/-8 first pass; fuzz gaps. PRs from its own branch, runner reviews.",
-        "since": "2026-11-14T01:18Z"
+        "doing": "X-dht01-fix built first (dht node only); PR from its own branch next. X-rollback-scrub-fix waits on #857 (store snapshot module). Queue after: X-search01-fix, X-pipe01-fix, X-writer-panic-fix, X-cmp01-fix, X-cluster06-fix (after #856).",
+        "since": "2026-11-14T01:45Z"
       }
     ]
   },
@@ -9644,7 +9644,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:41Z",
+  "updated": "2026-11-14T01:45Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
