@@ -1192,7 +1192,7 @@ class SessionCheck(unittest.TestCase):
 
         def answer(path):
             out = plain(path)
-            if "&status=completed&per_page=1&" in path:
+            if "&status=completed&per_page=1&" in path and MONTH in path:  # only the in-flight window
                 return dict(out, total_count=out["total_count"] + 1)  # more completed than all runs
             return out
         self.assertEqual(self.check(answer), tripwire.SESSION_UNKNOWN)

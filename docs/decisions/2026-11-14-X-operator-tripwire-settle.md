@@ -30,10 +30,12 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 - **A run that just settled:** an in-flight list whose copy of a run already shows it completed and skipped passes over that run, and the counts decide. Before, it made a mismatch that could never count as settling.
 
 ## No session outside the window (the runner's call)
-- **A wake whose run is too old refuses to start a session.** `wake.py` reads its own run's creation time with the job's token (`actions: read`, which it already holds). It refuses when the run is older than `COMPLETED_EXTRA_MINUTES` minus `WAKE_JOB_MINUTES`, that is 72 hours less 45 minutes.
+- **A wake whose run is too old refuses to start a session.** `wake.py` reads its own run's creation time with the job's token (`actions: read`, which it already holds). It refuses when the run is older than `WAKE_RUN_MAX_AGE_MINUTES`: `COMPLETED_EXTRA_MINUTES` less `WAKE_JOB_MINUTES` less `WAKE_AGE_MARGIN_MINUTES`, that is 72 hours less 45 minutes less 15.
+  - **Why the margin:** the 15 minutes cover the setup before the check, a cancellation's overrun and clock skew between the runner and GitHub.
+  - **Where it runs:** before the lock, so a refused run holds nothing, and so before the token, the vault write and the session.
   - **What the refusal does:** it posts the usual escalation, "no session started: the instruction was approved too late …; post it again", and starts no session. The runner posts the instruction again.
   - **Fail closed:** a creation time that can't be read refuses too.
-  - **Why this closes it:** a session ends within the wake job's 45 minutes. Every sweep whose lookback reaches that end reads completed runs from `LOOKBACK_MINUTES` + `COMPLETED_EXTRA_MINUTES` back, so it finds the run.
+  - **Why this closes it:** a session ends within the wake job's 45 minutes. Every sweep whose lookback reaches that end reads completed runs from `LOOKBACK_MINUTES` + `COMPLETED_EXTRA_MINUTES` back, so it finds the run with the margin to spare.
   - **In sync by construction:** `tripwire.wake_run_too_old` holds the cut-off, and `wake.py` calls it, so the two can't drift apart. A test checks the boundary against the window, and `test_workflows` pins the wake job's timeout to `WAKE_JOB_MINUTES`.
 - **This closes the late-approval residual,** which failed open. The runner decided to close it rather than ask the owner to accept it. It makes the check stricter: an instruction approved more than about 72 hours late is refused instead of run. The runner flags it to the owner (`docs/owner-decisions.md` §2.19).
 - **The same holds for a late approval completing during the check.** Its run can't be older than the window, so the completed list finds it.

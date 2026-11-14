@@ -356,6 +356,16 @@ def cmd_wake(env, deps=None) -> int:
     gh_post = deps.get("channel_transport")
     now = deps.get("clock", lambda: datetime.now(timezone.utc))
     mono, sleep = deps.get("monotonic", time.monotonic), deps.get("sleep", time.sleep)
+    if gh_post is None:  # pragma: no cover - network
+        from comments import urllib_transport  # noqa: PLC0415
+        gh_post = urllib_transport(env["GITHUB_TOKEN"])
+    # A run approved so late that a later sweep's window can't see it starts no session,
+    # before anything is held: the tripwire must be able to find every session
+    # (tripwire.wake_run_too_old).
+    if tripwire.wake_run_too_old(_run_created(env, gh_post), now()):
+        escalate(env, msg.id, "no session started: the instruction was approved too late for the "
+                 "tripwire to see its session; post it again", gh_post)
+        return 0
     try:  # nothing is held yet; a failure here still gets an answer
         bridge.require(env, WAKE_SETTINGS)
         run_id = f"{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
@@ -372,20 +382,11 @@ def cmd_wake(env, deps=None) -> int:
     if not acquired:
         post(env, f"busy, retry (instruction {msg.id})", gh_post)
         return 0
-    if gh_post is None:  # pragma: no cover - network
-        from comments import urllib_transport  # noqa: PLC0415
-        gh_post = urllib_transport(env["GITHUB_TOKEN"])
     token = cred = sid = None
     try:
         ids, etag = bridge.read_claude_lock(store)
         if ids is None:
             escalate(env, msg.id, "the agent isn't applied yet (run operator-apply.yml)", gh_post)
-            return 0
-        # A run approved so late that a later sweep's window can't see it starts no session:
-        # the tripwire must be able to find every session (tripwire.wake_run_too_old).
-        if tripwire.wake_run_too_old(_run_created(env, gh_post), now()):
-            escalate(env, msg.id, "no session started: the instruction was approved too late for the "
-                     "tripwire to see its session; post it again", gh_post)
             return 0
         sessions = pages(call, "/v1/sessions", {"include_archived": "true"})
         for old in stale_sessions(sessions):

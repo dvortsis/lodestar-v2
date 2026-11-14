@@ -345,7 +345,7 @@ class Wake(unittest.TestCase):
 
     def test_a_run_approved_too_late_starts_no_session(self):
         import tripwire
-        limit = timedelta(minutes=tripwire.COMPLETED_EXTRA_MINUTES - tripwire.WAKE_JOB_MINUTES)
+        limit = timedelta(minutes=tripwire.WAKE_RUN_MAX_AGE_MINUTES)
         for created, starts in ((T0 - limit - timedelta(minutes=1), False), (T0 - limit + timedelta(minutes=1), True),
                                 (None, False)):  # None: the run's creation time can't be read
             with self.subTest(created=created):
@@ -358,6 +358,7 @@ class Wake(unittest.TestCase):
                 if not starts:
                     self.assertIn("no session started: the instruction was approved too late", self.post.bodies()[0])
                     self.assertFalse(any(p.endswith("/credentials/cred_C") for _, p, _ in api.calls))  # no token went in
+                    self.assertEqual(self.store.calls, [])  # refused before the lock: nothing held
                 self.assertTrue(any(p == f"/repos/o/r/actions/runs/{env['GITHUB_RUN_ID']}" for _, p, _, _ in self.post.calls))
 
     def test_the_cut_off_matches_the_tripwires_window(self):
@@ -366,13 +367,16 @@ class Wake(unittest.TestCase):
         reaches the session's end."""
         import tripwire
         start = T0
-        cut_off = start - timedelta(minutes=tripwire.COMPLETED_EXTRA_MINUTES - tripwire.WAKE_JOB_MINUTES)
+        cut_off = start - timedelta(minutes=tripwire.WAKE_RUN_MAX_AGE_MINUTES)
         self.assertFalse(tripwire.wake_run_too_old(cut_off, start))
         self.assertTrue(tripwire.wake_run_too_old(cut_off - timedelta(seconds=1), start))
         end = start + timedelta(minutes=tripwire.WAKE_JOB_MINUTES)
         last_sweep = end + timedelta(minutes=tripwire.LOOKBACK_MINUTES)
         window_from = last_sweep - timedelta(minutes=tripwire.LOOKBACK_MINUTES + tripwire.COMPLETED_EXTRA_MINUTES)
         self.assertLessEqual(window_from, cut_off)
+        # With room to spare: the margin sits between the cut-off and the window's edge.
+        self.assertEqual(cut_off - window_from, timedelta(minutes=tripwire.WAKE_AGE_MARGIN_MINUTES))
+        self.assertGreaterEqual(tripwire.WAKE_AGE_MARGIN_MINUTES, 15)
 
     def test_budget_stop_escalates_and_still_cleans_up(self):
         env, marks = wake_env()

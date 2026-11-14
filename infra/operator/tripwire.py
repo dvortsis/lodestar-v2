@@ -62,6 +62,9 @@ SWEEP_DEADLINE_SECONDS = 300  # with the session check's, leaves 60 s of the job
 APPROVAL_WAIT_DAYS = 30
 COMPLETED_EXTRA_MINUTES = 72 * 60
 WAKE_JOB_MINUTES = 45  # operator-wake.yml's wake job timeout (test_workflows pins it)
+# Room on top of the job's length for the setup before the age check, a
+# cancellation's overrun and clock skew between the runner and GitHub.
+WAKE_AGE_MARGIN_MINUTES = 15
 SESSION_PAGES = 10  # GitHub lists at most 1,000 runs for a created= filter
 SESSION_DEADLINE_SECONDS = 45
 REQUEST_TIMEOUT_SECONDS = 30  # infra/fleet/comments.py's urlopen timeout, per socket operation
@@ -99,16 +102,20 @@ SESSION_UNKNOWN = "whether a wake session ran inside the sweep's lookback couldn
 END_OF_WAKE = "this is the end-of-wake sweep"
 
 
+WAKE_RUN_MAX_AGE_MINUTES = COMPLETED_EXTRA_MINUTES - WAKE_JOB_MINUTES - WAKE_AGE_MARGIN_MINUTES
+
+
 def wake_run_too_old(created: datetime | None, now: datetime) -> bool:
     """Whether a wake whose run was created at `created` must refuse to start
     a session at `now`. Its session ends within WAKE_JOB_MINUTES; every sweep
     up to LOOKBACK_MINUTES after that must still find the run in its completed
     window, which reaches LOOKBACK_MINUTES + COMPLETED_EXTRA_MINUTES back. So
-    the run may be at most COMPLETED_EXTRA_MINUTES - WAKE_JOB_MINUTES old. An
-    unknown creation time refuses (fail closed)."""
+    the run may be at most COMPLETED_EXTRA_MINUTES - WAKE_JOB_MINUTES old, less
+    WAKE_AGE_MARGIN_MINUTES of room. An unknown creation time refuses (fail
+    closed)."""
     if created is None:
         return True
-    return created < now - timedelta(minutes=COMPLETED_EXTRA_MINUTES - WAKE_JOB_MINUTES)
+    return created < now - timedelta(minutes=WAKE_RUN_MAX_AGE_MINUTES)
 
 
 def _digits(v) -> str | None:
