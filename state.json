@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T09:11Z",
+  "updated_at": "2026-11-14T09:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8563,6 +8563,11 @@
       "id": "vpn-retest-1114-short-run-dht",
       "added": "2026-11-14T09:03Z",
       "note": "VPN re-test: first-start 6 h sampling suppression leaves short tests with only a ~2.5 min DHT burst. Test design note."
+    },
+    {
+      "id": "pipe01-followup-owner-flag",
+      "added": "2026-11-14T09:17Z",
+      "note": "At X-pipe01-followup merge, flag to owner (\u00a72.19): per-address place now held only while a peer is untried or fetching (refines #877 counting rule); wait list bounds and turn-away-newest choice."
     }
   ],
   "main_health": [
@@ -9888,7 +9893,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T09:11Z",
+  "updated": "2026-11-14T09:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
