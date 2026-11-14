@@ -1128,8 +1128,8 @@ fn purge_one(
                 )?;
             }
             // As `Store::purge_filter`: an expired adult hold becomes a
-            // tombstone, replacing any but a floor hold (a worker's floor
-            // report included).
+            // tombstone, replacing any but a local floor row (a worker's
+            // floor report gives way: it lasts only its hold time).
             tx.execute(
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
@@ -1138,7 +1138,7 @@ fn purge_one(
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
                     crate::filter::kept_hold_sql("rule"),
-                    crate::filter::floor_hold_sql("tombstones.rule")
+                    crate::filter::local_floor_sql("tombstones.rule")
                 ),
                 params![now, ADULT_HOLD],
             )?;
@@ -1352,19 +1352,20 @@ fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> 
 
 /// How strong a tombstone or quarantine hold under `rule` is, in SQL with
 /// the adult mark as `?4` (`?1`–`?3` are still bound but unused): the
-/// locked floor's own rules first, then a worker's floor report (so a
-/// carry never renames a local floor row to one, which WK-13's purge
-/// could later delete), then a kept hold ([`KEPT_RULES`](crate::KEPT_RULES),
-/// which only its own release lifts, so no carry replaces it with a hold
-/// a release by rule could free), then an adult hold (the one filtering
-/// can't rebuild, see `Store::purge_filter`), then any other.
+/// locked floor's own rules first, then a kept hold
+/// ([`KEPT_RULES`](crate::KEPT_RULES), which only its own release lifts, so
+/// no carry replaces it with a hold a release by rule could free), then an
+/// adult hold (the one filtering can't rebuild, see `Store::purge_filter`),
+/// then a worker's floor report (it lasts only its hold time, so a hold
+/// that doesn't expire wins over it; a carry still never renames a local
+/// floor row to one), then any other.
 fn hold_rank(rule: &str) -> String {
     format!(
-        "CASE WHEN {} THEN 4 WHEN {} THEN 3 WHEN {} THEN 2 \
-         WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END",
+        "CASE WHEN {} THEN 4 WHEN {} THEN 3 \
+         WHEN substr({rule}, -length(?4)) = ?4 THEN 2 WHEN {} THEN 1 ELSE 0 END",
         crate::filter::local_floor_sql(rule),
-        crate::filter::worker_floor_sql(rule),
-        crate::filter::kept_hold_sql(rule)
+        crate::filter::kept_hold_sql(rule),
+        crate::filter::worker_floor_sql(rule)
     )
 }
 
@@ -2143,6 +2144,30 @@ mod tests {
         .collect()
     }
 
+    /// A rollback's merge ranks holds: the local floor, then a kept hold,
+    /// then an adult hold, then a worker's floor report, then any other.
+    #[test]
+    fn hold_rank_puts_a_workers_report_below_kept_and_adult_holds() {
+        let conn = Connection::open_in_memory().unwrap();
+        let rank = |rule: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT {}", hold_rank("?1")),
+                params![rule, "", "", ADULT_HOLD],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let order = [
+            rank("CS-1a"),
+            rank("CS-0a"),
+            rank("CS-4+adult"),
+            rank("worker-floor:7"),
+            rank("CS-3"),
+        ];
+        assert_eq!(order, [4, 3, 2, 1, 0]);
+        assert_eq!(rank("WORKER-FLOOR:7"), 0, "the prefix is exact");
+    }
+
     /// A rollback's copy gains the holds recorded since the snapshot
     /// (CS-1 entries, imported ones too, tombstones and quarantine, its
     /// sealed name still sealed), and the torrents they hold go. On a
@@ -2175,8 +2200,9 @@ mod tests {
         quarantine(c, [18; 20], "CS-2a", b"sealed-live18", T + 10 * DAY);
         // Tombstoned here, quarantined in the copy: the tombstone wins.
         tomb(19, "CS-3", T + DAY);
-        // A worker's floor report is a floor hold: it outranks the copy's
-        // later, weaker row (WK-10d).
+        // A worker's floor report outranks the copy's later row under any
+        // other rule (it ranks below only a kept, adult or local floor
+        // hold).
         tomb(20, "worker-floor:7", T + DAY);
         // ...but never over the locked floor's own row, which WK-13's
         // purge-by-worker must not be able to delete.
@@ -2994,8 +3020,9 @@ mod tests {
         quarantine(c, [3; 20], "CS-4+adult", b"c", T + DAY);
         quarantine(c, [4; 20], "CS-3", b"d", T + 5 * DAY);
         quarantine(c, [5; 20], "CS-4+adult", b"e", T + 5 * DAY);
-        // An expiring adult hold over a worker's floor report: the report
-        // stays, in both purges (WK-10d).
+        // An expiring adult hold over a worker's floor report: the adult
+        // hold replaces it, in both purges (the report lasts only its hold
+        // time; the adult mark doesn't expire).
         quarantine(c, [6; 20], "CS-4+adult", b"f", T + DAY);
         for (h, rule) in [
             ([3u8; 20], "CS-2"),
@@ -3049,8 +3076,8 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(rule_of(store.connection()), "worker-floor:7");
-        assert_eq!(rule_of(&snap_conn), "worker-floor:7");
+        assert_eq!(rule_of(store.connection()), "CS-4+adult");
+        assert_eq!(rule_of(&snap_conn), "CS-4+adult");
     }
 
     /// Snapshots of older schemas purge what their schema has; unknown

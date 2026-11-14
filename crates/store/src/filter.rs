@@ -4,6 +4,7 @@
 //! The store keeps plain values: rule ids as text, actions and origins as
 //! small integers. Their meaning belongs to the filter engine.
 
+use lodestar_metainfo::InfoHash;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{Error, Result, Store};
