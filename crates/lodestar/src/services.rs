@@ -1294,9 +1294,23 @@ mod gate_tests {
         }
         assert_eq!(gate.new_verified(Origin::Network), 1);
         assert_eq!(gate.latency.cumulative().last().copied(), Some(1));
-        let body = crate::metrics::render(&pipeline.monitor(), None, &FetchStats::default());
+        // The core re-judge's stalled-range gauges, as the writer sets them
+        // (its re-judge ran first, on the fresh store, and is done).
+        let monitor = pipeline.monitor();
+        let w = monitor.writer_stats();
+        w.core_stalled_ranges.store(3, Ordering::Relaxed);
+        w.core_stalled_rows.store(70, Ordering::Relaxed);
+        let body = crate::metrics::render(&monitor, None, &FetchStats::default());
         assert!(
             body.contains("lodestar_searchable_new_total{origin=\"network\"} 1\n"),
+            "{body}"
+        );
+        assert!(
+            body.contains("\nlodestar_core_rejudge_stalled_ranges 3\n"),
+            "{body}"
+        );
+        assert!(
+            body.contains("\nlodestar_core_rejudge_stalled_rows 70\n"),
             "{body}"
         );
         pipeline.shutdown().await.unwrap();

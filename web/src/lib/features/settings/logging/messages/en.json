@@ -554,7 +554,7 @@
 	"settings_logging_ev_pipeline_core_rejudge_failed_n": "Re-judge failed",
 	"settings_logging_ev_pipeline_core_rejudge_failed_h": "Judging stored torrents again failed; it tries again.",
 	"settings_logging_ev_pipeline_core_rejudge_stalled_n": "Re-judge skipped unreadable torrents",
-	"settings_logging_ev_pipeline_core_rejudge_stalled_h": "Stored torrents that mostly won't read were skipped and kept to judge again; nothing was held.",
+	"settings_logging_ev_pipeline_core_rejudge_stalled_h": "Stored torrents that won't read were skipped to judge again; any the core holds that did read were held.",
 	"settings_logging_ev_pipeline_core_rejudge_stall_cleared_n": "Skipped torrents re-judged",
 	"settings_logging_ev_pipeline_core_rejudge_stall_cleared_h": "Stored torrents the re-judge had skipped were judged.",
 	"settings_logging_ev_pipeline_enrichment_failed_n": "Enrichment failed",

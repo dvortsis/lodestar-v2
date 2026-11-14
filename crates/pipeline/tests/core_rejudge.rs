@@ -1008,3 +1008,71 @@ fn a_run_of_stopped_batches_is_reported_once() {
     let st = stalled(&mut store).unwrap();
     assert_eq!((st.ranges, st.rows), (1, 3 * n as u64));
 }
+
+/// A batch the breaker stops still holds what today's core holds among
+/// its torrents that did read, so a torrent it holds isn't left shown
+/// because its neighbours won't read; the range is kept whole all the
+/// same. So does a stalled range judged again that the breaker stops
+/// again.
+#[test]
+fn a_stopped_batch_still_holds_what_did_read() {
+    use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, is_breaker, stalled};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = BREAKER_ROWS * 2;
+    // Mostly unreadable: two the core holds, the rest plain films.
+    let held = add(&mut store, &long("rolea lexa one.mkv"));
+    let later = add(&mut store, &long("rolea lexa two.mkv"));
+    let mut plain = Vec::new();
+    let mut bad = Vec::new();
+    for i in 0..n - 2 {
+        let id = add(&mut store, &long(&format!("Plain.Film.{i}.mkv"))).0;
+        if i < BREAKER_ROWS + 4 {
+            bad.push(id);
+        } else {
+            plain.push(id);
+        }
+    }
+    let later_saved = break_rows(&mut store, &[later.0]);
+    break_rows(&mut store, &bad);
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let (b, marked) = batch(&mut store, &filter, &sealer, n);
+    let b = b.unwrap();
+    let stall = b.stall.expect("the breaker stopped it");
+    assert_eq!((stall.after, stall.rows), (0, n as u64));
+    // The one that read and that the core holds is held, and counted.
+    assert_eq!(marked, [held.1]);
+    assert_eq!(b.held, [held.1]);
+    assert!(!stored(&store, held.0));
+    let p = pass(&mut store).unwrap();
+    assert_eq!((p.found, p.held, p.unreadable), (1, 1, 0));
+    // Nothing else is touched: no hold on what won't read, no mark on
+    // what reads and passes.
+    assert!(stored(&store, later.0));
+    assert!(bad.iter().chain(&plain).all(|&id| stored(&store, id)));
+    // On to the retries, with the range still there.
+    while !batch(&mut store, &filter, &sealer, n).0.unwrap().waiting {}
+    let ranges = stalled(&mut store).unwrap().ranges;
+    assert_eq!(ranges, 2);
+    // The second one the core holds reads again, its neighbours don't:
+    // the breaker stops the retry, which still holds it.
+    mend_rows(&mut store, &later_saved);
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+        adult: Default::default(),
+    };
+    let marked = RefCell::new(Vec::new());
+    let e = rejudge_stored(&mut store, &filter, n, &ctx, &|_, hs| {
+        marked.borrow_mut().extend_from_slice(hs)
+    })
+    .unwrap_err();
+    assert!(is_breaker(&e));
+    assert_eq!(marked.into_inner(), [later.1]);
+    assert!(!stored(&store, later.0));
+    assert!(bad.iter().chain(&plain).all(|&id| stored(&store, id)));
+    assert_eq!(pass(&mut store).unwrap().held, 2);
+    // The range is kept whole, moved to the back.
+    assert_eq!(stalled(&mut store).unwrap().ranges, ranges);
+}
