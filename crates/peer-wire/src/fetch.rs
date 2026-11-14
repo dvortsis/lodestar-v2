@@ -469,6 +469,9 @@ struct Pace {
     need: usize,
     /// The part whose end is checked next.
     next: u32,
+    /// The most dict bytes seen in so far, and when they last grew.
+    seen: usize,
+    last_in: Instant,
 }
 
 const PACE_PARTS: u32 = 8;
@@ -504,6 +507,8 @@ impl Pace {
             base: got,
             need: size.saturating_sub(got),
             next,
+            seen: got,
+            last_in: now,
         })
     }
 
@@ -516,6 +521,10 @@ impl Pace {
     /// Runs the checks due by `now` against the `got` dict bytes in so
     /// far. `false`: the peer is behind.
     fn keeps_up(&mut self, now: Instant, got: usize) -> bool {
+        if got > self.seen {
+            self.seen = got;
+            self.last_in = now;
+        }
         while let Some(at) = self.next_check() {
             if now < at {
                 break;
@@ -528,6 +537,19 @@ impl Pace {
             self.next += 1;
         }
         true
+    }
+
+    /// At the deadline: how it ends. A peer that sent nothing for the last
+    /// part, or the last [`PACE_FREE`] if longer, had stopped, which is its own failure ([`Error::Behind`]); one
+    /// still sending ran out of time ([`Error::Timeout`]), which may be the
+    /// wait for room's.
+    fn at_deadline(&mut self, now: Instant, got: usize) -> Error {
+        self.keeps_up(now, got);
+        if now.saturating_duration_since(self.last_in) > self.part.max(PACE_FREE / 2) {
+            Error::Behind
+        } else {
+            Error::Timeout
+        }
     }
 }
 
@@ -553,7 +575,15 @@ async fn bounded<T>(
         };
         match timeout_at(due, &mut write).await {
             Ok(written) => return Ok(written?),
-            Err(_) if due >= deadline => return Err(Error::Timeout),
+            // Still not written at the deadline: a peer that has stopped
+            // reading has stopped.
+            Err(_) if due >= deadline => {
+                return Err(if pace.is_some() {
+                    Error::Behind
+                } else {
+                    Error::Timeout
+                });
+            }
             Err(_) => {}
         }
     }
@@ -641,10 +671,16 @@ where
                 }
                 let due = match pace.as_mut() {
                     Some(p) => {
-                        if !p.keeps_up(Instant::now(), got) {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return Err(p.at_deadline(now, got));
+                        }
+                        if !p.keeps_up(now, got) {
                             return Err(Error::Behind);
                         }
-                        p.next_check()
+                        // The deadline too, so its end says how the peer
+                        // was doing.
+                        Some(p.next_check().map_or(deadline, |at| at.min(deadline)))
                     }
                     None => None,
                 };
