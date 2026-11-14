@@ -104,10 +104,15 @@ pub(crate) fn kept_hold_sql(col: &str) -> String {
     )
 }
 
-/// The core version the stored torrents were all judged by (the filter's
-/// `CORE_VERSION`), once a re-judge finishes. A store without it was
+/// The core version the stored torrents were judged by (the filter's
+/// `CORE_VERSION`), with [`CORE_SEEN_KEY`]: every torrent up to that id
+/// was judged by this version or a newer one. A store without it was
 /// judged by version 1.
 pub const CORE_JUDGED_KEY: &str = "filter.core.judged";
+/// The highest torrent id a build that keeps the marker has seen judged.
+/// A torrent above it was stored by a build that doesn't (an older one),
+/// so its judgment isn't known: it's judged again.
+pub const CORE_SEEN_KEY: &str = "filter.core.seen";
 /// A core re-judge under way: the version it judges by...
 pub const CORE_PASS_KEY: &str = "filter.core.pass";
 /// ...the last torrent id it finished, so a restart resumes there...
@@ -138,25 +143,63 @@ const CORE_PASS_KEYS: [&str; 5] = [
     CORE_UNREADABLE_KEY,
 ];
 
+fn put_setting(tx: &Transaction<'_>, key: &str, value: i64) -> Result<()> {
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn max_id(tx: &Transaction<'_>) -> Result<i64> {
+    Ok(
+        tx.query_row("SELECT coalesce(max(id), 0) FROM torrents", [], |r| {
+            r.get(0)
+        })?,
+    )
+}
+
 impl Store {
     /// Where a core re-judge to `version` stands: its place and totals (a
-    /// new pass's are zero), or `None` when the store was already judged
-    /// by `version` or a newer one (a downgrade judges nothing again).
-    pub fn core_rejudge_due(&self, version: i64) -> Result<Option<CorePass>> {
-        if self.setting_i64(CORE_JUDGED_KEY)?.unwrap_or(1) >= version {
-            return Ok(None);
+    /// new pass's are zero), or `None` when every stored torrent was judged
+    /// by `version` or a newer core. A store judged by an older one is
+    /// judged again from the start; one judged by `version` only above
+    /// [`CORE_SEEN_KEY`] (stored since by an older build). A store judged
+    /// by a newer core has its marker lowered to `version` first (a
+    /// downgrade), so a later upgrade judges again what this one stores.
+    pub fn core_rejudge_due(&mut self, version: i64) -> Result<Option<CorePass>> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let get = |key: &str| -> Result<Option<i64>> {
+            Ok(tx
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                    r.get(0)
+                })
+                .optional()?)
+        };
+        let judged = get(CORE_JUDGED_KEY)?.unwrap_or(1);
+        if judged > version {
+            put_setting(&tx, CORE_JUDGED_KEY, version)?;
         }
-        if self.setting_i64(CORE_PASS_KEY)? != Some(version) {
-            // Another version's pass, or none: from the start.
-            return Ok(Some(CorePass::default()));
-        }
-        let get = |key| Ok::<_, Error>(self.setting_i64(key)?.unwrap_or(0));
-        Ok(Some(CorePass {
-            after: get(CORE_AFTER_KEY)?,
-            found: get(CORE_FOUND_KEY)?,
-            held: get(CORE_HELD_KEY)?,
-            unreadable: get(CORE_UNREADABLE_KEY)?,
-        }))
+        let due = if get(CORE_PASS_KEY)? == Some(version) {
+            // A pass under way: on from its place.
+            Some(CorePass {
+                after: get(CORE_AFTER_KEY)?.unwrap_or(0),
+                found: get(CORE_FOUND_KEY)?.unwrap_or(0),
+                held: get(CORE_HELD_KEY)?.unwrap_or(0),
+                unreadable: get(CORE_UNREADABLE_KEY)?.unwrap_or(0),
+            })
+        } else if judged < version {
+            Some(CorePass::default())
+        } else {
+            let seen = get(CORE_SEEN_KEY)?.unwrap_or(0);
+            (max_id(&tx)? > seen).then_some(CorePass {
+                after: seen,
+                ..CorePass::default()
+            })
+        };
+        tx.commit()?;
+        Ok(due)
     }
 
     /// Records a core re-judge to `version` as `pass` says: every torrent
@@ -165,30 +208,91 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let values = [version, pass.after, pass.found, pass.held, pass.unreadable];
         for (key, value) in CORE_PASS_KEYS.into_iter().zip(values) {
-            tx.execute(
-                "INSERT INTO settings (key, value) VALUES (?1, ?2)
-                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )?;
+            put_setting(&tx, key, value)?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Records that every stored torrent was judged by `version`: the
-    /// marker only rises, and the pass's place and totals go.
+    /// Records that every stored torrent was judged by `version`, up to
+    /// the highest id stored now, and the pass's place and totals go.
     pub fn finish_core_rejudge(&mut self, version: i64) -> Result<()> {
         let tx = crate::begin_write(&mut self.conn)?;
-        tx.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT (key) DO UPDATE SET value = max(value, excluded.value)",
-            params![CORE_JUDGED_KEY, version],
-        )?;
+        put_setting(&tx, CORE_JUDGED_KEY, version)?;
+        let seen = max_id(&tx)?;
+        put_setting(&tx, CORE_SEEN_KEY, seen)?;
         for key in CORE_PASS_KEYS {
             tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Records that this build judged every torrent stored now by
+    /// `version`: moves [`CORE_SEEN_KEY`] up to the highest id. Only when
+    /// the store is judged by `version` and no pass is under way, so it
+    /// never covers a torrent an older build stored.
+    pub fn advance_core_seen(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        tx.execute(
+            "UPDATE settings SET value = max(value, (SELECT coalesce(max(id), 0) FROM torrents))
+             WHERE key = ?1
+               AND EXISTS (SELECT 1 FROM settings WHERE key = ?2 AND value = ?3)
+               AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?4)",
+            params![CORE_SEEN_KEY, CORE_JUDGED_KEY, version, CORE_PASS_KEY],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks an empty store as judged by `version` when it records no
+    /// core version yet: whatever this build stores next, it judges.
+    pub fn seed_core_marker(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let marked: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM settings WHERE key = ?1)
+                 OR EXISTS (SELECT 1 FROM torrents)",
+            [CORE_JUDGED_KEY],
+            |r| r.get(0),
+        )?;
+        if !marked {
+            put_setting(&tx, CORE_JUDGED_KEY, version)?;
+            put_setting(&tx, CORE_SEEN_KEY, 0)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A stored torrent's swarm hashes as stored, read raw: for one whose
+    /// row won't decode, so it can still be held. A hash of the wrong
+    /// length is left out.
+    pub fn raw_hashes(&self, id: i64) -> Result<Vec<[u8; 20]>> {
+        // The two hash columns, either one unreadable.
+        type Hashes = (Option<Vec<u8>>, Option<Vec<u8>>);
+        let row: Option<Hashes> = self
+            .conn
+            .query_row(
+                "SELECT CAST(info_hash AS BLOB), CAST(info_hash_v2 AS BLOB) FROM torrents
+                 WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((v1, v2)) = row else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        if let Some(h) = v1.and_then(|h| <[u8; 20]>::try_from(h.as_slice()).ok()) {
+            out.push(h);
+        }
+        // A v2 hash's swarm hash is its first 20 bytes.
+        let truncated = v2
+            .filter(|h| h.len() == 32)
+            .and_then(|h| <[u8; 20]>::try_from(&h[..20]).ok());
+        if let Some(h) = truncated.filter(|h| !out.contains(h)) {
+            out.push(h);
+        }
+        Ok(out)
     }
 }
 
@@ -332,18 +436,23 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
         local_floor_sql("?2"),
         worker_floor_sql("rule")
     ))?;
-    // A later quarantine replaces an earlier one, except over a kept hold
-    // (`KEPT_RULES`), which only another kept hold or a floor hold takes
-    // over: otherwise a weaker rule there could later be released by rule
-    // and free the hash.
+    // A later quarantine replaces an earlier one, except over a floor
+    // hold, which only another floor hold takes over, or a kept hold
+    // (`KEPT_RULES`), which only a floor or kept hold does: otherwise a
+    // weaker rule there could later be released by rule and free the hash.
     let mut quarantine = tx.prepare_cached(&format!(
         "INSERT OR REPLACE INTO quarantine (hash, rule, sealed, at, expires_at)
-         SELECT ?1, ?2, ?3, ?4, ?5 WHERE {} OR {} OR NOT EXISTS (
-             SELECT 1 FROM quarantine WHERE hash = ?1 AND {}
-         )",
-        kept_hold_sql("?2"),
-        floor_hold_sql("?2"),
-        kept_hold_sql("rule")
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE {floor_new}
+             OR ({kept_new} AND NOT EXISTS (
+                 SELECT 1 FROM quarantine WHERE hash = ?1 AND {floor_old}
+             ))
+             OR NOT EXISTS (
+                 SELECT 1 FROM quarantine WHERE hash = ?1 AND ({kept_old} OR {floor_old})
+             )",
+        floor_new = floor_hold_sql("?2"),
+        kept_new = kept_hold_sql("?2"),
+        floor_old = floor_hold_sql("rule"),
+        kept_old = kept_hold_sql("rule"),
     ))?;
     for f in filtered {
         let Some(first) = f.hashes.first() else {
@@ -1271,6 +1380,10 @@ mod tests {
         let [floor, ..] = FLOOR_RULES;
         put(&mut s, f(floor, 60, false));
         assert_eq!(rule(&s), (floor.to_owned(), 60), "and the floor");
+        // Which nothing but the floor replaces, a kept hold included.
+        put(&mut s, f(kept, 70, false));
+        put(&mut s, f("CS-3", 80, false));
+        assert_eq!(rule(&s), (floor.to_owned(), 60), "the floor stays");
     }
 
     /// The adult-hold mark is a suffix on the stored rule id; reads strip

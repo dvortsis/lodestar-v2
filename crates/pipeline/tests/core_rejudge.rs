@@ -1,6 +1,7 @@
 //! The core re-judge (§20.5): stored torrents judged by an older core are
-//! judged again by today's, in batches that resume after a restart; a
-//! store judged already, or by a newer core, is left alone. Stand-in
+//! judged again by today's, in batches that resume after a restart, and so
+//! are torrents an older build stored since; a store judged already is
+//! left alone. Stand-in
 //! terms as in the core's tests: `lexa` for a sexual term, `rolea` for a
 //! child role.
 
@@ -14,7 +15,7 @@ use lodestar_metainfo::Info;
 use lodestar_pipeline::core_rejudge::{CoreRejudged, rejudge_stored};
 use lodestar_pipeline::enrich::Backfill;
 use lodestar_store::{
-    CORE_AFTER_KEY, CORE_FOUND_KEY, CORE_HELD_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY,
+    CORE_AFTER_KEY, CORE_FOUND_KEY, CORE_HELD_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY, CORE_SEEN_KEY,
     CORE_UNREADABLE_KEY, CorePass, NewTorrent, SourceId, Store, StoreConfig,
 };
 
@@ -240,21 +241,108 @@ fn another_versions_pass_starts_again() {
     assert!(!stored(&store, pair));
 }
 
-/// A store judged by today's core, or by a newer one (a downgrade), is
-/// judged again by nothing, and its marker never goes down.
+/// Every torrent up to the high-water id was judged by today's core:
+/// nothing is judged again, and the marker stays.
 #[test]
-fn a_current_or_newer_store_is_left_alone() {
-    for judged in [CORE_VERSION, CORE_VERSION + 1] {
-        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-        let (pair, _) = add(&mut store, &long("rolea lexa.mkv"));
-        store.set_setting_i64(CORE_JUDGED_KEY, judged).unwrap();
-        assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), None);
-        let (r, marked) = batch(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
-        assert_eq!((r, marked), (None, Vec::new()), "v{judged}");
-        assert!(stored(&store, pair), "v{judged}");
-        store.finish_core_rejudge(CORE_VERSION).unwrap();
-        assert_eq!(store.setting_i64(CORE_JUDGED_KEY).unwrap(), Some(judged));
-    }
+fn a_current_store_is_left_alone() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let (pair, _) = add(&mut store, &long("rolea lexa.mkv"));
+    store.finish_core_rejudge(CORE_VERSION).unwrap();
+    assert_eq!(store.setting_i64(CORE_SEEN_KEY).unwrap(), Some(pair));
+    let (r, marked) = batch(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
+    assert_eq!((r, marked), (None, Vec::new()));
+    assert!(stored(&store, pair));
+}
+
+/// A build that doesn't keep the marker (an older one) stored torrents
+/// after the store was marked: everything above the high-water id is
+/// judged again, and nothing below it.
+#[test]
+fn what_an_older_build_stored_since_is_judged_again() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let (before, _) = add(&mut store, &long("rolea lexa.mkv"));
+    store.finish_core_rejudge(CORE_VERSION).unwrap();
+    // Stored by the older build: the marker doesn't move.
+    let (since, since_hash) = add(&mut store, &long("rolea lexa again.mkv"));
+    // So an import starting now mustn't mark what it stores as judged.
+    assert!(!lodestar_pipeline::core_rejudge::is_current(&mut store).unwrap());
+    assert_eq!(
+        store.core_rejudge_due(CORE_VERSION).unwrap(),
+        Some(CorePass {
+            after: before,
+            ..CorePass::default()
+        })
+    );
+    run(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
+    assert!(stored(&store, before), "judged by today's core already");
+    assert!(!stored(&store, since));
+    assert_eq!(
+        store.quarantine_rule(&since_hash).unwrap().as_deref(),
+        Some("CS-4a")
+    );
+    // The mark is the highest id still stored (ids are never reused).
+    assert_eq!(store.setting_i64(CORE_SEEN_KEY).unwrap(), Some(before));
+    assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), None);
+    // This build records what it stores itself.
+    let (own, _) = add(&mut store, "Plain.Film.mkv");
+    lodestar_pipeline::core_rejudge::note_judged(&mut store).unwrap();
+    assert_eq!(store.setting_i64(CORE_SEEN_KEY).unwrap(), Some(own));
+    assert_eq!(store.core_rejudge_due(CORE_VERSION).unwrap(), None);
+}
+
+/// A store marked by a newer core (a downgrade): its marker is lowered to
+/// today's, so an upgrade later judges again what this build stores, and
+/// what was stored above its high-water id is judged again now.
+#[test]
+fn a_downgrade_lowers_the_marker_and_judges_what_followed() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let (before, _) = add(&mut store, &long("rolea lexa.mkv"));
+    store.finish_core_rejudge(CORE_VERSION + 1).unwrap();
+    let (since, _) = add(&mut store, &long("rolea lexa again.mkv"));
+    run(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
+    assert_eq!(
+        store.setting_i64(CORE_JUDGED_KEY).unwrap(),
+        Some(CORE_VERSION)
+    );
+    assert!(stored(&store, before) && !stored(&store, since));
+    // An upgrade back judges every torrent again.
+    assert_eq!(
+        store.core_rejudge_due(CORE_VERSION + 1).unwrap(),
+        Some(CorePass::default())
+    );
+}
+
+/// A row that won't decode can't be judged: held under CS-0a by the
+/// hashes as stored, and deleted, and the rest of the batch goes on.
+#[test]
+fn a_row_that_wont_decode_is_held() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let (bad, bad_hash) = add(&mut store, &long("Some.Show.mkv"));
+    let (pair, _) = add(&mut store, &long("rolea lexa.mkv"));
+    store
+        .connection()
+        .execute(
+            "UPDATE torrents SET name_raw = x'41', name_enc = 250 WHERE id = ?1",
+            [bad],
+        )
+        .unwrap();
+    assert!(store.torrent(bad).is_err(), "the row won't decode");
+    let (b, _) = batch(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
+    let b = b.unwrap();
+    assert_eq!((b.judged, b.after.held, b.after.unreadable), (2, 2, 1));
+    let gone: i64 = store
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM torrents WHERE id IN (?1, ?2)",
+            [bad, pair],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(gone, 0);
+    assert_eq!(
+        store.quarantine_rule(&bad_hash).unwrap().as_deref(),
+        Some("CS-0a")
+    );
 }
 
 /// The stand-ins ten words apart: only the Adult-only CS-5a (window 12)
@@ -306,25 +394,136 @@ fn corrections_are_judged_as_ingest_judges_them() {
     assert!(stored(&store, plain), "only CS-5a reads that far apart");
 }
 
+/// A torrent an always-adult source found is read as Adult too, as
+/// ingest reads it: the Adult-only core holds it, as an adult hold.
+#[test]
+fn an_always_adult_sources_find_is_read_as_adult() {
+    use lodestar_pipeline::source_adult::AdultSources;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let (found, hash) = add(&mut store, &long(&format!("Plain {SPREAD}.mp4")));
+    let (filter, sealer) = (stand_in(), Sealer::new(&[9; 32]));
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+        // Source 0 found it, and every find of source 0 is adult.
+        adult: AdultSources(1),
+    };
+    rejudge_stored(&mut store, &filter, 10, &ctx, &|_, _| {}).unwrap();
+    assert!(!stored(&store, found));
+    let rule: String = store
+        .connection()
+        .query_row(
+            "SELECT rule FROM quarantine WHERE hash = ?1",
+            [&hash[..]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rule, "CS-5a+adult");
+}
+
+/// A torrent with a partial file list, stored as an import left it, is
+/// judged by the list it has: what today's core holds there is deleted
+/// with its hold in one write, and one whose list won't read is held as
+/// too large to judge. A partial list is never taken as read whole.
+#[test]
+fn a_partial_file_list_is_judged_by_what_it_holds() {
+    use lodestar_store::flags::FILES_PARTIAL;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    // Short: the earlier core would have read a whole list like it.
+    let (held, held_hash) = add(&mut store, "rolea lexa.mkv");
+    let (unread, unread_hash) = add(&mut store, "Some.Show.mkv");
+    let c = store.connection();
+    for id in [held, unread] {
+        c.execute(
+            "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1",
+            [id, FILES_PARTIAL],
+        )
+        .unwrap();
+    }
+    c.execute(
+        "UPDATE torrent_files SET codec = 250 WHERE torrent_id = ?1",
+        [unread],
+    )
+    .unwrap();
+    let (b, marked) = batch(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
+    let b = b.unwrap();
+    assert_eq!((b.judged, b.stood), (2, 0));
+    assert_eq!(marked, b.held);
+    for (id, hash, rule) in [(held, held_hash, "CS-4a"), (unread, unread_hash, "CS-0a")] {
+        assert!(!stored(&store, id), "{rule}: deleted");
+        assert_eq!(
+            store.quarantine_rule(&hash).unwrap().as_deref(),
+            Some(rule),
+            "and held"
+        );
+    }
+}
+
+/// A copy restored from before the marker (a rollback) records none: its
+/// torrents are judged again from the start.
+#[test]
+fn a_restored_copy_without_a_marker_is_judged_again() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let (pair, _) = add(&mut store, &long("rolea lexa.mkv"));
+    store.finish_core_rejudge(CORE_VERSION).unwrap();
+    store
+        .connection()
+        .execute("DELETE FROM settings WHERE key LIKE 'filter.core.%'", [])
+        .unwrap();
+    assert_eq!(
+        store.core_rejudge_due(CORE_VERSION).unwrap(),
+        Some(CorePass::default())
+    );
+    run(&mut store, &stand_in(), &Sealer::new(&[9; 32]), 10);
+    assert!(!stored(&store, pair));
+}
+
+/// An empty store is marked as judged by today's core, which judges what
+/// it stores next; a store with torrents isn't.
+#[test]
+fn an_empty_store_is_marked_as_judged() {
+    use lodestar_pipeline::core_rejudge::seed_if_empty;
+    let mut empty = Store::open_in_memory(StoreConfig::default()).unwrap();
+    seed_if_empty(&mut empty).unwrap();
+    assert_eq!(empty.core_rejudge_due(CORE_VERSION).unwrap(), None);
+    let mut full = Store::open_in_memory(StoreConfig::default()).unwrap();
+    add(&mut full, &long("rolea lexa.mkv"));
+    seed_if_empty(&mut full).unwrap();
+    assert_eq!(full.setting_i64(CORE_JUDGED_KEY).unwrap(), None);
+}
+
 /// How long the re-judge takes, per million stored torrents: 20,000
 /// stored, 2% of them past the earlier core's caps (so judged again), the
-/// rest checked and left. Prints the rate; run with `--ignored`.
+/// rest checked and left, in memory and on disk. Prints the rates; run
+/// with `--ignored`.
 #[test]
 #[ignore]
 fn rejudge_rate() {
-    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let n = 20_000;
-    for i in 0..n {
-        let name = format!("Some.Show.S01E{i:05}.1080p.WEB-DL.DDP5.1.x264-GRP.mkv");
-        let name = if i % 50 == 0 { long(&name) } else { name };
-        add(&mut store, &name);
+    for (label, mut store) in [
+        (
+            "in memory",
+            Store::open_in_memory(StoreConfig::default()).unwrap(),
+        ),
+        (
+            "on disk",
+            Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap(),
+        ),
+    ] {
+        for i in 0..n {
+            let name = format!("Some.Show.S01E{i:05}.1080p.WEB-DL.DDP5.1.x264-GRP.mkv");
+            let name = if i % 50 == 0 { long(&name) } else { name };
+            add(&mut store, &name);
+        }
+        let (filter, sealer) = (stand_in(), Sealer::new(&[9; 32]));
+        let t = std::time::Instant::now();
+        run(&mut store, &filter, &sealer, 256);
+        let s = t.elapsed().as_secs_f64();
+        println!(
+            "{label}: {n} stored, 2% judged again: {s:.2} s, {:.0} s per million stored",
+            s * 1e6 / n as f64
+        );
     }
-    let (filter, sealer) = (stand_in(), Sealer::new(&[9; 32]));
-    let t = std::time::Instant::now();
-    run(&mut store, &filter, &sealer, 256);
-    let s = t.elapsed().as_secs_f64();
-    println!(
-        "{n} stored, 2% judged again: {s:.2} s, {:.0} s per million stored",
-        s * 1e6 / n as f64
-    );
 }

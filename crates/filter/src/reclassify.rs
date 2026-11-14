@@ -461,6 +461,26 @@ impl Refiling {
         }
     }
 
+    /// Stored torrent `id` held on `d` when its row won't read: its hashes
+    /// as stored (`hashes`), and no sealed name, since none can be read.
+    /// The torrent is deleted whatever `hashes` holds.
+    pub fn unread(id: i64, hashes: Vec<[u8; 20]>, d: &Decision) -> Refiling {
+        Refiling {
+            id,
+            hashes,
+            rule: d.rule.id(),
+            action: d.action.code(),
+            held: match d.action {
+                Action::Drop => Some(Held::Tombstone),
+                _ => Some(Held::Quarantine),
+            },
+            sealed: None,
+            evidence: d.evidence_codes(),
+            flags: 0,
+            adult_hold: false,
+        }
+    }
+
     /// What a rule in shadow mode would have done: logged, not applied.
     pub fn shadow(row: &TorrentRow, d: &Decision) -> Refiling {
         Refiling {

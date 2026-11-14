@@ -2049,6 +2049,16 @@ mod tests {
         let [floor, ..] = crate::FLOOR_RULES;
         quarantine(c, [32; 20], kept, b"kept-live", T + 400 * DAY);
         quarantine(c, [33; 20], floor, b"floor-live", T + 100 * DAY);
+        // And in the tombstones, both ways.
+        let tomb = |conn: &Connection, h: u8, rule: &str, at: i64| {
+            conn.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                params![&[h; 20][..], rule, at],
+            )
+            .unwrap();
+        };
+        tomb(c, 34, kept, T + 50 * DAY);
+        tomb(c, 35, floor, T);
         let copy = dir.path().join("kept.tmp");
         let conn = fixture(&copy, Plan::KNOWN_THROUGH);
         quarantine(&conn, [30; 20], "U-1+adult", b"adult-copy", T + 500 * DAY);
@@ -2061,6 +2071,8 @@ mod tests {
         );
         quarantine(&conn, [32; 20], floor, b"floor-copy", T + 100 * DAY);
         quarantine(&conn, [33; 20], kept, b"kept-copy", T + 400 * DAY);
+        tomb(&conn, 34, floor, T);
+        tomb(&conn, 35, kept, T + 50 * DAY);
         drop(conn);
         purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
         assert_eq!(
@@ -2071,6 +2083,16 @@ mod tests {
                 format!("h32 {floor}"),
                 format!("h33 {floor}"),
             ]
+        );
+        assert_eq!(
+            rows(
+                &copy,
+                "SELECT hash, rule FROM tombstones WHERE hash IN (?1, ?2) ORDER BY hash"
+                    .replace("?1", "x'2222222222222222222222222222222222222222'")
+                    .replace("?2", "x'2323232323232323232323232323232323232323'")
+                    .as_str()
+            ),
+            [format!("h34 {floor}"), format!("h35 {floor}")]
         );
     }
 

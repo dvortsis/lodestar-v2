@@ -314,6 +314,15 @@ lodestar_log::catalogue! {
         message: "Re-judge of stored torrents finished",
         fields: { found: Size, rejudged: Size, held: Size, unreadable: Size },
     }
+    /// A core re-judge batch failed in the store: it's tried again from
+    /// the same place after a backoff, then one torrent at a time.
+    CORE_REJUDGE_FAILED {
+        id: "pipeline.core_rejudge_failed",
+        component: Pipeline,
+        level: Error,
+        message: "Re-judge of stored torrents failed; it will try again",
+        fields: { error: Error },
+    }
     /// The background enrichment pass failed.
     ENRICHMENT_FAILED {
         id: "pipeline.enrichment_failed",

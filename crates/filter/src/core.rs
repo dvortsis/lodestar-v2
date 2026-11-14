@@ -547,8 +547,8 @@ pub const BUDGET: u64 = 9_000_000;
 /// The core's version: what a stored torrent was judged by. It goes up
 /// whenever a change to the core could judge a stored torrent differently,
 /// so the store re-judges every torrent judged by an older one (§20.5).
-/// 1 is the core before it read torrents whole within [`BUDGET`]; a store
-/// that records none was judged by that one.
+/// 1 is the core before X-filter01-fix (#843); a store that records none
+/// was judged by that one.
 pub const CORE_VERSION: i64 = 2;
 
 /// The most tokens a text, and files a torrent, version 1 of the core
