@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T06:18Z",
+  "updated_at": "2026-11-14T06:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-14T03:38Z",
+  "last_heartbeat": "2026-11-14T06:49Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8440,6 +8440,12 @@
       "from": "X-operator-wake-outcome",
       "at": "2026-11-14T06:14Z",
       "note": "Approved by runner; built by the owner operator session after #870 merges. Mount the operator helpers as session files from the reviewed checkout instead of fetching them at run time; the policy stays auto. ping-2 after operator-apply deploys it. Needs a slices.yaml entry in the next runner PR."
+    },
+    {
+      "id": "op5-check8-wording",
+      "from": "X-operator-mount-helpers",
+      "at": "2026-11-14T06:49Z",
+      "note": "OP-5 check 8 results sentence names files copied from uploads as a test-session marker; real wakes copy from uploads too now; runner rewords in a runner PR"
     }
   ],
   "main_health": [
@@ -8841,6 +8847,21 @@
       "slice": "X-cmp01-fix",
       "head": "bad86644",
       "status": "review (Opus+security) running"
+    },
+    "875": {
+      "slice": "runner-ui-review-placement",
+      "head": "92d30c1a",
+      "status": "fresh Opus review running"
+    },
+    "872": {
+      "slice": "X-operator-mount-helpers",
+      "head": "6f873691",
+      "status": "ready; fresh Opus review + security review running"
+    },
+    "874": {
+      "slice": "X-sec-S6-02-03 (part)",
+      "head": "eb529997",
+      "status": "awaiting ready"
     }
   },
   "merged_log": [
@@ -9487,7 +9508,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T05:50Z",
+    "updated": "2026-11-14T06:49Z",
     "items": [
       {
         "slot": 1,
@@ -9756,8 +9777,8 @@
       "via": "dashboard session"
     }
   ],
-  "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T06:18Z",
+  "heartbeat": "2026-11-14T06:49Z",
+  "updated": "2026-11-14T06:49Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
