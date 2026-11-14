@@ -5008,6 +5008,119 @@ mod budget {
         r
     }
 
+    /// Fetches for a late-room test: the hog's takes most of the budget
+    /// for 6 s; the others' windows wait behind it, then grow and time
+    /// out, those from `behind_ip` after falling behind their pace.
+    struct LateRoom {
+        hog: InfoHash,
+        behind_ip: std::net::IpAddr,
+    }
+
+    impl Fetcher for LateRoom {
+        fn fetch(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            Box::pin(async { Err(FailureKind::Unreachable) })
+        }
+
+        fn fetch_reserving(
+            &self,
+            peer: SocketAddr,
+            key: InfoHash,
+            reservation: Reservation,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            let (hog, behind) = (key == self.hog, peer.ip() == self.behind_ip);
+            Box::pin(async move {
+                if hog {
+                    reservation.reserve(700_000, 700_000).await;
+                    tokio::time::sleep(Duration::from_secs(6)).await;
+                    return Err(FailureKind::Invalid);
+                }
+                let total = 400_000;
+                reservation.reserve(64 << 10, total).await;
+                reservation.reserve(total, total).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if behind {
+                    reservation.behind();
+                }
+                Err(FailureKind::TimedOut)
+            })
+        }
+    }
+
+    /// A fetch whose room came late and whose peer then timed out isn't
+    /// charged: counted as late, the key is tried again. One whose peer
+    /// fell behind its pace is charged as the timeout it is, however late
+    /// its room came.
+    #[tokio::test(start_paused = true)]
+    async fn a_late_room_spares_the_peer_unless_it_fell_behind() {
+        let hog = InfoHash([1; 20]);
+        let (spared, charged) = (InfoHash([2; 20]), InfoHash([3; 20]));
+        let peer = |n: u8| SocketAddr::from(([198, 51, n, 1], 6881));
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out_tx, _out) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: 1_000_000,
+                max_attempts: 1,
+                retry_backoff: Duration::from_secs(600),
+                ..PoolConfig::default()
+            },
+            Arc::new(LateRoom {
+                hog,
+                behind_ip: peer(3).ip(),
+            }),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let source = SourceId::new(0).unwrap();
+        for (n, k) in [(1, hog), (2, spared), (3, charged)] {
+            disc_tx
+                .send(Discovery {
+                    source,
+                    found: crate::Found::key(k, 0).with_peers(vec![peer(n)]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let stats = handle.stats();
+        until("both late fetches ended", async || {
+            handle.queued().await;
+            stats.late_waits.load(Ordering::Relaxed) + stats.failure_count(FailureKind::TimedOut)
+                >= 2
+        })
+        .await;
+        assert_eq!(
+            stats.late_waits.load(Ordering::Relaxed),
+            1,
+            "the one still sending"
+        );
+        assert_eq!(
+            stats.failure_count(FailureKind::TimedOut),
+            1,
+            "the one that fell behind"
+        );
+        stop.send(true).unwrap();
+        let left = task.await.unwrap();
+        assert!(
+            left.iter().any(|q| q.info_hash == spared),
+            "spared, it waits to be tried again"
+        );
+    }
+
     /// A large claim whose room took [`LATE_ROOM`] or more in all, its
     /// first window's wait and its growth's together, is late: a timeout
     /// after it isn't its peer's. One that waited less isn't, and neither
