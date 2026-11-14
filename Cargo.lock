@@ -1765,6 +1765,7 @@ dependencies = [
  "rand 0.10.3",
  "sha1",
  "sha2",
+ "siphasher",
  "socket2",
  "tokio",
 ]

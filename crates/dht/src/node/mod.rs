@@ -22,6 +22,7 @@ pub mod shard;
 mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod tids;
 mod tokens;
 mod transport;
 

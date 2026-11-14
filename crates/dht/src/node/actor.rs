@@ -22,6 +22,7 @@ use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::shard::Shard;
 use super::stream::{LookupEnd, SessionAdmit, Stream};
+use super::tids::TxIds;
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
@@ -209,10 +210,28 @@ fn network(ip: IpAddr) -> Network {
     }
 }
 
+/// A voter in the external-address vote: its /24 (IPv4) or /48 (IPv6).
+/// IPv6 is cut wider than [`network`]'s /64, because one site is commonly
+/// given a whole /48, so its many /64s are one voter.
+fn voter(ip: IpAddr) -> Network {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => {
+            let o = v6.octets();
+            Network(
+                48,
+                u64::from_be_bytes([0, 0, o[0], o[1], o[2], o[3], o[4], o[5]]),
+            )
+        }
+        v4 => network(v4),
+    }
+}
+
 /// Majority vote over the external address other nodes report (BEP 42).
-/// One vote per reporting network, the last [`ExternalIp::WINDOW`] of
+/// One vote per voter unit ([`voter`]), the last [`ExternalIp::WINDOW`] of
 /// them, tallied apart for IPv4 and IPv6 addresses so one family never
-/// dilutes the other's majority.
+/// dilutes the other's majority. A report counts only when it reaches us
+/// over the family it reports: an IPv4 address is voted for by IPv4
+/// reporters only, an IPv6 one by IPv6 reporters only.
 #[derive(Default)]
 struct ExternalIp {
     v4: VecDeque<(Network, SocketAddr)>,
@@ -226,9 +245,16 @@ impl ExternalIp {
 
     /// Records a report; returns the new address when the majority changes.
     fn vote(&mut self, reporter: IpAddr, reported: SocketAddr) -> Option<IpAddr> {
-        let reporter = network(reporter);
-        // `::ffff:a.b.c.d` is `a.b.c.d`: one address, one count.
+        // `::ffff:a.b.c.d` is `a.b.c.d`: one address, one count, and a
+        // v4-mapped reporter is an IPv4 one.
         let reported = SocketAddr::new(reported.ip().to_canonical(), reported.port());
+        let reporter = reporter.to_canonical();
+        // A node sees us over the family it reaches us by; a report of the
+        // other family's address isn't evidence of ours.
+        if reporter.is_ipv4() != reported.is_ipv4() {
+            return None;
+        }
+        let reporter = voter(reporter);
         let votes = if reported.is_ipv4() {
             &mut self.v4
         } else {
@@ -428,7 +454,8 @@ struct Actor {
     pending: Map<u64, Pending>,
     /// Queries in flight per address, for cheap "already asked?" checks.
     pending_addrs: Map<SocketAddr, u32>,
-    next_tid: u64,
+    /// Wire transaction ids for our queries ([`TxIds`]).
+    tids: TxIds,
     lookups: Map<u32, Lookup>,
     next_lookup: u32,
     query_rate: TokenBucket,
@@ -735,7 +762,7 @@ impl Actor {
             pending: Map::default(),
             pending_addrs: Map::default(),
             // The lower half leaves 2^63 tokens before exhaustion.
-            next_tid: rng.random::<u64>() >> 1,
+            tids: TxIds::new(&mut rng),
             lookups: Map::default(),
             next_lookup: 0,
             stats,
@@ -1137,13 +1164,12 @@ impl Actor {
         purpose: Purpose,
         now: Instant,
     ) -> Result<u64, Sent> {
-        // Never reuse a wire token in this process, even after success.
-        // Wire tokens stay below the sampler's proof-token bit (CR-0d):
-        // exhaustion comes 2^63 tokens early, which never happens.
-        let Some(tid) = self.next_tid.checked_add(1).filter(|t| *t < 1 << 63) else {
+        // Never reuse a wire token in this process, even after success,
+        // and keep it below the sampler's proof-token bit (CR-0d); both
+        // hold by construction ([`TxIds`]).
+        let Some(tid) = self.tids.next_id() else {
             return Err(Sent::Throttled);
         };
-        self.next_tid = tid;
         if matches!(purpose, Purpose::Sample) && !self.sampler.reserve(to, tid, now) {
             Stats::inc(&self.stats.sample_deferred);
             return Err(Sent::Throttled);
@@ -2795,6 +2821,7 @@ fn source_label(s: Source) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use rand::SeedableRng;
 
     /// The port for test nodes nothing listens on. Below 1024, so it is
@@ -3239,9 +3266,9 @@ mod tests {
     }
 
     #[test]
-    fn transaction_ids_start_in_the_lower_half() {
+    fn queries_carry_distinct_ids_below_the_proof_bit() {
         for seed in 0..64 {
-            let a = Actor::new(
+            let mut a = Actor::new(
                 Config::default(),
                 Arc::new(Stats::default()),
                 vec![],
@@ -3251,7 +3278,12 @@ mod tests {
                 Instant::now(),
                 StdRng::seed_from_u64(seed),
             );
-            assert!(a.next_tid < 1 << 63, "{seed}: {}", a.next_tid);
+            let mut seen = Set::default();
+            for _ in 0..64 {
+                let id = a.tids.next_id().unwrap();
+                assert!(id < crate::node::tids::LIMIT, "{seed}: {id}");
+                assert!(seen.insert(id), "{seed}: {id} repeated");
+            }
         }
     }
 
@@ -3362,8 +3394,7 @@ mod tests {
         let mut lookup = Lookup::new(a.ids[0], 0);
         lookup.extra_in_flight = 1;
         a.lookups.insert(lid, lookup);
-        a.next_tid += 1;
-        let tid = a.next_tid;
+        let tid = a.tids.next_id().unwrap();
         a.pending.insert(
             tid,
             Pending {
@@ -3738,7 +3769,7 @@ mod tests {
         a.sample_tick(&sockets, Instant::now());
         assert_eq!(a.sampler.frontier_len(), 1);
         assert!(a.pending.is_empty());
-        a.next_tid = u64::MAX;
+        a.tids.exhaust();
         assert_eq!(
             a.try_query(&sockets, 0, to, None, Method::Ping, Purpose::Ping),
             Sent::Throttled
@@ -4053,16 +4084,17 @@ mod tests {
     }
 
     #[test]
-    fn families_are_tallied_apart_and_v6_votes_per_64() {
+    fn families_are_tallied_apart_and_v6_votes_per_48() {
         let mut e = ExternalIp::default();
         let me4: SocketAddr = "203.0.113.9:6881".parse().unwrap();
         let me6: SocketAddr = "[2001:db8::9]:6881".parse().unwrap();
-        // Many IPv6 hosts of one /64 are one voter.
+        // Many IPv6 hosts of one /48, across its /64s, are one voter.
         for i in 1..100u16 {
-            let r = IpAddr::from([0x2001, 0xdb8, 1, 1, 0, 0, 0, i]);
+            let r = IpAddr::from([0x2001, 0xdb8, 1, i, 0, 0, 0, i]);
             e.vote(r, me6);
         }
         assert_eq!(ExternalIp::tally_of(&e.v6).voters, 1);
+        assert_eq!(e.tally().ip, None);
         // IPv6 reports don't dilute an IPv4 majority.
         for i in 1..=5u16 {
             e.vote(IpAddr::from([0x2001, 0xdb8, i + 1, 0, 0, 0, 0, 1]), me6);
@@ -4097,6 +4129,119 @@ mod tests {
             network("::ffff:1.2.3.4".parse().unwrap()),
             network("1.2.3.200".parse().unwrap())
         );
+        assert_eq!(
+            voter("::ffff:1.2.3.4".parse().unwrap()),
+            voter("1.2.3.200".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_report_counts_only_from_its_own_family() {
+        let me4: SocketAddr = "203.0.113.9:6881".parse().unwrap();
+        let me6: SocketAddr = "[2001:db8::9]:6881".parse().unwrap();
+        let mut e = ExternalIp::default();
+        for i in 1..=40u16 {
+            let r6 = IpAddr::from([0x2001, 0xdb8, i, 0, 0, 0, 0, 1]);
+            let r4 = IpAddr::from([9, 9, i as u8, 1]);
+            assert_eq!(e.vote(r6, me4), None);
+            assert_eq!(e.vote(r4, me6), None);
+        }
+        assert_eq!(e.tally(), ExternalVotes::default());
+        assert_eq!(e.current, None);
+        // A v4-mapped reporter is an IPv4 one, for IPv4 addresses only.
+        for i in 1..=5u8 {
+            let mapped = IpAddr::from(std::net::Ipv4Addr::new(8, 8, i, 1).to_ipv6_mapped());
+            e.vote(mapped, me6);
+        }
+        assert_eq!(e.current, None);
+        for i in 1..=5u8 {
+            let mapped = IpAddr::from(std::net::Ipv4Addr::new(8, 8, i, 1).to_ipv6_mapped());
+            e.vote(mapped, me4);
+        }
+        assert_eq!(e.current, Some(me4.ip()));
+    }
+
+    #[test]
+    fn the_vote_converges_on_honest_reports_of_either_family() {
+        let me4: SocketAddr = "203.0.113.9:6881".parse().unwrap();
+        let me6: SocketAddr = "[2001:db8::9]:6881".parse().unwrap();
+        let mut e = ExternalIp::default();
+        let mut changed = vec![];
+        for i in 1..=ExternalIp::QUORUM as u16 {
+            changed.extend(e.vote(IpAddr::from([0x2400, i, 0, 0, 0, 0, 0, 1]), me6));
+        }
+        assert_eq!(changed, vec![me6.ip()]);
+        for i in 1..=ExternalIp::QUORUM as u8 {
+            changed.extend(e.vote(IpAddr::from([100, i, 0, 1]), me4));
+        }
+        // The IPv4 consensus is preferred once it exists.
+        assert_eq!(changed, vec![me6.ip(), me4.ip()]);
+    }
+
+    /// A reporter drawn from a few /24s and /48s (with many hosts and /64s
+    /// each, and v4-mapped forms), so collisions and cross-family reports
+    /// are common.
+    fn arb_reporter() -> impl Strategy<Value = IpAddr> {
+        prop_oneof![
+            (0..4u8, any::<u8>()).prop_map(|(net, host)| IpAddr::from([10 + net, 1, 1, host])),
+            (0..4u8, any::<u8>()).prop_map(|(net, host)| IpAddr::from(
+                std::net::Ipv4Addr::new(20 + net, 1, 1, host).to_ipv6_mapped()
+            )),
+            (0..6u16, any::<u16>(), any::<u16>()).prop_map(|(net, sub, host)| {
+                IpAddr::from([0x2001, 0xdb8, net, sub, 0, 0, 0, host])
+            }),
+        ]
+    }
+
+    fn arb_reported() -> impl Strategy<Value = SocketAddr> {
+        prop_oneof![
+            (0..3u8).prop_map(|i| SocketAddr::from(([198, 51, 100, i], 6881))),
+            (0..3u16)
+                .prop_map(|i| SocketAddr::from(([0x2001, 0xdb8, 0xffff, 0, 0, 0, 0, i], 6881))),
+        ]
+    }
+
+    proptest! {
+        /// `current` changes only to an address that, at that moment, is
+        /// the latest report of at least QUORUM distinct voter units of its
+        /// own family, and of more than half of the voters still in the
+        /// window. Checked against a model built from the inputs alone.
+        #[test]
+        fn current_changes_only_with_a_same_family_majority(
+            events in proptest::collection::vec((arb_reporter(), arb_reported()), 1..400)
+        ) {
+            let mut e = ExternalIp::default();
+            // Per family: each voter unit's latest same-family report, in
+            // arrival order.
+            let mut latest: [Vec<(IpAddr, IpAddr)>; 2] = [vec![], vec![]];
+            for (reporter, reported) in events {
+                let r = reporter.to_canonical();
+                let ip = reported.ip().to_canonical();
+                if r.is_ipv4() == ip.is_ipv4() {
+                    // The voter unit, computed apart from `voter`.
+                    let unit = match r {
+                        IpAddr::V4(v) => {
+                            let [a, b, c, _] = v.octets();
+                            IpAddr::from([a, b, c, 0])
+                        }
+                        IpAddr::V6(v) => {
+                            let s = v.segments();
+                            IpAddr::from([s[0], s[1], s[2], 0, 0, 0, 0, 0])
+                        }
+                    };
+                    let fam = &mut latest[usize::from(ip.is_ipv6())];
+                    fam.retain(|(u, _)| *u != unit);
+                    fam.push((unit, ip));
+                }
+                if let Some(new) = e.vote(reporter, reported) {
+                    let fam = &latest[usize::from(new.is_ipv6())];
+                    let window = &fam[fam.len().saturating_sub(ExternalIp::WINDOW)..];
+                    let agree = window.iter().filter(|(_, ip)| *ip == new).count();
+                    prop_assert!(agree >= ExternalIp::QUORUM, "{new}: {agree}");
+                    prop_assert!(agree * 2 > window.len(), "{new}: {agree}/{}", window.len());
+                }
+            }
+        }
     }
 
     #[test]
