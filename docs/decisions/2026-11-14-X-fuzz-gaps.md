@@ -1,4 +1,4 @@
-# X-fuzz-gaps decisions
+# X-fuzz-gaps decisions (#884)
 
 Follows the 2026-11-14 parser review (the fuzz and property-test gaps sent to the runner). Fuzz inputs and one new target; no product code.
 
