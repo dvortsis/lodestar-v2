@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T04:38Z",
+  "updated_at": "2026-11-14T04:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8388,6 +8388,10 @@
     {
       "at": "2026-11-14T04:38Z",
       "item": "Register slices from X-cmp01-fix: X-cmp-supervisor-bind (companions: tie the loopback listener to the supervised process; condition of the first managed pin) and X-cmp-managed-client (lodestar: one shared companion HTTP client, loopback-v4-only on the managed path). Next runner PR."
+    },
+    {
+      "at": "2026-11-14T04:40Z",
+      "item": "X-sim-restart-seed: crawler-sim restart-honoured fails on main with seed 5 (restart.rs:423 assertion, sampling resumed after 69 s); golden seed passes. Pre-existing; found by X-sec-S1-01-02 seed spread. Small Opus slice after X-sec-S1-01-02 merges (crawler-sim owns). Next runner PR."
     }
   ],
   "main_health": [
@@ -9711,7 +9715,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T04:38Z",
+  "updated": "2026-11-14T04:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
