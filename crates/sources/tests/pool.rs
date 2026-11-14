@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
-use lodestar_sources::pool::{MAX_VOUCHED_PER_IP, Reservation, SHUTDOWN_DRAIN, spawn};
+use lodestar_sources::pool::{
+    MAX_VOUCHED_PER_IP, Reservation, SHUTDOWN_DRAIN, address_caps, spawn,
+};
 use lodestar_sources::{
     BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PeerIpCap,
     PoolConfig, PoolHandle, PoolIo, Shutdown, Stage,
@@ -1085,10 +1087,14 @@ async fn a_full_queue_evicts_the_oldest_idle_key() {
 /// queue is full.
 #[tokio::test(start_paused = true)]
 async fn one_address_has_peers_in_a_bounded_number_of_keys() {
-    let max = MAX_VOUCHED_PER_IP as u32;
-    let extra = 40u32;
+    // A small queue, so the test can fill it: the limit is its share.
+    let queue = 2048;
+    let (max, _) = address_caps(queue);
+    assert!((2..MAX_VOUCHED_PER_IP).contains(&max), "a scaled limit");
+    let max = max as u32;
+    let extra = queue as u32 - max;
     let cfg = PoolConfig {
-        max_pending: (max + extra) as usize,
+        max_pending: queue,
         max_lookups: 4096,
         ..config()
     };
@@ -1143,6 +1149,55 @@ async fn one_address_has_peers_in_a_bounded_number_of_keys() {
         admitted >= new as usize - 5,
         "{admitted} of {new} new keys admitted"
     );
+}
+
+/// One network (an IPv4 /24, an IPv6 /48) has peers in a bounded number of
+/// keys at once too, however many addresses inside it they are spread
+/// over; another network has its own share.
+#[tokio::test(start_paused = true)]
+async fn one_network_has_peers_in_a_bounded_number_of_keys() {
+    let queue = 12_800;
+    let (per_address, max) = address_caps(queue);
+    assert!(per_address < max && max < 200, "{per_address} {max}");
+    let extra = 20;
+    let v4 = |net: u8, host: u16| {
+        let net = [[192, 0, 2], [198, 51, 100]][net as usize];
+        SocketAddr::from(([net[0], net[1], net[2], host as u8], 6881))
+    };
+    let v6 = |net: u8, host: u16| {
+        SocketAddr::from(([0x2001, 0xdb8, u16::from(net), host, 0, 0, 0, 1], 6881))
+    };
+    type At = dyn Fn(u8, u16) -> SocketAddr;
+    let families: [(&str, &At); 2] = [("a /24", &v4), ("a /48", &v6)];
+    for (i, (what, at)) in families.into_iter().enumerate() {
+        let cfg = PoolConfig {
+            max_pending: queue,
+            max_lookups: 4096,
+            ..config()
+        };
+        let mut h = Harness::start(cfg, &[], vec![]);
+        let base = i as u32 * 100_000;
+        // One key at each of many addresses inside one network.
+        for n in 1..=(max + extra) as u32 {
+            let peer = at(0, n as u16);
+            h.script(peer, 3_600_000, Ok(()));
+            h.send(found(0, base + n, vec![peer]));
+        }
+        sleep(Duration::from_millis(10)).await;
+        let mut looked = h.drain_lookups();
+        looked.sort();
+        let want: Vec<InfoHash> = (max as u32 + 1..=(max + extra) as u32)
+            .map(|n| key(base + n))
+            .collect();
+        assert_eq!(looked, want, "{what}: the keys past its limit");
+        // Another network is not full.
+        let other = at(1, 1);
+        h.script(other, 3_600_000, Ok(()));
+        h.send(found(0, base + 90_000, vec![other]));
+        sleep(Duration::from_millis(10)).await;
+        assert!(h.drain_lookups().is_empty(), "{what}: another has room");
+        h.stop().await;
+    }
 }
 
 /// A fetched key gives its place back, and a key counts at each address

@@ -150,10 +150,14 @@ impl Worker {
     async fn found(&self, key: InfoHash, token: u64) {
         self.leases.insert(key, Token(token));
         let mut found = Found::key(key, 0);
-        // A peer of its own for each key: the pool takes only so many keys
-        // at once on one address's word (`MAX_VOUCHED_PER_IP`).
-        let [hi, lo] = (token as u16).to_be_bytes();
-        found.peers = vec![std::net::SocketAddr::from(([198, 51, hi, lo], 6881))];
+        // A peer in a network of its own for each key (documentation
+        // addresses): the pool takes only so many keys at once with a peer
+        // at one address or in one network.
+        let net = token as u16;
+        found.peers = vec![std::net::SocketAddr::from((
+            [0x2001, 0xdb8, net, 0, 0, 0, 0, 1],
+            6881,
+        ))];
         self.discoveries
             .send(Discovery {
                 source: source(),
