@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:47Z",
+  "updated_at": "2026-11-14T01:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8722,11 +8722,15 @@
     "859": {
       "slice": "X-operator-hardening",
       "slot": 15,
-      "state": "fix round (review items + owner rule A); held for owner rule build"
+      "state": "fix round (review items + owner rule A); held for owner rule build",
+      "head": "1e39409b",
+      "status": "ready; fresh Opus + security review running"
     },
     "860": {
       "slice": "runner",
-      "state": "review CHANGES fixed at 89629350; fresh delta review running"
+      "state": "review CHANGES fixed at 89629350; fresh delta review running",
+      "head": "90c25743",
+      "status": "delta fixes pushed; awaiting CI"
     }
   },
   "merged_log": [
@@ -9373,7 +9377,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:47Z",
+    "updated": "2026-11-14T01:53Z",
     "items": [
       {
         "slot": 1,
@@ -9644,7 +9648,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:47Z",
+  "updated": "2026-11-14T01:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
