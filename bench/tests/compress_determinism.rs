@@ -1,6 +1,7 @@
 //! zstd at the store's settings gives the same bytes for the same tree
 //! and dictionary, whether the compressor is fresh or has compressed
-//! other trees first (the store reuses one per connection).
+//! other trees first (the store reuses one per connection). Named to run
+//! before `dataset.rs`: cargo stops at the first failing test binary.
 
 use lodestar_bench::dataset::{self, Key};
 use lodestar_store::rusqlite::{Connection, OpenFlags};
@@ -125,5 +126,49 @@ fn one_tree_compresses_to_one_output_however_often() {
         all.len(),
         1,
         "outputs (size, count, is the stored one): {sizes:?}"
+    );
+}
+
+/// Builds of one key on four threads at once, as the dataset tests run:
+/// every build stores torrent 56's tree as the same bytes, and they're
+/// what a fresh compressor gives for that tree on the same thread.
+#[test]
+fn builds_on_several_threads_store_one_blob() {
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            std::thread::spawn(|| {
+                let d = tempfile::tempdir().unwrap();
+                let ds =
+                    dataset::build_until(d.path(), Key::new(7, 1200), &mut |_| {}, Some("stored"))
+                        .unwrap();
+                let c =
+                    Connection::open_with_flags(ds.db(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+                let dict: Vec<u8> = c
+                    .query_row("SELECT data FROM zstd_dicts", [], |r| r.get(0))
+                    .unwrap();
+                let blob: Vec<u8> = c
+                    .query_row(
+                        "SELECT data FROM torrent_files WHERE torrent_id = 56",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                let raw = Decompressor::with_dictionary(&dict)
+                    .unwrap()
+                    .decompress(&blob, 1 << 30)
+                    .unwrap();
+                let mut z = Compressor::with_dictionary(19, &dict).unwrap();
+                z.set_parameter(CParameter::DictIdFlag(false)).unwrap();
+                z.set_parameter(CParameter::ChecksumFlag(false)).unwrap();
+                let fresh = z.compress(&raw).unwrap();
+                (blob, fresh)
+            })
+        })
+        .collect();
+    let got: Vec<(Vec<u8>, Vec<u8>)> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let sizes: Vec<(usize, usize)> = got.iter().map(|(b, f)| (b.len(), f.len())).collect();
+    assert!(
+        got.iter().all(|g| *g == got[0]) && got[0].0 == got[0].1,
+        "torrent 56 per build (stored, fresh): {sizes:?}"
     );
 }
