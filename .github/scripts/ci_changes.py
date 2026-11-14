@@ -10,7 +10,11 @@ request gets:
   job checks it), or one of the files listed in RUST_ALSO below (the
   companion templates, the Windows launcher, main.wxs, the packaging
   PowerShell scripts, the public keys, the docs that Rust tests read, the
-  licence notices and the scripts the Rust jobs run);
+  licence notices and the scripts the Rust jobs run). The user guide
+  (`docs/user/`) is not on that list: the one Rust test that reads it runs in
+  the small `rust-docs` job (`rust_docs` below), so a guide edit doesn't pay
+  for the whole workspace's tests, and a PR that turns the Rust jobs on for
+  another reason covers it already;
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
@@ -69,13 +73,17 @@ RUST_ALSO = re.compile(
     r"|^packaging/keys/[^/]+\.pub$"
     # Docs that Rust tests and includes read: the metrics table (metrics.rs, serve.rs),
     # the query-language examples (doc_examples.rs), the legal notice (api/src/legal.rs,
-    # legal_facts.rs), the user guide (sources-plugins safety.rs) and the bitmagnet
-    # reader-role SQL (bitmagnet_check.rs).
+    # legal_facts.rs) and the bitmagnet reader-role SQL (bitmagnet_check.rs). The user guide
+    # (sources-plugins safety.rs) is not here: see RUST_DOCS_ONLY.
     r"|^docs/(metrics|query-language)\.md$"
     r"|^docs/legal/legal-notice\.md$"
-    r"|^docs/user/"
     r"|^docs/operations/imports/bitmagnet-restore/reader-role\.sql$"
 )
+
+# The user guide. Its only Rust reader is the guide-wording assertion in
+# crates/sources-plugins/tests/safety.rs, which the `rust-docs` job runs alone.
+# test_ci_changes.py greps the Rust sources, so a second reader can't go unnoticed.
+USER_GUIDE = re.compile(r"^docs/user/")
 
 # Web and E2E applicability. Both workflows run on every pull request; these
 # patterns decide whether their heavy jobs do. Files the web tests read from
@@ -209,6 +217,7 @@ def main() -> None:
     if event != "pull_request" or "full-ci" in labels:
         out.update(
             rust="true",
+            rust_docs="true",
             bench="true",
             filter="true",
             importer="true",
@@ -257,6 +266,8 @@ def main() -> None:
 
     rust = everything or bool(touched) or any(RUST_ALSO.match(f) for f in changed)
     out["rust"] = str(rust).lower()
+    # The user guide's one Rust reader runs on its own, unless the full Rust jobs already do.
+    out["rust_docs"] = str(not rust and any(USER_GUIDE.match(f) for f in changed)).lower()
     out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest"] if rust else [])
     out["bench"] = str(needs({"lodestar-bench"})).lower()
     out["filter"] = str(needs({"lodestar-filter"}, tested=True)).lower()

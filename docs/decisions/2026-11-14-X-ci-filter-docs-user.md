@@ -1,0 +1,11 @@
+# X-ci-filter-docs-user decisions (#858)
+
+Date: 2026-11-14Z. Slice: X-ci-filter-docs-user. Decided by the runner (`docs/owner-decisions.md` §2.33). CI only; no product change.
+
+- **The cost:** `^docs/user/` was in `RUST_ALSO`, so any user-guide edit set `rust=true` and ran fmt, clippy, openapi drift and the whole workspace's tests on Linux and Windows (about 55 min on Windows). #854, a wording change, paid it. The guide's only Rust reader is the guide-wording assertion in `crates/sources-plugins/tests/safety.rs`, which walks every `.md` under `docs/user/`.
+- **The change:** `^docs/user/` is out of `RUST_ALSO`. A new output, `rust_docs`, is true when the PR changes a file under `docs/user/` and `rust` is false. A new ubuntu-only job, `rust-docs`, runs when it is true: `cargo test -p lodestar-sources-plugins --test safety`. It is in the `ci-ok` aggregate, so a skipped job counts as passing and a failed one fails.
+- **What is given up:** a guide-only PR no longer runs the assertion on Windows. It only reads `.md` files and searches for phrases, so a Windows-only failure isn't realistic; main, the nightly and `full-ci` still run it there.
+- **Always on:** pushes to main, the nightly, manual runs and the `full-ci` label set `rust_docs=true`, like every other output. When the Rust jobs run for another reason (`rust=true`), `rust_docs` is false, because `cargo test --workspace` already runs that test.
+- **Job setup:** the same checkout, toolchain, cache and debug-info settings as the `test` job, without the clippy component or the free-disk-space step (one crate's tests fit the runner and need no lints). No new permissions, secrets, environments or triggers, and no other job changed.
+- **Drift guard:** `test_ci_changes.py` greps every `*.rs` under `crates/`, `bench/` and `fuzz/` for `docs/user` and fails unless the only file is `crates/sources-plugins/tests/safety.rs`. A new Rust reader of the guide must join the `rust-docs` job or put `^docs/user/` back in `RUST_ALSO`. The failure message says so.
+- **Unchanged:** `docs/user/03-keep-lodestar-safe.md` still turns `infra` on (the fleet tests quote it); a guide edit that touches it runs the infra job and the small Rust job, not the workspace.
