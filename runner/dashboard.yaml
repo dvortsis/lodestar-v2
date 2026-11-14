@@ -1677,7 +1677,7 @@ owner_queue:
 
 - n: 26
   type: decision
-  action: 'X-operator-hardening (#859): an incomplete operator sweep (for example, a summary it can''t read) now escalates to you without disabling the operator; bot findings still disable it. This loosens the runner''s 2026-11-11 fail-closed call (OP-4). Runner recommends accepting: fail-closed on every unreadable summary would disable the operator on transient API errors. Alternative: keep fail-closed.'
+  action: 'X-operator-hardening (#859): when the operator''s sweep can''t finish (for example, a summary it can''t read), should it still switch the operator off? Today''s rule (the runner''s 2026-11-11 fail-closed call, OP-4) switches it off, so anyone who floods the sweep can switch it off. The PR changes this to tell you instead, without switching off; findings about the bot still switch it off. Runner recommends a middle option: switch off only when a wake session ran inside the sweep''s lookback (when the bot could have acted), and otherwise tell you. Then a stranger can block only the hours after a session, not switch the operator off whenever they like. Other choices: the PR as written, or keep today''s rule.'
   unblocks: Merging #859, then first-run check 8
   when: Before check 8
 
