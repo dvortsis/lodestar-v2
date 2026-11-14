@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:35Z",
+  "updated_at": "2026-11-14T03:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8765,6 +8765,11 @@
       "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
       "at": "2026-11-14T00:39Z",
       "status": "held-text fix push; then ready, fresh Opus + security review"
+    },
+    "865": {
+      "slice": "X-operator-tripwire-settle",
+      "head": "1772b164",
+      "status": "fresh Opus review running"
     }
   },
   "merged_log": [
@@ -9411,7 +9416,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T03:35Z",
+    "updated": "2026-11-14T03:37Z",
     "items": [
       {
         "slot": 1,
@@ -9500,7 +9505,7 @@
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
         "since": "2026-11-14T03:18Z",
-        "doing": "#859 X-operator-hardening merged dab4d8ff; same session builds X-operator-tripwire-settle (operator tripwire: settle wait and request budget; detail by message) before first-run check 8",
+        "doing": "#865 X-operator-tripwire-settle ready at 1772b164; fresh Opus review running; check 8 after merge",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -9682,7 +9687,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T03:35Z",
+  "updated": "2026-11-14T03:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
