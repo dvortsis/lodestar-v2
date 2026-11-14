@@ -329,10 +329,9 @@ async fn answering() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
 }
 
 /// X-cmp-supervisor-bind: a companion Lodestar runs owns its port from its
-/// start. While its child isn't running (here, held for its route), an
-/// answer on 127.0.0.1 from another process doesn't let a request that
-/// carries something through, and the port stays Lodestar's after the
-/// stop: nothing for it is sent to anything else.
+/// start. While it isn't running (here, held for its route), an answer on
+/// 127.0.0.1 never passes its health check or lets a request that carries
+/// something through, and the port stays managed after the stop.
 #[tokio::test]
 async fn a_companion_not_running_gets_no_credentialed_request() {
     let (port, seen) = answering().await;

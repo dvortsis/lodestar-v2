@@ -212,6 +212,9 @@ struct FakeRun {
     bound: Mutex<Option<(Arc<Bindings>, u16)>>,
     /// While set, a health check waits for `opened` before it answers.
     gate: AtomicBool,
+    /// Once set, the next passing bound check moves the status on to the
+    /// next run right after it: a restart before the follow begins.
+    restart_after_check: AtomicBool,
     opened: tokio::sync::Notify,
 }
 
@@ -233,6 +236,7 @@ fn status(state: State) -> Status {
         last_exit: None,
         run: 0,
         up: false,
+        pid: None,
     }
 }
 
@@ -257,6 +261,8 @@ impl Run for FakeRun {
             let first = Status {
                 run: u64::from(bound.is_some()),
                 up: true,
+                // A process for the (trusting) listener check to name.
+                pid: bound.is_some().then_some(1),
                 ..status(State::Running)
             };
             let tx = watch::channel(first).0;
@@ -285,7 +291,13 @@ impl Run for FakeRun {
             let bound = self.bound.lock().unwrap().clone();
             match bound {
                 // As `Supervised`'s check: it readies only the run up now.
-                Some((b, p)) => b.try_ready(p, || async move { ok }).await,
+                Some((b, p)) => {
+                    let ready = b.try_ready(p, || async move { ok }).await;
+                    if ready && self.restart_after_check.swap(false, Ordering::SeqCst) {
+                        self.run().send_modify(|s| s.run += 1);
+                    }
+                    ready
+                }
                 None => ok,
             }
         })
@@ -2373,7 +2385,7 @@ async fn a_restart_with_no_back_off_is_checked_again_and_found_ready() {
     let _g = SERIAL.lock().await;
     let w = World::new();
     let port = 8080;
-    let bindings = Arc::new(Bindings::new());
+    let bindings = Arc::new(Bindings::trusting());
     *w.run.bound.lock().unwrap() = Some((bindings.clone(), port));
     let m = w.manager(catalogue("5.0.3"), LINUX);
     m.install(&token("5.0.3")).await.unwrap();
@@ -2394,6 +2406,7 @@ async fn a_restart_with_no_back_off_is_checked_again_and_found_ready() {
     w.run.run().send_replace(Status {
         run: 2,
         up: true,
+        pid: Some(1),
         ..status(State::Running)
     });
     assert!(!bindings.ready(port));
@@ -2418,4 +2431,23 @@ async fn a_restart_with_no_back_off_is_checked_again_and_found_ready() {
     w.run.opened.notify_one();
     until("ready again", || bindings.ready(port)).await;
     assert_eq!(bindings.ready_run(port), Some(2));
+}
+
+/// X-cmp09-fix: the follow starts from the run the start's check found
+/// ready, so a restart between that check and the follow is checked again
+/// and found ready, not taken for the run already checked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_before_the_follow_begins_is_checked_again() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let port = 8080;
+    let bindings = Arc::new(Bindings::trusting());
+    *w.run.bound.lock().unwrap() = Some((bindings.clone(), port));
+    w.run.restart_after_check.store(true, Ordering::SeqCst);
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    // The install's check found run 1 ready; run 2 is up by the follow.
+    assert_eq!(w.run.run().borrow().run, 2);
+    until("run 2 ready", || bindings.ready_run(port) == Some(2)).await;
+    assert!(bindings.ready(port));
 }

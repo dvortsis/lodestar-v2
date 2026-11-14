@@ -1045,3 +1045,112 @@ async fn a_child_stopped_for_its_health_is_down_before_it_has_stopped() {
     );
     sup.shutdown().await;
 }
+
+/// A free loopback port, found by binding one and letting it go.
+fn free_port() -> u16 {
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+    l.local_addr().unwrap_or_else(|e| panic!("{e}")).port()
+}
+
+/// X-cmp09-fix: the listener on a port is told by its owner. A child of
+/// ours listening on its port is ours; a listener the test opens isn't,
+/// and a port nobody holds has nobody. A readiness attempt on the test's
+/// listener, though its health check passes, readies nothing.
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_childs_own_listener_counts() {
+    use lodestar_companions::supervise::bind::Bindings;
+    use lodestar_companions::supervise::listener::{Owner, owner};
+
+    let port = free_port();
+    let port_s = port.to_string();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    sup.add(companion(
+        data.path(),
+        "prowlarr",
+        "serve",
+        &[("FAKE_PORT", &port_s)],
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    let s = wait_status(&mut rx, "up", |s| s.up && s.pid.is_some()).await;
+    wait_line(&ring, "READY").await;
+    let pid = s.pid.unwrap_or_else(|| panic!("no pid"));
+    let mine = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+    let other = mine.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    let unused = free_port();
+    let got = tokio::task::spawn_blocking(move || {
+        (owner(port, pid), owner(other, pid), owner(unused, pid))
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(got, (Owner::Ours, Owner::Other, Owner::Nobody));
+    // The child's run, held on the test's port: refused, and why.
+    let bindings = Bindings::new();
+    assert!(bindings.hold(other, rx.clone()));
+    assert!(!bindings.try_ready(other, || async { true }).await);
+    assert!(!bindings.ready(other));
+    assert_eq!(bindings.refusal(other), Some("listener_not_ours"));
+    // On its own port: ready.
+    assert!(bindings.hold(port, rx.clone()));
+    assert!(bindings.try_ready(port, || async { true }).await);
+    drop(mine);
+    sup.shutdown().await;
+}
+
+/// X-cmp09-fix: a companion whose port another program already holds is
+/// never started. It backs off as after a crash and, while the port stays
+/// taken, ends waiting for you with `port_in_use`. Once the port is free
+/// a restart starts it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_port_already_in_use_is_never_started_on() {
+    let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+    let port = taken.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let health = Arc::new(FakeHealth {
+        id: id("prowlarr"),
+        healthy: true,
+        calls: AtomicU32::new(0),
+    });
+    let mut c = companion(data.path(), "prowlarr", "hang", &[]);
+    c.probe = Some(Probe {
+        health,
+        http: Arc::new(NoHttp),
+        target: Target::Loopback(PortNumber::new(port).unwrap_or_else(|e| panic!("{e:?}"))),
+    });
+    sup.add(c).unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    let s = wait_status(&mut rx, "waiting for you", |s| {
+        matches!(s.state, State::NeedsAttention(_))
+    })
+    .await;
+    assert_eq!(s.state, State::NeedsAttention(Attention::PortInUse));
+    assert_eq!(Attention::PortInUse.code(), "port_in_use");
+    assert_eq!((s.run, s.pid), (0, None), "it was started");
+    assert!(
+        ring.lines().is_empty(),
+        "it was started: {:?}",
+        ring.lines()
+    );
+    drop(taken);
+    assert!(sup.restart(&id("prowlarr")));
+    wait_status(&mut rx, "started", |s| s.up && s.run == 1).await;
+    wait_line(&ring, "READY").await;
+    sup.shutdown().await;
+}

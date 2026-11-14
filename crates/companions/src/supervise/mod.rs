@@ -39,6 +39,7 @@ pub mod limits;
 pub mod limits_linux;
 #[cfg(windows)]
 pub mod limits_windows;
+pub mod listener;
 pub mod logs;
 pub mod pidfile;
 pub mod process;
@@ -116,6 +117,9 @@ pub enum Attention {
     CrashLoop,
     /// It can't be started as configured; the [`SpawnError`] code.
     Refused(&'static str),
+    /// Its port stayed in use by another program through the crash
+    /// window, so it was never started.
+    PortInUse,
 }
 
 impl Attention {
@@ -123,6 +127,7 @@ impl Attention {
         match self {
             Attention::CrashLoop => "crash_loop",
             Attention::Refused(code) => code,
+            Attention::PortInUse => "port_in_use",
         }
     }
 }
@@ -179,6 +184,9 @@ pub struct Status {
     /// moment it's found gone or is told to stop, before the stop and the
     /// clean-up that follow (`bind`).
     pub up: bool,
+    /// The process id of run `run`, set as it starts: the process the
+    /// listener on its port must belong to (`bind`, `listener`).
+    pub pid: Option<u32>,
 }
 
 /// A companion's health check: the adapter (CMP-8a), the guarded client
@@ -369,6 +377,7 @@ impl Supervisor {
             last_exit: None,
             run: 0,
             up: false,
+            pid: None,
         });
         let (control, control_rx) = mpsc::unbounded_channel();
         let logs = LogRing::default();
@@ -550,10 +559,18 @@ async fn supervise(
             continue;
         }
         set(State::Starting);
-        let (spec, h) = (c.spawn.clone(), hook.clone());
-        let spawned = tokio::task::spawn_blocking(move || process::spawn(&spec, h.as_ref()))
-            .await
-            .unwrap_or(Err(SpawnError::Start(std::io::ErrorKind::Other)));
+        // A port another program holds already: it isn't started, and the
+        // try counts as a crash, so it backs off and, if the port stays
+        // taken, waits for you (X-cmp09-fix).
+        let port_busy = loopback_port(&c).is_some_and(port_taken);
+        let spawned = if port_busy {
+            Err(SpawnError::Start(std::io::ErrorKind::AddrInUse))
+        } else {
+            let (spec, h) = (c.spawn.clone(), hook.clone());
+            tokio::task::spawn_blocking(move || process::spawn(&spec, h.as_ref()))
+                .await
+                .unwrap_or(Err(SpawnError::Start(std::io::ErrorKind::Other)))
+        };
         let ended = match spawned {
             Ok(started) => run(&c, started, &t, &status, &logs, &redactor, &mut control).await,
             Err(
@@ -592,7 +609,11 @@ async fn supervise(
                     crashes.pop_front();
                 }
                 if crashes.len() >= t.crash_limit {
-                    parked = Some(Attention::CrashLoop);
+                    parked = Some(if port_busy {
+                        Attention::PortInUse
+                    } else {
+                        Attention::CrashLoop
+                    });
                     continue;
                 }
                 let delay = backoff(in_a_row, &t);
@@ -613,6 +634,28 @@ async fn supervise(
         }
     }
     set(State::Stopped);
+}
+
+/// The loopback port a companion's health check reaches, if it has one.
+fn loopback_port(c: &Companion) -> Option<u16> {
+    match c.probe.as_ref()?.target {
+        Target::Loopback(p) => Some(p.get()),
+        _ => None,
+    }
+}
+
+/// Whether another program already holds `127.0.0.1:port`: a listener
+/// bound there and dropped at once. Only "in use" (or, on Windows, an
+/// exclusive hold's "access denied") counts; any other failure leaves the
+/// start to the companion.
+fn port_taken(port: u16) -> bool {
+    match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+        Ok(_) => false,
+        Err(e) => {
+            e.kind() == std::io::ErrorKind::AddrInUse
+                || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
+        }
+    }
 }
 
 /// Waits for a restart, stop or hold; a closed channel is a stop. A
@@ -662,6 +705,7 @@ async fn run(
         s.state = State::Running;
         s.run += 1;
         s.up = true;
+        s.pid = Some(pid);
     });
     // Down from the moment it's found gone or told to stop.
     let down = || status.send_modify(|s| s.up = false);
