@@ -11,7 +11,10 @@ Follow-ups from #839 (X-lease-reconcile-every-session) and two nits from #853. B
 - **Test:** `a_full_event_queue_doesnt_hold_up_a_local_stop`. A one-slot event queue is flooded with large `Assign`s, and the drain returns only once several are on the wire, so the session's loop is already blocked when `Drained` reaches it. The stop still ends on the coordinator's confirmation, every lease back. Against the old stop it fails: it waits out its deadline and keeps the work for the next start (self-review).
 
 ## A flush on a session change
-- **The flush now sends on a new session before it answers, instead of correcting the comment** (runtime.rs). Tested by `a_flush_that_sees_a_new_session_sends_there_before_answering`: whichever of the flush or the loop top holds the batch when the session changes (the scheduler decides), it's out on the new session before the flush answers.
+- **The flush now sends on a new session before it answers, instead of correcting the comment** (runtime.rs). Tested by `a_flush_that_sees_a_new_session_sends_there_before_answering`.
+  - The test makes the flush's own loop the only path that can send the batch. The batch is refused for now (the loop top never sends a refused batch), the old link is full, and the session changes, without a new generation, once the flush has read the old one. Two test-only hooks mark those points (`TestHooks`, never in the binary).
+  - The batch is on the new link when the drain returns. With the loop removed, the test fails (runner's review).
+- **The session task's retry interval starts one period in, not at once.** At the start nothing has been sent, so the immediate first tick could only resend a batch refused before it was first polled. The test found it doing exactly that.
   - When the session changes while a flush sends, a new session gets the batches before the flush answers, and no session sends them to the spool.
   - Each extra round needs a real session change, and the caller's drain deadline bounds the wait for the answer.
   - Why: a drain that answered "flushed" with nothing sent on a healthy session would hand back leases whose results never left.
@@ -35,6 +38,7 @@ Follow-ups from #839 (X-lease-reconcile-every-session) and two nits from #853. B
 - **Re-grants don't see a worker pool's room.** A key re-granted to a full pool is evicted there and reported lost, then harvested again when it's sighted. #839's lease cap (2 × the pool cap) bounds it.
 - **Why not here:** the coordinator doesn't know a pool's fill. Only the worker does (`pool_room`: pool cap less leases held).
 - **Proposal for a follow-up:**
+  - the room a worker reports is stale by the time it's used, so the coordinator subtracts what it has granted that worker since: room − (held now − held at the report). Otherwise the over-grant comes back within each heartbeat window;
   - the worker reports its pool room in `Stats` with each heartbeat;
   - `regrant_pending` takes `min(lease-cap room, reported pool room, per_target)` per target;
   - a worker that hasn't reported yet, or an older worker, keeps today's bound.
@@ -45,5 +49,10 @@ Follow-ups from #839 (X-lease-reconcile-every-session) and two nits from #853. B
 - **The X-flake-companions-loopback decisions no longer say "(or 127.0.0.1)":** only the `::1` bind retries.
 - **The `CI` check's comment says any value counts.**
 
+## Not in this PR
+- **A drain the coordinator asks for (`WorkerEvent::Drain`) still reads no events while it hands back** (`work.drain()`, `session.drained()`), so a full event queue can stall it the same way. It predates this PR; a follow-up for the runner.
+- **The `cluster.claims_capped` log** (above).
+
 ## Other
+- **`reconcile` keeps its holder check** although the index already gives only that worker's keys: a cheap guard should the two ever disagree.
 - **The `leases.rs` test panic now says what was expected** ("a fresh key wasn't granted").

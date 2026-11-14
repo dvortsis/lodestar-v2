@@ -453,8 +453,8 @@ async fn a_closed_port_refuses_and_cant_be_taken() {
         "{refused}"
     );
     // Taken: the held socket doesn't set `SO_REUSEADDR`, so this is
-    // `AddrInUse` on every target (an excluded-range `PermissionDenied` can't arise for a
-    // port the system just handed out).
+    // `AddrInUse` on every target. An excluded-range `PermissionDenied`
+    // can't arise for a port the system just handed out.
     let taken = TcpListener::bind(closed.v4()).await.unwrap_err();
     assert_eq!(taken.kind(), io::ErrorKind::AddrInUse, "{taken}");
 }
