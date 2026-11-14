@@ -823,6 +823,12 @@ impl ClusterServer {
             .unwrap_or_default()
     }
 
+    /// [`certificates`](Self::certificates), or `None` if the lookup
+    /// itself failed (an empty list means there are none).
+    pub async fn try_certificates(&self) -> Option<Vec<crate::IssuedCert>> {
+        self.with_pki(|p| p.pki.coordinator.certificates()).await
+    }
+
     /// The heartbeat interval: a revoked worker's connection is closed
     /// within one of these at most.
     pub fn heartbeat_interval(&self) -> Duration {

@@ -356,8 +356,7 @@ impl Workers {
     /// gone meanwhile is dropped. Failures stay quiet here: the first was
     /// logged.
     async fn save_unsaved(&self) {
-        let pending: Vec<WorkerId> = lock(&self.unsaved).iter().copied().collect();
-        if pending.is_empty() {
+        if lock(&self.unsaved).is_empty() {
             return;
         }
         {
@@ -367,17 +366,42 @@ impl Workers {
             }
             *last = Some(std::time::Instant::now());
         }
+        let Some(server) = self.cluster.server() else {
+            return;
+        };
+        let certs = server.try_certificates().await;
+        self.save_unsaved_with(&server, certs).await;
+    }
+
+    /// One round of [`save_unsaved`](Self::save_unsaved), given the
+    /// certificate lookup's answer. A failed lookup (`None`) skips the
+    /// round and keeps every held pause. A worker is gone only when it
+    /// isn't connected and the lookup found no certificate of it that
+    /// stands; its pause is then dropped.
+    async fn save_unsaved_with(&self, server: &ClusterServer, certs: Option<Vec<IssuedCert>>) {
+        let Some(certs) = certs else {
+            return;
+        };
+        let standing: BTreeSet<WorkerId> = certs
+            .into_iter()
+            .filter(|c| !c.revoked)
+            .map(|c| c.worker)
+            .collect();
+        let connected: BTreeSet<WorkerId> = server
+            .snapshot()
+            .workers
+            .into_iter()
+            .filter(|s| s.connected)
+            .map(|s| s.worker)
+            .collect();
+        let pending: Vec<WorkerId> = lock(&self.unsaved).iter().copied().collect();
         for w in pending {
             let _edit = self.edits.lock().await;
             if !lock(&self.unsaved).contains(&w) {
                 continue;
             }
-            let Some(server) = self.cluster.server() else {
-                return;
-            };
-            let done =
-                self.check(&server, w).await.is_err() || self.set_paused(w, true).await.is_ok();
-            if done {
+            let gone = !standing.contains(&w) && !connected.contains(&w);
+            if gone || self.set_paused(w, true).await.is_ok() {
                 lock(&self.unsaved).remove(&w);
             }
         }
@@ -1404,6 +1428,32 @@ mod tests {
         let s = c.connect(&creds).await;
         assert!(granted(&s.claim(claim(7)).await.unwrap()));
         drop(s);
+        c.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_certificate_lookup_keeps_every_held_pause() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        lock(&c.workers.unsaved).insert(w);
+        let server = c.cluster.handle().server().unwrap();
+        // The lookup failed: the round is skipped, nothing saved or dropped.
+        c.workers.save_unsaved_with(&server, None).await;
+        assert!(lock(&c.workers.unsaved).contains(&w));
+        assert!(!c.workers.saved(w).paused);
+        assert!(c.workers.is_paused(w));
+        // An answer that lists it: saved, and no longer held unsaved.
+        let certs = server.try_certificates().await;
+        assert!(
+            certs
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|x| x.worker == w))
+        );
+        c.workers.save_unsaved_with(&server, certs).await;
+        assert!(c.workers.saved(w).paused);
+        assert!(lock(&c.workers.unsaved).is_empty());
         c.stop().await;
     }
 
