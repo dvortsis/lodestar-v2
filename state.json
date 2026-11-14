@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:44Z",
+  "updated_at": "2026-11-14T03:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8372,7 +8372,8 @@
     "#857 review brief: its re-judge reads every stored file list (see S8-02)",
     "X-fuzz-gaps (slot 33 reviewer session): peer-wire fuzz target + parser seeds; owns fuzz/fuzz_targets/peer_wire.rs, fuzz/seeds/{bencode,krpc,tokenizer,peer_wire}/**, fuzz/Cargo.toml, fuzz/Cargo.lock, fuzz/README.md, its decisions file; after X-cmp01-fix; add to slices.yaml in next runner PR",
     "Fuzz dictionaries need a ci.yml flag change: runner follow-up slice later",
-    "M8-SEC-1 hour-per-target fuzz running in the reviewer session container (results as numbers)"
+    "M8-SEC-1 hour-per-target fuzz running in the reviewer session container (results as numbers)",
+    "Owner \u00a72.19 flag at #857 merge: re-judge now judges every stored row (no shortcut); first real per-1M timing still owed from a real store"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8767,7 +8768,7 @@
       "slot": 32,
       "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
       "at": "2026-11-14T00:39Z",
-      "status": "held-text fix push; then ready, fresh Opus + security review"
+      "status": "review CHANGES (2 blocking, 4 important) relayed by message; await ready -> fresh delta review"
     },
     "865": {
       "slice": "X-operator-tripwire-settle",
@@ -9419,7 +9420,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T03:44Z",
+    "updated": "2026-11-14T03:50Z",
     "items": [
       {
         "slot": 1,
@@ -9596,7 +9597,7 @@
         "agent": "claude",
         "status": "active",
         "since": "2026-11-13T23:39Z",
-        "doing": "#857 ready at 7637de0f; fresh Opus review + security pass running",
+        "doing": "#857 CHANGES round (relayed by message); then X-filter15-fix",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9690,7 +9691,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T03:44Z",
+  "updated": "2026-11-14T03:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
