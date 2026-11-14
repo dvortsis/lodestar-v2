@@ -301,7 +301,9 @@ fn cluster_kind(e: &ClusterError) -> &'static str {
 /// - **Refused as soon as the sink sees it, everywhere:** a report goes
 ///   into this map, and into the built-in worker's `HeldSet` (its intake,
 ///   parked keys and commit refuse what that set holds), on the sink's
-///   path: short locks, nothing that waits. The claim check
+///   path: short locks, nothing that waits. (The floor writer holds the
+///   map's lock across a bounded store read when it lets keys go, at
+///   most 256 at a time, so a report can wait that long.) The claim check
 ///   ([`StoreCheck`]) reads the map before the store, so a re-claim is
 ///   denied before the row lands.
 /// - **Never dropped within the budget:** a report leaves the map only
@@ -522,19 +524,22 @@ impl FloorReports {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(worker.0);
-        let done = Store::open(db, config).and_then(|mut s| {
+        let done = Store::open(db, config.clone()).and_then(|mut s| {
             let gone = s.purge_worker_floor(worker.0)?;
             self.release_held(&s, &gone);
             self.release_held(&s, &dropped);
             Ok(gone.len())
         });
+        if done.is_ok() {
+            self.to_purge
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&worker.0);
+            // An earlier failed revoke's keys, if nothing is left to purge.
+            let _ = self.release_dropped(db, &config);
+        }
         match &done {
-            Ok(_) => {
-                self.to_purge
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&worker.0);
-            }
+            Ok(_) => {}
             Err(e) => {
                 self.to_release
                     .lock()
@@ -597,6 +602,39 @@ impl FloorReports {
         }
     }
 
+    /// Once no purge is left to do, lets the built-in held set go of the
+    /// keys failed revokes dropped (`to_release`). With purges still to
+    /// do, or a store that can't be opened, they wait for the next try.
+    /// Call with `writing` held.
+    fn release_dropped(
+        &self,
+        db: &std::path::Path,
+        config: &StoreConfig,
+    ) -> Result<(), lodestar_store::Error> {
+        let idle = self
+            .to_purge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        let waiting = !self
+            .to_release
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        if !idle || !waiting {
+            return Ok(());
+        }
+        let store = Store::open(db, config.clone())?;
+        let dropped = std::mem::take(
+            &mut *self
+                .to_release
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        self.release_held(&store, &dropped);
+        Ok(())
+    }
+
     fn holds(&self, key: &InfoHash) -> bool {
         self.pending().contains_key(&key.0)
     }
@@ -652,14 +690,8 @@ impl FloorReports {
                     .unwrap_or_else(PoisonError::into_inner)
                     .remove(&w);
             }
-            let dropped = std::mem::take(
-                &mut *self
-                    .to_release
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner),
-            );
-            self.release_held(&store, &dropped);
         }
+        self.release_dropped(db, &config)?;
         let batch: Vec<([u8; 20], Report)> = self
             .pending()
             .iter()
@@ -3540,6 +3572,36 @@ mod tests {
                 .is_err()
         );
         assert!(held.contains(&key_n(1).0), "kept until the retry lands");
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        assert!(!held.contains(&key_n(1).0));
+        assert_eq!(floor.unwritten(), 0);
+    }
+
+    /// A failed revoke followed by a successful one lets the built-in held
+    /// set go of the first one's dropped reports too.
+    #[test]
+    fn a_failed_then_successful_revoke_releases_the_dropped_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        floor.report(
+            WorkerId(5),
+            &key_n(1),
+            SystemClock.now_secs(),
+            Instant::now(),
+        );
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(
+            floor
+                .revoke(WorkerId(5), &gone, StoreConfig::default())
+                .is_err()
+        );
+        assert!(held.contains(&key_n(1).0));
+        floor
+            .revoke(WorkerId(5), &db, StoreConfig::default())
+            .unwrap();
         floor.flush(&db, StoreConfig::default()).unwrap();
         assert!(!held.contains(&key_n(1).0));
         assert_eq!(floor.unwritten(), 0);
