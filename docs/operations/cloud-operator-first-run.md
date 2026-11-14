@@ -25,6 +25,7 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
 ## The checks
 1. **Channel.** The runner opens the draft PR "cloud-operator channel" and subscribes to it. The owner sets `CHANNEL_PR` to its number, then reruns `operator-apply.yml` (the number goes into the agent's prompt).
    - **Pass:** the channel PR exists, and `operator-apply` ends with `operator: applied`.
+   - **The channel's size limit.** `thread.py read` reads at most 3,000 comments. Past that, every read exits 3, so every session only escalates. The remedy: delete old comments on the channel PR, or open a new channel PR and point `CHANNEL_PR` at it (then rerun `operator-apply.yml`).
 2. **Round trip.** The runner posts a comment on the channel PR:
    ```
    operator-instruction v1
@@ -33,7 +34,7 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
 
    ping
    ```
-   - **Before approving.** The `operator-wake` run waits for the owner's approval of the `cloud-operator` environment. Open the run's **gate** job and read its summary, **Instruction to approve**: it lists the parsed instruction's id, kind, mode and in-reply-to, nothing else. Approve only if they match the instruction the runner posted (here `ping-1`, `query`, `routine`, `none`). Otherwise reject it and tell the runner.
+   - **Before approving.** The `operator-wake` run waits for the owner's approval of the `cloud-operator` environment. Open the run's **gate** job and read its summary, **Instruction to approve**: it lists the parsed instruction's id, kind, mode and in-reply-to, and the first 12 hex digits of the comment's SHA-256, nothing else. The hash tells apart two instructions with the same id. Approve only if the fields match the instruction the runner posted (here `ping-1`, `query`, `routine`, `none`). Otherwise reject it and tell the runner.
    - **Pass:** within 5 minutes, the operator answers `operator-report v1` with `in-reply-to: ping-1`, `kind: ack` or `done`, `pong`, and confirms that `GITHUB_TOKEN` in its sandbox is a placeholder. The `operator-wake` run is green.
    - **Record:** the time from the instruction to the answer, and the wake's cost (Console → Managed Agents → Sessions, the session titled `wake ping-1`).
    - **The helper fetch (rv-655 N4).** The operator fetches `thread.py` and `reader.py` with its own `curl`, without a token, so GitHub's limit for unauthenticated calls (60 an hour per address, which other sandboxes may share) applies. In the session's transcript, check the first two tool calls:
@@ -44,6 +45,7 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
 3. **Negatives.**
    - Another account posts the same instruction with a new id: the `operator-wake` run's jobs are skipped, and no session starts.
    - The App's bot posting the instruction header starts no session either (this needs a token for the App; do it only if the owner already has one).
+     - **It also trips the tripwire.** The header isn't a shape the bot may post, so the next sweep counts it as the bot posting outside its lane and disables `operator-wake.yml`. That's expected: re-enable it after the check.
    - The owner's own login posts `/fleet up screen`: `fleet.yml`'s jobs are skipped, and no result comment appears.
 4. **Stalls.**
    - A call that needs approval: the bridge denies it with its fixed message, and the operator escalates. With the toolset on `auto`, few calls ask, so this may not happen on its own. If none does, record "not triggered", since `infra/operator/tests/test_wake.py` covers the denial.
@@ -56,6 +58,7 @@ Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-b
 7. **Edited comments and the App's limits.**
    - Edit a copy of a valid instruction: no session starts (the wake triggers on `created` only).
    - The App's token can't merge a PR, enable auto-merge or update a PR's branch from its base (`PUT /repos/{owner}/{repo}/pulls/{n}/update-branch`). It has Pull requests write and Metadata read, no Contents. **Verify the update-branch refusal; don't assume it.** If the call succeeds, the tripwire's `synchronize` trigger must trip on it. Record which you saw, and tell the runner if it succeeded.
+   - The App submits a review on a test PR, and the next sweep reports it ("the operator's bot reviewed #…"). This checks that the reviews summary attributes the App's reviews to its bot user ID. If the sweep misses it, tell the runner. Re-enable `operator-wake.yml` afterwards.
    - A test edit by the App on another PR trips `operator-tripwire.yml`: an escalation on the channel, and `operator-wake.yml` disabled. Re-enable it afterwards.
 8. **The injection test.** See the next section.
 9. **Results.** The runner records checks 1–8 in one decisions file, in the format the OP-5 decisions file gives.

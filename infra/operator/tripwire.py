@@ -124,18 +124,23 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
           max_pages: int = MAX_PAGES) -> list[dict]:
     out = []
     sep = "&" if "?" in path else "?"
+    name = path.split("?")[0].rsplit("/", 1)[-1]
     for page in range(1, max_pages + 1):
-        items = transport("GET", f"{path}{sep}per_page=100&page={page}", None)
+        try:
+            items = transport("GET", f"{path}{sep}per_page=100&page={page}", None)
+        except Incomplete as e:  # the deadline: keep what was read
+            raise Incomplete(*e.args, partial=out) from None
+        except Exception:  # noqa: BLE001 - a failed request stops this list, never the sweep
+            raise Incomplete("unreadable", f"a request for {name} failed", partial=out) from None
         if items is None:
             items = []
         if not isinstance(items, list):  # an unreadable page can't end a list as complete
-            raise Incomplete("unreadable", f"a page of {path.split('?')[0].rsplit('/', 1)[-1]} wasn't a list",
-                             partial=out)
+            raise Incomplete("unreadable", f"a page of {name} wasn't a list", partial=out)
         items = [i for i in items if isinstance(i, dict)]
         out += items
         if len(items) < 100 or (stop_before and items and (_when(items[-1].get(key)) or stop_before) < stop_before):
             return out
-    raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1], max_pages, partial=out)
+    raise Incomplete(name, max_pages, partial=out)
 
 
 # Review summaries (X-operator-hardening): one GraphQL request covers up to
@@ -162,7 +167,12 @@ def _review_summaries(transport, repo: str, numbers: list[str]) -> dict[str, lis
     out: dict[str, list[dict] | None] = {}
     for i in range(0, len(numbers), SUMMARY_PRS):
         chunk = numbers[i:i + SUMMARY_PRS]
-        r = transport("POST", "/graphql", {"query": _summary_query(chunk), "variables": {"o": owner, "n": name}})
+        try:
+            r = transport("POST", "/graphql", {"query": _summary_query(chunk), "variables": {"o": owner, "n": name}})
+        except Incomplete:
+            raise
+        except Exception:  # noqa: BLE001 - a failed request: every PR takes the REST read
+            raise Incomplete("unreadable", SUMMARY_FAILED) from None
         data = (r or {}).get("data") if isinstance(r, dict) and not r.get("errors") else None
         found = (data or {}).get("repository") if isinstance(data, dict) else None
         if not isinstance(found, dict):
@@ -181,6 +191,10 @@ def _review_summaries(transport, repo: str, numbers: list[str]) -> dict[str, lis
 
 
 SUMMARY_UNREADABLE = "a reviews summary wasn't readable"
+SUMMARY_FAILED = "a reviews summary request failed"
+# Any other error in a stage's read: recorded as a stop like the rest, so it
+# can't discard findings already made or skip the stages after it.
+STAGE_FAILED = "a list couldn't be read"
 
 
 def _recent_reviews(transport, repo: str, number: str, since: datetime, budget: list[int]) -> list[dict]:
@@ -237,6 +251,9 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
         except Incomplete as e:
             stops.append(e)
             return e.partial
+        except Exception:  # noqa: BLE001 - see STAGE_FAILED
+            stops.append(Incomplete("unreadable", STAGE_FAILED))
+            return []
 
     for e in listed(f"/repos/{repo}/issues/events", "created_at"):
         if not recent(e):
@@ -266,6 +283,9 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
     except Incomplete as e:  # no summary: every PR takes the REST read, under the budget
         stops.append(e)
         summaries = {}
+    except Exception:  # noqa: BLE001 - see STAGE_FAILED
+        stops.append(Incomplete("unreadable", SUMMARY_FAILED))
+        summaries = {}
     for n in active:
         reviews = summaries.get(n)
         if reviews is None:  # more reviews than the summary holds: the REST read, under the budget
@@ -274,6 +294,9 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             except Incomplete as e:
                 stops.append(e)
                 reviews = e.partial
+            except Exception:  # noqa: BLE001 - see STAGE_FAILED
+                stops.append(Incomplete("unreadable", STAGE_FAILED))
+                reviews = []
         for r in reviews:
             if _uid(r) == bot and recent(r, "submitted_at"):
                 bot_hits.append(f"the operator's bot reviewed #{n}")
@@ -313,8 +336,9 @@ def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
 
 
 LISTS = ("events", "pulls", "reviews", "comments")
-UNREADABLE = tuple(f"a page of {n} wasn't a list" for n in LISTS) + ("a PR in the pulls list had no readable number",
-                                                                    SUMMARY_UNREADABLE)
+UNREADABLE = (tuple(f"a page of {n} wasn't a list" for n in LISTS)
+              + tuple(f"a request for {n} failed" for n in LISTS)
+              + ("a PR in the pulls list had no readable number", SUMMARY_UNREADABLE, SUMMARY_FAILED, STAGE_FAILED))
 
 
 def describe(e: Incomplete) -> str:
@@ -342,8 +366,10 @@ def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
         # finding disables (X-operator-hardening).
         findings = sorted(set(found["bot"])) + sorted(set(found["other"])) + [describe(e)]
         disable = bool(found["bot"])
-    except Exception as e:  # noqa: BLE001 - an API error: say so (best effort), then fail the job
-        act(env, transport, [f"the sweep failed ({type(e).__name__}); nothing was checked this run"], False)
+    except Exception as e:  # noqa: BLE001 - say so (best effort), keep what was found, then fail the job
+        # Findings made before the failure still count: a bot finding still disables.
+        failed = f"the sweep failed ({type(e).__name__}) before it finished; check by hand"
+        act(env, transport, sorted(set(found["bot"])) + sorted(set(found["other"])) + [failed], bool(found["bot"]))
         raise SystemExit("tripwire: the sweep failed") from None
     if findings:
         act(env, transport, findings, disable)

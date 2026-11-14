@@ -70,6 +70,8 @@ class Gate(unittest.TestCase):
                     continue
                 for line in ("- id: `run-7`", "- kind: `run`", "- mode: `triage`", "- in reply to: `none`"):
                     self.assertIn(line, text)
+                import hashlib
+                self.assertIn(f"- body SHA-256 (first 12): `{hashlib.sha256(body.encode()).hexdigest()[:12]}`", text)
                 self.assertNotIn("SECRET-BODY", text)
                 self.assertNotIn("/fleet", text)
 

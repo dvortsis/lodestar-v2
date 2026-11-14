@@ -151,18 +151,19 @@ class Paging(unittest.TestCase):
         self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
         self.assertNotIn(DISABLE, [c[:2] for c in gh.calls])  # escalated for a check by hand, not disabled
 
-    def test_an_api_error_escalates_then_fails_the_job(self):
+    def test_failed_requests_escalate_each_list_without_disabling(self):
         posts = []
 
         def gh(method, path, body):
             if method == "GET":
                 raise RuntimeError("GitHub API GET failed")
             posts.append((method, path, body))
-        with self.assertRaises(SystemExit) as cm:
-            run(["sweep"], env(), gh)
-        self.assertEqual(str(cm.exception), "tripwire: the sweep failed")
+        run(["sweep"], env(), gh)
         self.assertEqual(len(posts), 1)
-        self.assertIn("the sweep failed (RuntimeError)", posts[0][2]["body"])
+        body = posts[0][2]["body"]
+        for name in ("events", "pulls", "comments"):
+            self.assertIn(f"the sweep is incomplete: a request for {name} failed; check by hand", body)
+        self.assertNotIn("GitHub API", body)  # the error's own text is never echoed
         self.assertNotIn("disable", posts[0][1])
 
 
@@ -536,3 +537,85 @@ class StagesStandAlone(unittest.TestCase):
         self.assertIn("the operator's bot reviewed #12", body)
         self.assertIn("a reviews summary wasn't readable", body)
         self.assertTrue(any(m == "PUT" for m, _, _ in posts))
+
+
+class FailedRequests(unittest.TestCase):
+    """X-operator-hardening: a failed request anywhere in the sweep never
+    throws away a bot finding already made."""
+
+    BOT_EVENT = {"actor": {"id": BOT}, "event": "closed", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 9}}
+    PR = {"user": {"id": 1}, "number": 12, "updated_at": ISO(timedelta(minutes=5))}
+
+    def run_failing(self, fails):
+        posts = []
+
+        def gh(method, path, body):
+            if fails(method, path):
+                raise RuntimeError("GitHub API failed")
+            if method == "GET" and path.endswith("&page=1"):
+                if path.startswith("/repos/o/r/issues/events"):
+                    return [self.BOT_EVENT]
+                if path.startswith("/repos/o/r/pulls?"):
+                    return [self.PR]
+            if method == "GET":
+                return []
+            if path == "/graphql":
+                return graphql_reviews(body, lambda n: [])
+            posts.append((method, path, body))
+        run(["sweep"], env(), gh)
+        body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
+        return body, DISABLE in [(m, p) for m, p, _ in posts]
+
+    def test_a_failed_summary_after_a_bot_hit_still_disables(self):
+        body, disabled = self.run_failing(lambda m, p: p == "/graphql")
+        self.assertTrue(disabled)
+        self.assertIn("the operator's bot: issue event `closed` on #9", body)
+        self.assertIn("the sweep is incomplete: a reviews summary request failed; check by hand", body)
+
+    def test_a_failed_list_after_a_bot_hit_still_disables(self):
+        body, disabled = self.run_failing(lambda m, p: m == "GET" and p.startswith("/repos/o/r/pulls"))
+        self.assertTrue(disabled)
+        self.assertIn("the operator's bot: issue event `closed` on #9", body)
+        self.assertIn("the sweep is incomplete: a request for pulls failed; check by hand", body)
+
+    def test_a_failed_page_keeps_the_pages_read_before_it(self):
+        full = [dict(self.BOT_EVENT, actor={"id": 1})] * 99 + [self.BOT_EVENT]
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET" and path.startswith("/repos/o/r/issues/events"):
+                if path.endswith("&page=1"):
+                    return full
+                raise RuntimeError("GitHub API failed")
+            if method == "GET":
+                return []
+            posts.append((method, path, body))
+        run(["sweep"], env(), gh)
+        self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
+
+    def test_an_error_that_escapes_the_sweep_still_disables_on_a_bot_finding(self):
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET" and path.startswith("/repos/o/r/issues/events") and path.endswith("&page=1"):
+                return [self.BOT_EVENT]
+            if method == "GET" and path.startswith("/repos/o/r/issues/comments") and path.endswith("&page=1"):
+                return [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=5)),
+                         "updated_at": ISO(timedelta(minutes=5)), "body": "x"}]
+            if method == "GET":
+                return []
+            posts.append((method, path, body))
+
+        def boom(_body):
+            raise ValueError("shape")
+        real, tripwire.thread.channel_shape = tripwire.thread.channel_shape, boom
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                run(["sweep"], env(), gh)
+        finally:
+            tripwire.thread.channel_shape = real
+        self.assertEqual(str(cm.exception), "tripwire: the sweep failed")
+        body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
+        self.assertIn("the operator's bot: issue event `closed` on #9", body)
+        self.assertIn("the sweep failed (ValueError) before it finished; check by hand", body)
+        self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
