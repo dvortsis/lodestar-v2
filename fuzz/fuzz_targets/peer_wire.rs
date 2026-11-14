@@ -12,10 +12,19 @@ use lodestar_peer_wire::message::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    if let Some(Ok(h)) = data.first_chunk::<HANDSHAKE_LEN>().map(parse_handshake) {
-        // What we read is what we'd write for the same peer.
-        let ours = handshake(&h.info_hash, &h.peer_id, h.extensions);
-        assert_eq!(parse_handshake(&ours).ok(), Some(h));
+    if let Some(input) = data.first_chunk::<HANDSHAKE_LEN>()
+        && let Ok(h) = parse_handshake(input)
+    {
+        // What we read is where BEP 3 puts it, and what we'd write for the
+        // same peer is the input with only the extension bit kept of the
+        // reserved bytes.
+        assert_eq!(&h.info_hash[..], &input[28..48]);
+        assert_eq!(&h.peer_id[..], &input[48..68]);
+        assert_eq!(h.extensions, input[25] & 0x10 != 0);
+        let mut expected = *input;
+        expected[20..28].fill(0);
+        expected[25] = input[25] & 0x10;
+        assert_eq!(handshake(&h.info_hash, &h.peer_id, h.extensions), expected);
     }
     if let Ok(h) = parse_extended_handshake(data) {
         // 0 means "disabled" and is never kept as an id.
