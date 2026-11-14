@@ -8,7 +8,7 @@ use lodestar_classify::{ContentType, FileInfo, classify};
 use lodestar_filter::{
     Action, Allow, BUDGET, Core, CoreRule, CsList, Engine, Evidence, Exception, Facts, Field, Item,
     Lists, MAX_FILES, Match, Origin, Override, RuleRef, Strength, Switches, TermSet, read_cost,
-    too_large,
+    read_whole_by_v1, too_large,
 };
 use lodestar_search::parse;
 use proptest::prelude::*;
@@ -497,7 +497,7 @@ fn the_repos_corpora_are_judged_whole() {
             files: &ex.files,
             content_type: ex.content_type.unwrap_or(ContentType::Other),
         };
-        held += usize::from(read_cost(&it).is_none());
+        held += usize::from(too_large(&it));
     }
     let golden =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../release-parser/tests/golden");
@@ -513,15 +513,44 @@ fn the_repos_corpora_are_judged_whole() {
             .filter(|l| !l.is_empty() && !l.starts_with([' ', '#']))
         {
             names += 1;
-            held += usize::from(read_cost(&item(name, &[])).is_none());
+            held += usize::from(too_large(&item(name, &[])));
         }
     }
     println!(
         "held: {held} of {} pack-corpus torrents and {names} release names",
         examples.len()
     );
-    assert!(examples.len() > 100 && names > 100, "the corpora were read");
+    // Every example was read (the corpora only grow).
+    assert!(
+        examples.len() >= 198 && names >= 317,
+        "{} {names}",
+        examples.len()
+    );
     assert_eq!(held, 0);
+}
+
+/// What the earlier core read whole: a short torrent was, and the
+/// re-judge reads it in its second phase. A long name or path, many files,
+/// a padding file, or a text that reads as long only in the earlier
+/// reading wasn't, so the re-judge reads it first. Sizes stay far from any
+/// limit; the exact-input tests land after the release
+/// (docs/security/v1/README.md §5).
+#[test]
+fn what_the_earlier_core_read_whole() {
+    let words = |n: usize| "word ".repeat(n);
+    let whole = |name: &str, files: &[FileInfo]| read_whole_by_v1(&item(name, files));
+    let files = |n: usize| -> Vec<FileInfo> { (0..n).map(|i| file(&format!("{i}"))).collect() };
+    assert!(whole("Some.Film.2001.1080p", &files(3)));
+    assert!(!whole(&words(5_000), &[]));
+    assert!(!whole("Title", &[file(&words(5_000))]));
+    assert!(!whole("Title", &[file(&format!("dir/{}", words(5_000)))]));
+    assert!(!whole("Title", &files(50_000)));
+    let mut padded = files(2);
+    padded[1].padding = true;
+    assert!(!whole("Title", &padded), "its path wasn't read");
+    // One word in the reading now, many in the earlier one.
+    let marked = "word\u{FFF9}".repeat(5_000);
+    assert!(!whole(&marked, &[]));
 }
 
 /// One file more than the core reads, so the torrent is CS-0a's.
@@ -561,32 +590,25 @@ fn a_stored_exception_to_a_locked_rule_is_skipped() {
     );
 }
 
-/// An engine given an exception to a locked rule directly, past both
-/// validation and loading, still doesn't apply it; the same exception to
-/// a rule that isn't locked does.
+/// An exception set on an engine directly, past validation and loading,
+/// applies to a rule that isn't locked: the control for the engine's own
+/// locked-rule guard, which is tested in `engine.rs` (no public judgment
+/// reaches it, since every one holds an over-budget torrent first).
 #[test]
-fn an_engine_applies_no_exception_to_a_locked_rule() {
-    let to = |rule| {
-        let mut e = Engine::new(core());
-        e.exceptions.push(Exception {
-            id: 1,
-            rule: RuleRef::Core(rule),
-            what: Match::Hashes(vec![H]),
-        });
-        e
-    };
-    let files = too_many_files();
-    assert_eq!(
-        judge(&to(CoreRule::Cs0a), "Title", &files),
-        Some(RuleRef::Core(CoreRule::Cs0a))
-    );
+fn an_engine_applies_an_exception_to_a_rule_that_isnt_locked() {
     let pair = [file("rolea lexa")];
     assert_eq!(
         judge(&Engine::new(core()), "Title", &pair),
         Some(RuleRef::Core(CoreRule::Cs4a))
     );
+    let mut e = Engine::new(core());
+    e.exceptions.push(Exception {
+        id: 1,
+        rule: RuleRef::Core(CoreRule::Cs4a),
+        what: Match::Hashes(vec![H]),
+    });
     assert_ne!(
-        judge(&to(CoreRule::Cs4a), "Title", &pair),
+        judge(&e, "Title", &pair),
         Some(RuleRef::Core(CoreRule::Cs4a))
     );
 }

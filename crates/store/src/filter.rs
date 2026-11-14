@@ -104,6 +104,277 @@ pub(crate) fn kept_hold_sql(col: &str) -> String {
     )
 }
 
+/// The core version the stored torrents were judged by (the filter's
+/// `CORE_VERSION`), with [`CORE_SEEN_KEY`]: every torrent up to that id
+/// was judged by this version or a newer one. A store without it was
+/// judged by version 1.
+pub const CORE_JUDGED_KEY: &str = "filter.core.judged";
+/// The highest torrent id a build that keeps the marker has seen judged.
+/// A torrent above it was stored by a build that doesn't (an older one),
+/// so its judgment isn't known: it's judged again.
+pub const CORE_SEEN_KEY: &str = "filter.core.seen";
+/// A core re-judge under way: the version it judges by...
+pub const CORE_PASS_KEY: &str = "filter.core.pass";
+/// ...the last torrent id it finished, so a restart resumes there...
+pub const CORE_AFTER_KEY: &str = "filter.core.after";
+/// ...its phase and where it started (the second phase starts there)...
+pub const CORE_PHASE_KEY: &str = "filter.core.phase";
+pub const CORE_START_KEY: &str = "filter.core.start";
+/// ...and its totals so far ([`CorePass`]).
+pub const CORE_FOUND_KEY: &str = "filter.core.found";
+pub const CORE_HELD_KEY: &str = "filter.core.held";
+pub const CORE_UNREADABLE_KEY: &str = "filter.core.unreadable";
+
+/// How big a stored file list [`Store::files_bounded`] reads.
+#[derive(Debug, Clone, Copy)]
+pub struct FilesBound {
+    /// Files, and directories.
+    pub files: usize,
+    /// Bytes of every path, summed, as decoding would copy them.
+    pub path_bytes: u64,
+    /// Path segments, summed.
+    pub segments: u64,
+    /// Bytes the list may decompress to.
+    pub raw_bytes: usize,
+}
+
+/// A core re-judge's place and totals: counts only, no names or hashes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CorePass {
+    /// 1: the torrents it judges first; 2: every other.
+    pub phase: i64,
+    /// The id it started after, where its second phase starts too.
+    pub start: i64,
+    /// The last torrent id it finished in this phase.
+    pub after: i64,
+    /// Torrents judged again, in either phase.
+    pub found: i64,
+    /// Of those, held back (dropped or quarantined)...
+    pub held: i64,
+    /// ...and of those, held because they couldn't be judged at all.
+    pub unreadable: i64,
+}
+
+impl CorePass {
+    /// A new pass after torrent id `start`, in its first phase.
+    pub fn starting(start: i64) -> CorePass {
+        CorePass {
+            phase: 1,
+            start,
+            after: start,
+            ..CorePass::default()
+        }
+    }
+}
+
+const CORE_PASS_KEYS: [&str; 7] = [
+    CORE_PASS_KEY,
+    CORE_PHASE_KEY,
+    CORE_START_KEY,
+    CORE_AFTER_KEY,
+    CORE_FOUND_KEY,
+    CORE_HELD_KEY,
+    CORE_UNREADABLE_KEY,
+];
+
+fn put_setting(tx: &Transaction<'_>, key: &str, value: i64) -> Result<()> {
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn max_id(tx: &Transaction<'_>) -> Result<i64> {
+    Ok(
+        tx.query_row("SELECT coalesce(max(id), 0) FROM torrents", [], |r| {
+            r.get(0)
+        })?,
+    )
+}
+
+impl Store {
+    /// Where a core re-judge to `version` stands: its place and totals (a
+    /// new pass's are zero), or `None` when every stored torrent was judged
+    /// by `version` or a newer core. A store judged by an older one is
+    /// judged again from the start; one judged by `version` only above
+    /// [`CORE_SEEN_KEY`] (stored since by an older build). A store judged
+    /// by a newer core has its marker lowered to `version` first (a
+    /// downgrade), so a later upgrade judges again what this one stores.
+    pub fn core_rejudge_due(&mut self, version: i64) -> Result<Option<CorePass>> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let get = |key: &str| -> Result<Option<i64>> {
+            Ok(tx
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                    r.get(0)
+                })
+                .optional()?)
+        };
+        let judged = get(CORE_JUDGED_KEY)?.unwrap_or(1);
+        if judged > version {
+            put_setting(&tx, CORE_JUDGED_KEY, version)?;
+        }
+        let due = if get(CORE_PASS_KEY)? == Some(version) {
+            // A pass under way: on from its place.
+            Some(CorePass {
+                phase: get(CORE_PHASE_KEY)?.unwrap_or(1),
+                start: get(CORE_START_KEY)?.unwrap_or(0),
+                after: get(CORE_AFTER_KEY)?.unwrap_or(0),
+                found: get(CORE_FOUND_KEY)?.unwrap_or(0),
+                held: get(CORE_HELD_KEY)?.unwrap_or(0),
+                unreadable: get(CORE_UNREADABLE_KEY)?.unwrap_or(0),
+            })
+        } else if judged < version {
+            Some(CorePass::starting(0))
+        } else {
+            let seen = get(CORE_SEEN_KEY)?.unwrap_or(0);
+            (max_id(&tx)? > seen).then_some(CorePass::starting(seen))
+        };
+        tx.commit()?;
+        Ok(due)
+    }
+
+    /// Records a core re-judge to `version` as `pass` says: every torrent
+    /// up to id `pass.after` finished, with these totals.
+    pub fn set_core_rejudge(&mut self, version: i64, pass: &CorePass) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let values = [
+            version,
+            pass.phase,
+            pass.start,
+            pass.after,
+            pass.found,
+            pass.held,
+            pass.unreadable,
+        ];
+        for (key, value) in CORE_PASS_KEYS.into_iter().zip(values) {
+            put_setting(&tx, key, value)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that every stored torrent was judged by `version`, up to
+    /// the highest id stored now, and the pass's place and totals go.
+    pub fn finish_core_rejudge(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        put_setting(&tx, CORE_JUDGED_KEY, version)?;
+        let seen = max_id(&tx)?;
+        put_setting(&tx, CORE_SEEN_KEY, seen)?;
+        for key in CORE_PASS_KEYS {
+            tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that this build judged every torrent stored now by
+    /// `version`: moves [`CORE_SEEN_KEY`] up to the highest id. Only when
+    /// the store is judged by `version` and no pass is under way, so it
+    /// never covers a torrent an older build stored.
+    pub fn advance_core_seen(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        tx.execute(
+            "UPDATE settings SET value = max(value, (SELECT coalesce(max(id), 0) FROM torrents))
+             WHERE key = ?1
+               AND EXISTS (SELECT 1 FROM settings WHERE key = ?2 AND value = ?3)
+               AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?4)",
+            params![CORE_SEEN_KEY, CORE_JUDGED_KEY, version, CORE_PASS_KEY],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks an empty store as judged by `version` when it records no
+    /// core version yet: whatever this build stores next, it judges.
+    pub fn seed_core_marker(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let marked: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM settings WHERE key = ?1)
+                 OR EXISTS (SELECT 1 FROM torrents)",
+            [CORE_JUDGED_KEY],
+            |r| r.get(0),
+        )?;
+        if !marked {
+            put_setting(&tx, CORE_JUDGED_KEY, version)?;
+            put_setting(&tx, CORE_SEEN_KEY, 0)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Stored torrent `id`'s file list, or a [`Error::Corrupt`] refusal
+    /// when it's bigger than `bound` allows: its shape is read before
+    /// anything is decoded, and its decompressed size is capped, so no
+    /// stored list can make the read allocate more than `bound` says.
+    /// [`Store::files`] stays as it is.
+    pub fn files_bounded(
+        &mut self,
+        id: i64,
+        bound: &FilesBound,
+    ) -> Result<Option<crate::FileTree>> {
+        // Its size first, so a blob past the bound is never read.
+        let size: Option<i64> = self
+            .conn
+            .prepare_cached("SELECT length(data) FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| r.get(0))
+            .optional()?;
+        let Some(size) = size else {
+            return Ok(None);
+        };
+        if usize::try_from(size).map_or(true, |n| n > bound.raw_bytes) {
+            return Err(Error::Corrupt("file list over the bound"));
+        }
+        let (codec, dict_id, data): (i64, Option<i64>, Vec<u8>) = self
+            .conn
+            .prepare_cached("SELECT codec, dict_id, data FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let codec = crate::Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
+        let raw = self
+            .codec
+            .decompress_capped(codec, dict_id, &data, bound.raw_bytes)?;
+        let shape = crate::filetree::shape(&raw, bound.files, bound.files)?;
+        crate::within_path_limits(&shape)?;
+        if shape.path_bytes > bound.path_bytes || shape.components > bound.segments {
+            return Err(Error::Corrupt("file list over the bound"));
+        }
+        Ok(Some(crate::filetree::decode(&raw)?))
+    }
+
+    /// A stored torrent's swarm hashes as stored, read raw: for one whose
+    /// row won't decode, so it can still be held. A hash of the wrong
+    /// length is left out.
+    pub fn raw_hashes(&self, id: i64) -> Result<Vec<[u8; 20]>> {
+        // The two hash columns, either one unreadable.
+        type Hashes = (Option<Vec<u8>>, Option<Vec<u8>>);
+        let row: Option<Hashes> = self
+            .conn
+            .query_row(
+                "SELECT CAST(info_hash AS BLOB), CAST(info_hash_v2 AS BLOB) FROM torrents
+                 WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((v1, v2)) = row else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        if let Some(h) = v1.and_then(|h| <[u8; 20]>::try_from(h.as_slice()).ok()) {
+            out.push(h);
+        }
+        // A v2 hash's swarm hash is its first 20 bytes.
+        let truncated = v2
+            .filter(|h| h.len() == 32)
+            .and_then(|h| <[u8; 20]>::try_from(&h[..20]).ok());
+        if let Some(h) = truncated.filter(|h| !out.contains(h)) {
+            out.push(h);
+        }
+        Ok(out)
+    }
+}
+
 /// Whether a stored rule is one of [`KEPT_RULES`], with or without a
 /// suffix: [`kept_hold_sql`] in Rust. Only [`Store::release`] lifts such a
 /// hold, never a release by rule or a batch.
@@ -244,10 +515,24 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
         local_floor_sql("?2"),
         worker_floor_sql("rule")
     ))?;
-    let mut quarantine = tx.prepare_cached(
+    // A later quarantine replaces an earlier one, except over a floor
+    // hold, which only another floor hold takes over, or a kept hold
+    // (`KEPT_RULES`), which only a floor or kept hold does: otherwise a
+    // weaker rule there could later be released by rule and free the hash.
+    let mut quarantine = tx.prepare_cached(&format!(
         "INSERT OR REPLACE INTO quarantine (hash, rule, sealed, at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE {floor_new}
+             OR ({kept_new} AND NOT EXISTS (
+                 SELECT 1 FROM quarantine WHERE hash = ?1 AND {floor_old}
+             ))
+             OR NOT EXISTS (
+                 SELECT 1 FROM quarantine WHERE hash = ?1 AND ({kept_old} OR {floor_old})
+             )",
+        floor_new = floor_hold_sql("?2"),
+        kept_new = kept_hold_sql("?2"),
+        floor_old = floor_hold_sql("rule"),
+        kept_old = kept_hold_sql("rule"),
+    ))?;
     for f in filtered {
         let Some(first) = f.hashes.first() else {
             continue;
@@ -1067,6 +1352,116 @@ mod tests {
     use super::*;
     use crate::StoreConfig;
 
+    /// The bounded read gives the list `files` gives within the bound,
+    /// and refuses one past it in files, path bytes or segments.
+    #[test]
+    fn the_bounded_file_list_read_refuses_a_list_past_the_bound() {
+        use lodestar_metainfo::Info;
+        let raw = b"d5:filesld6:lengthi1e4:pathl1:a2:bbeed6:lengthi1e4:pathl3:ccceee4:name1:n12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let id = s
+            .insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        let wide = FilesBound {
+            files: 100,
+            path_bytes: 100,
+            segments: 100,
+            raw_bytes: 1 << 20,
+        };
+        assert_eq!(s.files_bounded(id, &wide).unwrap(), s.files(id).unwrap());
+        for bound in [
+            FilesBound { files: 1, ..wide },
+            FilesBound {
+                path_bytes: 2,
+                ..wide
+            },
+            FilesBound {
+                segments: 2,
+                ..wide
+            },
+            FilesBound {
+                raw_bytes: 4,
+                ..wide
+            },
+        ] {
+            assert!(s.files_bounded(id, &bound).is_err(), "{bound:?}");
+        }
+        assert_eq!(s.files_bounded(id + 1, &wide).unwrap(), None);
+    }
+
+    /// A path deeper than metainfo allows is refused before decoding,
+    /// however few bytes it takes.
+    #[test]
+    fn the_bounded_file_list_read_refuses_a_deep_path() {
+        use lodestar_metainfo::Info;
+        let raw = b"d6:lengthi1e4:name1:n12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let id = s
+            .insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        // 300 nested directories with empty names, and one file.
+        let dirs = 300u64;
+        let mut blob = vec![1, 0, 0];
+        let varint = |out: &mut Vec<u8>, mut v: u64| {
+            while v >= 0x80 {
+                out.push(v as u8 | 0x80);
+                v >>= 7;
+            }
+            out.push(v as u8);
+        };
+        varint(&mut blob, dirs);
+        varint(&mut blob, 1);
+        for i in 0..dirs {
+            varint(&mut blob, i);
+        }
+        blob.extend((0..dirs).map(|_| 0));
+        varint(&mut blob, dirs);
+        blob.extend([1, b'f', 1]);
+        assert!(crate::filetree::decode(&blob).is_ok(), "a valid blob");
+        s.conn
+            .execute(
+                "UPDATE torrent_files SET codec = 0, dict_id = NULL, data = ?2 WHERE torrent_id = ?1",
+                params![id, blob],
+            )
+            .unwrap();
+        let bound = FilesBound {
+            files: 1_000,
+            path_bytes: 1 << 20,
+            segments: 1 << 20,
+            raw_bytes: 1 << 20,
+        };
+        assert!(s.files_bounded(id, &bound).is_err());
+        // And one past the bound in stored bytes isn't read.
+        assert!(
+            s.files_bounded(
+                id,
+                &FilesBound {
+                    raw_bytes: 16,
+                    ..bound
+                }
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn the_latest_hit_is_the_newest_applied_one() {
         let s = Store::open_in_memory(StoreConfig::default()).unwrap();
@@ -1129,6 +1524,55 @@ mod tests {
             assert_eq!((&hit.rule, hit.at), (rule, *at));
             assert_eq!(s.latest_hit(h).unwrap().as_ref(), Some(hit));
         }
+    }
+
+    /// A later quarantine never replaces a kept hold unless it's kept too;
+    /// it replaces any other, as before.
+    #[test]
+    fn a_later_quarantine_leaves_a_kept_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        let f = |rule, at, adult_hold| Filtered {
+            hashes: &[[1; 20]],
+            rule,
+            action: 4,
+            held: Some(Held::Quarantine),
+            sealed: None,
+            evidence: &[],
+            at,
+            expires_at: at + 10,
+            adult_hold,
+        };
+        let rule = |s: &Store| -> (String, i64) {
+            s.conn
+                .query_row(
+                    "SELECT rule, at FROM quarantine WHERE hash = ?1",
+                    [&[1u8; 20][..]],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        let put = |s: &mut Store, row: Filtered<'_>| {
+            let tx = s.conn.transaction().unwrap();
+            write(&tx, &[row]).unwrap();
+            tx.commit().unwrap();
+        };
+        put(&mut s, f("U-1", 10, false));
+        put(&mut s, f(kept, 20, false));
+        assert_eq!(rule(&s), (kept.to_owned(), 20), "a kept hold takes over");
+        put(&mut s, f("U-1", 30, true));
+        put(&mut s, f("CS-3", 40, false));
+        assert_eq!(rule(&s), (kept.to_owned(), 20), "and nothing else does");
+        put(&mut s, f(kept, 50, true));
+        assert_eq!(rule(&s), (format!("{kept}+adult"), 50), "but a kept one");
+        // The floor outranks a kept hold.
+        let [floor, ..] = FLOOR_RULES;
+        put(&mut s, f(floor, 60, false));
+        assert_eq!(rule(&s), (floor.to_owned(), 60), "and the floor");
+        // Which nothing but the floor replaces, a kept hold included.
+        put(&mut s, f(kept, 70, false));
+        put(&mut s, f("CS-3", 80, false));
+        assert_eq!(rule(&s), (floor.to_owned(), 60), "the floor stays");
     }
 
     /// The adult-hold mark is a suffix on the stored rule id; reads strip
@@ -1311,9 +1755,9 @@ mod tests {
     fn a_release_of_a_rules_hashes_leaves_a_kept_hold() {
         let mut s = with_kept_holds("L-1");
         let [kept] = KEPT_RULES;
-        for rule in [kept, "CS-0a+adult"] {
+        for rule in [kept.to_owned(), format!("{kept}+adult")] {
             assert_eq!(
-                s.release_rule_hashes(rule, &KEPT_AND_OTHER, |_| {})
+                s.release_rule_hashes(&rule, &KEPT_AND_OTHER, |_| {})
                     .unwrap(),
                 0
             );
@@ -1360,6 +1804,11 @@ mod tests {
         for rule in [
             "CS-0a",
             "CS-0a+adult",
+            "CS-0a+",
+            "xCS-0a",
+            "CS-0a ",
+            "CS-0a\u{00e9}",
+            "CS-0a+\u{00e9}",
             "CS-0ab",
             "CS-0",
             "cs-0a",

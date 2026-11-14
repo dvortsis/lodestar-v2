@@ -294,6 +294,35 @@ lodestar_log::catalogue! {
         message: "Store write failed",
         fields: { error: Error },
     }
+    /// The core re-judge (`crate::core_rejudge`) starts on this run, or
+    /// resumes: its totals so far, counts only.
+    CORE_REJUDGE_STARTED {
+        id: "pipeline.core_rejudge_started",
+        component: Pipeline,
+        level: Info,
+        message: "Re-judging stored torrents by today's filter core",
+        fields: { judged: Size, held: Size, unreadable: Size },
+    }
+    /// The core re-judge reached the end: how many stored torrents were
+    /// judged again, how many of those are now held, and how many of
+    /// those couldn't be judged at all. Counts only.
+    CORE_REJUDGE_DONE {
+        id: "pipeline.core_rejudge_done",
+        component: Pipeline,
+        level: Info,
+        message: "Re-judge of stored torrents finished",
+        fields: { judged: Size, held: Size, unreadable: Size },
+    }
+    /// A core re-judge batch failed in the store: it's tried again from
+    /// the same place after a backoff, then one torrent at a time (not
+    /// when most of a batch wouldn't read: that waits, holding nothing).
+    CORE_REJUDGE_FAILED {
+        id: "pipeline.core_rejudge_failed",
+        component: Pipeline,
+        level: Error,
+        message: "Re-judge of stored torrents failed; it will try again",
+        fields: { error: Error },
+    }
     /// The background enrichment pass failed.
     ENRICHMENT_FAILED {
         id: "pipeline.enrichment_failed",

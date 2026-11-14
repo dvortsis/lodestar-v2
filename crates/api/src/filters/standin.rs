@@ -285,7 +285,9 @@ impl FiltersApi {
                     Some(sealed) => self.sealer.as_deref().and_then(|s| s.open(sealed).ok()),
                 };
                 // A sealed name that won't open can't be judged: it stays.
-                name.is_some_and(|name| !engine.holds(&r.hash, &name, now))
+                // So does a kept hold, which `release_rows` never lifts.
+                !lodestar_store::is_kept_hold(&r.rule)
+                    && name.is_some_and(|name| !engine.holds(&r.hash, &name, now))
             });
             done.kept += kept.len();
             let freed = store.release_rows(&free).map_err(internal)?;

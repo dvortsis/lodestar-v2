@@ -897,6 +897,14 @@ async fn run_job(
     limit: Option<u64>,
     json: bool,
 ) -> Outcome {
+    // An empty store is marked as judged by this build's core, which
+    // judges what the import stores, so the server doesn't judge it again.
+    lodestar_pipeline::core_rejudge::seed_if_empty(store)
+        .map_err(failed("marking the store's core version"))?;
+    // Only a store with nothing to judge again before the import may be
+    // marked as judged after it: the server judges the rest.
+    let current = lodestar_pipeline::core_rejudge::is_current(store)
+        .map_err(failed("reading the store's core version"))?;
     let (engine, class_gen) = filter(config, store)?;
     let sealer = sealer(config);
     let quarantine_secs = config
@@ -961,6 +969,12 @@ async fn run_job(
         .await
         .map_err(|e| Failure::Failed(format!("job {id}: {e}")))?;
     let _ = store.checkpoint();
+    // What the import stored, this build's core judged: recorded when the
+    // store was judged before it, else the server's re-judge runs.
+    if current {
+        lodestar_pipeline::core_rejudge::note_judged(store)
+            .map_err(failed("marking the store's core version"))?;
+    }
     print_report(id, &report, json)?;
     match report.ended {
         Ended::Exhausted | Ended::Paused => Ok(()),
