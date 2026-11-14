@@ -8,6 +8,7 @@ from tests.helpers import T0, FakeGitHub, graphql_reviews, no_runs
 import tripwire
 
 BOT, NOW = 555, T0
+MONTH = f"created={(T0 - timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ')}.."  # the in-flight window
 ISO = lambda d: (NOW - d).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
 DISABLE = ("PUT", "/repos/o/r/actions/workflows/operator-wake.yml/disable")
 
@@ -333,8 +334,9 @@ class ReviewBudget(unittest.TestCase):
         # at its request cap. Still inside the token's ~1,000 (decisions file).
         self.assertLessEqual((wake.PER_HOUR + 1) * (sweep + tripwire.SESSION_REQUESTS), 1000)
         # One full pass: two counts, every status list, two counts again, with room for jobs and a retry.
-        one_pass = 2 + len(tripwire.RUN_STATES + tripwire.RUN_CONCLUSIONS) + 2
-        self.assertGreaterEqual(tripwire.SESSION_REQUESTS, 2 * one_pass + 4)
+        # Quiet passes: two counts, two counts and the common completed lists, two counts again.
+        quiet = 2 + 2 + len(tripwire.DONE_FIRST) + 2
+        self.assertGreaterEqual(tripwire.SESSION_REQUESTS, 3 * quiet)
 
     def test_exactly_the_budget_is_complete(self):
         gh = ManyPRs([2900, 2900])  # 30 pages each (29 full, then an empty one): 60
@@ -359,10 +361,10 @@ class Deadline(unittest.TestCase):
             return tick[0]
         gh = ManyPRs([2000] * 3)  # 63 pages: past 300 s before the 60-page budget
         with redirect_stdout(io.StringIO()):
-            tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
+            tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono, sleep=no_sleep)
         self.assertIn("the sweep is incomplete: it ran past its 5-minute deadline", gh.bodies()[0])
         self.assertIn(tripwire.PENDING, gh.bodies()[0])  # posted before the session check
-        # At 7 s a request the session check passes its own deadline too: that counts as a session.
+        # At 7 s a request the check passes its own deadline: that counts as a session.
         self.assertTrue(gh.disabled())
         self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", gh.bodies()[1])
 
@@ -379,7 +381,10 @@ class Deadline(unittest.TestCase):
             escalated = 60 + tripwire.SWEEP_DEADLINE_SECONDS + t + t
             disabled = escalated + tripwire.SESSION_DEADLINE_SECONDS + t + t
             self.assertGreaterEqual(wf["jobs"][job]["timeout-minutes"] * 60 - disabled, 60, name)
-            self.assertLess(tripwire.GATE_READS * tripwire.GATE_WAIT_SECONDS, tripwire.SESSION_DEADLINE_SECONDS)
+            waits = (tripwire.GATE_READS * tripwire.GATE_WAIT_SECONDS
+                     + (tripwire.SESSION_ATTEMPTS - 1) * tripwire.SETTLE_SECONDS
+                     + max(tripwire.SETTLE_SECONDS, tripwire.GATE_WAIT_SECONDS))  # a wait just before the deadline
+            self.assertLess(waits, tripwire.SESSION_DEADLINE_SECONDS)
         from comments import urllib_transport  # noqa: F401 - the timeout above is comments.py's
         src = (Path(tripwire.__file__).resolve().parents[1] / "fleet" / "comments.py").read_text()
         self.assertIn(f"timeout={tripwire.REQUEST_TIMEOUT_SECONDS})", src)
@@ -887,10 +892,13 @@ class SessionCheck(unittest.TestCase):
         r = dict(wake_run(1, None), created_at=ISO(timedelta(minutes=1)))
         self.assertIsNone(self.check(Actions([r], {"1": self.STRANGER_JOBS}, before_call=settle)))
 
-    def test_counts_that_never_settle_count_as_a_session(self):
-        def churn(actions):  # a new run inside the window on every call
-            actions.runs.append(skipped_run(1000 + len(actions.paths), timedelta(minutes=3)))
-        self.assertEqual(self.check(Actions([skipped_run(1)], before_call=churn)), tripwire.SESSION_UNKNOWN)
+    def test_skipped_runs_arriving_during_the_check_change_nothing(self):
+        def churn(actions):  # a new comment's run on every call: created after the window's end
+            n = len(actions.paths)
+            actions.runs.append(dict(skipped_run(1000 + n), created_at=ISO(timedelta(seconds=-n))))
+        slept = []
+        self.assertIsNone(self.check(Actions([skipped_run(1)], before_call=churn), sleep=slept.append))
+        self.assertEqual(slept, [])  # nothing to settle
 
     def test_the_runners_run_in_flight_waits_for_its_gate(self):
         pending = [{"name": "gate", "status": "in_progress", "conclusion": None}]
@@ -936,20 +944,32 @@ class SessionCheck(unittest.TestCase):
         self.assertLessEqual(len(actions.paths), 19)
         self.assertFalse(any("/actions/runs/" in p for p in actions.paths))
 
-    def test_the_window_is_thirty_days(self):
-        actions = Actions([])
+    def test_the_windows(self):
+        # Runs in flight: 30 days. Completed runs: from COMPLETED_EXTRA_MINUTES before the lookback.
+        actions = Actions([wake_run(1, None)], {"1": self.STRANGER_JOBS})
         self.check(actions)
-        want = (NOW - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = NOW.strftime('%Y-%m-%dT%H:%M:%SZ')
+        month = (NOW - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        done = (NOW - timedelta(minutes=tripwire.LOOKBACK_MINUTES + tripwire.COMPLETED_EXTRA_MINUTES)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
         lists = [p for p in actions.paths if "/actions/workflows/" in p]
-        self.assertTrue(lists)
-        self.assertTrue(all(f"created={want}..{NOW.strftime('%Y-%m-%dT%H:%M:%SZ')}&" in p for p in lists))
+        completed = [p for p in lists if any(f"&status={c}&" in p for c in tripwire.DONE_FIRST + ("skipped",))
+                     or (f"created={done}" in p)]
+        self.assertTrue(completed)
+        self.assertTrue(all(f"created={done}..{end}&" in p for p in completed))
+        self.assertTrue(all(f"created={month}..{end}&" in p for p in lists if p not in completed))
+        self.assertTrue(any("&status=in_progress&per_page=100" in p for p in lists))
 
     def test_a_late_approval_still_counts(self):
-        # Created nine days ago, approved late: its wake job finished 5 minutes ago.
-        actions = Actions([wake_run(1, created=timedelta(days=9))], {"1": wake_jobs()})
+        # Still in flight: read however long it waited (up to 30 days).
+        actions = Actions([dict(wake_run(1, None), created_at=ISO(timedelta(days=9)))], {"1": wake_jobs(None)})
         self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
-        # Older than the window: not listed at all.
-        self.assertIsNone(self.check(Actions([wake_run(1, created=timedelta(days=31))], {"1": wake_jobs()})))
+        # Completed: read when created inside COMPLETED_EXTRA_MINUTES before the lookback.
+        actions = Actions([wake_run(1, created=timedelta(hours=4))], {"1": wake_jobs()})
+        self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
+        # Completed and older than the window: the wake refuses to start a session for so old a
+        # run (tripwire.wake_run_too_old, test_wake), so none can be there to miss.
+        self.assertIsNone(self.check(Actions([wake_run(1, created=timedelta(days=9))], {"1": wake_jobs()})))
 
     def test_a_job_waiting_for_approval_doesnt_count_yet(self):
         run_ = {"id": 1, "status": "waiting", "conclusion": None, "created_at": ISO(timedelta(hours=4)),
@@ -980,25 +1000,95 @@ class SessionCheck(unittest.TestCase):
         self.assertIsNone(self.check(self.rerun_waiting(old)))
 
     def test_the_first_session_found_ends_the_check(self):
-        actions = Actions([dict(wake_run(1, None), status="queued")], {"1": wake_jobs(None, status="queued")})
+        actions = Actions([dict(wake_run(1, None), status="in_progress")], {"1": wake_jobs(None)})
         self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
         lists = [p for p in actions.paths if "/actions/workflows/" in p and "&per_page=100&" in p]
-        self.assertEqual(len(lists), 1)  # queued is the first list; nothing after the match is read
+        self.assertEqual(len(lists), 1)  # in_progress is the first list; nothing after the match is read
         self.assertTrue(all("&event=issue_comment" in p for p in actions.paths if "/actions/workflows/" in p))
 
-    def test_a_run_added_between_queries_is_read_again(self):
-        added = {"done": False}
-        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
-
-        def late(actions):  # a completed, non-skipped run turns up between the counts and the lists, once
-            if not added["done"] and len(actions.paths) == 3:
-                added["done"] = True
-                actions.runs.append(wake_run(77, created=timedelta(hours=5), updated=old))
-        actions = Actions([skipped_run(1)], {"77": wake_jobs(completed=old)}, before_call=late)
+    def test_no_run_in_flight_costs_no_in_flight_list(self):
+        actions = Actions([skipped_run(i) for i in range(1, 50)])
         self.assertIsNone(self.check(actions))
-        self.assertTrue(added["done"])
-        # The first pass's counts didn't match the runs read: the counts were read again.
-        self.assertGreater(sum(1 for p in actions.paths if "&per_page=1&" in p and "status" not in p), 2)
+        self.assertEqual(len(actions.paths), 9)  # counts, the common completed lists, counts again
+
+    def test_a_run_settling_between_attempts_is_read_again_after_a_wait(self):
+        # A comment's run is in flight at the first count, then skipped before it's listed.
+        r = dict(wake_run(1, None), created_at=ISO(timedelta(seconds=5)))
+        actions = Actions([r], {"1": self.STRANGER_JOBS})
+        plain = actions.__call__
+        slept = []
+
+        def answer(path):
+            out = plain(path)
+            if len(actions.paths) == 2:  # right after the first count
+                r.update(status="completed", conclusion="skipped")
+            return out
+        self.assertIsNone(self.check(answer, sleep=slept.append))
+        self.assertEqual(slept, [tripwire.SETTLE_SECONDS])  # one wait, then the counts agree
+
+    def test_a_mismatch_then_a_match_after_the_settle_wait(self):
+        # Listed in flight, then skipped before the last count: the counts disagree once.
+        r = dict(wake_run(1, None), created_at=ISO(timedelta(seconds=5)))
+        done = wake_run(2, created=timedelta(minutes=20), updated=timedelta(minutes=10))  # the runner's, refused
+        refused = [{"name": "gate", "status": "completed", "conclusion": "success"},
+                   {"name": "wake", "status": "completed", "conclusion": "skipped"}]
+        actions = Actions([r, done], {"1": self.STRANGER_JOBS, "2": refused})
+        plain = actions.__call__
+
+        def answer(path):
+            out = plain(path)
+            if "/actions/runs/1/jobs" in path:
+                r.update(status="completed", conclusion="skipped")
+            return out
+        slept = []
+        self.assertIsNone(self.check(answer, sleep=slept.append))
+        self.assertEqual(slept, [tripwire.SETTLE_SECONDS])
+        self.assertGreater(sum("&status=in_progress&per_page=100" in p for p in actions.paths), 0)
+        # Two attempts, but the completed run's jobs were read once.
+        self.assertEqual(sum("/actions/runs/2/jobs" in p for p in actions.paths), 1)
+
+    def test_a_final_mismatch_of_others_runs_is_no_session(self):
+        # Every listed run in flight has a gate that finished without success; the counts keep
+        # disagreeing because each attempt's last count no longer sees them.
+        r = dict(wake_run(1, None), created_at=ISO(timedelta(seconds=5)))
+        actions = Actions([r], {"1": self.STRANGER_JOBS})
+        plain = actions.__call__
+        state = {"n": 0}
+
+        def answer(path):
+            if "&status=completed&per_page=1&" in path and MONTH in path:  # the in-flight counts: flip each time
+                state["n"] += 1
+                r.update(status="in_progress" if state["n"] % 2 else "completed",
+                         conclusion=None if state["n"] % 2 else "skipped")
+            return plain(path)
+        slept = []
+        self.assertIsNone(self.check(answer, sleep=slept.append))
+        self.assertEqual(slept, [tripwire.SETTLE_SECONDS] * (tripwire.SESSION_ATTEMPTS - 1))
+
+    def test_any_other_final_mismatch_stays_unknown(self):
+        # A run in flight in a status no list covers: the latest count leaves it unlisted.
+        # (The request cap is lifted so the settle rule, not the cap, decides.)
+        odd = dict(wake_run(1, None), status="something-new")
+        cap, tripwire.SESSION_REQUESTS = tripwire.SESSION_REQUESTS, 1000
+        try:
+            self.assertEqual(self.check(Actions([odd], {"1": self.STRANGER_JOBS})), tripwire.SESSION_UNKNOWN)
+        finally:
+            tripwire.SESSION_REQUESTS = cap
+        # The runner's run settling: its gate succeeded, so it isn't someone else's.
+        r = dict(wake_run(2, None), created_at=ISO(timedelta(seconds=5)))
+        jobs = [{"name": "gate", "status": "completed", "conclusion": "success"},
+                {"name": "wake", "status": "completed", "conclusion": "skipped"}]
+        actions = Actions([r], {"2": jobs})
+        plain = actions.__call__
+        state = {"n": 0}
+
+        def answer(path):
+            if "&status=completed&per_page=1&" in path and MONTH in path:
+                state["n"] += 1
+                r.update(status="in_progress" if state["n"] % 2 else "completed",
+                         conclusion=None if state["n"] % 2 else "success")
+            return plain(path)
+        self.assertEqual(self.check(answer), tripwire.SESSION_UNKNOWN)
 
     def test_a_run_listed_in_a_state_it_has_left_is_read_again(self):
         # Listed as in progress, but the copy returned already says completed long ago: read
@@ -1028,12 +1118,84 @@ class SessionCheck(unittest.TestCase):
         runs.append(dict(skipped_run(9999, timedelta(minutes=50)), conclusion="something-new"))
         self.assertEqual(self.check(Actions(runs, cap=True)), tripwire.SESSION_UNKNOWN)
 
+    def runner_runs(self, n):
+        """n of the runner's channel comments in the lookback: gate passed, wake skipped."""
+        runs = [wake_run(i, created=timedelta(minutes=2 * i), updated=timedelta(minutes=2 * i)) for i in range(1, n + 1)]
+        jobs = [{"name": "gate", "status": "completed", "conclusion": "success"},
+                {"name": "wake", "status": "completed", "conclusion": "skipped"}]
+        return Actions(runs, {str(i): jobs for i in range(1, n + 1)})
+
+    def test_thirty_runner_comments_in_the_lookback_fit_the_request_budget(self):
+        actions = self.runner_runs(30)
+        self.assertIsNone(self.check(actions))
+        self.assertLessEqual(len(actions.paths), tripwire.SESSION_REQUESTS)
+
     def test_the_check_stops_at_its_request_cap(self):
-        def churn(actions):
-            actions.runs.append(skipped_run(1000 + len(actions.paths), timedelta(minutes=3)))
-        actions = Actions([skipped_run(1)], before_call=churn)
+        actions = self.runner_runs(tripwire.SESSION_REQUESTS)
         self.assertEqual(self.check(actions), tripwire.SESSION_UNKNOWN)
         self.assertLessEqual(len(actions.paths), tripwire.SESSION_REQUESTS)
+
+    def test_old_successes_in_the_window_cost_no_jobs_reads(self):
+        # 900 completed runs inside the 72-hour window, all updated before the lookback.
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
+        runs = [wake_run(i, created=timedelta(hours=3) + timedelta(minutes=4 * i), updated=old) for i in range(1, 901)]
+        actions = Actions(runs, {str(i): wake_jobs() for i in range(1, 901)})
+        self.assertIsNone(self.check(actions))
+        self.assertFalse(any("/actions/runs/" in p for p in actions.paths))
+        self.assertLessEqual(len(actions.paths), 9 + 8)  # nine pages of successes past the first
+
+    def test_the_request_budget_at_three_days_of_runs_with_a_settle_retry(self):
+        # 300 completed runs in the 72-hour window, 12 of the runner's comments in the lookback,
+        # and a comment's run in flight that settles, costing one retry.
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
+        runs = [wake_run(i, created=timedelta(hours=3) + timedelta(minutes=13 * i), updated=old) for i in range(1, 301)]
+        mine = [{"name": "gate", "status": "completed", "conclusion": "success"},
+                {"name": "wake", "status": "completed", "conclusion": "skipped"}]
+        jobs = {}
+        for i in range(1000, 1012):
+            runs.append(wake_run(i, created=timedelta(minutes=i - 990), updated=timedelta(minutes=i - 991)))
+            jobs[str(i)] = mine
+        r = dict(wake_run(1, None), id=5000, created_at=ISO(timedelta(seconds=5)))
+        runs.append(r)
+        jobs["5000"] = self.STRANGER_JOBS
+        actions = Actions(runs, jobs)
+        plain = actions.__call__
+
+        def answer(path):
+            out = plain(path)
+            if "/actions/runs/5000/jobs" in path:
+                r.update(status="completed", conclusion="skipped")
+            return out
+        slept = []
+        self.assertIsNone(self.check(answer, sleep=slept.append))
+        self.assertEqual(slept, [tripwire.SETTLE_SECONDS])  # one retry
+        self.assertLessEqual(len(actions.paths), tripwire.SESSION_REQUESTS)
+
+    def test_a_completed_run_missing_at_first_is_found_on_the_next_attempt(self):
+        actions = Actions([wake_run(1)], {"1": wake_jobs()})
+        plain = actions.__call__
+        state = {"hidden": True}
+
+        def answer(path):
+            out = plain(path)
+            if state["hidden"] and "&status=success&per_page=100" in path:
+                state["hidden"] = False
+                return {"total_count": 0, "workflow_runs": []}  # an index that hasn't caught up yet
+            return out
+        slept = []
+        self.assertEqual(self.check(answer, sleep=slept.append), tripwire.SESSION_RAN)
+        self.assertEqual(slept, [tripwire.SETTLE_SECONDS])
+
+    def test_a_count_below_zero_is_never_settled_on(self):
+        actions = Actions([skipped_run(1)])
+        plain = actions.__call__
+
+        def answer(path):
+            out = plain(path)
+            if "&status=completed&per_page=1&" in path and MONTH in path:  # only the in-flight window
+                return dict(out, total_count=out["total_count"] + 1)  # more completed than all runs
+            return out
+        self.assertEqual(self.check(answer), tripwire.SESSION_UNKNOWN)
 
     def test_a_queued_or_running_wake_job_counts(self):
         for status in ("queued", "in_progress"):
@@ -1052,15 +1214,40 @@ class SessionCheck(unittest.TestCase):
         self.assertFalse(any("/actions/runs/" in p for p in actions.paths))
 
     def test_counts_that_dont_add_up_count_as_a_session(self):
-        # A run in a state no list covers (as if GitHub added one), and a filter it ignores.
-        odd = dict(skipped_run(1), conclusion="something-new")
+        # A run in flight in a status no list covers (as if GitHub added one).
+        odd = dict(wake_run(1, None), status="something-new")
         self.assertEqual(self.check(Actions([odd])), tripwire.SESSION_UNKNOWN)
-        ignored = Actions([skipped_run(1), wake_run(2, updated=timedelta(hours=9))], {"2": wake_jobs()}, ignore=("success",))
-        self.assertEqual(self.check(ignored), tripwire.SESSION_UNKNOWN)
+        # A status filter the API ignores: the list returns runs in other states.
+        runs = [dict(wake_run(1, None)), wake_run(2, updated=timedelta(hours=4))]
+        self.assertEqual(self.check(Actions(runs, {"1": self.STRANGER_JOBS}, ignore=("in_progress",))),
+                         tripwire.SESSION_UNKNOWN)
+        # A conclusion filter the API ignores: the success list returns a skipped run too.
+        runs = [wake_run(1, updated=timedelta(hours=4)), skipped_run(2)]
+        self.assertEqual(self.check(Actions(runs, ignore=("success",))), tripwire.SESSION_UNKNOWN)
+
+    def test_completed_runs_by_conclusion(self):
+        # A rare conclusion is listed once the counts say a completed run is still unread.
+        r = dict(wake_run(1), conclusion="timed_out")
+        actions = Actions([r], {"1": wake_jobs()})
+        self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
+        self.assertTrue(any("&status=timed_out&per_page=100" in p for p in actions.paths))
+        # An unfamiliar one no list covers: the counts don't add up, so it fails closed.
+        self.assertEqual(self.check(Actions([dict(wake_run(1), conclusion="something-new")], {"1": wake_jobs()})),
+                         tripwire.SESSION_UNKNOWN)
+        # The rare lists aren't read while the counts add up.
+        quiet = Actions([wake_run(1, updated=timedelta(hours=4))])
+        self.assertIsNone(self.check(quiet))
+        self.assertFalse(any("&status=timed_out" in p for p in quiet.paths))
+
+    def test_any_number_of_skipped_runs_costs_nothing(self):
+        runs = [skipped_run(i, timedelta(seconds=5 * i)) for i in range(1, 2501)]  # inside the completed window
+        actions = Actions(runs)
+        self.assertIsNone(self.check(actions))
+        self.assertLessEqual(len(actions.paths), 9)
 
     def test_more_runs_in_one_list_than_it_holds_counts_as_a_session(self):
-        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 1)
-        runs = [wake_run(i, created=timedelta(minutes=200 + i), updated=old) for i in range(1, 1102)]
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5)
+        runs = [wake_run(i, created=timedelta(seconds=10 * i), updated=old) for i in range(1, 1102)]
         self.assertEqual(self.check(Actions(runs)), tripwire.SESSION_UNKNOWN)
 
     def test_the_check_stops_at_its_own_deadline(self):

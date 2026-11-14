@@ -49,8 +49,10 @@ def event_env(body=INSTRUCTION, **over) -> dict:
 class FakeGitHub:
     """Comment posts, the App installation and token calls, and list endpoints."""
 
-    def __init__(self, token="ghs_TESTTOKEN", perms=None, repos=None, lists=None, selection="selected"):
+    def __init__(self, token="ghs_TESTTOKEN", perms=None, repos=None, lists=None, selection="selected",
+                 run_created=T0):
         self.calls, self.token, self.selection = [], token, selection
+        self.run_created = run_created.strftime("%Y-%m-%dT%H:%M:%SZ") if run_created else None
         self.perms = {"pull_requests": "write", "metadata": "read"} if perms is None else perms
         self.repos = ["o/r"] if repos is None else repos
         self.lists = lists or {}
@@ -62,6 +64,8 @@ class FakeGitHub:
         if path.endswith("/access_tokens"):
             return {"token": self.token, "permissions": self.perms, "repository_selection": self.selection,
                     "repositories": [{"full_name": r} for r in self.repos]}
+        if method == "GET" and path.rsplit("/", 1)[-1].isdigit() and "/actions/runs/" in path:
+            return {"id": int(path.rsplit("/", 1)[-1]), "created_at": self.run_created}  # the wake's own run
         if method == "POST" and path == "/graphql":
             return graphql_reviews(body, lambda n: self.lists.get(f"/repos/o/r/pulls/{n}/reviews", []))
         if method == "GET":
