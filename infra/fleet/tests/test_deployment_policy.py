@@ -301,10 +301,11 @@ class UnattendedOperatorEnvironment(unittest.TestCase):
                 self.assertEqual(dp.require_for_run(job(workflow), "AWS_BRIDGE_ROLE_ARN", data.__getitem__),
                                  "cloud-operator")
 
-    def test_operator_passes_with_no_rules_field_at_all(self):
+    def test_operator_fails_closed_without_a_rules_field(self):
         data = settings()
         data[OPERATOR].pop("protection_rules")
-        self.assertEqual(self.audit(data), [])
+        self.assertIn("deployment: cloud-operator protection settings unreadable", self.audit(data))
+        self.assert_operator_blocked(data)
 
     def test_operator_passes_with_branch_policy_rule_only(self):
         data = settings()

@@ -73,6 +73,9 @@ def configuration_errors(get, environments=None) -> list[str]:
             if independent and any(r.get("type") != "branch_policy" for r in rules_seen):
                 problems.append(f"deployment: {name} must not queue behind environment approvals/timers")
             if unattended:
+                if not isinstance(env.get("protection_rules"), list):
+                    # A partial response can't show a queuing rule is absent.
+                    raise ValueError
                 # A wait timer or any other rule type would silently queue wakes: drift.
                 if any(r.get("type") not in ("branch_policy", "required_reviewers") for r in rules_seen):
                     problems.append(f"deployment: {name} must not queue behind environment timers or other rules")

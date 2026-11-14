@@ -14,13 +14,14 @@
 - **Everything else is still required for `cloud-operator`:** the selected-branches policy, exactly one branch rule (`main`, type `branch`, no tags or wildcards), and `can_admins_bypass` explicitly `false`.
 - **Any rule type other than `branch_policy` and `required_reviewers` fails**, a wait timer included. A timer would queue wakes without anyone noticing, so it counts as drift.
 - **Any reviewer rule that isn't owner-only fails:** another user, a team, a second reviewer, an empty reviewer list, or two reviewer rules.
-- **Reads still fail closed.** A missing environment, a denied read, a `null` rule list or a non-object rule is reported as unreadable, and the bridge stops before it requests OIDC credentials.
+- **Reads still fail closed.** A missing environment, a denied read, a response without a `protection_rules` list (missing or `null`) or a non-object rule is reported as unreadable. A response without the list can't show that a timer is absent, so it doesn't count as "no rules", and the bridge stops before it requests OIDC credentials.
 - **An environment in both `owner_dispatch_environments` and `unattended_environments` fails** as a conflicting class rather than taking either branch.
 - **Unchanged:** `cloud-fleet` and `pia-delivery` still need the owner as sole reviewer, because they gate paid VMs and PIA delivery. `fleet-cleanup` still admits no reviewer and no timer.
 - **No stack update is needed.** `build_templates.py` reads only `repository`, `owner_id`, `repository_id` and `environments` from the policy file. `build_templates.py --check` passes, and the three CloudFormation templates are byte-identical to `main`'s (same SHA-256).
 
 ## Residual risk
 - **Any session that can post as the owner on the channel PR can start a paid wake, with no human click.** Every session posts under the owner's login, so the runner's numeric id in the gate doesn't tell sessions apart. That was already true of who could ask for a wake; the approval click was the only point where the owner looked at each one. The caps below bound the cost.
+- **The first-run runbook says so too:** its note on `operator-apply` and `operator-injection` says sessions under the owner's account count as the owner.
 - **`operator-apply.yml` and `operator-injection.yml` share `cloud-operator`, so they lose the approval click too.** Both keep their own job-level gate: `workflow_dispatch` only, on `main`, first attempt, `github.actor_id == vars.OWNER_USER_ID`, and `OPERATOR_STOP == 'false'`. Neither relied on the reviewer alone. But a session that can dispatch workflows as the owner's login now runs them unapproved:
   - `operator-apply` takes no inputs and applies only `main`'s committed agent, environment and vault definitions;
   - `operator-injection` runs sessions with a dummy token and no route, each with a $1 budget, inside the injection harness's $50 and the workspace's $200 total.
