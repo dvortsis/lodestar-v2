@@ -64,8 +64,8 @@ pub use leases::{
 };
 pub use link::{CoordinatorLink, Link, LinkError, WorkerLink, local_pair};
 pub use server::{
-    CLUSTER_PATH, ClusterServer, FleetSnapshot, GrantAdmission, InboundSink, KeyCheck, Pki,
-    SendError, ServerConfig, ServerHooks, StoredKeys, WorkerStatus,
+    CLUSTER_PATH, ClusterServer, FleetSnapshot, GrantAdmission, InboundSink, KeyCheck, PauseSource,
+    Pki, SendError, ServerConfig, ServerHooks, StoredKeys, WorkerStatus,
 };
 pub use tls::{ALPN_CLUSTER, ALPN_JOIN, CoordinatorTls, PeerIdentity, coordinator_server_name};
 pub use worker::{Credentials, Joining, Renewal};

@@ -47,7 +47,7 @@ use lodestar_cluster::proto::{
 };
 use lodestar_cluster::{
     Clock, ClusterError, ClusterServer, Coordinator, FleetSnapshot, InboundSink, KeyCheck, Lease,
-    LeaseAuthority, Pki, ServerConfig, ServerHooks, StoredKeys, WorkerId,
+    LeaseAuthority, PauseSource, Pki, ServerConfig, ServerHooks, StoredKeys, WorkerId,
 };
 use lodestar_filter::Handle;
 use lodestar_integrations::SecretStore;
@@ -1574,30 +1574,36 @@ struct Inner {
     floor: Arc<FloorReports>,
     /// `Workers`' hook for a worker over its floor budget, across servers.
     over_budget: HookSlot,
+    /// `Workers`' pause source, installed on each new server before it
+    /// serves anyone.
+    pause_source: Mutex<Option<PauseSource>>,
 }
 
-/// The workers saved as paused (WK-14's rows), for a new server. A store
-/// that won't open, or a row that won't read, pauses nobody here; `Workers`
-/// applies its own copy once it follows the server.
-fn saved_pauses(db: &std::path::Path, config: StoreConfig) -> Vec<WorkerId> {
-    let Ok(store) = Store::open(db, config) else {
-        return Vec::new();
-    };
-    let Ok(rows) = store.settings_with_prefix(super::ops::PREFS_PREFIX) else {
-        return Vec::new();
-    };
-    rows.into_iter()
+/// The workers saved as paused (WK-14's rows), for a new server. A row
+/// that doesn't parse is read as paused unless it says otherwise
+/// (`Saved::maybe_paused`); a store that can't be read is an error, and
+/// the server doesn't start (fails closed).
+fn saved_pauses(
+    db: &std::path::Path,
+    config: StoreConfig,
+) -> Result<Vec<WorkerId>, lodestar_store::Error> {
+    let store = Store::open(db, config)?;
+    let rows = store.settings_with_prefix(super::ops::PREFS_PREFIX)?;
+    Ok(rows
+        .into_iter()
         .filter_map(|(key, text)| {
             let id = key
                 .strip_prefix(super::ops::PREFS_PREFIX)?
                 .parse::<u32>()
                 .ok()
                 .filter(|&id| id != 0)?;
-            super::ops::Saved::parse(&text)
-                .filter(super::ops::Saved::paused)
-                .map(|_| WorkerId(id))
+            let paused = match super::ops::Saved::parse(&text) {
+                Some(s) => s.paused(),
+                None => super::ops::Saved::maybe_paused(&text),
+            };
+            paused.then_some(WorkerId(id))
         })
-        .collect()
+        .collect())
 }
 
 /// How long `close` waits for an aborted tick to go.
@@ -1635,7 +1641,8 @@ impl Inner {
         let (db, store) = (self.wiring.db.clone(), self.wiring.store.clone());
         let paused = tokio::task::spawn_blocking(move || saved_pauses(&db, store))
             .await
-            .unwrap_or_default();
+            .map_err(|_| StartError::task())?
+            .map_err(|e| StartError::pki("pauses", &ClusterError::Store(e)))?;
         let preparer = check
             .reader
             .lock()
@@ -1686,6 +1693,10 @@ impl Inner {
         // (WK-14's window; `Workers` re-applies them too, later).
         for w in paused {
             server.pause(w);
+        }
+        // And every session asks `Workers` (unsaved pauses included).
+        if let Some(source) = lock(&self.pause_source).clone() {
+            server.set_pause_source(source);
         }
         let task = tokio::spawn(server.clone().serve(listener));
         let (gone, tick_gone) = watch::channel(());
@@ -1771,6 +1782,20 @@ impl std::fmt::Debug for ClusterHandle {
 }
 
 impl ClusterHandle {
+    /// Sets `Workers`' pause source: on the server serving now, and on
+    /// every server started from here on, before it serves anyone.
+    pub(crate) fn set_pause_source(&self, source: PauseSource) {
+        *lock(&self.0.pause_source) = Some(source.clone());
+        if let Some(server) = self.server() {
+            server.set_pause_source(source);
+        }
+    }
+
+    /// The pause source `Workers` set, if any.
+    pub(crate) fn pause_source(&self) -> Option<PauseSource> {
+        lock(&self.0.pause_source).clone()
+    }
+
     /// Registers what to do when a worker first goes over its floor
     /// budget (`Workers` saves the pause). One hook; a later call replaces
     /// it.
@@ -2168,6 +2193,7 @@ impl Cluster {
             store_errors: Arc::new(AtomicU64::new(0)),
             floor: Arc::new(FloorReports::new(wiring_held)),
             over_budget: HookSlot::default(),
+            pause_source: Mutex::new(None),
         });
         let running = if enabled {
             match inner.open().await {
@@ -2927,7 +2953,7 @@ mod tests {
 
     /// WK-14's window: a worker saved as paused is paused on a new server
     /// before it serves anyone, so one that reconnects at once is never
-    /// granted a key. A row that doesn't read pauses nobody.
+    /// granted a key. A row that doesn't read is read as paused.
     #[tokio::test]
     async fn saved_pauses_are_in_before_the_server_serves() {
         let dir = tempfile::tempdir().unwrap();
@@ -2944,8 +2970,12 @@ mod tests {
                 ])
                 .unwrap();
         }
-        let saved = saved_pauses(&w.db, w.store.clone());
-        assert_eq!(saved, vec![WorkerId(9)]);
+        // A store that can't be read is an error, never "nobody paused".
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(saved_pauses(&gone, w.store.clone()).is_err());
+        let mut saved = saved_pauses(&w.db, w.store.clone()).unwrap();
+        saved.sort();
+        assert_eq!(saved, vec![WorkerId(9), WorkerId(11)]);
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         // Paused already: in the server's fleet before any connection.
