@@ -318,6 +318,8 @@ struct FrontWait {
     passes: usize,
     /// First windows admitted while it waits; none of them may pass it.
     admitted: HashSet<u64>,
+    /// The networks of the claims that passed it.
+    passer_nets: HashSet<Net>,
 }
 
 impl BudgetState {
@@ -668,12 +670,13 @@ impl Reservation {
             let queued = s.growth.iter().any(|&(id, ..)| id == claim.id);
             if claim.net.is_some_and(|net| s.grown_nets.contains(&net)) {
                 // Its network has a grown claim: only that one holds it
-                // back, so it waits apart and holds up nothing. At the
-                // front, that claim can only be one of its own network's
-                // that passed it (nothing else grows while a front waits),
-                // so it keeps its turn: no later growth goes ahead of it,
-                // and first windows stay gated on it.
-                let at_front = s.growth.front().is_some_and(|&(id, ..)| id == claim.id);
+                // back, so it waits apart and holds up nothing. Unless a
+                // claim of its own network passed it while it waited at the
+                // front: then it keeps its turn, so no later growth goes
+                // ahead of it, and first windows stay gated on it.
+                let at_front = s.wait.as_ref().is_some_and(|w| {
+                    w.front == claim.id && claim.net.is_some_and(|n| w.passer_nets.contains(&n))
+                });
                 if queued && !at_front {
                     s.growth.retain(|&(id, ..)| id != claim.id);
                     budget.settled.notify_one();
@@ -733,6 +736,9 @@ impl Reservation {
             }
             if passing && let Some(w) = s.wait.as_mut() {
                 w.passes += 1;
+                if let Some(net) = claim.net {
+                    w.passer_nets.insert(net);
+                }
                 // Only claims whose window was in when the front began to
                 // wait can pass it, each once.
                 debug_assert!(w.passes <= w.before, "a front passed {} times", w.passes);
@@ -4621,6 +4627,53 @@ mod budget {
             .expect("then the later one grows")
             .unwrap();
         drop(later);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front whose network's claim was ahead of it in the queue, and grew
+    /// in its own turn, wasn't passed: held back by that grown claim, it
+    /// waits apart and holds up no other network's growth.
+    #[tokio::test(start_paused = true)]
+    async fn a_front_held_by_its_networks_earlier_claim_waits_apart() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        // Results the consumer hasn't taken stall every growth.
+        let results = Reservation::for_peer(b.clone(), Some(net(100)));
+        tokio::time::timeout(within, results.reserve(3_300_000, 3_300_000))
+            .await
+            .expect("alone, it fits");
+        results.settle(results.bytes());
+        drop(results);
+        let earlier = window(&b, 1, 64 << 10, 1_000_000).await;
+        let front = window(&b, 1, 64 << 10, 300_000).await;
+        let other = window(&b, 3, 1_000, 20_000).await;
+        let mut first = growing(&earlier, 1_000_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        let mut wait = growing(&front, 300_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        let mut after = growing(&other, 20_000);
+        queued(&b, |s| s.growth.len() == 3).await;
+        // The consumer takes the results: the earlier claim grows in turn.
+        let (held, _) = b.usage();
+        b.release_held(held);
+        tokio::time::timeout(within, &mut first)
+            .await
+            .expect("the earlier claim grows in its turn")
+            .unwrap();
+        tokio::time::timeout(within, &mut after)
+            .await
+            .expect("another network's growth isn't held up")
+            .unwrap();
+        assert!(
+            !wait.is_finished(),
+            "held back by its network's grown claim"
+        );
+        drop(earlier);
+        tokio::time::timeout(within, &mut wait)
+            .await
+            .expect("it grows once that claim ends")
+            .unwrap();
+        drop((front, other));
         assert_eq!(used(&b), 0);
     }
 

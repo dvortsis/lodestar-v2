@@ -1334,7 +1334,8 @@ mod tests {
 
     /// A real fetch over loopback TCP whose peer never sends its first
     /// window ends at the bound and is counted under `tcp`. Real time: the
-    /// bound itself is the wait.
+    /// bound itself is the wait. The fetch's deadline is well past it, so
+    /// a slow connect can't eat into it.
     #[tokio::test]
     async fn a_fetch_counts_its_first_window_timeout() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1359,7 +1360,7 @@ mod tests {
         });
         let opts = FetchOptions {
             allow_private: true,
-            ..plain(Duration::from_secs(8))
+            ..plain(Duration::from_secs(20))
         };
         let got = timeout(Duration::from_secs(30), fetch(addr, key, &opts))
             .await
