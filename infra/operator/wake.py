@@ -18,10 +18,14 @@
 6. One session: the agent version from claude-lock.json (routine), or an
    override to OPERATOR_MODEL_TRIAGE at high effort (triage); a $3 or $15
    budget; the instruction comment as its only user.message.
-7. Watching it: a call paused for approval is denied with a message to
-   escalate; a budget stop, an error, a stall or 30 minutes makes the bridge
-   post the escalation itself. Every session is archived at the end, so none
-   can be resumed later with a newer token.
+7. Watching it: the session object gives only the status, so why it went
+   idle comes from its event list (the last status event's stop reason). A
+   call paused for approval is denied with a message to escalate; a budget
+   stop, an error, a refusal, a stall or 30 minutes makes the bridge post the
+   escalation itself, naming an error by the API's own type. So does a clean
+   finish after an error the session didn't recover from, or in which the
+   permission policy refused a tool call. Every session is
+   archived at the end, so none can be resumed later with a newer token.
 8. Always: the token revoked, the credential reset, the lock released.
 
 Comment text arrives only through COMMENT_BODY. Logs and comments carry
@@ -55,10 +59,27 @@ BUDGET_CENTS = {"routine": 300, "triage": 1500}  # per session (plan §1)
 PER_HOUR, PER_DAY = 6, 60
 SESSION_MINUTES = 30
 POLL_SECONDS = 10
-STALL_POLLS = 6  # a requires_action with nothing left to deny, a minute long
+STALL_POLLS = 6  # a minute of idle polls with nothing to deny, or with no stop reason in the events
 INTERRUPT_SECONDS = 60  # after an interrupt, the wait for the session to stop before the archive
 TRIAGE_EFFORT = "high"  # an override replaces the model object, effort included
 UNSET_TOKEN = "revoked"
+# The session's own status events, in the event list. A session object has no
+# stop reason: only its last `session.status_idle` event does.
+STATUS_EVENTS = ("session.status_running", "session.status_idle", "session.status_rescheduled",
+                 "session.status_terminated")
+# `session.error`'s types and retry statuses, as the API lists them. An escalation
+# names only a value found here, never the error's free-text message.
+ERROR_TYPES = frozenset((
+    "unknown_error", "model_overloaded_error", "model_rate_limited_error", "model_request_failed_error",
+    "mcp_connection_failed_error", "mcp_authentication_failed_error", "billing_error",
+    "credential_host_unreachable_error", "tool_use_limit_reached_error", "compaction_limit_reached_error",
+    "repository_authentication_error", "repository_forbidden_error", "repository_not_found_error",
+    "repository_checkout_error", "repository_clone_error"))
+RETRY_STATUSES = frozenset(("retrying", "exhausted", "terminal"))
+# The reason codes on a call the `auto` permission policy refused outright (the
+# event's `evaluation.evaluated_permission`, type `deny`): judged high-risk, or
+# no judgement reached and the call not held for approval.
+POLICY_REASONS = frozenset(("high_risk", "indeterminate"))
 DENY = ("This call needs approval, which the bridge never gives. Don't retry or work around it: "
         "post an operator-report v1 with kind: escalation saying what you tried to do, then end your turn.")
 
@@ -249,8 +270,80 @@ def session_body(msg: message.Message, lock: dict, env, body_text: str, run_id: 
     }
 
 
-def _deny_pending(call, sid: str, denied: set) -> int:
-    events = pages(call, f"/v1/sessions/{sid}/events", {})
+def _events(call, sid: str) -> list[dict]:
+    """Every event of the session, oldest first. `_stop_reason` and the error
+    readers below take the last matching event as the latest, so the order is
+    asked for (the list's `order` parameter; `asc` is also its default) rather
+    than assumed."""
+    return pages(call, f"/v1/sessions/{sid}/events", {"order": "asc"})
+
+
+def _stop_reason(events: list[dict]) -> str | None:
+    """Why the session is idle: the stop reason of its last status event, when
+    that event is a `session.status_idle`. None when the list doesn't show the
+    idle yet (the status and the event list are written separately), or shows
+    no reason: the caller polls again rather than guess."""
+    for e in reversed(events):
+        if e.get("type") in STATUS_EVENTS:
+            reason = e.get("stop_reason") if e["type"] == "session.status_idle" else None
+            kind = reason.get("type") if isinstance(reason, dict) else None
+            return kind if isinstance(kind, str) and kind else None
+    return None
+
+
+def _error(event: dict) -> tuple[str, str]:
+    """A `session.error` as two fixed words (type, retry status). Both are
+    checked against the API's own lists, so no text from the session reaches a
+    log or a comment."""
+    err = event.get("error") if isinstance(event.get("error"), dict) else {}
+    kind, retry = err.get("type"), err.get("retry_status")
+    retry = retry.get("type") if isinstance(retry, dict) else None
+    return (kind if isinstance(kind, str) and kind in ERROR_TYPES else "an unlisted error type",
+            retry if isinstance(retry, str) and retry in RETRY_STATUSES else "an unlisted retry status")
+
+
+def _error_words(events: list[dict]) -> str:
+    """The session's last `session.error` as " (type, retry status)", or ""."""
+    for e in reversed(events):
+        if e.get("type") == "session.error":
+            return " (%s, %s)" % _error(e)
+    return ""
+
+
+def unrecovered_error(events: list[dict]) -> str:
+    """The escalation line for a session that ended its turn after an error it
+    didn't recover from, or "". Only `retrying` is a recovery in progress:
+    `exhausted`, `terminal` and any status this bridge doesn't know all count,
+    so an unknown value fails closed. The last such error is the one named."""
+    for e in reversed(events):
+        if e.get("type") == "session.error" and _error(e)[1] != "retrying":
+            return "the session finished after an error it didn't recover from (%s, %s)" % _error(e)
+    return ""
+
+
+def policy_denials(events: list[dict]) -> str:
+    """The escalation line for a session whose tool calls the permission policy
+    refused outright, or "". Such a session still ends its turn cleanly, but an
+    operator that can't run its tools can't read the channel or post a report,
+    so a finish with denied calls is never left silent. Calls the bridge itself
+    denied (paused for approval) aren't counted: those stay `ask`. The reason
+    is printed only when it's on the fixed list."""
+    reasons = set()
+    count = 0
+    for e in events:
+        if e.get("type") in ("agent.tool_use", "agent.mcp_tool_use") and e.get("evaluated_permission") == "deny":
+            count += 1
+            judged = e.get("evaluation") if isinstance(e.get("evaluation"), dict) else {}
+            judged = judged.get("evaluated_permission") if isinstance(judged.get("evaluated_permission"), dict) else {}
+            code = judged.get("reason_code")
+            reasons.add(code if isinstance(code, str) and code in POLICY_REASONS else "an unlisted reason")
+    if not count:
+        return ""
+    return (f"the session finished, but the permission policy denied {count} of its tool calls "
+            f"({', '.join(sorted(reasons))}); the operator may have posted no report")
+
+
+def _deny_pending(call, sid: str, events: list[dict], denied: set) -> int:
     answered = {e.get("tool_use_id") for e in events if e.get("type") == "user.tool_confirmation"}
     ask = [e["id"] for e in events if e.get("type") in ("agent.tool_use", "agent.mcp_tool_use")
            and e.get("evaluated_permission") == "ask" and isinstance(e.get("id"), str)
@@ -280,7 +373,25 @@ def _interrupt(call, sid: str, monotonic, sleep) -> None:
 
 
 def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=lambda: False) -> str:
-    """'done', or the escalation line for a session that couldn't escalate itself.
+    """'done', or the escalation line for a session that couldn't escalate itself."""
+    return watch_events(call, sid, monotonic, sleep, stopped)[0]
+
+
+def finish_problem(events: list[dict]) -> str:
+    """Why a session that ended its turn cleanly still needs an escalation, or
+    "": an error it didn't recover from, tool calls the policy refused, or both."""
+    return "; ".join(x for x in (unrecovered_error(events), policy_denials(events)) if x)
+
+
+def watch_events(call, sid: str, monotonic=time.monotonic, sleep=time.sleep,
+                 stopped=lambda: False) -> tuple[str, list[dict]]:
+    """`watch`, and the event list a "done" was read from (empty otherwise), so
+    what the bridge says about a finish comes from the same read that showed it.
+
+    The session object carries a status and no stop reason, so an idle or
+    terminated session is read from its event list. A session that finishes
+    its work goes idle (`end_turn`); `terminated` is an unrecoverable error or
+    an archive from outside, never a finish.
 
     `stopped()` is true once operator-wake.yml is disabled (the tripwire, or the
     owner's kill switch): the live session is interrupted at the next poll."""
@@ -290,28 +401,36 @@ def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=la
     while True:
         if monotonic() >= deadline:
             _interrupt(call, sid, monotonic, sleep)
-            return f"the session ran past {SESSION_MINUTES} minutes and was stopped"
+            return f"the session ran past {SESSION_MINUTES} minutes and was stopped", []
         if stopped():
             _interrupt(call, sid, monotonic, sleep)
-            return "operator-wake.yml was disabled, so the session was stopped"
-        s = call("GET", f"/v1/sessions/{sid}", None) or {}
-        status, stop = s.get("status"), ((s.get("stop_reason") or {}).get("type"))
+            return "operator-wake.yml was disabled, so the session was stopped", []
+        status = (call("GET", f"/v1/sessions/{sid}", None) or {}).get("status")
         if status == "terminated":
-            return "done" if stop in (None, "end_turn") else "the session ended with an error"
+            return "the session was terminated" + _error_words(_events(call, sid)), []
         if status == "idle":
+            events = _events(call, sid)
+            stop = _stop_reason(events)
             if stop == "end_turn":
-                return "done"
+                return "done", events
             if stop == "budget_reached":
-                return "the session reached its budget"
-            if stop == "requires_action":
-                if _deny_pending(call, sid, denied):
-                    stalled = 0
-                else:
-                    stalled += 1
-                    if stalled >= STALL_POLLS:
-                        return "the session stalled waiting for an action the bridge can't give"
-            else:
-                return "the session ended with an error"
+                return "the session reached its budget", []
+            if stop == "refusal":
+                return "the session stopped on a model refusal", []
+            if stop == "requires_action" and _deny_pending(call, sid, events, denied):
+                stalled = 0
+            elif stop in ("requires_action", None):
+                stalled += 1
+                if stalled >= STALL_POLLS:
+                    # A no-op on an idle session; it stops one whose status lagged behind a resume,
+                    # so the archive that follows is never refused with the session still running.
+                    _interrupt(call, sid, monotonic, sleep)
+                    return ("the session stalled waiting for an action the bridge can't give" if stop
+                            else "the session went idle and its events show no stop reason"), []
+            else:  # retries_exhausted, or a reason this bridge doesn't know
+                return "the session ended with an error" + _error_words(events), []
+        else:
+            stalled = 0
         sleep(POLL_SECONDS)
 
 
@@ -411,8 +530,10 @@ def cmd_wake(env, deps=None) -> int:
         print(f"operator-wake: session started ({msg.mode})")
         if not bridge.record_session(store, ids, etag, sid):
             escalate(env, msg.id, "couldn't record the session in claude-lock.json; the next wake will refuse", gh_post)
-        outcome = watch(call, sid, mono, sleep, wake_disabled(env, gh_post))
+        outcome, events = watch_events(call, sid, mono, sleep, wake_disabled(env, gh_post))
         print(f"operator-wake: session {'ended' if outcome == 'done' else 'stopped'}")
+        if outcome == "done":
+            outcome = finish_problem(events) or outcome
         if outcome != "done":
             escalate(env, msg.id, outcome, gh_post)
         return 0

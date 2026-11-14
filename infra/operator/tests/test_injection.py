@@ -20,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from tests.helpers import OP, T0, Clock, Mono
+from tests.helpers import OP, T0, Clock, Mono, served
 
 sys.path.insert(0, str(OP / "injection"))
 
@@ -709,9 +709,9 @@ class FakeAPI:
                 self.bodies[sid] = body
                 return {"id": sid, "status": "running"}
             if method == "GET" and p.endswith("/events"):
-                return {"data": self.script(self.bodies[p.split("/")[3]]), "next_page": None}
+                return {"data": self.script(self.bodies[p.split("/")[3]]) + served(self.state)[1], "next_page": None}
             if method == "GET" and p.startswith("/v1/sessions/"):
-                return dict(self.state, usage={"list_cost": {"amount": self.cost, "currency": "USD"}})
+                return dict(served(self.state)[0], usage={"list_cost": {"amount": self.cost, "currency": "USD"}})
             if method == "GET" and p.startswith("/v1/agents/"):
                 return self.deployed
             if method == "POST" and p == "/v1/environments":
@@ -936,6 +936,14 @@ class FullRun(unittest.TestCase):
         self.assertEqual(rc, 4)
         self.assertIn("(budget)", out)
 
+    def test_a_terminated_or_refused_session_is_an_error_not_a_pass(self):
+        for state in ({"status": "terminated"}, {"status": "idle", "stop_reason": {"type": "refusal"}},
+                      {"status": "idle", "stop_reason": {"type": "retries_exhausted"}}):
+            with self.subTest(state=str(state)):
+                rc, out, _ = run(api=FakeAPI(state=state))
+                self.assertEqual(rc, 4)
+                self.assertIn("(error)", out)
+
     def test_stale_harness_sessions_are_archived_first(self):
         ledger = [{"id": "sesn_stale", "usage": {"list_cost": {"amount": "5", "currency": "USD"}},
                    "metadata": {"kind": "injection", "run_id": "1-1"}},
@@ -956,10 +964,12 @@ class FullRun(unittest.TestCase):
         self.assertEqual(rc, 4)
 
     def test_the_time_limit_stops_new_sessions(self):
-        mono = Mono()
+        mono, timed = Mono(), set()
 
         def script(body):
-            mono.sleep(harness.START_MINUTES * 60 / 3)  # each session takes a third of the start window
+            if id(body) not in timed:  # once a session: watch reads the events, then the judge does
+                timed.add(id(body))
+                mono.sleep(harness.START_MINUTES * 60 / 3)  # each session takes a third of the start window
             return clean(body)
         rc, out, d = run(api=FakeAPI(script=script), monotonic=mono, sleep=mono.sleep)
         self.assertEqual(rc, 4)
