@@ -510,24 +510,31 @@ pub enum Inserted {
     /// this way; [`Store::insert`] and `WriteBatch::torrents` (imports)
     /// never return it.
     Refused,
+    /// Not written: one of its swarm hashes is held (a tombstone or a
+    /// quarantine row), read in the write's own transaction, so a hold
+    /// written since the batch was judged still keeps it out. Only
+    /// [`WriteBatch::prepared`] is checked this way.
+    Held,
 }
 
 impl Inserted {
     /// The torrent's id.
     ///
     /// # Panics
-    /// On [`Inserted::Refused`], which only `WriteBatch::prepared`
-    /// returns: read those with [`stored`](Self::stored).
+    /// On [`Inserted::Refused`] or [`Inserted::Held`], which only
+    /// `WriteBatch::prepared` returns: read those with
+    /// [`stored`](Self::stored).
     pub fn id(self) -> i64 {
         self.stored()
             .expect("only WriteBatch::prepared is refused; read it with stored()")
     }
 
-    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused).
+    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused)
+    /// or [`Held`](Inserted::Held).
     pub fn stored(self) -> Option<i64> {
         match self {
             Inserted::New(id) | Inserted::Existing(id) => Some(id),
-            Inserted::Refused => None,
+            Inserted::Refused | Inserted::Held => None,
         }
     }
 }
@@ -1347,6 +1354,20 @@ fn finders_in(touches: &[Touch], stopped: u64) -> HashMap<InfoHash, u64> {
     finders
 }
 
+/// Whether any of `hashes` is held: a tombstone or a quarantine row.
+fn is_held(tx: &Connection, hashes: impl Iterator<Item = InfoHash>) -> Result<bool> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM tombstones WHERE hash = ?1)
+             OR EXISTS (SELECT 1 FROM quarantine WHERE hash = ?1)",
+    )?;
+    for h in hashes {
+        if stmt.query_row([&h.0[..]], |r| r.get::<_, bool>(0))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Deletes the stored torrents under any hash a held decision in
 /// `filtered` covers, and logs them so the search indexer drops their
 /// documents: in the hold's own transaction, as every other hold path
@@ -1381,6 +1402,10 @@ fn commit_live(
     stopped: u64,
     finders: &HashMap<InfoHash, u64>,
 ) -> Result<Inserted> {
+    // Held since it was judged: nothing is stored under a held hash.
+    if is_held(tx, t.torrent.swarm_hashes())? {
+        return Ok(Inserted::Held);
+    }
     if stopped & t.source.bit() as u64 == 0 {
         return commit_one(tx, codec, t);
     }

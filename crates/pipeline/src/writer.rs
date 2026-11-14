@@ -2785,12 +2785,21 @@ fn transaction(
         Err(e) => return Err(e),
     };
     let mut refused = Vec::new();
+    let mut held_since = Vec::new();
     let stored: Vec<_> = rest
         .iter()
         .zip(&written.prepared)
-        .filter_map(|(&i, ins)| match ins.stored() {
-            Some(id) => Some((i, id, matches!(ins, Inserted::New(_)))),
-            None => {
+        .filter_map(|(&i, ins)| match ins {
+            Inserted::New(id) | Inserted::Existing(id) => {
+                Some((i, *id, matches!(ins, Inserted::New(_))))
+            }
+            // Held since it was judged (the store read its holds in the
+            // write's own transaction): never stored.
+            Inserted::Held => {
+                held_since.push(i);
+                None
+            }
+            Inserted::Refused => {
                 refused.push(i);
                 None
             }
@@ -2806,6 +2815,7 @@ fn transaction(
         .into_iter()
         .partition(|s: &(usize, i64, bool, Vec<InfoHash>)| !written.deleted.contains(&s.1));
     blocked.extend(gone.iter().map(|s| s.0));
+    blocked.extend(held_since);
     Ok(Outcome {
         stored,
         promoted_as,
@@ -6494,6 +6504,30 @@ mod tests {
             rule(&w.filter, "bunny", Action::Drop);
             w.commit_cache(vec![again], &retry).await;
             held_not_stored(&w, key, id);
+        }
+
+        /// A hold written after a result was judged, which the writer's
+        /// own set doesn't know of: the write reads it in its transaction
+        /// and the result is blocked, never stored.
+        #[tokio::test]
+        async fn a_hash_held_after_judging_is_never_stored() {
+            let (mut w, c, retry) = parts();
+            let r = results_named("Big Buck Bunny");
+            let key = r.key;
+            w.store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'U-1', 1)",
+                    [&key.0[..]],
+                )
+                .unwrap();
+            assert!(!w.held.contains(&key.0), "the writer's set doesn't know");
+            commit(&mut w, &c, r, &retry).await;
+            assert_eq!(find(&w, key), None);
+            assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
+            assert_eq!(w.stats.blocked.load(Ordering::Relaxed), 1);
         }
 
         /// Every waiting hold is tried on each pass: one that keeps failing

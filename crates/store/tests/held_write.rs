@@ -240,3 +240,61 @@ fn the_sweep_deletes_stored_torrents_under_held_hashes_once() {
     assert_eq!(store.sweep_held_stored().unwrap(), None);
     assert!(is_stored(&store, later));
 }
+
+/// A fetched torrent whose hash was held after it was judged (a hold the
+/// write itself didn't carry) is neither stored nor merged into a stored
+/// row: the write reads the holds in its own transaction.
+#[test]
+fn a_fetch_under_a_hash_held_since_is_never_stored() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let fresh_raw = info("fresh", false);
+    let fresh = Info::parse(&fresh_raw).unwrap();
+    let (stored_id, stored_hash, _) = stored(&mut store, "kept", false, flags::FILES_PARTIAL);
+    let stored_raw = info("kept", false);
+    let stored_info = Info::parse(&stored_raw).unwrap();
+    let c = store.connection();
+    for h in [fresh.primary_hash().0, stored_hash] {
+        c.execute(
+            "INSERT INTO quarantine (hash, rule, at, expires_at) VALUES (?1, 'U-1', 1, 2)",
+            [&h[..]],
+        )
+        .unwrap();
+    }
+    let mut preparer = store.preparer();
+    let prepared = [
+        preparer.prepare(&fresh, Some(&fresh_raw)).unwrap(),
+        preparer.prepare(&stored_info, Some(&stored_raw)).unwrap(),
+    ];
+    let batch: Vec<lodestar_store::PreparedTorrent<'_>> = prepared
+        .iter()
+        .map(|p| lodestar_store::PreparedTorrent {
+            torrent: p,
+            discovered_at: 1,
+            metadata_at: 1,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+            verified: true,
+        })
+        .collect();
+    let written = store
+        .write(&WriteBatch {
+            prepared: &batch,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        written.prepared,
+        [
+            lodestar_store::Inserted::Held,
+            lodestar_store::Inserted::Held
+        ]
+    );
+    assert_eq!(
+        store.find(&fresh.primary_hash()).unwrap(),
+        None,
+        "not stored"
+    );
+    // The partial row isn't upgraded either.
+    let row = store.torrent(stored_id).unwrap().unwrap();
+    assert_ne!(row.flags & flags::FILES_PARTIAL, 0);
+}
