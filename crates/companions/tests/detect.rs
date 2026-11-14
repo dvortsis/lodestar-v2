@@ -1173,3 +1173,214 @@ async fn errors_carry_no_url_or_body() {
         assert!(!shown.contains("xxx"));
     }
 }
+
+// ─── Companions Lodestar runs (X-cmp-supervisor-bind) ───────────────────
+
+mod bound {
+    use super::*;
+    use lodestar_companions::supervise::bind::Bindings;
+    use lodestar_companions::supervise::{State, Status};
+    use tokio::sync::watch;
+
+    fn status(state: State, run: u64) -> Status {
+        Status {
+            state,
+            restarts: 0,
+            last_exit: None,
+            run,
+        }
+    }
+
+    fn limits() -> Limits {
+        Limits::new(Duration::from_secs(15), 1024).unwrap()
+    }
+
+    fn path() -> RequestPath {
+        RequestPath::parse("/api/v2/app/version").unwrap()
+    }
+
+    /// A request carrying a key, a cookie, a body and a query: each is
+    /// "not bare".
+    fn carrying(target: &Target) -> Vec<ProbeRequest<'_>> {
+        let key = HeaderName::new("X-Api-Key").unwrap();
+        let cookie = HeaderName::new("Cookie").unwrap();
+        vec![
+            ProbeRequest::new(target, path(), limits())
+                .header(key, HeaderValue::secret(Secret::new("k")).unwrap()),
+            ProbeRequest::new(target, path(), limits())
+                .header(cookie, HeaderValue::plain("SID=abc").unwrap()),
+            ProbeRequest::new(target, path(), limits()).post(b"password=x".to_vec()),
+            ProbeRequest::new(
+                target,
+                RequestPath::parse("/api/v2/app/version?apikey=k").unwrap(),
+                limits(),
+            ),
+        ]
+    }
+
+    async fn refused(client: &CompanionHttp, req: ProbeRequest<'_>) {
+        let got = client.send(req).await;
+        assert!(
+            matches!(got, Err(AdapterError::Unreachable)),
+            "{:?}",
+            got.map(|r| r.status())
+        );
+    }
+
+    fn bound(bindings: &Arc<Bindings>) -> CompanionHttp {
+        http().with_bindings(Arc::clone(bindings))
+    }
+
+    /// A process on `::1` that answers on a managed companion's port
+    /// before the child Lodestar started listens gets nothing: not a
+    /// request that carries something, and not a bare probe either, while
+    /// the child is starting or once it's running.
+    #[tokio::test]
+    async fn an_ipv6_impostor_on_a_managed_port_gets_nothing() {
+        let impostor: Handler = Arc::new(|_: &str| reply(200, b"impostor"));
+        let Some((server, _v4)) = ipv6_with_ipv4_closed(impostor).await else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "::1 can't be bound here, so the managed-port rule is untested"
+            );
+            eprintln!("::1 unavailable here: the managed-port rule wasn't exercised");
+            return;
+        };
+        let target = server.loopback();
+        let port = target_port(&server);
+        let bindings = Arc::new(Bindings::new());
+        let (tx, rx) = watch::channel(status(State::Starting, 0));
+        bindings.hold(port, rx);
+        let client = bound(&bindings);
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        refused(&client, ProbeRequest::new(&target, path(), limits())).await;
+        // Running, but not found ready: still nothing goes to ::1.
+        tx.send_replace(status(State::Running, 1));
+        refused(&client, ProbeRequest::new(&target, path(), limits())).await;
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        // A readiness that can't be had from ::1 changes nothing either.
+        bindings.mark_ready(port, 1);
+        refused(&client, ProbeRequest::new(&target, path(), limits())).await;
+        assert!(server.seen().is_empty(), "nothing reached ::1");
+    }
+
+    /// A request that carries something goes to a managed port only while
+    /// the child is running in the run found ready. A restart holds them
+    /// until the new run is found ready, and a stop holds them for good.
+    #[tokio::test]
+    async fn a_restart_holds_credentialed_requests_until_ready_again() {
+        let server = Server::start(|_| reply(200, b"v5.0.3")).await;
+        let target = server.loopback();
+        let port = target_port(&server);
+        let bindings = Arc::new(Bindings::new());
+        let (tx, rx) = watch::channel(status(State::Running, 1));
+        bindings.hold(port, rx);
+        let client = bound(&bindings);
+        // Running but not yet found ready: only a bare probe goes out.
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        assert!(server.seen().is_empty());
+        let got = client
+            .send(ProbeRequest::new(&target, path(), limits()))
+            .await
+            .unwrap();
+        assert_eq!(got.status(), 200);
+        bindings.mark_ready(port, 1);
+        for req in carrying(&target) {
+            assert_eq!(client.send(req).await.unwrap().status(), 200);
+        }
+        assert_eq!(server.seen().len(), 5);
+        // The child exits and starts again: held until the new run is
+        // found ready, though something still answers on the port.
+        tx.send_replace(status(
+            State::BackingOff {
+                delay: Duration::from_secs(1),
+            },
+            1,
+        ));
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        tx.send_replace(status(State::Running, 2));
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        assert_eq!(server.seen().len(), 5);
+        bindings.mark_ready(port, 1);
+        refused(&client, carrying(&target).remove(0)).await;
+        bindings.mark_ready(port, 2);
+        for req in carrying(&target) {
+            assert_eq!(client.send(req).await.unwrap().status(), 200);
+        }
+        assert_eq!(server.seen().len(), 9);
+        // Stopped: held, and its port is never looked for on ::1.
+        bindings.release(port);
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        assert_eq!(server.seen().len(), 9);
+    }
+
+    /// A companion you run yourself (the guided path) is reached as after
+    /// #867 through the shared client: a bare probe finds it on ::1, and
+    /// what carries something goes there from then on.
+    #[tokio::test]
+    async fn a_hand_run_companion_is_reached_as_before() {
+        let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
+        let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "::1 can't be bound here, so the loopback rule is untested"
+            );
+            eprintln!("::1 unavailable here: the loopback rule wasn't exercised");
+            return;
+        };
+        let target = server.loopback();
+        // Another port is managed; this one isn't.
+        let bindings = Arc::new(Bindings::new());
+        let (_tx, rx) = watch::channel(status(State::Running, 1));
+        bindings.hold(target_port(&server).wrapping_add(1).max(1), rx);
+        let client = bound(&bindings);
+        for req in carrying(&target) {
+            refused(&client, req).await;
+        }
+        assert!(server.seen().is_empty());
+        let got = client
+            .send(ProbeRequest::new(&target, path(), limits()))
+            .await
+            .unwrap();
+        assert_eq!(got.status(), 200);
+        for req in carrying(&target) {
+            assert_eq!(client.send(req).await.unwrap().status(), 200);
+        }
+        assert_eq!(server.seen().len(), 5);
+    }
+
+    /// An entered URL naming `localhost` reaches 127.0.0.1 alone, whatever
+    /// the system resolver says of it.
+    #[tokio::test]
+    async fn an_entered_localhost_is_ipv4_loopback() {
+        let server = Server::start(|_| reply(200, b"v4")).await;
+        let port = target_port(&server);
+        let resolver = Arc::new(Table(vec![
+            ("localhost", IpAddr::V6(Ipv6Addr::LOCALHOST)),
+            ("LocalHost.", IpAddr::V6(Ipv6Addr::LOCALHOST)),
+        ]));
+        let client = CompanionHttp::with_resolver(resolver).unwrap();
+        for host in ["localhost", "LocalHost."] {
+            let target =
+                Target::Entered(EnteredUrl::parse(&format!("http://{host}:{port}")).unwrap());
+            let got = client
+                .send(ProbeRequest::new(&target, path(), limits()).post(b"x".to_vec()))
+                .await
+                .unwrap();
+            assert_eq!(got.body(), b"v4");
+        }
+        assert_eq!(server.seen().len(), 2);
+    }
+}

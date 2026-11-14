@@ -221,6 +221,7 @@ fn status(state: State) -> Status {
         state,
         restarts: 0,
         last_exit: None,
+        run: 0,
     }
 }
 

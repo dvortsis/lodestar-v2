@@ -32,6 +32,7 @@
 //! request if it has one, [`Timings::stop_deadline`], then a kill. Each
 //! step is bounded, so the whole is bounded.
 
+pub mod bind;
 pub mod egress;
 pub mod limits;
 #[cfg(target_os = "linux")]
@@ -169,6 +170,9 @@ pub struct Status {
     pub restarts: u32,
     /// How its last run ended: its exit code, or 128 + the signal.
     pub last_exit: Option<i32>,
+    /// Which run of it this is: one more at each start of the process, so
+    /// a restart is told apart from the run before (`bind`).
+    pub run: u64,
 }
 
 /// A companion's health check: the adapter (CMP-8a), the guarded client
@@ -357,6 +361,7 @@ impl Supervisor {
             state: if held { State::Held } else { State::Starting },
             restarts: 0,
             last_exit: None,
+            run: 0,
         });
         let (control, control_rx) = mpsc::unbounded_channel();
         let logs = LogRing::default();
@@ -646,7 +651,10 @@ async fn run(
             .0
             .push(tokio::spawn(read_into(err, ring.clone(), redactor.clone())));
     }
-    status.send_modify(|s| s.state = State::Running);
+    status.send_modify(|s| {
+        s.state = State::Running;
+        s.run += 1;
+    });
     let began = Instant::now();
     let mut tick = tokio::time::interval_at(began + t.health_every, t.health_every);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
