@@ -86,8 +86,66 @@ fn the_same_key_builds_the_same_bytes() {
 fn same_content(a: &dataset::Dataset, b: &dataset::Dataset, what: &str) {
     if dataset::digest(&a.db()).unwrap() != dataset::digest(&b.db()).unwrap() {
         let why = dataset::explain_difference(&a.db(), &b.db()).unwrap();
-        panic!("{what}: the content differs: {why:?}");
+        panic!(
+            "{what}: the content differs: {why:?}; file trees: {}",
+            file_trees(&a.db(), &b.db())
+        );
     }
+}
+
+/// Whether two stores' file-tree blobs that differ hold the same trees:
+/// each is decompressed with its own store's dictionary.
+fn file_trees(a: &Path, b: &Path) -> String {
+    use lodestar_store::rusqlite::{Connection, OpenFlags};
+    type Blob = (i64, i64, Option<i64>, Vec<u8>);
+    let read = |p: &Path| -> (Vec<Blob>, Vec<(i64, Vec<u8>)>) {
+        let c = Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let blobs = c
+            .prepare("SELECT torrent_id, codec, dict_id, data FROM torrent_files ORDER BY 1")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let dicts = c
+            .prepare("SELECT id, data FROM zstd_dicts ORDER BY 1")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        (blobs, dicts)
+    };
+    let raw = |(_, codec, dict, data): &Blob, dicts: &[(i64, Vec<u8>)]| -> Vec<u8> {
+        if *codec != 1 {
+            return data.clone();
+        }
+        let d = dict
+            .and_then(|id| dicts.iter().find(|(i, _)| *i == id))
+            .map_or(&[][..], |(_, d)| d.as_slice());
+        zstd::bulk::Decompressor::with_dictionary(d)
+            .unwrap()
+            .decompress(data, 1 << 30)
+            .unwrap()
+    };
+    let ((ba, da), (bb, db)) = (read(a), read(b));
+    let (mut blobs, mut trees) = (0, 0);
+    let mut first = None;
+    for (x, y) in ba.iter().zip(&bb) {
+        if x == y {
+            continue;
+        }
+        blobs += 1;
+        let same = x.1 == y.1 && x.2 == y.2 && raw(x, &da) == raw(y, &db);
+        if !same {
+            trees += 1;
+        }
+        first.get_or_insert((x.0, x.3.len(), y.3.len(), same));
+    }
+    format!(
+        "{blobs} blobs differ, {trees} of them in the tree itself; first: {first:?} \
+         (torrent, sizes, same tree)"
+    )
 }
 
 /// The store's bytes but for SQLite's two checkpoint counters (see
