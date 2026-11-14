@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T05:50Z",
+  "updated_at": "2026-11-14T06:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8428,6 +8428,12 @@
     {
       "at": "2026-11-14T05:42Z",
       "what": "Next free build slot: one Opus session lands the reviewer session's written fixes one PR at a time (X-pipe01-fix, X-search01-fix, X-cluster06-fix), then X-pipe01-followup (fetch pool)."
+    },
+    {
+      "id": "X-dht-timeout-cooldown",
+      "from": "X-sec-S1-03-04",
+      "at": "2026-11-14T06:06Z",
+      "note": "Runner to decide: shorter DHT timeout backoff. Needs the CR-0 rule, the CR-0d restart proof and the crawler-sim restart harness changed together; ask the owner if the number is owner-set."
     }
   ],
   "main_health": [
@@ -9745,7 +9751,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T05:50Z",
+  "updated": "2026-11-14T06:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
