@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:38Z",
+  "updated_at": "2026-11-14T00:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8224,6 +8224,11 @@
       "id": "worker-coordinator-drain-events",
       "note": "worker session: a coordinator-initiated drain (WorkerEvent::Drain) does not read events while draining, so a full event queue still delays the flush and Drained (pre-existing; found in #856 review)",
       "at": "2026-11-14T00:34Z"
+    },
+    {
+      "id": "owner-flag-857-retroactive-holds",
+      "note": "2.19 flag to owner: #857 re-judge applies any holding decision (packs, user rules) to stored torrents, not only the core; runner accepted as fail-safe",
+      "at": "2026-11-14T00:39Z"
     }
   ],
   "main_health": [
@@ -8630,8 +8635,8 @@
       "slice": "X-filter01-rejudge",
       "head": "35bbae5a",
       "slot": 32,
-      "review": "fresh Opus + security running; security reviewer session told",
-      "at": "2026-11-14T00:31Z"
+      "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
+      "at": "2026-11-14T00:39Z"
     }
   },
   "merged_log": [
@@ -9278,7 +9283,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:38Z",
+    "updated": "2026-11-14T00:39Z",
     "items": [
       {
         "slot": 1,
@@ -9539,7 +9544,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:38Z",
+  "updated": "2026-11-14T00:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
