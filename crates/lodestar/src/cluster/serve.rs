@@ -471,7 +471,7 @@ impl FloorReports {
     }
 
     /// A revoke: forgets the worker's reports not written yet and deletes
-    /// its written ones (`worker-floor:<id>`, an owner-approved choice),
+    /// its written ones (`worker-floor:<id>`; the owner's choice of 2026-11-14),
     /// with no flush in between. A delete that fails is kept and tried
     /// again by every flush until it lands (counted and logged as a
     /// failed write). Blocking. Returns the rows deleted.
@@ -582,10 +582,9 @@ impl FloorReports {
 const FLOOR_BATCH: usize = 1024;
 /// How long the floor writer waits before trying a failed write again.
 const FLOOR_RETRY: Duration = Duration::from_secs(5);
-/// How long a worker's floor report holds its key: 7 days. An
-/// owner-approved choice (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`),
-/// kept as one constant so a different answer is one line. A key let go is
-/// judged under the floor again by whoever fetches it next.
+/// How long a worker's floor report holds its key: 7 days, the owner's
+/// choice of 2026-11-14 (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`).
+/// A key let go is judged again in full by the main node on its next fetch.
 pub(crate) const WORKER_FLOOR_HOLD_SECS: i64 = 7 * 24 * 3600;
 /// How often the floor writer lets go of reports past their hold.
 const FLOOR_EXPIRE_EVERY: Duration = Duration::from_secs(3600);

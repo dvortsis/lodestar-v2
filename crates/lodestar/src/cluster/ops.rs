@@ -674,7 +674,7 @@ impl Workers {
         // in between can't rejoin it with the defaults.
         let (certificates, leases) = server.revoke_worker(w).await.map_err(failed)?;
         // Its floor reports not written yet go too (#607's review), and so
-        // do the ones written: an owner-approved choice
+        // do the ones written: the owner's choice of 2026-11-14
         // (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`). Each key is
         // judged under the floor again by whoever fetches it next. A
         // delete that fails is tried again by the floor writer until it

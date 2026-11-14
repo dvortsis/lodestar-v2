@@ -1459,6 +1459,61 @@ mod tests {
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
     }
 
+    /// The main node's own judgement, as its writer records a floor hit:
+    /// a tombstone under the rule, over anything a worker reported.
+    fn judged(s: &mut Store, hash: [u8; 20], rule: &'static str, held: Held, at: i64) {
+        let tx = s.conn.transaction().unwrap();
+        let hashes = [hash];
+        write(
+            &tx,
+            &[Filtered {
+                hashes: &hashes,
+                rule,
+                action: 4,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at,
+                expires_at: at + 1_000_000,
+                adult_hold: false,
+            }],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    /// After a worker's report lapses, the key is held again when the main
+    /// node's own judgement of its next fetch holds it, and stays so after
+    /// any later lapse of worker reports.
+    #[test]
+    fn a_lapsed_report_is_held_again_by_the_main_nodes_judgement() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        assert_eq!(s.expire_worker_floor(11).unwrap(), 1);
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+        judged(&mut s, [1; 20], "CS-1a", Held::Tombstone, 20);
+        assert_eq!(rules(&s)[&1], "CS-1a");
+        assert_eq!(s.expire_worker_floor(i64::MAX).unwrap(), 0);
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// A key a revoked worker reported that another source also holds
+    /// stays held: a hold written over the report, or a quarantine row.
+    #[test]
+    fn a_key_also_held_by_another_source_stays_held_through_a_revoke() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20], [2; 20], [3; 20]], 7, 10)
+            .unwrap();
+        judged(&mut s, [1; 20], "user", Held::Tombstone, 20);
+        judged(&mut s, [2; 20], "CS-3", Held::Quarantine, 20);
+        assert_eq!(s.purge_worker_floor(7).unwrap(), 2, "[2] and [3]");
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20], [3; 20]]).unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(rules(&s)[&1], "user");
+    }
+
     /// A purge removes one worker's reports: another worker's, the local
     /// floor's and a user's rows stay.
     #[test]
