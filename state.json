@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:42Z",
+  "updated_at": "2026-11-14T00:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9325,7 +9325,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:42Z",
+    "updated": "2026-11-14T00:43Z",
     "items": [
       {
         "slot": 1,
@@ -9484,13 +9484,13 @@
       },
       {
         "slot": 30,
-        "slice": "X-ci-filter-docs-user",
+        "slice": "X-metainfo01-fix",
         "role": "build",
         "agent": "claude",
-        "model": "sonnet",
+        "model": "opus",
         "status": "active",
-        "since": "2026-11-14T00:24Z",
-        "doing": "docs/user changes run only the guide-reading Rust test, not the full matrix",
+        "since": "2026-11-14T00:43Z",
+        "doing": "session_01MMjhn8uWYYRNeLqCmiGGvY: METAINFO-01 fix (blocking); previous session parking X-ci-filter-docs-user",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9586,7 +9586,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:42Z",
+  "updated": "2026-11-14T00:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
