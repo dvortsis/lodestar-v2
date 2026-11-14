@@ -236,6 +236,15 @@ lodestar_log::catalogue! {
     }
 
     // ── Start-up checks ──
+    /// The metadata size limit is set above 47 MiB, the largest the fetch
+    /// pool gives room (X-fetch-room-fix), so 47 MiB is used.
+    FETCH_METADATA_LIMIT_CLAMPED {
+        id: "fetch.metadata_limit_clamped",
+        component: Fetch,
+        level: Warn,
+        message: "The metadata size limit is set above 47 MiB; metadata up to 47 MiB is fetched",
+        fields: {},
+    }
     /// `PUID`/`PGID` can't apply: not started as root.
     SYSTEM_IDS_IGNORED {
         id: "system.ids_ignored",

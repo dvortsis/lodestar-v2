@@ -136,6 +136,15 @@ impl Run for Unwired {
     fn stop<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }
+    fn ready_run(&self, _: &CompanionId) -> Option<u64> {
+        None
+    }
+    fn recheck<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+    fn refusal(&self, _: &CompanionId) -> Option<&'static str> {
+        None
+    }
 }
 
 impl ApiConfigure for Unwired {
@@ -569,6 +578,18 @@ impl Run for Wiring {
     }
     fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.supervised.get().and_then(|s| s.status(id))
+    }
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        self.supervised.get().and_then(|s| s.ready_run(id))
+    }
+    fn recheck<'a>(&'a self, id: &'a CompanionId, t: &'a Target) -> BoxFuture<'a, bool> {
+        match self.supervised.get() {
+            Some(s) => s.recheck(id, t),
+            None => Box::pin(async { false }),
+        }
+    }
+    fn refusal(&self, id: &CompanionId) -> Option<&'static str> {
+        self.supervised.get().and_then(|s| s.refusal(id))
     }
 }
 
@@ -3540,6 +3561,7 @@ mod tests {
             last_exit: None,
             run: 1,
             up: true,
+            pid: None,
         });
         assert!(bindings.hold(8080, rx));
         assert!(!gate.allow(8080) && gate.allow(9696));
@@ -3584,6 +3606,40 @@ mod tests {
         assert!(!gate.allow(q));
         // No folder: untouched, for a companion you run yourself.
         assert!(!c.bindings.managed(p) && gate.allow(p));
+        c.shutdown().await;
+    }
+
+    /// X-cmp09-fix: serve's runner answers the readiness methods from the
+    /// supervisor, never with a permissive default: a companion that isn't
+    /// running is never found ready again, wired or not. (The `Run` trait
+    /// gives these no default, so a runner can't leave one out.)
+    #[tokio::test]
+    async fn serves_runner_answers_readiness_from_the_supervisor() {
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let target = Target::Loopback(lodestar_companions::inputs::PortNumber::new(8080).unwrap());
+        let unwired = Wiring::default();
+        assert!(!unwired.recheck(&qbt, &target).await);
+        assert_eq!(
+            (unwired.refusal(&qbt), unwired.ready_run(&qbt)),
+            (None, None)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            lodestar_companions::builtin().unwrap(),
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        assert!(c.wiring.supervised.get().is_some());
+        assert!(!c.wiring.recheck(&qbt, &target).await);
+        assert_eq!(
+            (c.wiring.refusal(&qbt), c.wiring.ready_run(&qbt)),
+            (None, None)
+        );
         c.shutdown().await;
     }
 

@@ -611,6 +611,8 @@
 	"settings_logging_ev_dht_key_harvested_h": "A key was collected from the DHT.",
 	"settings_logging_ev_dht_harvest_summary_n": "DHT harvest summary",
 	"settings_logging_ev_dht_harvest_summary_h": "A periodic summary of what the DHT collected.",
+	"settings_logging_ev_fetch_metadata_limit_clamped_n": "Largest torrent info size lowered",
+	"settings_logging_ev_fetch_metadata_limit_clamped_h": "The metadata size limit is set above 47 MiB, so it is treated as 47 MiB. Your saved setting is kept; torrent info larger than 47 MiB is not fetched.",
 	"settings_logging_ev_fetch_failed_n": "Fetch failed",
 	"settings_logging_ev_fetch_failed_h": "Fetching a torrent's details from a peer failed.",
 	"settings_logging_ev_fetch_failed_summary_n": "Fetch failure summary",

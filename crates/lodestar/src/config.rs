@@ -253,6 +253,16 @@ pub enum EncryptionName {
     Disable,
 }
 
+/// The largest `fetch.max_metadata_mib` the main node uses: what fits
+/// beside the fetch pool's floor ([`lodestar_sources::pool::largest_dict`]),
+/// as a whole number of MiB so the setting's help can say it plainly.
+/// Higher values act as this (X-fetch-room-fix).
+pub const MAX_METADATA_MIB: usize = 47;
+const _: () = assert!(
+    MAX_METADATA_MIB << 20
+        <= lodestar_sources::pool::largest_dict(lodestar_sources::pool::MAX_HELD_BYTES)
+);
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Fetch {
@@ -855,6 +865,17 @@ impl Config {
         }
     }
 
+    /// The largest info dict the main node fetches: the setting, held to
+    /// [`MAX_METADATA_MIB`] (X-fetch-room-fix).
+    pub fn max_metadata(&self) -> usize {
+        self.fetch.max_metadata_mib.min(MAX_METADATA_MIB) << 20
+    }
+
+    /// Whether the setting is above [`MAX_METADATA_MIB`].
+    pub fn max_metadata_clamped(&self) -> bool {
+        self.fetch.max_metadata_mib > MAX_METADATA_MIB
+    }
+
     pub fn pipeline_config(&self) -> Result<PipelineConfig, ConfigError> {
         // §6: 400 sockets at Balanced; the presets scale with it. 0, as
         // unset, follows the intensity (as the settings registry shows it).
@@ -869,7 +890,7 @@ impl Config {
                 });
         let fetch = FetchOptions {
             timeout: Duration::from_secs(self.fetch.timeout_secs.max(1)),
-            max_metadata: self.fetch.max_metadata_mib << 20,
+            max_metadata: self.max_metadata(),
             encryption: match self.fetch.encryption {
                 EncryptionName::Prefer => Encryption::Prefer,
                 EncryptionName::Require => Encryption::Require,
@@ -1375,6 +1396,27 @@ mod tests {
         assert!(Config::load(Some(&path), no_env).is_err());
         let bad = |k: &str| (k == "LODESTAR_DHT_TARGET_PREFIXES").then(|| "on".to_string());
         assert!(Config::load(None, bad).is_err());
+    }
+
+    /// The metadata size limit is used as it is up to 47 MiB and held to
+    /// 47 MiB above.
+    #[test]
+    fn the_metadata_limit_is_held_to_47_mib() {
+        let mut c = Config::load(None, no_env).unwrap();
+        for (mib, used, clamped) in [
+            (16, 16, false),
+            (47, 47, false),
+            (48, 47, true),
+            (64, 47, true),
+        ] {
+            c.fetch.max_metadata_mib = mib;
+            assert_eq!(
+                c.pipeline_config().unwrap().fetch.max_metadata,
+                used << 20,
+                "{mib}"
+            );
+            assert_eq!(c.max_metadata_clamped(), clamped, "{mib}");
+        }
     }
 
     #[test]
