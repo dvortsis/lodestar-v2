@@ -317,6 +317,15 @@ impl Workers {
     }
 
     /// Writes (or with `None`, deletes) a worker's row.
+    /// Deletes `w`'s written floor reports (`worker-floor:<w>`).
+    async fn purge_floor_holds(&self, w: WorkerId) -> Result<usize, WorkersError> {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || lock(&store).purge_worker_floor(w.0))
+            .await
+            .map_err(failed)?
+            .map_err(failed)
+    }
+
     async fn persist(&self, w: WorkerId, s: Option<Saved>) -> Result<(), WorkersError> {
         let store = self.store.clone();
         let key = prefs_key(w);
@@ -549,8 +558,14 @@ impl Workers {
         // Disconnect (and take the leases back) first, then forget: a sync
         // in between can't rejoin it with the defaults.
         let (certificates, leases) = server.revoke_worker(w).await.map_err(failed)?;
-        // Its floor reports not written yet go too (#607's review).
+        // Its floor reports not written yet go too (#607's review), and so
+        // do the ones written: an owner-approved choice
+        // (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`). Each key is
+        // judged under the floor again by whoever fetches it next. A
+        // failed delete leaves the holds in place, and the revocation
+        // stands either way.
         self.cluster.forget_floor_reports(w);
+        let _ = self.purge_floor_holds(w).await;
         self.placement.forget(w);
         lock(&self.saved).remove(&w);
         // The revocation stands either way. A row left behind only gives
@@ -1237,6 +1252,31 @@ mod tests {
         let a = c.workers.placement().assignment(w).expect("planned");
         assert_eq!((a.pool_cap, a.dht), (1234, None));
         assert_eq!(a.budget.up_kbps, 1000);
+        c.stop().await;
+    }
+
+    /// A revoke removes that worker's written floor reports and nothing
+    /// else: another worker's report and a local or user row stay.
+    #[tokio::test]
+    async fn a_revoke_removes_only_that_workers_floor_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        let other = WorkerId(w.0 + 100);
+        {
+            let mut store =
+                Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+            store.tombstone_from_worker(&[[1; 20]], w.0, 1).unwrap();
+            store.tombstone_from_worker(&[[2; 20]], other.0, 1).unwrap();
+        }
+        c.workers.revoke(w.0).await.unwrap();
+        let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        assert_eq!(
+            store.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        drop(store);
         c.stop().await;
     }
 

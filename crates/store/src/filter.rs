@@ -715,6 +715,36 @@ impl Store {
         Ok((added, stored))
     }
 
+    /// Deletes workers' floor reports written before `before` (Unix
+    /// seconds); the caller sets how long a report holds its key. Only `worker-floor:` rows go; a local floor row, a list's or a
+    /// user's is never touched. Returns how many went. A key let go is
+    /// judged under the floor again by whoever fetches it next.
+    pub fn expire_worker_floor(&mut self, before: i64) -> Result<usize> {
+        let sql = format!(
+            "DELETE FROM tombstones WHERE at < ?1 AND {}",
+            worker_floor_sql("rule")
+        );
+        let n = self.conn.execute(&sql, [before])?;
+        if n > 0 {
+            self.scrub_wal();
+        }
+        Ok(n)
+    }
+
+    /// Deletes one worker's floor reports (`worker-floor:<worker>`), for a
+    /// revoke. Another worker's rows, and every local, list or user hold,
+    /// are left alone. Returns how many went.
+    pub fn purge_worker_floor(&mut self, worker: u32) -> Result<usize> {
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        let n = self
+            .conn
+            .execute("DELETE FROM tombstones WHERE rule = ?1", [&rule])?;
+        if n > 0 {
+            self.scrub_wal();
+        }
+        Ok(n)
+    }
+
     /// Releases a held hash (removes its tombstone or quarantine row), so
     /// it can be fetched again. Returns whether a row was removed. A
     /// worker's floor report is never removed, so a hash with one stays
@@ -1385,6 +1415,71 @@ impl Store {
 mod tests {
     use super::*;
     use crate::StoreConfig;
+
+    /// Rows of other kinds, written as their own paths write them.
+    fn put_row(s: &Store, hash: u8, rule: &str, at: i64) {
+        s.conn
+            .execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                params![&[hash; 20][..], rule, at],
+            )
+            .unwrap();
+    }
+
+    fn rules(s: &Store) -> std::collections::BTreeMap<u8, String> {
+        s.tombstones(100)
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.hash[0], t.rule))
+            .collect()
+    }
+
+    /// Expiry lets go of workers' reports older than the cutoff and
+    /// nothing else: a newer report, a local floor row and a user's or a
+    /// list's row stay.
+    #[test]
+    fn expiry_lets_go_of_old_worker_reports_only() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        s.tombstone_from_worker(&[[2; 20]], 7, 50).unwrap();
+        put_row(&s, 3, "CS-1a", 1);
+        put_row(&s, 4, "user", 1);
+        put_row(&s, 5, "WORKER-FLOOR:7", 1);
+        assert_eq!(s.expire_worker_floor(20).unwrap(), 1);
+        let left = rules(&s);
+        assert!(!left.contains_key(&1));
+        assert_eq!(left[&2], "worker-floor:7");
+        assert_eq!(left[&3], "CS-1a");
+        assert_eq!(left[&4], "user");
+        assert_eq!(left[&5], "WORKER-FLOOR:7", "the prefix is exact");
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        // Held again by the next report.
+        s.tombstone_from_worker(&[[1; 20]], 8, 60).unwrap();
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// A purge removes one worker's reports: another worker's, the local
+    /// floor's and a user's rows stay.
+    #[test]
+    fn a_purge_removes_only_that_workers_reports() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20], [2; 20]], 7, 10).unwrap();
+        s.tombstone_from_worker(&[[3; 20]], 8, 10).unwrap();
+        s.tombstone_from_worker(&[[6; 20]], 70, 10).unwrap();
+        put_row(&s, 4, "CS-8a", 1);
+        put_row(&s, 5, "user", 1);
+        assert_eq!(s.purge_worker_floor(7).unwrap(), 2);
+        let left = rules(&s);
+        assert!(!left.contains_key(&1) && !left.contains_key(&2));
+        assert_eq!(left[&3], "worker-floor:8");
+        assert_eq!(left[&6], "worker-floor:70", "not a prefix match");
+        assert_eq!(left[&4], "CS-8a");
+        assert_eq!(left[&5], "user");
+        assert_eq!(s.purge_worker_floor(7).unwrap(), 0);
+    }
 
     /// A worker's report holds only hashes not stored, checked and written
     /// in one transaction; a stored torrent is neither held nor touched.

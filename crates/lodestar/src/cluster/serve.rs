@@ -521,6 +521,23 @@ impl FloorReports {
 const FLOOR_BATCH: usize = 1024;
 /// How long the floor writer waits before trying a failed write again.
 const FLOOR_RETRY: Duration = Duration::from_secs(5);
+/// How long a worker's floor report holds its key: 7 days. An
+/// owner-approved choice (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`),
+/// kept as one constant so a different answer is one line. A key let go is
+/// judged under the floor again by whoever fetches it next.
+pub(crate) const WORKER_FLOOR_HOLD_SECS: i64 = 7 * 24 * 3600;
+/// How often the floor writer lets go of reports past their hold.
+const FLOOR_EXPIRE_EVERY: Duration = Duration::from_secs(3600);
+
+/// Lets go of workers' floor reports written more than
+/// [`WORKER_FLOOR_HOLD_SECS`] before `now`. Blocking.
+fn expire_floor_holds(
+    db: &std::path::Path,
+    config: StoreConfig,
+    now: i64,
+) -> Result<usize, lodestar_store::Error> {
+    Store::open(db, config)?.expire_worker_floor(now.saturating_sub(WORKER_FLOOR_HOLD_SECS))
+}
 
 /// Writes floor reports as they come, until `stopped`; then once more,
 /// so a report taken before a shutdown is in the store when it ends.
@@ -531,10 +548,24 @@ async fn write_floor(
     mut stopped: watch::Receiver<bool>,
 ) {
     let mut failing = false;
+    // At start, then hourly.
+    let mut expire = tokio::time::interval(FLOOR_EXPIRE_EVERY);
+    expire.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let stop = tokio::select! {
             () = floor.wake.notified() => false,
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
+            _ = expire.tick() => {
+                let (db, config) = (db.clone(), config.clone());
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+                // A failure is tried again at the next tick; holds only
+                // last longer meanwhile.
+                let _ = tokio::task::spawn_blocking(move || expire_floor_holds(&db, config, now))
+                    .await;
+                continue;
+            }
             _ = stopped.changed() => true,
         };
         loop {
@@ -3075,6 +3106,46 @@ mod tests {
             store.held_among(&[key.0, key_n(1).0]).unwrap(),
             vec![false, true]
         );
+    }
+
+    /// A worker's report holds its key for `WORKER_FLOOR_HOLD_SECS`: past
+    /// that it's let go, so a claim's check finds it free and whoever
+    /// fetches it next judges it, and a new report holds it again.
+    #[test]
+    fn a_floor_hold_lapses_after_its_time_and_a_new_report_holds_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let at = 1_000_000;
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        let check = || {
+            StoreCheck {
+                reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+                errors: Arc::default(),
+                floor: Arc::new(FloorReports::new(None)),
+                filter: None,
+            }
+            .key_checks(&[key_n(1)])
+        };
+        assert_eq!(check(), vec![KeyCheck::Held]);
+        // Not yet.
+        let end = at + WORKER_FLOOR_HOLD_SECS;
+        assert_eq!(
+            expire_floor_holds(&db, StoreConfig::default(), end).unwrap(),
+            0
+        );
+        assert_eq!(check(), vec![KeyCheck::Held]);
+        // Past it: claimable.
+        assert_eq!(
+            expire_floor_holds(&db, StoreConfig::default(), end + 1).unwrap(),
+            1
+        );
+        assert_eq!(check(), vec![KeyCheck::Free]);
+        // Fetched and judged again: a new report holds it again.
+        floor.report(WorkerId(5), &key_n(1), end + 2, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        assert_eq!(check(), vec![KeyCheck::Held]);
     }
 
     fn key_n(i: usize) -> InfoHash {
