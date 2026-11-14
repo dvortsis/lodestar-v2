@@ -4,6 +4,7 @@
 //! The store keeps plain values: rule ids as text, actions and origins as
 //! small integers. Their meaning belongs to the filter engine.
 
+use lodestar_metainfo::InfoHash;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{Error, Result, Store};
@@ -385,10 +386,11 @@ pub fn is_kept_hold(rule: &str) -> bool {
 
 /// The stored rule of a floor drop a remote worker reported (WK-10d),
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
-/// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
-/// replaces it, a rollback keeps it over a weaker hold, and no release
-/// removes it. The only way out is WK-13's purge-by-worker, which deletes
-/// a removed worker's rows by rule.
+/// hold ([`is_floor_hold`]) that no release removes, but it gives way to
+/// any other hold written over it (a filter rule, an expired adult hold),
+/// so the key stays held past its expiry. Otherwise it goes only when it
+/// expires ([`Store::expire_worker_floor`]) or its worker is revoked
+/// ([`Store::purge_worker_floor`]).
 pub const WORKER_FLOOR_PREFIX: &str = "worker-floor:";
 
 /// Whether a stored tombstone rule is a floor hold: the locked floor's
@@ -502,18 +504,12 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
     let mut hit = tx.prepare_cached(
         "INSERT INTO filter_hits (hash, rule, action, at, evidence) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    // As before, a later hold replaces an earlier one (and the insert
-    // triggers fire), except over a worker's floor report, which only a
-    // local floor rule may take over (#604's review): otherwise a weaker
-    // rule there could later be released and free the hash.
-    let mut tomb = tx.prepare_cached(&format!(
-        "INSERT OR REPLACE INTO tombstones (hash, rule, at)
-         SELECT ?1, ?2, ?3 WHERE {} OR NOT EXISTS (
-             SELECT 1 FROM tombstones WHERE hash = ?1 AND {}
-         )",
-        local_floor_sql("?2"),
-        worker_floor_sql("rule")
-    ))?;
+    // A later hold replaces an earlier one (and the insert triggers
+    // fire). A worker's floor report gives way to any rule here: it lasts
+    // only its hold time, so the key stays held under a rule that doesn't
+    // expire (X-sec-S6-02-03 part 2b).
+    let mut tomb = tx
+        .prepare_cached("INSERT OR REPLACE INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)")?;
     // A later quarantine replaces an earlier one, except over a floor
     // hold, which only another floor hold takes over, or a kept hold
     // (`KEPT_RULES`), which only a floor or kept hold does: otherwise a
@@ -652,9 +648,10 @@ impl Store {
 
     /// Records a remote worker's floor drops (CS-1a, CS-1b, CS-8a or a
     /// hash list, reported as `Lost(Blocked)`) as tombstones under
-    /// `worker-floor:<worker>` (WK-10d), so the keys are never claimed,
-    /// fetched or stored again. A hash already tombstoned keeps its row (a
-    /// local floor row is never renamed). Returns how many rows were added.
+    /// `worker-floor:<worker>` (WK-10d), so the keys aren't claimed,
+    /// fetched or stored again while the row holds them. A hash already
+    /// tombstoned keeps its row (a local floor row is never renamed).
+    /// Returns how many rows were added.
     pub fn tombstone_from_worker(
         &mut self,
         hashes: &[[u8; 20]],
@@ -678,6 +675,102 @@ impl Store {
         }
         tx.commit()?;
         Ok(added)
+    }
+
+    /// [`tombstone_from_worker`](Self::tombstone_from_worker), only for
+    /// hashes the store has nothing under: no stored torrent, no item
+    /// awaiting verification and no import candidate. A row under a hold
+    /// is something the main node judges itself; a worker's report never
+    /// removes one. The checks and the writes are one write transaction,
+    /// so no commit lands between them, and a failure part way writes
+    /// nothing. Returns the rows added and the hashes skipped because the
+    /// store has something under them (so a caller's in-memory hold on
+    /// them can go).
+    pub fn tombstone_from_worker_unless_stored(
+        &mut self,
+        hashes: &[[u8; 20]],
+        worker: u32,
+        at: i64,
+    ) -> Result<(usize, Vec<[u8; 20]>)> {
+        if hashes.is_empty() {
+            return Ok((0, Vec::new()));
+        }
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        let tx = crate::begin_write(&mut self.conn)?;
+        let (mut added, mut stored) = (0, Vec::new());
+        {
+            // What a hold's insert would otherwise take away (the
+            // tombstone triggers): an unverified item or an import
+            // candidate under the hash.
+            let mut pending = tx.prepare_cached(
+                "SELECT EXISTS (
+                     SELECT 1 FROM unverified_items WHERE network = 0 AND key = ?1
+                 ) OR EXISTS (
+                     SELECT 1 FROM import_candidates WHERE hash = ?1
+                         OR (hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1)
+                 )",
+            )?;
+            let mut ins = tx.prepare_cached(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (hash) DO NOTHING",
+            )?;
+            for h in hashes {
+                let awaiting: bool = pending.query_row([&h[..]], |r| r.get(0))?;
+                if awaiting || crate::find_any(&tx, std::iter::once(InfoHash(*h)))?.is_some() {
+                    stored.push(*h);
+                    continue;
+                }
+                added += ins.execute(params![&h[..], rule, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok((added, stored))
+    }
+
+    /// Deletes workers' floor reports written before `before` (Unix
+    /// seconds); the caller sets how long a report holds its key. Only
+    /// `worker-floor:` rows go; a local floor row, a list's or a user's is
+    /// never touched. Returns the hashes let go, for the caller to
+    /// reconcile its in-memory held set.
+    pub fn expire_worker_floor(&mut self, before: i64) -> Result<Vec<[u8; 20]>> {
+        let sql = format!(
+            "DELETE FROM tombstones WHERE at < ?1 AND {} RETURNING hash",
+            worker_floor_sql("rule")
+        );
+        self.delete_returning(&sql, params![before])
+    }
+
+    /// Deletes one worker's floor reports (`worker-floor:<worker>`), for a
+    /// revoke. Another worker's rows, and every local, list or user hold,
+    /// are left alone. Returns the hashes let go, as
+    /// [`expire_worker_floor`](Self::expire_worker_floor) does.
+    pub fn purge_worker_floor(&mut self, worker: u32) -> Result<Vec<[u8; 20]>> {
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        self.delete_returning(
+            "DELETE FROM tombstones WHERE rule = ?1 RETURNING hash",
+            params![rule],
+        )
+    }
+
+    /// Runs a `DELETE … RETURNING hash` and collects the hashes.
+    fn delete_returning(
+        &mut self,
+        sql: &str,
+        args: impl rusqlite::Params,
+    ) -> Result<Vec<[u8; 20]>> {
+        let gone: Vec<[u8; 20]> = {
+            let mut stmt = self.conn.prepare(sql)?;
+            let rows = stmt.query_map(args, |r| r.get::<_, Vec<u8>>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(hash20(row?)?);
+            }
+            out
+        };
+        if !gone.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(gone)
     }
 
     /// Releases a held hash (removes its tombstone or quarantine row), so
@@ -795,7 +888,8 @@ impl Store {
             }
             // The adult mark is the one hold filtering can't rebuild (the
             // correction went with the torrent), so it replaces another
-            // rule's tombstone, except a floor hold, which stays.
+            // rule's tombstone, a worker's floor report included (that
+            // lasts only its hold time); a local floor row stays.
             tx.execute(
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
@@ -804,7 +898,7 @@ impl Store {
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
                     kept_hold_sql("rule"),
-                    floor_hold_sql("tombstones.rule")
+                    local_floor_sql("tombstones.rule")
                 ),
                 params![now, adult],
             )?;
@@ -838,8 +932,9 @@ impl Store {
     ) -> Result<usize> {
         let mut total = 0;
         let mut deleted_any = false;
-        // A worker's floor report isn't released by rule here: only WK-13's
-        // purge-by-worker removes it. Nor is a kept hold: only `release`.
+        // A worker's floor report isn't released by rule here: only its
+        // expiry or its worker's revoke removes it. Nor is a kept hold:
+        // only `release`.
         for rule in rules
             .iter()
             .filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX) && !is_kept_hold(r))
@@ -1351,6 +1446,228 @@ impl Store {
 mod tests {
     use super::*;
     use crate::StoreConfig;
+
+    /// A worker's report on a key the store has anything under (an item
+    /// awaiting verification, an import candidate by either hash) leaves
+    /// that row in place, journals no deletion, and holds nothing; a key
+    /// with nothing under it is held.
+    #[test]
+    fn a_worker_report_leaves_unverified_and_import_rows_alone() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let v2 = format!("{}{}", "54".repeat(20), "00".repeat(12));
+        s.conn
+            .execute_batch(&format!(
+                "INSERT OR IGNORE INTO sources (id, plugin, version, state, added_at)
+                     VALUES (0, 'dht', '1', 0, 0);
+                 INSERT INTO unverified_items (network, key, source_id, sources, flags, claims,
+                     first_at, last_at) VALUES (0, x'{u}', 0, 1, 0, x'01000000000000', 0, 0);
+                 INSERT INTO import_sources (id, adapter, dataset, schema_sig)
+                     VALUES (1, 'magnetico', x'01', x'02');
+                 INSERT INTO import_jobs (id, source, adapter_ver, contract_ver, phase, control,
+                     options, created_at, updated_at) VALUES (1, 1, 1, 1, 2, 0, x'', 0, 0);
+                 INSERT INTO import_candidates (hash, job, name, missing, privacy, at)
+                     VALUES (x'{c}', 1, CAST('a' AS BLOB), 6, 0, 0);
+                 INSERT INTO import_candidates (hash, hash_v2, job, name, missing, privacy, at)
+                     VALUES (x'{d}', x'{v2}', 1, CAST('b' AS BLOB), 6, 0, 0);",
+                u = "51".repeat(20),
+                c = "52".repeat(20),
+                d = "53".repeat(20),
+            ))
+            .unwrap();
+        let count =
+            |s: &Store, sql: &str| -> i64 { s.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        let keys = [[0x51; 20], [0x52; 20], [0x54; 20], [0x55; 20]];
+        let (added, kept) = s.tombstone_from_worker_unless_stored(&keys, 7, 10).unwrap();
+        assert_eq!((added, kept), (1, keys[..3].to_vec()));
+        assert_eq!(count(&s, "SELECT count(*) FROM unverified_items"), 1);
+        assert_eq!(count(&s, "SELECT count(*) FROM import_candidates"), 2);
+        assert_eq!(count(&s, "SELECT count(*) FROM snapshot_deletions"), 0);
+        assert_eq!(
+            s.held_among(&keys).unwrap(),
+            vec![false, false, false, true]
+        );
+    }
+
+    /// The checks and the writes are one transaction: a write that fails
+    /// part way leaves nothing written.
+    #[test]
+    fn a_worker_report_that_fails_part_way_writes_nothing() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.conn
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER fail_second BEFORE INSERT ON main.tombstones
+                     WHEN new.hash = x'{}' BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                "62".repeat(20)
+            ))
+            .unwrap();
+        assert!(
+            s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
+                .is_err()
+        );
+        assert_eq!(
+            s.held_among(&[[0x61; 20]]).unwrap(),
+            vec![false],
+            "rolled back"
+        );
+        s.conn
+            .execute_batch("DROP TRIGGER temp.fail_second")
+            .unwrap();
+        assert_eq!(
+            s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
+                .unwrap(),
+            (2, vec![])
+        );
+    }
+
+    /// Rows of other kinds, written as their own paths write them.
+    fn put_row(s: &Store, hash: u8, rule: &str, at: i64) {
+        s.conn
+            .execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                params![&[hash; 20][..], rule, at],
+            )
+            .unwrap();
+    }
+
+    fn rules(s: &Store) -> std::collections::BTreeMap<u8, String> {
+        s.tombstones(100)
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.hash[0], t.rule))
+            .collect()
+    }
+
+    /// Expiry lets go of workers' reports older than the cutoff and
+    /// nothing else: a newer report, a local floor row and a user's or a
+    /// list's row stay.
+    #[test]
+    fn expiry_lets_go_of_old_worker_reports_only() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        s.tombstone_from_worker(&[[2; 20]], 7, 50).unwrap();
+        put_row(&s, 3, "CS-1a", 1);
+        put_row(&s, 4, "user", 1);
+        put_row(&s, 5, "WORKER-FLOOR:7", 1);
+        assert_eq!(s.expire_worker_floor(20).unwrap(), vec![[1; 20]]);
+        let left = rules(&s);
+        assert!(!left.contains_key(&1));
+        assert_eq!(left[&2], "worker-floor:7");
+        assert_eq!(left[&3], "CS-1a");
+        assert_eq!(left[&4], "user");
+        assert_eq!(left[&5], "WORKER-FLOOR:7", "the prefix is exact");
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        // Held again by the next report.
+        s.tombstone_from_worker(&[[1; 20]], 8, 60).unwrap();
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// The main node's own judgement, as its writer records a floor hit:
+    /// a tombstone under the rule, over anything a worker reported.
+    fn judged(s: &mut Store, hash: [u8; 20], rule: &'static str, held: Held, at: i64) {
+        let tx = s.conn.transaction().unwrap();
+        let hashes = [hash];
+        write(
+            &tx,
+            &[Filtered {
+                hashes: &hashes,
+                rule,
+                action: 4,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at,
+                expires_at: at + 1_000_000,
+                adult_hold: false,
+            }],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    /// After a worker's report lapses, the key is held again when the main
+    /// node's own judgement of its next fetch holds it, and stays so after
+    /// any later lapse of worker reports.
+    #[test]
+    fn a_lapsed_report_is_held_again_by_the_main_nodes_judgement() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        assert_eq!(s.expire_worker_floor(11).unwrap(), vec![[1; 20]]);
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+        judged(&mut s, [1; 20], "CS-1a", Held::Tombstone, 20);
+        assert_eq!(rules(&s)[&1], "CS-1a");
+        assert!(s.expire_worker_floor(i64::MAX).unwrap().is_empty());
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// A key a revoked worker reported that another source also holds
+    /// stays held: a hold written over the report, or a quarantine row.
+    #[test]
+    fn a_key_also_held_by_another_source_stays_held_through_a_revoke() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20], [2; 20], [3; 20]], 7, 10)
+            .unwrap();
+        judged(&mut s, [1; 20], "user", Held::Tombstone, 20);
+        judged(&mut s, [2; 20], "CS-3", Held::Quarantine, 20);
+        assert_eq!(s.purge_worker_floor(7).unwrap().len(), 2, "[2] and [3]");
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20], [3; 20]]).unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(rules(&s)[&1], "user");
+    }
+
+    /// A purge removes one worker's reports: another worker's, the local
+    /// floor's and a user's rows stay.
+    #[test]
+    fn a_purge_removes_only_that_workers_reports() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20], [2; 20]], 7, 10).unwrap();
+        s.tombstone_from_worker(&[[3; 20]], 8, 10).unwrap();
+        s.tombstone_from_worker(&[[6; 20]], 70, 10).unwrap();
+        put_row(&s, 4, "CS-8a", 1);
+        put_row(&s, 5, "user", 1);
+        assert_eq!(s.purge_worker_floor(7).unwrap().len(), 2);
+        let left = rules(&s);
+        assert!(!left.contains_key(&1) && !left.contains_key(&2));
+        assert_eq!(left[&3], "worker-floor:8");
+        assert_eq!(left[&6], "worker-floor:70", "not a prefix match");
+        assert_eq!(left[&4], "CS-8a");
+        assert_eq!(left[&5], "user");
+        assert!(s.purge_worker_floor(7).unwrap().is_empty());
+    }
+
+    /// A worker's report holds only hashes not stored, checked and written
+    /// in one transaction; a stored torrent is neither held nor touched.
+    #[test]
+    fn a_worker_report_holds_only_hashes_not_stored() {
+        use lodestar_metainfo::Info;
+        let raw = b"d6:lengthi1048576e4:name9:floor.bin12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let key = info.v1.unwrap().0;
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.insert(&[crate::NewTorrent {
+            info: &info,
+            raw_info: Some(raw),
+            discovered_at: 1,
+            metadata_at: 1,
+            extra_flags: 0,
+            source: crate::SourceId::new(0).unwrap(),
+        }])
+        .unwrap();
+        let (added, stored) = s
+            .tombstone_from_worker_unless_stored(&[key, [6; 20]], 7, 10)
+            .unwrap();
+        assert_eq!((added, stored), (1, vec![key]));
+        assert_eq!(s.held_among(&[key, [6; 20]]).unwrap(), vec![false, true]);
+        assert!(s.find(&InfoHash(key)).unwrap().is_some(), "still stored");
+        assert_eq!(
+            s.tombstone_from_worker_unless_stored(&[], 7, 10).unwrap(),
+            (0, vec![])
+        );
+    }
 
     /// The bounded read gives the list `files` gives within the bound,
     /// and refuses one past it in files, path bytes or segments.
@@ -2080,7 +2397,8 @@ mod tests {
             vec![true, false]
         );
 
-        // An adult hold expiring over [3] doesn't replace the report.
+        // An adult hold expiring over [3] replaces the report: the key
+        // stays held under the mark filtering can't rebuild.
         let tx = s.conn.transaction().unwrap();
         let adult = [[3u8; 20]];
         write(
@@ -2106,10 +2424,11 @@ mod tests {
             .into_iter()
             .find(|t| t.hash == [3; 20])
             .unwrap();
-        assert_eq!(t3.rule, "worker-floor:7");
+        assert_eq!(t3.rule, "CS-5a");
 
         // A later hold under another rule (ingest, refile, hold_claims)
-        // doesn't take the row over; a local floor rule may (below).
+        // takes the row over too, so the key stays held past the report's
+        // expiry.
         let weaker = [[2u8; 20]];
         let hold = |s: &mut Store, rule: &'static str, at: i64| {
             let tx = s.conn.transaction().unwrap();
@@ -2138,7 +2457,9 @@ mod tests {
                 .find(|t| t.hash == h)
                 .map(|t| t.rule)
         };
-        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("worker-floor:7"));
+        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("SRC-2"));
+        // A report for the checks below.
+        assert_eq!(s.tombstone_from_worker(&[[9; 20]], 7, 30).unwrap(), 1);
         // The prefix is exact: another case is a different rule.
         assert_eq!(s.tombstone_from_worker(&[[8; 20]], 1, 1).unwrap(), 1);
         s.conn
@@ -2150,22 +2471,19 @@ mod tests {
         assert!(s.release(&[8; 20]).unwrap(), "not a worker's report");
 
         // No release removes a report: by hash, many, or by its rule.
-        assert!(!s.release(&[2; 20]).unwrap());
-        assert_eq!(
-            s.release_many(&[[2; 20], [3; 20]]).unwrap(),
-            vec![false, false]
-        );
+        assert!(!s.release(&[9; 20]).unwrap());
+        assert_eq!(s.release_many(&[[9; 20]]).unwrap(), vec![false]);
         assert_eq!(
             s.release_rules(&["worker-floor:7".into()], |_| {}).unwrap(),
             0
         );
         assert_eq!(
-            s.release_rule_hashes("worker-floor:7", &[[2; 20]], |_| {})
+            s.release_rule_hashes("worker-floor:7", &[[9; 20]], |_| {})
                 .unwrap(),
             0
         );
-        assert_eq!(s.held_among(&[[2; 20], [3; 20]]).unwrap(), vec![true, true]);
-        // A local floor rule may take over a report.
+        assert_eq!(s.held_among(&[[9; 20], [3; 20]]).unwrap(), vec![true, true]);
+        // A local floor rule takes over as well.
         hold(&mut s, "CS-8a", 40);
         assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("CS-8a"));
         // The locked floor's own rows are released as before.

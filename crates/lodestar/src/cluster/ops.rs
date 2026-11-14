@@ -673,8 +673,14 @@ impl Workers {
         // Disconnect (and take the leases back) first, then forget: a sync
         // in between can't rejoin it with the defaults.
         let (certificates, leases) = server.revoke_worker(w).await.map_err(failed)?;
-        // Its floor reports not written yet go too (#607's review).
-        self.cluster.forget_floor_reports(w);
+        // Its floor reports not written yet go too (#607's review), and so
+        // do the ones written: the owner's choice of 2026-11-14
+        // (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`). Each key is
+        // judged under the floor again by whoever fetches it next. A
+        // delete that fails is tried again by the floor writer until it
+        // lands; the revocation stands either way.
+        let cluster = self.cluster.clone();
+        let _ = tokio::task::spawn_blocking(move || cluster.revoke_floor_reports(w)).await;
         self.placement.forget(w);
         lock(&self.saved).remove(&w);
         lock(&self.unsaved).remove(&w);
@@ -1247,7 +1253,7 @@ mod tests {
     }
 
     /// #607's delta review: revoking a worker forgets its floor reports not
-    /// written yet and its budget window.
+    /// written yet and its budget window, and refuses its later reports.
     #[tokio::test]
     async fn revoking_a_worker_forgets_its_floor_reports() {
         let dir = tempfile::tempdir().unwrap();
@@ -1262,7 +1268,8 @@ mod tests {
         assert!(!h.floor_report_for_test(w, 255, 999));
         c.workers.revoke(w.0).await.unwrap();
         assert_eq!(h.floor_pending_for_test(w), 0);
-        assert!(h.floor_report_for_test(w, 1, 1000), "a fresh window");
+        assert!(!h.floor_report_for_test(w, 1, 1000), "refused from now on");
+        assert_eq!(h.floor_pending_for_test(w), 0);
         c.stop().await;
     }
 
@@ -1601,6 +1608,35 @@ mod tests {
         let s = c.connect(&creds).await;
         assert!(granted(&s.claim(claim(9)).await.unwrap()));
         drop(s);
+        c.stop().await;
+    }
+
+    /// A revoke removes that worker's written floor reports and nothing
+    /// else: another worker's report and a local or user row stay.
+    #[tokio::test]
+    async fn a_revoke_removes_only_that_workers_floor_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        let other = WorkerId(w.0 + 100);
+        {
+            let mut store =
+                Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+            // Written now, so the hold's own expiry doesn't touch them.
+            let at = unix_now();
+            store.tombstone_from_worker(&[[1; 20]], w.0, at).unwrap();
+            store
+                .tombstone_from_worker(&[[2; 20]], other.0, at)
+                .unwrap();
+        }
+        c.workers.revoke(w.0).await.unwrap();
+        let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        assert_eq!(
+            store.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        drop(store);
         c.stop().await;
     }
 

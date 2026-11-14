@@ -685,11 +685,14 @@ impl AuthorityState {
         if self.pending.is_empty() {
             self.order.clear();
         } else if self.order.len() > 2 * self.pending.len() + ORDER_SLACK {
-            // Keys taken out leave their place behind: drop those places
-            // once they're half of `order`, so it stays within twice the
-            // queue.
+            // Keys taken out leave their place behind, and a key parked
+            // again gets a second one: drop those places (keeping each
+            // waiting key's first) once they're half of `order`, so it
+            // stays within twice the queue.
             let pending = &self.pending;
-            self.order.retain(|k| pending.contains_key(k));
+            let mut seen = HashSet::with_capacity(pending.len());
+            self.order
+                .retain(|k| pending.contains_key(k) && seen.insert(*k));
         }
         self.uncount_parked(lease.holder);
         Some(lease)
@@ -3269,5 +3272,28 @@ mod tests {
             "{}",
             s.order.len()
         );
+    }
+
+    #[test]
+    fn compaction_keeps_one_place_per_waiting_key() {
+        let (a, _) = counted();
+        for i in 0..3_001 {
+            a.claim(WorkerId::LOCAL, wide(i), 1);
+        }
+        a.evict(WorkerId::LOCAL);
+        // Keys 0..500 are taken and parked again: a second place each.
+        for i in 0..500 {
+            a.claim(WorkerId::LOCAL, wide(i), 2);
+        }
+        a.evict(WorkerId::LOCAL);
+        // Taking others out triggers the compaction while 0..500 wait.
+        for i in 500..2_600 {
+            a.claim(WorkerId::LOCAL, wide(i), 3);
+        }
+        let s = a.lock();
+        assert_eq!(s.pending.len(), 901);
+        let unique: HashSet<_> = s.order.iter().collect();
+        assert_eq!(unique.len(), s.order.len(), "no key has two places");
+        assert!(s.order.len() <= 2 * s.pending.len() + ORDER_SLACK);
     }
 }
