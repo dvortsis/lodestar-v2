@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T10:19Z",
+  "updated_at": "2026-11-14T10:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8608,6 +8608,11 @@
       "id": "watcher-midsegment-stale-ns",
       "note": "Only if the re-test shows a segment starting in a stale namespace after #881: a watcher follow-up. Otherwise the mid-segment gluetun restart voids the segment and the next start recovers.",
       "at": "2026-11-14T09:58Z"
+    },
+    {
+      "id": "place-s1-11-s1-14",
+      "note": "S1-11 and S1-14 are not in X-pipe01-followup; the runner places them as their own slice.",
+      "at": "2026-11-14T10:24Z"
     }
   ],
   "main_health": [
@@ -9013,8 +9018,8 @@
       "slice": "X-search01-fix",
       "head": "eb05662f",
       "session": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-      "status": "CI; review on ready (blocking finding; 1,024 cap is a \u00a72.26 call to flag)",
-      "at": "2026-11-14T09:11Z"
+      "status": "ready; fresh Opus code+security review running",
+      "at": "2026-11-14T10:24Z"
     },
     "869": {
       "slice": "X-sec-S8-01",
@@ -9942,7 +9947,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T10:19Z",
+  "updated": "2026-11-14T10:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
