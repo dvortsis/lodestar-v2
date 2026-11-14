@@ -420,6 +420,9 @@ pub(crate) fn within_path_limits(shape: &filetree::Shape) -> Result<()> {
     Ok(())
 }
 
+/// The `settings` key [`Store::sweep_held_stored`] sets once it has run.
+pub const HELD_SWEEP_KEY: &str = "store.held_sweep";
+
 /// A prepared torrent to commit, with its provenance.
 #[derive(Debug, Clone, Copy)]
 pub struct PreparedTorrent<'a> {
@@ -486,6 +489,10 @@ pub struct Written {
     /// The classification rules changed since the batch was enriched: its
     /// torrents are marked for background enrichment.
     pub stale_class: bool,
+    /// Stored torrents a held decision in `filtered` covers, deleted with
+    /// the hold. Ids are never reused, so hot-column slots left behind are
+    /// never read again.
+    pub deleted: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -770,6 +777,8 @@ impl Store {
             .collect::<Result<_>>()?;
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         filter::write(&tx, batch.filtered)?;
+        // Nothing stays stored under a hash this batch holds back.
+        let deleted = delete_held(&tx, batch.filtered)?;
         let stale_class = match batch.class_gen {
             Some(g) if rules::class_gen(&tx)? != g => {
                 let mut stmt = tx.prepare_cached(
@@ -783,12 +792,16 @@ impl Store {
             _ => false,
         };
         tx.commit()?;
+        if !deleted.is_empty() {
+            self.scrub_wal();
+        }
         Ok(Written {
             torrents: out,
             prepared,
             touched,
             swarm,
             stale_class,
+            deleted,
         })
     }
 
@@ -1054,7 +1067,9 @@ impl Store {
     /// swarm hash: that keeps the key private even beside a public import,
     /// as `Gate::check` and the writer's `stored_private` hold. They are
     /// left out here, not after, so `limit` counts only keys that can be
-    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`).
+    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`). Nor
+    /// one held under either swarm hash (a tombstone or a quarantine row):
+    /// nothing is stored under it, so it's never fetched again.
     pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.info_hash FROM torrents t \
@@ -1062,6 +1077,10 @@ impl Store {
              AND NOT EXISTS (SELECT 1 FROM unverified_items u \
                  WHERE u.network = ?3 AND u.flags & ?4 != 0 \
                  AND u.key IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             AND NOT EXISTS (SELECT 1 FROM tombstones h \
+                 WHERE h.hash IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             AND NOT EXISTS (SELECT 1 FROM quarantine h \
+                 WHERE h.hash IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
              ORDER BY t.id LIMIT ?5",
         )?;
         let rows = stmt.query_map(
@@ -1082,6 +1101,58 @@ impl Store {
             ))
         })
         .collect()
+    }
+
+    /// Deletes, once, every stored torrent under a hash that's held (a
+    /// tombstone or a quarantine row), as a hold's own write now does, and
+    /// logs them so the search indexer drops their documents. The marker
+    /// ([`HELD_SWEEP_KEY`]) is set in the same transaction, so it runs to
+    /// the end once and never again. Returns the deleted ids, `None` when
+    /// it ran before.
+    pub fn sweep_held_stored(&mut self) -> Result<Option<Vec<i64>>> {
+        let tx = begin_write(&mut self.conn)?;
+        let done: Option<i64> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [HELD_SWEEP_KEY],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if done.is_some() {
+            return Ok(None);
+        }
+        let held: Vec<Vec<u8>> = tx
+            .prepare("SELECT hash FROM tombstones UNION SELECT hash FROM quarantine")?
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut ids = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        {
+            let mut find = tx.prepare_cached(FIND_BY_HASH)?;
+            // Cached: the delete carries Insights' trigger.
+            let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+            let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+            for h in &held {
+                let found: Option<i64> = find.query_row([&h[..]], |r| r.get(0)).optional()?;
+                if let Some(id) = found
+                    && seen.insert(id)
+                {
+                    delete.execute([id])?;
+                    log.execute([id])?;
+                    ids.push(id);
+                }
+            }
+        }
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, 1)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [HELD_SWEEP_KEY],
+        )?;
+        tx.commit()?;
+        if !ids.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(Some(ids))
     }
 
     /// Torrents changed since `after` (a `reindex_log` sequence number):
@@ -1276,6 +1347,29 @@ fn finders_in(touches: &[Touch], stopped: u64) -> HashMap<InfoHash, u64> {
         }
     }
     finders
+}
+
+/// Deletes the stored torrents under any hash a held decision in
+/// `filtered` covers, and logs them so the search indexer drops their
+/// documents: in the hold's own transaction, as every other hold path
+/// does. Returns the deleted ids.
+fn delete_held(tx: &Connection, filtered: &[Filtered<'_>]) -> Result<Vec<i64>> {
+    let mut ids = Vec::new();
+    for f in filtered.iter().filter(|f| f.held.is_some()) {
+        for h in f.hashes {
+            if let Some(id) = find_any(tx, std::iter::once(InfoHash(*h)))?
+                && !ids.contains(&id)
+            {
+                // Cached: the delete carries Insights' trigger.
+                tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                    .execute([id])?;
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([id])?;
+                ids.push(id);
+            }
+        }
+    }
+    Ok(ids)
 }
 
 /// [`commit_one`] under a live source: `t`'s own when it's running, else

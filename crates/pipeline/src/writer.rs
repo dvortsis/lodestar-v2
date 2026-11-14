@@ -143,6 +143,9 @@ pub(crate) struct Writer {
     pub candidates: CandidateSweep,
     /// The core re-judge of stored torrents after a core change.
     pub core_rejudge: CoreSweep,
+    /// Holds a commit decided but couldn't write: written again until they
+    /// are, never dropped.
+    pub hold_retry: HoldRetry,
     /// The unverified-item and claims refile sweep (SRC-2).
     pub sweep: unverified::Sweep,
     /// The verification cursor (`sources.verify_unverified`).
@@ -274,6 +277,22 @@ impl CoreSweep {
     }
 }
 
+/// Holds whose commit failed ([`Writer::retry_holds`]): each is written
+/// again, with the stored torrent under its hashes deleted, until it is.
+#[derive(Debug, Default)]
+pub(crate) struct HoldRetry {
+    pub holds: Vec<unverified::Hold>,
+    /// The wait after a store error.
+    pub backoff: Backoff,
+}
+
+impl HoldRetry {
+    /// Has holds to write now.
+    fn ready(&self) -> bool {
+        !self.holds.is_empty() && self.backoff.ready()
+    }
+}
+
 /// A result under a current lease, ready to commit, or verified metadata
 /// from a torrent cache, which came through no lease.
 struct Committing {
@@ -364,6 +383,8 @@ struct Outcome {
     failed: Option<lodestar_store::Error>,
     /// Results the authoritative blocklist rejected.
     blocked: Vec<usize>,
+    /// Stored torrents the batch's holds deleted with them.
+    deleted: Vec<i64>,
     /// Results the store refused: every source that found them had
     /// stopped (`Inserted::Refused`, SRC-14b). Never stored.
     refused: Vec<usize>,
@@ -440,6 +461,7 @@ impl Writer {
                 () = std::future::ready(()), if self.core_rejudge.yields() && self.candidates.ready() => self.refile_candidates().await,
                 () = std::future::ready(()), if self.core_rejudge.ready() => self.rejudge_core().await,
                 () = std::future::ready(()), if self.core_rejudge.yields() && self.sweep.ready() => self.refile_unverified().await,
+                () = std::future::ready(()), if self.hold_retry.ready() => self.retry_holds().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
@@ -450,6 +472,7 @@ impl Writer {
                     self.core_rejudge.backoff.retry_due(unix_now());
                     self.sweep.backoff.retry_due(unix_now());
                     self.backfill_backoff.retry_due(unix_now());
+                    self.hold_retry.backoff.retry_due(unix_now());
                     self.verify(&io.retry).await;
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     self.note_judged().await;
@@ -486,6 +509,10 @@ impl Writer {
         self.commit(Vec::new(), Vec::new(), swarm, vec![stop], &io.retry)
             .await;
         self.save_queue(queue).await;
+        // One more try for holds still waiting, whatever their backoff.
+        if !self.hold_retry.holds.is_empty() {
+            self.retry_holds().await;
+        }
         self.note_judged().await;
         let store = self.store.take().expect("store");
         tokio::task::spawn_blocking(move || {
@@ -891,6 +918,8 @@ impl Writer {
                 if let Some(e) = o.failed.take() {
                     // The batch is lost but its promotions committed in
                     // their own transactions: they're accounted below.
+                    // Its holds are written again until they are.
+                    self.hold_retry.holds.extend(commit_holds(&committing));
                     self.stats.errors.fetch_add(1, Ordering::Relaxed);
                     let lost = |leased: bool| {
                         (0..committing.len())
@@ -914,7 +943,8 @@ impl Writer {
             Err(e) => {
                 // The batch and its counters are lost; keep going. Its
                 // leases stay held, so the keys aren't fetched again in
-                // this run.
+                // this run. Its holds are written again until they are.
+                self.hold_retry.holds.extend(commit_holds(&committing));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 let cache = committing.iter().filter(|c| !c.leased).count() as u64;
                 self.gate
@@ -1094,6 +1124,10 @@ impl Writer {
             Ordering::Relaxed,
         );
         for (d, id) in touches.into_iter().zip(outcome.touched) {
+            // Deleted by the batch's own hold: neither stored nor retried.
+            if id.is_some_and(|id| outcome.deleted.contains(&id)) {
+                continue;
+            }
             if let Some(id) = id {
                 if self.adult.has(d.source) {
                     adult_ids.push(id);
@@ -1383,6 +1417,50 @@ impl Writer {
             Err(e) => {
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 cs.errors.fetch_add(n - written, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
+    /// Writes again the holds a failed commit decided
+    /// ([`HoldRetry`]): each with the stored torrent under its hashes
+    /// deleted in its own transaction, marked for intake first. Those not
+    /// written wait out a backoff and are tried again.
+    async fn retry_holds(&mut self) {
+        let mut store = self.store.take().expect("store");
+        let held = self.held.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let holds = std::mem::take(&mut self.hold_retry.holds);
+        let (store, left, result) = tokio::task::spawn_blocking(move || {
+            let now = unix_now();
+            let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
+            let pending = held.pend(&hashes);
+            // One transaction per hold: those before an error are written.
+            let mut written = 0;
+            let result = (|| {
+                for h in &holds {
+                    store.hold_claims(&[h.filtered(now, quarantine_secs)])?;
+                    written += 1;
+                }
+                Ok::<_, lodestar_store::Error>(())
+            })();
+            // Written or failed: the store says which hold.
+            hold_committed(&store, Some(pending), true);
+            let left: Vec<_> = holds.into_iter().skip(written).collect();
+            (store, left, result)
+        })
+        .await
+        .expect("hold retry task");
+        self.store = Some(store);
+        self.hold_retry.holds = left;
+        match result {
+            Ok(()) => self.hold_retry.backoff.succeeded(),
+            Err(e) => {
+                self.hold_retry.backoff.failed(unix_now());
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::log_events::STORE_WRITE_FAILED,
                     error = crate::log_events::store_error(&e)
@@ -2467,6 +2545,33 @@ const RETRY_FIRST: i64 = 5;
 const RETRY_MAX: i64 = 300;
 
 /// One store transaction (runs on the blocking pool).
+/// The holds a batch decided, as [`transaction`] writes them: for a
+/// commit that failed, so they're written again ([`HoldRetry`]).
+fn commit_holds(committing: &[Committing]) -> Vec<unverified::Hold> {
+    committing
+        .iter()
+        .filter_map(|c| {
+            let d = c.verdict.as_ref()?;
+            let held = match d.action {
+                Action::Drop => Held::Tombstone,
+                Action::Quarantine => Held::Quarantine,
+                _ => return None,
+            };
+            Some(unverified::Hold {
+                hashes: c.results.torrent.swarm_hashes().map(|h| h.0).collect(),
+                rule: d.rule.id(),
+                action: d.action.code(),
+                held,
+                sealed: c.sealed.clone(),
+                evidence: d.evidence_codes(),
+                adult_hold: c.results.fix == Some(true)
+                    && lodestar_filter::reclassify::adult_hold(d),
+                core: matches!(d.rule, lodestar_filter::RuleRef::Core(_)),
+            })
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn transaction(
     store: &mut Store,
@@ -2654,6 +2759,7 @@ fn transaction(
                 promoted_as,
                 failed: Some(e),
                 blocked: promo_held,
+                deleted: Vec::new(),
                 refused: Vec::new(),
                 touched: Vec::new(),
                 swarm: Vec::new(),
@@ -2683,6 +2789,7 @@ fn transaction(
         promoted_as,
         failed: None,
         blocked,
+        deleted: written.deleted,
         refused,
         stale_class: written.stale_class || stale_promo,
         touched: written.touched[extra..].to_vec(),
@@ -2964,6 +3071,7 @@ mod tests {
                 done: true,
                 ..Default::default()
             },
+            hold_retry: Default::default(),
             sweep: unverified::Sweep {
                 done: true,
                 ..Default::default()
@@ -4126,6 +4234,43 @@ mod tests {
                 panic!("{put:?}")
             };
             (store, id)
+        }
+
+        /// A promoted item (stored under its own id) whose verified
+        /// torrent a rule added since holds: the next commit of it deletes
+        /// the row with the hold (FILTER-15).
+        #[tokio::test]
+        async fn a_promoted_torrent_held_later_is_deleted_with_its_hold() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let r = results_named("Big Buck Bunny");
+            let key = r.key;
+            let (store, id) = with_item(key.0);
+            let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+            let (retry, _rx) = mpsc::channel(4);
+            w.commit(
+                vec![leased(&coordinator, r)],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+            assert_eq!(w.stats.unverified.promoted.load(Ordering::Relaxed), 1);
+            assert_eq!(w.store.as_ref().unwrap().find(&key).unwrap(), Some(id));
+            super::drop_rule(&w.filter, "bunny");
+            w.commit(
+                vec![leased(&coordinator, results_named("Big Buck Bunny"))],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(store.find(&key).unwrap(), None);
+            assert!(store.torrent(id).unwrap().is_none());
+            assert_eq!(store.held_among(&[key.0]).unwrap(), [true]);
         }
 
         /// The duplicate-insert gate (plan SRC-2): the crawler (or a
@@ -6139,5 +6284,234 @@ mod tests {
         assert!(dht_ns <= 0.05 * insert, "the crawl's commits");
         assert!(noted_ns <= 0.05 * promoted, "a feed's commits");
         assert!(scrape_ns <= 0.05 * insert, "a full scrape's commits");
+    }
+
+    /// FILTER-15: a held commit over a torrent already stored deletes it
+    /// with its hold, in the commit's own transaction, however the hold
+    /// was decided; a commit that fails keeps its holds and writes them
+    /// again until they're written.
+    mod held_over_stored {
+        use super::*;
+
+        fn parts() -> (Writer, Arc<Coordinator>, mpsc::Sender<Discovery>) {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+            let w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+            let (retry, rx) = mpsc::channel(64);
+            std::mem::forget(rx);
+            (w, coordinator, retry)
+        }
+
+        async fn commit(
+            w: &mut Writer,
+            c: &Coordinator,
+            r: Results,
+            retry: &mpsc::Sender<Discovery>,
+        ) {
+            w.commit(vec![leased(c, r)], vec![], vec![], vec![], retry)
+                .await;
+        }
+
+        fn find(w: &Writer, key: InfoHash) -> Option<i64> {
+            w.store.as_ref().unwrap().find(&key).unwrap()
+        }
+
+        /// The torrent is gone and its hash held, as one write left them.
+        fn held_not_stored(w: &Writer, key: InfoHash, id: i64) {
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(store.find(&key).unwrap(), None, "not found");
+            assert!(store.torrent(id).unwrap().is_none(), "not stored");
+            assert_eq!(store.held_among(&[key.0]).unwrap(), [true], "held");
+            assert!(w.held.contains(&key.0), "refused by intake");
+        }
+
+        fn rule(filter: &Handle, query: &str, action: Action) {
+            filter.update_engine(|e| {
+                let notes = e.load_rules(&lodestar_store::RuleSet {
+                    rules: vec![lodestar_store::RuleRow {
+                        id: 1,
+                        query: query.into(),
+                        action: action.code(),
+                        enabled: true,
+                        shadow_until: None,
+                        unless_query: None,
+                    }],
+                    ..Default::default()
+                });
+                assert!(notes.is_empty(), "{notes:?}");
+                e.version += 1;
+            });
+        }
+
+        /// A remote worker's result judged again at commit under a drop
+        /// or quarantine rule added since the torrent was stored.
+        #[tokio::test]
+        async fn a_rule_added_since_deletes_the_stored_torrent() {
+            for action in [Action::Drop, Action::Quarantine] {
+                let (mut w, c, retry) = parts();
+                let r = results_named("Big Buck Bunny");
+                let key = r.key;
+                commit(&mut w, &c, r, &retry).await;
+                let id = find(&w, key).expect("stored");
+                rule(&w.filter, "bunny", action);
+                commit(&mut w, &c, results_named("Big Buck Bunny"), &retry).await;
+                held_not_stored(&w, key, id);
+                let store = w.store.as_ref().unwrap();
+                let quarantined = store.quarantine_rule(&key.0).unwrap().is_some();
+                assert_eq!(quarantined, action == Action::Quarantine, "{action:?}");
+            }
+        }
+
+        /// The built-in worker's verdict, kept at commit: a torrent too
+        /// large to judge is held under CS-0a and the stored row goes.
+        #[tokio::test]
+        async fn a_local_verdict_too_large_to_judge_deletes_the_stored_torrent() {
+            let (mut w, c, retry) = parts();
+            let r = results_named("Some Show");
+            let key = r.key;
+            commit(&mut w, &c, r, &retry).await;
+            let id = find(&w, key).expect("stored");
+            let engine = w.filter.current();
+            let mut r = results_named("Some Show");
+            r.worker = WorkerId::LOCAL;
+            r.version = engine.version;
+            r.verdict = Verdict {
+                decision: Some(engine.unjudgeable()),
+                shadow: Vec::new(),
+            };
+            commit(&mut w, &c, r, &retry).await;
+            held_not_stored(&w, key, id);
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(
+                store.quarantine_rule(&key.0).unwrap().as_deref(),
+                Some("CS-0a")
+            );
+        }
+
+        /// A refetch of an import's partial file list whose verified
+        /// metadata the core holds: the partial row is deleted with the
+        /// hold, not upgraded or left stored.
+        #[tokio::test]
+        async fn a_refetch_the_core_holds_deletes_the_partial_row() {
+            let (mut w, c, retry) = parts();
+            let raw = info_named("rolea lexa");
+            let info = Info::parse(&raw).unwrap();
+            let id = w
+                .store
+                .as_mut()
+                .unwrap()
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: None,
+                    discovered_at: 1,
+                    metadata_at: 1,
+                    extra_flags: flags::FILES_PARTIAL | flags::IMPORTED,
+                    source: SourceId::new(0).unwrap(),
+                }])
+                .unwrap()[0]
+                .id();
+            let mut r = results_named("rolea lexa");
+            let key = r.key;
+            assert_eq!(w.store.as_ref().unwrap().partial_hashes(10).unwrap(), [key]);
+            r.token = c.restore(
+                r.worker,
+                r.key,
+                lodestar_cluster::RestoredLease {
+                    cohort: crate::REFETCH_COHORT,
+                    source: SourceId::new(1).unwrap(),
+                    sources: 0b10,
+                    strategy: crate::strategy::REFETCH,
+                    discovered_at: 3600,
+                },
+                0,
+            );
+            w.commit(vec![r], vec![], vec![], vec![], &retry).await;
+            held_not_stored(&w, key, id);
+            assert!(
+                w.store
+                    .as_ref()
+                    .unwrap()
+                    .partial_hashes(10)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        /// A torrent stored before an always-adult source found it: judged
+        /// again as adult at commit, held by the Adult-only core, and the
+        /// stored row goes.
+        #[tokio::test]
+        async fn a_newly_adult_torrent_is_deleted_with_its_hold() {
+            let (mut w, c, retry) = parts();
+            commit(&mut w, &c, results(), &retry).await;
+            let key = results().key;
+            let id = find(&w, key).expect("stored: not adult yet");
+            // The lease's source (1) is now always-adult.
+            w.adult = AdultSources(0b10);
+            commit(&mut w, &c, results(), &retry).await;
+            held_not_stored(&w, key, id);
+        }
+
+        /// A cache's file judged again at commit under a rule added since,
+        /// over a torrent already stored.
+        #[tokio::test]
+        async fn a_cache_file_held_at_commit_deletes_the_stored_torrent() {
+            let (mut w, _c, retry) = parts();
+            let cache = w
+                .store
+                .as_mut()
+                .unwrap()
+                .register_source("torrent_cache", "1", 1)
+                .unwrap();
+            let first = cached(&w, "Big Buck Bunny", cache);
+            let key = first.key;
+            w.commit_cache(vec![first], &retry).await;
+            let id = find(&w, key).expect("stored");
+            let again = cached(&w, "Big Buck Bunny", cache);
+            rule(&w.filter, "bunny", Action::Drop);
+            w.commit_cache(vec![again], &retry).await;
+            held_not_stored(&w, key, id);
+        }
+
+        /// A commit that fails keeps its holds: the stored row stays until
+        /// the hold is written again, then goes with it.
+        #[tokio::test]
+        async fn a_failed_commits_holds_are_written_again() {
+            let (mut w, c, retry) = parts();
+            let r = results_named("Big Buck Bunny");
+            let key = r.key;
+            commit(&mut w, &c, r, &retry).await;
+            let id = find(&w, key).expect("stored");
+            rule(&w.filter, "bunny", Action::Drop);
+            let fail = |w: &Writer, on: bool| {
+                let sql = if on {
+                    "CREATE TEMP TRIGGER fail_hold BEFORE INSERT ON tombstones
+                     BEGIN SELECT RAISE(ABORT, 'test'); END"
+                } else {
+                    "DROP TRIGGER fail_hold"
+                };
+                w.store
+                    .as_ref()
+                    .unwrap()
+                    .connection()
+                    .execute_batch(sql)
+                    .unwrap();
+            };
+            fail(&w, true);
+            commit(&mut w, &c, results_named("Big Buck Bunny"), &retry).await;
+            assert_eq!(find(&w, key), Some(id), "the write failed");
+            assert_eq!(w.hold_retry.holds.len(), 1, "kept");
+            // Still failing: kept, after a backoff.
+            w.retry_holds().await;
+            assert_eq!(w.hold_retry.holds.len(), 1);
+            assert!(!w.hold_retry.ready(), "waits out the backoff");
+            fail(&w, false);
+            w.hold_retry.backoff.retry_due(i64::MAX);
+            assert!(w.hold_retry.ready());
+            w.retry_holds().await;
+            assert!(w.hold_retry.holds.is_empty());
+            held_not_stored(&w, key, id);
+        }
     }
 }
