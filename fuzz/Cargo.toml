@@ -36,6 +36,9 @@ sha2 = "0.11"
 # The plugins' own pin: `verified_claims` compares trackers in its form.
 url = "2.5.8"
 lodestar-utp = { path = "../crates/utp" }
+# `peer_fetch` plays a peer over an in-memory stream, with a runtime's
+# clock for the fetch's timers.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "time"] }
 
 # Each target is a separate binary; see README.md for running them.
 [[bin]]
@@ -335,6 +338,13 @@ bench = false
 [[bin]]
 name = "peer_wire"
 path = "fuzz_targets/peer_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "peer_fetch"
+path = "fuzz_targets/peer_fetch.rs"
 test = false
 doc = false
 bench = false
