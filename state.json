@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T02:34Z",
+  "updated_at": "2026-11-14T02:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8343,6 +8343,17 @@
         "windows.md: Node download single-file match, PATH reload after Run Command installs, time with perf_counter",
         "owner 2026-11-14 (relayed by the X-test-vm coordinator): the real Magnetico import test moves to the owner Unraid server; record in the next runner PR"
       ]
+    },
+    {
+      "at": "2026-11-14T02:48Z",
+      "for": "next runner PR",
+      "items": [
+        "X-test-vm owns: .agents/skills/lodestar-fleet/SKILL.md, docs/decisions/2026-11-12-X-test-vm.md, infra/dev-vm/**, infra/fleet/run_tests.sh",
+        "X-pipe01-fix owns: crates/sources/src/pool.rs, crates/sources/tests/** (+ crates/pipeline/tests/** if e2e needed)",
+        "new slice: companions managed-request binding, before the first pin (follow-up of X-cmp01-fix; owns crates/companions/src/supervise/**, manager.rs)",
+        "DHT backlog (component level): pending_addrs per-IP dedupe; bound pings from pending inserts in the DHT-02/DHT-11 fix",
+        "perf slices from Windows lane leads: /suggest prefix p95 at 1M; Magnetico import scaling 200k->1M; two Chromium e2e failures on Windows"
+      ]
     }
   ],
   "main_health": [
@@ -9398,7 +9409,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T02:34Z",
+    "updated": "2026-11-14T02:48Z",
     "items": [
       {
         "slot": 1,
@@ -9669,7 +9680,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T02:34Z",
+  "updated": "2026-11-14T02:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
