@@ -257,8 +257,6 @@ pub(crate) struct CoreSweep {
     /// Batches failed in a row: after [`CORE_REJUDGE_SINGLE`] of them, it
     /// judges one torrent at a time.
     pub failures: u32,
-    /// Batches failed on this run.
-    pub failed: u64,
     /// The wait after a store error.
     pub backoff: Backoff,
 }
@@ -267,6 +265,12 @@ impl CoreSweep {
     /// Has a batch to judge now.
     fn ready(&self) -> bool {
         !self.done && self.backoff.ready()
+    }
+
+    /// Lets the passes that wait for it run: it's done, or waiting out a
+    /// store failure.
+    fn yields(&self) -> bool {
+        self.done || !self.backoff.ready()
     }
 }
 
@@ -433,9 +437,9 @@ impl Writer {
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
                 () = std::future::ready(()), if self.backfill_ready() => self.backfill().await,
-                () = std::future::ready(()), if self.core_rejudge.done && self.candidates.ready() => self.refile_candidates().await,
+                () = std::future::ready(()), if self.core_rejudge.yields() && self.candidates.ready() => self.refile_candidates().await,
                 () = std::future::ready(()), if self.core_rejudge.ready() => self.rejudge_core().await,
-                () = std::future::ready(()), if self.core_rejudge.done && self.sweep.ready() => self.refile_unverified().await,
+                () = std::future::ready(()), if self.core_rejudge.yields() && self.sweep.ready() => self.refile_unverified().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
@@ -1390,9 +1394,9 @@ impl Writer {
     /// The backfill has a batch to enrich now: not done, and not waiting
     /// out a store error.
     fn backfill_ready(&self) -> bool {
-        // The core re-judge goes first: torrents the earlier core couldn't
-        // read whole are judged again before any other background pass.
-        self.core_rejudge.done && !self.backfill_done && self.backfill_backoff.ready()
+        // The core re-judge goes first, before any other background pass,
+        // except while it waits out a store failure.
+        self.core_rejudge.yields() && !self.backfill_done && self.backfill_backoff.ready()
     }
 
     /// Enriches the next batch of stored torrents that lack an up-to-date
@@ -1860,21 +1864,20 @@ impl Writer {
                     (p.found as u64, p.held as u64, p.unreadable as u64)
                 };
                 if !std::mem::replace(&mut self.core_rejudge.started, true) {
-                    let (found, held, unreadable) = counts(b.before);
+                    let (judged, held, unreadable) = counts(b.before);
                     lodestar_log::log_event!(
                         crate::log_events::CORE_REJUDGE_STARTED,
-                        found = found,
+                        judged = judged,
                         held = held,
                         unreadable = unreadable
                     );
                 }
                 // A rejected batch (the rules changed under it) runs again.
                 if b.finished {
-                    let (found, held, unreadable) = counts(b.after);
+                    let (judged, held, unreadable) = counts(b.after);
                     lodestar_log::log_event!(
                         crate::log_events::CORE_REJUDGE_DONE,
-                        found = found,
-                        rejudged = found,
+                        judged = judged,
                         held = held,
                         unreadable = unreadable
                     );
@@ -1891,9 +1894,12 @@ impl Writer {
             Err(e) => {
                 // The store failed (a torrent's own bad rows are held, not
                 // errors): the same place again after a backoff. The error
-                // carries no name.
-                self.core_rejudge.failures += 1;
-                self.core_rejudge.failed += 1;
+                // carries no name. A batch that mostly wouldn't read is the
+                // store's fault too, and going one at a time would hold
+                // what it can't read, so it only waits.
+                if !crate::core_rejudge::is_breaker(&e) {
+                    self.core_rejudge.failures += 1;
+                }
                 self.core_rejudge.backoff.failed(unix_now());
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
@@ -1925,7 +1931,7 @@ impl Writer {
             // only judged once more.
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
             lodestar_log::log_event!(
-                crate::log_events::CORE_REJUDGE_FAILED,
+                crate::log_events::STORE_WRITE_FAILED,
                 error = crate::log_events::store_error(&e)
             );
         }
@@ -3918,6 +3924,20 @@ mod tests {
             "the sweep's quarantine, expired"
         );
         assert!(w.held.contains(&stored), "the adult hold, now a tombstone");
+    }
+
+    /// The passes that wait for the core re-judge run once it's done, and
+    /// while it waits out a store failure.
+    #[test]
+    fn the_core_rejudge_yields_while_it_waits() {
+        let mut c = CoreSweep::default();
+        assert!(c.ready() && !c.yields());
+        c.backoff.failed(1_000);
+        assert!(!c.ready() && c.yields());
+        c.backoff.retry_due(i64::MAX);
+        assert!(c.ready() && !c.yields());
+        c.done = true;
+        assert!(!c.ready() && c.yields());
     }
 
     /// The sweeps' backoff doubles after each error in a row, up to its

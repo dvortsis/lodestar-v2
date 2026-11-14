@@ -117,17 +117,37 @@ pub const CORE_SEEN_KEY: &str = "filter.core.seen";
 pub const CORE_PASS_KEY: &str = "filter.core.pass";
 /// ...the last torrent id it finished, so a restart resumes there...
 pub const CORE_AFTER_KEY: &str = "filter.core.after";
+/// ...its phase and where it started (the second phase starts there)...
+pub const CORE_PHASE_KEY: &str = "filter.core.phase";
+pub const CORE_START_KEY: &str = "filter.core.start";
 /// ...and its totals so far ([`CorePass`]).
 pub const CORE_FOUND_KEY: &str = "filter.core.found";
 pub const CORE_HELD_KEY: &str = "filter.core.held";
 pub const CORE_UNREADABLE_KEY: &str = "filter.core.unreadable";
 
+/// How big a stored file list [`Store::files_bounded`] reads.
+#[derive(Debug, Clone, Copy)]
+pub struct FilesBound {
+    /// Files, and directories.
+    pub files: usize,
+    /// Bytes of every path, summed, as decoding would copy them.
+    pub path_bytes: u64,
+    /// Path segments, summed.
+    pub segments: u64,
+    /// Bytes the list may decompress to.
+    pub raw_bytes: usize,
+}
+
 /// A core re-judge's place and totals: counts only, no names or hashes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CorePass {
-    /// The last torrent id it finished.
+    /// 1: the torrents it judges first; 2: every other.
+    pub phase: i64,
+    /// The id it started after, where its second phase starts too.
+    pub start: i64,
+    /// The last torrent id it finished in this phase.
     pub after: i64,
-    /// Torrents the earlier core may have judged in part, judged again.
+    /// Torrents judged again, in either phase.
     pub found: i64,
     /// Of those, held back (dropped or quarantined)...
     pub held: i64,
@@ -135,8 +155,22 @@ pub struct CorePass {
     pub unreadable: i64,
 }
 
-const CORE_PASS_KEYS: [&str; 5] = [
+impl CorePass {
+    /// A new pass after torrent id `start`, in its first phase.
+    pub fn starting(start: i64) -> CorePass {
+        CorePass {
+            phase: 1,
+            start,
+            after: start,
+            ..CorePass::default()
+        }
+    }
+}
+
+const CORE_PASS_KEYS: [&str; 7] = [
     CORE_PASS_KEY,
+    CORE_PHASE_KEY,
+    CORE_START_KEY,
     CORE_AFTER_KEY,
     CORE_FOUND_KEY,
     CORE_HELD_KEY,
@@ -184,19 +218,18 @@ impl Store {
         let due = if get(CORE_PASS_KEY)? == Some(version) {
             // A pass under way: on from its place.
             Some(CorePass {
+                phase: get(CORE_PHASE_KEY)?.unwrap_or(1),
+                start: get(CORE_START_KEY)?.unwrap_or(0),
                 after: get(CORE_AFTER_KEY)?.unwrap_or(0),
                 found: get(CORE_FOUND_KEY)?.unwrap_or(0),
                 held: get(CORE_HELD_KEY)?.unwrap_or(0),
                 unreadable: get(CORE_UNREADABLE_KEY)?.unwrap_or(0),
             })
         } else if judged < version {
-            Some(CorePass::default())
+            Some(CorePass::starting(0))
         } else {
             let seen = get(CORE_SEEN_KEY)?.unwrap_or(0);
-            (max_id(&tx)? > seen).then_some(CorePass {
-                after: seen,
-                ..CorePass::default()
-            })
+            (max_id(&tx)? > seen).then_some(CorePass::starting(seen))
         };
         tx.commit()?;
         Ok(due)
@@ -206,7 +239,15 @@ impl Store {
     /// up to id `pass.after` finished, with these totals.
     pub fn set_core_rejudge(&mut self, version: i64, pass: &CorePass) -> Result<()> {
         let tx = crate::begin_write(&mut self.conn)?;
-        let values = [version, pass.after, pass.found, pass.held, pass.unreadable];
+        let values = [
+            version,
+            pass.phase,
+            pass.start,
+            pass.after,
+            pass.found,
+            pass.held,
+            pass.unreadable,
+        ];
         for (key, value) in CORE_PASS_KEYS.into_iter().zip(values) {
             put_setting(&tx, key, value)?;
         }
@@ -261,6 +302,35 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Stored torrent `id`'s file list, or a [`Error::Corrupt`] refusal
+    /// when it's bigger than `bound` allows: its shape is read before
+    /// anything is decoded, and its decompressed size is capped, so no
+    /// stored list can make the read allocate more than `bound` says.
+    /// [`Store::files`] stays as it is.
+    pub fn files_bounded(
+        &mut self,
+        id: i64,
+        bound: &FilesBound,
+    ) -> Result<Option<crate::FileTree>> {
+        let row: Option<(i64, Option<i64>, Vec<u8>)> = self
+            .conn
+            .prepare_cached("SELECT codec, dict_id, data FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        let Some((codec, dict_id, data)) = row else {
+            return Ok(None);
+        };
+        let codec = crate::Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
+        let raw = self
+            .codec
+            .decompress_capped(codec, dict_id, &data, bound.raw_bytes)?;
+        let shape = crate::filetree::shape(&raw, bound.files, bound.files)?;
+        if shape.path_bytes > bound.path_bytes || shape.components > bound.segments {
+            return Err(Error::Corrupt("file list over the bound"));
+        }
+        Ok(Some(crate::filetree::decode(&raw)?))
     }
 
     /// A stored torrent's swarm hashes as stored, read raw: for one whose
@@ -1272,6 +1342,52 @@ impl Store {
 mod tests {
     use super::*;
     use crate::StoreConfig;
+
+    /// The bounded read gives the list `files` gives within the bound,
+    /// and refuses one past it in files, path bytes or segments.
+    #[test]
+    fn the_bounded_file_list_read_refuses_a_list_past_the_bound() {
+        use lodestar_metainfo::Info;
+        let raw = b"d5:filesld6:lengthi1e4:pathl1:a2:bbeed6:lengthi1e4:pathl3:ccceee4:name1:n12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let id = s
+            .insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        let wide = FilesBound {
+            files: 100,
+            path_bytes: 100,
+            segments: 100,
+            raw_bytes: 1 << 20,
+        };
+        assert_eq!(s.files_bounded(id, &wide).unwrap(), s.files(id).unwrap());
+        for bound in [
+            FilesBound { files: 1, ..wide },
+            FilesBound {
+                path_bytes: 2,
+                ..wide
+            },
+            FilesBound {
+                segments: 2,
+                ..wide
+            },
+            FilesBound {
+                raw_bytes: 4,
+                ..wide
+            },
+        ] {
+            assert!(s.files_bounded(id, &bound).is_err(), "{bound:?}");
+        }
+        assert_eq!(s.files_bounded(id + 1, &wide).unwrap(), None);
+    }
 
     #[test]
     fn the_latest_hit_is_the_newest_applied_one() {

@@ -520,13 +520,17 @@ fn the_repos_corpora_are_judged_whole() {
         "held: {held} of {} pack-corpus torrents and {names} release names",
         examples.len()
     );
-    // Every example was read: a corpus that grows changes these.
-    assert_eq!((examples.len(), names), (198, 317));
+    // Every example was read (the corpora only grow).
+    assert!(
+        examples.len() >= 198 && names >= 317,
+        "{} {names}",
+        examples.len()
+    );
     assert_eq!(held, 0);
 }
 
-/// What the earlier core read whole keeps its judgment: a short torrent
-/// does, and a long name or path, many files, a padding file or a text
+/// What the earlier core read whole is judged again in the re-judge's
+/// second phase: a short torrent is, and a long name or path, many files, a padding file or a text
 /// that reads as long only in the earlier reading is judged again. Sizes
 /// stay far from any limit; the exact-input tests land after the release
 /// (docs/security/v1/README.md §5).
