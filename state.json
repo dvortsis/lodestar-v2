@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:52Z",
+  "updated_at": "2026-11-14T03:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8374,7 +8374,9 @@
     "Fuzz dictionaries need a ci.yml flag change: runner follow-up slice later",
     "M8-SEC-1 hour-per-target fuzz running in the reviewer session container (results as numbers)",
     "Owner \u00a72.19 flag at #857 merge: re-judge now judges every stored row (no shortcut); first real per-1M timing still owed from a real store",
-    "Owner \u00a72.19 FYI for #863 X-dht01-fix sent via dashboard session"
+    "Owner \u00a72.19 FYI for #863 X-dht01-fix sent via dashboard session",
+    "Hardening follow-up: bootstrap fetches Docker GPG key without fingerprint check (akamai cloud-init template); slice later",
+    "slices.yaml: X-gluetun-leak-cmp also owns pia-example/compose.vpn.yaml; sequence after #866"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8774,7 +8776,12 @@
     "865": {
       "slice": "X-operator-tripwire-settle",
       "head": "1772b164",
-      "status": "review CHANGES (1 blocking, 6 polish) relayed; runner chose to close the residual (stricter), owner \u00a72.19 flag at merge; await ready -> delta review"
+      "status": "r2 at 236a7f8b green; fresh delta review running"
+    },
+    "866": {
+      "slice": "X-pia-vm-helper",
+      "head": "e70b3d40",
+      "status": "review MERGE + 2 important/polish folded into one push; await ready -> runner delta check"
     }
   },
   "merged_log": [
@@ -9421,7 +9428,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T03:52Z",
+    "updated": "2026-11-14T03:56Z",
     "items": [
       {
         "slot": 1,
@@ -9588,7 +9595,7 @@
         "model": "opus",
         "status": "active",
         "since": "2026-11-14T03:12Z",
-        "doing": "building from main; PR next",
+        "doing": "#866 X-pia-vm-helper: review MERGE; fix round for 2 important + polish",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9692,7 +9699,7 @@
     }
   ],
   "heartbeat": "2026-11-14T03:38Z",
-  "updated": "2026-11-14T03:52Z",
+  "updated": "2026-11-14T03:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
