@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T06:49Z",
+  "updated_at": "2026-11-14T06:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8442,10 +8442,10 @@
       "note": "Approved by runner; built by the owner operator session after #870 merges. Mount the operator helpers as session files from the reviewed checkout instead of fetching them at run time; the policy stays auto. ping-2 after operator-apply deploys it. Needs a slices.yaml entry in the next runner PR."
     },
     {
-      "id": "op5-check8-wording",
-      "from": "X-operator-mount-helpers",
-      "at": "2026-11-14T06:49Z",
-      "note": "OP-5 check 8 results sentence names files copied from uploads as a test-session marker; real wakes copy from uploads too now; runner rewords in a runner PR"
+      "id": "X-operator-mount-nits",
+      "from": "rv-872",
+      "at": "2026-11-14T06:53Z",
+      "note": "operator session: harness docstring, first-run step 2 denial count and reasons, decisions orphan wording, OP-5 check 8 sentence reworded (runner call); docs/comments only, runner self-checks"
     }
   ],
   "main_health": [
@@ -8852,11 +8852,6 @@
       "slice": "runner-ui-review-placement",
       "head": "92d30c1a",
       "status": "fresh Opus review running"
-    },
-    "872": {
-      "slice": "X-operator-mount-helpers",
-      "head": "6f873691",
-      "status": "ready; fresh Opus review + security review running"
     },
     "874": {
       "slice": "X-sec-S6-02-03 (part)",
@@ -9778,7 +9773,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T06:49Z",
+  "updated": "2026-11-14T06:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10353,6 +10348,12 @@
       "slice": "X-operator-wake-outcome",
       "merged": "fcf0f17b",
       "at": "2026-11-14T06:18Z"
+    },
+    {
+      "pr": 872,
+      "slice": "X-operator-mount-helpers",
+      "merged": "c73c8b5d",
+      "at": "2026-11-14T06:53Z"
     }
   ],
   "review_sessions": []
