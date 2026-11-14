@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T16:12Z",
+  "updated_at": "2026-11-14T17:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8767,6 +8767,16 @@
       "id": "operator-check-3c",
       "at": "2026-11-14T16:12Z",
       "text": "Operator first-run check 3c PASSED: owner posted /fleet status 14:51Z; operator-wake gate and refuse ran green and posted nothing, wake and sweep skipped; fleet run skipped at run level; runner-verified via ping_numbers.py that no comment followed. Outstanding: 3b recorded \"not done (no App token held)\"; check 5 optional, owner has not said."
+    },
+    {
+      "id": "owner-operator-1114",
+      "at": "2026-11-14T17:00Z",
+      "note": "Owner in chat 2026-11-14: operator wakes need no per-wake approval (owner removes cloud-operator reviewers); $200 Claude API credits for this week; models up to Fable; offload suited tasks. Record in owner-decisions next runner PR. Sessions told never to post on #821."
+    },
+    {
+      "id": "slot33-queue-1114",
+      "at": "2026-11-14T17:00Z",
+      "note": "Slot 33 after #886: X-pool-model-test (+B +H), then A, C, X-fuzz-peer-fetch, X-fuzz-mse."
     }
   ],
   "main_health": [
@@ -9158,9 +9168,15 @@
     },
     "886": {
       "slice": "X-fetch-room-fix",
-      "head": "ab11a9fc",
-      "review": "rv-886 fresh Opus+security CHANGES: B1 worker hand-back drops (runner already deferred to X-worker-oversize-handback); I1 share-held partial never rejoins partials queue (fix + probe test); optional: regrow self-block assert, admission doc wording. Relayed; delta check next.",
-      "at": "2026-11-14T16:08Z"
+      "head": "699342e6",
+      "review": "rv-886 CHANGES fixed at 699342e6 (I1 share-held claim keeps its turn + test; both optionals). Runner delta check OK; merge on green.",
+      "at": "2026-11-14T17:00Z"
+    },
+    "888": {
+      "slice": "X-rejudge-stall",
+      "head": "85343985",
+      "review": "await ready; fresh Opus + /security-review",
+      "at": "2026-11-14T17:00Z"
     }
   },
   "merged_log": [
@@ -9807,7 +9823,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T16:12Z",
+    "updated": "2026-11-14T17:00Z",
     "items": [
       {
         "slot": 1,
@@ -9969,7 +9985,7 @@
         "slot": 30,
         "slice": "X-sec-S6-02-03",
         "role": "build",
-        "agent": "pending launch",
+        "agent": "session_01MMjhn9hfwMf4Ydg4La5rEh",
         "model": "opus",
         "since": "2026-11-14T09:33Z",
         "doing": "X-sec-S6-02-03 part 2b: told 16:1xZ to bring main in and open PR (#874, #879 merged)",
@@ -9979,7 +9995,7 @@
         "slot": 32,
         "slice": "X-filter-budget-fix",
         "role": "build",
-        "agent": "claude",
+        "agent": "session_01MMjhn8URRT9adbFfM1zGi1",
         "status": "active",
         "since": "2026-11-14T07:27Z",
         "doing": "X-filter-budget-fix (FILTER-13 + FILTER-14, owner FILTER-14 decision; detail by message); approach to runner first",
@@ -9990,7 +10006,7 @@
         "slice": "X-fetch-room-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "X-fetch-room-fix build (then X-pool-model-test)",
+        "doing": "#886 on green; then X-pool-model-test (+B +H), A, C, X-fuzz-peer-fetch, X-fuzz-mse",
         "since": "2026-11-14T14:34Z"
       }
     ]
@@ -10082,7 +10098,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T16:12Z",
+  "updated": "2026-11-14T17:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
