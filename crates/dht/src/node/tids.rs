@@ -58,7 +58,7 @@ impl TxIds {
     }
 
     fn round(&self, round: u8, half: u32) -> u32 {
-        let mut h = self.prf.clone();
+        let mut h = self.prf;
         h.write(&[round]);
         h.write(&half.to_le_bytes());
         // Truncation to the half's width.
