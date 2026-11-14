@@ -73,6 +73,7 @@ A follow-up to X-pipe01-fix (#877, `2026-11-14-X-pipe01-fix.md`), which bounded 
 ## Also in this PR (from the #877 review)
 - `2026-11-14-X-pipe01-fix.md`: the reason given for the `stages.rs` helper was wrong (that pool has no peer finder, so the limits don't apply to it) and is corrected there and in the helper's comment; the NAT64 bullet's bold is closed; the table has a row for a queue of 1,000; one sentence under "What it costs" is smoothed. Its line about a follow-up now names this file.
 - `Places::take` reads a key's peers once, not twice.
+- `2026-11-14-X-search01-fix.md` (#880; the runner widened this PR to that one file): three wording fixes from its review. `-ext:x` also matches a torrent whose `x` falls past the cap; hidden files count toward the cap but not toward the file index; the bench follow-up is reworded.
 
 ## Follow-ups
 - **The exact-input regression test** lands after the release with the fix (`docs/security/v1/README.md` §5).
