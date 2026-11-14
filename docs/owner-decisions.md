@@ -712,6 +712,12 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - The choices are held like the findings (`docs/security/v1/README.md` §5). No file records them; the runner gives each fix session its choice directly.
     - `ext:owner-filter01-choice` and `ext:owner-filter03-choice` now hold.
 
+71. **Five answers on the security review's follow-ups** (owner, 2026-11-14 about 00:55Z, in the owner-started security review session, answering "go with all of them" to five recommendations put to them; relayed to the runner by that session).
+    - **FILTER-14 (important, content safety) and FILTER-03's two remaining questions:** the owner took the recommended option for each. They're held like the findings (`docs/security/v1/README.md` §5): no file records them, and the runner gives each fix session its choice directly.
+    - **Re-judging after a core change:** stored torrents stay visible until the re-judge reaches them, and the ones the old core couldn't read whole go first, right after start. The held-until-re-judged gate (X-rejudge-pending-gate) isn't wanted for now. The runner reports the first real measurement of the re-judge's time per million stored to the owner, so this can be revisited if it runs much longer than expected.
+    - **Operator first-run check 8** (the injection test) waits until X-operator-hardening has merged, then runs. The owner-started reviewer reads that PR before it merges.
+    - **PR #632** (the owner's branch, the PIA bridge) is split, not merged as it stands: (a) its control-plane files are dropped in favour of main's; (b) one PR for the on-VM helper, compose and cloud-init, once the sudo model is settled against main's fleet steps; (c) one PR for the bridge script, its tests and the PowerShell verbs, as the manual break-glass path; (d) one PR for the docs. (e) The new `vpn-provision`, `vpn-crawler` and `vpn-cleanup` verbs get the typed-phrase gate that the deploy and destroy scripts have. The runner slices and places the split. The sudo model for (b) is still the owner's (`ext:owner-pia-sudo-model`).
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
