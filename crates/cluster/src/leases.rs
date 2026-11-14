@@ -26,7 +26,7 @@
 //! remote workers are allowed, so a key can never be leased twice (once
 //! locally, once remotely).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use lodestar_metainfo::InfoHash;
@@ -108,10 +108,12 @@ pub struct LeaseTable {
     /// [`PINNED`] for a late result's lease, which the coordinator holds
     /// for a result already in hand. Ends with the lease.
     delivered: HashMap<Token, u64>,
-    /// Leases each worker holds, kept with `leases` so a count is one
-    /// lookup, not a scan (the per-worker cap, CLUSTER-02). A worker with
-    /// none has no entry.
-    held: HashMap<WorkerId, usize>,
+    /// The keys each worker holds, kept with `leases` on every insert and
+    /// removal: a count is one lookup (the per-worker cap, CLUSTER-02), and
+    /// an eviction, expiry or reconcile visits only that worker's leases,
+    /// not the whole table (X-worker-839-followups). A worker with none has
+    /// no entry.
+    by_worker: HashMap<WorkerId, HashSet<InfoHash>>,
 }
 
 /// [`LeaseTable`]'s delivery mark for a lease the coordinator holds on a
@@ -129,13 +131,13 @@ impl LeaseTable {
             workers: HashMap::new(),
             fetched: HashMap::new(),
             delivered: HashMap::new(),
-            held: HashMap::new(),
+            by_worker: HashMap::new(),
         }
     }
 
     /// Adds a lease; `key` must have none.
     fn put(&mut self, key: InfoHash, lease: Lease) {
-        *self.held.entry(lease.holder).or_insert(0) += 1;
+        self.by_worker.entry(lease.holder).or_default().insert(key);
         let old = self.leases.insert(key, lease);
         debug_assert!(old.is_none(), "a key leased twice");
     }
@@ -143,10 +145,10 @@ impl LeaseTable {
     /// Removes `key`'s lease, if any, keeping the counts.
     fn take(&mut self, key: &InfoHash) -> Option<Lease> {
         let lease = self.leases.remove(key)?;
-        if let Some(n) = self.held.get_mut(&lease.holder) {
-            *n -= 1;
-            if *n == 0 {
-                self.held.remove(&lease.holder);
+        if let Some(keys) = self.by_worker.get_mut(&lease.holder) {
+            keys.remove(key);
+            if keys.is_empty() {
+                self.by_worker.remove(&lease.holder);
             }
         }
         Some(lease)
@@ -322,12 +324,7 @@ impl LeaseTable {
         for w in &dead {
             self.workers.remove(w);
         }
-        let mut expired: Vec<InfoHash> = self
-            .leases
-            .iter()
-            .filter(|(_, l)| dead.contains(&l.holder))
-            .map(|(k, _)| *k)
-            .collect();
+        let mut expired: Vec<InfoHash> = dead.iter().flat_map(|&w| self.keys_of(w)).collect();
         expired.extend(stuck.into_iter().filter(|k| {
             self.leases
                 .get(k)
@@ -351,12 +348,7 @@ impl LeaseTable {
     /// caller grants the keys again. Its late reports are stale from now on.
     pub fn evict(&mut self, worker: WorkerId) -> Vec<(InfoHash, Lease)> {
         self.workers.remove(&worker);
-        let keys: Vec<InfoHash> = self
-            .leases
-            .iter()
-            .filter(|(_, l)| l.holder == worker)
-            .map(|(k, _)| *k)
-            .collect();
+        let keys = self.keys_of(worker).collect();
         self.end_all(keys)
     }
 
@@ -384,11 +376,11 @@ impl LeaseTable {
         &mut self,
         worker: WorkerId,
         session: u64,
-        listed: &std::collections::HashSet<Token>,
+        listed: &HashSet<Token>,
     ) -> Vec<(InfoHash, Lease)> {
         let keys: Vec<InfoHash> = self
-            .leases
-            .iter()
+            .keys_of(worker)
+            .filter_map(|k| self.leases.get(&k).map(|l| (k, l)))
             .filter(|(_, l)| {
                 l.holder == worker
                     && !listed.contains(&l.token)
@@ -398,7 +390,7 @@ impl LeaseTable {
                         .get(&l.token)
                         .is_none_or(|&s| s != session && s != PINNED)
             })
-            .map(|(k, _)| *k)
+            .map(|(k, _)| k)
             .collect();
         self.end_all(keys)
     }
@@ -411,8 +403,13 @@ impl LeaseTable {
         self.leases.is_empty()
     }
 
+    /// The keys `worker` holds, from the index.
+    fn keys_of(&self, worker: WorkerId) -> impl Iterator<Item = InfoHash> + '_ {
+        self.by_worker.get(&worker).into_iter().flatten().copied()
+    }
+
     pub fn held_by(&self, worker: WorkerId) -> usize {
-        self.held.get(&worker).copied().unwrap_or(0)
+        self.by_worker.get(&worker).map_or(0, HashSet::len)
     }
 
     pub fn ttl_secs(&self) -> i64 {
@@ -2385,22 +2382,28 @@ mod tests {
         assert_eq!(a.held_tokens(B, &asked), [t2]);
     }
 
-    /// The table's per-worker counts (CLUSTER-02) against a scan.
-    fn assert_counts(t: &LeaseTable) {
-        let mut scanned: HashMap<WorkerId, usize> = HashMap::new();
-        for l in t.leases.values() {
-            *scanned.entry(l.holder).or_insert(0) += 1;
+    /// The table's per-worker key index (CLUSTER-02, X-worker-839-followups)
+    /// against a full scan: the same keys for each worker, and no entry for
+    /// a worker holding none.
+    fn assert_index_matches_a_scan(t: &LeaseTable) {
+        let mut scanned: HashMap<WorkerId, HashSet<InfoHash>> = HashMap::new();
+        for (k, l) in &t.leases {
+            scanned.entry(l.holder).or_default().insert(*k);
         }
-        assert_eq!(t.held, scanned);
+        assert_eq!(t.by_worker, scanned);
+        for (w, keys) in &scanned {
+            assert_eq!(t.held_by(*w), keys.len());
+        }
     }
 
     proptest::proptest! {
-        /// Whatever happens to the table, each worker's count is the
-        /// number of leases it holds, and a worker holding none has no
-        /// entry.
+        /// Whatever happens to the table (grants, renewals, releases,
+        /// expiries, evictions, re-grants, reconciles, fetched marks), each
+        /// worker's index holds exactly the keys it leases, and a worker
+        /// holding none has no entry.
         #[test]
-        fn held_counts_follow_every_change(
-            ops in proptest::collection::vec((0u8..7, 1u32..4, 0u8..12), 1..200)
+        fn the_key_index_follows_every_change(
+            ops in proptest::collection::vec((0u8..9, 1u32..4, 0u8..12), 1..200)
         ) {
             let mut t = LeaseTable::new(1, 600);
             let mut now = 0;
@@ -2430,11 +2433,25 @@ mod tests {
                             t.regrant(w, key, l, now);
                         }
                     }
+                    6 => {
+                        // A list naming this key's lease, if it's the worker's.
+                        let listed: HashSet<Token> =
+                            t.get(&key).map(|l| l.token).into_iter().collect();
+                        let _ = t.reconcile(w, 9, &listed);
+                    }
+                    7 => {
+                        // Marked fetched: a later expiry takes it as stuck.
+                        if let Some(l) = t.get(&key).copied() {
+                            let _ = t.mark_fetched(l.holder, &key, l.token, now);
+                        }
+                    }
                     _ => {
-                        let _ = t.reconcile(w, 9, &std::collections::HashSet::new());
+                        // A renewal only.
+                        now += 100;
+                        t.heartbeat(w, now);
                     }
                 }
-                assert_counts(&t);
+                assert_index_matches_a_scan(&t);
             }
         }
     }
@@ -2558,7 +2575,7 @@ mod tests {
             });
             let c = Claim { key, ..claim(2, 0) };
             let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 1) else {
-                panic!("leased")
+                panic!("a fresh key wasn't granted")
             };
             assert!(a.commit(WorkerId::LOCAL, &key, t).is_some());
         }

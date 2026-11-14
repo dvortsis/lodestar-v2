@@ -305,8 +305,20 @@ struct Stages {
     pauser: JoinHandle<()>,
 }
 
+/// Points in the session task a test can wait on (never in the binary).
+#[cfg(test)]
+#[derive(Default)]
+struct TestHooks {
+    /// Batches marked refused for now.
+    refused: AtomicU64,
+    /// Flushes that have read the session they send on.
+    flush_observed: AtomicU64,
+}
+
 /// What the tasks and the message loop share.
 struct Shared {
+    #[cfg(test)]
+    hooks: TestHooks,
     config: Config,
     have: WorkerHave,
     judge: Arc<Judge>,
@@ -498,6 +510,8 @@ impl Runtime {
             hello_ip: Mutex::new(None),
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
+            #[cfg(test)]
+            hooks: TestHooks::default(),
             flush,
             unsealable_since: Mutex::new(None),
             dht_want: Mutex::new(Some(dht_want)),
@@ -2183,7 +2197,12 @@ async fn send_results(
     let mut next_batch: u64 = 1;
     let mut flight: BTreeMap<u64, InFlight> = BTreeMap::new();
     let mut sessions = s.session.subscribe();
-    let mut retry = tokio::time::interval(s.config.retry_every);
+    // From one period in: at the start nothing has been sent, so a first
+    // tick at once would only resend a batch refused before it's polled.
+    let mut retry = tokio::time::interval_at(
+        tokio::time::Instant::now() + s.config.retry_every,
+        s.config.retry_every,
+    );
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay = Replay::default();
     if let Some(sp) = &s.spool {
@@ -2262,21 +2281,30 @@ async fn send_results(
                 {
                     spool_live(&s, sp, &mut flight).await;
                 }
-                // The session gone while sending: what's left goes to
-                // the spool now, not at the next round.
-                match send_due_or_changed(&s, session, &mut flight, true, &mut sessions).await {
-                    Sending::Done => {}
-                    Sending::Changed => {
-                        let now = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
-                        if let Some(sp) = &s.spool
-                            && offline(&now)
-                        {
-                            spool_live(&s, sp, &mut flight).await;
+                // The session changed while sending: gone, what's left goes
+                // to the spool now, not at the next round; a new one, it's
+                // sent there before the flush is answered. Each round needs
+                // a real session change, and the drain's deadline bounds
+                // the wait for the answer.
+                #[cfg(test)]
+                s.hooks.flush_observed.fetch_add(1, Ordering::Release);
+                let mut session = session;
+                loop {
+                    match send_due_or_changed(&s, session, &mut flight, true, &mut sessions).await {
+                        Sending::Done => break,
+                        Sending::Changed => {
+                            session = observe(&s, &mut sessions, &mut seen, &mut flight, &mut replay);
+                            if offline(&session) {
+                                if let Some(sp) = &s.spool {
+                                    spool_live(&s, sp, &mut flight).await;
+                                }
+                                break;
+                            }
                         }
-                    }
-                    Sending::Gone => {
-                        let _ = done.send(());
-                        return;
+                        Sending::Gone => {
+                            let _ = done.send(());
+                            return;
+                        }
                     }
                 }
                 let _ = done.send(());
@@ -2327,6 +2355,8 @@ async fn send_results(
                     // Refused for now (backpressure): sent again on the
                     // next retry tick, not at once.
                     f.refused = true;
+                    #[cfg(test)]
+                    s.hooks.refused.fetch_add(1, Ordering::Release);
                 }
             }
             changed = sessions.changed() => {
@@ -4465,6 +4495,89 @@ pub(crate) mod tests {
         lodestar_cluster::WorkerSession,
     ) {
         session_pair_with(64).await
+    }
+
+    /// X-worker-839-followups: a flush whose session changes to a new, live
+    /// one while it sends answers only once the batch is on the new
+    /// session. Made so the flush's own loop is the only path that can send
+    /// it: the batch was refused for now (the loop top never sends a
+    /// refused batch, and the retry tick is an hour away), the old
+    /// session's link is full and never read, and the session changes once
+    /// the flush has read the old one. The batch is on the new session's
+    /// link when the drain returns. Without the loop, it never gets there.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_flush_that_sees_a_new_session_sends_there_before_answering() {
+        let mut rt = Runtime::start(Config {
+            retry_every: Duration::from_secs(3600),
+            ..config(Arc::new(MapFetch::default()))
+        });
+        let (mut old_coord, mut old) = session_pair_with(1).await;
+        // Attached as `connected` does it, without the have-filter
+        // acknowledgement `connected` also queues: nothing but this test's
+        // frames may take the old link's one slot.
+        let attach = |rt: &Runtime, h: SessionHandle| {
+            rt.shared.generation.fetch_add(1, Ordering::AcqRel);
+            rt.shared.session.send_replace(Some(h));
+        };
+        attach(&rt, old.handle());
+        let out = rt.test_outbound();
+        out.send(sealed(3)).await.unwrap();
+        let first = next_results(&mut old_coord).await;
+        // Refused for now: only a flush sends it again.
+        old_coord
+            .send(lodestar_cluster::proto::ToWorker::Accepted {
+                batch: first.batch,
+                accepted: false,
+            })
+            .await
+            .unwrap();
+        let e = tokio::time::timeout(DEADLINE, old.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        rt.event(e);
+        let hooks = rt.shared.clone();
+        until("refused", || {
+            let n = hooks.hooks.refused.load(Ordering::Acquire);
+            (n == 1, n)
+        })
+        .await;
+        // The old link's one slot taken, never read, so any later send
+        // stalls. The filler is queued, not awaited: the session's loop
+        // takes commands in order, so it goes ahead of the flush's resend,
+        // into the slot or behind whatever already holds it.
+        let filler = ToCoordinator::SnapshotAck(lodestar_cluster::proto::SnapshotAck {
+            kind: lodestar_cluster::proto::SnapshotKind::Filter,
+            version: 1,
+            seq: 0,
+        });
+        let old_handle = old.handle();
+        let mut filling = std::pin::pin!(old_handle.send(filler));
+        let _ = tokio::time::timeout(Duration::ZERO, &mut filling).await;
+
+        let (mut new_coord, new) = session_pair().await;
+        let shared = rt.shared.clone();
+        let handle = new.handle();
+        // Once the flush has read the old session, the session changes.
+        // The generation doesn't: the batch stays sent and refused, which
+        // the loop top never sends, so only the flush's own loop can put it
+        // on the new session.
+        let reconnect = async move {
+            until("the flush on the old session", || {
+                let n = shared.hooks.flush_observed.load(Ordering::Acquire);
+                (n == 1, n)
+            })
+            .await;
+            shared.session.send_replace(Some(handle));
+        };
+        let (_, ()) = tokio::join!(rt.drain(), reconnect);
+        // Already there, without waiting.
+        let got = tokio::time::timeout(Duration::ZERO, new_coord.recv()).await;
+        let Ok(Ok(Some(ToCoordinator::Results(p)))) = got else {
+            panic!("not on the new session when the flush answered: {got:?}");
+        };
+        assert_eq!(p.batch, first.batch);
+        drop((old, new, out));
     }
 
     /// A session over a link of `capacity` frames: at 1, a coordinator

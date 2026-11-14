@@ -1462,6 +1462,7 @@ struct Totals {
     check_failures: u64,
     busy_check_failed: u64,
     busy_unknown: u64,
+    busy_capped: u64,
     reconcile_returned: u64,
     reconcile_unknown: u64,
     reconcile_refused: u64,
@@ -1487,6 +1488,7 @@ impl Totals {
             check_failures: s.check_failures,
             busy_check_failed: s.busy_check_failed,
             busy_unknown: s.busy_unknown,
+            busy_capped: s.busy_capped,
             reconcile_returned: s.reconcile_returned,
             reconcile_unknown: s.reconcile_unknown,
             reconcile_refused: s.reconcile_refused,
@@ -1512,6 +1514,7 @@ impl Totals {
             check_failures: self.check_failures + o.check_failures,
             busy_check_failed: self.busy_check_failed + o.busy_check_failed,
             busy_unknown: self.busy_unknown + o.busy_unknown,
+            busy_capped: self.busy_capped + o.busy_capped,
             reconcile_returned: self.reconcile_returned + o.reconcile_returned,
             reconcile_unknown: self.reconcile_unknown + o.reconcile_unknown,
             reconcile_refused: self.reconcile_refused + o.reconcile_refused,
@@ -2036,8 +2039,9 @@ impl ClusterHandle {
 }
 
 /// Claimed keys denied as busy, by cause (X-wk-busy-metrics): the
-/// coordinator's side of the workers' busy retry. A fixed set of three
-/// causes; no key, worker or free-form label.
+/// coordinator's side of the workers' busy retry. A fixed set of four
+/// causes (`capped`: the worker holds its lease cap, CLUSTER-02); no key,
+/// worker or free-form label.
 fn claims_busy(o: &mut Out<'_>, totals: &Totals) {
     o.family(
         "cluster_claims_busy_total",
@@ -2048,6 +2052,7 @@ fn claims_busy(o: &mut Out<'_>, totals: &Totals) {
         ("held_back", totals.busy),
         ("check_failed", totals.busy_check_failed),
         ("key_unknown", totals.busy_unknown),
+        ("capped", totals.busy_capped),
     ] {
         o.value(
             "cluster_claims_busy_total",
@@ -2667,7 +2672,7 @@ mod tests {
         cluster.shutdown().await;
     }
 
-    /// X-wk-busy-metrics: the three causes render with their own values,
+    /// X-wk-busy-metrics: the four causes render with their own values,
     /// summed over the port's openings like every cluster counter.
     #[test]
     fn claims_busy_renders_each_cause() {
@@ -2675,22 +2680,29 @@ mod tests {
             busy: 3,
             busy_check_failed: 5,
             busy_unknown: 7,
+            busy_capped: 9,
             ..Totals::default()
         };
         let again = Totals {
             busy: 1,
             busy_check_failed: 1,
             busy_unknown: 1,
+            busy_capped: 1,
             ..Totals::default()
         };
         let mut text = String::new();
         claims_busy(&mut Out(&mut text), &first.plus(again));
         assert!(text.contains("# TYPE lodestar_cluster_claims_busy_total counter"));
-        for (cause, n) in [("held_back", 4), ("check_failed", 6), ("key_unknown", 8)] {
+        for (cause, n) in [
+            ("held_back", 4),
+            ("check_failed", 6),
+            ("key_unknown", 8),
+            ("capped", 10),
+        ] {
             let name = format!("lodestar_cluster_claims_busy_total{{cause=\"{cause}\"}}");
             assert_eq!(series(&text, &name), n, "{text}");
         }
-        assert_eq!(text.lines().filter(|l| !l.starts_with('#')).count(), 3);
+        assert_eq!(text.lines().filter(|l| !l.starts_with('#')).count(), 4);
     }
 
     /// WK-11b: each result is read from its own snapshot field.
@@ -2720,11 +2732,17 @@ mod tests {
             busy: 2,
             busy_check_failed: 3,
             busy_unknown: 5,
+            busy_capped: 7,
             ..Default::default()
         };
         let mut text = String::new();
         claims_busy(&mut Out(&mut text), &Totals::of(&snapshot));
-        for (cause, n) in [("held_back", 2), ("check_failed", 3), ("key_unknown", 5)] {
+        for (cause, n) in [
+            ("held_back", 2),
+            ("check_failed", 3),
+            ("key_unknown", 5),
+            ("capped", 7),
+        ] {
             let name = format!("lodestar_cluster_claims_busy_total{{cause=\"{cause}\"}}");
             assert_eq!(series(&text, &name), n, "{text}");
         }
