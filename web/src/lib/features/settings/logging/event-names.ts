@@ -6,6 +6,7 @@ export const CHUNKS: Record<string, () => Promise<{ NAMES: EventNames }>> = {
 	system: () => import('./event-names/system'),
 	auth: () => import('./event-names/auth'),
 	dht: () => import('./event-names/dht'),
+	fetch: () => import('./event-names/fetch'),
 	filters: () => import('./event-names/filters'),
 	search: () => import('./event-names/search'),
 	sources: () => import('./event-names/sources'),
@@ -13,6 +14,5 @@ export const CHUNKS: Record<string, () => Promise<{ NAMES: EventNames }>> = {
 	api: () => import('./event-names/api'),
 	companions: () => import('./event-names/companions'),
 	integrations: () => import('./event-names/integrations'),
-	pipeline: () => import('./event-names/pipeline'),
-	fetch: () => import('./event-names/fetch')
+	pipeline: () => import('./event-names/pipeline')
 };

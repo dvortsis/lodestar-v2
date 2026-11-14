@@ -132,6 +132,9 @@ impl Services {
             .borrow()
             .clone();
         let mut pipeline_config = config.pipeline_config()?;
+        if config.max_metadata_clamped() {
+            lodestar_log::log_event!(crate::logging::events::FETCH_METADATA_LIMIT_CLAMPED);
+        }
         pipeline_config.pool.paused = crawl_settings.paused;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
