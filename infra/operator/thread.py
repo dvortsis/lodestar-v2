@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -30,17 +29,13 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "fleet")]  # beside it in the sandbox, or the repo layout
 
 import reader  # noqa: E402
+from reader import channel_shape  # noqa: E402,F401 - one rule for what the bot may post; the tripwire uses it here
 
 REPO = "dvortsis/lodestar-v2"
 REPORT = "operator-report v1\n"
 MAX_BODY = 16000
 MAX_PAGES = 30
 CAPPED = 3  # read's exit code past MAX_PAGES: a helper failure, which the prompt escalates
-_FIELD = re.compile(r"(id|in-reply-to|kind): ([a-z0-9][a-z0-9-]{0,39})")
-# A /fleet command's words, as infra/fleet/command.py reads them: lower-case
-# words of letters, digits and hyphens, or a full commit; one space between.
-_WORD = re.compile(r"[a-z0-9-]{1,32}|[0-9a-f]{40}")
-MAX_WORDS = 4  # `run <step> <vm> <commit>`, the longest command
 
 
 def _call(method: str, path: str, body=None):  # pragma: no cover - network
@@ -54,31 +49,6 @@ def _call(method: str, path: str, body=None):  # pragma: no cover - network
             return json.loads(r.read() or b"null")
     except Exception:
         raise SystemExit(f"thread: GitHub {method} failed") from None
-
-
-def channel_shape(body) -> bool:
-    """The only comments the operator's bot may post (check_post's rule): an
-    operator-report v1 with its three header fields and a body, or a one-line
-    /fleet command in the command parser's words (never free text). Shared with
-    the tripwire's sweep."""
-    if not isinstance(body, str) or len(body) > MAX_BODY:
-        return False
-    text = body.strip()
-    if text.startswith("/fleet "):
-        words = text[len("/fleet "):].split(" ")
-        return text.isascii() and 1 <= len(words) <= MAX_WORDS and all(_WORD.fullmatch(w) for w in words)
-    lines = text.replace("\r\n", "\n").split("\n")
-    if lines[0] != REPORT.rstrip("\n"):
-        return False
-    fields, i = {}, 1
-    while i < len(lines) and lines[i]:
-        m = _FIELD.fullmatch(lines[i])
-        if not m or m[1] in fields:
-            return False
-        fields[m[1]] = m[2]
-        i += 1
-    return (set(fields) == {"id", "in-reply-to", "kind"} and fields["kind"] in ("ack", "report", "escalation", "done")
-            and bool("\n".join(lines[i + 1:]).strip()))
 
 
 def _page(call, pr: int, page: int) -> list:
@@ -118,11 +88,11 @@ def read(pr: int, runner: str, bot: str, call=_call) -> tuple[list[dict], bool]:
 
 
 def keep(items: list, allowed: frozenset[str], bot: str) -> list[dict]:
-    """reader.trusted, less any bot comment of no shape the bot may post, and
-    less a repeat (a comment deleted between page reads shifts the pages)."""
+    """reader.trusted (which drops any bot comment of no shape the bot may
+    post), less a repeat: a comment deleted between page reads shifts the pages."""
     seen, out = set(), []
-    for c in reader.trusted(items, allowed):
-        if c["id"] in seen or (str(c["author_id"]) == str(bot) and not channel_shape(c["body"])):
+    for c in reader.trusted(items, allowed, bot):
+        if c["id"] in seen:
             continue
         seen.add(c["id"])
         out.append(c)
