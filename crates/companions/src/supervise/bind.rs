@@ -211,14 +211,33 @@ impl Bindings {
             None => Owner::Unknown,
         };
         if owner != Owner::Ours {
+            // Readiness found before counts no longer: the port is ready
+            // again only once its own listener is found again.
             if let Some(p) = self.ports().get_mut(&port).filter(|p| p.claim == claim) {
                 p.refusal = Some(owner.code());
+                p.ready = None;
             }
             return false;
         }
         // A check that spanned a restart, or a new claim, readies nothing.
         self.mark(port, claim, run);
         self.ready(port)
+    }
+
+    /// `port` is no longer ready, under its current claim: after a change
+    /// that may have moved its listener, until a readiness attempt finds
+    /// it again ([`Bindings::try_ready`]).
+    pub fn unready(&self, port: u16) {
+        if let Some(p) = self.ports().get_mut(&port) {
+            p.ready = None;
+        }
+    }
+
+    /// One whose listener check is `check`, for tests of what a check's
+    /// answer does.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn with_owner_check(check: impl Fn(u16, u32) -> Owner + Send + Sync + 'static) -> Bindings {
+        Bindings::with_verify(Arc::new(check))
     }
 
     /// Why the last readiness attempt on `port` that passed its health
@@ -423,5 +442,34 @@ mod tests {
             })
             .await;
         assert!(!got && !b.ready(8080) && b.ready_run(8080).is_none());
+    }
+
+    /// A ready run whose listener is found to be another's, or gone, is
+    /// ready no more, and stays so until its own listener is found again.
+    #[tokio::test]
+    async fn a_ready_run_whose_listener_moves_is_ready_no_more() {
+        use std::sync::atomic::AtomicU8;
+        let answer = Arc::new(AtomicU8::new(0));
+        let read = Arc::clone(&answer);
+        let b = Bindings::with_verify(Arc::new(move |_, _| match read.load(Ordering::SeqCst) {
+            0 => Owner::Ours,
+            1 => Owner::Other,
+            _ => Owner::Nobody,
+        }));
+        let (_tx, rx) = watch::channel(running(1, Some(40)));
+        assert!(b.hold(8080, rx));
+        assert!(b.try_ready(8080, || async { true }).await);
+        for (n, code) in [(1, "listener_not_ours"), (2, "listener_missing")] {
+            answer.store(n, Ordering::SeqCst);
+            assert!(!b.try_ready(8080, || async { true }).await);
+            assert!(!b.ready(8080) && b.ready_run(8080).is_none());
+            assert_eq!(b.refusal(8080), Some(code));
+            answer.store(0, Ordering::SeqCst);
+            assert!(b.try_ready(8080, || async { true }).await);
+        }
+        // Marked not ready by hand (after a change that may move it).
+        b.unready(8080);
+        assert!(!b.ready(8080));
+        assert!(b.try_ready(8080, || async { true }).await);
     }
 }

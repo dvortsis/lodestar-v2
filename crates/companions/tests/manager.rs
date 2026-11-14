@@ -313,6 +313,23 @@ impl Run for FakeRun {
     fn status(&self, _: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.status.lock().unwrap().as_ref().map(|s| s.subscribe())
     }
+    fn recheck<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let bound = self.bound.lock().unwrap().clone();
+            match bound {
+                // As `Supervised`'s: not ready until found so again.
+                Some((b, p)) => {
+                    b.unready(p);
+                    self.healthy(id, target).await
+                }
+                None => true,
+            }
+        })
+    }
+    fn refusal(&self, _: &CompanionId) -> Option<&'static str> {
+        let bound = self.bound.lock().unwrap().clone();
+        bound.and_then(|(b, p)| b.refusal(p))
+    }
     fn ready_run(&self, id: &CompanionId) -> Option<u64> {
         match self.bound.lock().unwrap().clone() {
             Some((b, p)) => b.ready_run(p),
@@ -2450,4 +2467,49 @@ async fn a_restart_before_the_follow_begins_is_checked_again() {
     assert_eq!(w.run.run().borrow().run, 2);
     until("run 2 ready", || bindings.ready_run(port) == Some(2)).await;
     assert!(bindings.ready(port));
+}
+
+/// X-cmp09-fix: after it's configured (which may move its listener), a
+/// companion is found ready again, listener and all, before the step
+/// counts: a listener found to be another's fails it, and leaves the port
+/// not ready.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_configuration_is_followed_by_a_fresh_readiness_check() {
+    use lodestar_companions::supervise::listener::Owner;
+    let _g = SERIAL.lock().await;
+    // Ours, then the answers in `then`.
+    for (then, ok) in [(Owner::Ours, true), (Owner::Other, false)] {
+        let w = World::new();
+        let port = 8080;
+        let asked = Arc::new(AtomicUsize::new(0));
+        let n = Arc::clone(&asked);
+        let bindings = Arc::new(Bindings::with_owner_check(move |_, _| {
+            if n.fetch_add(1, Ordering::SeqCst) == 0 {
+                Owner::Ours
+            } else {
+                then
+            }
+        }));
+        *w.run.bound.lock().unwrap() = Some((bindings.clone(), port));
+        let m = w.manager(catalogue("5.0.3"), LINUX);
+        let got = m.install(&token("5.0.3")).await;
+        // The start's check, then the one after the configuration.
+        assert_eq!(asked.load(Ordering::SeqCst), 2, "{then:?}");
+        assert_eq!(w.api.calls.load(Ordering::SeqCst), 1);
+        if ok {
+            assert!(got.is_ok() && bindings.ready(port), "{got:?}");
+        } else {
+            assert!(
+                matches!(
+                    &got,
+                    Err(ManagerError::Step {
+                        step: "configure",
+                        code: "listener_not_ours"
+                    })
+                ),
+                "{got:?}"
+            );
+            assert!(!bindings.ready(port));
+        }
+    }
 }
