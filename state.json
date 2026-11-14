@@ -9575,11 +9575,11 @@
         "slot": 30,
         "slice": "X-pia-vm-helper",
         "role": "build",
-        "agent": "claude",
+        "agent": "session_01MMjhnAq2j9C5gsXKYX19E1",
         "model": "opus",
         "status": "active",
         "since": "2026-11-14T03:12Z",
-        "doing": "launching (brief briefs/X-pia-vm-helper.md)",
+        "doing": "building from main; PR next",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
