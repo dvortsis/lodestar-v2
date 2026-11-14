@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T09:38Z",
+  "updated_at": "2026-11-14T09:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8967,11 +8967,6 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "874": {
-      "slice": "X-sec-S6-02-03 (part)",
-      "head": "eb529997",
-      "status": "awaiting ready"
-    },
     "878": {
       "slice": "X-operator-bash-allow",
       "head": "15ee6a31",
@@ -8988,6 +8983,12 @@
       "session": "session_01MMjhnBh7zpNQt1KJTfEEZk",
       "status": "CI; review on ready (blocking finding; 1,024 cap is a \u00a72.26 call to flag)",
       "at": "2026-11-14T09:11Z"
+    },
+    "869": {
+      "slice": "X-sec-S8-01",
+      "head": "a8aa48c2",
+      "status": "fix round in, CI green; fresh delta review running",
+      "at": "2026-11-14T09:48Z"
     }
   },
   "merged_log": [
@@ -9903,7 +9904,7 @@
     }
   ],
   "heartbeat": "2026-11-14T09:38Z",
-  "updated": "2026-11-14T09:38Z",
+  "updated": "2026-11-14T09:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10526,6 +10527,12 @@
       "slice": "X-pipe01-fix",
       "merged": "2c2fe185",
       "at": "2026-11-14T09:05Z"
+    },
+    {
+      "pr": 874,
+      "slice": "X-sec-S6-02-03",
+      "merged": "ac55f8c9",
+      "at": "2026-11-14T09:48Z"
     }
   ],
   "review_sessions": []
