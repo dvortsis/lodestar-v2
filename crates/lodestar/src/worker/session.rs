@@ -625,10 +625,14 @@ impl<C: Connect> Worker<C> {
                         }
                         written = true;
                     }
-                    // The coordinator says this only once it has evicted the
-                    // leases, even in the same wake as `drained`'s reply.
+                    // The coordinator says this once it has evicted the
+                    // leases. Read in the same wake as `drained`'s reply, it
+                    // counts once that reply says `Drained` was written; a
+                    // stop for another drain ends the session and fails it.
                     event = session.next_event() => match event {
-                        Some(WorkerEvent::Ended(Some(StopReason::Drained))) => return true,
+                        Some(WorkerEvent::Ended(Some(StopReason::Drained))) => {
+                            return written || (&mut sent).await.is_ok();
+                        }
                         None | Some(WorkerEvent::Ended(_)) => return false,
                         Some(_) => {}
                     },

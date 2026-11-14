@@ -18,6 +18,7 @@ Follow-ups from #839 (X-lease-reconcile-every-session) and two nits from #853. B
   - When the session changes while a flush sends, a new session gets the batches before the flush answers, and no session sends them to the spool.
   - Each extra round needs a real session change, and the caller's drain deadline bounds the wait for the answer.
   - Why: a drain that answered "flushed" with nothing sent on a healthy session would hand back leases whose results never left.
+  - **No round limit of its own:** each round needs a real session change (a connect or a disconnect), and the caller waits for the answer only as long as its drain deadline, so a flapping session can't hold a stop past it.
 
 ## `capped` on /metrics
 - **A fourth cause, `capped`, on the existing `cluster_claims_busy_total{cause}`.** No new family; the cause set stays closed. It reads `FleetSnapshot::busy_capped`, summed over the port's openings like the other causes.

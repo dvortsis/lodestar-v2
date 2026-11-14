@@ -4570,9 +4570,7 @@ pub(crate) mod tests {
             .await;
             shared.session.send_replace(Some(handle));
         };
-        let started = Instant::now();
         let (_, ()) = tokio::join!(rt.drain(), reconnect);
-        assert!(started.elapsed() < rt.shared.config.drain_deadline);
         // Already there, without waiting.
         let got = tokio::time::timeout(Duration::ZERO, new_coord.recv()).await;
         let Ok(Ok(Some(ToCoordinator::Results(p)))) = got else {
