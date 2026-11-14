@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:39Z",
+  "updated_at": "2026-11-14T00:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8229,6 +8229,48 @@
       "id": "owner-flag-857-retroactive-holds",
       "note": "2.19 flag to owner: #857 re-judge applies any holding decision (packs, user rules) to stored torrents, not only the core; runner accepted as fail-safe",
       "at": "2026-11-14T00:39Z"
+    },
+    {
+      "id": "METAINFO-01",
+      "severity": "blocking",
+      "surface": "metainfo parser (network input)",
+      "status": "fix slice next free build slot, Opus + /security-review",
+      "track": "Q (held: id/severity/surface only)",
+      "at": "2026-11-14T00:41Z"
+    },
+    {
+      "id": "CLUSTER-06",
+      "severity": "important",
+      "surface": "cluster coordinator lease authority",
+      "status": "fix slice in slot 7 after #856",
+      "track": "Q (held: id/severity/surface only)",
+      "at": "2026-11-14T00:41Z"
+    },
+    {
+      "id": "FILTER-13",
+      "severity": "important",
+      "surface": "filter budget bound",
+      "status": "fix slice in slot 32 after #857 (one filter slice at a time)",
+      "track": "Q (held: id/severity/surface only)",
+      "at": "2026-11-14T00:41Z"
+    },
+    {
+      "id": "FILTER-14",
+      "severity": "important",
+      "surface": "filter budget (over-holding)",
+      "status": "owner decision (options via the owner-started reviewer); fix after",
+      "track": "Q (held: id/severity/surface only)",
+      "at": "2026-11-14T00:41Z"
+    },
+    {
+      "id": "SR-polish-1114",
+      "note": "security review steps 1/3/4 polish items (search query parser, uTP probe timeouts, deny.toml review date, companions egress apply, filter read reservation, fuzz seeds/dictionaries for metainfo/bencode/krpc/tokenizer, M8-SEC-1 fuzz hours); detail with the runner by message",
+      "at": "2026-11-14T00:41Z"
+    },
+    {
+      "id": "trackq-unplaced-fixes",
+      "note": "reviewer found no fix slices on main for UPDATE-01, UPDATE-05, STORE-01: check their placement",
+      "at": "2026-11-14T00:41Z"
     }
   ],
   "main_health": [
@@ -9283,7 +9325,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:39Z",
+    "updated": "2026-11-14T00:41Z",
     "items": [
       {
         "slot": 1,
@@ -9544,7 +9586,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T00:39Z",
+  "updated": "2026-11-14T00:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
