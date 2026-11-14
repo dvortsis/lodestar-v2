@@ -789,9 +789,10 @@ impl ClusterServer {
 
     /// [`revoke`](Self::revoke), saying what it did: `(certificates,
     /// leases)`, the certificates refused from now on and the leases taken
-    /// back (to wait for other workers, or dropped past the worker's
-    /// allowance, `LeaseAuthority::expire`) (WK-14's Danger zone result). The connection is stopped here, before this returns, so a
-    /// snapshot taken afterwards no longer lists the worker.
+    /// back: waiting for other workers, or dropped past the worker's
+    /// allowance or queue share (`LeaseAuthority::expire`). WK-14's Danger
+    /// zone shows the result. The connection is stopped here, before this
+    /// returns, so a snapshot taken afterwards no longer lists the worker.
     pub async fn revoke_worker(&self, worker: WorkerId) -> Result<(usize, usize), ClusterError> {
         let certificates = self
             .with_pki(move |p| {

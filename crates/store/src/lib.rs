@@ -420,6 +420,12 @@ pub(crate) fn within_path_limits(shape: &filetree::Shape) -> Result<()> {
     Ok(())
 }
 
+/// The `settings` key [`Store::sweep_held_stored`] sets once it has run.
+pub const HELD_SWEEP_KEY: &str = "store.held_sweep";
+
+/// Held hashes [`Store::sweep_held_stored`] reads per transaction.
+pub const SWEEP_BATCH: usize = 2_000;
+
 /// A prepared torrent to commit, with its provenance.
 #[derive(Debug, Clone, Copy)]
 pub struct PreparedTorrent<'a> {
@@ -486,6 +492,10 @@ pub struct Written {
     /// The classification rules changed since the batch was enriched: its
     /// torrents are marked for background enrichment.
     pub stale_class: bool,
+    /// Stored torrents a held decision in `filtered` covers, deleted with
+    /// the hold. Ids are never reused, so hot-column slots left behind are
+    /// never read again.
+    pub deleted: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -503,24 +513,31 @@ pub enum Inserted {
     /// this way; [`Store::insert`] and `WriteBatch::torrents` (imports)
     /// never return it.
     Refused,
+    /// Not written: one of its swarm hashes is held (a tombstone or a
+    /// quarantine row), read in the write's own transaction, so a hold
+    /// written since the batch was judged still keeps it out. Only
+    /// [`WriteBatch::prepared`] returns it.
+    Held,
 }
 
 impl Inserted {
     /// The torrent's id.
     ///
     /// # Panics
-    /// On [`Inserted::Refused`], which only `WriteBatch::prepared`
-    /// returns: read those with [`stored`](Self::stored).
+    /// On [`Inserted::Refused`] or [`Inserted::Held`], which only
+    /// `WriteBatch::prepared` returns: read those with
+    /// [`stored`](Self::stored).
     pub fn id(self) -> i64 {
         self.stored()
             .expect("only WriteBatch::prepared is refused; read it with stored()")
     }
 
-    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused).
+    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused)
+    /// or [`Held`](Inserted::Held).
     pub fn stored(self) -> Option<i64> {
         match self {
             Inserted::New(id) | Inserted::Existing(id) => Some(id),
-            Inserted::Refused => None,
+            Inserted::Refused | Inserted::Held => None,
         }
     }
 }
@@ -770,25 +787,32 @@ impl Store {
             .collect::<Result<_>>()?;
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         filter::write(&tx, batch.filtered)?;
+        // Nothing stays stored under a hash this batch holds back.
+        let deleted = delete_held(&tx, batch.filtered)?;
         let stale_class = match batch.class_gen {
             Some(g) if rules::class_gen(&tx)? != g => {
                 let mut stmt = tx.prepare_cached(
                     "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
                 )?;
-                for ins in out.iter().chain(&prepared) {
-                    stmt.execute([ins.id()])?;
+                // Only what was stored: a refused or held item has no row.
+                for id in out.iter().chain(&prepared).filter_map(|i| i.stored()) {
+                    stmt.execute([id])?;
                 }
                 true
             }
             _ => false,
         };
         tx.commit()?;
+        if !deleted.is_empty() {
+            self.scrub_wal();
+        }
         Ok(Written {
             torrents: out,
             prepared,
             touched,
             swarm,
             stale_class,
+            deleted,
         })
     }
 
@@ -1054,7 +1078,9 @@ impl Store {
     /// swarm hash: that keeps the key private even beside a public import,
     /// as `Gate::check` and the writer's `stored_private` hold. They are
     /// left out here, not after, so `limit` counts only keys that can be
-    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`).
+    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`). Nor
+    /// one held under either swarm hash (a tombstone or a quarantine row):
+    /// nothing is stored under it, so it's never fetched again.
     pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.info_hash FROM torrents t \
@@ -1062,6 +1088,10 @@ impl Store {
              AND NOT EXISTS (SELECT 1 FROM unverified_items u \
                  WHERE u.network = ?3 AND u.flags & ?4 != 0 \
                  AND u.key IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             AND NOT EXISTS (SELECT 1 FROM tombstones h \
+                 WHERE h.hash IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             AND NOT EXISTS (SELECT 1 FROM quarantine h \
+                 WHERE h.hash IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
              ORDER BY t.id LIMIT ?5",
         )?;
         let rows = stmt.query_map(
@@ -1082,6 +1112,69 @@ impl Store {
             ))
         })
         .collect()
+    }
+
+    /// Deletes, once, every stored torrent under a hash that's held (a
+    /// tombstone or a quarantine row), as a hold's own write now does, and
+    /// logs them so the search indexer drops their documents. It walks
+    /// the hold tables in batches of [`SWEEP_BATCH`] hashes, one short
+    /// transaction each, and sets the marker ([`HELD_SWEEP_KEY`]) with the
+    /// last, so it runs to the end once and never again. Returns the
+    /// deleted ids, `None` when it ran before.
+    pub fn sweep_held_stored(&mut self) -> Result<Option<Vec<i64>>> {
+        if self.setting_i64(HELD_SWEEP_KEY)?.is_some() {
+            return Ok(None);
+        }
+        let tables = ["tombstones", "quarantine"];
+        let mut ids = Vec::new();
+        for (t, table) in tables.iter().enumerate() {
+            let mut after: Vec<u8> = Vec::new();
+            loop {
+                // One short transaction per batch of held hashes, in key
+                // order, so the write lock is never held for long.
+                let tx = begin_write(&mut self.conn)?;
+                let held: Vec<Vec<u8>> = tx
+                    .prepare_cached(&format!(
+                        "SELECT hash FROM {table} WHERE hash > ?1 ORDER BY hash LIMIT ?2"
+                    ))?
+                    .query_map(params![after, SWEEP_BATCH as i64], |r| r.get(0))?
+                    .collect::<std::result::Result<_, _>>()?;
+                {
+                    // Cached: the delete carries Insights' trigger.
+                    let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+                    let mut log =
+                        tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+                    for h in &held {
+                        for id in all_by_hash(&tx, h)? {
+                            // Gone already when another hash found it.
+                            if delete.execute([id])? > 0 {
+                                log.execute([id])?;
+                                ids.push(id);
+                            }
+                        }
+                    }
+                }
+                let last = held.len() < SWEEP_BATCH;
+                if last && t == tables.len() - 1 {
+                    // The marker with the last batch: a stop before it
+                    // runs the sweep again, which deletes nothing twice.
+                    tx.execute(
+                        "INSERT INTO settings (key, value) VALUES (?1, 1)
+                         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                        [HELD_SWEEP_KEY],
+                    )?;
+                }
+                tx.commit()?;
+                match held.last() {
+                    Some(h) if !last => after.clone_from(h),
+                    _ => break,
+                }
+            }
+        }
+        if !ids.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(Some(ids))
     }
 
     /// Torrents changed since `after` (a `reindex_log` sequence number):
@@ -1278,6 +1371,44 @@ fn finders_in(touches: &[Touch], stopped: u64) -> HashMap<InfoHash, u64> {
     finders
 }
 
+/// Whether any of `hashes` is held: a tombstone or a quarantine row.
+fn is_held(tx: &Connection, hashes: impl Iterator<Item = InfoHash>) -> Result<bool> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM tombstones WHERE hash = ?1)
+             OR EXISTS (SELECT 1 FROM quarantine WHERE hash = ?1)",
+    )?;
+    for h in hashes {
+        if stmt.query_row([&h.0[..]], |r| r.get::<_, bool>(0))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Deletes the stored torrents under any hash a held decision in
+/// `filtered` covers, and logs them so the search indexer drops their
+/// documents: in the hold's own transaction, as every other hold path
+/// does. Returns the deleted ids.
+fn delete_held(tx: &Connection, filtered: &[Filtered<'_>]) -> Result<Vec<i64>> {
+    let mut ids = Vec::new();
+    for f in filtered.iter().filter(|f| f.held.is_some()) {
+        for h in f.hashes {
+            for id in all_by_hash(tx, h)? {
+                if ids.contains(&id) {
+                    continue;
+                }
+                // Cached: the delete carries Insights' trigger.
+                tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                    .execute([id])?;
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([id])?;
+                ids.push(id);
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// [`commit_one`] under a live source: `t`'s own when it's running, else
 /// the lowest live one that also found it in this batch. With none left,
 /// nothing is written ([`Inserted::Refused`]).
@@ -1288,6 +1419,10 @@ fn commit_live(
     stopped: u64,
     finders: &HashMap<InfoHash, u64>,
 ) -> Result<Inserted> {
+    // Held since it was judged: nothing is stored under a held hash.
+    if is_held(tx, t.torrent.swarm_hashes())? {
+        return Ok(Inserted::Held);
+    }
     if stopped & t.source.bit() as u64 == 0 {
         return commit_one(tx, codec, t);
     }
@@ -1576,6 +1711,21 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      SELECT id FROM torrents
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
+
+/// Every stored torrent under a swarm hash, as either of its own: what a
+/// hold on it deletes.
+const ALL_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
+     UNION
+     SELECT id FROM torrents
+     WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1";
+
+/// The ids [`ALL_BY_HASH`] finds under `hash`.
+pub(crate) fn all_by_hash(tx: &Connection, hash: &[u8]) -> Result<Vec<i64>> {
+    Ok(tx
+        .prepare_cached(ALL_BY_HASH)?
+        .query_map([hash], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?)
+}
 
 /// Begins a write transaction, taking the write lock up front (`BEGIN
 /// IMMEDIATE`) and waiting for it up to the busy timeout. A deferred one

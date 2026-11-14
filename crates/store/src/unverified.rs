@@ -526,11 +526,12 @@ impl Store {
         filter::write(&tx, holds)?;
         let mut ids = Vec::new();
         for f in holds.iter().filter(|f| f.held.is_some()) {
+            // Every stored torrent under the hash, as either of its own.
             for h in f.hashes {
-                let found = crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(*h)))?;
-                if let Some(id) = found
-                    && !ids.contains(&id)
-                {
+                for id in crate::all_by_hash(&tx, h)? {
+                    if ids.contains(&id) {
+                        continue;
+                    }
                     tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
                         .execute([id])?;
                     tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
@@ -710,11 +711,10 @@ impl Store {
                         hashes.push(k);
                     }
                     for h in hashes {
-                        let found =
-                            crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(h)))?;
-                        if let Some(tid) = found
-                            && !done.torrents_deleted.contains(&tid)
-                        {
+                        for tid in crate::all_by_hash(&tx, &h)? {
+                            if done.torrents_deleted.contains(&tid) {
+                                continue;
+                            }
                             tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
                                 .execute([tid])?;
                             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
