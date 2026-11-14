@@ -288,18 +288,21 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 The data folder holds the store, the search index and your settings. Only Lodestar's own user should be able to open it, so Lodestar keeps it owner-only. That's mode 700: only the owner can read, write or open it. That's the safe choice because the folder holds your library, settings and keys, and no other account needs it.
 
 - **A folder Lodestar creates** is owner-only from the start.
-- **A folder Lodestar's user owns** is made owner-only at the next start. In Docker and on Unraid, that's every data folder: Lodestar hands it to the `PUID` user first.
-- **A folder another account owns** is never changed. If other users could read it, Lodestar logs one warning at start. The warning gives the folder's path and says "the data folder can be read by other users".
+- **A folder Lodestar's user owns** is made owner-only at the next start, if it's plainly Lodestar's: empty, or holding Lodestar's files. In Docker and on Unraid with `PUID`/`PGID`, Lodestar hands the folder to that user first.
+- **Any other folder** is never changed. That's a folder another account owns, a link, or a folder holding other files, such as a whole share. If other users could read it, Lodestar logs one warning at start. The warning gives the folder's path and says "the data folder can be read by other users".
 
-If you see that warning, make the folder owner-only as the account that owns it.
+If you see that warning, give the folder to Lodestar's user. Don't run `chmod 700` as the folder's owner instead. Lodestar reaches a folder it doesn't own through the group or other permissions, so that would lock it out.
 
-1. Find the folder in the warning, for example the folder you set in `LODESTAR_DATA_DIR`.
-2. Run this in a terminal on that computer, with your folder's path:
-   ```bash
-   chmod 700 /path/to/lodestar-data
-   ```
+1. Find the folder in the warning, for example the folder you set in `LODESTAR_DATA_DIR`. Check it holds only Lodestar's files, not a whole share or a home folder. If it doesn't, point Lodestar at a folder of its own.
+2. Give the folder to Lodestar's user:
+   - **Docker or Unraid:** set `PUID` and `PGID` to the user and group Lodestar should run as, and don't use `--user`. Lodestar hands the folder over itself.
+   - **Linux without Docker:** run this in a terminal, with Lodestar's user and group and your folder's path:
+     ```bash
+     sudo chown lodestar:lodestar /path/to/lodestar-data
+     ```
+3. Restart Lodestar.
 
-   **Result:** the next start logs no warning.
+   **Result:** Lodestar makes the folder owner-only, and the next start logs no warning.
 
 Unraid's appdata backup runs as root, so it can still copy the folder. On Windows, the installed service's folder `C:\ProgramData\Lodestar` is already limited to SYSTEM, Administrators and the service ([chapter 4](04-install-on-windows-and-linux.md)). A portable copy's `data` folder, or a folder you chose yourself, keeps the permissions of the folder it's in.
 

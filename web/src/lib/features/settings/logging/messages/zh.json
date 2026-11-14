@@ -228,7 +228,7 @@
 	"settings_logging_ev_system_data_dir_mismatch_n": "数据文件夹所有者不符",
 	"settings_logging_ev_system_data_dir_mismatch_h": "数据文件夹属于另一个用户，而非 Lodestar 的运行用户。",
 	"settings_logging_ev_system_data_dir_open_n": "数据文件夹可被他人读取",
-	"settings_logging_ev_system_data_dir_open_h": "本机其他用户可以读取数据文件夹。请将其设为仅所有者可访问（chmod 700）。",
+	"settings_logging_ev_system_data_dir_open_h": "本机其他用户可以读取数据文件夹，且 Lodestar 无法将其设为仅所有者可访问。请将该文件夹交给 Lodestar 的用户（在 Docker 中设置 PUID 和 PGID），Lodestar 会在下次启动时将其设为仅所有者可访问。",
 	"settings_logging_ev_system_data_dir_user_share_n": "数据文件夹位于用户共享",
 	"settings_logging_ev_system_data_dir_user_share_h": "数据文件夹位于 Unraid 用户共享上，可能较慢。",
 	"settings_logging_ev_system_data_dir_fuse_n": "数据文件夹位于 FUSE",

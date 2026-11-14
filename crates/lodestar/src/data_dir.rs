@@ -3,9 +3,10 @@
 //! The data folder is owner-only on Unix (0700), so every file under it is
 //! closed to other local users whatever mode each file gets. A folder
 //! Lodestar creates is made so. An existing one Lodestar's user owns is
-//! tightened at start, as the logs folder is (`logging/file.rs`). One it
-//! doesn't own is never changed: if it's open to its group or to others, the
-//! start logs one warning that names the safe mode. No process-wide umask is
+//! tightened at start, as the logs folder is (`logging/file.rs`), if it's
+//! plainly Lodestar's: empty or holding one of its [`MARKERS`], and not the
+//! filesystem root. Any other folder is never changed: if it's open to its
+//! group or to others, the start logs one warning. No process-wide umask is
 //! set: outputs and companion files are meant for other users to read.
 
 use std::io;
@@ -41,6 +42,38 @@ pub fn ensure(dir: &Path) -> io::Result<bool> {
     }
 }
 
+/// What Lodestar leaves in a data folder; one is enough.
+#[cfg(unix)]
+pub const MARKERS: [&std::ffi::CStr; 3] = [c"lodestar.db", c"config.toml", c"index"];
+
+/// Whether the folder open as `dir` is plainly Lodestar's: it holds one of
+/// the [`MARKERS`] or nothing at all. A mis-pointed folder (`/srv`, a home
+/// folder, a whole share) is neither, so it's never changed as a whole.
+#[cfg(unix)]
+pub fn looks_like_data(dir: rustix::fd::BorrowedFd<'_>) -> io::Result<bool> {
+    use rustix::fs::{AtFlags, Dir};
+    let found =
+        |name: &std::ffi::CStr| rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW).is_ok();
+    if MARKERS.iter().any(|m| found(m)) {
+        return Ok(true);
+    }
+    let mut entries = Dir::read_from(dir)?;
+    while let Some(entry) = entries.read() {
+        let entry = entry?;
+        if entry.file_name() != c"." && entry.file_name() != c".." {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether two `stat` results name the same folder (device and inode), as
+/// a folder and the filesystem root are compared.
+#[cfg(unix)]
+pub fn same_dir(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
+    (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+}
+
 /// What the start does with an existing data folder.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +82,8 @@ pub enum Action {
     Keep,
     /// Open, and owned by Lodestar's user: made owner-only.
     Tighten,
-    /// Open, and owned by another account: left as it is, with a warning.
+    /// Open, and Lodestar can't vouch for it (another account owns it, or
+    /// it isn't plainly Lodestar's): left as it is, with a warning.
     Warn,
 }
 
@@ -64,13 +98,16 @@ pub fn action(mode: u32, owner: u32, euid: u32) -> Action {
     }
 }
 
-/// Makes the existing data folder owner-only when Lodestar's user owns it.
-/// It's changed through a descriptor opened without following a link, so a
-/// symlink is never followed for the change. Returns what it did; anything
-/// it can't vouch for (a symlink, a folder it can't open) is `Warn`, and
-/// the caller warns only if the folder really is open.
+/// Makes the existing data folder owner-only when Lodestar's user owns it
+/// and it's plainly Lodestar's ([`looks_like_data`], and not the filesystem
+/// root). It's changed through a descriptor opened without following a
+/// link, so a symlink is never followed for the change. Returns what it
+/// did; anything it can't vouch for (a symlink, a folder it can't open or
+/// read, the root, a folder holding others' files) is `Warn`, and the
+/// caller warns only if the folder really is open.
 #[cfg(unix)]
 pub fn tighten(dir: &Path) -> Action {
+    use rustix::fd::AsFd;
     use rustix::fs::{Mode, OFlags};
     let Ok(fd) = rustix::fs::open(
         dir,
@@ -87,12 +124,19 @@ pub fn tighten(dir: &Path) -> Action {
         reason = "st_mode is u16 on some Unix targets"
     )]
     let mode = st.st_mode as u32 & 0o777;
-    match action(mode, st.st_uid, rustix::process::geteuid().as_raw()) {
-        Action::Tighten => match rustix::fs::fchmod(&fd, Mode::from_raw_mode(MODE as _)) {
-            Ok(()) => Action::Tighten,
-            Err(_) => Action::Warn,
-        },
-        other => other,
+    let decided = action(mode, st.st_uid, rustix::process::geteuid().as_raw());
+    if decided != Action::Tighten {
+        return decided;
+    }
+    let Ok(root) = rustix::fs::stat("/") else {
+        return Action::Warn;
+    };
+    if same_dir(&st, &root) || !matches!(looks_like_data(fd.as_fd()), Ok(true)) {
+        return Action::Warn;
+    }
+    match rustix::fs::fchmod(&fd, Mode::from_raw_mode(MODE as _)) {
+        Ok(()) => Action::Tighten,
+        Err(_) => Action::Warn,
     }
 }
 
@@ -112,8 +156,9 @@ pub fn open_mode(dir: &Path) -> Option<u32> {
     }
 }
 
-/// At start: tightens the data folder when Lodestar's user owns it, and logs
-/// one warning when it's still open to its group or others.
+/// At start: tightens the data folder when Lodestar can vouch for it
+/// ([`tighten`]), and logs one warning when it's still open to its group or
+/// others.
 pub fn secure(dir: &Path) {
     #[cfg(unix)]
     if tighten(dir) != Action::Warn {
@@ -182,6 +227,49 @@ mod tests {
         assert_eq!(tighten(&dir), Action::Tighten);
         assert_eq!(mode_of(&dir), 0o700);
         assert_eq!(tighten(&dir), Action::Keep);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_holding_lodestars_files_is_tightened() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("data");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("lodestar.db"), b"").unwrap();
+        std::fs::write(dir.join("seal.key"), b"").unwrap();
+        set_mode(&dir, 0o755);
+        assert_eq!(tighten(&dir), Action::Tighten);
+        assert_eq!(mode_of(&dir), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_isnt_plainly_lodestars_is_never_changed_and_is_warned_about() {
+        crate::test_log::install();
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("share");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+        set_mode(&dir, 0o755);
+        assert_eq!(tighten(&dir), Action::Warn);
+        secure(&dir);
+        assert_eq!(mode_of(&dir), 0o755);
+        let log = crate::test_log::text();
+        assert!(log.contains("system.data_dir_open"), "{log}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_root_comparison_matches_only_the_same_folder() {
+        let base = tempfile::tempdir().unwrap();
+        let (a, b) = (base.path().join("a"), base.path().join("b"));
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        let st = |p: &Path| rustix::fs::stat(p).unwrap();
+        assert!(same_dir(&st(&a), &st(&a)));
+        assert!(same_dir(&st(&a), &st(&base.path().join("b/../a"))));
+        assert!(!same_dir(&st(&a), &st(&b)));
+        assert!(!same_dir(&st(&a), &st(base.path())));
     }
 
     #[cfg(unix)]

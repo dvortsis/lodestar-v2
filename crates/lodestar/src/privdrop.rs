@@ -608,7 +608,7 @@ mod imp {
         .map_err(|e| format!("opening {shown}: {e}"))?;
         drop(path_fd);
         let root = rustix::fs::stat("/").map_err(|e| format!("stat /: {e}"))?;
-        if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
+        if crate::data_dir::same_dir(&st, &root) {
             return Err(format!(
                 "the data directory {shown} is the filesystem root; refusing to chown it"
             ));
@@ -666,20 +666,41 @@ mod imp {
             Ok(_) => {}
             Err(e) => return left("open", e.to_string()),
         }
-        let fd = match rustix::fs::open(
+        // As in chown_data_dir: the owner is read through an O_PATH
+        // descriptor, which needs no read access, so a directory already
+        // theirs is never opened for reading (root may lack DAC_OVERRIDE).
+        let path_fd = match rustix::fs::open(
             dir,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
             Ok(fd) => fd,
             Err(e) => return left("open", format!("opening it: {e}")),
         };
-        let (Ok(st), Ok(root)) = (rustix::fs::fstat(&fd), rustix::fs::stat("/")) else {
+        let (Ok(st), Ok(root)) = (rustix::fs::fstat(&path_fd), rustix::fs::stat("/")) else {
             return left("open", "it can't be examined".into());
         };
-        if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
+        if crate::data_dir::same_dir(&st, &root) {
             return left("root", "it is the filesystem root".into());
         }
+        if !needs_handing_over((st.st_uid, st.st_gid), ids) {
+            return Line::Witness {
+                dir: dir.to_path_buf(),
+                ids,
+                changed: 0,
+                skipped: None,
+            };
+        }
+        let fd = match rustix::fs::openat(
+            &path_fd,
+            c".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(e) => return left("open", format!("opening it: {e}")),
+        };
+        drop(path_fd);
         // Every name first: nothing changes unless all are witnesses.
         let Ok(mut entries) = Dir::read_from(&fd) else {
             return left("open", "it can't be read".into());
@@ -729,12 +750,10 @@ mod imp {
                 changed += 1;
             }
         }
-        if (st.st_uid, st.st_gid) != (ids.uid, ids.gid) {
-            if let Err(e) = rustix::fs::fchown(&fd, Some(uid), Some(gid)) {
-                return left("chown", format!("chown: {e}"));
-            }
-            changed += 1;
+        if let Err(e) = rustix::fs::fchown(&fd, Some(uid), Some(gid)) {
+            return left("chown", format!("chown: {e}"));
         }
+        changed += 1;
         Line::Witness {
             dir: dir.to_path_buf(),
             ids,
@@ -889,34 +908,24 @@ mod imp {
         }
     }
 
-    /// What Lodestar leaves in a data directory; one is enough.
-    const MARKERS: [&CStr; 3] = [c"lodestar.db", c"config.toml", c"index"];
-
     /// A directory is only handed over whole if it is empty or plainly
-    /// Lodestar's, so a mistyped LODESTAR_DATA_DIR (`/srv`, `/var/lib`)
-    /// can't give a whole tree away.
+    /// Lodestar's ([`crate::data_dir::looks_like_data`]), so a mistyped
+    /// LODESTAR_DATA_DIR (`/srv`, `/var/lib`) can't give a whole tree away.
     pub(super) fn looks_like_data(
         dir: rustix::fd::BorrowedFd<'_>,
         path: &Path,
     ) -> Result<(), String> {
-        let found = |name: &CStr| rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW).is_ok();
-        if MARKERS.iter().any(|m| found(m)) {
-            return Ok(());
+        match crate::data_dir::looks_like_data(dir) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "the data directory {} belongs to someone else and doesn't look like \
+                 Lodestar's (no lodestar.db, config.toml or index), so its contents \
+                 weren't handed to PUID/PGID. Point LODESTAR_DATA_DIR at an empty \
+                 folder, or change the folder's owner yourself",
+                path.display()
+            )),
+            Err(e) => Err(format!("{}: {e}", path.display())),
         }
-        let mut entries = Dir::read_from(dir).map_err(|e| format!("{}: {e}", path.display()))?;
-        while let Some(entry) = entries.read() {
-            let entry = entry.map_err(|e| format!("{}: {e}", path.display()))?;
-            if entry.file_name() != c"." && entry.file_name() != c".." {
-                return Err(format!(
-                    "the data directory {} belongs to someone else and doesn't look like \
-                     Lodestar's (no lodestar.db, config.toml or index), so its contents \
-                     weren't handed to PUID/PGID. Point LODESTAR_DATA_DIR at an empty \
-                     folder, or change the folder's owner yourself",
-                    path.display()
-                ));
-            }
-        }
-        Ok(())
     }
 
     /// Every entry is opened without following symlinks, then checked and
@@ -1194,14 +1203,36 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let dir = tmp.path().join("data");
             std::fs::create_dir(&dir).unwrap();
+            // The folder's own owner: under a setgid TMPDIR its group isn't
+            // the process's.
+            let st = rustix::fs::stat(&dir).unwrap();
             let ids = Ids {
-                uid: rustix::process::getuid().as_raw(),
-                gid: rustix::process::getgid().as_raw(),
+                uid: st.st_uid,
+                gid: st.st_gid,
             };
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
             let got = chown_data_dir(&dir, ids);
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert!(matches!(got, Ok(Line::Owned { .. })), "{got:?}");
+        }
+
+        /// The same for the witness directory: one already theirs passes
+        /// with no read access, and nothing in it is touched.
+        #[test]
+        fn an_owned_witness_dir_is_checked_without_read_access() {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("witness");
+            std::fs::create_dir(&dir).unwrap();
+            let st = rustix::fs::stat(&dir).unwrap();
+            let ids = Ids {
+                uid: st.st_uid,
+                gid: st.st_gid,
+            };
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let line = chown_witness_dir(&dir, ids).to_string();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(line.contains("0 entries changed"), "{line}");
         }
 
         #[test]

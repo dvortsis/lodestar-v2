@@ -59,6 +59,10 @@ pub fn run(
         .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
         .try_init();
     dropped.log(data_dir);
+    // The data folder is made owner-only here, before `bin` is created in
+    // it, while a newly handed-over folder is still empty and so plainly
+    // Lodestar's. The child's start warns if it's still open.
+    let _ = crate::data_dir::tighten(data_dir);
     let bin = match Bin::open(data_dir) {
         Ok(b) => b,
         Err(e) => {
