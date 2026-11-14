@@ -1,4 +1,4 @@
-# X-flake-dataset-macos decisions
+# X-flake-dataset-macos decisions (#896)
 
 The 10M bench dataset's determinism tests (`bench/tests/dataset.rs`, M8-PERF-1a) failed on macOS on every merge since they were added. Linux and Windows passed. This records the cause and what the tests compare now. It is the runner's call, as a test-correctness question.
 
