@@ -1,4 +1,4 @@
-# X-operator-hardening decisions (#PR)
+# X-operator-hardening decisions (#859)
 
 These are the fixes for the cloud operator findings the owner-started security review raised before first-run check 8. Each finding is named only by id, severity and surface, and each fix only by what the code now does (`docs/security/v1/README.md` §5).
 
