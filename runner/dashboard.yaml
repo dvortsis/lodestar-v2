@@ -1675,12 +1675,6 @@ owner_queue:
   unblocks: Nothing; this goes ahead unless you object
   when: Any time
 
-- n: 26
-  type: decision
-  action: 'X-operator-hardening (#859): when the operator''s sweep can''t finish (for example, a summary it can''t read), should it still switch the operator off? Today''s rule (the runner''s 2026-11-11 fail-closed call, OP-4) switches it off, so anyone who floods the sweep can switch it off. The PR changes this to tell you instead, without switching off; findings about the bot still switch it off. Runner recommends a middle option: switch off only when a wake session ran inside the sweep''s lookback (when the bot could have acted), and otherwise tell you. Then a stranger can block only the hours after a session, not switch the operator off whenever they like. Other choices: the PR as written, or keep today''s rule.'
-  unblocks: Merging #859, then first-run check 8
-  when: Before check 8
-
 gates:
 - id: G-v05
   name: v0.5 MVP exit
