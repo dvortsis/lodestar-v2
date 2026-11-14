@@ -29,8 +29,9 @@ HEX64='^[0-9a-f]{64}$'
 #   gluetun, the endpoint's leftover UDP is still forwarded towards the gone
 #   container, and the host answers "host unreachable"; a new gluetun can send
 #   its own "port unreachable" before its firewall is up. Both leave from the
-#   host's public address. POSTROUTING sees what the host sends and what it
-#   forwards, after NAT, and Docker never writes to the mangle table, so the
+#   host's public address. mangle POSTROUTING sees what the host sends and
+#   what it forwards, after any DNAT and before SNAT (the destination, the
+#   endpoint, is the same either way), and Docker never writes to the mangle table, so the
 #   rule holds before Docker starts (the boot guard) and stays at the top.
 # Neither can touch the tunnel: a live session's replies are de-NATed and
 # forwarded, never delivered to the host, and the tunnel itself is UDP; nothing
@@ -370,7 +371,7 @@ start_lodestar() {  # $1 segment, $2 "fresh" to recreate whatever compose thinks
     export LODESTAR_IMAGE="$image" LODESTAR_DHT_SAFE_RESTART=true \
       "$TREATMENT_ENV=$value" DOCKER_GID=unused
     timeout 240 docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
-      --profile block up -d --no-deps "${recreate[@]}" lodestar >/dev/null 2>&1
+      --profile block up -d --pull never --no-deps "${recreate[@]}" lodestar >/dev/null 2>&1
   )
 }
 # Lodestar shares gluetun's namespace (plan Lane L: checked before each collector starts).

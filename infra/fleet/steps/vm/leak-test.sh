@@ -593,18 +593,24 @@ fi
 # A slow download runs through the stop, so the far side keeps sending; a
 # capture of the endpoint's packets to the host shows it did.
 stopped=""
+# At least 60 s, whatever STOP_WINDOW says: the leak ran to 58 s after a stop.
 win=${STOP_WINDOW:-75}
-[[ $win =~ ^[0-9]{1,4}$ ]] || win=75
+[[ $win =~ ^[0-9]{1,4}$ ]] && ((win >= 60)) || win=60
 timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
 if timeout 60 docker run -d --rm --name "$DRIVE" --network container:gluetun --cap-drop ALL "$PROBE_IMAGE" \
   curl -s -o /dev/null --limit-rate 64k --max-time 600 "$DRIVE_URL" >/dev/null 2>&1; then
   drive=1
 fi
-start_inbound_capture || bad capture_ready_inbound
 if timeout 60 docker stop -t 10 gluetun >/dev/null 2>&1; then stopped=1; pass gluetun_stopped; else bad gluetun_stopped; fi
-window=$((SECONDS + win))
-while [[ -n $stopped ]] && ((SECONDS < window)); do sleep 1; done
-if [[ -n $no_handshake ]]; then
+# Counted only from after the stop: the download's own packets before it
+# don't show that the endpoint kept sending to a stopped gluetun.
+if [[ -n $stopped ]]; then
+  start_inbound_capture || bad capture_ready_inbound
+  sleep "$win"  # the observation window: a fixed length is the point here
+fi
+if [[ -z $stopped ]]; then
+  :  # no window
+elif [[ -n $no_handshake ]]; then
   kill "$in_cap_pid" 2>/dev/null; wait "$in_cap_pid" 2>/dev/null; in_cap_pid=""
   echo "skip stop_window_exercised"  # no session, so nothing to leave over
 else

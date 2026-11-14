@@ -61,8 +61,9 @@ case "$1" in
   image) [ "$*" = "image inspect -f {{.Id}} sha256:$LOCAL_ID" ] || bad "$*"
          [ -n "$LOCAL_MISSING" ] && exit 1; echo "sha256:$LOCAL_ID" ;;
   restart) [ "$*" = "restart -t 60 lodestar" ] || bad "$*"
-           # A restarted Lodestar joins gluetun's namespace.
-           ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net"; : > "$STUB/lodestar_restarted" ;;
+           # A restarted Lodestar joins gluetun's namespace (RESTART_STALE: it doesn't).
+           [ -n "$RESTART_STALE" ] || ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net"
+           : > "$STUB/lodestar_restarted" ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
   stop) if [ "$*" = "stop -t 10 gluetun" ]; then  # the host guard couldn't be held
           : > "$STUB/gluetun_stopped"; [ -n "$GLUETUN_STOP_FAIL" ] && exit 1
@@ -86,10 +87,10 @@ case "$1" in
         [ -n "$PROXY_FAIL" ] && exit 1
         python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$STUB_STACK/proxy-sock/docker.sock"
         exit 0 ;;
-      *"--profile block up -d --no-deps lodestar")
+      *"--profile block up -d --pull never --no-deps lodestar")
         # A started (not recreated) Lodestar container still joins gluetun's namespace as it starts.
         [ -n "$STALE_NETNS" ] || ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net" ;;
-      *"--profile block up -d --no-deps --force-recreate lodestar") echo fresh >> "$STUB/fresh"
+      *"--profile block up -d --pull never --no-deps --force-recreate lodestar") echo fresh >> "$STUB/fresh"
         [ -n "$STALE_NETNS" ] || ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net" ;;
       *) bad "$*" ;;
     esac
@@ -731,6 +732,13 @@ class StartBlock(Base):
         self.assertTrue((self.stub / "lodestar_restarted").exists())
         self.assertIn("ok lodestar_started", lines)
 
+    def test_a_restart_that_leaves_lodestar_in_the_old_namespace_stops(self):
+        self.args()
+        rc, lines, raw = self.run_script("start-block.sh", STALE_NETNS=1, RESTART_STALE=1)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail network_parent", "fail start_block"]), raw)
+        self.assertTrue((self.stub / "lodestar_restarted").exists())
+        self.assertTrue((self.stub / "stopped").exists())  # the failed start stops Lodestar
+
     def test_a_lodestar_in_gluetuns_namespace_isnt_restarted(self):
         self.args()
         rc, _, raw = self.run_script("start-block.sh")
@@ -775,7 +783,7 @@ class ArmSwitch(Base):
         self.assertIn("LODESTAR_DHT_COORDINATED_ADMISSION=true\n", (self.stub / "arm.env").read_text())  # B
         args = (self.stub / "collector-lodestar-collector-2.args").read_text()
         self.assertIn("--root /evidence/seg-2", args)
-        self.assertIn("--no-deps lodestar", self.log())  # gluetun isn't recreated
+        self.assertIn("--pull never --no-deps lodestar", self.log())  # gluetun isn't recreated, nothing pulled
         # The new container's ID, rendered between the segments.
         self.assertIn("d4" * 32, (self.stub / "proxy-0.cfg").read_text())
 

@@ -685,15 +685,17 @@ if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ] && [ "${6##*/}" != cap-inbound.pcap
   while :; do /bin/sleep 0.05; done
 fi
 # The stop window's precondition: the endpoint's packets to the host while
-# gluetun is stopped. They come only while the download drives the session
-# (WINDOW_IDLE: they never come).
+# gluetun is stopped. The download's packets come before the stop either way;
+# after it, only while it drives the session (WINDOW_IDLE: none come after the
+# stop). A capture started before the stop would see the first kind too.
 if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ] && [ "${6##*/}" = cap-inbound.pcap ]; then
   if [ $# -ne 7 ] || [ "$7" != "udp and src host 192.0.2.77 and src port 1337" ]; then
     printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
   fi
   cat "$STUB/empty.pcap" > "$6"
   out=$6
-  trap '[ -e "$STUB/drive" ] && [ -z "$WINDOW_IDLE" ] && cat "$STUB/fixture-inbound.pcap" > "$out"; exit 0' TERM
+  pre=; [ -e "$STUB/gluetun_stopped" ] || pre=1
+  trap 'if [ -e "$STUB/drive" ] && { [ -n "$pre" ] || [ -z "$WINDOW_IDLE" ]; }; then cat "$STUB/fixture-inbound.pcap" > "$out"; fi; exit 0' TERM
   while :; do /bin/sleep 0.05; done
 fi
 # Capture only: the pcap is the test's fixture for that phase (fixture-<phase>.pcap),
@@ -1535,7 +1537,8 @@ class VMScripts(unittest.TestCase):
         self.assertEqual((self.copies("host"), self.copies("icmp")), (0, 1))  # both were tried
 
     def test_an_idle_stop_window_proves_nothing_and_fails(self):
-        """The window is judged only when the endpoint really kept sending to the host while gluetun was down."""
+        """The window is judged only when the endpoint really kept sending to the host while gluetun was down;
+        with WINDOW_IDLE the download's packets come only before the stop."""
         for flags in ({"WINDOW_IDLE": 1}, {"DRIVE_FAILS": 1}):
             with self.subTest(flags=flags):
                 self.setUp()
