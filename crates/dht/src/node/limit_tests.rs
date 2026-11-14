@@ -162,10 +162,13 @@ proptest! {
             respond(&mut a, &sockets, from, tid, &r);
             let got = drain(&mut rx);
             prop_assert!(got <= SAMPLES_PER_REPLY, "{got} from one reply");
+            if i == 0 {
+                prop_assert_eq!(got, (*n).min(SAMPLES_PER_REPLY), "the first reply is taken");
+            }
             total += got;
         }
         let elapsed = Instant::now().duration_since(t0).as_secs_f64();
-        let share = HARVEST_PER_NETWORK_BURST + HARVEST_PER_NETWORK_RATE * elapsed;
+        let share = SAMPLES_PER_NETWORK_BURST + SAMPLES_PER_NETWORK_RATE * elapsed;
         prop_assert!(total as f64 <= share + 1.0, "{total} > {share}");
     }
 
@@ -283,13 +286,115 @@ fn an_address_counts_as_proven_once_it_answers_a_query() {
     assert!(a.answered.contains(from.ip()));
 }
 
-/// The actor's queries carry keyed ids: two consecutive queries' ids are
-/// not neighbours, as a plain counter's would be.
+#[test]
+fn one_block_gets_its_share_of_passive_harvest() {
+    let (mut a, sockets, mut rx) = actor();
+    let t0 = Instant::now();
+    let get_peers = |i: u32| {
+        let mut h = [0x33u8; 20];
+        h[..4].copy_from_slice(&i.to_be_bytes());
+        Method::GetPeers {
+            info_hash: InfoHash(h),
+            want: Want::default(),
+            scrape: false,
+            noseed: false,
+        }
+    };
+    for i in 0..1000u32 {
+        query(&mut a, &sockets, src(20, (i % 200) as u8 + 1), get_peers(i));
+    }
+    let got = drain(&mut rx);
+    let share = PASSIVE_PER_NETWORK_BURST + PASSIVE_PER_NETWORK_RATE * t0.elapsed().as_secs_f64();
+    assert!(got as f64 <= share + 1.0, "{got} > {share}");
+    assert!(got > 0);
+    // Another block still has its own.
+    query(&mut a, &sockets, src(21, 1), get_peers(5000));
+    assert_eq!(drain(&mut rx), 1);
+}
+
+#[test]
+fn a_valid_announce_is_stored_when_its_reply_is_dropped() {
+    let (mut a, sockets, mut rx) = actor();
+    a.reply_rate = TokenBucket::with_burst(0.0, 1.0, Instant::now());
+    a.reply_rate.tokens = 0.0;
+    let from = src(7, 1);
+    let token = a.tokens.issue(&from.ip());
+    let h = InfoHash([0x77; 20]);
+    let before = a.stats.snapshot().replies_dropped;
+    query(
+        &mut a,
+        &sockets,
+        from,
+        Method::AnnouncePeer {
+            info_hash: h,
+            port: 6881,
+            implied_port: false,
+            token: &token,
+            seed: false,
+        },
+    );
+    assert_eq!(a.stats.snapshot().replies_dropped, before + 1);
+    assert_eq!(
+        a.peer_store.peers(&h, false, false, Instant::now()),
+        [SocketAddr::new(from.ip(), 6881)]
+    );
+    assert_eq!(drain(&mut rx), 1);
+}
+
+/// BEP 32: a querier that hasn't answered us gets its own family's nodes
+/// only, whatever it asks for; once it has answered, it gets both.
+#[test]
+fn the_other_familys_nodes_go_only_to_a_proven_querier() {
+    let (mut a, sockets, _rx) = actor();
+    a.families.push(Family {
+        table: RoutingTable::new(a.ids[0], true),
+        ipv6: true,
+    });
+    let now = a.now_secs();
+    let v4 = NodeInfo {
+        id: NodeId([0x11; 20]),
+        addr: "192.0.2.1:6881".parse().unwrap(),
+    };
+    let v6 = NodeInfo {
+        id: NodeId([0x12; 20]),
+        addr: "[2001:db8::1]:6881".parse().unwrap(),
+    };
+    a.families[0].table.insert(v4, Contact::Response, now);
+    a.families[1].table.insert(v6, Contact::Response, now);
+    let find = || Method::FindNode {
+        target: NodeId([0x10; 20]),
+        want: Want { v4: true, v6: true },
+    };
+    let nodes = |raw: &[u8]| {
+        let Body::Response(r) = krpc::parse(raw).unwrap().body else {
+            panic!("a response");
+        };
+        (r.nodes.len(), r.nodes6.len())
+    };
+    let raw = ask(&mut a, &sockets, find());
+    assert_eq!(
+        nodes(&raw),
+        (1, 0),
+        "an unproven querier gets its own family's"
+    );
+    a.answered
+        .insert("127.0.0.1".parse().unwrap(), Instant::now());
+    let raw = ask(&mut a, &sockets, find());
+    assert_eq!(nodes(&raw), (1, 1), "a proven one gets what it asked for");
+}
+
+/// The actor's queries carry keyed ids on the wire: the ids the peers
+/// receive are the pending ones, and two in a row aren't neighbours, as a
+/// plain counter's would be.
 #[test]
 fn queries_on_the_wire_carry_keyed_ids() {
     let (mut a, sockets, _rx) = actor();
     let peers: Vec<_> = (0..2)
-        .map(|_| std::net::UdpSocket::bind("127.0.0.1:0").unwrap())
+        .map(|_| {
+            let p = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            p.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            p
+        })
         .collect();
     for p in &peers {
         let to = p.local_addr().unwrap();
@@ -298,8 +403,18 @@ fn queries_on_the_wire_carry_keyed_ids() {
             Sent::Yes
         );
     }
-    let ids: Vec<u64> = a.pending.keys().copied().collect();
-    assert_eq!(ids.len(), 2);
-    assert!(ids.iter().all(|t| *t < super::super::tids::LIMIT));
-    assert!(ids[0].abs_diff(ids[1]) > 1, "{ids:?}");
+    let mut wire = vec![];
+    for p in &peers {
+        let mut buf = [0u8; 512];
+        let (n, _) = p.recv_from(&mut buf).expect("the query");
+        let t = krpc::parse(&buf[..n]).unwrap().transaction_id.to_vec();
+        wire.push(u64::from_be_bytes(t.try_into().expect("8-byte id")));
+    }
+    let mut pending: Vec<u64> = a.pending.keys().copied().collect();
+    pending.sort_unstable();
+    let mut sorted = wire.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, pending);
+    assert!(wire.iter().all(|t| *t < super::super::tids::LIMIT));
+    assert!(wire[0].abs_diff(wire[1]) > 1, "{wire:?}");
 }

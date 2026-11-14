@@ -81,8 +81,7 @@ const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 /// Below this frontier size, refill it and explore a random region.
 const LOW_FRONTIER: usize = 64;
 /// Backoff for a sample query that timed out (CR-0: six hours, which the
-/// restart proof relies on). What one block can hold this way is bounded
-/// by the sampler's shares instead.
+/// restart proof relies on).
 const SAMPLE_TIMEOUT_BACKOFF: Duration = sampler::MAX_INTERVAL;
 /// The most contacts one reply offers to sampling; an honest reply holds
 /// 8 per family. Ping replies offer none.
@@ -92,10 +91,14 @@ const NODES_PER_REPLY: usize = 16;
 const SAMPLES_PER_REPLY: usize = 100;
 /// The most peers one `get_peers` reply lists.
 const VALUES_PER_REPLY: usize = 16;
-/// Infohashes one block (/24, IPv6 /64) may hand the pipeline: from
-/// samples it answers and from queries it sends. Per second, and at once.
-const HARVEST_PER_NETWORK_RATE: f64 = 4.0;
-const HARVEST_PER_NETWORK_BURST: f64 = 400.0;
+/// Infohashes from samples one block's (/24, IPv6 /64) nodes answer that
+/// may reach the pipeline. Per second, and at once.
+const SAMPLES_PER_NETWORK_RATE: f64 = 4.0;
+const SAMPLES_PER_NETWORK_BURST: f64 = 400.0;
+/// Get_peers and announces from one block's hosts that may be harvested
+/// or stored. Per second, and at once.
+const PASSIVE_PER_NETWORK_RATE: f64 = 4.0;
+const PASSIVE_PER_NETWORK_BURST: f64 = 100.0;
 /// Blocks remembered by each per-source table ([`SourceBuckets`]).
 const SOURCE_TABLE: usize = 4096;
 /// Addresses remembered as having answered us ([`Answered`]).
@@ -168,10 +171,18 @@ fn passive_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
     TokenBucket::new(intensity.queries_per_sec(), now)
 }
 
-fn harvest_sources() -> SourceBuckets<Network> {
+fn sample_sources() -> SourceBuckets<Network> {
     SourceBuckets::new(
-        HARVEST_PER_NETWORK_RATE,
-        HARVEST_PER_NETWORK_BURST,
+        SAMPLES_PER_NETWORK_RATE,
+        SAMPLES_PER_NETWORK_BURST,
+        SOURCE_TABLE,
+    )
+}
+
+fn passive_sources() -> SourceBuckets<Network> {
+    SourceBuckets::new(
+        PASSIVE_PER_NETWORK_RATE,
+        PASSIVE_PER_NETWORK_BURST,
         SOURCE_TABLE,
     )
 }
@@ -477,8 +488,10 @@ struct Actor {
     reply_sources: SourceBuckets<Network>,
     /// Passive harvest's own rate, apart from replies.
     passive_rate: TokenBucket,
-    /// Each block's share of what reaches the pipeline.
-    harvest_sources: SourceBuckets<Network>,
+    /// Each block's share of the samples that reach the pipeline...
+    sample_sources: SourceBuckets<Network>,
+    /// ...and of passive harvest and announce storage.
+    passive_sources: SourceBuckets<Network>,
     /// Addresses that answered a query of ours.
     answered: Answered,
     /// Pings to queriers draw on this before the query rate, so inbound
@@ -774,7 +787,8 @@ impl Actor {
             reply_rate: reply_bucket(cfg.intensity, now),
             reply_sources: reply_sources(cfg.intensity),
             passive_rate: passive_bucket(cfg.intensity, now),
-            harvest_sources: harvest_sources(),
+            sample_sources: sample_sources(),
+            passive_sources: passive_sources(),
             answered: Answered::new(ANSWERED_TABLE, now),
             verify_rate: verify_bucket(cfg.intensity, now),
             verify_tids: Set::default(),
@@ -1412,8 +1426,12 @@ impl Actor {
         let now_i = Instant::now();
         // A block's own share first, so one block can't empty the global
         // bucket for everyone else.
-        let may_reply = self.reply_sources.try_take(network(from.ip()), now_i)
-            && self.reply_rate.try_take(now_i);
+        let global = self.reply_rate.try_take(now_i);
+        let may_reply = global && self.reply_sources.try_take_from(from.ip(), now_i);
+        if global && !may_reply {
+            // Not this block's turn: the global token stays for others.
+            self.reply_rate.refund();
+        }
         let announced = match &q.method {
             Method::AnnouncePeer { token, .. } => self.tokens.is_valid(&from.ip(), token),
             _ => false,
@@ -1548,8 +1566,8 @@ impl Actor {
     }
 
     /// Passive harvest and announce storage, under their own limits rather
-    /// than the reply rate's: the passive rate overall, and the querier's
-    /// block's harvest share.
+    /// than the reply rate's: the querier's block's passive share, and the
+    /// passive rate overall for what reaches the pipeline.
     fn passive_harvest(
         &mut self,
         q: &Query<'_>,
@@ -1559,7 +1577,9 @@ impl Actor {
     ) {
         match &q.method {
             Method::GetPeers { info_hash, .. } if self.cfg.harvest.passive => {
-                if self.may_harvest_passive(from, now_i) {
+                if self.passive_sources.try_take_from(from.ip(), now_i)
+                    && self.passive_rate.try_take(now_i)
+                {
                     self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
                 }
             }
@@ -1571,21 +1591,16 @@ impl Actor {
                 ..
             } if announced => {
                 let port = if *implied_port { from.port() } else { *port };
-                if port != 0 {
+                if port != 0 && self.passive_sources.try_take_from(from.ip(), now_i) {
                     let peer = SocketAddr::new(from.ip(), port);
                     self.peer_store.announce(*info_hash, peer, *seed, now_i);
-                    if self.cfg.harvest.passive && self.may_harvest_passive(from, now_i) {
+                    if self.cfg.harvest.passive && self.passive_rate.try_take(now_i) {
                         self.harvest_hash(*info_hash, Source::Announce, vec![peer]);
                     }
                 }
             }
             _ => {}
         }
-    }
-
-    fn may_harvest_passive(&mut self, from: SocketAddr, now_i: Instant) -> bool {
-        self.harvest_sources.try_take(network(from.ip()), now_i)
-            && self.passive_rate.try_take(now_i)
     }
 
     fn on_response(
@@ -1693,14 +1708,13 @@ impl Actor {
                         r.samples.is_some() && r.interval.is_some_and(|i| i <= SAMPLE_INTERVAL);
                     // A bounded number per reply, within the responder's
                     // block's share of the pipeline.
-                    let net = network(from.ip());
                     for h in r
                         .samples
                         .iter()
                         .flat_map(|s| s.iter())
                         .take(SAMPLES_PER_REPLY)
                     {
-                        if !self.harvest_sources.try_take(net, now_i) {
+                        if !self.sample_sources.try_take_from(from.ip(), now_i) {
                             break;
                         }
                         if self.harvest_hash(h, Source::Sample, Vec::new()) {

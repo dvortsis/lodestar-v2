@@ -108,10 +108,20 @@ impl<K: Copy + Eq + Ord + std::hash::Hash> SourceBuckets<K> {
     }
 }
 
+impl SourceBuckets<Network> {
+    /// [`SourceBuckets::try_take`] for `ip`'s block. Loopback has no share:
+    /// no packet from off the host carries a loopback source, and a local
+    /// test network runs many nodes on it.
+    pub fn try_take_from(&mut self, ip: IpAddr, now: Instant) -> bool {
+        ip.to_canonical().is_loopback() || self.try_take(network(ip), now)
+    }
+}
+
 /// Addresses that answered a query of ours: a reply carrying an id we
 /// chose came back from them, so they aren't a forged source. Two
 /// generations of at most `cap / 2` each, turned over when the current one
-/// fills or every [`Answered::GENERATION`].
+/// fills or, at the next insert, once [`Answered::GENERATION`] has passed:
+/// an address is remembered up to about an hour, less when many answer.
 #[derive(Debug)]
 pub(crate) struct Answered {
     current: Set<IpAddr>,

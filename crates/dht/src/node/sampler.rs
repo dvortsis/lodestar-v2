@@ -19,16 +19,15 @@ const RECLAIM_PER_TICK: usize = 1024;
 /// The most addresses one IP may hold across the frontier and the table:
 /// the fleet's DHT nodes per IP (`MAX_DHT_PER_IP`), so a host running
 /// several nodes still has each sampled.
-pub(crate) const MAX_PER_IP: u16 = 8;
+pub(crate) const MAX_PER_IP: u32 = 8;
 /// The most addresses one IPv4 /24 may hold across the frontier and the
-/// table, so no block takes more than a small share of either: filling
-/// the 200,000-record table takes about 3,100 of them.
-pub(crate) const MAX_PER_V4_NETWORK: u16 = 64;
+/// table, so no block takes more than a small share of either.
+pub(crate) const MAX_PER_V4_NETWORK: u32 = 64;
 /// The same for one IPv6 /64...
-pub(crate) const MAX_PER_V6_NETWORK: u16 = 16;
+pub(crate) const MAX_PER_V6_NETWORK: u32 = 16;
 /// ...and for one IPv6 /48, an ordinary site's allocation, so filling the
 /// table takes as many allocations on IPv6 as on IPv4.
-pub(crate) const MAX_PER_V6_ALLOCATION: u16 = 64;
+pub(crate) const MAX_PER_V6_ALLOCATION: u32 = 64;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
@@ -57,10 +56,10 @@ pub(crate) struct Sampler {
     queued: Set<SocketAddr>,
     /// How many addresses each IP and each block holds, queued or in
     /// `states` (an address in both counts once).
-    per_ip: Map<IpAddr, u16>,
-    per_network: Map<Network, u16>,
+    per_ip: Map<IpAddr, u32>,
+    per_network: Map<Network, u32>,
     /// IPv6 /48s ([`allocation`]).
-    per_allocation: Map<Network, u16>,
+    per_allocation: Map<Network, u32>,
     capacity: usize,
     next_proof: u64,
     /// Restored records still cooling, and the running totals of
@@ -385,18 +384,20 @@ impl Sampler {
 }
 
 /// A share's count; zero when the key holds nothing.
-fn count<K: Ord + std::hash::Hash>(map: &Map<K, u16>, key: K) -> u16 {
+fn count<K: Ord + std::hash::Hash>(map: &Map<K, u32>, key: K) -> u32 {
     map.get(&key).copied().unwrap_or(0)
 }
 
 /// Lowers a share's count, dropping the key at zero so the maps hold only
 /// live IPs and blocks.
-fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u16>, key: K) {
-    if let Some(n) = map.get_mut(&key) {
-        *n -= 1;
-        if *n == 0 {
-            map.remove(&key);
-        }
+fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
+    let Some(n) = map.get_mut(&key) else {
+        debug_assert!(false, "a share released that was never counted");
+        return;
+    };
+    *n -= 1;
+    if *n == 0 {
+        map.remove(&key);
     }
 }
 
@@ -587,7 +588,7 @@ mod tests {
         let _ = s.complete_scaled(n(1).addr, PROOF_TOKEN | 1, MAX_INTERVAL, 1, now);
     }
 
-    type Counts = (Map<IpAddr, u16>, Map<Network, u16>, Map<Network, u16>);
+    type Counts = (Map<IpAddr, u32>, Map<Network, u32>, Map<Network, u32>);
 
     /// The shares, recomputed from scratch.
     fn recounted(s: &Sampler) -> Counts {
@@ -642,7 +643,7 @@ mod tests {
                 (1..=2000).map(|p| SocketAddr::new(ip, p)),
                 Instant::now(),
             );
-            assert_eq!(held, usize::from(MAX_PER_IP), "{ip}");
+            assert_eq!(held, MAX_PER_IP as usize, "{ip}");
         }
     }
 
@@ -653,7 +654,7 @@ mod tests {
             (0..=255u8).flat_map(|h| (1..=8u16).map(move |p| SocketAddr::from(([10, 0, 0, h], p))));
         assert_eq!(
             push(&mut s, addrs, Instant::now()),
-            usize::from(MAX_PER_V4_NETWORK)
+            MAX_PER_V4_NETWORK as usize
         );
         // Another block isn't affected.
         assert!(s.offer(node(SocketAddr::from(([10, 0, 1, 1], 1))), Instant::now()));
@@ -666,7 +667,7 @@ mod tests {
             (1..=5000u16).map(|h| SocketAddr::from(([0x2001, 0xdb8, 0, 1, 0, 0, h, h], 6881)));
         assert_eq!(
             push(&mut s, addrs, Instant::now()),
-            usize::from(MAX_PER_V6_NETWORK)
+            MAX_PER_V6_NETWORK as usize
         );
     }
 
@@ -679,7 +680,7 @@ mod tests {
         });
         assert_eq!(
             push(&mut s, addrs, Instant::now()),
-            usize::from(MAX_PER_V6_ALLOCATION)
+            MAX_PER_V6_ALLOCATION as usize
         );
         // Another /48 isn't affected.
         assert!(s.offer(
