@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T07:20Z",
+  "updated_at": "2026-11-14T07:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8476,6 +8476,18 @@
       "from": "X-test-vm coordinator",
       "at": "2026-11-14T07:20Z",
       "note": "Owner decision: short VM re-test of VPN failure drills on main cb156f3b (#841 host guard, #845 guard after reboot). One cloud-tester session (owner-started), under 2 h. Numbers only to runner; VM deleted and session archived after."
+    },
+    {
+      "id": "X-rejudge-stall",
+      "from": "#857 review",
+      "at": "2026-11-14T07:27Z",
+      "note": "New slice (filter, Opus): the re-judge breaker stall on a damaged dictionary; record the stalled range, move past it, keep the pass unfinished while a range remains, show it in health. Next runner PR (slices.yaml)."
+    },
+    {
+      "id": "857-v1-constants-ok",
+      "from": "#857 review",
+      "at": "2026-11-14T07:27Z",
+      "note": "Runner call: the earlier core limits kept as constants in core.rs are acceptable; they were in public main history all along."
     }
   ],
   "main_health": [
@@ -8864,14 +8876,6 @@
       "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
-    },
-    "857": {
-      "slice": "X-filter01-rejudge",
-      "head": "c50530c7",
-      "slot": 32,
-      "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
-      "at": "2026-11-14T00:39Z",
-      "status": "ready; fresh Opus delta review running"
     },
     "874": {
       "slice": "X-sec-S6-02-03 (part)",
@@ -9526,7 +9530,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T07:08Z",
+    "updated": "2026-11-14T07:27Z",
     "items": [
       {
         "slot": 1,
@@ -9697,12 +9701,12 @@
       },
       {
         "slot": 32,
-        "slice": "X-filter01-rejudge",
+        "slice": "X-filter15-fix",
         "role": "build",
         "agent": "claude",
         "status": "active",
-        "since": "2026-11-13T23:39Z",
-        "doing": "#857 CHANGES round (relayed by message); then X-filter15-fix",
+        "since": "2026-11-14T07:27Z",
+        "doing": "#857 merged 82797c01; X-filter15-fix briefed by message (detail held)",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -9796,7 +9800,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T07:20Z",
+  "updated": "2026-11-14T07:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10395,6 +10399,12 @@
       "slice": "X-operator-mount-nits",
       "merged": "cb156f3b",
       "at": "2026-11-14T07:12Z"
+    },
+    {
+      "pr": 857,
+      "slice": "X-filter01-rejudge",
+      "merged": "82797c01",
+      "at": "2026-11-14T07:27Z"
     }
   ],
   "review_sessions": []
