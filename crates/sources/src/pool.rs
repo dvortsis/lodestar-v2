@@ -296,10 +296,38 @@ struct BudgetState {
     grown_nets: HashSet<Net>,
     /// Bytes held by partial claims, by network.
     partial_nets: HashMap<Net, u64>,
+    /// Networks whose grown claims ended in metadata that didn't match its
+    /// key: they grow no claim until their back-off ends.
+    held_back: HashMap<Net, HeldBack>,
     next_id: u64,
 }
 
+/// A network's back-off after a grown claim's metadata failed its check.
+#[derive(Debug, Clone, Copy)]
+struct HeldBack {
+    until: tokio::time::Instant,
+    /// Doublings of [`HOLD_BACK`] so far.
+    level: u32,
+    last: tokio::time::Instant,
+}
+
+/// A network's first back-off; each mismatch within [`HOLD_BACK_FORGIVEN`]
+/// of the last doubles it, up to [`HOLD_BACK_MAX`].
+pub const HOLD_BACK: Duration = Duration::from_secs(10 * 60);
+pub const HOLD_BACK_MAX: Duration = Duration::from_secs(2 * 60 * 60);
+/// A day without a mismatch starts a network's back-off over.
+pub const HOLD_BACK_FORGIVEN: Duration = Duration::from_secs(24 * 60 * 60);
+/// Networks remembered at most; the one whose last mismatch is oldest goes
+/// first.
+const HELD_BACK_NETS: usize = 4096;
+
 impl BudgetState {
+    /// Whether `net` is held back from growing at `now`.
+    fn holds_back(&self, net: Option<Net>, now: tokio::time::Instant) -> bool {
+        net.and_then(|net| self.held_back.get(&net))
+            .is_some_and(|h| now < h.until)
+    }
+
     fn add_need(&mut self, bytes: u64, need: u64) {
         self.partial += bytes;
         *self.needs.entry(need).or_insert(0) += 1;
@@ -480,6 +508,8 @@ struct Claim {
     /// Which of the budget's counts the bytes are in (`KIND_*`); changed
     /// only under the budget's lock.
     kind: AtomicU8,
+    /// Set once it has grown.
+    grew: AtomicBool,
 }
 
 impl Reservation {
@@ -503,6 +533,7 @@ impl Reservation {
             waited_out: AtomicBool::new(false),
             net,
             kind: AtomicU8::new(KIND_NONE),
+            grew: AtomicBool::new(false),
         }))
     }
 
@@ -604,9 +635,12 @@ impl Reservation {
                 "a grown claim grows again"
             );
             let queued = s.growth.iter().any(|&(id, _)| id == claim.id);
-            if claim.net.is_some_and(|net| s.grown_nets.contains(&net)) {
-                // Its network has a grown claim: only that one holds it
-                // back, so it waits apart and holds up nothing.
+            if claim.net.is_some_and(|net| s.grown_nets.contains(&net))
+                || s.holds_back(claim.net, tokio::time::Instant::now())
+            {
+                // Its network has a grown claim, or is held back: only its
+                // own network holds it back, so it waits apart and holds up
+                // nothing.
                 if queued {
                     s.growth.retain(|&(id, _)| id != claim.id);
                     budget.settled.notify_one();
@@ -714,6 +748,7 @@ impl Reservation {
             let kind = match claim.net {
                 Some(net) if growing => {
                     s.grown_nets.insert(net);
+                    claim.grew.store(true, Ordering::Relaxed);
                     KIND_GROWN
                 }
                 _ => KIND_LARGE,
@@ -754,6 +789,43 @@ impl Reservation {
 
     fn waited_out(&self) -> bool {
         self.0.waited_out.load(Ordering::Relaxed)
+    }
+
+    /// The fetch's metadata didn't match its key. If the claim had grown,
+    /// its network is held back from growing for a while (`HOLD_BACK`):
+    /// the room for large dicts isn't given again soon to a network whose
+    /// large dict failed its check.
+    fn mismatched(&self) {
+        let claim = &*self.0;
+        let (Some(net), true) = (claim.net, claim.grew.load(Ordering::Relaxed)) else {
+            return;
+        };
+        let now = tokio::time::Instant::now();
+        let mut s = claim.budget.lock();
+        let level = match s.held_back.get(&net) {
+            Some(h) if now.duration_since(h.last) < HOLD_BACK_FORGIVEN => h.level + 1,
+            _ => 0,
+        };
+        let length = HOLD_BACK
+            .checked_mul(1 << level.min(16))
+            .map_or(HOLD_BACK_MAX, |d| d.min(HOLD_BACK_MAX));
+        s.held_back.insert(
+            net,
+            HeldBack {
+                until: now + length,
+                level,
+                last: now,
+            },
+        );
+        if s.held_back.len() > HELD_BACK_NETS
+            && let Some(oldest) = s
+                .held_back
+                .iter()
+                .min_by_key(|(_, h)| h.last)
+                .map(|(n, _)| *n)
+        {
+            s.held_back.remove(&oldest);
+        }
     }
 }
 
@@ -3299,8 +3371,10 @@ impl Pool {
                 let result = fetch.await;
                 // Held from the moment it finishes, joined or not; on any
                 // other ending the reservation is released as it drops.
-                if let Ok(fetched) = &result {
-                    reservation.settle(weigh(fetched));
+                match &result {
+                    Ok(fetched) => reservation.settle(weigh(fetched)),
+                    Err(FailureKind::HashMismatch) => reservation.mismatched(),
+                    Err(_) => {}
                 }
                 let waited_out = result.is_err() && reservation.waited_out();
                 (result, waited_out)
@@ -4370,6 +4444,116 @@ mod budget {
         assert!(b.lock().partials.is_empty());
     }
 
+    /// A grown claim from network `n` whose metadata then fails its check.
+    async fn junk(b: &Arc<Budget>, n: u8) {
+        let r = window(b, n, 1_000, 100_000).await;
+        r.reserve(100_000, 100_000).await;
+        r.mismatched();
+    }
+
+    /// After a grown claim's metadata fails its check, its network grows
+    /// nothing for ten minutes: its next growth waits apart while another
+    /// network's grows, and grows once the back-off ends.
+    #[tokio::test(start_paused = true)]
+    async fn a_network_whose_large_dict_failed_its_check_is_held_back() {
+        let b = Arc::new(Budget::new(1_000_000));
+        junk(&b, 1).await;
+        let next = window(&b, 1, 1_000, 100_000).await;
+        let mut wait = growing(&next, 100_000);
+        let honest = window(&b, 2, 1_000, 100_000).await;
+        tokio::time::timeout(Duration::from_secs(1), honest.reserve(100_000, 100_000))
+            .await
+            .expect("another network grows");
+        drop(honest);
+        tokio::time::sleep(HOLD_BACK - Duration::from_secs(1)).await;
+        assert!(!wait.is_finished(), "held back for ten minutes");
+        assert!(b.lock().growth.is_empty(), "it waits apart");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        // A release wakes it to look again.
+        let small = Reservation::new(b.clone());
+        small.reserve(1_000, 1_000).await;
+        drop(small);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("it grows once the back-off ends")
+            .unwrap();
+        drop(next);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// Each mismatch within a day of the last doubles the back-off, up to
+    /// two hours; a day without one starts it over.
+    #[tokio::test(start_paused = true)]
+    async fn a_back_off_doubles_to_its_cap_and_is_forgiven() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let length = |b: &Budget| {
+            let s = b.lock();
+            let h = s.held_back[&net(1)];
+            h.until - h.last
+        };
+        let mut expected = HOLD_BACK;
+        for _ in 0..6 {
+            junk(&b, 1).await;
+            assert_eq!(length(&b), expected.min(HOLD_BACK_MAX));
+            // The next large dict from the network once this back-off
+            // ends, well within a day.
+            tokio::time::sleep(length(&b) + Duration::from_secs(1)).await;
+            expected *= 2;
+        }
+        assert_eq!(length(&b), HOLD_BACK_MAX);
+        tokio::time::sleep(HOLD_BACK_FORGIVEN).await;
+        junk(&b, 1).await;
+        assert_eq!(length(&b), HOLD_BACK, "forgiven after a day");
+    }
+
+    /// Only a grown claim's failed check holds a network back: a small
+    /// claim's, or any other ending, changes nothing, and other networks
+    /// are never affected.
+    #[tokio::test(start_paused = true)]
+    async fn an_honest_network_is_never_held_back() {
+        let b = Arc::new(Budget::new(1_000_000));
+        // A small dict that failed its check, and a large one that ended
+        // some other way.
+        let small = Reservation::for_peer(b.clone(), Some(net(1)));
+        small.reserve(1_000, 1_000).await;
+        small.mismatched();
+        drop(small);
+        let ended = window(&b, 1, 1_000, 100_000).await;
+        tokio::time::timeout(Duration::from_secs(1), ended.reserve(100_000, 100_000))
+            .await
+            .expect("a small dict's failed check holds nothing back");
+        drop(ended);
+        // Another network's large dict failed its check.
+        junk(&b, 9).await;
+        assert!(!b.lock().held_back.contains_key(&net(1)));
+        let large = window(&b, 1, 1_000, 100_000).await;
+        tokio::time::timeout(Duration::from_secs(1), large.reserve(100_000, 100_000))
+            .await
+            .expect("an honest network grows");
+        drop(large);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// The networks held back are bounded: past the bound, the one whose
+    /// last mismatch is oldest is forgotten.
+    #[tokio::test(start_paused = true)]
+    async fn the_networks_held_back_are_bounded() {
+        let b = Arc::new(Budget::new(1_000_000));
+        for i in 0..=HELD_BACK_NETS as u32 {
+            let ip = std::net::Ipv4Addr::from(0x0A00_0000 + (i << 8));
+            let r = Reservation::for_peer(b.clone(), Some(net_of(IpAddr::V4(ip)).network()));
+            r.reserve(1_000, 100_000).await;
+            r.reserve(100_000, 100_000).await;
+            r.mismatched();
+            drop(r);
+            tokio::time::advance(Duration::from_millis(1)).await;
+        }
+        let s = b.lock();
+        assert_eq!(s.held_back.len(), HELD_BACK_NETS);
+        let first = net_of(IpAddr::V4(std::net::Ipv4Addr::from(0x0A00_0000))).network();
+        assert!(!s.held_back.contains_key(&first), "the oldest went first");
+    }
+
     fn net(n: u8) -> Net {
         net_of(IpAddr::from([198, 51, n, 1])).network()
     }
@@ -4871,6 +5055,75 @@ mod budget {
         })
         .await;
         assert_eq!(stats.reserve_timeouts.load(Ordering::Relaxed), 0);
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    /// Through the pool, with the real fetcher: a large dict that fails its
+    /// check holds its network back, so the next large dict from that
+    /// network waits for room until its deadline, while a small one from it
+    /// still arrives. Real time and TCP, with condition waits.
+    #[tokio::test]
+    async fn a_failed_large_dict_holds_its_network_back_in_the_pool() {
+        let junk = raw_peer(vec![b'x'; 200_000], [5; 20], false).await;
+        let (large_info, large_key) = dict_of(200_000);
+        let (small_info, small_key) = dict_of(10_000);
+        let large = raw_peer(large_info, large_key.0, false).await;
+        let small = raw_peer(small_info.clone(), small_key.0, false).await;
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out_tx, mut out) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let fetcher = PeerWireFetcher(FetchOptions {
+            allow_private: true,
+            encryption: lodestar_peer_wire::Encryption::Disable,
+            timeout: Duration::from_secs(3),
+            ..FetchOptions::default()
+        });
+        let (handle, task) = spawn(
+            PoolConfig::default(),
+            Arc::new(fetcher),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let source = SourceId::new(0).unwrap();
+        let send = async |k: InfoHash, peer: SocketAddr| {
+            disc_tx
+                .send(Discovery {
+                    source,
+                    found: crate::Found::key(k, 0).with_peers(vec![peer]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+        };
+        let stats = handle.stats();
+        send(InfoHash([5; 20]), junk).await;
+        until("the junk to fail its check", async || {
+            handle.queued().await;
+            stats.failure_count(FailureKind::HashMismatch) == 1
+        })
+        .await;
+        send(large_key, large).await;
+        send(small_key, small).await;
+        let got = tokio::time::timeout(Duration::from_secs(10), out.recv())
+            .await
+            .expect("the small dict")
+            .unwrap();
+        assert_eq!(got.key, small_key);
+        until("the large dict to wait out its room", async || {
+            handle.queued().await;
+            stats.reserve_timeouts.load(Ordering::Relaxed) == 1
+        })
+        .await;
+        assert!(out.try_recv().is_err(), "the large dict wasn't fetched");
         stop.send(true).unwrap();
         task.await.unwrap();
     }
