@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T07:41Z",
+  "updated_at": "2026-11-14T07:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8493,6 +8493,16 @@
       "id": "873-review-followups",
       "added": "2026-11-14T07:41Z",
       "note": "#873 review MERGE; one small fix round asked (IPv6 share keying, passive-token order, heading). Queued: per-responder offer limit goes into X-dht-timeout-cooldown notes; unproven-querier sample size; Answered turnover note in decisions file."
+    },
+    {
+      "id": "877-two-level-cap-flag",
+      "added": "2026-11-14T07:50Z",
+      "note": "#877 review CHANGES relayed. Runner call (2.26): fetch-pool limit counted at host and network level, both caps scaled to the pool size. Flag to owner (2.19) on merge."
+    },
+    {
+      "id": "871-optional-to-part2",
+      "added": "2026-11-14T07:50Z",
+      "note": "#871 delta MERGE; two optional items (lease waiting-order dedupe, doc nits) go to part 2."
     }
   ],
   "main_health": [
@@ -9805,7 +9815,7 @@
     }
   ],
   "heartbeat": "2026-11-14T06:49Z",
-  "updated": "2026-11-14T07:41Z",
+  "updated": "2026-11-14T07:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
