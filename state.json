@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T00:17Z",
+  "updated_at": "2026-11-14T00:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8177,6 +8177,26 @@
       "id": "filter03-owner-questions",
       "note": "before X-filter03-fix launches, ask the owner two component-level design questions (destructive-effect warning on Accept anyway for a floor-list subscription; visibility of not-yet-re-judged torrents after a core change); detail held locally",
       "at": "2026-11-14T00:17Z"
+    },
+    {
+      "id": "SR5-P1",
+      "note": "polish: import watcher (crates/import watch path); from security review step 5 part 1; detail with the runner, by message only",
+      "at": "2026-11-14T00:20Z"
+    },
+    {
+      "id": "SR5-P2",
+      "note": "polish: Windows release packaging; from security review step 5 part 1; detail with the runner, by message only",
+      "at": "2026-11-14T00:20Z"
+    },
+    {
+      "id": "SR5-P3",
+      "note": "polish: Windows worker join script; from security review step 5 part 1; detail with the runner, by message only",
+      "at": "2026-11-14T00:20Z"
+    },
+    {
+      "id": "SR5-P4",
+      "note": "polish: bench relevance data-dir guard; from security review step 5 part 1; detail with the runner, by message only",
+      "at": "2026-11-14T00:20Z"
     }
   ],
   "main_health": [
@@ -9217,7 +9237,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T00:17Z",
+    "updated": "2026-11-14T00:20Z",
     "items": [
       {
         "slot": 1,
@@ -9478,7 +9498,7 @@
     }
   ],
   "heartbeat": "2026-11-13T21:38Z",
-  "updated": "2026-11-14T00:17Z",
+  "updated": "2026-11-14T00:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
