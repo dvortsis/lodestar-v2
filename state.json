@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T17:00Z",
+  "updated_at": "2026-11-14T17:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8777,6 +8777,11 @@
       "id": "slot33-queue-1114",
       "at": "2026-11-14T17:00Z",
       "note": "Slot 33 after #886: X-pool-model-test (+B +H), then A, C, X-fuzz-peer-fetch, X-fuzz-mse."
+    },
+    {
+      "id": "owner-delegate-1114",
+      "at": "2026-11-14T17:16Z",
+      "note": "Owner in chat 2026-11-14: owner is out of the loop for cloud testing, Unraid testing and the Claude API operator. Runner decides within pre-set limits (4 cloud-testing slots, fleet and operator caps, $200 operator credits this week), best practice, UX-focused. Owner-only switches (environment reviewers, repo vars, operator-apply, App permissions, secrets, IAM) unchanged. Runner call: no code-review operator slice (it would widen the operator past its pre-set scope); operator used for cloud tests only. Record in owner-decisions next runner PR."
     }
   ],
   "main_health": [
@@ -9823,7 +9828,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T17:00Z",
+    "updated": "2026-11-14T17:16Z",
     "items": [
       {
         "slot": 1,
@@ -10098,7 +10103,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T17:00Z",
+  "updated": "2026-11-14T17:16Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
