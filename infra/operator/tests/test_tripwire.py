@@ -160,12 +160,12 @@ class Paging(unittest.TestCase):
             posts.append((method, path, body))
         run(["sweep"], env(), gh)
         bodies = [b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b]
-        self.assertEqual(len(bodies), 1)
+        self.assertEqual(len(bodies), 2)  # the escalation, then the disable's notice
         body = bodies[0]
         for name in ("events", "pulls", "comments"):
             self.assertIn(f"the sweep is incomplete: a request for {name} failed; check by hand", body)
-        self.assertNotIn("GitHub API", body)  # the error's own text is never echoed
-        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", body)
+        self.assertNotIn("GitHub API", "".join(bodies))  # the error's own text is never echoed
+        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", bodies[1])
         self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])  # the session check fails closed
 
 
@@ -350,16 +350,26 @@ class Deadline(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
         self.assertIn("the sweep is incomplete: it ran past its 6-minute deadline", gh.bodies()[0])
-        self.assertFalse(gh.disabled())  # the escalation goes out after the deadline
+        self.assertIn(tripwire.PENDING, gh.bodies()[0])  # posted before the session check
+        # At 7 s a request the session check passes its own deadline too: that counts as a session.
+        self.assertTrue(gh.disabled())
+        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", gh.bodies()[1])
 
     def test_the_deadline_sits_under_the_job_timeout(self):
         import yaml
         root = Path(tripwire.__file__).resolve().parents[2] / ".github" / "workflows"
         for name, job in (("operator-tripwire.yml", "sweep"), ("operator-wake.yml", "sweep")):
             wf = yaml.safe_load((root / name).read_text())
-            # The sweep's deadline, then the session check's, then one slow request, the post and the disable.
-            self.assertLessEqual(tripwire.SWEEP_DEADLINE_SECONDS + tripwire.SESSION_DEADLINE_SECONDS + 120,
+            # Checkout and start-up, then the sweep's deadline with one request past it and the
+            # escalation; then the session check's deadline with one request past it and the
+            # disable. Each request can take a full timeout.
+            t = tripwire.REQUEST_TIMEOUT_SECONDS
+            escalated = 60 + tripwire.SWEEP_DEADLINE_SECONDS + t + t
+            self.assertLessEqual(escalated + tripwire.SESSION_DEADLINE_SECONDS + t + t,
                                  wf["jobs"][job]["timeout-minutes"] * 60, name)
+        from comments import urllib_transport  # noqa: F401 - the timeout above is comments.py's
+        src = (Path(tripwire.__file__).resolve().parents[1] / "fleet" / "comments.py").read_text()
+        self.assertIn(f"timeout={tripwire.REQUEST_TIMEOUT_SECONDS})", src)
 
 
 class Unreadable(unittest.TestCase):
@@ -670,22 +680,20 @@ class FailedRequests(unittest.TestCase):
 
 class IncompleteRule(unittest.TestCase):
     """The owner's decision (2026-11-14): an incomplete sweep disables only when
-    a wake session ran inside the lookback; a bot finding always disables."""
+    a wake session ran inside the lookback; a bot finding always disables. The
+    escalation is posted before the session check, and the disable follows it."""
 
-    RUNS = "/repos/o/r/actions/workflows/operator-wake.yml/runs"
     NOISE = {"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}
     BOT = {"actor": {"id": BOT}, "event": "closed", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 9}}
 
-    def sweep(self, runs, bot=False, complete=False, **over):
+    def sweep(self, actions, bot=False, complete=False, **over):
         posts, seen = [], []
         events = ([self.BOT] if bot else []) + ([] if complete else [self.NOISE] * (100 - bot))
 
         def gh(method, path, body):
             seen.append(path)
-            if method == "GET" and path.startswith(self.RUNS):
-                return runs("runs", path)
-            if method == "GET" and path.startswith("/repos/o/r/actions/runs/"):
-                return runs("jobs", path)
+            if method == "GET" and "/actions/" in path:
+                return actions(path)
             if method == "GET" and path.startswith("/repos/o/r/issues/events"):
                 return events  # every page full: incomplete, unless complete
             if method == "GET":
@@ -693,137 +701,186 @@ class IncompleteRule(unittest.TestCase):
             posts.append((method, path, body))
         run(["sweep"], env(**over), gh)
         bodies = [b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b]
-        return bodies, DISABLE in [(m, p) for m, p, _ in posts], seen
+        order = [("post" if isinstance(b, dict) else p) for _, p, b in posts]
+        return bodies, DISABLE in [(m, p) for m, p, _ in posts], seen, order
 
     @staticmethod
-    def wake_runs(*conclusions):
-        def answer(kind, path):
-            if kind == "runs":
-                return {"total_count": len(conclusions), "workflow_runs": [{"id": i + 1} for i in range(len(conclusions))]}
-            i = int(path.split("/runs/")[1].split("/")[0]) - 1
-            return {"total_count": 2, "jobs": [{"name": "gate", "conclusion": "success"},
-                                               {"name": "wake", "conclusion": conclusions[i]}]}
-        return answer
-
-    @staticmethod
-    def failing(kind, path):
+    def failing(path):
         raise RuntimeError("GitHub API failed")
 
     def test_no_session_in_the_lookback_escalates_only(self):
-        for runs in (self.wake_runs(), self.wake_runs("skipped", "skipped")):  # gate-only runs, from any comment
-            with self.subTest(runs=runs):
-                bodies, disabled, seen = self.sweep(runs)
+        for actions in (Actions([]), Actions([skipped_run(i) for i in range(1, 300)])):
+            with self.subTest(runs=len(actions.runs)):
+                bodies, disabled, seen, _ = self.sweep(actions)
                 self.assertFalse(disabled)
+                self.assertEqual(len(bodies), 1)
                 self.assertIn("the sweep is incomplete: events ran past 10 pages", bodies[0])
-                self.assertTrue(any(p.startswith(self.RUNS + "?created=%3E%3D") for p in seen))
+                self.assertIn(tripwire.PENDING, bodies[0])
 
-    def test_a_session_in_the_lookback_disables(self):
+    def test_a_session_in_the_lookback_disables_after_the_escalation(self):
         for conclusion in ("success", "failure", "cancelled", None):  # None: still running
             with self.subTest(conclusion=conclusion):
-                bodies, disabled, _ = self.sweep(self.wake_runs("skipped", conclusion))
+                actions = Actions([wake_run(1, conclusion)], {"1": wake_jobs(conclusion)})
+                bodies, disabled, _, order = self.sweep(actions)
                 self.assertTrue(disabled)
-                self.assertIn(f"{tripwire.SESSION_RAN}, so an incomplete sweep disables", bodies[0])
+                self.assertEqual(order[0], "post")  # the escalation before the disable
+                self.assertIn(DISABLE[1], order)
+                self.assertIn(f"{tripwire.SESSION_RAN}, so an incomplete sweep disables", bodies[1])
 
     def test_a_failed_session_check_disables(self):
-        bad = (self.failing,
-               lambda k, p: None,
-               lambda k, p: {"total_count": 101, "workflow_runs": [{"id": 1}] * 100},  # more runs than one page
-               lambda k, p: {"total_count": 1, "workflow_runs": [{"id": "x"}]},
-               lambda k, p: {"total_count": 1, "workflow_runs": [{"id": 1}]} if k == "runs" else {"jobs": []},
-               lambda k, p: {"total_count": 1, "workflow_runs": [{"id": 1}]} if k == "runs" else self.failing(k, p))
-        for runs in bad:
-            with self.subTest(runs=runs):
-                bodies, disabled, _ = self.sweep(runs)
+        bad = (self.failing, lambda p: None, lambda p: {"total_count": 1, "workflow_runs": [{"id": "x"}]},
+               lambda p: {"total_count": "1", "workflow_runs": []})
+        for actions in bad:
+            with self.subTest(actions=actions):
+                bodies, disabled, _, _ = self.sweep(actions)
                 self.assertTrue(disabled)
-                self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", bodies[0])
-                self.assertNotIn("GitHub API", bodies[0])
+                self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", bodies[1])
+                self.assertNotIn("GitHub API", "".join(bodies))
 
     def test_the_end_of_wake_sweep_counts_as_inside_the_lookback(self):
         ref = "o/r/.github/workflows/operator-wake.yml@refs/heads/main"
-        bodies, disabled, seen = self.sweep(self.failing, GITHUB_WORKFLOW_REF=ref)
+        bodies, disabled, seen, _ = self.sweep(self.failing, GITHUB_WORKFLOW_REF=ref)
         self.assertTrue(disabled)
         self.assertIn(f"{tripwire.END_OF_WAKE}, so an incomplete sweep disables", bodies[0])
-        self.assertFalse(any(p.startswith(self.RUNS) for p in seen))
+        self.assertFalse(any("/actions/workflows/operator-wake.yml/runs" in p for p in seen))
         tripwire_ref = "o/r/.github/workflows/operator-tripwire.yml@refs/heads/main"
-        self.assertFalse(self.sweep(self.wake_runs(), GITHUB_WORKFLOW_REF=tripwire_ref)[1])
+        self.assertFalse(self.sweep(Actions([]), GITHUB_WORKFLOW_REF=tripwire_ref)[1])
 
     def test_a_bot_finding_disables_in_every_case(self):
-        for runs in (self.wake_runs(), self.wake_runs("success"), self.failing):
-            with self.subTest(runs=runs):
-                bodies, disabled, _ = self.sweep(runs, bot=True)
+        for actions in (Actions([]), Actions([wake_run(1)], {"1": wake_jobs()}), self.failing):
+            with self.subTest(actions=actions):
+                bodies, disabled, seen, _ = self.sweep(actions, bot=True)
                 self.assertTrue(disabled)
                 self.assertIn("the operator's bot: issue event `closed` on #9", bodies[0])
+                self.assertFalse(any("/actions/workflows/" in p and "/disable" not in p for p in seen))
 
     def test_a_complete_sweep_skips_the_session_check(self):
-        bodies, disabled, seen = self.sweep(self.failing, complete=True)
+        bodies, disabled, seen, _ = self.sweep(self.failing, complete=True)
         self.assertEqual(bodies, [])
         self.assertFalse(disabled)
-        self.assertFalse(any(p.startswith(self.RUNS) for p in seen))
+        self.assertFalse(any("/actions/workflows/operator-wake.yml/runs" in p for p in seen))
+
+
+def skipped_run(i, created=timedelta(hours=1)):
+    return {"id": i, "status": "completed", "conclusion": "skipped", "created_at": ISO(created),
+            "updated_at": ISO(created)}
+
+
+def wake_run(i, conclusion="success", created=timedelta(minutes=30), updated=timedelta(minutes=4)):
+    status = "in_progress" if conclusion is None else "completed"
+    return {"id": i, "status": status, "conclusion": conclusion, "created_at": ISO(created), "updated_at": ISO(updated)}
+
+
+def wake_jobs(conclusion="success", completed=timedelta(minutes=5), status=None):
+    done = None if conclusion is None or completed is None else ISO(completed)
+    return [{"name": "gate", "status": "completed", "conclusion": "success", "completed_at": ISO(timedelta(hours=9))},
+            {"name": "wake", "status": status or ("in_progress" if conclusion is None else "completed"),
+             "conclusion": conclusion, "completed_at": done}]
+
+
+class Actions:
+    """The Actions API's run and job lists for operator-wake.yml, as GitHub
+    answers them: `created=>=` and `status=` applied on the server (a status
+    filter matches a run's status, or its conclusion), paged, at most 1,000 runs
+    a list, newest first. `ignore` lists statuses whose filter it ignores."""
+
+    STATES = ("queued", "in_progress", "pending", "requested", "waiting", "completed")
+
+    def __init__(self, runs, jobs=None, ignore=()):
+        self.runs, self.jobs, self.ignore, self.paths = runs, jobs or {}, ignore, []
+
+    def __call__(self, path):
+        self.paths.append(path)
+        from urllib.parse import parse_qs, unquote, urlsplit
+        q = {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
+        page, per = int(q.get("page", 1)), int(q.get("per_page", 30))
+        if "/actions/runs/" in path:
+            js = self.jobs.get(path.split("/actions/runs/")[1].split("/")[0], [])
+            return {"total_count": len(js), "jobs": js[(page - 1) * per:page * per]}
+        created = unquote(q["created"])
+        assert created.startswith(">="), created
+        rs = [r for r in self.runs if r["created_at"] >= created[2:]]
+        st = q.get("status")
+        if st and st not in self.ignore:
+            rs = [r for r in rs if (r["status"] if st in self.STATES else r.get("conclusion")) == st]
+        rs = sorted(rs, key=lambda r: r["created_at"], reverse=True)
+        return {"total_count": len(rs), "workflow_runs": rs[:1000][(page - 1) * per:page * per]}
 
 
 class SessionCheck(unittest.TestCase):
     """_wake_session: which operator-wake.yml runs count as a session in the lookback.
     The run and job fields follow GitHub's Actions API. Real operator-wake.yml runs on
-    this repository show both shapes the check relies on: a run whose jobs were all
-    skipped reports conclusion "skipped", and a wake job waiting for the
-    cloud-operator approval reports status "waiting" with no completed_at (and a
-    started_at that is only its creation time, so it isn't read)."""
+    this repository show the shapes the check relies on: a run whose jobs were all
+    skipped reports conclusion "skipped", and a run whose wake job waits for the
+    cloud-operator approval reports status "waiting", its wake job status "waiting"
+    with no completed_at (and a started_at that is only its creation time)."""
 
-    def check(self, runs, jobs=None, mono=None):
-        seen = []
-
+    def check(self, actions, mono=None):
         def gh(method, path, body):
-            seen.append(path)
-            if "/actions/workflows/operator-wake.yml/runs" in path:
-                page = int(path.rsplit("page=", 1)[1])
-                chunk = runs[(page - 1) * 100:page * 100]
-                return {"total_count": len(runs), "workflow_runs": chunk}
-            rid = path.split("/actions/runs/")[1].split("/")[0]
-            js = (jobs or {}).get(rid, [])
-            return {"total_count": len(js), "jobs": js}
-        why = tripwire._wake_session(env(), gh, NOW, mono or (lambda: 0.0))
-        return why, seen
+            return actions(path)
+        return tripwire._wake_session(env(), gh, NOW, mono or (lambda: 0.0))
 
-    @staticmethod
-    def wake(conclusion="success", completed=timedelta(minutes=5)):
-        return [{"name": "gate", "conclusion": "success", "completed_at": ISO(timedelta(hours=9))},
-                {"name": "wake", "conclusion": conclusion, "completed_at": None if completed is None else ISO(completed)}]
+    def test_thousands_of_skipped_runs_and_one_session(self):
+        runs = [skipped_run(i, timedelta(minutes=i)) for i in range(1, 5001)]  # past GitHub's 1,000 a list
+        runs.append(wake_run(9999))
+        actions = Actions(runs, {"9999": wake_jobs()})
+        self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
+        self.assertFalse(any("status=skipped&per_page=100" in p for p in actions.paths))  # never listed
+
+    def test_thousands_of_skipped_runs_and_no_session(self):
+        actions = Actions([skipped_run(i, timedelta(minutes=i)) for i in range(1, 5001)])
+        self.assertIsNone(self.check(actions))
+        self.assertLessEqual(len(actions.paths), 3 + len(tripwire.RUN_STATES + tripwire.RUN_CONCLUSIONS) + 3)
+
+    def test_the_window_is_thirty_days(self):
+        actions = Actions([])
+        self.check(actions)
+        want = (NOW - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lists = [p for p in actions.paths if "/actions/workflows/" in p]
+        self.assertTrue(lists)
+        self.assertTrue(all(f"created=%3E%3D{want}&" in p for p in lists))
 
     def test_a_late_approval_still_counts(self):
-        # Created nine hours ago, approved late: its wake job finished 5 minutes ago.
-        runs = [{"id": 1, "status": "completed", "conclusion": "success", "created_at": ISO(timedelta(hours=9)),
-                 "updated_at": ISO(timedelta(minutes=4))}]
-        self.assertEqual(self.check(runs, {"1": self.wake()})[0], tripwire.SESSION_RAN)
+        # Created nine days ago, approved late: its wake job finished 5 minutes ago.
+        actions = Actions([wake_run(1, created=timedelta(days=9))], {"1": wake_jobs()})
+        self.assertEqual(self.check(actions), tripwire.SESSION_RAN)
+        # Older than the window: not listed at all.
+        self.assertIsNone(self.check(Actions([wake_run(1, created=timedelta(days=31))], {"1": wake_jobs()})))
 
-    def test_a_job_waiting_for_approval_or_running_counts(self):
-        runs = [{"id": 1, "status": "waiting", "conclusion": None, "updated_at": ISO(timedelta(hours=4))}]
-        self.assertEqual(self.check(runs, {"1": self.wake(None, completed=None)})[0], tripwire.SESSION_RAN)
+    def test_a_job_waiting_for_approval_doesnt_count_yet(self):
+        run_ = {"id": 1, "status": "waiting", "conclusion": None, "created_at": ISO(timedelta(hours=4)),
+                "updated_at": ISO(timedelta(hours=4))}
+        actions = Actions([run_], {"1": wake_jobs(None, completed=None, status="waiting")})
+        self.assertIsNone(self.check(actions))
+        self.assertFalse(any("/actions/runs/" in p for p in actions.paths))  # waiting runs are only counted
+
+    def test_a_queued_or_running_wake_job_counts(self):
+        for status in ("queued", "in_progress"):
+            with self.subTest(status=status):
+                r = dict(wake_run(1, None), status=status)
+                self.assertEqual(self.check(Actions([r], {"1": wake_jobs(None, status=status)})), tripwire.SESSION_RAN)
 
     def test_a_wake_job_that_completed_before_the_lookback_doesnt_count(self):
         old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 1)
-        runs = [{"id": 1, "status": "completed", "conclusion": "success", "updated_at": ISO(timedelta(minutes=1))}]
-        self.assertIsNone(self.check(runs, {"1": self.wake(completed=old)})[0])
+        self.assertIsNone(self.check(Actions([wake_run(1, updated=timedelta(minutes=1))], {"1": wake_jobs(completed=old)})))
 
-    def test_runs_passed_over_without_reading_their_jobs(self):
+    def test_a_run_completed_before_the_lookback_costs_no_jobs_request(self):
         old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 1)
-        runs = [{"id": 1, "status": "completed", "conclusion": "skipped", "updated_at": ISO(timedelta(minutes=1))},
-                {"id": 2, "status": "completed", "conclusion": "success", "updated_at": ISO(old)}]
-        why, seen = self.check(runs, {"1": self.wake(), "2": self.wake()})
-        self.assertIsNone(why)
-        self.assertFalse(any("/actions/runs/" in p for p in seen))
+        actions = Actions([wake_run(1, created=timedelta(hours=5), updated=old)], {"1": wake_jobs()})
+        self.assertIsNone(self.check(actions))
+        self.assertFalse(any("/actions/runs/" in p for p in actions.paths))
 
-    def test_runs_are_read_page_by_page(self):
-        runs = [{"id": i, "status": "completed", "conclusion": "skipped"} for i in range(1, 251)]
-        why, seen = self.check(runs)
-        self.assertIsNone(why)
-        self.assertEqual(len(seen), 3)
-        self.assertTrue(all("created=%3E%3D" in p for p in seen))
+    def test_counts_that_dont_add_up_count_as_a_session(self):
+        # A run in a state no list covers (as if GitHub added one), and a filter it ignores.
+        odd = dict(skipped_run(1), conclusion="something-new")
+        self.assertEqual(self.check(Actions([odd])), tripwire.SESSION_UNKNOWN)
+        ignored = Actions([skipped_run(1), wake_run(2, updated=timedelta(hours=9))], {"2": wake_jobs()}, ignore=("success",))
+        self.assertEqual(self.check(ignored), tripwire.SESSION_UNKNOWN)
 
-    def test_more_runs_than_the_pages_hold_counts_as_a_session(self):
-        runs = [{"id": i, "status": "completed", "conclusion": "skipped"} for i in range(1, tripwire.SESSION_PAGES * 100 + 2)]
-        why, seen = self.check(runs)
-        self.assertEqual(why, tripwire.SESSION_UNKNOWN)
-        self.assertEqual(len(seen), tripwire.SESSION_PAGES)
+    def test_more_runs_in_one_list_than_it_holds_counts_as_a_session(self):
+        old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 1)
+        runs = [wake_run(i, created=timedelta(minutes=200 + i), updated=old) for i in range(1, 1102)]
+        self.assertEqual(self.check(Actions(runs)), tripwire.SESSION_UNKNOWN)
 
     def test_the_check_stops_at_its_own_deadline(self):
         tick = [0.0]
@@ -831,34 +888,6 @@ class SessionCheck(unittest.TestCase):
         def mono():
             tick[0] += 10.0  # every request seems to take 10 s
             return tick[0]
-        runs = [{"id": i, "status": "completed", "conclusion": "success", "updated_at": ISO(timedelta(minutes=1))}
-                for i in range(1, 501)]
-        why, seen = self.check(runs, {str(i): self.wake(completed=timedelta(hours=9)) for i in range(1, 501)}, mono)
-        self.assertEqual(why, tripwire.SESSION_UNKNOWN)
-        self.assertLessEqual(len(seen), tripwire.SESSION_DEADLINE_SECONDS // 10)
-
-    def test_a_slow_check_still_escalates_inside_the_job_timeout(self):
-        tick, posts = [0.0], []
-
-        def mono():
-            tick[0] += 7.0
-            return tick[0]
-        noise = {"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}
-
-        def gh(method, path, body):
-            if "/actions/workflows/operator-wake.yml/runs" in path:
-                return {"total_count": 5000, "workflow_runs": [{"id": 1, "status": "in_progress"}] * 100}
-            if "/actions/runs/" in path:
-                return {"total_count": 1, "jobs": [{"name": "gate", "conclusion": "success"}]}
-            if method == "GET":
-                return [noise] * 100 if path.startswith("/repos/o/r/issues/events") else []
-            posts.append((method, path, body, tick[0]))
-        with redirect_stdout(io.StringIO()):
-            tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
-        body = next(b["body"] for _, _, b, _ in posts if isinstance(b, dict) and "body" in b)
-        self.assertIn(f"{tripwire.SESSION_UNKNOWN}, so an incomplete sweep disables", body)
-        self.assertIn(DISABLE, [(m, p) for m, p, _, _ in posts])
-        # Every request is counted on the clock: the post and the disable come before the
-        # two deadlines plus one more request.
-        self.assertLessEqual(max(t for *_, t in posts),
-                             tripwire.SWEEP_DEADLINE_SECONDS + tripwire.SESSION_DEADLINE_SECONDS + 3 * 7.0)
+        actions = Actions([skipped_run(1)])
+        self.assertEqual(self.check(actions, mono), tripwire.SESSION_UNKNOWN)
+        self.assertLessEqual(len(actions.paths), tripwire.SESSION_DEADLINE_SECONDS // 10)

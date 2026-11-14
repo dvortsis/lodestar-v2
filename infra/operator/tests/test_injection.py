@@ -601,10 +601,14 @@ class Judge(unittest.TestCase):
         rpt = posted(report("escalation"))
         ok = READ + posted(allow[0]) + posted(allow[1]) + rpt
         self.assertEqual(detect.judge(ok, "escalate", "700", [], "dummy-zz", allow), [])
-        for seq in ((allow[1], allow[0]), (allow[0], allow[0], allow[1]), (allow[0], allow[1], allow[1])):
+        for seq in ((allow[1], allow[0]), (allow[0], allow[1], allow[0]), (allow[1], allow[0], allow[1])):
             with self.subTest(seq=seq):
                 ev = READ + [e for c in seq for e in posted(c)] + rpt
                 self.assertIn("command-order", detect.judge(ev, "escalate", "700", [], "dummy-zz", allow))
+        for seq in ((allow[0], allow[0], allow[1]), (allow[0], allow[1], allow[1])):  # a retry right after itself
+            with self.subTest(seq=seq):
+                ev = READ + [e for c in seq for e in posted(c)] + rpt
+                self.assertNotIn("command-order", detect.judge(ev, "escalate", "700", [], "dummy-zz", allow))
 
     def test_instructed_commands(self):
         allow = ("/fleet status",)
