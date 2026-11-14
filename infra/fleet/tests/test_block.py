@@ -8,6 +8,7 @@ import base64
 import io
 import json
 import os
+import stat
 import re
 import subprocess
 import tarfile
@@ -31,6 +32,7 @@ scrub = steps._scrubber()
 DIGEST = "d" * 64
 LC, SC, RC = "1" * 40, "2" * 40, "3" * 40
 LODESTAR_ID, GLUETUN_ID, IMAGE_ID = "a1" * 32, "b2" * 32, "c3" * 32
+LOCAL_ID = "e4" * 32  # a locally built image (LOCAL_IMAGE_ID)
 RULES = {"version": 1, "screen": "adm-1", "lodestar_image": f"ghcr.io/dvortsis/lodestar-v2@sha256:{DIGEST}",
          "lodestar_commit": LC, "spec_commit": SC, "treatment": "adm", "segment_hours": 2, "notice_version": 1}
 # Fake private values: none may survive the scrubber or reach a log.
@@ -51,8 +53,16 @@ case "$1" in
       "inspect --type container -f {{.Id}} lodestar") echo "${LODESTAR_ID-$DEFAULT_LID}" ;;
       "inspect --type container -f {{.Image}} lodestar") echo "sha256:$IMAGE_ID" ;;
       "inspect --type container -f {{.HostConfig.NetworkMode}} lodestar") echo "container:${PARENT:-$GLUETUN_ID}" ;;
+      # Main processes, whose namespaces are files under the test's own /proc.
+      "inspect --type container -f {{.State.Pid}} gluetun") echo 101 ;;
+      "inspect --type container -f {{.State.Pid}} lodestar") echo 102 ;;
       *) bad "$*" ;;
     esac ;;
+  image) [ "$*" = "image inspect -f {{.Id}} sha256:$LOCAL_ID" ] || bad "$*"
+         [ -n "$LOCAL_MISSING" ] && exit 1; echo "sha256:$LOCAL_ID" ;;
+  restart) [ "$*" = "restart -t 60 lodestar" ] || bad "$*"
+           # A restarted Lodestar joins gluetun's namespace.
+           ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net"; : > "$STUB/lodestar_restarted" ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
   stop) if [ "$*" = "stop -t 10 gluetun" ]; then  # the host guard couldn't be held
           : > "$STUB/gluetun_stopped"; [ -n "$GLUETUN_STOP_FAIL" ] && exit 1
@@ -76,8 +86,11 @@ case "$1" in
         [ -n "$PROXY_FAIL" ] && exit 1
         python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$STUB_STACK/proxy-sock/docker.sock"
         exit 0 ;;
-      *"--profile block up -d --no-deps lodestar") ;;
-      *"--profile block up -d --no-deps --force-recreate lodestar") echo fresh >> "$STUB/fresh" ;;
+      *"--profile block up -d --no-deps lodestar")
+        # A started (not recreated) Lodestar container still joins gluetun's namespace as it starts.
+        [ -n "$STALE_NETNS" ] || ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net" ;;
+      *"--profile block up -d --no-deps --force-recreate lodestar") echo fresh >> "$STUB/fresh"
+        [ -n "$STALE_NETNS" ] || ln -f "$PROC_ROOT/101/ns/net" "$PROC_ROOT/102/ns/net" ;;
       *) bad "$*" ;;
     esac
     [ -e "$STUB_BLOCK/marker" ] || bad "compose before the marker"
@@ -156,6 +169,8 @@ printf 'iptables %s\n' "$*" >> "$STUB/log"
 host="-s 192.0.2.77/32 -p udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
 host_s="-s 192.0.2.77/32 -p udp -m udp --sport 1337 -m comment --comment lodestar-leak-host -j DROP"
 old_host_s="-s 198.51.100.66/32 -p udp -m udp --sport 51820 -m comment --comment lodestar-leak-host -j DROP"
+icmp="-d 192.0.2.77/32 -p icmp -m comment --comment lodestar-leak-host -j DROP"
+old_icmp="-d 198.51.100.66/32 -p icmp -m comment --comment lodestar-leak-host -j DROP"
 n() { cat "$STUB/$1" 2>/dev/null || echo 0; }
 down() { [ "$(n "$1")" -gt 0 ] || exit 1; echo $(($(n "$1") - 1)) > "$STUB/$1"; }
 case "$*" in
@@ -172,6 +187,17 @@ case "$*" in
     echo "-P INPUT ACCEPT"
     for _ in $(seq "$(n host)"); do echo "-A INPUT $host_s"; done
     for _ in $(seq "$(n oldhost)"); do echo "-A INPUT $old_host_s"; done ;;
+  # The guard's ICMP rule (mangle POSTROUTING), with its own copy count.
+  "-t mangle -I POSTROUTING 1 $icmp") [ -n "$ICMP_FAILS" ] && exit 1; echo $(($(n icmp) + 1)) > "$STUB/icmp" ;;
+  "-t mangle -C POSTROUTING $icmp")
+    if [ -n "$ICMP_CHECK_ERR" ]; then exit 4; fi
+    [ "$(n icmp)" -gt 0 ] ;;
+  "-t mangle -D POSTROUTING $icmp") [ -n "$ICMP_STUCK" ] && exit 1; down icmp ;;
+  "-t mangle -D POSTROUTING $old_icmp") [ -n "$ICMP_STUCK" ] && exit 1; down oldicmp ;;
+  "-t mangle -S POSTROUTING")
+    echo "-P POSTROUTING ACCEPT"
+    for _ in $(seq "$(n icmp)"); do echo "-A POSTROUTING $icmp"; done
+    for _ in $(seq "$(n oldicmp)"); do echo "-A POSTROUTING $old_icmp"; done ;;
   *) printf 'iptables %s\n' "$*" >> "$STUB/badargs"; exit 2 ;;
 esac
 """
@@ -204,6 +230,11 @@ class Base(unittest.TestCase):
                            ("sleep", "#!/bin/sh\nexit 0\n")):
             (self.stub / "bin" / name).write_text(body)
             (self.stub / "bin" / name).chmod(0o755)
+        # The containers' namespaces: gluetun's and Lodestar's, separate until Lodestar starts in gluetun's.
+        self.proc = self.tmp / "proc"
+        for pid in ("101", "102"):
+            (self.proc / pid / "ns").mkdir(parents=True)
+            (self.proc / pid / "ns" / "net").write_text(pid)
         (self.stack / "data").mkdir(parents=True)
         (self.stack / "data" / "old.db").write_text("a past block's database")
         (self.stack / "secrets").mkdir()
@@ -228,7 +259,8 @@ class Base(unittest.TestCase):
         env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub), "STUB_BLOCK": str(self.block),
                "STUB_STACK": str(self.stack), "HOME": str(self.tmp), "DOCKER_SOCK": str(sock),
                "PROXY_UID": str(os.getuid()), "PROXY_WAIT": "0", "UNIT_DIR": str(self.units), "COLLECT_WAIT": "0", "GLUETUN_ID": GLUETUN_ID, "IMAGE_ID": IMAGE_ID,
-               "DEFAULT_LID": LODESTAR_ID, "SOCK_GID": str(sock.stat().st_gid), **{k: str(v) for k, v in flags.items()}}
+               "DEFAULT_LID": LODESTAR_ID, "SOCK_GID": str(sock.stat().st_gid), "PROC_ROOT": str(self.proc),
+               "DATA_UID": str(os.getuid()), "LOCAL_ID": LOCAL_ID, **{k: str(v) for k, v in flags.items()}}
         r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"),
                             str(self.block)], env=env, capture_output=True, text=True, timeout=120)
         bad = self.stub / "badargs"
@@ -256,6 +288,7 @@ class Base(unittest.TestCase):
         (self.block / "block.env").write_text("".join(f"{k}={v}\n" for k, v in values.items()))
         (self.block / "marker").write_text(f"block=42-1\nsegment={segment}\nstate=running\n")
         (self.stub / "host").write_text("1")  # start-block's host guard, held for the block
+        (self.stub / "icmp").write_text("1")  # and its ICMP rule
 
     def finish_segment(self, n, reason="baseline_window_complete"):
         seg = self.block / "evidence" / f"seg-{n}"
@@ -644,6 +677,86 @@ class StartBlock(Base):
                 self.assertNotIn("192.0.2.77", raw)
 
 
+    def test_the_data_folders_belong_to_lodestar_and_others_cant_reach_them(self):
+        """X-gluetun-guard-stop: Lodestar starts as root without DAC override, so it can only reopen a
+        folder others can read; the stack folder keeps every other host account out."""
+        self.args()
+        self.stack.chmod(0o755)
+        rc, _, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        for d in ("data", "witness"):
+            st = (self.stack / d).stat()
+            self.assertEqual((stat.S_IMODE(st.st_mode), st.st_uid), (0o755, os.getuid()), d)
+            self.assertEqual(list((self.stack / d).iterdir()), [], d)  # fresh: a past block's data is gone
+        self.assertEqual(stat.S_IMODE(self.stack.stat().st_mode) & 0o007, 0)
+
+    def test_a_locally_built_image_by_its_id(self):
+        """A test run's image: pinned by its local image ID, never pulled."""
+        args = dict(IMAGE_DIGEST="")
+        self.args(**args)
+        text = (self.work / "args").read_text().replace("IMAGE_DIGEST=\n", f"LOCAL_IMAGE_ID={LOCAL_ID}\n")
+        (self.work / "args").write_text(text)
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertIn(f"LODESTAR_IMAGE=sha256:{LOCAL_ID}\n", (self.stub / "arm.env").read_text())
+        self.assertNotIn("docker pull ghcr.io", self.log())
+        self.assertIn(f"docker image inspect -f {{{{.Id}}}} sha256:{LOCAL_ID}", self.log())
+        self.assertIn(f"LOCAL_IMAGE_ID={LOCAL_ID}\n", (self.block / "block.env").read_text())
+        self.assertNotIn("IMAGE_DIGEST", (self.block / "block.env").read_text())
+
+    def test_a_local_image_that_isnt_there_stops(self):
+        self.args(IMAGE_DIGEST="")
+        text = (self.work / "args").read_text().replace("IMAGE_DIGEST=\n", f"LOCAL_IMAGE_ID={LOCAL_ID}\n")
+        (self.work / "args").write_text(text)
+        rc, lines, raw = self.run_script("start-block.sh", LOCAL_MISSING=1)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail lodestar_image", "fail start_block"]), raw)
+
+    def test_exactly_one_image_pin(self):
+        self.args(LOCAL_IMAGE_ID=LOCAL_ID)  # and the digest
+        rc, lines, _ = self.run_script("start-block.sh")
+        self.assertEqual((rc, lines[-2:]), (1, ["fail args_valid", "fail start_block"]))
+        self.assertNotIn("iptables", self.log())
+        # One from the environment never counts as the arguments' pin.
+        self.setUp()
+        self.args(IMAGE_DIGEST="")
+        rc, lines, _ = self.run_script("start-block.sh", LOCAL_IMAGE_ID=LOCAL_ID)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail args_valid", "fail start_block"]))
+
+    def test_a_lodestar_left_in_an_old_namespace_is_restarted(self):
+        """Started into a gluetun that has since come back, Lodestar is restarted into its namespace."""
+        self.args()
+        rc, lines, raw = self.run_script("start-block.sh", STALE_NETNS=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertTrue((self.stub / "lodestar_restarted").exists())
+        self.assertIn("ok lodestar_started", lines)
+
+    def test_a_lodestar_in_gluetuns_namespace_isnt_restarted(self):
+        self.args()
+        rc, _, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertFalse((self.stub / "lodestar_restarted").exists())
+
+    def test_the_host_guard_holds_both_rules_for_the_block(self):
+        self.args()
+        rc, _, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual((self.copies("host"), self.copies("icmp")), (1, 1))
+        log = self.log()
+        self.assertLess(log.index("iptables -t mangle -I POSTROUTING 1 -d 192.0.2.77/32 -p icmp"),
+                        log.index("compose"))
+        self.assertNotIn("192.0.2.77", raw)
+
+    def test_an_icmp_rule_that_cant_be_held_stops_before_the_leak_test(self):
+        self.args()
+        rc, lines, _ = self.run_script("start-block.sh", ICMP_FAILS=1)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail host_guarded", "fail start_block"]))
+        self.assertFalse((self.stub / "leak_args").exists())
+
+    def copies(self, name):
+        p = self.stub / name
+        return int(p.read_text()) if p.exists() else 0
+
+
 class ArmSwitch(Base):
     def test_switches_to_the_next_arm(self):
         self.make_block(segment=1)
@@ -729,6 +842,29 @@ class ArmSwitch(Base):
                 self.assertNotIn("compose", self.log())
                 after = (self.block / "marker").read_text() if (self.block / "marker").exists() else None
                 self.assertEqual(before, after)  # the block stays recorded as it was
+
+
+    def test_folders_left_at_0700_are_fixed_before_lodestar_restarts(self):
+        """A block started before the folders were handed over: Lodestar couldn't reopen them."""
+        self.make_block(segment=1)
+        self.finish_segment(1)
+        self.running("gluetun")
+        (self.stack / "witness").mkdir()
+        for d in ("data", "witness"):
+            (self.stack / d).chmod(0o700)
+        rc, _, raw = self.run_script("arm-switch.sh", LODESTAR_ID="d4" * 32)
+        self.assertEqual(rc, 0, raw)
+        for d in ("data", "witness"):
+            self.assertEqual(stat.S_IMODE((self.stack / d).stat().st_mode), 0o755, d)
+        self.assertTrue((self.stack / "data" / "old.db").exists())  # kept: only a fresh start replaces them
+
+    def test_a_switch_into_a_restarted_gluetun_restarts_lodestar(self):
+        self.make_block(segment=1)
+        self.finish_segment(1)
+        self.running("gluetun")
+        rc, _, raw = self.run_script("arm-switch.sh", LODESTAR_ID="d4" * 32, STALE_NETNS=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertTrue((self.stub / "lodestar_restarted").exists())
 
 
 class OutageWatcher(Base):
@@ -868,6 +1004,36 @@ class GuardResume(Base):
         rc, lines, _ = self.run_script("outage-watcher.sh")  # held now: nothing more is recorded
         self.assertEqual((rc, lines[:2]), (0, ["ok host_guarded", "count host_guard_drops 1"]))
         self.assertEqual((self.copies(), self.outages()), (1, ["host_guard_dropped"]))
+
+    def test_a_dropped_icmp_rule_is_re_held_and_recorded(self):
+        """X-gluetun-guard-stop: the guard's ICMP rule is checked and put back like INPUT's."""
+        self.make_block(segment=2)
+        (self.stub / "icmp").write_text("0")  # a flush of the mangle table
+        self.running("gluetun", "lodestar", "lodestar-collector-2")
+        rc, lines, raw = self.run_script("outage-watcher.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual(lines[:2], ["ok host_guard_reheld", "count host_guard_drops 1"])
+        self.assertEqual((self.copies(), self.copies("icmp")), (1, 1))
+        self.assertEqual(self.outages(), ["host_guard_dropped"])
+        self.assertFalse((self.block / "damaged").exists())
+
+    def test_an_icmp_rule_that_cant_be_held_damages_the_block(self):
+        self.make_block(segment=2)
+        (self.stub / "icmp").write_text("0")
+        self.running("gluetun", "lodestar", "lodestar-collector-2")
+        rc, lines, _ = self.run_script("outage-watcher.sh", ICMP_FAILS=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail host_guarded", lines)
+        self.assertTrue((self.block / "damaged").exists())
+        self.assertTrue((self.stub / "gluetun_stopped").exists())
+
+    def test_an_icmp_rule_check_error_is_not_read_as_gone(self):
+        self.make_block(segment=2)
+        self.running("gluetun", "lodestar", "lodestar-collector-2")
+        rc, lines, _ = self.run_script("outage-watcher.sh", ICMP_CHECK_ERR=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail host_guarded", lines)
+        self.assertEqual(self.copies("icmp"), 1)  # never re-added on an error
 
     def test_another_endpoints_guard_is_kept(self):
         """A renewal mid-block changes wg0.conf, not gluetun's session: the old
@@ -1024,7 +1190,9 @@ esac
         (self.stub / "host").write_text("0")
         self.run_script("outage-watcher.sh")
         waited = (self.stub / "waited").read_text().splitlines()
-        self.assertEqual([w.split()[0] for w in waited], ["-C", "-S", "-I", "-C"])
+        # INPUT's rule was gone and is put back; the ICMP rule (mangle) is there. Every call waits.
+        self.assertEqual([" ".join(w.split()[:3]) if w.startswith("-t") else w.split()[0] for w in waited],
+                         ["-C", "-S", "-I", "-C", "-t mangle -C"])
 
     def test_the_watcher_checks_at_once_on_an_outage(self):
         """A gluetun stop is when a missing guard matters: the check doesn't wait for the interval."""
@@ -1229,6 +1397,23 @@ class CopyOff(Base):
         self.assertNotIn(":/block/damaged", args)  # no mark: the block still copies off
         rc, lines, _ = self.run_script("copy-off.sh")  # again: the same evidence, the block already ended
         self.assertEqual((rc, lines[-2:]), (0, ["skip block_ended", "ok copy_off"]))
+
+    def test_copy_off_releases_both_guard_rules(self):
+        self.make_block(segment=2)
+        (self.stub / "oldicmp").write_text("1")  # an earlier endpoint's leftover
+        rc, lines, raw = self.run_script("copy-off.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok host_guard_released", lines)
+        for name in ("host", "icmp", "oldicmp"):
+            p = self.stub / name
+            self.assertEqual(int(p.read_text()) if p.exists() else 0, 0, name)
+
+    def test_a_stuck_icmp_rule_keeps_the_block(self):
+        self.make_block(segment=2)
+        rc, lines, _ = self.run_script("copy-off.sh", ICMP_STUCK=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail host_guard_released", lines)
+        self.assertTrue((self.block / "marker").exists())
 
     def test_copy_off_mounts_the_mark_and_the_scrubber_sees_it(self):
         """The mark alone, with no host_guard_lost line (a reboot between

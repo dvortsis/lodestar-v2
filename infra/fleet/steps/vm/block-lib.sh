@@ -18,15 +18,26 @@ API=http://127.0.0.1:8090  # Lodestar on gluetun's loopback, which the throwaway
 DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}  # read for its group only; only the proxy mounts it
 HEX64='^[0-9a-f]{64}$'
 
-# The host guard (X-gluetun-host-guard): an INPUT DROP for the VPN endpoint's
-# UDP, tagged lodestar-leak-host. When gluetun stops or is recreated, Docker
-# flushes the container's conntrack entries, so the endpoint's leftover UDP for
-# the old session goes to the host's own INPUT and the host's kernel would
-# answer it ("port unreachable") from its public address, outside the tunnel.
-# The guard can't touch the tunnel: a live session's replies are de-NATed and
-# forwarded, never delivered to the host. start-block holds it for the whole
-# block (from before the leak test recreates gluetun), copy-off removes it; a
-# leak test run on its own holds its own copy for its run.
+# The host guard: two rules, both tagged lodestar-leak-host, held and released
+# together.
+# - INPUT (X-gluetun-host-guard): a DROP for the VPN endpoint's UDP. When
+#   gluetun stops or is recreated and Docker flushes the container's conntrack
+#   entries, the endpoint's leftover UDP for the old session goes to the host's
+#   own INPUT, and the host's kernel would answer it ("port unreachable").
+# - mangle POSTROUTING (X-gluetun-guard-stop): a DROP for any ICMP to the
+#   endpoint, whoever sends it. While conntrack entries outlive a stopped
+#   gluetun, the endpoint's leftover UDP is still forwarded towards the gone
+#   container, and the host answers "host unreachable"; a new gluetun can send
+#   its own "port unreachable" before its firewall is up. Both leave from the
+#   host's public address. POSTROUTING sees what the host sends and what it
+#   forwards, after NAT, and Docker never writes to the mangle table, so the
+#   rule holds before Docker starts (the boot guard) and stays at the top.
+# Neither can touch the tunnel: a live session's replies are de-NATed and
+# forwarded, never delivered to the host, and the tunnel itself is UDP; nothing
+# legitimate sends ICMP to the VPN endpoint outside the tunnel. start-block
+# holds the guard for the whole block (from before the leak test recreates
+# gluetun), copy-off removes it; a leak test run on its own holds its own copy
+# for its run.
 HOST_TAG=lodestar-leak-host
 IPV4='^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$'
 # endpoint_read conf: the WireGuard endpoint from the root-only wg0.conf, into
@@ -41,21 +52,36 @@ endpoint_read() {
   ((10#$port >= 1 && 10#$port <= 65535)) || return 1
   ep_ip=$ip ep_port=$((10#$port))
 }
-host_guard_rule() {  # sets host_rule, for the endpoint endpoint_read read
+host_guard_rule() {  # sets host_rule and icmp_rule, for the endpoint endpoint_read read
   host_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment "$HOST_TAG" -j DROP)
+  icmp_rule=(-d "$ep_ip/32" -p icmp -m comment --comment "$HOST_TAG" -j DROP)
 }
-# host_guard_hold: exactly one host guard, this endpoint's. The new copy goes
-# in at the top of INPUT first and the rest (a stuck copy, a duplicate, or an
-# earlier endpoint's) come out after, so there's never a moment without one.
-# Re-running it leaves the same single rule. (With an identical copy already
+ICMP_TABLE=mangle
+ICMP_CHAIN=POSTROUTING
+# host_guard_hold: exactly one host guard, this endpoint's, in each chain. The
+# new copy goes in at the top first and the rest (a stuck copy, a duplicate, or
+# an earlier endpoint's) come out after, so there's never a moment without one.
+# Re-running it leaves the same single rules. (With an identical copy already
 # there, deleting by spec removes the new one, so the old copy keeps its place;
-# nothing else on the VM adds INPUT rules above it.)
+# nothing else on the VM adds rules above it.)
 host_guard_hold() {
   iptables -I INPUT 1 "${host_rule[@]}" 2>/dev/null || return 1
   clear_tagged INPUT "$HOST_TAG" 1 || return 1
-  iptables -C INPUT "${host_rule[@]}" 2>/dev/null
+  iptables -t "$ICMP_TABLE" -I "$ICMP_CHAIN" 1 "${icmp_rule[@]}" 2>/dev/null || return 1
+  clear_tagged_t "$ICMP_TABLE" "$ICMP_CHAIN" "$HOST_TAG" 1 || return 1
+  iptables -C INPUT "${host_rule[@]}" 2>/dev/null \
+    && iptables -t "$ICMP_TABLE" -C "$ICMP_CHAIN" "${icmp_rule[@]}" 2>/dev/null
 }
-host_guard_release() { clear_tagged INPUT "$HOST_TAG"; }  # every copy, whatever endpoint it names
+host_guard_held() {  # both rules are there, for this endpoint
+  iptables -C INPUT "${host_rule[@]}" 2>/dev/null \
+    && iptables -t "$ICMP_TABLE" -C "$ICMP_CHAIN" "${icmp_rule[@]}" 2>/dev/null
+}
+host_guard_release() {  # every copy in both chains, whatever endpoint it names
+  local rc=0
+  clear_tagged INPUT "$HOST_TAG" || rc=1
+  clear_tagged_t "$ICMP_TABLE" "$ICMP_CHAIN" "$HOST_TAG" || rc=1
+  return "$rc"
+}
 
 # A guard dropped mid-block (X-gluetun-guard-reboot): a reboot or an iptables
 # flush removes it while the marker still records a block, and gluetun, which
@@ -66,7 +92,7 @@ host_guard_release() { clear_tagged INPUT "$HOST_TAG"; }  # every copy, whatever
 # - the outage-watcher step.
 #
 # guard_resume conf [boot]: while a guard is expected, this endpoint's guard
-# is in INPUT, or it's put back. Expected means a recorded block; at boot also
+# is in both its chains, or what's missing is put back. Expected means a recorded block; at boot also
 # a block that ended but isn't copied off yet (copy-off releases the guard).
 # It only adds: a copy for another endpoint (a VPN renewal mid-block replaces
 # wg0.conf but not gluetun's session) is left in place, and copy-off removes
@@ -99,25 +125,35 @@ guard_resume() {
   if ! guard_expected "$mode"; then exec {fd}>&-; return 0; fi
   if endpoint_read "$conf"; then
     host_guard_rule
-    # Only exit 1 means gone (as in drop_all). Any other exit (the xtables
-    # lock held past -w's 5 s, say) is tried again, and fails closed if it
-    # persists.
-    for ((i = 0; i < 3; i++)); do
-      iptables -w 5 -C INPUT "${host_rule[@]}" 2>/dev/null; rc=$?
-      ((rc <= 1)) && break
-      sleep 2
-    done
-    if ((rc == 0)); then exec {fd}>&-; return 0; fi
-    if ((rc == 1)); then
-      tagged=$(iptables -w 5 -S INPUT 2>/dev/null | grep -c -e "--comment $HOST_TAG ")
-      ((${tagged:-0} > 0)) || dropped=1
-      if iptables -w 5 -I INPUT 1 "${host_rule[@]}" 2>/dev/null \
-        && iptables -w 5 -C INPUT "${host_rule[@]}" 2>/dev/null; then
-        exec {fd}>&-
-        [[ -n $dropped ]] || return 0
-        block_record "$mode" host_guard_dropped
-        return 3
+    local slot table chain ok=1 rule=()
+    for slot in "filter INPUT" "$ICMP_TABLE $ICMP_CHAIN"; do
+      read -r table chain <<<"$slot"
+      if [[ $chain == INPUT ]]; then rule=("${host_rule[@]}"); else rule=("${icmp_rule[@]}"); fi
+      # Only exit 1 means gone (as in drop_all). Any other exit (the xtables
+      # lock held past -w's 5 s, say) is tried again, and fails closed if it
+      # persists.
+      for ((i = 0; i < 3; i++)); do
+        ipt_w "$table" -C "$chain" "${rule[@]}" 2>/dev/null; rc=$?
+        ((rc <= 1)) && break
+        sleep 2
+      done
+      ((rc == 0)) && continue
+      if ((rc == 1)); then
+        tagged=$(ipt_w "$table" -S "$chain" 2>/dev/null | grep -c -e "--comment $HOST_TAG ")
+        ((${tagged:-0} > 0)) || dropped=1
+        if ipt_w "$table" -I "$chain" 1 "${rule[@]}" 2>/dev/null \
+          && ipt_w "$table" -C "$chain" "${rule[@]}" 2>/dev/null; then
+          continue
+        fi
       fi
+      ok=""
+      break
+    done
+    if [[ -n $ok ]]; then
+      exec {fd}>&-
+      [[ -n $dropped ]] || return 0
+      block_record "$mode" host_guard_dropped
+      return 3
     fi
   fi
   guard_lost "$mode" "$dropped"
@@ -182,20 +218,34 @@ stop_gluetun() {
   ! running gluetun
 }
 guard_drops() { grep -cE ' host_guard_dropped$' "$BLOCK/outages" 2>/dev/null || true; }
+# ipt_w table args...: iptables waiting up to 5 s for the xtables lock, in
+# `table` (no -t for filter, the default).
+ipt_w() {
+  local table=$1
+  shift
+  if [[ $table == filter ]]; then iptables -w 5 "$@"; else iptables -w 5 -t "$table" "$@"; fi
+}
+# ipt table args...: iptables in `table` (no -t for filter).
+ipt() {
+  local table=$1
+  shift
+  if [[ $table == filter ]]; then iptables "$@"; else iptables -t "$table" "$@"; fi
+}
 # drop_all chain rule...: remove every copy of a rule (a failed delete can
 # leave more than one). Only `-C` exit 1 means absent (iptables also uses 1
 # for some generic errors, such as a missing chain); any other exit is an
 # error, never read as "gone". Fails when a copy may still be there.
-drop_all() {
-  local chain=$1 i rc
-  shift
+drop_all() { drop_all_t filter "$@"; }
+drop_all_t() {  # table chain rule...
+  local table=$1 chain=$2 i rc
+  shift 2
   for ((i = 0; i < 5; i++)); do
-    iptables -C "$chain" "$@" 2>/dev/null; rc=$?
+    ipt "$table" -C "$chain" "$@" 2>/dev/null; rc=$?
     ((rc == 1)) && return 0
     ((rc == 0)) || return 1
-    iptables -D "$chain" "$@" 2>/dev/null || return 1
+    ipt "$table" -D "$chain" "$@" 2>/dev/null || return 1
   done
-  iptables -C "$chain" "$@" 2>/dev/null; rc=$?
+  ipt "$table" -C "$chain" "$@" 2>/dev/null; rc=$?
   ((rc == 1))
 }
 # clear_tagged chain tag [keep]: remove every rule in the chain that carries
@@ -203,16 +253,17 @@ drop_all() {
 # 0). Each line of `iptables -S` is turned from -A into -D and run as words,
 # never through a shell. Deleting by a duplicate's spec removes the first
 # identical copy, which leaves the same rule in place.
-clear_tagged() {
-  local chain=$1 tag=$2 keep=${3:-0} i out line words
+clear_tagged() { clear_tagged_t filter "$@"; }
+clear_tagged_t() {  # table chain tag [keep]
+  local table=$1 chain=$2 tag=$3 keep=${4:-0} i out line words
   for ((i = 0; i < 10; i++)); do
-    out=$(iptables -S "$chain" 2>/dev/null) || return 1
+    out=$(ipt "$table" -S "$chain" 2>/dev/null) || return 1
     line=$(printf '%s\n' "$out" | grep -e "--comment $tag " | sed -n "$((keep + 1))p")
     [[ -z $line ]] && return 0
     read -ra words <<<"$line"
     [[ ${words[0]} == -A && ${words[1]} == "$chain" ]] || return 1
     words[0]=-D
-    iptables "${words[@]}" 2>/dev/null || return 1
+    ipt "$table" "${words[@]}" 2>/dev/null || return 1
   done
   return 1
 }
@@ -262,13 +313,56 @@ arm_of() { case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac; }
 # Start Lodestar (alone: gluetun isn't recreated) with segment $1's arm. Every
 # switch but the treatment's stays at its shipped default; safe restart is on
 # for the whole block, so each later start is a resumed one.
+# The image Lodestar runs: the registry's, pinned by digest (the default), or,
+# for a test run, a locally built image pinned by its image ID (LOCAL_IMAGE_ID, the
+# 64 hex of `docker image inspect -f {{.Id}}`). Either way it's content-pinned.
+lodestar_image() {
+  if [[ -n ${LOCAL_IMAGE_ID:-} ]]; then echo "sha256:$LOCAL_IMAGE_ID"; else echo "$LODESTAR_REPO@sha256:$IMAGE_DIGEST"; fi
+}
+# lodestar_image_ready: the registry image pulled, or the local one present
+# with exactly that ID (a local image is never pulled).
+lodestar_image_ready() {
+  if [[ -n ${LOCAL_IMAGE_ID:-} ]]; then
+    [[ $(timeout 30 docker image inspect -f '{{.Id}}' "sha256:$LOCAL_IMAGE_ID" 2>/dev/null) == "sha256:$LOCAL_IMAGE_ID" ]]
+  else
+    timeout 300 docker pull "$LODESTAR_REPO@sha256:$IMAGE_DIGEST" >/dev/null 2>&1
+  fi
+}
+# Lodestar's account (the image's default PUID/PGID; compose sets neither).
+# Tests, which don't run as root, pass their own.
+LODESTAR_UID=${DATA_UID:-65532}
+# data_dirs_ready: the data and witness folders belong to Lodestar's account,
+# mode 0755, inside a stack folder others can't enter.
+# Lodestar starts as root with only CHOWN, SETGID and SETUID (compose
+# cap_drop: ALL), so root can't override file modes: it opens /data to check
+# its owner, which a 0700 folder owned by 65532 refuses on every start after
+# the first. Others' read and execute let it open the folder; closing the
+# stack folder to others (o-rwx) keeps every host account but root and the
+# stack's owner out, and only the containers that mount the folders see them
+# (a bind mount doesn't need its host parents). What Lodestar writes inside
+# keeps its own modes. Created empty when missing (`fresh` replaces them).
+data_dirs_ready() {  # [fresh]
+  local d
+  chmod o-rwx -- "$STACK" || return 1
+  [[ $(stat -c %A -- "$STACK" 2>/dev/null) == *--- ]] || return 1
+  if [[ ${1:-} == fresh ]]; then rm -rf -- "$STACK/data" "$STACK/witness" || return 1; fi
+  for d in "$STACK/data" "$STACK/witness"; do
+    [[ -L $d ]] && return 1
+    if [[ -d $d ]]; then
+      chown "$LODESTAR_UID:$LODESTAR_UID" -- "$d" && chmod 0755 -- "$d" || return 1
+    else
+      install -d -o "$LODESTAR_UID" -g "$LODESTAR_UID" -m 0755 -- "$d" || return 1
+    fi
+  done
+}
 start_lodestar() {  # $1 segment, $2 "fresh" to recreate whatever compose thinks
-  local value=false recreate=()
+  local value=false recreate=() image
   [[ ${2:-} == fresh ]] && recreate=(--force-recreate)
   [[ $(arm_of "$1") == treatment ]] && value=true
+  image=$(lodestar_image)
   (
     unset LODESTAR_DHT_COORDINATED_ADMISSION LODESTAR_DHT_UTP LODESTAR_DHT_ROUTE_BACKOFF
-    export LODESTAR_IMAGE="$LODESTAR_REPO@sha256:$IMAGE_DIGEST" LODESTAR_DHT_SAFE_RESTART=true \
+    export LODESTAR_IMAGE="$image" LODESTAR_DHT_SAFE_RESTART=true \
       "$TREATMENT_ENV=$value" DOCKER_GID=unused
     timeout 240 docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
       --profile block up -d --no-deps "${recreate[@]}" lodestar >/dev/null 2>&1
@@ -280,6 +374,30 @@ network_parent_ok() {
   id=$(timeout 30 docker inspect --type container -f '{{.Id}}' gluetun 2>/dev/null) || return 1
   mode=$(timeout 30 docker inspect --type container -f '{{.HostConfig.NetworkMode}}' lodestar 2>/dev/null) || return 1
   [[ -n $id && $mode == "container:$id" ]]
+}
+# netns_of container: its network namespace's inode, from its main process.
+netns_of() {
+  local pid
+  pid=$(timeout 30 docker inspect --type container -f '{{.State.Pid}}' "$1" 2>/dev/null)
+  [[ $pid =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  stat -L -c %i -- "${PROC_ROOT:-/proc}/$pid/ns/net" 2>/dev/null  # tests pass their own /proc
+}
+# same_netns: running Lodestar is in the namespace gluetun has now. A gluetun
+# that restarted (same container, new namespace) leaves a running Lodestar in
+# the old one, where its API can't be reached, until Lodestar restarts.
+same_netns() {
+  local a b
+  a=$(netns_of gluetun) && b=$(netns_of lodestar) && [[ -n $a && $a == "$b" ]]
+}
+# lodestar_follows_gluetun: after gluetun has come back, a running Lodestar in
+# an old namespace is restarted, so it joins gluetun's (test scripts only; the
+# product's own behaviour is a follow-up, X-gluetun-guard-stop decisions).
+# 0 when it's in gluetun's namespace, restarted or not.
+lodestar_follows_gluetun() {
+  running lodestar || return 0
+  same_netns && return 0
+  timeout 120 docker restart -t 60 lodestar >/dev/null 2>&1 || return 1
+  same_netns
 }
 # The collector's Docker proxy (docker-proxy.cfg), rendered with the IDs of the
 # Lodestar container just started, its image and gluetun, read here on the
@@ -349,9 +467,10 @@ collector_ok() {
 load_block_env() {
   local f=$BLOCK/block.env k v
   [[ -f $f ]] || return 1
+  unset IMAGE_DIGEST LOCAL_IMAGE_ID  # only the file's pin counts, never the environment's
   while IFS='=' read -r k v; do
     case $k in
-      IMAGE_DIGEST) [[ $v =~ ^[0-9a-f]{64}$ ]] || return 1 ;;
+      IMAGE_DIGEST | LOCAL_IMAGE_ID) [[ $v =~ ^[0-9a-f]{64}$ ]] || return 1 ;;
       LODESTAR_COMMIT | SPEC_COMMIT | RULES_COMMIT) [[ $v =~ ^[0-9a-f]{40}$ ]] || return 1 ;;
       TREATMENT) [[ $v =~ ^(adm|utp|route)$ ]] || return 1 ;;
       SEGMENT_HOURS) [[ $v =~ ^[23]$ ]] || return 1 ;;
@@ -360,7 +479,9 @@ load_block_env() {
     esac
     printf -v "$k" '%s' "$v"
   done <"$f"
-  [[ -n ${IMAGE_DIGEST:-} && -n ${LODESTAR_COMMIT:-} && -n ${SPEC_COMMIT:-} && -n ${TREATMENT:-} \
+  # Exactly one image pin: the registry digest or a local image ID.
+  [[ -z ${IMAGE_DIGEST:-} && -n ${LOCAL_IMAGE_ID:-} || -n ${IMAGE_DIGEST:-} && -z ${LOCAL_IMAGE_ID:-} ]] || return 1
+  [[ -n ${LODESTAR_COMMIT:-} && -n ${SPEC_COMMIT:-} && -n ${TREATMENT:-} \
     && -n ${SEGMENT_HOURS:-} && -n ${ROLE:-} ]] || return 1
   case $TREATMENT in
     adm) TREATMENT_ENV=LODESTAR_DHT_COORDINATED_ADMISSION ;;

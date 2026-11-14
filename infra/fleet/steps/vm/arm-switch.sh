@@ -62,9 +62,12 @@ if ((seg == 4)); then
 fi
 next=$((seg + 1))
 printf 'block=%s\nsegment=%s\nstate=running\n' "$id" "$next" | marker_write || fail marker_written
+# A block started before the folders were handed over keeps 0700 ones, which
+# Lodestar can't reopen (block-lib.sh data_dirs_ready); they're fixed in place.
+data_dirs_ready || fail data_dirs
 started=1
 start_lodestar "$next" || fail lodestar_started
-network_parent_ok || fail network_parent
+network_parent_ok && lodestar_follows_gluetun || fail network_parent
 start_proxy || fail docker_proxy  # the new container's ID; no collector runs yet
 wait_api || fail api_up
 echo "ok lodestar_started"
