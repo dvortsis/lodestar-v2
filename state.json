@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T14:17Z",
+  "updated_at": "2026-11-14T14:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8722,6 +8722,11 @@
       "id": "operator-checks-3-5",
       "note": "Owner runs check 3 (a: second account neg-1; b: not done, no App token; c: owner posts /fleet status, pass = gate+refuse green, nothing posted) and optional check 5 (status-1, ghs_ prefix False closes token item). Check 2 passed except token item pending check 5. Nit: #885 decisions heading (#PR) -> (#885) in next operator-docs push.",
       "at": "2026-11-14T14:17Z"
+    },
+    {
+      "id": "X-fuzz-gaps-optional",
+      "note": "#884 review optional: peer_wire handshake round trip cannot fail; fold into slot 33 next fuzz/ PR.",
+      "at": "2026-11-14T14:34Z"
     }
   ],
   "main_health": [
@@ -9117,12 +9122,6 @@
       "status": "delta review CHANGES on 9baaf526 (1 blocking hygiene leftover in bench fixture, 1 important: retry-queue merge could weaken hold strength; 1 optional test); round 4 requested",
       "at": "2026-11-14T13:09Z",
       "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
-    },
-    "884": {
-      "slice": "X-fuzz-gaps",
-      "slot": 33,
-      "head": "25694d7f",
-      "state": "CI running; awaiting ready"
     }
   },
   "merged_log": [
@@ -9769,7 +9768,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T14:17Z",
+    "updated": "2026-11-14T14:34Z",
     "items": [
       {
         "slot": 1,
@@ -9949,11 +9948,11 @@
       },
       {
         "slot": 33,
-        "slice": "X-fuzz-gaps",
+        "slice": "X-fetch-room-fix",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "#884 X-fuzz-gaps CI; building X-fetch-room-fix (w1, m2) locally",
-        "since": "2026-11-14T09:05Z"
+        "doing": "X-fetch-room-fix build (then X-pool-model-test)",
+        "since": "2026-11-14T14:34Z"
       }
     ]
   },
@@ -10038,7 +10037,7 @@
     }
   ],
   "heartbeat": "2026-11-14T12:39Z",
-  "updated": "2026-11-14T14:17Z",
+  "updated": "2026-11-14T14:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10709,6 +10708,12 @@
       "slice": "X-operator-check-notes",
       "merged": "19041df6",
       "at": "2026-11-14T14:17Z"
+    },
+    {
+      "pr": 884,
+      "slice": "X-fuzz-gaps",
+      "merged": "92b181bd",
+      "at": "2026-11-14T14:34Z"
     }
   ],
   "review_sessions": []
