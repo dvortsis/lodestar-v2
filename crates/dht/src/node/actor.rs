@@ -135,6 +135,20 @@ fn reply_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
     TokenBucket::new(intensity.queries_per_sec() * 2, now)
 }
 
+/// The share of the query rate that pings to queriers may use. A querier's
+/// address isn't proven until it answers one, so what arrives decides how
+/// many are wanted; this is the most of our own budget it can spend.
+const VERIFY_SHARE: f64 = 0.05;
+
+/// The share of the outstanding-query cap those pings may hold at once.
+const VERIFY_OUTSTANDING_DIV: usize = 16;
+
+/// Pings to queriers: [`VERIFY_SHARE`] of the query rate.
+fn verify_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
+    let per_sec = f64::from(intensity.queries_per_sec()) * VERIFY_SHARE;
+    TokenBucket::with_burst(per_sec, per_sec, now)
+}
+
 /// Scrape lookups: [`SCRAPE_SHARE`] of the query rate.
 fn scrape_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
     let qps = f64::from(intensity.queries_per_sec());
@@ -414,6 +428,11 @@ struct Actor {
     next_lookup: u32,
     query_rate: TokenBucket,
     reply_rate: TokenBucket,
+    /// Pings to queriers draw on this before the query rate, so inbound
+    /// traffic never spends more than its share of it.
+    verify_rate: TokenBucket,
+    /// Those pings still awaiting an answer.
+    verify_tids: Set<u64>,
     stats: Arc<Stats>,
     rng: StdRng,
     epoch: Instant,
@@ -700,6 +719,8 @@ impl Actor {
             tokens: Tokens::new(now, &mut rng),
             query_rate: query_bucket(cfg.intensity, now),
             reply_rate: reply_bucket(cfg.intensity, now),
+            verify_rate: verify_bucket(cfg.intensity, now),
+            verify_tids: Set::default(),
             families,
             ids,
             external: ExternalIp {
@@ -846,6 +867,7 @@ impl Actor {
                 self.cfg.intensity = intensity;
                 self.query_rate = query_bucket(intensity, now);
                 self.reply_rate = reply_bucket(intensity, now);
+                self.verify_rate = verify_bucket(intensity, now);
                 self.scrape_rate = scrape_bucket(intensity, now);
             }
             Command::GetPeers(hash) => {
@@ -1136,6 +1158,7 @@ impl Actor {
         if self.seed_tids.remove(&tid) {
             self.end_seed_round_if_done();
         }
+        self.verify_tids.remove(&tid);
         if let Purpose::Lookup(lid) = p.purpose
             && let Some(r) = self
                 .lookups
@@ -1232,6 +1255,36 @@ impl Actor {
         (v4, v6)
     }
 
+    /// Pings a querier, within the share of the query rate and of the
+    /// outstanding cap that such pings may use. Whoever sends us queries
+    /// chooses how many of these are wanted and where they'd go, so they
+    /// have a budget of their own, taken before the shared one: past it the
+    /// querier just isn't verified this time, and lookups and sampling keep
+    /// the rest.
+    fn verify_querier(
+        &mut self,
+        sockets: &[SendSocket],
+        family: usize,
+        from: SocketAddr,
+        id: NodeId,
+    ) {
+        let to = lodestar_network_policy::normalize(from);
+        if !endpoint_allowed(&self.cfg, to) {
+            Stats::inc(&self.stats.denied);
+            return;
+        }
+        let cap = (self.cfg.intensity.max_outstanding() / VERIFY_OUTSTANDING_DIV).max(1);
+        if self.verify_tids.len() >= cap || !self.verify_rate.try_take(Instant::now()) {
+            Stats::inc(&self.stats.throttled);
+            return;
+        }
+        if let Ok(tid) =
+            self.dispatch_query(sockets, family, to, Some(id), Method::Ping, Purpose::Ping)
+        {
+            self.verify_tids.insert(tid);
+        }
+    }
+
     fn on_query(
         &mut self,
         sockets: &[SendSocket],
@@ -1252,14 +1305,7 @@ impl Actor {
             // A querier's address may be spoofed, so it only enters the
             // table once it answers a ping of ours.
             if worth_verifying && !self.cfg.read_only && !self.pending_addrs.contains_key(&from) {
-                self.query(
-                    sockets,
-                    family,
-                    from,
-                    Some(q.id),
-                    Method::Ping,
-                    Purpose::Ping,
-                );
+                self.verify_querier(sockets, family, from, q.id);
             }
         }
         // BEP 43: a read-only node doesn't answer.
@@ -4343,3 +4389,7 @@ mod shard_tests;
 #[cfg(test)]
 #[path = "join_tests.rs"]
 mod join_tests;
+
+#[cfg(test)]
+#[path = "verify_tests.rs"]
+mod verify_tests;
