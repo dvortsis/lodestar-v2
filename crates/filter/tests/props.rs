@@ -2488,7 +2488,7 @@ fn runner_speed() -> f64 {
 #[test]
 #[ignore]
 fn budget_worst_case() {
-    use lodestar_filter::{BUDGET, Engine, PackSwitches, read_cost};
+    use lodestar_filter::{BUDGET, Engine, PackSwitches};
 
     struct Rng(u64);
     impl Rng {
@@ -2514,6 +2514,8 @@ fn budget_worst_case() {
         (0..n).map(|i| FileInfo::new(f(i), 1 << 20)).collect()
     }
     type Shape = Box<dyn Fn(usize) -> Vec<FileInfo>>;
+    /// A shape that grows the torrent's name, not its files.
+    type Named = Box<dyn Fn(usize) -> String>;
     let ascii: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
     let cjk: Vec<char> = ('\u{4E00}'..='\u{9FA5}').collect();
     let arabic: Vec<char> = ('\u{0627}'..='\u{064A}').collect();
@@ -2636,6 +2638,35 @@ fn budget_worst_case() {
             Box::new(|n| each(n, |i| vec![format!("dir {} word", i % 5), format!("{i}")])),
         ),
         (
+            "shape 1",
+            Box::new(move |n| {
+                each(n, |i| {
+                    let base = 0xAC01 + (i as u32 % 7) * 28;
+                    let s: String = (0..5)
+                        .filter_map(|k| char::from_u32(base + k * 2048))
+                        .collect();
+                    vec![s]
+                })
+            }),
+        ),
+        (
+            "shape 2",
+            Box::new(|n| {
+                each(n, |i| {
+                    let mut r = Rng(i as u64 * 2 + 1);
+                    let mix = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                    let mut s = String::new();
+                    while s.len() < 4_000 {
+                        for _ in 0..32 {
+                            s.push(mix[r.next() as usize % mix.len()] as char);
+                        }
+                        s.push(' ');
+                    }
+                    vec![s]
+                })
+            }),
+        ),
+        (
             "typical Latin",
             Box::new(|n| {
                 each(n, |i| {
@@ -2689,11 +2720,40 @@ fn budget_worst_case() {
             let t = apart("15 yo", "lexa").repeat(40);
             Box::new(move |n| each(n, |i| vec![format!("{t}{i}")]))
         }),
+        ("shape 3", {
+            let t = format!(
+                "{}{}{}",
+                "rolea ".repeat(200),
+                "w ".repeat(20),
+                "lexa ".repeat(200)
+            );
+            Box::new(move |n| each(n, |i| vec![format!("{t}{i}")]))
+        }),
+        ("shape 4", {
+            Box::new(|n| each(n, |i| vec![format!("15 yo {}", i % 10)]))
+        }),
         ("terms in a shared folder", {
             let t = apart("rolea", "lexa").repeat(40);
             Box::new(move |n| each(n, |i| vec![t.clone(), format!("{i}")]))
         }),
     ];
+    // A shape that grows the name.
+    let named: Vec<(&str, Named)> = vec![(
+        "shape 5",
+        Box::new(|n| {
+            let pair: Vec<char> = (0..2)
+                .filter_map(|k| char::from_u32(0xAC01 + 27 * 28 + k * 2048))
+                .collect();
+            let mut s = String::new();
+            for i in 0..n {
+                s.push(pair[i % 2]);
+                if i % 3 == 2 {
+                    s.push(' ');
+                }
+            }
+            s
+        }),
+    )];
     let speed = runner_speed();
     println!("calibration: {speed:.2}× the reference's time");
     let shipped = Core::new(
@@ -2704,23 +2764,33 @@ fn budget_worst_case() {
     let stand_in = Core::new(stand_ins(), CsList::default(), Switches::default());
     let mut over = Vec::new();
     let mut worst = 0f64;
-    let all = shapes
+    type Torrent = Box<dyn Fn(usize) -> (String, Vec<FileInfo>)>;
+    let title = |s: &'static Shape| -> Torrent { Box::new(move |n| ("Title".into(), s(n))) };
+    let shapes: &'static Vec<(&str, Shape)> = Box::leak(Box::new(shapes));
+    let terms: &'static Vec<(&str, Shape)> = Box::leak(Box::new(terms));
+    let named: &'static Vec<(&str, Named)> = Box::leak(Box::new(named));
+    let all: Vec<(&str, Torrent, &Core, ContentType)> = shapes
         .iter()
-        .map(|(l, s)| (*l, s, &shipped, ContentType::Video))
+        .map(|(l, s)| (*l, title(s), &shipped, ContentType::Video))
         .chain(
             terms
                 .iter()
-                .map(|(l, s)| (*l, s, &stand_in, ContentType::Adult)),
-        );
+                .map(|(l, s)| (*l, title(s), &stand_in, ContentType::Adult)),
+        )
+        .chain(named.iter().map(|(l, s)| {
+            let t: Torrent = Box::new(move |n| (s(n), vec![FileInfo::new(vec!["a".into()], 1)]));
+            (*l, t, &shipped, ContentType::Video)
+        }))
+        .collect();
     for (label, shape, core, content_type) in all {
         let mut engine = Engine::new(core.clone());
         engine.packs = PackSwitches::all();
         // The largest torrent of this shape the core still reads whole.
         let fits = |n: usize| {
-            let files = shape(n);
-            read_cost(&Item {
+            let (name, files) = shape(n);
+            core.read_cost(&Item {
                 hashes: &[],
-                name: "Title",
+                name: &name,
                 files: &files,
                 content_type,
             })
@@ -2735,14 +2805,14 @@ fn budget_worst_case() {
             let mid = (lo + hi) / 2;
             if fits(mid) { lo = mid } else { hi = mid }
         }
-        let files = shape(lo);
+        let (name, files) = shape(lo);
         let it = Item {
             hashes: &[],
-            name: "Title",
+            name: &name,
             files: &files,
             content_type,
         };
-        let units = read_cost(&it).expect("within the budget");
+        let units = core.read_cost(&it).expect("within the budget");
         let time = |f: &dyn Fn()| {
             f();
             let mut best = f64::MAX;
@@ -2790,3 +2860,179 @@ fn budget_worst_case() {
 /// two, which this host can't measure. A bench against a stored
 /// baseline could, as §20.8 says of the budget gate.
 const WORST_CASE_MS: f64 = 15.0;
+
+/// [`budget_worst_case`]'s generated inputs, in work units rather than
+/// time, so CI enforces their charges: each one's charged units reach the
+/// budget at no more files (or name length) than a fixed cap, set about
+/// a quarter above what the charges allow today, and the torrent is held
+/// as too large to judge (CS-0a) at it. Before these charges every one of them
+/// fitted well past its cap; a charge lost later lets more fit and fails
+/// this.
+#[test]
+fn generated_inputs_reach_the_budget() {
+    use lodestar_filter::{CoreRule, TermSet, read_cost};
+    fn each(n: usize, f: impl Fn(usize) -> String) -> Vec<FileInfo> {
+        (0..n).map(|i| FileInfo::new(vec![f(i)], 1 << 20)).collect()
+    }
+    type Torrent = Box<dyn Fn(usize) -> (String, Vec<FileInfo>)>;
+    let files =
+        |f: fn(usize) -> String| -> Torrent { Box::new(move |n| ("Title".into(), each(n, f))) };
+    let shipped = Core::new(
+        Lists::shipped().unwrap(),
+        CsList::default(),
+        Switches::default(),
+    );
+    let stand_in = Core::new(
+        Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        },
+        CsList::default(),
+        Switches::default(),
+    );
+    let shapes: Vec<(&str, Torrent, &Core, ContentType, usize)> = vec![
+        (
+            "shape 1",
+            files(|i| {
+                let base = 0xAC01 + (i as u32 % 7) * 28;
+                (0..5)
+                    .filter_map(|k| char::from_u32(base + k * 2048))
+                    .collect()
+            }),
+            &shipped,
+            ContentType::Video,
+            16_000,
+        ),
+        (
+            "shape 2",
+            files(|i| {
+                let mut x = i as u64 * 2 + 1;
+                let mix = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                let mut s = String::new();
+                while s.len() < 4_000 {
+                    for _ in 0..32 {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        s.push(mix[x as usize % mix.len()] as char);
+                    }
+                    s.push(' ');
+                }
+                s
+            }),
+            &shipped,
+            ContentType::Video,
+            74,
+        ),
+        (
+            "shape 3",
+            files(|i| {
+                format!(
+                    "{}{}{}{i}",
+                    "rolea ".repeat(200),
+                    "w ".repeat(20),
+                    "lexa ".repeat(200)
+                )
+            }),
+            &stand_in,
+            ContentType::Adult,
+            650,
+        ),
+        (
+            "shape 4",
+            files(|i| format!("15 yo {}", i % 10)),
+            &stand_in,
+            ContentType::Adult,
+            48_000,
+        ),
+        (
+            "shape 5",
+            Box::new(|n| {
+                let pair: Vec<char> = (0..2)
+                    .filter_map(|k| char::from_u32(0xAC01 + 27 * 28 + k * 2048))
+                    .collect();
+                let mut s = String::new();
+                for i in 0..n {
+                    s.push(pair[i % 2]);
+                    if i % 3 == 2 {
+                        s.push(' ');
+                    }
+                }
+                (s, vec![FileInfo::new(vec!["a".into()], 1)])
+            }),
+            &shipped,
+            ContentType::Video,
+            CAP_NAME,
+        ),
+        (
+            "shape 6",
+            files(|i| {
+                let mut x = (i % 4) as u64 * 2 + 1;
+                let mut s = String::new();
+                while s.len() < 4_000 {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    s.push_str(&format!("q{} ", x % 2_000));
+                }
+                s
+            }),
+            &shipped,
+            ContentType::Video,
+            CAP_6,
+        ),
+    ];
+    for (label, shape, core, content_type, cap) in shapes {
+        let (name, files) = shape(cap);
+        let it = Item {
+            hashes: &[],
+            name: &name,
+            files: &files,
+            content_type,
+        };
+        assert_eq!(core.read_cost(&it), None, "{label}: {cap} fit the budget");
+        assert_eq!(
+            core.verdict(&it).map(|h| h.rule),
+            Some(CoreRule::Cs0a),
+            "{label}"
+        );
+        // Judging counts too: a torrent the read alone fits, held because
+        // judging its signals passes the budget.
+        if label == "shape 3" {
+            let fits = |n: usize| {
+                let (name, files) = shape(n);
+                core.read_cost(&Item {
+                    hashes: &[],
+                    name: &name,
+                    files: &files,
+                    content_type,
+                })
+                .is_some()
+            };
+            let (mut lo, mut hi) = (1, cap);
+            while hi - lo > 1 {
+                let mid = (lo + hi) / 2;
+                if fits(mid) { lo = mid } else { hi = mid }
+            }
+            let (name, files) = shape(hi);
+            let it = Item {
+                hashes: &[],
+                name: &name,
+                files: &files,
+                content_type,
+            };
+            assert!(
+                read_cost(&it).is_some(),
+                "the read alone fits at {hi} files"
+            );
+            assert_eq!(core.verdict(&it).map(|h| h.rule), Some(CoreRule::Cs0a));
+        }
+    }
+}
+
+/// [`generated_inputs_reach_the_budget`]'s cap on shape 6's files.
+const CAP_6: usize = 130;
+
+/// [`generated_inputs_reach_the_budget`]'s cap on shape 5's size.
+const CAP_NAME: usize = 101_000;

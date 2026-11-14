@@ -299,19 +299,23 @@ const SCRIPTS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Ten thousand files with paths of up to 120 bytes, and a name of 4 KB,
-/// in any script, are judged whole: a pair in the last file is caught.
+/// Nine thousand files with paths of up to 120 bytes built from a few
+/// words that repeat, each file numbered, and a name of 4 KB, in any
+/// script, are judged whole: a pair in the last file is caught (measured:
+/// 10,880 in Latin, 9,472 in CJK, 9,344 in Cyrillic and 9,728 in Arabic).
+/// Names that vary from file to file fit fewer, by script
+/// ([`varied_collections_in_each_script_are_judged`]).
 #[test]
 fn large_torrents_in_any_script_are_judged() {
     let c = core();
     for (script, words) in SCRIPTS {
-        let mut files: Vec<FileInfo> = (0..10_000).map(|i| typical_path(words, 120, i)).collect();
+        let mut files: Vec<FileInfo> = (0..9_000).map(|i| typical_path(words, 120, i)).collect();
         assert!(
             files
                 .iter()
                 .all(|f| f.path.iter().map(String::len).sum::<usize>() <= 120)
         );
-        files[9_999] = file("Folder/rolea lexa.mkv");
+        files[8_999] = file("Folder/rolea lexa.mkv");
         let mut name = String::new();
         while name.len() < 4_000 {
             name.push_str(words[name.len() % words.len()]);
@@ -657,7 +661,7 @@ fn every_reading_reaches_the_end_or_holds() {
                 _ => None,
             };
             assert!(both(by_engine), "{segments}/{chars}: {by_engine:?}");
-            assert_eq!(by_core == Some(CoreRule::Cs0a), too_large(&it));
+            assert_eq!(by_core == Some(CoreRule::Cs0a), c.too_large(&it));
             held[usize::from(by_core == Some(CoreRule::Cs0a))] += 1;
         }
     }
@@ -730,5 +734,75 @@ proptest! {
         let it = item(&name, &[]);
         prop_assert!(too_large(&it));
         prop_assert_eq!(c.verdict(&it).map(|h| h.rule), Some(CoreRule::Cs0a));
+    }
+}
+
+/// Each script's letters, for names that vary from file to file.
+const POOLS: &[(&str, u32, u32)] = &[
+    ("Latin", 0x61, 0x7A),
+    ("Cyrillic", 0x430, 0x44F),
+    ("Arabic", 0x627, 0x64A),
+    ("Kana", 0x30A1, 0x30FA),
+    ("CJK", 0x4E00, 0x9FA5),
+    ("Hangul", 0xAC00, 0xD7A3),
+];
+
+/// `n` files with names of about 60 bytes of words from a vocabulary of
+/// 2,000 words in the characters `from..=to`, each file's different, as a
+/// large collection's are.
+fn varied(from: u32, to: u32, n: usize) -> Vec<FileInfo> {
+    let span = u64::from(to - from + 1);
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let vocabulary: Vec<String> = (0..2_000)
+        .map(|_| {
+            let len = 2 + next() % 4;
+            (0..len)
+                .map(|_| char::from_u32(from + (next() % span) as u32).unwrap())
+                .collect()
+        })
+        .collect();
+    (0..n)
+        .map(|i| {
+            let mut name = format!("{i:05} ");
+            while name.len() < 60 {
+                name.push_str(&vocabulary[next() as usize % vocabulary.len()]);
+                name.push(' ');
+            }
+            name.push_str(".mkv");
+            FileInfo::new(vec!["Collection".into(), name], 1 << 30)
+        })
+        .collect()
+}
+
+/// A collection of [`varied`] names is judged whole up to a number of
+/// files that depends on the script, since each word new to the torrent
+/// is charged once: at least 5,000 files in Latin, 5,500 in Cyrillic and
+/// Arabic, 6,000 in Kana, 2,800 in CJK and 2,300 in Hangul (measured:
+/// 5,312, 5,888, 5,760, 6,656, 2,944 and 2,432). A pair in the last file
+/// is caught.
+#[test]
+fn varied_collections_in_each_script_are_judged() {
+    let c = core();
+    let fits = [5_000, 5_500, 5_500, 6_000, 2_800, 2_300];
+    for ((script, from, to), n) in POOLS.iter().zip(fits) {
+        let mut files = varied(*from, *to, n);
+        files[n - 1] = file("Collection/rolea lexa.mkv");
+        let it = item("Collection", &files);
+        assert!(
+            !c.too_large(&it),
+            "{script}: {n} files: {:?}",
+            c.read_cost(&it)
+        );
+        assert_eq!(
+            c.verdict(&it).map(|h| h.rule),
+            Some(CoreRule::Cs4a),
+            "{script}"
+        );
     }
 }

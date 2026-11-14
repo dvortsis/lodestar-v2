@@ -499,6 +499,7 @@ impl ReadBufs {
             ends: &self.ends,
             apart: &self.apart,
             over: self.read.work.is_none(),
+            work: self.read.work.unwrap_or(0),
             marks: self.read.marks,
         }
     }
@@ -813,6 +814,36 @@ fn near_index(second: &[u32]) -> Vec<(u32, u32)> {
     near
 }
 
+/// What judging signals costs ([`Core::judge`]), in units of
+/// [`BUDGET`], whatever the content type: each text kept for the rules,
+/// and each rule's search for a pair, as Adult reads them (two rules for
+/// each of ages and roles). Where [`indexed`], sorting the sexual terms
+/// and a binary search for each age or role; otherwise a scan of each
+/// pair.
+fn pairing_work(texts: &[(Field, Signals)]) -> u64 {
+    /// A text kept for the rules: its signals, and each rule's look.
+    const TEXT: u64 = 120;
+    /// A signal kept.
+    const SIGNAL: u64 = 2;
+    /// A step of a sort or search.
+    const STEP: u64 = 1;
+    let log2 = |n: usize| u64::from(usize::BITS - n.leading_zeros());
+    texts
+        .iter()
+        .map(|(_, s)| {
+            let firsts = (s.ages.len() + s.roles.len()) as u64;
+            let sexual = s.sexual.len();
+            let kept = firsts + (sexual + s.codes.len()) as u64;
+            let search = if indexed(s.ages.len().max(s.roles.len()), sexual) {
+                sexual as u64 * log2(sexual) + 2 * firsts * (log2(sexual) + 1)
+            } else {
+                2 * firsts * sexual as u64
+            };
+            TEXT + kept * SIGNAL + search * STEP
+        })
+        .fold(0, u64::saturating_add)
+}
+
 /// The signals of a torrent's name (first) and files, as the pattern
 /// rules read them ([`Core::pattern_signals`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -821,6 +852,9 @@ pub(crate) struct PatternSignals {
     /// The read passed the budget: the torrent is too large to judge
     /// (CS-0a), and `texts` are empty.
     over: bool,
+    /// The read's work and judging its signals' ([`pairing_work`]), in
+    /// units of [`BUDGET`]; zero where it's over.
+    work: u64,
     /// A text reads differently in the earlier reading
     /// ([`Core::pattern_hits_split`]).
     marks: bool,
@@ -997,6 +1031,24 @@ impl Core {
             Some(split) => stronger(first(split), hit),
             None => hit,
         }
+    }
+
+    /// What this core's reading and judging `item` whole costs, in units
+    /// of [`BUDGET`], or `None` where it's past the budget: [`read_cost`]
+    /// and judging the signals it finds. For tests and the budget's bench.
+    #[doc(hidden)]
+    pub fn read_cost(&self, item: &Item) -> Option<u64> {
+        if past_budget_unread(item) {
+            return None;
+        }
+        let s = self.pattern_signals(item, &TermSet::default(), None);
+        (!s.over).then_some(s.work)
+    }
+
+    /// Whether this core holds `item` as too large to judge (CS-0a):
+    /// [`too_large`], or judging what it reads passes the budget.
+    pub fn too_large(&self, item: &Item) -> bool {
+        too_large(item) || self.read_cost(item).is_none()
     }
 
     /// The locked rules that read no words (CS-1a/1b, CS-8a, and CS-0a for
@@ -1239,12 +1291,14 @@ impl Core {
         // The thread's tokenizer, whose word plans keyword entries' pass
         // over the same torrent just made (`normalize::with_tokenizer`).
         let judge = |read: normalize::Read| {
+            let over = |marks| PatternSignals {
+                texts: Vec::new(),
+                over: true,
+                work: 0,
+                marks,
+            };
             if read.over {
-                return PatternSignals {
-                    texts: Vec::new(),
-                    over: true,
-                    marks: read.marks,
-                };
+                return over(read.marks);
             }
             let mut s = normalize::with_tokenizer(|tok| {
                 SCRATCH.with(|s| match s.try_borrow_mut() {
@@ -1257,6 +1311,18 @@ impl Core {
                 })
             });
             s.marks = read.marks;
+            // Judging the signals counts too, in both readings where the
+            // earlier one is read: the torrent is read whole only if it's
+            // judged within the budget. Twice this reading's is enough:
+            // the earlier reading's signals come from the same text, and
+            // the meter already bounds its tokens with this reading's.
+            let readings = if read.marks { 2 } else { 1 };
+            s.work = read
+                .work
+                .saturating_add(pairing_work(&s.texts).saturating_mul(readings));
+            if s.work > BUDGET {
+                return over(read.marks);
+            }
             s
         };
         if let Some(read) = read {
@@ -1369,6 +1435,7 @@ impl Core {
         PatternSignals {
             texts,
             over: false,
+            work: 0,
             marks: false,
         }
     }
@@ -1599,6 +1666,7 @@ mod tests {
             ends: &ends,
             apart: &apart,
             over: false,
+            work: 0,
             marks: false,
         };
         let none = TermSet::default();
@@ -1625,6 +1693,7 @@ mod tests {
                 ends: &e,
                 apart: &a,
                 over: false,
+                work: 0,
                 marks: false,
             };
             assert_eq!(c.patterns(&item, &none, Some(read_of)).0, own, "{files:?}");
@@ -1775,7 +1844,7 @@ mod tests {
             normalize::tokens(name, &mut tokens);
             let mut ends = vec![tokens.len()];
             normalize::paths_apart(files.iter().map(|f| &f.path[..]), &mut tokens, &mut ends, &mut apart);
-            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false, marks: false };
+            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false, work: 0, marks: false };
             let neutral = TermSet::of(&neutral);
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };
