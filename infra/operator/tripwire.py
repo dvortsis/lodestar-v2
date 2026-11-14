@@ -205,6 +205,7 @@ SUMMARY_FAILED = "a reviews summary request failed"
 # Any other error in a stage's read: recorded as a stop like the rest, so it
 # can't discard findings already made or skip the stages after it.
 STAGE_FAILED = "a list couldn't be read"
+ITEM_FAILED = "an item in a list couldn't be checked"
 
 
 def _recent_reviews(transport, repo: str, number: str, since: datetime, budget: list[int]) -> list[dict]:
@@ -265,9 +266,18 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             stops.append(Incomplete("unreadable", STAGE_FAILED))
             return []
 
-    for e in listed(f"/repos/{repo}/issues/events", "created_at"):
+    def each(items, check):
+        """Checks every item on its own: one that can't be checked is a stop
+        (ITEM_FAILED), and the items and stages after it still run."""
+        for item in items:
+            try:
+                check(item)
+            except Exception:  # noqa: BLE001
+                stops.append(Incomplete("unreadable", ITEM_FAILED))
+
+    def event(e):
         if not recent(e):
-            continue
+            return
         n = _digits((e.get("issue") or {}).get("number")) or "?"
         kind = str(e.get("event", ""))
         kind = kind if kind.replace("_", "").isalpha() else "event"
@@ -275,19 +285,22 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             bot_hits.append(f"the operator's bot: issue event `{kind}` on #{n}")
         elif kind == "base_ref_changed":
             other.append(f"base branch changed on #{n}")
+    each(listed(f"/repos/{repo}/issues/events", "created_at"), event)
 
     review_budget = [REVIEW_PAGE_BUDGET]
     active = []
-    for p in listed(f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc"):
+
+    def pull(p):
         if not recent(p, "updated_at"):
-            continue
+            return
         n = _digits(p.get("number"))
         if n is None:  # its reviews can't be read: never skip them silently
             stops.append(Incomplete("unreadable", "a PR in the pulls list had no readable number"))
-            continue
+            return
         if _uid(p) == bot:
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
         active.append(n)
+    each(listed(f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc"), pull)
     try:
         summaries = _review_summaries(transport, repo, active) if active else {}
     except Incomplete as e:  # no summary: every PR takes the REST read, under the budget
@@ -296,7 +309,8 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
     except Exception:  # noqa: BLE001 - see STAGE_FAILED
         stops.append(Incomplete("unreadable", SUMMARY_FAILED))
         summaries = {}
-    for n in active:
+
+    def reviews_of(n):
         reviews = summaries.get(n)
         if reviews is None:  # more reviews than the summary holds: the REST read, under the budget
             try:
@@ -307,29 +321,32 @@ def sweep(env, transport, now: datetime, found: dict | None = None) -> tuple[lis
             except Exception:  # noqa: BLE001 - see STAGE_FAILED
                 stops.append(Incomplete("unreadable", STAGE_FAILED))
                 reviews = []
-        for r in reviews:
+
+        def review(r):
             if _uid(r) == bot and recent(r, "submitted_at"):
                 bot_hits.append(f"the operator's bot reviewed #{n}")
+        each(reviews, review)
+    each(active, reviews_of)
 
-    for c in listed(f"/repos/{repo}/pulls/comments?sort=updated&direction=desc&since={iso}"):
+    def review_comment(c):
         n = _digits(str(c.get("pull_request_url", "")).rsplit("/", 1)[-1]) or "?"
         if _uid(c) == bot:
             bot_hits.append(f"the operator's bot wrote a review comment on #{n}")
         elif c.get("updated_at") != c.get("created_at") and recent(c, "updated_at"):
             other.append(f"a review comment on #{n} was edited")
+    each(listed(f"/repos/{repo}/pulls/comments?sort=updated&direction=desc&since={iso}"), review_comment)
 
-    for c in listed(f"/repos/{repo}/issues/comments?sort=updated&direction=desc&since={iso}"):
+    def issue_comment(c):
         n = _digits(str(c.get("issue_url", "")).rsplit("/", 1)[-1]) or "?"
         if _uid(c) != bot:
-            continue
+            return
         if n != channel:
             bot_hits.append(f"the operator's bot commented on #{n}")
         elif c.get("updated_at") != c.get("created_at"):
             bot_hits.append("the operator's bot edited a comment on the channel PR")
-        elif not recent(c) or thread.channel_shape(c.get("body")):
-            continue
-        else:  # its text is never echoed
+        elif recent(c) and not thread.channel_shape(c.get("body")):  # its text is never echoed
             bot_hits.append("the operator's bot posted a channel comment of no allowed shape")
+    each(listed(f"/repos/{repo}/issues/comments?sort=updated&direction=desc&since={iso}"), issue_comment)
     notes = list(dict.fromkeys(describe(e) for e in stops))  # one line per kind of stop, in order
     return sorted(set(bot_hits)) + sorted(set(other)) + notes, bool(bot_hits)
 
@@ -396,7 +413,8 @@ def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
 LISTS = ("events", "pulls", "reviews", "comments")
 UNREADABLE = (tuple(f"a page of {n} wasn't a list" for n in LISTS)
               + tuple(f"a request for {n} failed" for n in LISTS)
-              + ("a PR in the pulls list had no readable number", SUMMARY_UNREADABLE, SUMMARY_FAILED, STAGE_FAILED))
+              + ("a PR in the pulls list had no readable number", SUMMARY_UNREADABLE, SUMMARY_FAILED, STAGE_FAILED,
+                 ITEM_FAILED))
 
 
 def describe(e: Incomplete) -> str:

@@ -595,15 +595,15 @@ class FailedRequests(unittest.TestCase):
         run(["sweep"], env(), gh)
         self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
 
-    def test_an_error_that_escapes_the_sweep_still_disables_on_a_bot_finding(self):
+    def test_an_item_that_cant_be_checked_is_a_stop_and_later_items_still_run(self):
         posts = []
+        when = ISO(timedelta(minutes=5))
 
         def gh(method, path, body):
-            if method == "GET" and path.startswith("/repos/o/r/issues/events") and path.endswith("&page=1"):
-                return [self.BOT_EVENT]
             if method == "GET" and path.startswith("/repos/o/r/issues/comments") and path.endswith("&page=1"):
-                return [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=5)),
-                         "updated_at": ISO(timedelta(minutes=5)), "body": "x"}]
+                return [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": when, "updated_at": when,
+                         "body": "x"},
+                        {"user": {"id": BOT}, "issue_url": "x/issues/9", "created_at": when, "updated_at": when}]
             if method == "GET":
                 return no_runs(path)
             posts.append((method, path, body))
@@ -612,16 +612,56 @@ class FailedRequests(unittest.TestCase):
             raise ValueError("shape")
         real, tripwire.thread.channel_shape = tripwire.thread.channel_shape, boom
         try:
+            run(["sweep"], env(), gh)
+        finally:
+            tripwire.thread.channel_shape = real
+        body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
+        self.assertIn("the operator's bot commented on #9", body)  # the item after it still ran
+        self.assertIn(f"the sweep is incomplete: {tripwire.ITEM_FAILED}; check by hand", body)
+        self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
+
+    def test_an_error_that_escapes_the_sweep_still_disables_on_a_bot_finding(self):
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET":
+                return no_runs(path)
+            posts.append((method, path, body))
+
+        def escapes(env, transport, now, found):
+            found["bot"].append("the operator's bot: issue event `closed` on #9")
+            raise ValueError("escaped")
+        real, tripwire.sweep = tripwire.sweep, escapes
+        try:
             with self.assertRaises(SystemExit) as cm:
                 run(["sweep"], env(), gh)
         finally:
-            tripwire.thread.channel_shape = real
+            tripwire.sweep = real
         self.assertEqual(str(cm.exception), "tripwire: the sweep failed")
         body = next(b["body"] for _, _, b in posts if isinstance(b, dict) and "body" in b)
         self.assertIn("the operator's bot: issue event `closed` on #9", body)
         self.assertIn("the sweep failed (ValueError) before it finished; check by hand", body)
+        self.assertNotIn("escaped", body)
         self.assertIn(DISABLE, [(m, p) for m, p, _ in posts])
 
+    def test_an_error_that_escapes_without_a_bot_finding_follows_the_session_rule(self):
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET":
+                return no_runs(path)  # no wake runs in the lookback
+            posts.append((method, path, body))
+
+        def escapes(env, transport, now, found):
+            raise ValueError("escaped")
+        real, tripwire.sweep = tripwire.sweep, escapes
+        try:
+            with self.assertRaises(SystemExit):
+                run(["sweep"], env(), gh)
+        finally:
+            tripwire.sweep = real
+        self.assertNotIn(DISABLE, [(m, p) for m, p, _ in posts])
+        self.assertEqual(sum(isinstance(b, dict) and "body" in b for _, _, b in posts), 1)
 
 class IncompleteRule(unittest.TestCase):
     """The owner's decision (2026-11-14): an incomplete sweep disables only when
