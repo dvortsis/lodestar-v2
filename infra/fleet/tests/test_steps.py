@@ -486,7 +486,11 @@ case "$1" in
       *) bad "$*" ;;
     esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
-  rm) [ "$*" = "rm -f lodestar-leak-flow" ] || bad "$*"; rm -f "$STUB/flow" ;;
+  rm) case "$*" in
+        "rm -f lodestar-leak-flow") rm -f "$STUB/flow" ;;
+        "rm -f lodestar-leak-drive") rm -f "$STUB/drive" ;;
+        *) bad "$*" ;;
+      esac ;;
   # The stop window: while gluetun is stopped the host answers the endpoint's
   # leftover session, and a new gluetun answers too as it starts; only the
   # guard's ICMP rule keeps those off the wire (the host capture's fixture).
@@ -522,6 +526,9 @@ case "$1" in
     case "$*" in
       "run -d --rm --name lodestar-leak-flow --network container:gluetun --cap-drop ALL nicolaka/netshoot@sha256:"????????????????????????????????????????????????????????????????" ping -q -i 0.5 1.1.1.1")
         [ -n "$FLOW_FAILS" ] && exit 125; : > "$STUB/flow"; echo 0123abcd; exit 0 ;;
+      # The stop window's download, detached, without capabilities.
+      "run -d --rm --name lodestar-leak-drive --network container:gluetun --cap-drop ALL nicolaka/netshoot@sha256:"????????????????????????????????????????????????????????????????" curl -s -o /dev/null --limit-rate 64k --max-time 600 https://speed.cloudflare.com/__down?bytes=200000000")
+        [ -n "$DRIVE_FAILS" ] && exit 125; : > "$STUB/drive"; echo 4567cdef; exit 0 ;;
       "run -d"*) bad "$*" ;;
     esac
     # Exactly: run --rm --network container:gluetun --cap-drop ALL [--cap-add NET_ADMIN]
@@ -667,7 +674,7 @@ esac
 STUB_TCPDUMP = r"""#!/usr/bin/env bash
 # The host-side ICMP capture: an empty capture until it's stopped, then the
 # endpoint-bound ICMP the stop window drew if nothing dropped it (host_leak).
-if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ]; then
+if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ] && [ "${6##*/}" != cap-inbound.pcap ]; then
   if [ $# -ne 7 ] || [ "$7" != "icmp and dst host 192.0.2.77" ] || [ "${6##*/}" != cap-host.pcap ]; then
     printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
   fi
@@ -675,6 +682,18 @@ if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ]; then
   [ -n "$HOST_CAPTURE_DIES" ] && exit 1
   out=$6
   trap '[ -e "$STUB/host_leak" ] && [ -z "$HOST_READ_FAILS" ] && cat "$STUB/fixture-hostleak.pcap" > "$out"; exit 0' TERM
+  while :; do /bin/sleep 0.05; done
+fi
+# The stop window's precondition: the endpoint's packets to the host while
+# gluetun is stopped. They come only while the download drives the session
+# (WINDOW_IDLE: they never come).
+if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ] && [ "${6##*/}" = cap-inbound.pcap ]; then
+  if [ $# -ne 7 ] || [ "$7" != "udp and src host 192.0.2.77 and src port 1337" ]; then
+    printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
+  fi
+  cat "$STUB/empty.pcap" > "$6"
+  out=$6
+  trap '[ -e "$STUB/drive" ] && [ -z "$WINDOW_IDLE" ] && cat "$STUB/fixture-inbound.pcap" > "$out"; exit 0' TERM
   while :; do /bin/sleep 0.05; done
 fi
 # Capture only: the pcap is the test's fixture for that phase (fixture-<phase>.pcap),
@@ -817,9 +836,11 @@ class VMScripts(unittest.TestCase):
         (self.stub / "bin").mkdir(parents=True)
         # `sleep` is stubbed too: the scripts' waits poll the (stubbed) state, so no
         # test waits on a clock.
+        # `sleep 1` (the interface check's poll) takes a tenth of a second, so a
+        # deadline loop isn't a busy one; every other sleep returns at once.
         for name, body in (("docker", STUB_DOCKER), ("iptables", STUB_IPTABLES), ("tcpdump", STUB_TCPDUMP),
                            ("ip", STUB_IP), ("dig", STUB_DIG),
-                           ("sleep", "#!/bin/sh\nexit 0\n")):
+                           ("sleep", '#!/bin/sh\n[ "$1" = 1 ] && exec /bin/sleep 0.1\nexit 0\n')):
             (self.stub / "bin" / name).write_text(body)
             (self.stub / "bin" / name).chmod(0o755)
         (self.stack / "secrets").mkdir(parents=True)
@@ -857,6 +878,7 @@ class VMScripts(unittest.TestCase):
         # What the host's egress saw on the VM without the ICMP rule: "host unreachable"
         # answers to the endpoint's leftover session, and a new gluetun's "port unreachable".
         (self.stub / "fixture-hostleak.pcap").write_bytes(pcap(HOST_ICMP_LEAK))
+        (self.stub / "fixture-inbound.pcap").write_bytes(pcap([frame(HOST_MAC, ip4(17, "192.0.2.77", "192.0.2.10", bytes(8)))] * 5))
 
     def env(self, **flags):
         # STOP_WINDOW is the leak test's observation window; the stubs need none.
@@ -1299,7 +1321,7 @@ class VMScripts(unittest.TestCase):
         """O1/O5: TERM while gluetun is being recreated; the EXIT trap removes both guards."""
         rc, out = self.signal_at("composing", BLOCK_COMPOSE=1)
         self.assertEqual(rc, 143)
-        self.assertEqual((self.copies("guard"), self.copies("host")), (0, 0))
+        self.assertEqual((self.copies("guard"), self.copies("host"), self.copies("icmp")), (0, 0, 0))
         self.assertNotIn("fail guards_released", out)
 
     def test_a_signal_under_start_block_keeps_the_held_guard(self):
@@ -1309,7 +1331,7 @@ class VMScripts(unittest.TestCase):
         (self.stub / "icmp").write_text("1")  # and its ICMP rule
         rc, out = self.signal_at("composing", BLOCK_COMPOSE=1, ARGV5="held")
         self.assertEqual(rc, 143)
-        self.assertEqual((self.copies("guard"), self.copies("host")), (0, 1))
+        self.assertEqual((self.copies("guard"), self.copies("host"), self.copies("icmp")), (0, 1, 1))
         self.assertNotIn("-D INPUT", self.log())
         self.assertNotIn("fail guards_released", out)
 
@@ -1505,6 +1527,40 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(rc, 0, raw)
         self.assertIn("ok vpn_interface_stayed_down", lines)
         self.assertNotIn("fail probe_ran", lines)
+
+    def test_a_stuck_icmp_rule_fails_the_run_and_input_still_comes_off(self):
+        rc, lines, _ = self.run_script("leak-test.sh", ICMP_STUCK=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail guards_released", lines)
+        self.assertEqual((self.copies("host"), self.copies("icmp")), (0, 1))  # both were tried
+
+    def test_an_idle_stop_window_proves_nothing_and_fails(self):
+        """The window is judged only when the endpoint really kept sending to the host while gluetun was down."""
+        for flags in ({"WINDOW_IDLE": 1}, {"DRIVE_FAILS": 1}):
+            with self.subTest(flags=flags):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", **flags)
+                self.assertEqual(rc, 1)
+                self.assertIn("fail stop_window_exercised", lines)
+        self.setUp()
+        rc, lines, _ = self.run_script("leak-test.sh")
+        self.assertIn("ok stop_window_exercised", lines)
+        self.assertIn("count stop_window_endpoint_packets 5", lines)
+        self.assertFalse((self.stub / "drive").exists())  # the download is gone afterwards
+        log = self.log()
+        self.assertLess(log.index("--name lodestar-leak-drive"), log.index("docker stop -t 10 gluetun"))
+
+    def test_a_probe_that_never_runs_by_the_deadline_fails_both_checks(self):
+        rc, lines, _ = self.run_script("leak-test.sh", IFACE_NOT_RUN=100000)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail vpn_interface_stayed_down", lines)
+        self.assertIn("fail probe_ran", lines)
+
+    def test_the_post_rules_are_back_after_the_start(self):
+        rc, lines, _ = self.run_script("leak-test.sh")
+        self.assertEqual(rc, 0)
+        self.assertIn("ok post_rules_after_start_ipv4", lines)
+        self.assertIn("ok post_rules_after_start_ipv6", lines)
 
     def test_leak_test_fails_closed_when_docker_cant_list(self):
         rc, lines, _ = self.run_script("leak-test.sh", PS_FAIL=1)

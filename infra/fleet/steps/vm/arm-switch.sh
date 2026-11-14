@@ -67,7 +67,7 @@ printf 'block=%s\nsegment=%s\nstate=running\n' "$id" "$next" | marker_write || f
 data_dirs_ready || fail data_dirs
 started=1
 start_lodestar "$next" || fail lodestar_started
-network_parent_ok && lodestar_follows_gluetun || fail network_parent
+{ network_parent_ok && lodestar_follows_gluetun; } || fail network_parent
 start_proxy || fail docker_proxy  # the new container's ID; no collector runs yet
 wait_api || fail api_up
 echo "ok lodestar_started"

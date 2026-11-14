@@ -140,7 +140,10 @@ guard_resume() {
       ((rc == 0)) && continue
       if ((rc == 1)); then
         tagged=$(ipt_w "$table" -S "$chain" 2>/dev/null | grep -c -e "--comment $HOST_TAG ")
-        ((${tagged:-0} > 0)) || dropped=1
+        # A block start-block began before the ICMP rule existed never held
+        # one: it's added, not recorded as a drop. ($BLOCK/guard-icmp says
+        # the block's start held it.)
+        if ((${tagged:-0} == 0)) && [[ $chain == INPUT || -e $BLOCK/guard-icmp ]]; then dropped=1; fi
         if ipt_w "$table" -I "$chain" 1 "${rule[@]}" 2>/dev/null \
           && ipt_w "$table" -C "$chain" "${rule[@]}" 2>/dev/null; then
           continue
@@ -349,10 +352,12 @@ data_dirs_ready() {  # [fresh]
   for d in "$STACK/data" "$STACK/witness"; do
     [[ -L $d ]] && return 1
     if [[ -d $d ]]; then
-      chown "$LODESTAR_UID:$LODESTAR_UID" -- "$d" && chmod 0755 -- "$d" || return 1
+      chown -h "$LODESTAR_UID:$LODESTAR_UID" -- "$d" && chmod 0755 -- "$d" || return 1
     else
       install -d -o "$LODESTAR_UID" -g "$LODESTAR_UID" -m 0755 -- "$d" || return 1
     fi
+    # What's there now: a real folder, Lodestar's, 0755 (nothing swapped in meanwhile).
+    [[ ! -L $d && $(stat -c '%u %a' -- "$d" 2>/dev/null) == "$LODESTAR_UID 755" ]] || return 1
   done
 }
 start_lodestar() {  # $1 segment, $2 "fresh" to recreate whatever compose thinks

@@ -84,7 +84,7 @@ endpoint_read "$STACK/secrets/wg0.conf" || fail endpoint_valid
 host_guard_rule
 host_guard_hold || fail host_guarded
 echo "ok host_guarded"
-out=$(timeout 600 bash "$work/leak-test.sh" "$work" "$STACK" "$PIA_RUN" "$BLOCK" held); rc=$?
+out=$(timeout 900 bash "$work/leak-test.sh" "$work" "$STACK" "$PIA_RUN" "$BLOCK" held); rc=$?
 printf '%s\n' "$out"
 [[ $rc -eq 0 && $(printf '%s\n' "$out" | tail -n 1) == "ok leak_test" ]] || fail leak_test_passed
 echo "ok leak_test_passed"
@@ -93,6 +93,7 @@ echo "ok leak_test_passed"
 # A past block's directory (its evidence) is kept beside the new one, never wiped.
 if [[ -d $BLOCK ]]; then mv -- "$BLOCK" "$BLOCK.$(date -u +%Y%m%dT%H%M%SZ)" || fail block_dir; fi
 mkdir -m 0700 -- "$BLOCK" || fail block_dir
+: >"$BLOCK/guard-icmp" || fail block_dir  # this block holds the guard's ICMP rule (block-lib.sh guard_resume)
 # The boot guard (X-gluetun-guard-reboot), before the marker: from the moment
 # a block is recorded, a reboot holds the host guard before Docker starts.
 # Failing here leaves no marker, so the next start-block sets this one aside.
@@ -119,7 +120,7 @@ timeout 120 docker pull "$COLLECTOR_IMAGE" >/dev/null 2>&1 || fail collector_ima
 timeout 120 docker pull "$PROXY_IMAGE" >/dev/null 2>&1 || fail proxy_image
 started=1
 start_lodestar 1 fresh || fail lodestar_started
-network_parent_ok && lodestar_follows_gluetun || fail network_parent
+{ network_parent_ok && lodestar_follows_gluetun; } || fail network_parent
 start_proxy || fail docker_proxy
 wait_api || fail api_up
 echo "ok lodestar_started"

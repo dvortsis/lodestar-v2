@@ -289,6 +289,7 @@ class Base(unittest.TestCase):
         (self.block / "marker").write_text(f"block=42-1\nsegment={segment}\nstate=running\n")
         (self.stub / "host").write_text("1")  # start-block's host guard, held for the block
         (self.stub / "icmp").write_text("1")  # and its ICMP rule
+        (self.block / "guard-icmp").write_text("")  # which this block's start held
 
     def finish_segment(self, n, reason="baseline_window_complete"):
         seg = self.block / "evidence" / f"seg-{n}"
@@ -741,6 +742,7 @@ class StartBlock(Base):
         rc, _, raw = self.run_script("start-block.sh")
         self.assertEqual(rc, 0, raw)
         self.assertEqual((self.copies("host"), self.copies("icmp")), (1, 1))
+        self.assertTrue((self.block / "guard-icmp").exists())
         log = self.log()
         self.assertLess(log.index("iptables -t mangle -I POSTROUTING 1 -d 192.0.2.77/32 -p icmp"),
                         log.index("compose"))
@@ -1016,6 +1018,19 @@ class GuardResume(Base):
         self.assertEqual((self.copies(), self.copies("icmp")), (1, 1))
         self.assertEqual(self.outages(), ["host_guard_dropped"])
         self.assertFalse((self.block / "damaged").exists())
+
+    def test_a_block_started_before_the_icmp_rule_gets_it_without_a_drop(self):
+        """An older block never held the ICMP rule: it's added, and nothing is recorded."""
+        self.make_block(segment=2)
+        (self.block / "guard-icmp").unlink()
+        (self.stub / "icmp").write_text("0")
+        self.running("gluetun", "lodestar", "lodestar-collector-2")
+        rc, lines, raw = self.run_script("outage-watcher.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual(lines[:2], ["ok host_guarded", "count host_guard_drops 0"])
+        self.assertEqual(self.copies("icmp"), 1)
+        self.assertEqual(self.outages(), [])
+        self.assertFalse((self.stub / "collector_notes").exists())
 
     def test_an_icmp_rule_that_cant_be_held_damages_the_block(self):
         self.make_block(segment=2)
