@@ -43,6 +43,13 @@ class Workflows(unittest.TestCase):
     def setUpClass(cls):
         cls.wfs = {n: load(n) for n in NAMES}
 
+    def test_the_tripwire_finds_the_wake_job_by_its_name(self):
+        """tripwire._wake_session matches the API's job name "wake": the job's id,
+        with no `name:` to change it."""
+        job = self.wfs["operator-wake.yml"]["jobs"]["wake"]
+        self.assertNotIn("name", job)
+        self.assertEqual(job["environment"], "cloud-operator")
+
     def jobs(self):
         for n, wf in self.wfs.items():
             for j, job in wf["jobs"].items():
@@ -53,8 +60,9 @@ class Workflows(unittest.TestCase):
         self.assertEqual(self.wfs["operator-apply.yml"]["on"], {"workflow_dispatch": None})
         on = self.wfs["operator-tripwire.yml"]["on"]
         self.assertEqual(set(on), {"pull_request_target", "issue_comment", "schedule"})
-        self.assertEqual(on["pull_request_target"]["types"], ["opened", "edited", "closed", "reopened", "labeled",
-                                                              "unlabeled", "ready_for_review", "converted_to_draft"])
+        # synchronize (X-operator-hardening): a branch update by the bot, which Pull requests write may allow.
+        self.assertEqual(on["pull_request_target"]["types"], ["opened", "edited", "closed", "reopened", "synchronize",
+                                                              "labeled", "unlabeled", "ready_for_review", "converted_to_draft"])
         self.assertEqual(on["issue_comment"]["types"], ["created", "edited", "deleted"])
 
     def test_no_workflow_call_or_reusable_workflow(self):

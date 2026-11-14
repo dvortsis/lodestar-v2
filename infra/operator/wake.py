@@ -30,6 +30,7 @@ fixed lines; never a token, an ID from the vault or the lock, or the text.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import time
@@ -100,9 +101,24 @@ def _out(env, **kv) -> None:
                 f.write(f"{k}={v}\n")
 
 
+def _summary(env, msg: message.Message) -> None:
+    """What the owner approves (X-operator-hardening): the parsed instruction's
+    fixed fields only, in the job summary. The id matches message.ID and kind
+    and mode are fixed words, so no comment text reaches the page. The body's
+    short SHA-256 (fixed hex) tells apart two instructions with the same id."""
+    path = env.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    digest = hashlib.sha256(env.get("COMMENT_BODY", "").encode("utf-8")).hexdigest()[:12]
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"### Instruction to approve\n\n- id: `{msg.id}`\n- kind: `{msg.kind}`\n- mode: `{msg.mode}`\n"
+                f"- in reply to: `{msg.in_reply_to or 'none'}`\n- body SHA-256 (first 12): `{digest}`\n\n"
+                "Approve the `cloud-operator` deployment only if this is the instruction the runner posted.\n")
+
+
 def cmd_gate(env) -> int:
     try:
-        check_event(env)
+        msg = check_event(env)
     except Gated:
         print("operator-wake: not for the bridge")
         _out(env, allowed="false", reason="")
@@ -117,6 +133,7 @@ def cmd_gate(env) -> int:
         return 0
     print("operator-wake: allowed")
     _out(env, allowed="true", reason="")
+    _summary(env, msg)
     return 0
 
 

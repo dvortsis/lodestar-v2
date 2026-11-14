@@ -62,15 +62,39 @@ class FakeGitHub:
         if path.endswith("/access_tokens"):
             return {"token": self.token, "permissions": self.perms, "repository_selection": self.selection,
                     "repositories": [{"full_name": r} for r in self.repos]}
+        if method == "POST" and path == "/graphql":
+            return graphql_reviews(body, lambda n: self.lists.get(f"/repos/o/r/pulls/{n}/reviews", []))
         if method == "GET":
             for prefix, items in self.lists.items():
                 if path.startswith(prefix):
                     return items if path.endswith("&page=1") or "&page=" not in path else []
-            return []
+            return no_runs(path)
         return None
 
     def bodies(self):
         return [c[2]["body"] for c in self.calls if isinstance(c[2], dict) and "body" in c[2]]
+
+
+def no_runs(path):
+    """A GET answer for the tripwire's fakes: no operator-wake.yml runs in the
+    window for the session check, an empty page for anything else."""
+    if "/actions/workflows/operator-wake.yml/runs" in path:
+        return {"total_count": 0, "workflow_runs": []}
+    return []
+
+
+def graphql_reviews(body, reviews_of, total_of=None) -> dict:
+    """The tripwire's review-summary query, answered from REST-shaped reviews:
+    each `pN:` alias gets PR N's reviews (its last 50) and their total."""
+    import re
+    repo = {}
+    for n in re.findall(r"p(\d+):pullRequest", (body or {}).get("query", "")):
+        rs = list(reviews_of(n))
+        total = len(rs) if total_of is None else total_of(n)
+        repo[f"p{n}"] = {"reviews": {"totalCount": total, "nodes": [
+            {"submittedAt": r.get("submitted_at"), "author": {"__typename": "User", "databaseId": (r.get("user") or {}).get("id")}}
+            for r in rs[-50:]]}}
+    return {"data": {"repository": repo}}
 
 
 class FakeAnthropic:

@@ -3,9 +3,13 @@
     thread.py read --pr N --runner ID --bot ID     trusted comments, as JSON
     thread.py post --pr N --file F                  one report or /fleet command
 
-`read` pages through the channel PR's comments and keeps only what the reader
-helper (infra/fleet/reader.py, fetched beside this file) trusts: unedited,
-from the runner, the operator App's bot or the control plane. `post` refuses
+`read` reads the channel PR's comments newest page first (the list runs oldest
+first) and keeps only what the reader helper (infra/fleet/reader.py, fetched
+beside this file) trusts: unedited, from the runner, the operator App's bot or
+the control plane. A comment by the operator's bot counts only in a shape the
+bot may post (channel_shape); any other is dropped. Past MAX_PAGES pages it
+prints what it read, newest included, then exits non-zero (X-operator-hardening).
+`post` refuses
 anything but an `operator-report v1` or a one-line `/fleet` command; the PR
 number is the agent's to pass (the system prompt names the channel PR, and the
 tripwire catches a comment anywhere else). GITHUB_TOKEN is the vault's placeholder; the platform
@@ -25,11 +29,13 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "fleet")]  # beside it in the sandbox, or the repo layout
 
 import reader  # noqa: E402
+from reader import channel_shape  # noqa: E402,F401 - one rule for what the bot may post; the tripwire uses it here
 
 REPO = "dvortsis/lodestar-v2"
 REPORT = "operator-report v1\n"
 MAX_BODY = 16000
 MAX_PAGES = 30
+CAPPED = 3  # read's exit code past MAX_PAGES: a helper failure, which the prompt escalates
 
 
 def _call(method: str, path: str, body=None):  # pragma: no cover - network
@@ -45,14 +51,51 @@ def _call(method: str, path: str, body=None):  # pragma: no cover - network
         raise SystemExit(f"thread: GitHub {method} failed") from None
 
 
-def read(pr: int, runner: str, bot: str, call=_call) -> list[dict]:
+def _page(call, pr: int, page: int) -> list:
+    items = call("GET", f"/repos/{REPO}/issues/{pr}/comments?per_page=100&page={page}")
+    items = [] if items is None else items
+    if not isinstance(items, list):
+        raise SystemExit("thread: a page of comments wasn't a list")
+    return items
+
+
+def read(pr: int, runner: str, bot: str, call=_call) -> tuple[list[dict], bool]:
+    """The trusted comments, oldest first, and whether MAX_PAGES cut the read
+    short. The newest pages are read first: the issue's comment count names the
+    last page, the read goes forward from there while pages are full (comments
+    that arrived since), then back towards the first."""
     allowed = reader.allowed_ids({"RUNNER_USER_ID": runner, "OPERATOR_BOT_USER_ID": bot})
-    out = []
-    for page in range(1, MAX_PAGES + 1):
-        items = call("GET", f"/repos/{REPO}/issues/{pr}/comments?per_page=100&page={page}") or []
-        out += reader.trusted(items, allowed)
-        if len(items) < 100:
+    issue = call("GET", f"/repos/{REPO}/issues/{pr}")
+    count = issue.get("comments") if isinstance(issue, dict) else None
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise SystemExit("thread: the channel's comment count isn't readable")
+    start = max(1, -(-count // 100))
+    page, got, full = start, {}, False
+    while len(got) < MAX_PAGES:
+        got[page] = _page(call, pr, page)
+        full = len(got[page]) == 100
+        if not full:
+            if page > start and not got[page]:
+                del got[page]  # an empty page past the count was only a check: it holds nothing to count
             break
+        page += 1
+    page = min(got) - 1
+    while page >= 1 and len(got) < MAX_PAGES:
+        got[page] = _page(call, pr, page)
+        page -= 1
+    capped = full or min(got) > 1
+    return keep([c for n in sorted(got) for c in got[n]], allowed, bot), capped
+
+
+def keep(items: list, allowed: frozenset[str], bot: str) -> list[dict]:
+    """reader.trusted (which drops any bot comment of no shape the bot may
+    post), less a repeat: a comment deleted between page reads shifts the pages."""
+    seen, out = set(), []
+    for c in reader.trusted(items, allowed, bot):
+        if c["id"] in seen:
+            continue
+        seen.add(c["id"])
+        out.append(c)
     return out
 
 
@@ -60,9 +103,7 @@ def check_post(body: str) -> str:
     body = body.strip()
     if len(body) > MAX_BODY:
         raise SystemExit("thread: too long")
-    if body.startswith(REPORT):
-        return body
-    if body.startswith("/fleet ") and "\n" not in body:
+    if channel_shape(body):  # the same rule the reader and the tripwire apply to the bot's comments
         return body
     raise SystemExit("thread: only an operator-report v1 or a one-line /fleet command may be posted")
 
@@ -79,8 +120,13 @@ def main(argv=None, call=_call) -> int:
     w.add_argument("--file", required=True)
     a = p.parse_args(argv)
     if a.cmd == "read":
-        json.dump(read(a.pr, a.runner, a.bot, call), sys.stdout, indent=1)
+        comments, capped = read(a.pr, a.runner, a.bot, call)
+        json.dump(comments, sys.stdout, indent=1)
         sys.stdout.write("\n")
+        if capped:
+            print(f"thread: the channel has more than {MAX_PAGES * 100} comments; only the newest were read",
+                  file=sys.stderr)
+            return CAPPED
     else:
         body = check_post(Path(a.file).read_text(encoding="utf-8"))
         call("POST", f"/repos/{REPO}/issues/{a.pr}/comments", {"body": body})

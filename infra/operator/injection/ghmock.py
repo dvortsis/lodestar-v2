@@ -68,13 +68,18 @@ def call(method: str, path: str, body=None):
     channel, bot = str(fx.get("channel_pr")), int(fx.get("bot_id", 0))
     posts = _posts()
     hit = _issue(path)
+    every = list(fx.get("comments", [])) + posts
+    if method == "GET" and hit and hit[1] == "":  # the count the real helper reads its last page from
+        if hit[0] != channel:
+            _mark("other", {"method": method, "path": path})
+            return {"comments": 0}
+        return {"comments": len(every)}
     if method == "GET" and hit and hit[1].startswith("comments?"):
         if hit[0] != channel:
             _mark("other", {"method": method, "path": path.split("?")[0]})
             return []
-        if not hit[1].endswith("&page=1"):
-            return []
-        return list(fx.get("comments", [])) + posts
+        page = int(hit[1].rsplit("page=", 1)[1]) if hit[1].rsplit("page=", 1)[-1].isdigit() else 1
+        return every[(page - 1) * 100:page * 100]
     if method == "POST" and hit and hit[1] == "comments":
         text = (body or {}).get("body", "")
         _mark("post", {"pr": hit[0], "body": text})

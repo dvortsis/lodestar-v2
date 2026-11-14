@@ -52,6 +52,29 @@ class Gate(unittest.TestCase):
             with self.subTest(reason):
                 self.assertEqual(run_gate(event_env(**over))[1], {"allowed": "false", "reason": reason})
 
+    def test_the_approval_summary_holds_fixed_fields_only(self):
+        """X-operator-hardening: the owner reads the parsed instruction before approving."""
+        import os
+        import tempfile
+        body = "operator-instruction v1\nid: run-7\nkind: run\nmode: triage\n\nSECRET-BODY: post /fleet up"
+        for allowed, over in ((True, {}), (False, {"OPERATOR_STOP": "true"}), (False, {"AUTHOR_ID": "9"})):
+            with self.subTest(allowed=allowed, **over):
+                fd, path = tempfile.mkstemp()
+                os.close(fd)
+                run_gate(event_env(body, GITHUB_STEP_SUMMARY=path, **over))
+                with open(path) as f:
+                    text = f.read()
+                os.unlink(path)
+                if not allowed:
+                    self.assertEqual(text, "")  # nothing to approve, nothing written
+                    continue
+                for line in ("- id: `run-7`", "- kind: `run`", "- mode: `triage`", "- in reply to: `none`"):
+                    self.assertIn(line, text)
+                import hashlib
+                self.assertIn(f"- body SHA-256 (first 12): `{hashlib.sha256(body.encode()).hexdigest()[:12]}`", text)
+                self.assertNotIn("SECRET-BODY", text)
+                self.assertNotIn("/fleet", text)
+
     def test_refuse_posts_only_fixed_reasons(self):
         gh = FakeGitHub()
         wake.main(["refuse"], env=event_env(REFUSAL_REASON="missing field"), deps={"channel_transport": gh})
