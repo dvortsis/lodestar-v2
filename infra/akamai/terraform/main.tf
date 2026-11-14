@@ -14,6 +14,8 @@ locals {
   # the same pinned file deliver-pia uses (one copy, its hash pinned by a test).
   compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
   pia_ca_cert_content = file("${path.module}/../../pia-bridge/vm/pia-ca.rsa.4096.crt")
+  # The root-owned helper, gzipped: cloud-init writes it with encoding gz+b64.
+  vpn_helper_gz = base64gzip(file("${path.module}/cloud-init/lodestar-vpn-helper.sh"))
 }
 
 # Separate main and worker firewalls, so all rules are in place
@@ -86,6 +88,7 @@ resource "linode_instance" "main" {
       host_key_public     = try(var.host_keys["main"].public_key, "")
       compose_vpn_content = local.compose_vpn_content
       pia_ca_cert_content = local.pia_ca_cert_content
+      vpn_helper_gz       = local.vpn_helper_gz
     }))
   }
 
@@ -120,6 +123,7 @@ resource "linode_instance" "workers" {
       host_key_public     = try(var.host_keys[format("worker-%02d", count.index + 1)].public_key, "")
       compose_vpn_content = local.compose_vpn_content
       pia_ca_cert_content = local.pia_ca_cert_content
+      vpn_helper_gz       = local.vpn_helper_gz
     }))
   }
 

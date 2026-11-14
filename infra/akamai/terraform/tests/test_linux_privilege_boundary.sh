@@ -5,20 +5,24 @@
 #   --offline     (the default) No root, no network, no cloud, no terraform.
 #                 Runs on stock Ubuntu 24.04 (bash, python3, python3-yaml):
 #                 1. Renders cloud-init/ubuntu24.yaml.tftpl with test values
-#                    and parses it as YAML.
+#                    (worst-case key sizes included), parses it as YAML, checks
+#                    its size and cloud-init's schema, and decodes the gzipped
+#                    helper (cloud-init/lodestar-vpn-helper.sh) back.
 #                 2. The sudoers tie test: every privileged command main's fleet
-#                    steps (infra/fleet/steps/**) and deliver-pia
-#                    (infra/pia-bridge/**) invoke must be allowed, without a
-#                    password, by the template's sudoers lines. A sudo use the
-#                    test can't classify fails it. A self-check proves the tie
-#                    test fails when only the helper rule is left.
+#                    steps (infra/fleet/steps/**), deliver-pia
+#                    (infra/pia-bridge/**) and the manual scripts
+#                    (infra/akamai/terraform/scripts/**) invoke must be allowed,
+#                    without a password, by the template's sudoers lines. Any
+#                    sudo use that isn't a string or command word starting with
+#                    `sudo -n`, or plain prose, fails it. Self-checks prove the
+#                    scanner and matcher can fail.
 #                 3. The helper: bash -n, shellcheck when installed, its fixed
-#                    verb list, and its paths and gluetun digest against
-#                    compose.vpn.yaml and the fleet's stack.
+#                    verb list, its secure_path, and its paths and gluetun
+#                    digest against compose.vpn.yaml and the fleet's stack.
 #                 4. The helper's wg0.conf schema, CIDR and firewall checks run
 #                    under every awk on the host (mawk is Ubuntu 24.04's awk).
 #   --privileged  Also #632's integration test: a real unprivileged user, its
-#                 sudoers rule and a network namespace. It changes the host, so
+#                 sudoers rule and a network namespace (veth). It changes the host, so
 #                 it runs only as root in CI or with LODESTAR_ALLOW_PRIVILEGED_TESTS=1,
 #                 in a disposable container or VM, and restores what it changed.
 #
@@ -62,6 +66,7 @@ except ImportError:
 ROOT, WORK = Path(sys.argv[1]), Path(sys.argv[2])
 TF = ROOT / "infra/akamai/terraform"
 TEMPLATE = TF / "cloud-init/ubuntu24.yaml.tftpl"
+HELPER_SRC = TF / "cloud-init/lodestar-vpn-helper.sh"
 COMPOSE = TF / "pia-example/compose.vpn.yaml"
 CA = ROOT / "infra/pia-bridge/vm/pia-ca.rsa.4096.crt"
 FLEET_COMPOSE = ROOT / "infra/fleet/steps/vm/compose.yaml"
@@ -70,13 +75,16 @@ FLEET_COMPOSE = ROOT / "infra/fleet/steps/vm/compose.yaml"
 CA_SHA256 = "32e9b1d1433ea97614f2a14c6e358e3f57c0570cc9f6b2ee812699ba696c66ab"
 HELPER = "/usr/local/sbin/lodestar-vpn-helper"
 HELPER_RULE = f"lodestar ALL=(root) NOPASSWD: {HELPER}"
+# The PATH the helper runs with: root-owned system directories only.
+HELPER_SECURE_PATH = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
 HELPER_VERBS = {
     "preflight", "write-config", "verify-permissions", "validate-compose", "start-vpn",
     "start-crawler", "verify-tunnel", "stop-vpn", "cleanup", "wg-handshake", "wg-transfer",
     "wg-endpoints", "query-egress", "query-ipinfo", "query-dns", "verify-dns-firewall",
     "inspect-firewall", "inspect-ipv6",
 }
-# Ubuntu 24.04's sudo secure_path (/etc/sudoers), where `sudo -n bash` finds bash.
+# Stock Ubuntu 24.04's global sudo secure_path (/etc/sudoers, which the template
+# leaves alone), where `sudo -n bash` finds bash.
 SECURE_PATH = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/snap/bin"]
 # The files whose privileged commands the template must allow: main's fleet
 # steps and deliver-pia, plus the manual bridge once X-pia-bridge-manual adds it.
@@ -168,11 +176,23 @@ if hashlib.sha256(CA.read_bytes()).hexdigest() != CA_SHA256:
     fail(f"{CA} is not the pinned PIA CA")
 ok("PIA's CA is the pinned file (SHA-256 " + CA_SHA256 + ")")
 
+import gzip
+helper_src = HELPER_SRC.read_text()
+# As main.tf's base64gzip(file(...)); the gzip bytes differ from Go's, not their size class.
+helper_gz = base64.b64encode(gzip.compress(helper_src.encode(), mtime=0)).decode()
 base = {"ssh_public_keys": TEST_KEYS, "role_label": "worker-01", "compose_vpn_content": compose_text,
-        "pia_ca_cert_content": ca_text}
+        "pia_ca_cert_content": ca_text, "vpn_helper_gz": helper_gz}
 variants = {
     "no host key": {**base, "host_key_private": "", "host_key_public": ""},
     "pinned host key": {**base, "role_label": "main", "host_key_private": TEST_HOST_PRIV, "host_key_public": TEST_HOST_PUB},
+    # The largest variables.tf allows in practice: the primary key and the two
+    # extra keys at about 120 characters with comments, and a real-length
+    # OpenSSH ed25519 host key (476 bytes). Key comments aren't bounded there.
+    "worst case": {**base, "role_label": "worker-06",
+                   "ssh_public_keys": ["ssh-ed25519 " + "A" * 68 + " " + c.ljust(39, "x") for c in ("operator", "control-plane", "spare")],
+                   "host_key_private": "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "\n".join(["B" * 70] * 5) + "\n" + "B" * 50
+                                       + "\n-----END OPENSSH PRIVATE KEY-----\n",
+                   "host_key_public": "ssh-ed25519 " + "C" * 68 + " lodestar-worker-06"},
 }
 docs = {}
 for name, env in variants.items():
@@ -229,13 +249,29 @@ sudoers_d = {p: f for p, f in files.items() if p.startswith("/etc/sudoers.d/")}
 if list(sudoers_d) != ["/etc/sudoers.d/90-lodestar-vpn-helper"]:
     fail(f"sudoers.d files: {sorted(sudoers_d)}")
 helper_sudoers = want_file("/etc/sudoers.d/90-lodestar-vpn-helper", "0440")
-if helper_sudoers != HELPER_RULE + "\n":
+helper_defaults = f'Defaults!{HELPER} secure_path="{":".join(HELPER_SECURE_PATH)}"'
+if helper_sudoers != helper_defaults + "\n" + HELPER_RULE + "\n":
     fail(f"the helper's sudoers file is {helper_sudoers!r}")
 if want_file("/etc/lodestar/vpn/compose.yaml", "0644") != compose_text:
     fail("the installed compose.yaml isn't pia-example/compose.vpn.yaml byte for byte")
 if want_file("/etc/lodestar/vpn/ca.rsa.4096.crt", "0644") != ca_text:
     fail("the installed CA isn't the pinned file byte for byte")
-helper = want_file(HELPER, "0750")
+helper_b64 = want_file(HELPER, "0750")
+if files[HELPER].get("encoding") != "gz+b64":
+    fail("cloud-init must write the helper with encoding gz+b64")
+helper = gzip.decompress(base64.b64decode(helper_b64)).decode()
+if helper != helper_src:
+    fail("the helper cloud-init writes isn't cloud-init/lodestar-vpn-helper.sh byte for byte")
+# cloud-init's own decoder, where it is installed (it runs on the system python).
+probe = 'import sys; from cloudinit.config.cc_write_files import extract_contents as x, canonicalize_extraction as c; ' \
+        'sys.stdout.buffer.write(x(sys.stdin.read().strip(), c("gz+b64")))'
+if Path("/usr/bin/python3").exists() and subprocess.run(["/usr/bin/python3", "-c", "import cloudinit"], capture_output=True).returncode == 0:
+    r = subprocess.run(["/usr/bin/python3", "-c", probe], input=helper_b64.encode(), capture_output=True)
+    if r.returncode or r.stdout != helper_src.encode():
+        fail(f"cloud-init's gz+b64 decoder doesn't give back the helper: {r.stderr.decode()[-300:]}")
+    ok("cloud-init's write_files decoder gives back the helper byte for byte")
+else:
+    print("SKIP: cloud-init's python module not installed; no decoder round trip")
 want_file("/usr/local/sbin/lodestar-bootstrap.sh", "0700")
 ok("cloud-init writes the helper, its sudoers rule, compose.yaml and the CA, root-owned")
 
@@ -257,6 +293,18 @@ ok("main's sudo model is kept: lodestar ALL=(ALL) NOPASSWD:ALL, password locked"
 sudoers_lines = [f"lodestar {s}" for s in user_sudo]
 for f in sudoers_d.values():
     sudoers_lines += [l for l in f["content"].splitlines() if l.strip() and not l.lstrip().startswith("#")]
+# Defaults lines: only a secure_path for the helper itself, read here so the
+# tie test and the template can't disagree about where commands resolve.
+defaults = [l for l in sudoers_lines if l.startswith("Defaults")]
+for d in defaults:
+    m = re.fullmatch(r'Defaults!(\S+) secure_path="([^"]*)"', d)
+    if not m or m.group(1) != HELPER:
+        fail(f"an unexpected sudoers Defaults line: {d!r}")
+    dirs = m.group(2).split(":")
+    if dirs != HELPER_SECURE_PATH or any(not x.startswith("/") or x.startswith(("/home", "/tmp", "/run", "/var")) for x in dirs):
+        fail(f"the helper's secure_path must be root-owned system directories only: {dirs}")
+if len(defaults) != 1:
+    fail("the helper needs exactly one Defaults! secure_path line")
 (WORK / "sudoers").write_text("\n".join(sudoers_lines) + "\n")
 
 
@@ -304,51 +352,8 @@ class Unreadable(Exception):
     pass
 
 
-def code_lines(p, text):
-    """The file's lines with comments cut: Python's by its tokenizer (a # in a
-    string stays), shell's and PowerShell's at a # that starts a word outside
-    quotes and ${...}."""
-    lines = text.splitlines()
-    if p.suffix == ".py":
-        import io, tokenize
-        cut = {}
-        try:
-            for tok in tokenize.generate_tokens(io.StringIO(text).readline):
-                if tok.type == tokenize.COMMENT:
-                    cut[tok.start[0]] = tok.start[1]
-        except (tokenize.TokenError, SyntaxError) as e:
-            raise Unreadable(f"{p}: can't tokenize: {e}")
-        return [l[:cut[i]] if i in cut else l for i, l in enumerate(lines, 1)]
-    out = []
-    for l in lines:
-        q, brace, end = None, 0, len(l)
-        for i, ch in enumerate(l):
-            if q:
-                if ch == q:
-                    q = None
-            elif ch in "'\"":
-                q = ch
-            elif ch == "{" and i and l[i - 1] == "$":
-                brace += 1
-            elif ch == "}" and brace:
-                brace -= 1
-            elif ch == "#" and not brace and (i == 0 or l[i - 1].isspace()):
-                end = i
-                break
-        out.append(l[:end])
-    return out
-
-
-def py_constants(text):
-    """Module-level NAME = "string" assignments, to resolve {NAME} in f-strings."""
-    import ast
-    consts = {}
-    for node in ast.parse(text).body:
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    consts[t.id] = node.value.value
-    return consts
+# A sudo mention that isn't a command: "has sudo access", "needs sudo rights".
+PROSE_NEXT = {"access", "rights", "privileges", "permission", "permissions"}
 
 
 def sudo_argv(where, s, consts):
@@ -372,33 +377,107 @@ def sudo_argv(where, s, consts):
     return argv
 
 
-def scan_file(p, rel):
-    """Every privileged command in one file, as (where, argv). A string literal
-    that starts with `sudo` is a command; in shell, so is a sudo command word.
-    Elsewhere, `sudo` followed by an option is a command the test can't read
-    (it fails); other mentions (prose in messages) are not commands."""
-    try:
-        text = p.read_text()
-    except UnicodeDecodeError:
-        return []
-    shell = p.suffix in (".sh", "")
-    consts = py_constants(text) if p.suffix == ".py" else {}
+def judge_string(where, s, consts):
+    """A string that starts with sudo is a command. Any other sudo in it is
+    refused, unless the next word marks it as prose."""
     found = []
-    for n, code in enumerate(code_lines(p, text), 1):
-        where = f"{rel}:{n}"
+    for m in re.finditer(r"\bsudo\b", s):
+        if m.start() == 0:
+            found.append((where, sudo_argv(where, s, consts)))
+            continue
+        nxt = re.match(r"\s+([A-Za-z]+)", s[m.end():])
+        if not (nxt and nxt.group(1).lower() in PROSE_NEXT):
+            raise Unreadable(f"{where}: sudo inside a longer string the tie test can't read: {s.strip()!r}")
+    return found
+
+
+def scan_python(text, rel):
+    """Every string constant and f-string (ast, so comments never count and a
+    # in a string hides nothing). {NAME} in an f-string resolves to the module's
+    string constant. A name `sudo` in code is refused."""
+    import ast
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as e:
+        raise Unreadable(f"{rel}: can't parse: {e}")
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    consts[t.id] = node.value.value
+    inner = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            inner.update(id(v) for v in node.values)
+    found = []
+    for node in ast.walk(tree):
+        where = f"{rel}:{getattr(node, 'lineno', '?')}"
+        if isinstance(node, ast.Name) and node.id == "sudo":
+            raise Unreadable(f"{where}: a name sudo the tie test can't follow")
+        if isinstance(node, ast.JoinedStr):
+            s = "".join(v.value if isinstance(v, ast.Constant) else
+                        ("{%s}" % v.value.id if isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name) else "{...}")
+                        for v in node.values)
+            found += judge_string(where, s, consts)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in inner:
+            found += judge_string(where, node.value, consts)
+    return found
+
+
+def shell_code(line):
+    """A shell or PowerShell line with its comment cut at a # that starts a
+    word outside quotes and ${...}."""
+    q, brace = None, 0
+    for i, ch in enumerate(line):
+        if q:
+            if ch == q:
+                q = None
+        elif ch in "'\"":
+            q = ch
+        elif ch == "{" and i and line[i - 1] == "$":
+            brace += 1
+        elif ch == "}" and brace:
+            brace -= 1
+        elif ch == "#" and not brace and (i == 0 or line[i - 1].isspace()):
+            return line[:i]
+    return line
+
+
+def scan_shell(text, rel):
+    """A quoted string that starts with sudo, or a sudo command word, is a
+    command. sudo held in a variable, or anywhere else but prose, is refused."""
+    found = []
+    for n, line in enumerate(text.splitlines(), 1):
+        code, where = shell_code(line), f"{rel}:{n}"
+        if re.search(r"=\s*[\"']?sudo\b", code):
+            raise Unreadable(f"{where}: sudo kept in a variable the tie test can't follow: {code.strip()}")
         for m in re.finditer(r"\bsudo\b", code):
             i = m.start()
             before = code[i - 1] if i else ""
-            if before in "'\"":
+            if before and before in "'\"":
                 close = code.find(before, i)
                 if close < 0:
-                    raise Unreadable(f"{where}: a sudo literal the test can't read: {code.strip()}")
-                found.append((where, sudo_argv(where, code[i:close], consts)))
-            elif shell and (i == 0 or before.isspace() or before in ";|&(") and re.match(r"sudo\s", code[i:]):
-                found.append((where, sudo_argv(where, re.split(r"[;&|)]", code[i:])[0], consts)))
-            elif re.match(r"sudo\s+-", code[i:]) or code[i:i + 5] == "sudo\"" or code[i:i + 5] == "sudo'":
-                raise Unreadable(f"{where}: a sudo use the tie test can't read: {code.strip()}")
+                    raise Unreadable(f"{where}: a sudo string the tie test can't read: {code.strip()}")
+                found += judge_string(where, code[i:close], {})
+            elif (not before or before.isspace() or before in ";|&(") and re.match(r"sudo(\s|$)", code[i:]):
+                found.append((where, sudo_argv(where, re.split(r"[;&|)]", code[i:])[0], {})))
+            else:
+                nxt = re.match(r"\s+([A-Za-z]+)", code[m.end():])
+                if not (nxt and nxt.group(1).lower() in PROSE_NEXT):
+                    raise Unreadable(f"{where}: a sudo use the tie test can't read: {code.strip()}")
     return found
+
+
+def scan_file(p, rel):
+    """Every privileged command in one file, as (where, argv)."""
+    try:
+        text = p.read_text()
+    except UnicodeDecodeError:
+        raise Unreadable(f"{rel}: not UTF-8, so the tie test can't read it")
+    if p.suffix == ".py":
+        return scan_python(text, rel)
+    return scan_shell(text, rel)
 
 
 def privileged_commands(tops):
@@ -413,7 +492,7 @@ def privileged_commands(tops):
     return found
 
 
-rules = [parse_rule(l) for l in sudoers_lines]
+rules = [parse_rule(l) for l in sudoers_lines if not l.startswith("Defaults")]
 try:
     cmds = privileged_commands(SCAN)
 except Unreadable as e:
@@ -448,6 +527,8 @@ cases = {
     "comment_only.sh": ("  # sudo -n reboot\n", []),
     "helper_const.py": (f'HELPER = "{HELPER}"\ncmd = f"sudo -n {{HELPER}} preflight"\n', [[HELPER, "preflight"]]),
     "prose.py": ('msg = f"Verify {user} has sudo access to the helper"\n', []),
+    "line_start.sh": ("sudo -n systemctl restart docker\n", [["systemctl", "restart", "docker"]]),
+    "shell_string.sh": ("ssh host 'sudo -n flock -n /x true'\n", [["flock", "-n", "/x", "true"]]),
 }
 for name, (body, want) in cases.items():
     (sc / name).write_text(body)
@@ -459,16 +540,27 @@ for name, (body, want) in cases.items():
         fail(f"scanner self-check {name}: found {got}, want {want}")
 for name, body in {"list.py": 'X = ["sudo", "-n", "id"]\n', "no_n.py": 'X = "sudo id"\n',
                    "option.py": 'X = "sudo -n -u root id"\n', "embedded.py": 'X = "true && sudo -n id"\n',
-                   "no_n.sh": "sudo reboot\n"}.items():
-    (sc / name).write_text(body)
+                   "no_n.sh": "sudo reboot\n",
+                   # The runner's review probes: sudo mid-string, and sudo kept in a variable.
+                   "mid_and.py": 'X = "cd /x && sudo systemctl restart docker"\n',
+                   "mid_semicolon.py": 'X = f"test -d {d}; sudo tee /etc/sudoers.d/x"\n',
+                   "variable.sh": "SUDO=sudo\n$SUDO -n systemctl stop docker\n",
+                   "name.py": "cmd = [sudo, '-n', 'id']\n",
+                   "not_utf8.sh": None}.items():
+    if body is None:
+        (sc / name).write_bytes(b"sudo -n id \xff\xfe\n")
+    else:
+        (sc / name).write_text(body)
     try:
         scan_file(sc / name, name)
-    except Unreadable:
+    except Unreadable as e:
+        if name == "no_n.sh" and "without -n" not in str(e):
+            fail(f"scanner self-check {name}: refused for the wrong reason: {e}")
         continue
     fail(f"scanner self-check {name}: an unreadable sudo use was accepted")
 if not allows(narrow[0], "lodestar", cases["helper_const.py"][1][0]):
     fail("scanner self-check: a helper call doesn't tie to the helper rule")
-ok("scanner self-check: comments, constants and prose handled; list, option, embedded and passworded forms refused")
+ok("scanner self-check: comments, constants, prose and line-start commands handled; list, option, mid-string, variable, passworded and non-UTF-8 forms refused")
 
 if shutil.which("visudo"):
     r = subprocess.run(["visudo", "-c", "-q", "-f", str(WORK / "sudoers")], capture_output=True, text=True)
@@ -687,6 +779,7 @@ done
 restore() {
   local rc=$?
   set +e
+  [[ -s "$WORK/holder.pid" ]] && kill "$(cat "$WORK/holder.pid")" 2>/dev/null
   [[ "$STATE_NETNS" -eq 1 ]] && ip netns del "$TEST_NETNS" 2>/dev/null
   [[ "$STATE_SUDOERS" -eq 1 ]] && rm -f "$SUDOERS_FILE"
   [[ "$STATE_USER" -eq 1 ]] && userdel -r -f "$TEST_USER" 2>/dev/null
@@ -775,6 +868,15 @@ esac
 MOCK_CURL
 cat > "$MOCK/docker" <<MOCK_DOCKER
 #!/usr/bin/env bash
+# gluetun as this stack's container, its process the namespace holder.
+if [[ "\$1" == inspect && "\$2" == -f ]]; then
+  case "\$3" in
+    *com.docker.compose.service*) echo gluetun; exit 0 ;;
+    *com.docker.compose.project*) echo "\${MOCK_PROJECT:-lodestar-vpn}"; exit 0 ;;
+    *State.Pid*) cat "$WORK/holder.pid"; exit 0 ;;
+  esac
+  exit 1
+fi
 if [[ "\$1" == exec && "\$2" == gluetun ]]; then
   shift 2
   # A kernel built without IPv6 has no switch to read: IPv6 is off there.
@@ -799,6 +901,8 @@ out="$(wg_conf 203.0.113.10:1337 | PATH="$MOCK:$PATH" "$HELPER_BIN" write-config
 rmdir "$RUN_DIR/wg0.conf"
 cp -a "$WORK/wg0.conf.keep" "$RUN_DIR/wg0.conf"
 grep -q "exists and is not a file; run cleanup first" <<<"$out" || fail "write-config over a directory: $out"
+leftover="$(find "$RUN_DIR" -name 'wg0.tmp.*')"
+[[ -z "$leftover" ]] || fail "write-config left temporary files: $leftover"
 pass "write-config: a valid config is written root-only; an unlisted endpoint, a missing or symlinked CA, or a directory in its place fail"
 
 ip netns add "$TEST_NETNS"; STATE_NETNS=1
@@ -818,6 +922,9 @@ nsx iptables -A OUTPUT -o lo -j ACCEPT
 nsx iptables -A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT
 nsx iptables -A OUTPUT -d 203.0.113.10/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT
 nsx iptables -A OUTPUT -o wg0 -j ACCEPT
+# A process in the namespace, standing in for gluetun's (the wg verbs enter its net namespace).
+ip netns exec "$TEST_NETNS" tail -f /dev/null &
+echo $! > "$WORK/holder.pid"
 nsx iptables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
 nsx iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
 nsx iptables -I OUTPUT 3 ! -o wg0 -p icmp -m addrtype ! --dst-type LOCAL -j DROP
@@ -837,6 +944,12 @@ for verb in wg-handshake wg-transfer wg-endpoints; do
   if PATH="$MOCK:$PATH" "$HELPER_BIN" "$verb" >/dev/null 2>&1; then fail "$verb answered for a wg0 that isn't WireGuard"; fi
 done
 pass "a wg0 that isn't WireGuard can't fake handshake, transfer or endpoint evidence"
+
+for verb in verify-dns-firewall wg-endpoints query-egress inspect-firewall; do
+  out="$(MOCK_PROJECT=lodestar PATH="$MOCK:$PATH" "$HELPER_BIN" "$verb" 2>&1 || true)"
+  grep -q "is not this stack's gluetun service" <<<"$out" || fail "$verb read another project's gluetun: $out"
+done
+pass "verbs that read gluetun refuse the fleet's (another project's) container"
 
 if PATH="$MOCK:$PATH" "$HELPER_BIN" cleanup >/dev/null 2>&1; then fail "cleanup passed although compose down failed"; fi
 [[ -f "$RUN_DIR/wg0.conf" ]] || fail "cleanup deleted wg0.conf although the containers weren't verifiably down"
