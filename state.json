@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T01:23Z",
+  "updated_at": "2026-11-14T01:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8719,10 +8719,14 @@
       "review": "CHANGES r1 relayed (B1 hold order; I1-I5; nits); one push pending",
       "at": "2026-11-14T00:39Z"
     },
-    "858": {
-      "slice": "X-ci-filter-docs-user",
-      "head": "fb817f1f",
-      "note": "runner keeps it (session parked); review on green; slices.yaml entry in next runner PR"
+    "859": {
+      "slice": "X-operator-hardening",
+      "slot": 15,
+      "state": "fix round (review items + owner rule A); held for owner rule build"
+    },
+    "860": {
+      "slice": "runner",
+      "state": "fresh Opus review running"
     }
   },
   "merged_log": [
@@ -9369,7 +9373,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T01:23Z",
+    "updated": "2026-11-14T01:41Z",
     "items": [
       {
         "slot": 1,
@@ -9640,7 +9644,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T01:23Z",
+  "updated": "2026-11-14T01:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10155,6 +10159,12 @@
       "slice": "X-fleet-guard-docs",
       "merged": "38cbef39",
       "at": "2026-11-14T00:49Z"
+    },
+    {
+      "pr": 858,
+      "slice": "X-ci-filter-docs-user",
+      "merged": "c9c1b2c2",
+      "at": "2026-11-14T01:41Z"
     }
   ]
 }
