@@ -1631,8 +1631,12 @@ mod tests {
         {
             let mut store =
                 Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
-            store.tombstone_from_worker(&[[1; 20]], w.0, 1).unwrap();
-            store.tombstone_from_worker(&[[2; 20]], other.0, 1).unwrap();
+            // Written now, so the hold's own expiry doesn't touch them.
+            let at = unix_now();
+            store.tombstone_from_worker(&[[1; 20]], w.0, at).unwrap();
+            store
+                .tombstone_from_worker(&[[2; 20]], other.0, at)
+                .unwrap();
         }
         c.workers.revoke(w.0).await.unwrap();
         let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();

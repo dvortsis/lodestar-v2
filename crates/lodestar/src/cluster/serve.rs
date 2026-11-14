@@ -545,6 +545,7 @@ async fn write_floor(
     floor: Arc<FloorReports>,
     db: PathBuf,
     config: StoreConfig,
+    clock: Arc<dyn Clock>,
     mut stopped: watch::Receiver<bool>,
 ) {
     let mut failing = false;
@@ -557,9 +558,8 @@ async fn write_floor(
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = expire.tick() => {
                 let (db, config) = (db.clone(), config.clone());
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+                // The clock that stamps the reports (`Sink::outcomes`).
+                let now = clock.now_secs();
                 // A failure is tried again at the next tick; holds only
                 // last longer meanwhile.
                 let _ = tokio::task::spawn_blocking(move || expire_floor_holds(&db, config, now))
@@ -2213,6 +2213,7 @@ impl Cluster {
             inner.floor.clone(),
             inner.wiring.db.clone(),
             inner.wiring.store.clone(),
+            inner.wiring.clock.clone(),
             writer_stopped,
         ));
         let task = tokio::spawn(run(inner.clone(), follow, reseals, stopped, running));
@@ -3378,7 +3379,8 @@ mod tests {
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         let floor = h.0.floor.clone();
-        floor.report(WorkerId(3), &InfoHash([9; 20]), 1, Instant::now());
+        let at = SystemClock.now_secs();
+        floor.report(WorkerId(3), &InfoHash([9; 20]), at, Instant::now());
         // Pending or already written: the metrics say which.
         let mut m = String::new();
         h.render(&mut m);
@@ -3389,7 +3391,7 @@ mod tests {
         // The sessions stop, and a report still in flight lands after: the
         // writer runs until they're gone (#607's review).
         let writer = cluster.stop_serving().await;
-        floor.report(WorkerId(3), &InfoHash([10; 20]), 2, Instant::now());
+        floor.report(WorkerId(3), &InfoHash([10; 20]), at + 1, Instant::now());
         writer.finish().await;
         assert_eq!(floor.len(), 0);
         let held = Store::open(&db, StoreConfig::default())
