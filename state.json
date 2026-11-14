@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T03:18Z",
+  "updated_at": "2026-11-14T03:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8364,7 +8364,9 @@
         "owner call: delete old branch slice/X-metainfo01-fix"
       ]
     },
-    "X-operator-tripwire-settle: operator tripwire settle wait and request budget (component level; detail by message); slot 15 session; before first-run check 8; record in next runner PR slices.yaml"
+    "X-operator-tripwire-settle: operator tripwire settle wait and request budget (component level; detail by message); slot 15 session; before first-run check 8; record in next runner PR slices.yaml",
+    "X-snapshot-proactive-carry: store: carry holds into pre-migration snapshots (component level; filter queue after X-update01-store01-fix; waits on owner answers relayed by the reviewer session); add to slices.yaml in next runner PR",
+    "X-pipe01-fix: per-address constant accepted as runner call; owner \u00a72.19 flag at merge"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9677,7 +9679,7 @@
     }
   ],
   "heartbeat": "2026-11-14T00:38Z",
-  "updated": "2026-11-14T03:18Z",
+  "updated": "2026-11-14T03:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
