@@ -389,8 +389,7 @@ pub fn is_kept_hold(rule: &str) -> bool {
 /// hold ([`is_floor_hold`]) that no release removes, but it gives way to
 /// any other hold written over it (a filter rule, an expired adult hold),
 /// so the key stays held past its expiry. Otherwise it goes only when it
-/// expires
-/// ([`Store::expire_worker_floor`]) or its worker is revoked
+/// expires ([`Store::expire_worker_floor`]) or its worker is revoked
 /// ([`Store::purge_worker_floor`]).
 pub const WORKER_FLOOR_PREFIX: &str = "worker-floor:";
 
@@ -650,8 +649,9 @@ impl Store {
     /// Records a remote worker's floor drops (CS-1a, CS-1b, CS-8a or a
     /// hash list, reported as `Lost(Blocked)`) as tombstones under
     /// `worker-floor:<worker>` (WK-10d), so the keys aren't claimed,
-    /// fetched or stored again while the row holds them. A hash already tombstoned keeps its row (a
-    /// local floor row is never renamed). Returns how many rows were added.
+    /// fetched or stored again while the row holds them. A hash already
+    /// tombstoned keeps its row (a local floor row is never renamed).
+    /// Returns how many rows were added.
     pub fn tombstone_from_worker(
         &mut self,
         hashes: &[[u8; 20]],
@@ -712,33 +712,49 @@ impl Store {
     }
 
     /// Deletes workers' floor reports written before `before` (Unix
-    /// seconds); the caller sets how long a report holds its key. Only `worker-floor:` rows go; a local floor row, a list's or a
-    /// user's is never touched. Returns how many went. A key let go is
-    /// judged under the floor again by whoever fetches it next.
-    pub fn expire_worker_floor(&mut self, before: i64) -> Result<usize> {
+    /// seconds); the caller sets how long a report holds its key. Only
+    /// `worker-floor:` rows go; a local floor row, a list's or a user's is
+    /// never touched. Returns the hashes let go, for the caller to
+    /// reconcile its in-memory held set.
+    pub fn expire_worker_floor(&mut self, before: i64) -> Result<Vec<[u8; 20]>> {
         let sql = format!(
-            "DELETE FROM tombstones WHERE at < ?1 AND {}",
+            "DELETE FROM tombstones WHERE at < ?1 AND {} RETURNING hash",
             worker_floor_sql("rule")
         );
-        let n = self.conn.execute(&sql, [before])?;
-        if n > 0 {
-            self.scrub_wal();
-        }
-        Ok(n)
+        self.delete_returning(&sql, params![before])
     }
 
     /// Deletes one worker's floor reports (`worker-floor:<worker>`), for a
     /// revoke. Another worker's rows, and every local, list or user hold,
-    /// are left alone. Returns how many went.
-    pub fn purge_worker_floor(&mut self, worker: u32) -> Result<usize> {
+    /// are left alone. Returns the hashes let go, as
+    /// [`expire_worker_floor`](Self::expire_worker_floor) does.
+    pub fn purge_worker_floor(&mut self, worker: u32) -> Result<Vec<[u8; 20]>> {
         let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
-        let n = self
-            .conn
-            .execute("DELETE FROM tombstones WHERE rule = ?1", [&rule])?;
-        if n > 0 {
+        self.delete_returning(
+            "DELETE FROM tombstones WHERE rule = ?1 RETURNING hash",
+            params![rule],
+        )
+    }
+
+    /// Runs a `DELETE … RETURNING hash` and collects the hashes.
+    fn delete_returning(
+        &mut self,
+        sql: &str,
+        args: impl rusqlite::Params,
+    ) -> Result<Vec<[u8; 20]>> {
+        let gone: Vec<[u8; 20]> = {
+            let mut stmt = self.conn.prepare(sql)?;
+            let rows = stmt.query_map(args, |r| r.get::<_, Vec<u8>>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(hash20(row?)?);
+            }
+            out
+        };
+        if !gone.is_empty() {
             self.scrub_wal();
         }
-        Ok(n)
+        Ok(gone)
     }
 
     /// Releases a held hash (removes its tombstone or quarantine row), so
@@ -1444,7 +1460,7 @@ mod tests {
         put_row(&s, 3, "CS-1a", 1);
         put_row(&s, 4, "user", 1);
         put_row(&s, 5, "WORKER-FLOOR:7", 1);
-        assert_eq!(s.expire_worker_floor(20).unwrap(), 1);
+        assert_eq!(s.expire_worker_floor(20).unwrap(), vec![[1; 20]]);
         let left = rules(&s);
         assert!(!left.contains_key(&1));
         assert_eq!(left[&2], "worker-floor:7");
@@ -1490,11 +1506,11 @@ mod tests {
     fn a_lapsed_report_is_held_again_by_the_main_nodes_judgement() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
         s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
-        assert_eq!(s.expire_worker_floor(11).unwrap(), 1);
+        assert_eq!(s.expire_worker_floor(11).unwrap(), vec![[1; 20]]);
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
         judged(&mut s, [1; 20], "CS-1a", Held::Tombstone, 20);
         assert_eq!(rules(&s)[&1], "CS-1a");
-        assert_eq!(s.expire_worker_floor(i64::MAX).unwrap(), 0);
+        assert!(s.expire_worker_floor(i64::MAX).unwrap().is_empty());
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
     }
 
@@ -1507,7 +1523,7 @@ mod tests {
             .unwrap();
         judged(&mut s, [1; 20], "user", Held::Tombstone, 20);
         judged(&mut s, [2; 20], "CS-3", Held::Quarantine, 20);
-        assert_eq!(s.purge_worker_floor(7).unwrap(), 2, "[2] and [3]");
+        assert_eq!(s.purge_worker_floor(7).unwrap().len(), 2, "[2] and [3]");
         assert_eq!(
             s.held_among(&[[1; 20], [2; 20], [3; 20]]).unwrap(),
             vec![true, true, false]
@@ -1525,14 +1541,14 @@ mod tests {
         s.tombstone_from_worker(&[[6; 20]], 70, 10).unwrap();
         put_row(&s, 4, "CS-8a", 1);
         put_row(&s, 5, "user", 1);
-        assert_eq!(s.purge_worker_floor(7).unwrap(), 2);
+        assert_eq!(s.purge_worker_floor(7).unwrap().len(), 2);
         let left = rules(&s);
         assert!(!left.contains_key(&1) && !left.contains_key(&2));
         assert_eq!(left[&3], "worker-floor:8");
         assert_eq!(left[&6], "worker-floor:70", "not a prefix match");
         assert_eq!(left[&4], "CS-8a");
         assert_eq!(left[&5], "user");
-        assert_eq!(s.purge_worker_floor(7).unwrap(), 0);
+        assert!(s.purge_worker_floor(7).unwrap().is_empty());
     }
 
     /// A worker's report holds only hashes not stored, checked and written

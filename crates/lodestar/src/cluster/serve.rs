@@ -295,7 +295,8 @@ fn cluster_kind(e: &ClusterError) -> &'static str {
 
 /// Floor drops remote workers reported (`Lost(Blocked)`, WK-10d), until
 /// each is a `worker-floor:<id>` tombstone in the store
-/// ([`Store::tombstone_from_worker`]).
+/// ([`Store::tombstone_from_worker_unless_stored`]), which lasts
+/// [`WORKER_FLOOR_HOLD_SECS`].
 ///
 /// - **Refused as soon as the sink sees it, everywhere:** a report goes
 ///   into this map, and into the built-in worker's `HeldSet` (its intake,
@@ -471,10 +472,12 @@ impl FloorReports {
     }
 
     /// A revoke: forgets the worker's reports not written yet and deletes
-    /// its written ones (`worker-floor:<id>`; the owner's choice of 2026-11-14),
-    /// with no flush in between. A delete that fails is kept and tried
-    /// again by every flush until it lands (counted and logged as a
-    /// failed write). Blocking. Returns the rows deleted.
+    /// its written ones (`worker-floor:<id>`; the owner's choice of
+    /// 2026-11-14), with no flush in between, and lets the built-in
+    /// worker's held set go of each key nothing else holds. A delete that
+    /// fails is counted and logged as a failed write, kept, and tried
+    /// again by every flush until it lands. Blocking. Returns the rows
+    /// deleted.
     pub(crate) fn revoke(
         &self,
         worker: WorkerId,
@@ -487,16 +490,64 @@ impl FloorReports {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(worker.0);
-        let done = Store::open(db, config).and_then(|mut s| s.purge_worker_floor(worker.0));
-        if done.is_ok() {
-            self.to_purge
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&worker.0);
-        } else {
-            self.wake.notify_one();
+        let done = Store::open(db, config).and_then(|mut s| {
+            let gone = s.purge_worker_floor(worker.0)?;
+            self.release_held(&s, &gone);
+            Ok(gone.len())
+        });
+        match &done {
+            Ok(_) => {
+                self.to_purge
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&worker.0);
+            }
+            Err(e) => {
+                self.write_failures.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    events::CLUSTER_FLOOR_REPORT_FAILED,
+                    error = lodestar_log::Error::new(e)
+                );
+                self.wake.notify_one();
+            }
         }
         done
+    }
+
+    /// Lets go of workers' reports written more than
+    /// [`WORKER_FLOOR_HOLD_SECS`] before `now`, and of each such key in
+    /// the built-in worker's held set unless something else holds it.
+    /// Blocking. Returns the rows deleted.
+    fn expire(
+        &self,
+        db: &std::path::Path,
+        config: StoreConfig,
+        now: i64,
+    ) -> Result<usize, lodestar_store::Error> {
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut store = Store::open(db, config)?;
+        let gone = store.expire_worker_floor(now.saturating_sub(WORKER_FLOOR_HOLD_SECS))?;
+        self.release_held(&store, &gone);
+        Ok(gone.len())
+    }
+
+    /// Takes `gone` (hashes whose worker-floor rows were just deleted) out
+    /// of the built-in worker's held set, except those the store still
+    /// holds (another rule, quarantine) or a report not written yet holds.
+    /// A store that can't answer leaves them held: over-strict, never
+    /// loose. Call with `writing` held.
+    fn release_held(&self, store: &Store, gone: &[[u8; 20]]) {
+        let Some(held) = &self.held else {
+            return;
+        };
+        let free: Vec<[u8; 20]> = {
+            let pending = self.pending();
+            gone.iter()
+                .filter(|h| !pending.contains_key(*h))
+                .copied()
+                .collect()
+        };
+        let _ = held.remove_released(&free, |hs| store.held_among(hs));
     }
 
     fn holds(&self, key: &InfoHash) -> bool {
@@ -524,6 +575,17 @@ impl FloorReports {
         db: &std::path::Path,
         config: StoreConfig,
     ) -> Result<usize, lodestar_store::Error> {
+        self.flush_with(db, config, || {})
+    }
+
+    /// [`flush`](Self::flush), with `between` run after the batch is taken
+    /// and before it's written (a seam for the lock test).
+    fn flush_with(
+        &self,
+        db: &std::path::Path,
+        config: StoreConfig,
+        between: impl FnOnce(),
+    ) -> Result<usize, lodestar_store::Error> {
         let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         // Purges a revoke couldn't finish, first.
         let purges: Vec<u32> = self
@@ -536,7 +598,8 @@ impl FloorReports {
         if !purges.is_empty() {
             let mut store = Store::open(db, config.clone())?;
             for w in purges {
-                store.purge_worker_floor(w)?;
+                let gone = store.purge_worker_floor(w)?;
+                self.release_held(&store, &gone);
                 self.to_purge
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -552,6 +615,7 @@ impl FloorReports {
         if batch.is_empty() {
             return Ok(0);
         }
+        between();
         let mut store = Store::open(db, config)?;
         let mut by_worker: BTreeMap<(u32, i64), Vec<[u8; 20]>> = BTreeMap::new();
         for (k, r) in &batch {
@@ -589,16 +653,6 @@ pub(crate) const WORKER_FLOOR_HOLD_SECS: i64 = 7 * 24 * 3600;
 /// How often the floor writer lets go of reports past their hold.
 const FLOOR_EXPIRE_EVERY: Duration = Duration::from_secs(3600);
 
-/// Lets go of workers' floor reports written more than
-/// [`WORKER_FLOOR_HOLD_SECS`] before `now`. Blocking.
-fn expire_floor_holds(
-    db: &std::path::Path,
-    config: StoreConfig,
-    now: i64,
-) -> Result<usize, lodestar_store::Error> {
-    Store::open(db, config)?.expire_worker_floor(now.saturating_sub(WORKER_FLOOR_HOLD_SECS))
-}
-
 /// Writes floor reports as they come, until `stopped`; then once more,
 /// so a report taken before a shutdown is in the store when it ends.
 async fn write_floor(
@@ -617,13 +671,12 @@ async fn write_floor(
             () = floor.wake.notified() => false,
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = expire.tick() => {
-                let (db, config) = (db.clone(), config.clone());
+                let (f, db, config) = (floor.clone(), db.clone(), config.clone());
                 // The clock that stamps the reports (`Sink::outcomes`).
                 let now = clock.now_secs();
                 // A failure is tried again at the next tick; holds only
                 // last longer meanwhile.
-                let _ = tokio::task::spawn_blocking(move || expire_floor_holds(&db, config, now))
-                    .await;
+                let _ = tokio::task::spawn_blocking(move || f.expire(&db, config, now)).await;
                 continue;
             }
             _ = stopped.changed() => true,
@@ -3228,14 +3281,11 @@ mod tests {
         assert_eq!(check(), vec![KeyCheck::Held]);
         // Not yet.
         let end = at + WORKER_FLOOR_HOLD_SECS;
-        assert_eq!(
-            expire_floor_holds(&db, StoreConfig::default(), end).unwrap(),
-            0
-        );
+        assert_eq!(floor.expire(&db, StoreConfig::default(), end).unwrap(), 0);
         assert_eq!(check(), vec![KeyCheck::Held]);
         // Past it: claimable.
         assert_eq!(
-            expire_floor_holds(&db, StoreConfig::default(), end + 1).unwrap(),
+            floor.expire(&db, StoreConfig::default(), end + 1).unwrap(),
             1
         );
         assert_eq!(check(), vec![KeyCheck::Free]);
@@ -3288,6 +3338,75 @@ mod tests {
         floor.flush(&db, StoreConfig::default()).unwrap();
         assert_eq!(floor.unwritten(), 0);
         assert_eq!(held(&[key_n(2)]), vec![false]);
+    }
+
+    /// When a worker's report lapses or its worker is revoked, the built-in
+    /// worker's held set lets the key go too, so the main node judges its
+    /// next fetch; a key something else still holds (another rule, a
+    /// report not written yet) stays held there.
+    #[test]
+    fn the_built_in_held_set_follows_expiry_and_revoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        let at = 1_000_000;
+        // Expiry: [1] lapses; [2] is re-reported meanwhile, not yet written.
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        floor.report(WorkerId(4), &key_n(2), at, Instant::now());
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        let end = at + WORKER_FLOOR_HOLD_SECS + 1;
+        floor.report(WorkerId(6), &key_n(2), end, Instant::now());
+        assert!(held.contains(&key_n(1).0) && held.contains(&key_n(2).0));
+        assert_eq!(floor.expire(&db, StoreConfig::default(), end).unwrap(), 2);
+        assert!(!held.contains(&key_n(1).0), "let go with the row");
+        assert!(held.contains(&key_n(2).0), "a newer report holds it");
+        floor.flush(&db, StoreConfig::default()).unwrap();
+
+        // Revoke: worker 5's [3] goes; [4], also held by the main node's
+        // own rule, stays.
+        floor.report(WorkerId(5), &key_n(3), end, Instant::now());
+        floor.report(WorkerId(5), &key_n(4), end, Instant::now());
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE tombstones SET rule = 'CS-1a' WHERE hash = ?1",
+                [&key_n(4).0[..]],
+            )
+            .unwrap();
+        assert_eq!(
+            floor
+                .revoke(WorkerId(5), &db, StoreConfig::default())
+                .unwrap(),
+            1
+        );
+        assert!(!held.contains(&key_n(3).0));
+        assert!(held.contains(&key_n(4).0));
+        assert!(held.contains(&key_n(2).0), "another worker's report stays");
+    }
+
+    /// A flush keeps the writer's lock from taking its batch to removing
+    /// it, so a revoke can't land in between.
+    #[test]
+    fn a_flush_holds_the_writers_lock_across_its_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        floor.report(WorkerId(4), &key_n(1), 1, Instant::now());
+        let mut seen = None;
+        floor
+            .flush_with(&db, StoreConfig::default(), || {
+                seen = Some(floor.writing.try_lock().is_err());
+            })
+            .unwrap();
+        assert_eq!(
+            seen,
+            Some(true),
+            "the lock is held while the batch is written"
+        );
+        assert!(floor.writing.try_lock().is_ok(), "and released after");
     }
 
     fn key_n(i: usize) -> InfoHash {
