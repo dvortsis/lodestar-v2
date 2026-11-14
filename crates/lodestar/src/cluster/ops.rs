@@ -54,6 +54,9 @@ use crate::logging::events;
 /// How often the follower checks for a newly built cluster server, to
 /// re-apply saved pauses to it.
 const FOLLOW_EVERY: Duration = Duration::from_millis(100);
+/// How often the follower tries again to save a floor pause whose save
+/// failed.
+const RETRY_EVERY: Duration = Duration::from_secs(5);
 
 /// Each worker's saved settings: `workers.prefs.<id>`.
 pub const PREFS_PREFIX: &str = "workers.prefs.";
@@ -147,7 +150,7 @@ impl Saved {
 
     /// Whether a row that doesn't parse may hold a pause: unless it's JSON
     /// that says `"paused": false`, it's read as paused (fails closed).
-    fn maybe_paused(text: &str) -> bool {
+    pub(crate) fn maybe_paused(text: &str) -> bool {
         serde_json::from_str::<serde_json::Value>(text)
             .ok()
             .and_then(|v| v.get("paused").and_then(serde_json::Value::as_bool))
@@ -188,19 +191,22 @@ impl Saved {
 
 /// The workers API over the cluster port and the planner.
 pub struct Workers {
-    /// Itself, for the pause source each server asks.
-    me: Weak<Workers>,
     cluster: ClusterHandle,
     placement: Arc<Placement>,
     /// A read-write connection for the settings rows.
     store: Arc<Mutex<Store>>,
     saved: Mutex<BTreeMap<WorkerId, Saved>>,
-    /// Pauses in force that aren't saved as such: a floor-budget pause
-    /// whose save failed, a saved row this start couldn't read (read as
-    /// paused: it fails closed), or a paused row the planner had no room
-    /// for. Applied like saved ones, and saved again by the follower until
-    /// they land; an admin's resume or revoke ends them.
+    /// Floor-budget pauses whose save failed: applied like saved ones, and
+    /// saved again by the follower (at most every [`RETRY_EVERY`]) until
+    /// they land. An admin's resume or revoke ends them.
     unsaved: Mutex<BTreeSet<WorkerId>>,
+    /// Pauses held in memory only, never written: a saved row this start
+    /// couldn't read (read as paused, failing closed; the row itself is
+    /// left alone), or a paused row the planner had no room for. Applied
+    /// like saved ones; an admin's resume or revoke ends them.
+    held: Mutex<BTreeSet<WorkerId>>,
+    /// When the follower last tried to save `unsaved`.
+    retried: Mutex<Option<std::time::Instant>>,
     /// The server saved pauses were last applied to.
     applied_to: Mutex<Weak<ClusterServer>>,
     /// Held across every change to a worker's settings, from reading them
@@ -246,7 +252,7 @@ impl Workers {
     ) -> Result<Arc<Workers>, lodestar_store::Error> {
         let store = Store::open(db, config)?;
         let mut saved = BTreeMap::new();
-        let mut unsaved = BTreeSet::new();
+        let mut held = BTreeSet::new();
         for (key, text) in store.settings_with_prefix(PREFS_PREFIX)? {
             let Some(id) = key
                 .strip_prefix(PREFS_PREFIX)
@@ -264,7 +270,7 @@ impl Workers {
                 // Its settings go back to the defaults, but not its pause:
                 // a row that can't be read is read as paused.
                 if Saved::maybe_paused(&text) {
-                    unsaved.insert(w);
+                    held.insert(w);
                 }
                 continue;
             };
@@ -272,16 +278,17 @@ impl Workers {
             {
                 saved.insert(w, s);
             } else if s.paused {
-                unsaved.insert(w);
+                held.insert(w);
             }
         }
-        let workers = Arc::new_cyclic(|me| Workers {
-            me: me.clone(),
+        let workers = Arc::new(Workers {
             cluster,
             placement,
             store: Arc::new(Mutex::new(store)),
             saved: Mutex::new(saved),
-            unsaved: Mutex::new(unsaved),
+            unsaved: Mutex::new(BTreeSet::new()),
+            held: Mutex::new(held),
+            retried: Mutex::new(None),
             applied_to: Mutex::new(Weak::new()),
             edits: tokio::sync::Mutex::new(()),
         });
@@ -297,6 +304,13 @@ impl Workers {
             rt.spawn(async move {
                 workers.save_floor_pause(w).await;
             });
+        }));
+        // Every session start asks it, on this server and on every server
+        // started later (before it serves), so a pause stands whatever a
+        // server forgot.
+        let me = Arc::downgrade(&workers);
+        workers.cluster.set_pause_source(Arc::new(move |w| {
+            me.upgrade().is_some_and(|ws| ws.is_paused(w))
         }));
         let weak = Arc::downgrade(&workers);
         tokio::spawn(async move {
@@ -323,15 +337,9 @@ impl Workers {
                     server.pause(*w);
                 }
             }
-            for w in lock(&self.unsaved).iter() {
+            for w in lock(&self.unsaved).iter().chain(lock(&self.held).iter()) {
                 server.pause(*w);
             }
-            // And at every session start, so a pause stands whatever the
-            // server forgot meanwhile.
-            let me = self.me.clone();
-            server.set_pause_source(Arc::new(move |w| {
-                me.upgrade().is_some_and(|ws| ws.is_paused(w))
-            }));
             *last = Arc::downgrade(&server);
         }
         Some(server)
@@ -339,7 +347,9 @@ impl Workers {
 
     /// Whether `w`'s pause is in force: saved, or held unsaved.
     fn is_paused(&self, w: WorkerId) -> bool {
-        lock(&self.saved).get(&w).is_some_and(|s| s.paused) || lock(&self.unsaved).contains(&w)
+        lock(&self.saved).get(&w).is_some_and(|s| s.paused)
+            || lock(&self.unsaved).contains(&w)
+            || lock(&self.held).contains(&w)
     }
 
     /// Saves each pause held unsaved, until it lands. One for a worker
@@ -347,6 +357,16 @@ impl Workers {
     /// logged.
     async fn save_unsaved(&self) {
         let pending: Vec<WorkerId> = lock(&self.unsaved).iter().copied().collect();
+        if pending.is_empty() {
+            return;
+        }
+        {
+            let mut last = lock(&self.retried);
+            if last.is_some_and(|at| at.elapsed() < RETRY_EVERY) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
         for w in pending {
             let _edit = self.edits.lock().await;
             if !lock(&self.unsaved).contains(&w) {
@@ -547,6 +567,7 @@ impl Workers {
         self.check(&server, w).await?;
         self.set_paused(w, false).await?;
         lock(&self.unsaved).remove(&w);
+        lock(&self.held).remove(&w);
         self.server()?.resume(w);
         self.one(&server, w).await
     }
@@ -624,6 +645,7 @@ impl Workers {
         self.placement.forget(w);
         lock(&self.saved).remove(&w);
         lock(&self.unsaved).remove(&w);
+        lock(&self.held).remove(&w);
         // The revocation stands either way. A row left behind only gives
         // an id that can never reconnect its old settings at the next
         // start, so this failing doesn't fail the revoke.
@@ -1338,13 +1360,22 @@ mod tests {
         assert!(!granted(&s.claim(claim(9)).await.unwrap()));
         c.wait_status(w, StatusDto::Paused).await;
         drop(s);
-        // The follower saves it as paused, readable from now on.
-        let workers = c.workers.clone();
-        until("saved", || {
-            let workers = workers.clone();
-            async move { (workers.saved(w).paused, ()) }
-        })
-        .await;
+        // The row itself is left as it was.
+        let row = |dir: &Path| {
+            Store::open(dir.join("lodestar.db"), StoreConfig::default())
+                .unwrap()
+                .settings_with_prefix(PREFS_PREFIX)
+                .unwrap()
+        };
+        assert_eq!(
+            row(dir.path()),
+            vec![(prefs_key(w), "{\"v\":1".to_string())]
+        );
+        // An admin's resume ends the pause.
+        c.workers.resume(w.0).await.unwrap();
+        let s = c.connect(&creds).await;
+        assert!(granted(&s.claim(claim(8)).await.unwrap()));
+        drop(s);
         c.stop().await;
     }
 
