@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T16:03Z",
+  "updated_at": "2026-11-14T16:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9157,6 +9157,12 @@
       "status": "delta review CHANGES on 9baaf526 (1 blocking hygiene leftover in bench fixture, 1 important: retry-queue merge could weaken hold strength; 1 optional test); round 4 requested",
       "at": "2026-11-14T13:09Z",
       "owns_widened": "crates/store/tests/held_write.rs + one new crates/pipeline/tests file + one new search-handler test file (runner, \u00a75)"
+    },
+    "886": {
+      "slice": "X-fetch-room-fix",
+      "head": "ab11a9fc",
+      "review": "rv-886 fresh Opus+security CHANGES: B1 worker hand-back drops (runner already deferred to X-worker-oversize-handback); I1 share-held partial never rejoins partials queue (fix + probe test); optional: regrow self-block assert, admission doc wording. Relayed; delta check next.",
+      "at": "2026-11-14T16:08Z"
     }
   },
   "merged_log": [
@@ -9803,7 +9809,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T16:03Z",
+    "updated": "2026-11-14T16:08Z",
     "items": [
       {
         "slot": 1,
@@ -10078,7 +10084,7 @@
     }
   ],
   "heartbeat": "2026-11-14T15:38Z",
-  "updated": "2026-11-14T16:03Z",
+  "updated": "2026-11-14T16:08Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
