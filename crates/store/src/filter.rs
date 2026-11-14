@@ -1453,6 +1453,7 @@ mod tests {
     #[test]
     fn a_worker_report_leaves_unverified_and_import_rows_alone() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let v2 = format!("{}{}", "54".repeat(20), "00".repeat(12));
         s.conn
             .execute_batch(&format!(
                 "INSERT OR IGNORE INTO sources (id, plugin, version, state, added_at)
@@ -1470,7 +1471,6 @@ mod tests {
                 u = "51".repeat(20),
                 c = "52".repeat(20),
                 d = "53".repeat(20),
-                v2 = format!("{}{}", "54".repeat(20), "00".repeat(12)),
             ))
             .unwrap();
         let count =
