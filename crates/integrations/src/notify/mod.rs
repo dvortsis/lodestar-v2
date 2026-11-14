@@ -203,7 +203,7 @@ impl From<NetError> for AttemptError {
                 AttemptError::fatal(DeliveryError::Failed("the endpoint's answer was too large"))
             }
             NetError::Timeout => AttemptError::transient(DeliveryError::Timeout),
-            NetError::Resolve | NetError::Connect | NetError::Http => {
+            NetError::Resolve | NetError::Connect | NetError::Http | NetError::NotReady => {
                 AttemptError::transient(DeliveryError::Unreachable)
             }
         }
