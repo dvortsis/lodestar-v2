@@ -381,12 +381,65 @@ def _id(res, prefix: str) -> str:
     return rid
 
 
+# What the API fills into a stored agent toolset that main's files may leave
+# out (the Managed Agents tools reference): a bare toolset enables every tool
+# with the `always_allow` policy, a `configs` entry inherits what it omits from
+# `default_config`, and each entry's `type` is always returned, equal to its
+# `name`. Only these values are excused; any other difference refuses.
+TOOLSET = "agent_toolset_20260401"
+TOOLSET_DEFAULTS = {"enabled": True, "permission_policy": {"type": "always_allow"}}
+
+
+def _toolset_matches(declared: dict, deployed: dict) -> bool:
+    if set(deployed) - {"type", "default_config", "configs"}:
+        return False
+    got_default = deployed.get("default_config", {})
+    got_configs = deployed.get("configs", [])
+    if not isinstance(got_default, dict) or not isinstance(got_configs, list) \
+            or not all(isinstance(c, dict) and isinstance(c.get("name"), str) for c in got_configs):
+        return False
+    defaults = {**TOOLSET_DEFAULTS, **declared.get("default_config", {})}
+    if {**TOOLSET_DEFAULTS, **got_default} != defaults:
+        return False
+
+    def resolved(configs):
+        """Each entry in full, by name: what it sets over what it inherits. None
+        when two entries name the same tool."""
+        out = {c.get("name"): {**defaults, "type": c.get("name"), **c} for c in configs}
+        return out if len(out) == len(configs) else None
+
+    want, got = resolved(declared.get("configs", [])), resolved(got_configs)
+    if want is None or got is None:
+        return False
+    # A tool only one side lists has the toolset's defaults on the other.
+    return all(want.get(n, {**defaults, "type": n, "name": n}) == got.get(n, {**defaults, "type": n, "name": n})
+               for n in want.keys() | got.keys())
+
+
+def tools_match(declared, deployed) -> bool:
+    """Whether the deployed `tools` are what main declares: the same tools in the
+    same order, each declared value present and equal, and nothing else but the
+    defaults the API fills in (TOOLSET_DEFAULTS, each config's `type`). An added
+    or removed tool, a changed value or an unknown field refuses."""
+    if not isinstance(deployed, list) or len(deployed) != len(declared):
+        return False
+    for want, got in zip(declared, deployed):
+        if not isinstance(got, dict) or got.get("type") != want.get("type"):
+            return False
+        if want.get("type") == TOOLSET:
+            if not _toolset_matches(want, got):
+                return False
+        elif got != want:
+            return False
+    return True
+
+
 def check_deployed(call, lock: dict, agent: dict) -> None:
     """The deployed agent version must be what main's files render to, or the
     test would certify a prompt or toolset that isn't running."""
     cur = call("GET", f"/v1/agents/{lock['agent_id']}", None) or {}
     if cur.get("version") != lock["agent_version"] or cur.get("system") != agent["system"] \
-            or cur.get("tools") != agent["tools"]:
+            or not tools_match(agent["tools"], cur.get("tools")):
         raise Refusal("the deployed agent differs from main's files; run operator-apply.yml first")
 
 

@@ -1,4 +1,4 @@
-# X-operator-check-notes decisions (#PR)
+# X-operator-check-notes decisions (#885)
 
 These change the owner's first-run checklist (`docs/operations/cloud-operator-first-run.md`) after the first good round trip. The runner decided each one on 2026-11-14. Each tightens a check or says how to run it; none loosens one. No code, limit, gate or permission changes.
 
