@@ -351,7 +351,7 @@ async fn a_companion_not_running_gets_no_credentialed_request() {
     let path = || RequestPath::parse("/api/v1/system/status").unwrap();
     let carrying = || ProbeRequest::new(&target, path(), limits()).post(b"x".to_vec());
     let got = client.send(carrying()).await;
-    assert!(matches!(got, Err(AdapterError::Unreachable)), "{got:?}");
+    assert!(matches!(got, Err(AdapterError::NotReady)), "{got:?}");
     // The health check never counts that answer.
     let healthy = tokio::time::timeout(WAIT, s.healthy(&id, &target)).await;
     assert_eq!(healthy, Ok(false));
@@ -359,7 +359,7 @@ async fn a_companion_not_running_gets_no_credentialed_request() {
     s.stop(&id).await;
     assert!(bindings.managed(port) && !bindings.ready(port));
     let got = client.send(carrying()).await;
-    assert!(matches!(got, Err(AdapterError::Unreachable)), "{got:?}");
+    assert!(matches!(got, Err(AdapterError::NotReady)), "{got:?}");
     assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
     // A bare probe still reaches 127.0.0.1 alone.
     let got = client

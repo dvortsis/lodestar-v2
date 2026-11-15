@@ -16,7 +16,7 @@ use lodestar_api::companions::CompanionsError;
 use lodestar_api::companions_guided::{CompanionsGuidedApi, GuidedError, PASTE_MAX};
 use lodestar_api::dto::companions::{Companion, CompanionRuns, TemplateKind};
 use lodestar_api::dto::companions_guided::{
-    CompanionForgotten, CompanionTarget, DetectedCompanion,
+    CompanionForgotten, CompanionTarget, DetectedCompanion, DetectedCompanions,
 };
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::{ApiState, Auth, router};
@@ -80,10 +80,13 @@ fn detected() -> DetectedCompanion {
 }
 
 impl CompanionsGuidedApi for Fake {
-    fn detect(&self) -> BoxFuture<'_, Result<Vec<DetectedCompanion>, GuidedError>> {
+    fn detect(&self) -> BoxFuture<'_, Result<DetectedCompanions, GuidedError>> {
         Box::pin(async move {
             self.call("detect".into())?;
-            Ok(vec![detected()])
+            Ok(DetectedCompanions {
+                found: vec![detected()],
+                starting: vec!["prowlarr".into()],
+            })
         })
     }
     fn set_target(
@@ -349,6 +352,7 @@ async fn each_route_reaches_the_binary_with_what_it_was_given() {
                     r.body["found"][0]["target"],
                     json!({"kind":"loopback","port":8080})
                 );
+                assert_eq!(r.body["starting"], json!(["prowlarr"]));
             }
             "/api/v1/companions/qbittorrent/plan" => {
                 assert_eq!(r.body, json!({ "id": "qbittorrent", "settings": PLAN }));

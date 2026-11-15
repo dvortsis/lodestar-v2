@@ -41,6 +41,7 @@ const CODES: Record<string, () => string> = {
 	no_template: m.settings_companions_code_no_template,
 	companion_unreachable: m.settings_companions_code_unreachable,
 	companion_not_ready: m.settings_companions_code_not_ready,
+	companion_starting: m.settings_companions_code_starting,
 	companion_unauthorized: m.settings_companions_code_unauthorized,
 	companion_protocol: m.settings_companions_code_protocol,
 	network: m.settings_companions_code_network,
@@ -53,6 +54,11 @@ const CODES: Record<string, () => string> = {
 export function wordsFor(code: string | null | undefined): string {
 	const f = code && Object.hasOwn(CODES, code) ? CODES[code] : undefined;
 	return (f ?? m.settings_companions_code_other)();
+}
+
+/** Whether a failed request was refused because a companion Lodestar runs is still starting. */
+export function isStarting(e: unknown): boolean {
+	return e instanceof ApiError && e.code === 'companion_starting';
 }
 
 /** A plain sentence for a failed request. Never the error's own text. */

@@ -317,7 +317,8 @@ describe('detect, add and templates', () => {
 	it('adds a detected companion with the server target, not a guess', async () => {
 		answers['POST /companions/detect'] = () =>
 			reply(200, {
-				found: [{ id: 'qbittorrent', version: '5.0.0', target: { kind: 'container', port: 8080 } }]
+				found: [{ id: 'qbittorrent', version: '5.0.0', target: { kind: 'container', port: 8080 } }],
+				starting: []
 			});
 		answers['POST /companions/qbittorrent/target'] = () =>
 			reply(200, {
@@ -333,6 +334,49 @@ describe('detect, add and templates', () => {
 			kind: 'container',
 			port: 8080
 		});
+	});
+	it('a companion still starting is said, not "none found", and can be looked for again', async () => {
+		let calls = 0;
+		answers['POST /companions/detect'] = () => {
+			calls += 1;
+			return reply(200, { found: [], starting: ['qbittorrent'] });
+		};
+		await open();
+		await fireEvent.click(screen.getByRole('button', { name: 'Look for companions' }));
+		await until(() => expect(document.querySelector('[data-starting]')).toBeTruthy());
+		expect(document.querySelector('[data-starting]')?.textContent).toContain(
+			'qBittorrent is still starting'
+		);
+		expect(document.body.textContent).not.toContain('None found.');
+		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+		await until(() => expect(calls).toBe(2));
+	});
+	it('a refusal while the companion is still starting offers Try again, which asks again', async () => {
+		// As in use: a target detection found, refused while Lodestar's copy is starting.
+		const target = { kind: 'loopback', port: 8080 };
+		answers['POST /companions/detect'] = () =>
+			reply(200, { found: [{ id: 'qbittorrent', version: '5.0.0', target }], starting: [] });
+		let calls = 0;
+		answers['POST /companions/qbittorrent/target'] = () => {
+			calls += 1;
+			return calls === 1
+				? fail(409, 'companion_starting')
+				: reply(200, { id: 'qbittorrent', version: '5.0.0', target });
+		};
+		await open();
+		await fireEvent.click(screen.getByRole('button', { name: 'Look for companions' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Add qBittorrent' }));
+		await until(() => expect(screen.getByText(/still starting/)).toBeTruthy());
+		expect(document.body.textContent).not.toContain("didn't answer");
+		expect(document.body.textContent).not.toContain('companion_starting');
+		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+		await until(() => expect(calls).toBe(2));
+		expect(bodies['POST /companions/qbittorrent/target']).toEqual(target);
+		await until(() => expect(screen.queryByText(/still starting/)).toBeNull());
+	});
+	it('words a starting companion apart from one that did not answer', () => {
+		expect(wordsFor('companion_starting')).toMatch(/still starting/);
+		expect(wordsFor('companion_starting')).not.toBe(wordsFor('companion_unreachable'));
 	});
 	it('a refused address shows words, and an empty form says what is missing', async () => {
 		answers['POST /companions/qbittorrent/target'] = () => fail(409, 'address_refused');
@@ -508,7 +552,8 @@ describe('words and copy', () => {
 	it('a detected companion with no version has no trailing space', async () => {
 		answers['POST /companions/detect'] = () =>
 			reply(200, {
-				found: [{ id: 'qbittorrent', version: null, target: { kind: 'loopback', port: 8080 } }]
+				found: [{ id: 'qbittorrent', version: null, target: { kind: 'loopback', port: 8080 } }],
+				starting: []
 			});
 		await open();
 		await fireEvent.click(screen.getByRole('button', { name: 'Look for companions' }));

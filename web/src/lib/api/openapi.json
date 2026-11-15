@@ -881,7 +881,7 @@
         "tags": [
           "companions"
         ],
-        "summary": "Runs detection on its fixed targets and lists what answered.",
+        "summary": "Runs detection on its fixed targets and lists what answered, and the\ncompanions Lodestar runs that are still starting.",
         "operationId": "detectCompanions",
         "responses": {
           "200": {
@@ -2412,7 +2412,7 @@
             }
           },
           "409": {
-            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_unauthorized`, `companion_protocol`).",
+            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_starting`, `companion_unauthorized`, `companion_protocol`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -14279,7 +14279,8 @@
       "DetectedCompanions": {
         "type": "object",
         "required": [
-          "found"
+          "found",
+          "starting"
         ],
         "properties": {
           "found": {
@@ -14287,6 +14288,13 @@
             "items": {
               "$ref": "#/components/schemas/DetectedCompanion"
             }
+          },
+          "starting": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Companions Lodestar runs that are still starting, so detection\ncouldn't look for them yet: try again in a moment. Never one that\nis in `found`."
           }
         }
       },

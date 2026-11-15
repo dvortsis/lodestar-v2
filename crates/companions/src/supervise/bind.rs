@@ -67,6 +67,9 @@ struct Port {
     /// Why the last readiness attempt that passed its health check
     /// didn't count (a [`listener::Owner`] code).
     refusal: Option<&'static str>,
+    /// The run that refusal was recorded for: a later run of the same
+    /// claim isn't marked by it.
+    refused_run: Option<u64>,
     /// The child's status while Lodestar holds it; `None` before it's
     /// attached and once it's stopped or removed.
     status: Option<watch::Receiver<Status>>,
@@ -111,6 +114,7 @@ impl Bindings {
             held: true,
             claim: self.claims.fetch_add(1, Ordering::Relaxed) + 1,
             refusal: None,
+            refused_run: None,
             status: None,
             ready: None,
         };
@@ -173,6 +177,7 @@ impl Bindings {
         {
             p.ready = Some(run);
             p.refusal = None;
+            p.refused_run = None;
         }
     }
 
@@ -219,6 +224,7 @@ impl Bindings {
                 let current = p.status.as_ref().and_then(up).map(|s| s.run);
                 if current == Some(run) {
                     p.refusal = Some(owner.code());
+                    p.refused_run = Some(run);
                 }
                 if p.ready == Some(run) {
                     p.ready = None;
@@ -267,6 +273,33 @@ impl Bindings {
         self.ports().get(&port).and_then(|p| p.refusal)
     }
 
+    /// Whether the companion on `port` is still starting: a start holds the
+    /// port (claimed, and not released by its stop, its removal or a failed
+    /// start), and its child is about to start, starting, running or
+    /// backing off before its next start. Not while it waits for you, is
+    /// held, or is stopped; not once its supervisor is gone; and not while
+    /// the run up now had a readiness attempt refused (its listener isn't
+    /// its own, or can't be told), which waiting won't change. Says
+    /// nothing about readiness.
+    pub fn starting(&self, port: u16) -> bool {
+        let ports = self.ports();
+        let Some(p) = ports.get(&port).filter(|p| p.held) else {
+            return false;
+        };
+        let Some(rx) = p.status.as_ref() else {
+            return true;
+        };
+        if rx.has_changed().is_err() {
+            return false;
+        }
+        let s = *rx.borrow();
+        match s.state {
+            State::Starting | State::BackingOff { .. } => true,
+            State::Running | State::Unhealthy { .. } => !(s.up && p.refused_run == Some(s.run)),
+            _ => false,
+        }
+    }
+
     /// The run last found ready on `port`, if any.
     pub fn ready_run(&self, port: u16) -> Option<u64> {
         self.ports().get(&port).and_then(|p| p.ready)
@@ -312,6 +345,40 @@ mod tests {
             up,
             pid: None,
         }
+    }
+
+    /// X-companion-starting-steps: still starting while a start is under
+    /// way, about to start included; not once it waits for you, is held
+    /// or stopped, nor once the port is released or never held.
+    #[test]
+    fn starting_means_a_start_under_way() {
+        let b = Bindings::new();
+        assert!(!b.starting(9000));
+        assert!(b.claim(9000));
+        assert!(b.starting(9000), "claimed, about to start");
+        let (tx, rx) = watch::channel(status(State::Starting, 0));
+        b.attach(9000, rx);
+        for state in [
+            State::Starting,
+            State::Running,
+            State::Unhealthy { failures: 1 },
+            State::BackingOff {
+                delay: std::time::Duration::from_secs(1),
+            },
+        ] {
+            tx.send_replace(status(state, 1));
+            assert!(b.starting(9000), "{state:?}");
+        }
+        for state in [
+            State::NeedsAttention(super::super::Attention::CrashLoop),
+            State::Held,
+            State::Stopped,
+        ] {
+            tx.send_replace(status(state, 1));
+            assert!(!b.starting(9000), "{state:?}");
+        }
+        b.release(9000);
+        assert!(b.managed(9000) && !b.starting(9000));
     }
 
     #[test]
@@ -412,6 +479,38 @@ mod tests {
             pid,
             ..status(State::Running, run)
         }
+    }
+
+    /// X-companion-starting-steps (review I1): a run that is up with a
+    /// refused readiness attempt isn't starting (waiting won't make it
+    /// ready); a new run of the same claim isn't marked by it, and a
+    /// supervisor that's gone isn't starting either (O1).
+    #[tokio::test]
+    async fn a_refused_run_is_not_starting_until_the_next_run() {
+        let b = with_owner(Owner::Unknown);
+        let (tx, rx) = watch::channel(running(1, Some(40)));
+        assert!(b.hold(8080, rx));
+        assert!(b.starting(8080), "up, not checked yet");
+        assert!(!b.try_ready(8080, || async { true }).await);
+        assert_eq!(b.refusal(8080), Some("listener_unverified"));
+        assert!(!b.starting(8080), "up with its refusal");
+        // A restart: the new run is starting again, the old refusal aside.
+        tx.send_replace(status(
+            State::BackingOff {
+                delay: std::time::Duration::from_secs(1),
+            },
+            1,
+        ));
+        assert!(b.starting(8080));
+        tx.send_replace(running(2, Some(41)));
+        assert!(b.starting(8080), "a new run isn't marked by the last");
+        assert!(!b.try_ready(8080, || async { true }).await);
+        assert!(!b.starting(8080), "refused in its own run");
+        // The supervisor is gone: not starting, whatever it said last.
+        tx.send_replace(running(3, Some(42)));
+        assert!(b.starting(8080));
+        drop(tx);
+        assert!(!b.starting(8080));
     }
 
     /// A passing health check counts only when the listener is the run's

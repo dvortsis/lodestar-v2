@@ -915,7 +915,7 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     wait_status(&mut rx, "the first run", |s| s.up && s.run == 1).await;
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
@@ -931,7 +931,7 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     wait_status(&mut rx, "the exit seen", |s| !(s.up && s.run == 1)).await;
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
@@ -949,7 +949,7 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     }
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
@@ -1029,7 +1029,8 @@ async fn credentialed_requests_stay_held_where_the_listener_cant_be_told() {
     assert!(!bindings.ready(port));
     assert_eq!(bindings.ready_run(port), None);
     // The child answers a bare probe, and a request that carries something
-    // is held all the same.
+    // is held all the same: not ready, not "starting", since waiting won't
+    // make an unverified listener its own (X-companion-starting-steps).
     assert_eq!(
         client
             .send(ProbeRequest::new(&target, at("/"), limits()))
@@ -1042,7 +1043,7 @@ async fn credentialed_requests_stay_held_where_the_listener_cant_be_told() {
         .send(ProbeRequest::new(&target, at("/api"), limits()).post(b"key=x".to_vec()))
         .await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::NotReady)),
         "{:?}",
         got.map(|r| r.status())
     );

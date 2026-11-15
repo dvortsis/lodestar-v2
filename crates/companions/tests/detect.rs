@@ -1209,13 +1209,113 @@ mod bound {
         ]
     }
 
+    /// Refused with nothing sent: unreachable, or (at a managed port that
+    /// isn't ready) still starting or not ready.
     async fn refused(client: &CompanionHttp, req: ProbeRequest<'_>) {
         let got = client.send(req).await;
         assert!(
-            matches!(got, Err(AdapterError::Unreachable)),
+            matches!(
+                got,
+                Err(AdapterError::Unreachable | AdapterError::Starting | AdapterError::NotReady)
+            ),
             "{:?}",
             got.map(|r| r.status())
         );
+    }
+
+    /// X-companion-starting-steps: a managed port that isn't ready is
+    /// "starting" while a start holds it and "not ready" once none does,
+    /// for what carries something and for a bare probe that finds nothing
+    /// there; detection there says so rather than "not here". A port
+    /// nothing manages still reads "not here", and a ready one is asked.
+    #[tokio::test]
+    async fn a_managed_port_that_isnt_ready_says_starting() {
+        let closed = ClosedPort::new();
+        let target = Target::Loopback(PortNumber::new(closed.port).unwrap());
+        let qbt = detect::detector(&id("qbittorrent")).unwrap();
+        // Nothing manages the port: nothing there is "not here".
+        let unmanaged = bound(&Arc::new(Bindings::new()));
+        assert_eq!(qbt.detect(&unmanaged, &target).await, Ok(None));
+
+        let bindings = Arc::new(Bindings::new());
+        let (tx, rx) = watch::channel(status(State::Starting, 0));
+        bindings.hold(closed.port, rx);
+        let client = bound(&bindings);
+        for req in carrying(&target) {
+            assert_eq!(client.send(req).await.err(), Some(AdapterError::Starting));
+        }
+        let bare = client
+            .send(ProbeRequest::new(&target, path(), limits()))
+            .await;
+        assert_eq!(bare.err(), Some(AdapterError::Starting));
+        assert_eq!(
+            qbt.detect(&client, &target).await,
+            Err(AdapterError::Starting)
+        );
+        // Waiting for you after a crash loop: not starting, so not ready.
+        tx.send_replace(status(
+            State::NeedsAttention(lodestar_companions::supervise::Attention::CrashLoop),
+            1,
+        ));
+        assert_eq!(
+            qbt.detect(&client, &target).await,
+            Err(AdapterError::NotReady)
+        );
+        tx.send_replace(status(State::Starting, 2));
+        // Stopped (or removed, or a failed start): not ready.
+        bindings.release(closed.port);
+        for req in carrying(&target) {
+            assert_eq!(client.send(req).await.err(), Some(AdapterError::NotReady));
+        }
+        assert_eq!(
+            qbt.detect(&client, &target).await,
+            Err(AdapterError::NotReady)
+        );
+    }
+
+    /// Review O2: a bare probe at a managed port that's starting, which
+    /// accepts the connection but never answers, ends at its deadline as
+    /// starting too (not a bare timeout, which detection reads as "not
+    /// here"), whichever deadline fires first.
+    #[tokio::test]
+    async fn a_silent_starting_port_past_its_deadline_says_starting() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let keep = Arc::clone(&held);
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = listener.accept().await {
+                keep.lock().unwrap().push(sock);
+            }
+        });
+        let target = Target::Loopback(PortNumber::new(port).unwrap());
+        let bindings = Arc::new(Bindings::new());
+        let (_tx, rx) = watch::channel(status(State::Starting, 0));
+        bindings.hold(port, rx);
+        let client = bound(&bindings);
+        let short = Limits::new(Duration::from_millis(200), 1024).unwrap();
+        let got = client.send(ProbeRequest::new(&target, path(), short)).await;
+        assert_eq!(got.err(), Some(AdapterError::Starting));
+        let qbt = detect::detector(&id("qbittorrent")).unwrap();
+        assert_ne!(qbt.detect(&client, &target).await, Ok(None));
+    }
+
+    /// A ready companion is asked as before: what carries something goes,
+    /// and detection finds it.
+    #[tokio::test]
+    async fn a_ready_managed_port_is_asked_as_before() {
+        let server = Server::start(|_| reply(200, b"v5.0.3")).await;
+        let target = server.loopback();
+        let port = target_port(&server);
+        let bindings = Arc::new(Bindings::new());
+        let (_tx, rx) = watch::channel(status(State::Running, 1));
+        bindings.hold(port, rx);
+        bindings.mark_ready(port, 1);
+        let client = bound(&bindings);
+        for req in carrying(&target) {
+            assert_eq!(client.send(req).await.unwrap().status(), 200);
+        }
+        assert_eq!(server.seen().len(), carrying(&target).len());
     }
 
     fn bound(bindings: &Arc<Bindings>) -> CompanionHttp {
