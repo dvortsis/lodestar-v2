@@ -801,6 +801,7 @@ placement:
   - X-cmp01-fix
   - X-sec-S6-02-03
   - X-floor-renew-metrics-nits
+  - X-import-progress-visible
   - X-import-status-lock
   - X-store-load-busy-map
 unplaced_workstream: ws-small
