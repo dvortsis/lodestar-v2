@@ -1196,7 +1196,6 @@ fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
     );
 }
 
-/// CR-1a-S's streaming families on the DHT's side (docs/metrics.md).
 /// `dht_reply_ratio`, left out until a query has resolved: unknown, not 0.
 fn render_reply_ratio(o: &mut Out, d: &StatsSnapshot) {
     if let Some(ratio) = d.reply_ratio() {
@@ -1209,6 +1208,7 @@ fn render_reply_ratio(o: &mut Out, d: &StatsSnapshot) {
     }
 }
 
+/// CR-1a-S's streaming families on the DHT's side (docs/metrics.md).
 fn render_stream_dht(o: &mut Out, d: &StatsSnapshot) {
     o.one(
         "dht_peer_stream_batches_total",

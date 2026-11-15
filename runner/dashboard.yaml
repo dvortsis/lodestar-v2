@@ -473,6 +473,7 @@ placement:
   - X-flake-companions-loopback
   - X-flake-dht-bootstrap
   - X-dht-reply-ratio-resolved
+  - X-ci-no-fail-fast
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
