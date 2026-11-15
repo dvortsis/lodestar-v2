@@ -4,7 +4,7 @@
  "offset": 0,
  "release-groups": [
   {
-   "id": "a1000000-0000-4000-8000-000000000001",
+   "id": "a1000000-0000-4000-8000-e00000000001",
    "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
    "score": 100,
    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
@@ -17,7 +17,7 @@
      "name": "The Quiet Engines",
      "joinphrase": "",
      "artist": {
-      "id": "9a000000-0000-4000-8000-000012559534",
+      "id": "9a000000-0000-4000-8000-e00012559534",
       "name": "The Quiet Engines",
       "sort-name": "SENTINEL-SORT",
       "disambiguation": "SENTINEL-DISAMBIGUATION",
@@ -37,241 +37,241 @@
    ],
    "releases": [
     {
-     "id": "7e000000-0000-4000-8000-000000000000",
+     "id": "7e000000-0000-4000-8000-e00000000000",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000001",
+     "id": "7e000000-0000-4000-8000-e00000000001",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000002",
+     "id": "7e000000-0000-4000-8000-e00000000002",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000003",
+     "id": "7e000000-0000-4000-8000-e00000000003",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000004",
+     "id": "7e000000-0000-4000-8000-e00000000004",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000005",
+     "id": "7e000000-0000-4000-8000-e00000000005",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000006",
+     "id": "7e000000-0000-4000-8000-e00000000006",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000007",
+     "id": "7e000000-0000-4000-8000-e00000000007",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000008",
+     "id": "7e000000-0000-4000-8000-e00000000008",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000009",
+     "id": "7e000000-0000-4000-8000-e00000000009",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000010",
+     "id": "7e000000-0000-4000-8000-e00000000010",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000011",
+     "id": "7e000000-0000-4000-8000-e00000000011",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000012",
+     "id": "7e000000-0000-4000-8000-e00000000012",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000013",
+     "id": "7e000000-0000-4000-8000-e00000000013",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000014",
+     "id": "7e000000-0000-4000-8000-e00000000014",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000015",
+     "id": "7e000000-0000-4000-8000-e00000000015",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000016",
+     "id": "7e000000-0000-4000-8000-e00000000016",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000017",
+     "id": "7e000000-0000-4000-8000-e00000000017",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000018",
+     "id": "7e000000-0000-4000-8000-e00000000018",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000019",
+     "id": "7e000000-0000-4000-8000-e00000000019",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000020",
+     "id": "7e000000-0000-4000-8000-e00000000020",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000021",
+     "id": "7e000000-0000-4000-8000-e00000000021",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000022",
+     "id": "7e000000-0000-4000-8000-e00000000022",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000023",
+     "id": "7e000000-0000-4000-8000-e00000000023",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000024",
+     "id": "7e000000-0000-4000-8000-e00000000024",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000025",
+     "id": "7e000000-0000-4000-8000-e00000000025",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000026",
+     "id": "7e000000-0000-4000-8000-e00000000026",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000027",
+     "id": "7e000000-0000-4000-8000-e00000000027",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000028",
+     "id": "7e000000-0000-4000-8000-e00000000028",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000029",
+     "id": "7e000000-0000-4000-8000-e00000000029",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000030",
+     "id": "7e000000-0000-4000-8000-e00000000030",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000031",
+     "id": "7e000000-0000-4000-8000-e00000000031",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000032",
+     "id": "7e000000-0000-4000-8000-e00000000032",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000033",
+     "id": "7e000000-0000-4000-8000-e00000000033",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000034",
+     "id": "7e000000-0000-4000-8000-e00000000034",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000035",
+     "id": "7e000000-0000-4000-8000-e00000000035",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000036",
+     "id": "7e000000-0000-4000-8000-e00000000036",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000037",
+     "id": "7e000000-0000-4000-8000-e00000000037",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000038",
+     "id": "7e000000-0000-4000-8000-e00000000038",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000039",
+     "id": "7e000000-0000-4000-8000-e00000000039",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
@@ -286,7 +286,7 @@
    "disambiguation": "SENTINEL-COMMENT"
   },
   {
-   "id": "a1000000-0000-4000-8000-000000000003",
+   "id": "a1000000-0000-4000-8000-e00000000003",
    "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
    "score": 100,
    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
@@ -299,7 +299,7 @@
      "name": "Marla Venn",
      "joinphrase": " & ",
      "artist": {
-      "id": "9a000000-0000-4000-8000-000007380508",
+      "id": "9a000000-0000-4000-8000-e00007380508",
       "name": "Marla Venn",
       "sort-name": "SENTINEL-SORT",
       "disambiguation": "SENTINEL-DISAMBIGUATION",
@@ -320,7 +320,7 @@
      "name": "The Quiet Engines Orchestra",
      "joinphrase": "",
      "artist": {
-      "id": "9a000000-0000-4000-8000-000020248883",
+      "id": "9a000000-0000-4000-8000-e00020248883",
       "name": "The Quiet Engines Orchestra",
       "sort-name": "SENTINEL-SORT",
       "disambiguation": "SENTINEL-DISAMBIGUATION",
@@ -340,19 +340,19 @@
    ],
    "releases": [
     {
-     "id": "7e000000-0000-4000-8000-000000000000",
+     "id": "7e000000-0000-4000-8000-e00000000000",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000001",
+     "id": "7e000000-0000-4000-8000-e00000000001",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000002",
+     "id": "7e000000-0000-4000-8000-e00000000002",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
@@ -366,7 +366,7 @@
    ]
   },
   {
-   "id": "a1000000-0000-4000-8000-000000000002",
+   "id": "a1000000-0000-4000-8000-e00000000002",
    "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
    "score": 100,
    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
@@ -379,7 +379,7 @@
      "name": "The Quiet Engines",
      "joinphrase": "",
      "artist": {
-      "id": "9a000000-0000-4000-8000-000012559534",
+      "id": "9a000000-0000-4000-8000-e00012559534",
       "name": "The Quiet Engines",
       "sort-name": "SENTINEL-SORT",
       "disambiguation": "SENTINEL-DISAMBIGUATION",
@@ -399,19 +399,19 @@
    ],
    "releases": [
     {
-     "id": "7e000000-0000-4000-8000-000000000000",
+     "id": "7e000000-0000-4000-8000-e00000000000",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights (Live)",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000001",
+     "id": "7e000000-0000-4000-8000-e00000000001",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights (Live)",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000002",
+     "id": "7e000000-0000-4000-8000-e00000000002",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights (Live)",
      "status": "Official"

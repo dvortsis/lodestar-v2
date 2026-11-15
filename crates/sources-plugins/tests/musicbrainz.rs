@@ -43,7 +43,7 @@ use harness::{core_with, n, until};
 
 const TITLE: &str = "The Quiet Engines - Harbour Lights";
 const NAME: &str = "The Quiet Engines - Harbour Lights (2004) [FLAC]";
-const ALBUM_ID: &str = "a1000000-0000-4000-8000-000000000001";
+const ALBUM_ID: &str = "a1000000-0000-4000-8000-e00000000001";
 const T: i64 = 1_700_000_000;
 
 fn fixture(case: &str) -> PathBuf {
@@ -154,13 +154,13 @@ async fn the_year_and_the_album_type_pick_among_candidates() {
     let (got, r) = lookup("musicbrainz_candidates", &music("Echoes", Some(1999))).await;
     r.finish().unwrap();
     let i = matched(got);
-    assert_eq!(i.ids[0].value, "e1000000-0000-4000-8000-000000000001");
+    assert_eq!(i.ids[0].value, "e1000000-0000-4000-8000-e00000000001");
     assert_eq!(i.confidence, musicbrainz::CONFIDENCE_YEAR);
     // 2010: an album and a single; the album.
     let (got, _) = lookup("musicbrainz_candidates", &music("Echoes", Some(2010))).await;
     assert_eq!(
         matched(got).ids[0].value,
-        "e1000000-0000-4000-8000-000000000002"
+        "e1000000-0000-4000-8000-e00000000002"
     );
     // No year: two albums agree, so it doesn't guess.
     let (got, _) = lookup("musicbrainz_candidates", &music("Echoes", None)).await;

@@ -27,7 +27,7 @@ const SEEDS: &[(&str, &[u8])] = &[
     ),
 ];
 
-const ID: &str = "a1000000-0000-4000-8000-000000000001";
+const ID: &str = "a1000000-0000-4000-8000-e00000000001";
 
 fn seed(name: &str) -> &'static [u8] {
     SEEDS.iter().find(|(n, _)| *n == name).unwrap().1
@@ -93,7 +93,7 @@ fn only_the_asked_shape_is_whole() {
         r#"{"release-groups":["x"]}"#,
         r#"{"release-groups":[{"title":"T"}]}"#,
         r#"{"release-groups":[{"id":"x","title":"T"}]}"#,
-        r#"{"release-groups":[{"id":"A1000000-0000-4000-8000-000000000001","title":"T"}]}"#,
+        r#"{"release-groups":[{"id":"A1000000-0000-4000-8000-e00000000001","title":"T"}]}"#,
         &format!(r#"{{"release-groups":[{{"id":"{ID}"}}]}}"#),
         &one(r#","title":"U""#),
         &one(r#","i\u0064":"x""#),
@@ -135,7 +135,7 @@ fn only_the_asked_shape_is_whole() {
 fn the_caps_hold() {
     // Results past the cap stop the parse.
     let many: String = (1..=11)
-        .map(|i| format!(r#"{{"id":"a1000000-0000-4000-8000-{i:012}","title":"T"}}"#))
+        .map(|i| format!(r#"{{"id":"a1000000-0000-4000-8000-e{i:011}","title":"T"}}"#))
         .collect::<Vec<_>>()
         .join(",");
     let s = parse(&format!(r#"{{"release-groups":[{many}]}}"#));

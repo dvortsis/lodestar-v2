@@ -4,7 +4,7 @@
  "offset": 0,
  "release-groups": [
   {
-   "id": "a1000000-0000-4000-8000-000000000001",
+   "id": "a1000000-0000-4000-8000-e00000000001",
    "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
    "score": 100,
    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
@@ -17,7 +17,7 @@
      "name": "The Quiet Engines",
      "joinphrase": "",
      "artist": {
-      "id": "9a000000-0000-4000-8000-000012559534",
+      "id": "9a000000-0000-4000-8000-e00012559534",
       "name": "The Quiet Engines",
       "sort-name": "SENTINEL-SORT",
       "disambiguation": "SENTINEL-DISAMBIGUATION",
@@ -37,19 +37,19 @@
    ],
    "releases": [
     {
-     "id": "7e000000-0000-4000-8000-000000000000",
+     "id": "7e000000-0000-4000-8000-e00000000000",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000001",
+     "id": "7e000000-0000-4000-8000-e00000000001",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
     },
     {
-     "id": "7e000000-0000-4000-8000-000000000002",
+     "id": "7e000000-0000-4000-8000-e00000000002",
      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
      "title": "Harbour Lights",
      "status": "Official"
