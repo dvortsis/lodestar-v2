@@ -432,6 +432,7 @@ placement:
   - X-fleet-polish
   - X-win-log-held-open
   - X-cli-win-data-dir
+  - X-win-service-path-hardening
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
