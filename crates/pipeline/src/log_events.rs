@@ -324,10 +324,11 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
     /// The core re-judge's breaker stopped a batch in a new range: most of
-    /// its stored torrents wouldn't read. Nothing in it was held; its range
-    /// is kept to judge again, and the pass went on past it. Once per
-    /// range: the batches that only extend it aren't logged again. The
-    /// torrents the batch covered, and the ranges kept now. Counts only.
+    /// its stored torrents wouldn't read. Only the core's holds on the
+    /// torrents that did read were written; its range is kept to judge
+    /// again, and the pass went on past it. Once per range: the batches
+    /// that only extend it aren't logged again. The torrents the batch
+    /// covered, and the ranges kept now. Counts only.
     CORE_REJUDGE_STALLED {
         id: "pipeline.core_rejudge_stalled",
         component: Pipeline,

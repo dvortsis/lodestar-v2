@@ -2063,7 +2063,8 @@ impl Writer {
             Err(e) if crate::core_rejudge::is_breaker(&e) => {
                 // A stalled range judged again still mostly won't read: it
                 // went to the back of the list, and the next try waits
-                // longer. Nothing was held.
+                // longer. Only the core's holds on torrents that did read
+                // were written.
                 self.core_rejudge.stall_wait(unix_now());
             }
             Err(e) => {
@@ -3665,9 +3666,10 @@ mod tests {
         // waits twice as long.
         w.core_rejudge.stall_due(at);
         assert!(w.core_rejudge.ready());
+        let t = unix_now();
         w.rejudge_core().await;
         let next = w.core_rejudge.stall_retry_at.expect("waiting again");
-        assert!(next >= unix_now() + 2 * STALL_RETRY_FIRST - 5, "{next}");
+        assert!(next >= t + 2 * STALL_RETRY_FIRST, "{next} {t}");
     }
 
     /// The writer's sweep holds back a waiting import candidate the core

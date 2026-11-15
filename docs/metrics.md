@@ -897,7 +897,7 @@ See [the decision](decisions/2026-11-14-X-rejudge-stall.md). The core re-judge (
 
 | Series | Type | Meaning |
 | --- | --- | --- |
-| `core_rejudge_stalled_ranges` / `core_rejudge_stalled_rows` | gauge | Ranges of stored torrents the core re-judge skipped because most of a batch wouldn't read, still to judge again, and the stored torrents they covered when they stopped (a range judged again in part loses those judged). Nothing in a range is held or changed until it reads. A range is logged when it stops (`pipeline.core_rejudge_stalled`) and when it's judged through (`pipeline.core_rejudge_stall_cleared`). |
+| `core_rejudge_stalled_ranges` / `core_rejudge_stalled_rows` | gauge | Ranges of stored torrents the core re-judge skipped because most of a batch wouldn't read, still to judge again, and the stored torrents they covered when they stopped (a range judged again in part loses those judged). Nothing in a range is changed until it reads, except that today's core's holds on the torrents in it that did read are written at once. A range is logged when it stops (`pipeline.core_rejudge_stalled`) and when it's judged through (`pipeline.core_rejudge_stall_cleared`). |
 
 ## Source egress and kill switch (SRC-5, 2026-11-02)
 

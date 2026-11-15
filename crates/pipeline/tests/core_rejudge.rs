@@ -1008,3 +1008,165 @@ fn a_run_of_stopped_batches_is_reported_once() {
     let st = stalled(&mut store).unwrap();
     assert_eq!((st.ranges, st.rows), (1, 3 * n as u64));
 }
+
+/// A batch the breaker stops still holds what today's core holds among
+/// its torrents that did read, so a torrent it holds isn't left shown
+/// because its neighbours won't read; the range is kept whole all the
+/// same. So does a stalled range judged again that the breaker stops
+/// again.
+#[test]
+fn a_stopped_batch_still_holds_what_did_read() {
+    use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, is_breaker, stalled};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = BREAKER_ROWS * 2;
+    // Mostly unreadable: two the core holds, the rest plain films.
+    let held = add(&mut store, &long("rolea lexa one.mkv"));
+    let later = add(&mut store, &long("rolea lexa two.mkv"));
+    let mut plain = Vec::new();
+    let mut bad = Vec::new();
+    for i in 0..n - 2 {
+        let id = add(&mut store, &long(&format!("Plain.Film.{i}.mkv"))).0;
+        if i < BREAKER_ROWS + 4 {
+            bad.push(id);
+        } else {
+            plain.push(id);
+        }
+    }
+    let later_saved = break_rows(&mut store, &[later.0]);
+    break_rows(&mut store, &bad);
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let (b, marked) = batch(&mut store, &filter, &sealer, n);
+    let b = b.unwrap();
+    let stall = b.stall.expect("the breaker stopped it");
+    // Its rows leave out the torrent just held: it's no longer stored.
+    assert_eq!((stall.after, stall.rows), (0, n as u64 - 1));
+    // The one that read and that the core holds is held, and counted.
+    assert_eq!(marked, [held.1]);
+    assert_eq!(b.held, [held.1]);
+    assert!(!stored(&store, held.0));
+    let p = pass(&mut store).unwrap();
+    assert_eq!((p.found, p.held, p.unreadable), (1, 1, 0));
+    // Nothing else is touched: no hold on what won't read, no mark on
+    // what reads and passes.
+    assert!(stored(&store, later.0));
+    assert!(bad.iter().chain(&plain).all(|&id| stored(&store, id)));
+    // On to the retries, with the range still there.
+    while !batch(&mut store, &filter, &sealer, n).0.unwrap().waiting {}
+    let ranges = stalled(&mut store).unwrap().ranges;
+    assert_eq!(ranges, 2);
+    // The second one the core holds reads again, its neighbours don't:
+    // the breaker stops the retry, which still holds it.
+    mend_rows(&mut store, &later_saved);
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+        adult: Default::default(),
+    };
+    let marked = RefCell::new(Vec::new());
+    let e = rejudge_stored(&mut store, &filter, n, &ctx, &|_, hs| {
+        marked.borrow_mut().extend_from_slice(hs)
+    })
+    .unwrap_err();
+    assert!(is_breaker(&e));
+    assert_eq!(marked.into_inner(), [later.1]);
+    assert!(!stored(&store, later.0));
+    assert!(bad.iter().chain(&plain).all(|&id| stored(&store, id)));
+    assert_eq!(pass(&mut store).unwrap().held, 2);
+    // The range is kept whole, moved to the back.
+    assert_eq!(stalled(&mut store).unwrap().ranges, ranges);
+}
+
+/// The rules change while a batch the breaker stopped is about to hold
+/// what did read: its write is rejected, nothing is held, no range is
+/// noted and the pass stays where it was. The next batch notes the range
+/// and holds the torrent. In both phases, and when a stalled range is
+/// judged again.
+#[test]
+fn a_stopped_batch_whose_rules_change_holds_nothing_and_runs_again() {
+    use lodestar_pipeline::core_rejudge::{BREAKER_ROWS, is_breaker, stalled};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = BREAKER_ROWS * 2;
+    // Mostly unreadable. The core holds one torrent of each phase (a long
+    // name is judged in the first, a short one in the second), and a
+    // third that won't read until the retries.
+    let first = add(&mut store, &long("rolea lexa one.mkv"));
+    let second = add(&mut store, "rolea lexa two.mkv");
+    let later = add(&mut store, &long("rolea lexa three.mkv"));
+    let mut bad = Vec::new();
+    for i in 0..n - 3 {
+        let id = add(&mut store, &long(&format!("Plain.Film.{i}.mkv"))).0;
+        if i < BREAKER_ROWS + 4 {
+            bad.push(id);
+        }
+    }
+    let later_saved = break_rows(&mut store, &[later.0]);
+    break_rows(&mut store, &bad);
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+        adult: Default::default(),
+    };
+    // The rules move on just before the hold is written, as a rule edit
+    // would.
+    let bump = |st: &Store, _: &[[u8; 20]]| {
+        let next = st.class_gen().unwrap() + 1;
+        st.connection()
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ('class_rules_gen', ?1) \
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                [next],
+            )
+            .unwrap();
+    };
+    // Rejected, then run again: in each phase, the torrent that phase holds.
+    for (phase, held) in [(1, first), (2, second)] {
+        let before = pass(&mut store).unwrap();
+        assert_eq!(before.phase, phase);
+        let ranges = stalled(&mut store).unwrap();
+        let b = rejudge_stored(&mut store, &filter, n, &ctx, &bump)
+            .unwrap()
+            .unwrap();
+        assert!(b.rejected, "phase {phase}");
+        assert!(b.stall.is_none() && b.held.is_empty(), "phase {phase}");
+        assert!(stored(&store, held.0), "phase {phase}: still stored");
+        assert_eq!(stalled(&mut store).unwrap(), ranges, "phase {phase}");
+        assert_eq!(pass(&mut store).unwrap(), before, "phase {phase}");
+        let (b, marked) = batch(&mut store, &filter, &sealer, n);
+        let b = b.unwrap();
+        assert!(!b.rejected && b.stall.is_some(), "phase {phase}");
+        assert_eq!(marked, [held.1], "phase {phase}");
+        assert!(!stored(&store, held.0), "phase {phase}: held");
+        // On to the next phase.
+        while pass(&mut store).unwrap().phase == phase {
+            batch(&mut store, &filter, &sealer, n);
+        }
+    }
+    // The retries: the third one reads now, its neighbours still don't.
+    assert_eq!(
+        pass(&mut store).unwrap().phase,
+        lodestar_pipeline::core_rejudge::RETRY_PHASE
+    );
+    mend_rows(&mut store, &later_saved);
+    let before = pass(&mut store).unwrap();
+    let ranges = stalled(&mut store).unwrap();
+    let b = rejudge_stored(&mut store, &filter, n, &ctx, &bump)
+        .unwrap()
+        .unwrap();
+    assert!(b.rejected && b.waiting && b.held.is_empty());
+    assert!(stored(&store, later.0), "retry: still stored");
+    assert_eq!(stalled(&mut store).unwrap(), ranges, "retry: not rotated");
+    assert_eq!(pass(&mut store).unwrap(), before);
+    let marked = RefCell::new(Vec::new());
+    let e = rejudge_stored(&mut store, &filter, n, &ctx, &|_, hs| {
+        marked.borrow_mut().extend_from_slice(hs)
+    })
+    .unwrap_err();
+    assert!(is_breaker(&e));
+    assert_eq!(marked.into_inner(), [later.1]);
+    assert!(!stored(&store, later.0), "retry: held");
+}
