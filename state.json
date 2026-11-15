@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T07:41Z",
+  "updated_at": "2026-11-15T07:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T07:41Z",
+  "last_heartbeat": "2026-11-15T07:46Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10095,7 +10095,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T07:41Z",
+    "updated": "2026-11-15T07:46Z",
     "items": [
       {
         "slot": 1,
@@ -10231,7 +10231,7 @@
     }
   ],
   "heartbeat": "2026-11-15T07:21Z",
-  "updated": "2026-11-15T07:41Z",
+  "updated": "2026-11-15T07:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10499,7 +10499,7 @@
         "role": "build",
         "agent": "claude-api-local",
         "model": "opus",
-        "doing": "api-lane: owner-run local Claude Code session; own workspace lodestar-build-lane, $140 limit (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); lodestar-operator limit $200\u2192$60; outside the 4+4 cap; up to 3 reserved slices at once, each in an Opus subagent on its own slice/<id> branch, reviewed by the lane session before \"ready <sha>\"; no new slice past $110, stops at $130, $25 per slice; reserved: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, X-worker-service-log, M8-PERF-1 (last, best-effort); never merges; reports by unsigned PR comments",
+        "doing": "api-lane: owner-run local Claude Code session; own workspace lodestar-build-lane, $200 (owner 2026-11-15, \u00a72.67 amended twice, relayed by session_01MMjhnA1awRT8P19wZUdtY9); lodestar-operator at $0 (unfunded, checks 5-8 stood down); outside the 4+4 cap; up to 3 reserved slices at once, each in an Opus subagent on its own slice/<id> branch, reviewed by the lane session before \"ready <sha>\"; no new slice past $170, stops at $190, $25 per slice; reserved, in order: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, X-worker-service-log, ENR-anidb, ENR-igdb, ENR-steam, ENR-debrid (may end as a recorded skip per Q4), M8-PERF-1 (last, best-effort); never merges; reports by unsigned PR comments",
         "since": "2026-11-15T07:34Z",
         "name": "api-lane",
         "session": "none (local; reports via PR comments if no send_message)",
