@@ -496,6 +496,7 @@ placement:
   - X-flake-store-migrate-race
   - X-store-wal-nits
   - X-cluster-start-retry
+  - X-worker-oversize-handback
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
