@@ -784,6 +784,7 @@ placement:
   - X-store02-pipe02-fix
   - X-cmp01-fix
   - X-sec-S6-02-03
+  - X-floor-renew-metrics-nits
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small

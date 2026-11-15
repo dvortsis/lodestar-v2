@@ -3150,6 +3150,15 @@ mod tests {
             .map(|l| l.split(' ').next().unwrap())
             .collect();
         assert_eq!(families.len(), 39, "{text}");
+        // The lapsed-key series render, each as one series, at 0 here.
+        for name in [
+            "lodestar_cluster_claims_denied_excluded_total",
+            "lodestar_cluster_floor_lapsed_keys",
+            "lodestar_cluster_floor_lapsed_evicted_total",
+            "lodestar_cluster_floor_reports_lapsed_total",
+        ] {
+            assert_eq!(series(&text, name), 0, "{name}");
+        }
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
