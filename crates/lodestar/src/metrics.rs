@@ -312,18 +312,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Stored torrents enriched in the background (§6).",
         get(&w.enriched),
     );
-    o.one(
-        "core_rejudge_stalled_ranges",
-        "gauge",
-        "Ranges of stored torrents the core re-judge skipped because most wouldn't read, still to judge again.",
-        get(&w.core_stalled_ranges),
-    );
-    o.one(
-        "core_rejudge_stalled_rows",
-        "gauge",
-        "Stored torrents in the core re-judge's skipped ranges.",
-        get(&w.core_stalled_rows),
-    );
+    render_core_rejudge(&mut o, w);
     o.one(
         "writer_last_commit_seconds",
         "gauge",
@@ -725,6 +714,24 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         );
     }
     o.0
+}
+
+/// The core re-judge's stalled ranges (X-rejudge-stall), as the writer
+/// last set them.
+fn render_core_rejudge(o: &mut Out, w: &lodestar_pipeline::WriterStats) {
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    o.one(
+        "core_rejudge_stalled_ranges",
+        "gauge",
+        "Ranges of stored torrents the core re-judge skipped because most wouldn't read, still to judge again.",
+        get(&w.core_stalled_ranges),
+    );
+    o.one(
+        "core_rejudge_stalled_rows",
+        "gauge",
+        "Stored torrents in the core re-judge's skipped ranges.",
+        get(&w.core_stalled_rows),
+    );
 }
 
 /// Each running plugin's egress and kill switch (SRC-5, `docs/metrics.md`
@@ -1818,6 +1825,24 @@ mod tests {
             assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
         }
         assert_eq!(g.excluded(Excluded::StoreFailed), 17);
+    }
+
+    #[test]
+    fn core_rejudge_stalled_gauges_render_their_values() {
+        let w = lodestar_pipeline::WriterStats::default();
+        w.core_stalled_ranges.store(3, Ordering::Relaxed);
+        w.core_stalled_rows.store(70, Ordering::Relaxed);
+        let mut o = Out(String::new());
+        render_core_rejudge(&mut o, &w);
+        let out = o.0;
+        for line in [
+            "# TYPE lodestar_core_rejudge_stalled_ranges gauge",
+            "lodestar_core_rejudge_stalled_ranges 3",
+            "# TYPE lodestar_core_rejudge_stalled_rows gauge",
+            "lodestar_core_rejudge_stalled_rows 70",
+        ] {
+            assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
+        }
     }
 
     #[test]
