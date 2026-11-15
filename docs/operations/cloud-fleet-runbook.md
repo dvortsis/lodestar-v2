@@ -231,7 +231,7 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
 3. **Suspend the GitHub App, and stop Anthropic spend.**
    - **GitHub:** the `lodestar-operator` App's installation on `dvortsis/lodestar-v2`: suspend it.
    - **Anthropic Console:** in the `lodestar-operator` workspace, revoke the API key (or set the workspace's spend limit to $0). Then interrupt or archive any running session: a revoked key may not stop a session already running.
-   - **Undo:** unsuspend the installation. A revoked key can't come back: make a new one and put it in the `cloud-operator` environment's `ANTHROPIC_API_KEY`. Restore the spend limit ($200).
+   - **Undo:** unsuspend the installation. A revoked key can't come back: make a new one and put it in the `cloud-operator` environment's `ANTHROPIC_API_KEY`. Restore the workspace's spend limit ($60).
 4. **Cut cloud access.**
    > **The revocations and the key deletion in this step can't be undone, only replaced.** These provisioning/PIA revocations do not revoke the independent cleanup role/token. Verify that separation live before relying on it; a full cleanup-credential revocation requires owner recovery.
    - **AWS:** IAM → Roles → the role → Permissions → Add permissions → Attach policies:

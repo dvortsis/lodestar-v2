@@ -8,7 +8,7 @@ The operator agent (Managed Agents) and the workflows around it (OP-4). Plan: `d
 | `agent/environment.json` | `limited` networking, `api.github.com` only, no package managers or MCP hosts |
 | `agent/vault.json` | The vault and its one credential, `GITHUB_TOKEN` (header only, `api.github.com` only, no value committed) |
 | `agent_apply.py` | `operator-apply.yml`: create or update the three, IDs in `claude-lock.json` in the control bucket |
-| `wake.py` | `operator-wake.yml`: the gates, the ledger ($200 total, 6 an hour, 60 a day, new ids only), the S3 lock, the App token, one session, stall handling, cleanup |
+| `wake.py` | `operator-wake.yml`: the gates, the ledger ($60 total, 6 an hour, 60 a day, new ids only), the S3 lock, the App token, one session, stall handling, cleanup |
 | `ghapp.py` | The App JWT (RS256, standard library) and the installation token: this repo, Pull requests write and Metadata read, or refused |
 | `oplock.py` | The operator lock, `locks/operator.json` |
 | `message.py` | `operator-instruction v1` and `operator-report v1` |
