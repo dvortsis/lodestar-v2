@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T07:49Z",
+  "updated_at": "2026-11-15T07:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T07:49Z",
+  "last_heartbeat": "2026-11-15T07:50Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10095,7 +10095,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T07:46Z",
+    "updated": "2026-11-15T07:50Z",
     "items": [
       {
         "slot": 1,
@@ -10115,7 +10115,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T07:41Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #913 merged; X-store-migrate-race (PR pending, fresh Opus review), then X-flake-detect-macos-nits, X-cluster-start-retry",
+        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #919 X-store-migrate-race (CI, then fresh Opus review); #920 X-operator-cap-60 held as draft (operator unfunded); then X-flake-detect-macos-nits, X-cluster-start-retry",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10231,7 +10231,7 @@
     }
   ],
   "heartbeat": "2026-11-15T07:21Z",
-  "updated": "2026-11-15T07:49Z",
+  "updated": "2026-11-15T07:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
