@@ -487,6 +487,7 @@ placement:
   - X-flake-detect-macos-nits
   - X-flake-supervise-restarts
   - X-fuzz-slow-targets
+  - X-fuzz-nits-1115
   - X-operator-unattended-wake
   - X-operator-check8-compare
   - X-store-migrate-race
@@ -813,6 +814,7 @@ placement:
   - X-import-progress-visible
   - X-import-status-lock
   - X-store-load-busy-map
+  - X-store-busy-nits
   - X-first-run-search-gate
   - D-docker-guide-1115
 unplaced_workstream: ws-small

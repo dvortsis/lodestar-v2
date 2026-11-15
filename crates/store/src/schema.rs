@@ -2051,21 +2051,32 @@ mod tests {
 
     /// A connection that waits past its busy timeout for another's lock
     /// gets SQLite's busy error, not a corrupt store or a failed migration,
-    /// and changes nothing; once the lock is free it migrates.
+    /// and changes nothing; once the lock is free it migrates. Both
+    /// connections are set up as the store sets one up (`configure`, so in
+    /// WAL; X-store-busy-nits).
     #[test]
     fn a_migration_that_cant_get_the_lock_says_busy() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.db");
         let mut holder = Connection::open(&path).unwrap();
+        configure(&holder, 0).unwrap();
         migrate_with(&mut holder, Some(&path), &FAKE[..1]).unwrap();
         holder.execute_batch("BEGIN IMMEDIATE").unwrap();
 
         let mut waiter = Connection::open(&path).unwrap();
+        configure(&waiter, 0).unwrap();
+        let mode: String = waiter
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "as the store runs");
+        // Shorter than the store's own, so the test doesn't wait 5 s.
         waiter
             .busy_timeout(std::time::Duration::from_millis(50))
             .unwrap();
-        match migrate_with(&mut waiter, Some(&path), FAKE) {
-            Err(Error::Sqlite(rusqlite::Error::SqliteFailure(e, _))) => {
+        let e = migrate_with(&mut waiter, Some(&path), FAKE).unwrap_err();
+        assert!(e.is_busy(), "{e:?}");
+        match e {
+            Error::Sqlite(rusqlite::Error::SqliteFailure(e, _)) => {
                 assert_eq!(e.code, rusqlite::ErrorCode::DatabaseBusy, "{e}");
             }
             other => panic!("expected SQLite's busy error, got {other:?}"),
