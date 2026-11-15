@@ -29,7 +29,7 @@ Every template trust uses exact `StringEquals` for this subject shape and `aud=s
 
 Both use named IAM resources, so a deploy needs `CAPABILITY_NAMED_IAM`. Neither holds an account ID: they use AWS pseudo-parameters and the parameters below.
 
-The separate `cleanup.json` stack creates the independently scoped brokers, invocation-only role, dedicated empty credential shell, logs and alerts. It reuses the same-account OIDC provider and existing buckets; its expiration schedule defaults to disabled. It requires its own owner review/authorization. See the cleanup runbook for 13 expected Adds, costs, exact commands and retained-resource limitations.
+The separate `cleanup.json` stack creates the independently scoped brokers, invocation-only role, dedicated empty credential shell, logs and alerts. It reuses the same-account OIDC provider and existing buckets; its expiration schedule defaults to disabled. It requires its own owner review/authorization. See the cleanup runbook for 16 expected Adds, costs, exact commands and retained-resource limitations.
 
 ## Deploy, in order (us-east-1)
 1. **`fleet-control.json`.** Parameters:

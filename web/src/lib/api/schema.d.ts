@@ -3888,6 +3888,29 @@ export interface components {
             /** @description How many went in (sent or already there). */
             sent: number;
         };
+        /**
+         * @description A cluster port that couldn't open, and when it's tried next. Fixed
+         *     labels only: never error text, an address, a path or key material.
+         */
+        ClusterStartFailure: {
+            kind: components["schemas"]["ClusterStartKind"];
+            /**
+             * Format: int64
+             * @description When it's tried again, in unix seconds.
+             */
+            next_retry_at: number;
+            step: components["schemas"]["ClusterStartStep"];
+        };
+        /**
+         * @description Why the cluster port failed to open.
+         * @enum {string}
+         */
+        ClusterStartKind: "addr_in_use" | "addr_not_available" | "permission_denied" | "io" | "store" | "secrets" | "tls" | "corrupt" | "random" | "pki" | "task_failed";
+        /**
+         * @description What the cluster port was doing when it failed to open.
+         * @enum {string}
+         */
+        ClusterStartStep: "bind" | "store" | "secrets" | "pki" | "pauses" | "server";
         /** @description `POST /collections`. */
         CollectionCreate: {
             /** @description 1–200 characters. */
@@ -11304,6 +11327,7 @@ export interface components {
         WorkerList: {
             /** @description "Allow workers" is on and the cluster port is serving. */
             allowed: boolean;
+            start_failure: null | components["schemas"]["ClusterStartFailure"];
             /** @description Every joined worker, by id. Empty on a single machine. */
             workers: components["schemas"]["Worker"][];
         };

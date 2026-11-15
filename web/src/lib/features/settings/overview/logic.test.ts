@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { components } from '$lib/api/schema';
 import type { FieldKey, FieldSpec, SectionValues } from '../form/types';
-import { changedFromDefault, needsAttention } from './logic';
+import {
+	changedFromDefault,
+	needsAttention,
+	retryIn,
+	startReason,
+	type StartFailure
+} from './logic';
 
 const spec = (section: string, name: string, over: Partial<FieldSpec> = {}): FieldSpec =>
 	({ key: `${section}.${name}`, section, name, writeOnly: false, ...over }) as FieldSpec;
@@ -124,6 +130,86 @@ describe('needsAttention', () => {
 			(section) => (section === 'network' ? 'network' : undefined)
 		);
 		expect(row).toMatchObject({ kind: 'restart', screen: 'network' });
+	});
+
+	describe('workers that cannot start (X-cluster-start-retry)', () => {
+		type Workers = components['schemas']['WorkerList'];
+		const failure: StartFailure = {
+			step: 'bind',
+			kind: 'addr_in_use',
+			next_retry_at: 1_700_000_120
+		};
+		const workers = (start_failure: StartFailure | null, allowed = false): Workers => ({
+			allowed,
+			start_failure,
+			workers: []
+		});
+
+		it('shows a warning with no link while the port is being tried again', () => {
+			const rows = needsAttention(system(), undefined, undefined, workers(failure));
+			expect(rows).toEqual([
+				{ kind: 'workers_start_failing', severity: 'warning', startFailure: failure }
+			]);
+			expect(rows[0]!.screen).toBeUndefined();
+		});
+
+		it('links to the logs when the fix is not in config.toml', () => {
+			const store: StartFailure = { step: 'store', kind: 'store', next_retry_at: 0 };
+			const [row] = needsAttention(system(), undefined, undefined, workers(store));
+			expect(row).toMatchObject({ kind: 'workers_start_failing', href: '/logs' });
+			const bind: StartFailure = { step: 'bind', kind: 'io', next_retry_at: 0 };
+			expect(needsAttention(system(), undefined, undefined, workers(bind))[0]!.href).toBe('/logs');
+			for (const kind of ['addr_in_use', 'addr_not_available', 'permission_denied'] as const) {
+				const own: StartFailure = { step: 'bind', kind, next_retry_at: 0 };
+				expect(
+					needsAttention(system(), undefined, undefined, workers(own))[0]!.href
+				).toBeUndefined();
+			}
+		});
+
+		it('goes away once the port opens', () => {
+			expect(needsAttention(system(), undefined, undefined, workers(null, true))).toEqual([]);
+		});
+
+		it('says nothing when workers are off or the list is unavailable', () => {
+			expect(needsAttention(system(), undefined, undefined, workers(null))).toEqual([]);
+			expect(needsAttention(system(), undefined, undefined, undefined)).toEqual([]);
+		});
+
+		it('sorts among the other warnings, after errors', () => {
+			const rows = needsAttention(
+				system({ data_formats: { rebuild: { phase: 'failed' } } }),
+				undefined,
+				undefined,
+				workers(failure)
+			);
+			expect(rows.map((r) => r.kind)).toEqual(['rebuild_failed', 'workers_start_failing']);
+		});
+
+		it('says when it tries next: minutes rounded up, seconds under a minute, else shortly', () => {
+			expect(retryIn(1000, 1000)).toBeNull();
+			expect(retryIn(1044, 1000)).toBeNull();
+			expect(retryIn(990, 1000)).toBeNull(); // already due
+			expect(retryIn(1050, 1000)).toEqual({ value: 50, unit: 'second' });
+			expect(retryIn(1060, 1000)).toEqual({ value: 1, unit: 'minute' });
+			expect(retryIn(1150, 1000)).toEqual({ value: 3, unit: 'minute' });
+			expect(retryIn(1300, 1000)).toEqual({ value: 5, unit: 'minute' });
+		});
+
+		it('names the reason in plain words: the kind where it says more, else the step', () => {
+			const f = (step: StartFailure['step'], kind: StartFailure['kind']) =>
+				startReason({ step, kind, next_retry_at: 0 });
+			expect(f('bind', 'addr_in_use')).toBe('port_in_use');
+			expect(f('bind', 'addr_not_available')).toBe('address');
+			expect(f('bind', 'permission_denied')).toBe('permission');
+			expect(f('bind', 'io')).toBe('port');
+			expect(f('store', 'store')).toBe('database');
+			expect(f('pauses', 'store')).toBe('database');
+			expect(f('secrets', 'secrets')).toBe('secrets');
+			expect(f('pki', 'corrupt')).toBe('certificates');
+			expect(f('pki', 'task_failed')).toBe('certificates');
+			expect(f('server', 'tls')).toBe('server');
+		});
 	});
 
 	it('reports a running rebuild as information only', () => {

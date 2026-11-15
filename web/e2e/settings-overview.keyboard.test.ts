@@ -1,6 +1,6 @@
 // Settings → Overview (X-settings-overview) against the OpenAPI mock, by keyboard alone, with axe:
-// Needs attention lists what /system and the network check report, each with a link to the
-// screen that fixes it; Changed from default lists the values that aren't defaults, grouped by
+// Needs attention lists what /system, the network check and /workers report, each with a link to
+// the screen that fixes it where one exists; Changed from default lists the values that aren't defaults, grouped by
 // screen, with a secret shown only as "Set"; a healthy install says so; a failed load can retry.
 import { expectNoA11yViolations } from './a11y';
 import { expect as baseExpect, test } from './support/test';
@@ -61,6 +61,42 @@ test.describe('keyboard: Settings → Overview', () => {
 		await expect(list.getByRole('link')).toHaveCount(3);
 		await expect(page.getByTestId('attention-empty')).toHaveCount(0);
 		await expectNoA11yViolations(page);
+	});
+
+	test('says when workers cannot start yet, and drops the row once they can', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
+		let failing = true;
+		on('listWorkers', () => ({
+			status: 200,
+			body: {
+				allowed: !failing,
+				start_failure: failing
+					? {
+							step: 'bind',
+							kind: 'addr_in_use',
+							next_retry_at: Math.floor(Date.now() / 1000) + 150
+						}
+					: null,
+				workers: []
+			}
+		}));
+		await go('/settings');
+		const row = page.getByTestId('attention-workers_start_failing');
+		await expect(row).toHaveText(
+			/^Workers can't start yet: another program is using the cluster port\. Close that program, or set another port under \[cluster\] in config\.toml\. Trying again in \d+ minutes?\.$/
+		);
+		// The fix is in config.toml, and there's no Workers screen yet: no link.
+		await expect(page.getByTestId('attention-list').getByRole('link')).toHaveCount(0);
+		await expectNoA11yViolations(page);
+		// Recovered: the next load has no row.
+		failing = false;
+		await page.reload();
+		await expect(page.getByTestId('attention-empty')).toHaveText('Nothing needs attention.');
+		await expect(row).toHaveCount(0);
 	});
 
 	test('lists changed settings by screen, links to the field, hides secrets', async ({

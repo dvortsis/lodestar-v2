@@ -48,12 +48,19 @@ fuzz_target!(|data: &[u8]| {
             let mut rest = body;
             while let [head, seq, len, tail @ ..] = rest {
                 let n = usize::from(*len).min(tail.len());
-                let (bytes, after) = tail.split_at(n);
+                let (payload, after) = tail.split_at(n);
                 rest = after;
-                let mut bytes = bytes.to_vec();
-                if head & 0x80 == 0 {
-                    bytes.resize(MAX_CHUNK, 0);
-                }
+                // The same bytes as `to_vec` then `resize(MAX_CHUNK, 0)`, built
+                // from zeroed memory and one copy: `resize` fills byte by byte,
+                // and with coverage instrumentation that loop was most of the
+                // time per input (X-fuzz-slow-targets).
+                let bytes = if head & 0x80 == 0 {
+                    let mut padded = vec![0u8; MAX_CHUNK];
+                    padded[..payload.len()].copy_from_slice(payload);
+                    padded
+                } else {
+                    payload.to_vec()
+                };
                 let c = SnapshotChunk {
                     kind: if head & 0x40 == 0 {
                         SnapshotKind::Filter
