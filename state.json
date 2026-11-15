@@ -9878,7 +9878,7 @@
     },
     {
       "pr": 915,
-      "slice": "X-pool-model-test",
+      "slice": "X-peerwire-model-test",
       "sha": "1c6491d7",
       "at": "2026-11-15T08:50Z"
     }
