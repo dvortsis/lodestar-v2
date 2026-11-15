@@ -1,0 +1,6 @@
+GET https://api.srrdb.com/v1/search/harbour/lights/2004
+Accept: application/json
+
+HTTP 200
+Retry-After: 15
+Content-Type: application/json; charset=utf-8

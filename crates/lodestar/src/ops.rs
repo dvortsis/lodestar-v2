@@ -953,6 +953,12 @@ mod spec_tests {
                 wikidata::ID,
                 *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata::new()),
             ),
+            (
+                lodestar_sources_plugins::srrdb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::srrdb::Srrdb::new(),
+                ),
+            ),
         ]
     }
 

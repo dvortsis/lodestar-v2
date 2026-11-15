@@ -11,6 +11,7 @@ pub mod json;
 pub mod lemmy;
 pub mod nostr;
 pub mod rss;
+pub mod srrdb;
 pub mod stashdb;
 pub mod torznab;
 pub mod tpdb;

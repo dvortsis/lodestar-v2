@@ -19,6 +19,7 @@
 
 use lodestar_sources::Manifest;
 
+use crate::srrdb;
 use crate::{
     academic, archive_org, arr, clients, full_scrape, nyaa, prowlarr, stashdb, torrent_cache, tpdb,
     wikidata,
@@ -35,6 +36,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("nyaa", &nyaa::MANIFEST),
     ("nyaa", &nyaa::SUKEBEI_MANIFEST),
     ("prowlarr", &prowlarr::MANIFEST),
+    ("srrdb", &srrdb::MANIFEST),
     ("stashdb", &stashdb::MANIFEST),
     ("torrent_cache", &torrent_cache::MANIFEST),
     ("tpdb", &tpdb::MANIFEST),
