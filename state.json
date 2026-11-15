@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T15:53Z",
+  "updated_at": "2026-11-15T15:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T15:53Z",
+  "last_heartbeat": "2026-11-15T15:59Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9959,6 +9959,12 @@
       "slice": "X-flake-metainfo-bound-rss",
       "sha": "2384a8de",
       "at": "2026-11-15T15:53Z"
+    },
+    {
+      "pr": 926,
+      "slice": "X-cli-win-data-dir",
+      "sha": "ec40a1ef",
+      "at": "2026-11-15T15:59Z"
     }
   ],
   "active_sessions": {
@@ -10197,16 +10203,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T15:53Z",
+    "updated": "2026-11-15T15:59Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-cli-win-data-dir",
+        "slice": "X-win-service-path-hardening",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T09:03Z",
-        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #926 delta CHANGES (B1 + I1) fix round",
+        "since": "2026-11-15T15:59Z",
+        "doing": "Windows service-folder path comparison and service load order; session_01MMjhn8LCZuDPeXwdBzodLH",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10331,8 +10337,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T15:53Z",
-  "updated": "2026-11-15T15:53Z",
+  "heartbeat": "2026-11-15T15:59Z",
+  "updated": "2026-11-15T15:59Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
