@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T22:38Z",
+  "updated_at": "2026-11-15T22:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T22:38Z",
+  "last_heartbeat": "2026-11-15T22:40Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10043,6 +10043,12 @@
       "slice": "X-win-service-path-hardening",
       "sha": "be2cb36be487c7804bcc3b88cb965c399e090a65",
       "at": "2026-11-15T22:38Z"
+    },
+    {
+      "pr": 951,
+      "slice": "X-worker-oversize-nits",
+      "sha": "b1758dd3b379ad61ddcc96418209392a7505d48e",
+      "at": "2026-11-15T22:40Z"
     }
   ],
   "active_sessions": {
@@ -10281,7 +10287,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T22:38Z",
+    "updated": "2026-11-15T22:40Z",
     "items": [
       {
         "slot": 1,
@@ -10316,12 +10322,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-worker-oversize-nits",
+        "slice": "X-import-rate-1m",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T20:45Z",
-        "doing": "X-worker-oversize-nits: #939 review optionals (#939 merged)",
+        "since": "2026-11-15T22:40Z",
+        "doing": "X-import-rate-1m: 1M import 990/s vs IMP-4b 2,000/s; profile and fix (#951 merged)",
         "cap": "build (\u00a72.64 4+4)"
       }
     ],
@@ -10413,8 +10419,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T22:38Z",
-  "updated": "2026-11-15T22:38Z",
+  "heartbeat": "2026-11-15T22:40Z",
+  "updated": "2026-11-15T22:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
