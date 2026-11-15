@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T14:54Z",
+  "updated_at": "2026-11-15T15:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T14:54Z",
+  "last_heartbeat": "2026-11-15T15:27Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9947,6 +9947,12 @@
       "slice": "X-store-wal-nits",
       "sha": "4565fabc",
       "at": "2026-11-15T14:54Z"
+    },
+    {
+      "pr": 933,
+      "slice": "X-flake-supervise-restarts",
+      "sha": "cfe1fef4",
+      "at": "2026-11-15T15:27Z"
     }
   ],
   "active_sessions": {
@@ -10185,7 +10191,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T14:54Z",
+    "updated": "2026-11-15T15:27Z",
     "items": [
       {
         "slot": 1,
@@ -10211,12 +10217,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-flake-supervise-restarts",
+        "slice": "X-proptest-cases-env",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T12:32Z",
-        "doing": "root-cause the companions supervise flake under load",
+        "since": "2026-11-15T15:27Z",
+        "doing": "PROPTEST_CASES override in parser proptest suites (test-only)",
         "cap": "build (\u00a72.64 4+4)"
       },
       {
@@ -10319,8 +10325,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T14:54Z",
-  "updated": "2026-11-15T14:54Z",
+  "heartbeat": "2026-11-15T15:27Z",
+  "updated": "2026-11-15T15:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
