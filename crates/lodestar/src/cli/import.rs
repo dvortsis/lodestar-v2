@@ -1023,7 +1023,14 @@ async fn run_job(
         now: unix_now,
         progress: Some(&progress),
     };
+    // Offline, with the server stopped: the import's own connection takes
+    // a large page cache and a wider WAL checkpoint while it writes
+    // (X-import-rate-1m), and gives them back after.
+    store
+        .set_bulk_writes(true)
+        .map_err(failed("tuning the store for the import"))?;
     let report = driver::run(store, id, adapter, &opts).await;
+    let _ = store.set_bulk_writes(false);
     // The beat stops before the file goes, so it can't write it back;
     // then the last strong reference goes, and with it the file (the
     // Ctrl-C handler holds only a weak one).

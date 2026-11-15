@@ -819,6 +819,7 @@ placement:
   - X-floor-renew-metrics-nits
   - X-import-progress-visible
   - X-import-status-lock
+  - X-import-rate-1m
   - X-store-load-busy-map
   - X-store-busy-nits
   - X-routing-table-metric

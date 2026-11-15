@@ -358,24 +358,10 @@ struct Judged {
 /// Runs the job until its source is exhausted, it's stopped, or a refusal
 /// or store error ends it. The job must be running (`resume` it first).
 ///
-/// The store's connection is tuned for bulk writes while it runs
-/// ([`Store::set_bulk_writes`], X-import-rate-1m) and set back after, on
-/// every path.
+/// An offline caller, with the server stopped, may tune the store's
+/// connection for it first ([`Store::set_bulk_writes`]): the store's own
+/// connection settings are left as they are here.
 pub async fn run(
-    store: &mut Store,
-    job_id: i64,
-    adapter: &mut Adapter,
-    opts: &Options<'_>,
-) -> Result<Report, DriverError> {
-    store.set_bulk_writes(true)?;
-    let r = run_tuned(store, job_id, adapter, opts).await;
-    let back = store.set_bulk_writes(false);
-    let report = r?;
-    back?;
-    Ok(report)
-}
-
-async fn run_tuned(
     store: &mut Store,
     job_id: i64,
     adapter: &mut Adapter,

@@ -677,6 +677,8 @@ fn throughput_on_a_synthetic_100k_source() {
     let stop = AtomicBool::new(false);
     let mut a = adapter(&path);
     let id = create(&mut store, &a);
+    // As the offline CLI runs it.
+    store.set_bulk_writes(true).unwrap();
     let started = std::time::Instant::now();
     let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
     let secs = started.elapsed().as_secs_f64();
