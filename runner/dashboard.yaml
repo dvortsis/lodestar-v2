@@ -777,6 +777,7 @@ placement:
   - X-filter01-hardening
   - X-rejudge-pending-gate
   - X-filter15-fix
+  - X-rejudge-stall-nits
   - X-filter13-fix
   - X-filter14-fix
   - X-filter-budget-manyfile-perf
