@@ -416,6 +416,7 @@ struct Counters {
     busy_check_failed: AtomicU64,
     busy_unknown: AtomicU64,
     busy_capped: AtomicU64,
+    denied_excluded: AtomicU64,
     reconcile_returned: AtomicU64,
     reconcile_unknown: AtomicU64,
     reconcile_refused: AtomicU64,
@@ -495,6 +496,10 @@ pub struct FleetSnapshot {
     /// Claimed keys denied as busy because the worker holds its lease cap
     /// (CLUSTER-02), per key.
     pub busy_capped: u64,
+    /// Claimed keys denied as stored only because the store check
+    /// excludes them for the claiming worker
+    /// ([`StoredKeys::excludes`]), per key.
+    pub denied_excluded: u64,
     /// Leases a worker's reconcile list left out, given back for re-grant
     /// (WK-11b).
     pub reconcile_returned: u64,
@@ -987,6 +992,7 @@ impl ClusterServer {
             busy_check_failed: get(&c.busy_check_failed),
             busy_unknown: get(&c.busy_unknown),
             busy_capped: get(&c.busy_capped),
+            denied_excluded: get(&c.denied_excluded),
             reconcile_returned: get(&c.reconcile_returned),
             reconcile_unknown: get(&c.reconcile_unknown),
             reconcile_refused: get(&c.reconcile_refused),
@@ -1553,21 +1559,33 @@ impl ClusterServer {
                         let w = peer.worker;
                         let checked = tokio::task::spawn_blocking(move || {
                             let checks = check.key_checks(&keys);
-                            // A key not for this worker is denied as stored.
-                            checks
+                            // A key not for this worker is denied as stored;
+                            // counted where the store alone would have let
+                            // it through.
+                            let mut excluded = 0u64;
+                            let checks = checks
                                 .into_iter()
                                 .zip(&keys)
                                 .map(|(c, k)| {
                                     if check.excludes(w, k) {
+                                        if matches!(c, KeyCheck::Free | KeyCheck::Unknown) {
+                                            excluded += 1;
+                                        }
                                         KeyCheck::Stored
                                     } else {
                                         c
                                     }
                                 })
-                                .collect::<Vec<_>>()
+                                .collect::<Vec<_>>();
+                            (checks, excluded)
                         });
                         match checked.await {
-                            Ok(s) if s.len() == batch.items.len() => Some(s),
+                            Ok((s, excluded)) if s.len() == batch.items.len() => {
+                                self.counters
+                                    .denied_excluded
+                                    .fetch_add(excluded, Ordering::Relaxed);
+                                Some(s)
+                            }
                             // Fails closed: a check that died or came back
                             // short grants nothing (#607's review).
                             _ => None,

@@ -998,6 +998,19 @@ async fn an_excluded_key_is_denied_to_that_worker_only() {
         token_of(&b.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
         let s = c.server.snapshot();
         assert_eq!((s.leases, s.pending), (2, 0));
+        assert_eq!(s.denied_excluded, 1);
+        // A key the store denies anyway isn't counted as excluded.
+        check.stored.lock().unwrap().push(key(3));
+        check.excluded.lock().unwrap().push((nas.worker(), key(3)));
+        let got = a.claim(found(&*c.clock, &[3])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(3),
+                reason: DenyReason::Stored
+            }
+        );
+        assert_eq!(c.server.snapshot().denied_excluded, 1);
         assert!(c.server.lease(&InfoHash(key(1))).is_some());
     })
     .await;
