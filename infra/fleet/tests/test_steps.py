@@ -711,6 +711,22 @@ else cat "$STUB/empty.pcap" > "$6"; fi
 [ -n "$CAPTURE_DIES" ] && exit 1  # wrote its header, then went away
 trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done
 """
+# The kill on PATH, which the leak test signals its captures with: the real
+# one, unless KILL_DENIED names a capture (cap-host, cap-down, ...) whose
+# signals are refused, as an AppArmor-confined shell's are, or
+# KILL_IGNORES_TERM names one a TERM leaves running.
+STUB_KILL = r"""#!/bin/sh
+if [ "$1" = "-s" ] && [ $# -eq 3 ] && [ -r "/proc/$3/cmdline" ]; then
+  cmd=$(tr '\0' ' ' < "/proc/$3/cmdline")
+  if [ -n "$KILL_DENIED" ]; then
+    case "$cmd" in *"$KILL_DENIED.pcap"*) echo "kill: ($3) - Operation not permitted" >&2; exit 1 ;; esac
+  fi
+  if [ -n "$KILL_IGNORES_TERM" ] && [ "$2" = TERM ]; then
+    case "$cmd" in *"$KILL_IGNORES_TERM.pcap"*) exit 0 ;; esac
+  fi
+fi
+exec env PATH=/usr/bin:/bin kill "$@"
+"""
 CMAC = bytes.fromhex("0242ac140002")  # the container's MAC (the stub's docker exec)
 HOST_MAC = bytes.fromhex("0242c0a80001")
 
@@ -841,7 +857,7 @@ class VMScripts(unittest.TestCase):
         # `sleep 1` (the interface check's poll) takes a tenth of a second, so a
         # deadline loop isn't a busy one; every other sleep returns at once.
         for name, body in (("docker", STUB_DOCKER), ("iptables", STUB_IPTABLES), ("tcpdump", STUB_TCPDUMP),
-                           ("ip", STUB_IP), ("dig", STUB_DIG),
+                           ("ip", STUB_IP), ("dig", STUB_DIG), ("kill", STUB_KILL),
                            ("sleep", '#!/bin/sh\n[ "$1" = 1 ] && exec /bin/sleep 0.1\nexit 0\n')):
             (self.stub / "bin" / name).write_text(body)
             (self.stub / "bin" / name).chmod(0o755)
@@ -1535,6 +1551,45 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("fail guards_released", lines)
         self.assertEqual((self.copies("host"), self.copies("icmp")), (0, 1))  # both were tried
+
+    def kill_stub_leftovers(self):
+        """Ends any stub process the run couldn't stop (KILL_DENIED leaves one)."""
+        for pid in os.listdir("/proc"):
+            if pid.isdigit():
+                try:
+                    cmd = Path("/proc", pid, "cmdline").read_bytes()
+                except OSError:
+                    continue
+                if str(self.stub).encode() in cmd:
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                    except OSError:
+                        pass
+
+    def test_a_capture_a_term_leaves_running_is_killed(self):
+        """X-leak-test-capture-kill: a capture still running after TERM gets KILL
+        after its deadline, and the run carries on and passes."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", KILL_IGNORES_TERM="cap-host", CAPTURE_STOP_WAIT=10)
+        self.assertEqual(rc, 0, raw)
+        self.assertNotIn("fail capture_stopped_host", lines)
+        self.assertIn("ok no_host_icmp_to_endpoint", lines)
+        self.assertGreaterEqual(time.monotonic() - start, 10)  # it waited for the TERM first
+
+    def test_a_capture_that_cant_be_signalled_fails_its_own_line(self):
+        """X-leak-test-capture-kill: a capture neither TERM nor KILL can stop (an
+        AppArmor-confined shell can't signal tcpdump) fails as its own line once
+        its deadlines pass, instead of a wait that never returns."""
+        self.addCleanup(self.kill_stub_leftovers)
+        for capture, line in (("cap-host", "capture_stopped_host"), ("cap-down", "capture_stopped_down")):
+            with self.subTest(capture):
+                self.kill_stub_leftovers()
+                rc, lines, raw = self.run_script("leak-test.sh", KILL_DENIED=capture, CAPTURE_STOP_WAIT=10)
+                self.assertEqual(rc, 1, raw)
+                self.assertIn(f"fail {line}", lines)
+                self.assertIn("fail leak_test", lines)
+                # Every other capture still stopped.
+                self.assertEqual([l for l in lines if l.startswith("fail capture_stopped_")], [f"fail {line}"])
 
     def test_an_idle_stop_window_proves_nothing_and_fails(self):
         """The window is judged only when the endpoint really kept sending to the host while gluetun was down;

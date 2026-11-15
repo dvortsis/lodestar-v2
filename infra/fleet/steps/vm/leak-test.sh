@@ -239,6 +239,34 @@ start_counter() {
 read_counter() {  # the counter's packets, or nothing when it can't be read
   iptables -L DOCKER-USER -v -x -n 2>/dev/null | awk '/\/\* lodestar-leak-egress \*\// {print $1; exit}' | grep -E '^[0-9]{1,12}$'
 }
+# Stopping a capture (X-leak-test-capture-kill): TERM, then up to
+# CAPTURE_STOP_WAIT seconds (at least 10) for it to go, then KILL and as long
+# again. A capture still running after that (a shell that may not signal
+# tcpdump, as an AppArmor-confined one can't) fails as its own line and is
+# left, instead of a wait that never returns. It's alive while /proc has it:
+# kill -0 is a signal too, which the same confinement can refuse. Signals go
+# through the kill on PATH, as the other tools do.
+stop_capture() {  # $1: pid; $2: its name in the failure line
+  local pid=$1
+  [[ -n $pid ]] || return 0
+  env kill -s TERM "$pid" 2>/dev/null
+  if capture_gone "$pid" || { env kill -s KILL "$pid" 2>/dev/null; capture_gone "$pid"; }; then
+    wait "$pid" 2>/dev/null
+    return 0
+  fi
+  bad "capture_stopped_$2"
+  return 1
+}
+capture_gone() {  # $1: pid; true once it has exited, within the deadline
+  local wait=${CAPTURE_STOP_WAIT:-15} until
+  [[ $wait =~ ^[0-9]{1,4}$ ]] && ((wait >= 10)) || wait=10
+  until=$((SECONDS + wait))
+  while [[ -d /proc/$1 ]]; do
+    ((SECONDS >= until)) && return 1
+    sleep 1
+  done
+  return 0
+}
 judge_counter() {  # $1: phase
   local n=""
   if [[ -n $counter ]]; then
@@ -321,8 +349,8 @@ for k in sorted(icmp)[:40]:
 '
 judge_capture() {  # $1: phase. The capture must have run through every probe, then be readable, and the container sent nothing.
   local alive="" captured="" parsed
-  if kill -0 "$cap_pid" 2>/dev/null; then alive=1; pass "capture_alive_$1"; else bad "capture_alive_$1"; fi
-  kill "$cap_pid" 2>/dev/null; wait "$cap_pid" 2>/dev/null; cap_pid=""
+  if [[ -d /proc/$cap_pid ]]; then alive=1; pass "capture_alive_$1"; else bad "capture_alive_$1"; fi
+  stop_capture "$cap_pid" "$1"; cap_pid=""
   if parsed=$(timeout 30 python3 -I -c "$CAPTURE_PARSE" "$work/cap-$1.pcap" "$cmac" "$ep_ip" "$1" 2>/dev/null); then
     captured=$(printf '%s\n' "$parsed" | sed -n "s/^count captured_packets_$1 \([0-9]*\)$/\1/p")
     pass "capture_read_$1"
@@ -395,8 +423,8 @@ start_inbound_capture() {
 }
 judge_inbound_capture() {
   local n=""
-  kill -0 "$in_cap_pid" 2>/dev/null || n=dead
-  kill "$in_cap_pid" 2>/dev/null; wait "$in_cap_pid" 2>/dev/null; in_cap_pid=""
+  [[ -d /proc/$in_cap_pid ]] || n=dead
+  stop_capture "$in_cap_pid" inbound; in_cap_pid=""
   if [[ -n $n ]]; then bad stop_window_exercised; return; fi
   n=$(timeout 30 python3 -I -c "$PCAP_COUNT" "$work/cap-inbound.pcap" 2>/dev/null)
   [[ $n =~ ^[0-9]{1,9}$ ]] && echo "count stop_window_endpoint_packets $n"
@@ -404,8 +432,8 @@ judge_inbound_capture() {
 }
 judge_host_capture() {
   local alive="" n=""
-  if kill -0 "$host_cap_pid" 2>/dev/null; then alive=1; pass capture_alive_host; else bad capture_alive_host; fi
-  kill "$host_cap_pid" 2>/dev/null; wait "$host_cap_pid" 2>/dev/null; host_cap_pid=""
+  if [[ -d /proc/$host_cap_pid ]]; then alive=1; pass capture_alive_host; else bad capture_alive_host; fi
+  stop_capture "$host_cap_pid" host; host_cap_pid=""
   if n=$(timeout 30 python3 -I -c "$PCAP_COUNT" "$work/cap-host.pcap" 2>/dev/null) && [[ $n =~ ^[0-9]{1,9}$ ]]; then
     pass capture_read_host
     echo "count host_icmp_to_endpoint $n"
@@ -421,6 +449,7 @@ judge_host_capture() {
 for tool in docker iptables tcpdump ip python3; do
   command -v "$tool" >/dev/null 2>&1 || { bad "tool_missing_$tool"; finish; }
 done
+type -P kill >/dev/null 2>&1 || { bad tool_missing_kill; finish; }  # the program, not the builtin
 [[ -z $HOST_HELD || $HOST_HELD == held ]] || { bad args_valid; finish; }
 [[ -s $CONF ]] || { bad wg_conf_present; finish; }
 endpoint_read "$CONF" || { bad endpoint_valid; finish; }
@@ -611,7 +640,7 @@ fi
 if [[ -z $stopped ]]; then
   :  # no window
 elif [[ -n $no_handshake ]]; then
-  kill "$in_cap_pid" 2>/dev/null; wait "$in_cap_pid" 2>/dev/null; in_cap_pid=""
+  stop_capture "$in_cap_pid" inbound; in_cap_pid=""
   echo "skip stop_window_exercised"  # no session, so nothing to leave over
 else
   judge_inbound_capture
