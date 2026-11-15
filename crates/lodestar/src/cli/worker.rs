@@ -693,9 +693,14 @@ mod tests {
             rotate_key: false,
             join_only: false,
         });
-        let (config, _) =
-            crate::cli::load_config(&worker, None, &crate::cli::Install::default(), |_| None)
-                .unwrap();
+        let (config, _) = crate::cli::load_config(
+            &worker,
+            None,
+            &crate::cli::Install::default(),
+            |_| None,
+            |_| Ok(()),
+        )
+        .unwrap();
         // The folder, and the config.toml read from it.
         assert_eq!(config.data_dir, dir.path());
         assert!(config.cluster.enabled);
@@ -705,6 +710,7 @@ mod tests {
             None,
             &crate::cli::Install::default(),
             |_| None,
+            |_| Ok(()),
         )
         .unwrap();
         assert_eq!(other.data_dir, std::path::PathBuf::from("data"));

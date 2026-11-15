@@ -255,23 +255,111 @@ pub(crate) fn msi_data_dir(install: &Install) -> Option<PathBuf> {
         .then(|| crate::windows::service::default_data_dir(install.program_data.clone()))
 }
 
+/// Why the service's folder can't be used, from [`check_service_dir`].
+pub(crate) type FolderCheck = Result<(), Failure>;
+
+/// Whether the CLI may use the service's folder `dir`, judged as the
+/// service judges it before using it ([`acl::secure_dir`]'s read-only
+/// half: [`acl::Ops::inspect`] and [`acl::verdict`]). It never creates
+/// the folder and changes nothing:
+/// - private: `Ok`;
+/// - not private (or its permissions can't be read): refused, with the
+///   service's own words ([`acl::refusal`]);
+/// - missing: no store there, and nothing is created.
+///
+/// [`acl::secure_dir`]: crate::windows::acl::secure_dir
+/// [`acl::Ops::inspect`]: crate::windows::acl::Ops::inspect
+/// [`acl::verdict`]: crate::windows::acl::verdict
+/// [`acl::refusal`]: crate::windows::acl::refusal
+// Off Windows only the tests call it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn check_service_dir(
+    dir: &Path,
+    own_sid: Option<&str>,
+    ops: &dyn crate::windows::acl::Ops,
+) -> FolderCheck {
+    use crate::windows::acl;
+    let seen = match ops.inspect(dir) {
+        Ok(Some(seen)) => seen,
+        Ok(None) => return Err(Failure::Failed(util::no_store(&dir.join("lodestar.db")))),
+        Err(e) => {
+            return Err(Failure::Refused(format!(
+                "reading {}'s permissions: {e}",
+                dir.display()
+            )));
+        }
+    };
+    acl::verdict(&seen, own_sid).map_err(|why| {
+        Failure::Refused(acl::refusal(dir, &seen, own_sid, &why, &|sid| {
+            ops.account(sid)
+        }))
+    })
+}
+
+/// [`check_service_dir`] for this machine's service: on Windows, with the
+/// service's SID. Elsewhere it's never asked ([`Install::here`] names no
+/// executable there), and refuses if it were.
+fn check_this_service_dir(dir: &Path) -> FolderCheck {
+    #[cfg(windows)]
+    {
+        use crate::windows::{acl, service};
+        let own = acl::service_sid(service::NAME).ok();
+        check_service_dir(
+            dir,
+            own.as_deref(),
+            &acl::Windows {
+                own_sid: own.as_deref(),
+            },
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        Err(Failure::Refused(format!(
+            "{} is a Windows service's folder",
+            dir.display()
+        )))
+    }
+}
+
+/// Why [`load_config`] found no config.
+#[derive(Debug)]
+pub(crate) enum LoadError {
+    Config(crate::config::ConfigError),
+    /// The service's folder can't be used ([`check_service_dir`]).
+    Folder(Failure),
+}
+
+impl From<crate::config::ConfigError> for LoadError {
+    fn from(e: crate::config::ConfigError) -> LoadError {
+        LoadError::Config(e)
+    }
+}
+
 /// The config for `command`, and the `config.toml` it was read from (if
 /// any). `lodestar worker --data <dir>` is the data folder for the config
 /// too (its config.toml, its log), as it is for the privilege drop, so the
 /// two agree.
 ///
 /// Run from the MSI's executable ([`msi_data_dir`]) with no
-/// `LODESTAR_DATA_DIR` and no `--data`, the folder is the service's, found
-/// as the service finds it: `config.toml` there if present, and the data
-/// there unless the config file chose another folder. `--config` and
-/// `LODESTAR_DATA_DIR` still win. It only reads that folder: its
-/// permissions are the service's to set.
+/// `LODESTAR_DATA_DIR`, the folder is the service's, found as the service
+/// finds it: `config.toml` there if present, and the data there unless the
+/// config file chose another folder. `--config` and `LODESTAR_DATA_DIR`
+/// still win. `worker` never defaults to it: a worker's folder is the
+/// installer's to set up, and `--data` stays explicit.
+///
+/// Before anything in that folder is read, `check` (on Windows,
+/// [`check_service_dir`]) must find it private, as the service does
+/// before using it. The CLI never sets its permissions. Commands that
+/// write there (backup's `backups`, vacuum, reindex, rollback, rollup,
+/// import, settings, companion) add files that inherit the folder's
+/// permissions.
 pub(crate) fn load_config(
     command: &Command,
     config_path: Option<&Path>,
     install: &Install,
     env: impl Fn(&str) -> Option<String>,
-) -> Result<(Config, Option<PathBuf>), crate::config::ConfigError> {
+    check: impl FnOnce(&Path) -> FolderCheck,
+) -> Result<(Config, Option<PathBuf>), LoadError> {
     let data = match command {
         Command::Worker(a) => a.data.as_ref().and_then(|d| d.to_str()).map(str::to_owned),
         _ => None,
@@ -280,11 +368,14 @@ pub(crate) fn load_config(
         ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
         _ => env(k),
     };
-    let msi = msi_data_dir(install).filter(|_| env("LODESTAR_DATA_DIR").is_none());
+    let msi = msi_data_dir(install)
+        .filter(|_| env("LODESTAR_DATA_DIR").is_none())
+        .filter(|_| !matches!(command, Command::Worker(_)));
     let Some(dir) = msi else {
         let file = config_file(config_path, env);
         return Ok((Config::load(config_path, env)?, file));
     };
+    check(&dir).map_err(LoadError::Folder)?;
     let file = crate::windows::service::config_path(config_path.map(Path::to_path_buf), &dir, env);
     let mut config = match (&file, dir.to_str()) {
         // No config.toml there: loaded as if pointed at that folder, so
@@ -320,14 +411,28 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         return update_helper::run(&a, config_path);
     }
     let install = Install::here();
-    let (config, file) =
-        match load_config(&command, config_path, &install, |k| std::env::var(k).ok()) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("config: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let loaded = load_config(
+        &command,
+        config_path,
+        &install,
+        |k| std::env::var(k).ok(),
+        check_this_service_dir,
+    );
+    let (config, file) = match loaded {
+        Ok(c) => c,
+        Err(LoadError::Config(e)) => {
+            eprintln!("config: {e}");
+            return ExitCode::FAILURE;
+        }
+        Err(LoadError::Folder(e @ Failure::Refused(_))) => {
+            eprintln!("lodestar: {e}");
+            return ExitCode::from(3);
+        }
+        Err(LoadError::Folder(e @ Failure::Failed(_))) => {
+            eprintln!("lodestar: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     crate::settings::log::init(&config.log);
     dropped.log(&config.data_dir);
     // Its own exit statuses: a bad setting or value is 2, as clap's are.
@@ -434,7 +539,7 @@ mod tests {
         let none = env_of(&[]);
 
         // Nothing set and no config.toml there: the service's folder.
-        let (c, file) = load_config(&Command::Vacuum, None, &install, &none).unwrap();
+        let (c, file) = load_config(&Command::Vacuum, None, &install, &none, private).unwrap();
         assert_eq!((c.data_dir.clone(), file), (service_dir.clone(), None));
         assert!(!c.layers.in_env("LODESTAR_DATA_DIR"));
 
@@ -447,32 +552,145 @@ mod tests {
             format!("data_dir = \"{}\"\n", toml_path(&moved)),
         )
         .unwrap();
-        let (c, file) = load_config(&Command::Vacuum, None, &install, &none).unwrap();
+        let (c, file) = load_config(&Command::Vacuum, None, &install, &none, private).unwrap();
         assert_eq!((c.data_dir, file), (moved, Some(config_toml.clone())));
 
         // `--config` without a data_dir: the service's folder still.
         let other = root.path().join("other.toml");
         std::fs::write(&other, "").unwrap();
-        let (c, file) = load_config(&Command::Vacuum, Some(&other), &install, &none).unwrap();
+        let (c, file) =
+            load_config(&Command::Vacuum, Some(&other), &install, &none, private).unwrap();
         assert_eq!((c.data_dir, file), (service_dir.clone(), Some(other)));
 
         // LODESTAR_DATA_DIR wins, and the service's config.toml isn't read.
         let chosen = root.path().join("chosen");
         let env = env_of(&[("LODESTAR_DATA_DIR", chosen.to_str().unwrap())]);
-        let (c, file) = load_config(&Command::Vacuum, None, &install, &env).unwrap();
+        let (c, file) = load_config(&Command::Vacuum, None, &install, &env, unasked).unwrap();
         assert_eq!((c.data_dir, file), (chosen, None));
 
-        // `worker --data` wins too.
+        // `worker --data` wins too, and `worker` never defaults to the
+        // service's folder: without `--data` it keeps `data`.
         let mine = root.path().join("worker");
-        let worker = Command::Worker(worker::WorkerArgs {
-            join: None,
-            token_file: None,
-            data: Some(mine.clone()),
-            rotate_key: false,
-            join_only: false,
-        });
-        let (c, _) = load_config(&worker, None, &install, &none).unwrap();
+        let worker = |data: Option<PathBuf>| {
+            Command::Worker(worker::WorkerArgs {
+                join: None,
+                token_file: None,
+                data,
+                rotate_key: false,
+                join_only: false,
+            })
+        };
+        let (c, _) =
+            load_config(&worker(Some(mine.clone())), None, &install, &none, unasked).unwrap();
         assert_eq!(c.data_dir, mine);
+        let (c, _) = load_config(&worker(None), None, &install, &none, unasked).unwrap();
+        assert_eq!(c.data_dir, PathBuf::from("data"));
+    }
+
+    /// A check that finds the service's folder private.
+    fn private(_: &Path) -> FolderCheck {
+        Ok(())
+    }
+
+    /// A check that must not be asked: the service's folder isn't used.
+    fn unasked(dir: &Path) -> FolderCheck {
+        panic!("the service's folder {} was checked", dir.display())
+    }
+
+    /// S8-07: the service's folder is used only once it's found private,
+    /// as the service judges it; otherwise nothing in it is read.
+    #[test]
+    fn the_services_folder_is_used_only_when_private() {
+        use crate::windows::acl::{Inspection, Item, Ops};
+        use std::cell::RefCell;
+
+        /// The service's SID and its folder as the installer makes it.
+        const OWN: &str = "S-1-5-80-1-2-3-4-5";
+        const PRIVATE: &str =
+            "O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-80-1-2-3-4-5)";
+        /// Made by a standard user: theirs, and open to every user.
+        const PLANTED: &str = "O:S-1-5-21-9-9-9-1001G:S-1-5-21-9-9-9-513D:AI(A;OICIID;FA;;;SY)\
+                               (A;OICIID;FA;;;BA)(A;OICIID;0x1200a9;;;BU)";
+
+        struct Fake {
+            seen: Option<Inspection>,
+            calls: RefCell<Vec<&'static str>>,
+        }
+        impl Ops for Fake {
+            fn inspect(&self, _: &Path) -> std::io::Result<Option<Inspection>> {
+                self.calls.borrow_mut().push("inspect");
+                Ok(self.seen.clone())
+            }
+            fn create(&self, _: &Path) -> std::io::Result<()> {
+                self.calls.borrow_mut().push("create");
+                Ok(())
+            }
+        }
+        let fake = |sddl: Option<&str>, entries: Vec<Item>| Fake {
+            seen: sddl.map(|s| Inspection {
+                folder: Item {
+                    name: "Lodestar".into(),
+                    link: false,
+                    sddl: s.into(),
+                },
+                entries,
+                links: Vec::new(),
+            }),
+            calls: RefCell::new(Vec::new()),
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let install = msi(root.path());
+        let service_dir = root.path().join("ProgramData").join("Lodestar");
+        // A config.toml that must not be read unless the folder is private.
+        std::fs::create_dir_all(&service_dir).unwrap();
+        std::fs::write(service_dir.join("config.toml"), "not toml [").unwrap();
+        let load = |ops: &Fake| {
+            load_config(&Command::Vacuum, None, &install, env_of(&[]), |d| {
+                check_service_dir(d, Some(OWN), ops)
+            })
+        };
+
+        // Not private: refused in the service's words, nothing created.
+        let planted = fake(Some(PLANTED), Vec::new());
+        match load(&planted) {
+            Err(LoadError::Folder(Failure::Refused(why))) => {
+                assert!(why.contains("isn't private"), "{why}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(*planted.calls.borrow(), ["inspect"]);
+
+        // A private folder with a file another user put in it: refused.
+        let foreign = Item {
+            name: "config.toml".into(),
+            link: false,
+            sddl: "O:S-1-5-21-9-9-9-1001D:AI(A;ID;FA;;;SY)".into(),
+        };
+        let planted_file = fake(Some(PRIVATE), vec![foreign]);
+        assert!(matches!(
+            load(&planted_file),
+            Err(LoadError::Folder(Failure::Refused(_)))
+        ));
+
+        // Missing: no store there, and nothing is created.
+        let missing = fake(None, Vec::new());
+        match check_service_dir(&service_dir, Some(OWN), &missing) {
+            Err(Failure::Failed(why)) => {
+                assert!(why.starts_with("no store at"), "{why}");
+                assert!(why.contains(&service_dir.display().to_string()), "{why}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(*missing.calls.borrow(), ["inspect"]);
+
+        // Private: its config.toml is read (and here it's broken).
+        let ok = fake(Some(PRIVATE), Vec::new());
+        assert!(matches!(load(&ok), Err(LoadError::Config(_))));
+        std::fs::write(service_dir.join("config.toml"), "").unwrap();
+        let (c, _) = load(&ok).unwrap();
+        assert_eq!(c.data_dir, service_dir);
+        assert!(!ok.calls.borrow().contains(&"create"));
     }
 
     /// Any other executable is left as before: the portable zip's (beside
@@ -494,7 +712,8 @@ mod tests {
         no_program_files.program_files = None;
         for install in [portable, elsewhere, no_program_files, Install::default()] {
             assert_eq!(msi_data_dir(&install), None, "{install:?}");
-            let (c, _) = load_config(&Command::Vacuum, None, &install, env_of(&[])).unwrap();
+            let (c, _) =
+                load_config(&Command::Vacuum, None, &install, env_of(&[]), unasked).unwrap();
             assert_eq!(c.data_dir, PathBuf::from("data"), "{install:?}");
         }
         // This test binary is never the MSI's, on any platform.
