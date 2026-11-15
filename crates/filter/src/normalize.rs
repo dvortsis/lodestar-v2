@@ -1315,6 +1315,30 @@ pub(crate) fn with_tokenizer<R>(f: impl FnOnce(&mut Tokenizer) -> R) -> R {
     }
 }
 
+/// Runs `f` with this thread's tokenizer for the earlier reading
+/// ([`Tokenizer::splitting`]), or a new one if it's in use, as
+/// [`with_tokenizer`] does for the main one. Kept per thread, so a read
+/// that trades through [`Tokenizer::kept`] doesn't allocate and free the
+/// table each time. Its meter is stopped when `f` returns, a panic
+/// included, so a meter `f` starts never reaches the next caller.
+pub(crate) fn with_splitting<R>(f: impl FnOnce(&mut Tokenizer) -> R) -> R {
+    thread_local! {
+        static SPLITTING: std::cell::RefCell<Tokenizer> =
+            std::cell::RefCell::new(Tokenizer::splitting());
+    }
+    let mut f = Some(f);
+    let reused = SPLITTING.try_with(|t| {
+        t.try_borrow_mut().ok().map(|mut t| {
+            let tok = Unmeter(&mut t);
+            (f.take().expect("called once"))(&mut *tok.0)
+        })
+    });
+    match reused {
+        Ok(Some(r)) => r,
+        _ => (f.take().expect("not called"))(&mut Tokenizer::splitting()),
+    }
+}
+
 /// Appends the tokens of `text` to `out`, positions starting at 0.
 pub fn tokens(text: &str, out: &mut Vec<Token>) {
     with_tokenizer(|t| t.text(text, out));
@@ -1472,17 +1496,17 @@ pub(crate) fn read_whole<'p>(
     with_tokenizer(|tok| read_with(tok, name, paths, out, ends, apart))
 }
 
-/// [`read_whole`] in the earlier reading ([`Tokenizer::splitting`]), its
-/// own tokenizer, metered against the same budget. Paths read alike
-/// either way here: in one folder they share its part.
+/// [`read_whole`] in the earlier reading ([`Tokenizer::splitting`]), with
+/// the thread's tokenizer for it ([`with_splitting`]), metered against the
+/// same budget. Paths read alike either way here: in one folder they share
+/// its part.
 pub(crate) fn read_split<'p>(
     name: &str,
     paths: impl IntoIterator<Item = &'p [String]>,
     out: &mut Vec<Token>,
     ends: &mut Vec<usize>,
 ) -> Metered {
-    let mut tok = Tokenizer::splitting();
-    read_with(&mut tok, name, paths, out, ends, &mut Vec::new())
+    with_splitting(|tok| read_with(tok, name, paths, out, ends, &mut Vec::new()))
 }
 
 fn read_with<'p>(
@@ -1721,6 +1745,54 @@ mod tests {
         // and planned, or charged, again.
         assert_eq!(checked, 48);
         assert_eq!(charged, 17_323_027_761_506_347_612);
+    }
+
+    /// The earlier reading's tokenizer is kept per thread: a split read
+    /// that trades reuses its tables, reads and is charged exactly as on
+    /// a new tokenizer, and leaves it unmetered for the next caller, even
+    /// one that started a meter of its own.
+    #[test]
+    fn the_splitting_tokenizer_is_kept_and_left_unmetered() {
+        // Distinct numbers past the cache, so the read trades.
+        let paths: Vec<Vec<String>> = (0..3_000u32)
+            .map(|i| vec!["disc".into(), format!("{i}")])
+            .collect();
+        let read = |out: &mut Vec<Token>, ends: &mut Vec<usize>| {
+            read_split("name", paths.iter().map(|p| &p[..]), out, ends)
+        };
+        let fresh = {
+            let (mut out, mut ends) = (Vec::new(), Vec::new());
+            let m = read_with(
+                &mut Tokenizer::splitting(),
+                "name",
+                paths.iter().map(|p| &p[..]),
+                &mut out,
+                &mut ends,
+                &mut Vec::new(),
+            );
+            (m.work, out, ends)
+        };
+        assert!(fresh.0.is_some(), "within the budget");
+        let mut kept_at = None;
+        for _ in 0..3 {
+            let (mut out, mut ends) = (Vec::new(), Vec::new());
+            let m = read(&mut out, &mut ends);
+            assert_eq!((m.work, out, ends), fresh);
+            let at = with_splitting(|t| {
+                assert!(!t.kept.is_empty(), "the read traded");
+                assert_eq!(t.limit, 0, "unmetered after a read");
+                t.kept.as_ptr()
+            });
+            assert_eq!(*kept_at.get_or_insert(at), at, "the table is reused");
+        }
+        // A caller's own meter doesn't outlive its call.
+        with_splitting(|t| t.meter(1));
+        with_splitting(|t| {
+            assert_eq!(t.limit, 0);
+            let mut out = Vec::new();
+            t.text("still read whole", &mut out);
+            assert_eq!(out.len(), 3);
+        });
     }
 
     fn plan_of(word: &str) -> Plan {
