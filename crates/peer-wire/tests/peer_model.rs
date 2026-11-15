@@ -5,12 +5,17 @@
 //! put up with (keep-alives, other messages, unknown extensions, PEX,
 //! repeated handshakes, pieces sent twice, its own requests): the fetch
 //! must succeed. A hostile peer also breaks the protocol at random points:
-//! the fetch must end, and may succeed only with the true dict.
+//! the fetch must end, and may succeed only with the true dict. A stalling
+//! peer is honest until it goes quiet part way, holding the connection
+//! open: the fetch must end by its own deadlines (`FirstWindow`, `Behind`
+//! or `Timeout`), within its timeout.
 //!
 //! Both ways the test reads everything the fetch sends and checks that each
 //! piece is asked for once, in order, within the announced size, with a
 //! bounded number outstanding, and none past the first window before the
-//! whole result is reserved; and that a result fits its reservation.
+//! whole result is reserved; that with a reservation hook set, nothing is
+//! asked for before the first reservation, which covers the first window
+//! and no more; and that a result fits its reservation.
 //!
 //! The peer always ends by closing. The fetch keeps real deadlines (its
 //! timeout, the pace a large dict must keep, the first window's 4 s), so
@@ -25,7 +30,9 @@ use std::time::Duration;
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::InfoHash;
-use lodestar_peer_wire::{Encryption, FetchOptions, Fetched, Reserve, fetch_on_stream, message};
+use lodestar_peer_wire::{
+    Encryption, Error, FetchOptions, Fetched, Reserve, fetch_on_stream, message,
+};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
@@ -162,6 +169,9 @@ fn pex_peers(rng: &mut Rng) -> Vec<SocketAddr> {
 struct Peer {
     rng: Rng,
     hostile: bool,
+    /// A stalling peer: after serving this many pieces it sends nothing
+    /// more and holds the connection open until the fetch leaves.
+    stall_after: Option<usize>,
     out: WriteHalf<DuplexStream>,
     asked: mpsc::UnboundedReceiver<usize>,
     seen: Shared,
@@ -377,6 +387,12 @@ impl Peer {
         // Serve what's asked, in any order, among other messages.
         let total = self.pieces();
         while self.done.len() < total {
+            if self.stall_after.is_some_and(|n| self.done.len() >= n) {
+                // Quiet from here, the connection held: only the fetch's
+                // own deadlines can end it.
+                while self.asked.recv().await.is_some() {}
+                return;
+            }
             if self.hostile && self.rng.chance(40) {
                 return; // gone, mid-fetch
             }
@@ -447,6 +463,7 @@ impl Peer {
 async fn watch(
     mut from: ReadHalf<DuplexStream>,
     their_id: u8,
+    with_reserve: bool,
     seen: Shared,
     asked: mpsc::UnboundedSender<usize>,
 ) {
@@ -504,6 +521,12 @@ async fn watch(
             s.wrong
                 .push(format!("{a} pieces asked for with {d} served"));
         }
+        // With a reservation hook set, nothing before its first step.
+        if with_reserve && s.reserved.is_empty() {
+            s.wrong.push(format!(
+                "piece {piece} asked for before anything was reserved"
+            ));
+        }
         // Past the first window only with the whole result reserved (or
         // no reservation hook at all: `reserved` stays empty).
         let whole = s.reserved.last().is_none_or(|(now, total)| now == total);
@@ -524,7 +547,17 @@ fn reserve_hook(seen: Shared) -> Reserve {
             s.wrong.push(format!("reserved {now} of {total}"));
         }
         match (s.reserved.len(), s.announced) {
-            (0, Some(_)) => {}
+            (0, Some(size)) => {
+                // The first step covers the first window (or all of a smaller
+                // dict) and no more: what's left is the rest of the dict.
+                let rest = size - size.min(FIRST_PIECES * PIECE);
+                if total.checked_sub(now) != Some(rest) {
+                    s.wrong.push(format!(
+                        "first reservation ({now}, {total}) for {size} leaves {:?}, not {rest}",
+                        total.checked_sub(now)
+                    ));
+                }
+            }
             (1, Some(size)) => {
                 // The second step: the whole, once the first window is in.
                 let window = size.div_ceil(PIECE).min(FIRST_PIECES);
@@ -548,9 +581,13 @@ fn reserve_hook(seen: Shared) -> Reserve {
     }))
 }
 
-async fn run(seed: u64) {
+/// How a stalled fetch ended, if this seed's peer stalled.
+async fn run(seed: u64) -> Option<&'static str> {
     let mut rng = Rng::new(seed);
     let hostile = rng.chance(2);
+    // A third of the honest peers stall part way (a dict of one piece and
+    // up: after 0 to all-but-one pieces).
+    let stalling = !hostile && rng.chance(3);
     let size = dict_size(&mut rng);
     let info = Arc::new(rng.bytes(size));
     let v2 = rng.chance(4);
@@ -577,10 +614,19 @@ async fn run(seed: u64) {
     let (ours, theirs) = tokio::io::duplex(1 + rng.below(64 << 10));
     let (from_fetch, to_fetch) = tokio::io::split(theirs);
     let (asked_tx, asked_rx) = mpsc::unbounded_channel();
-    let watcher = tokio::spawn(watch(from_fetch, their_id, seen.clone(), asked_tx));
+    let watcher = tokio::spawn(watch(
+        from_fetch,
+        their_id,
+        with_reserve,
+        seen.clone(),
+        asked_tx,
+    ));
+    let pieces = info.len().div_ceil(PIECE);
+    let stall_after = stalling.then(|| rng.below(pieces));
     let peer = Peer {
         rng: Rng::new(seed ^ 0xD1B5_4A32_D192_ED03),
         hostile,
+        stall_after,
         out: to_fetch,
         asked: asked_rx,
         seen: seen.clone(),
@@ -600,9 +646,22 @@ async fn run(seed: u64) {
         peer.pex_sent
     });
 
-    let got = tokio::time::timeout(STUCK, fetch_on_stream(ours, &key, &opts, false))
+    // Bounded by `opts.timeout` as `fetch` bounds each attempt
+    // (`fetch_on_stream` has no deadline of its own); `STUCK` past that
+    // means the bound itself failed.
+    let started = tokio::time::Instant::now();
+    let bounded = async {
+        tokio::time::timeout_at(
+            started + opts.timeout,
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .unwrap_or(Err(Error::Timeout))
+    };
+    let got = tokio::time::timeout(STUCK, bounded)
         .await
         .unwrap_or_else(|_| panic!("seed {seed}: the fetch didn't end (hostile: {hostile})"));
+    let took = started.elapsed();
     let pex_sent = tokio::time::timeout(STUCK, peer)
         .await
         .unwrap_or_else(|_| panic!("seed {seed}: the peer didn't end"))
@@ -618,10 +677,39 @@ async fn run(seed: u64) {
         "seed {seed} (hostile: {hostile}): {:?}",
         &s.wrong[..s.wrong.len().min(4)]
     );
+    if stalling {
+        // Ended by its own deadlines, within its timeout.
+        assert!(
+            matches!(
+                got,
+                Err(Error::FirstWindow | Error::Behind | Error::Timeout)
+            ),
+            "seed {seed}: a stalled fetch ended {got:?}"
+        );
+        assert!(
+            took <= opts.timeout,
+            "seed {seed}: a stalled fetch took {took:?}, past {:?}",
+            opts.timeout
+        );
+        return Some(match got {
+            Err(Error::FirstWindow) => "first window",
+            Err(Error::Behind) => "behind",
+            _ => "timeout",
+        });
+    }
     match &got {
-        Ok(f) => check_result(seed, f, &info, v2, &client, &pex_sent, &s),
+        Ok(f) => {
+            if with_reserve {
+                assert!(
+                    !s.reserved.is_empty(),
+                    "seed {seed}: a result with nothing reserved"
+                );
+            }
+            check_result(seed, f, &info, v2, &client, &pex_sent, &s);
+        }
         Err(e) => assert!(hostile, "seed {seed}: an honest peer's fetch failed: {e:?}"),
     }
+    None
 }
 
 fn check_result(
@@ -670,7 +758,17 @@ fn check_result(
 
 #[tokio::test(start_paused = true)]
 async fn fetches_end_right_whatever_the_peer_sends() {
+    let mut stalls: BTreeMap<&str, usize> = BTreeMap::new();
     for seed in SEEDS {
-        run(seed).await;
+        if let Some(how) = run(seed).await {
+            *stalls.entry(how).or_default() += 1;
+        }
+    }
+    // Every deadline is reached by some stalled fetch.
+    for how in ["first window", "behind", "timeout"] {
+        assert!(
+            stalls.contains_key(how),
+            "no stalled fetch ended {how}: {stalls:?}"
+        );
     }
 }
