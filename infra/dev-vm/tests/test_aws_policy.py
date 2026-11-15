@@ -123,6 +123,15 @@ class PolicyTests(unittest.TestCase):
                            "Resource": {"Ref": "PiaLoginSecret"}}])
         self.assertEqual(res["LinuxTestVmInstanceProfile"]["Properties"]["Roles"], [{"Ref": "LinuxTestVmRole"}])
 
+    def test_deployed_policy_is_updated_in_place(self):
+        # A managed policy's Description and Path can't change in place, and its
+        # fixed name makes the replacement fail with AlreadyExists (2026-11-15:
+        # the stack update stopped at UPDATE_FAILED). Keep both as deployed.
+        t, _, _ = statements()
+        props = t["Resources"]["ClaudeTestVmPolicy"]["Properties"]
+        self.assertEqual(props["Description"], "X-test-vm: what Claude may do in AWS (the Windows test instance only).")
+        self.assertNotIn("Path", props)
+
     def test_region_fence(self):
         _, _, sts = statements()
         deny = next(s for s in sts if s["Effect"] == "Deny")

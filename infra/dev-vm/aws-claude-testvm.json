@@ -52,7 +52,7 @@
         "ManagedPolicyName": {
           "Fn::Sub": "${UserName}-policy"
         },
-        "Description": "X-test-vm: what Claude may do in AWS (the guarded test instances only).",
+        "Description": "X-test-vm: what Claude may do in AWS (the Windows test instance only).",
         "PolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
