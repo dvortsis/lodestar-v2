@@ -1095,7 +1095,23 @@ class Hardening(unittest.TestCase):
             "a web setting main doesn't declare": lambda t: config(t, "web_fetch").update(allowed_domains=["example.com"]),
             "a config with no name": lambda t: t[0]["configs"].append({"enabled": True}),
             "another toolset type": lambda t: t[0].update(type="agent_toolset_20990101"),
+            "no default_config": lambda t: t[0].pop("default_config"),
+            "no default permission policy": lambda t: t[0]["default_config"].pop("permission_policy"),
+            "a config that isn't an object": lambda t: t[0]["configs"].append(["bash"]),
+            "a default_config that isn't an object": lambda t: t[0].update(default_config=[]),
+            "configs that aren't a list": lambda t: t[0].update(configs={"bash": {}}),
+            "a custom tool in the toolset's place": lambda t: t.__setitem__(
+                0, {"type": "custom", "name": "bash", "input_schema": {}}),
+            "a number for a boolean": lambda t: config(t, "web_fetch").update(enabled=0),
+            "a float for a boolean": lambda t: t[0]["default_config"].update(enabled=1.0),
         }
+        # A tool of another kind must equal its declaration exactly.
+        custom = {"type": "custom", "name": "probe", "input_schema": {"type": "object"}}
+        self.assertTrue(harness.tools_match([custom], [dict(custom)]))
+        for what, other in (("a renamed custom tool", dict(custom, name="other")),
+                            ("a custom tool with an extra field", dict(custom, extra=True))):
+            with self.subTest(what):
+                self.assertFalse(harness.tools_match([custom], [other]))
         lock = {"agent_id": "agent_REAL", "agent_version": 3}
         for what, edit in cases.items():
             tools = changed(edit)

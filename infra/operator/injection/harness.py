@@ -390,6 +390,15 @@ TOOLSET = "agent_toolset_20260401"
 TOOLSET_DEFAULTS = {"enabled": True, "permission_policy": {"type": "always_allow"}}
 
 
+def _same(a, b) -> bool:
+    """Equal as JSON, so `0` or `1.0` never passes for a boolean. What JSON
+    can't hold refuses."""
+    try:
+        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    except (TypeError, ValueError):
+        return False
+
+
 def _toolset_matches(declared: dict, deployed: dict) -> bool:
     if set(deployed) - {"type", "default_config", "configs"}:
         return False
@@ -399,7 +408,7 @@ def _toolset_matches(declared: dict, deployed: dict) -> bool:
             or not all(isinstance(c, dict) and isinstance(c.get("name"), str) for c in got_configs):
         return False
     defaults = {**TOOLSET_DEFAULTS, **declared.get("default_config", {})}
-    if {**TOOLSET_DEFAULTS, **got_default} != defaults:
+    if not _same({**TOOLSET_DEFAULTS, **got_default}, defaults):
         return False
 
     def resolved(configs):
@@ -412,7 +421,7 @@ def _toolset_matches(declared: dict, deployed: dict) -> bool:
     if want is None or got is None:
         return False
     # A tool only one side lists has the toolset's defaults on the other.
-    return all(want.get(n, {**defaults, "type": n, "name": n}) == got.get(n, {**defaults, "type": n, "name": n})
+    return all(_same(want.get(n, {**defaults, "type": n, "name": n}), got.get(n, {**defaults, "type": n, "name": n}))
                for n in want.keys() | got.keys())
 
 
@@ -429,7 +438,7 @@ def tools_match(declared, deployed) -> bool:
         if want.get("type") == TOOLSET:
             if not _toolset_matches(want, got):
                 return False
-        elif got != want:
+        elif not _same(got, want):
             return False
     return True
 
