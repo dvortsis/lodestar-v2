@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T15:59Z",
+  "updated_at": "2026-11-15T16:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T15:59Z",
+  "last_heartbeat": "2026-11-15T16:10Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9965,6 +9965,12 @@
       "slice": "X-cli-win-data-dir",
       "sha": "ec40a1ef",
       "at": "2026-11-15T15:59Z"
+    },
+    {
+      "pr": 932,
+      "slice": "X-fuzz-tpdb-harness",
+      "sha": "298fa8f97da9cb83926ad85b1fb02ef1f7c7c47c",
+      "at": "2026-11-15T16:10Z"
     }
   ],
   "active_sessions": {
@@ -10203,7 +10209,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T15:59Z",
+    "updated": "2026-11-15T16:10Z",
     "items": [
       {
         "slot": 1,
@@ -10223,7 +10229,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #929 MERGE + fix round; #931 MERGE + fix round; then X-fuzz-tpdb-harness",
+        "doing": "#929 X-cluster-start-retry waiting on CI; #932 merged 298fa8f9",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10234,7 +10240,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T15:32Z",
-        "doing": "regex_plan + cluster_filter_snapshot harness throughput; PROPTEST_CASES deep-run doc line",
+        "doing": "#935 X-fuzz-slow-targets: review MERGE, waiting on CI",
         "cap": "build (\u00a72.64 4+4)"
       },
       {
@@ -10337,8 +10343,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T15:59Z",
-  "updated": "2026-11-15T15:59Z",
+  "heartbeat": "2026-11-15T16:10Z",
+  "updated": "2026-11-15T16:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
