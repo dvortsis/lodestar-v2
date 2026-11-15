@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T12:39Z",
+  "updated_at": "2026-11-15T12:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T12:39Z",
+  "last_heartbeat": "2026-11-15T12:42Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9929,6 +9929,12 @@
       "slice": "D-docker-guide-1115",
       "sha": "b789ca4e",
       "at": "2026-11-15T12:32Z"
+    },
+    {
+      "pr": 928,
+      "slice": "X-flake-store-migrate-race",
+      "sha": "b96474ed",
+      "at": "2026-11-15T12:42Z"
     }
   ],
   "active_sessions": {
@@ -10167,7 +10173,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T12:39Z",
+    "updated": "2026-11-15T12:42Z",
     "items": [
       {
         "slot": 1,
@@ -10182,12 +10188,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-flake-store-migrate-race",
+        "slice": "X-cluster-start-retry",
         "role": "build",
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "#928 MERGE review, CI running; then X-cluster-start-retry PR",
+        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #928 merged; next X-cluster-start-retry PR, then X-store-wal-nits",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10301,8 +10307,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T12:39Z",
-  "updated": "2026-11-15T12:39Z",
+  "heartbeat": "2026-11-15T12:42Z",
+  "updated": "2026-11-15T12:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
