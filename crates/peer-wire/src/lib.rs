@@ -43,6 +43,10 @@ pub enum Error {
     /// arrive within [`FIRST_WINDOW_DEADLINE`] of being requested. Counted
     /// as a timeout.
     FirstWindow,
+    /// A large dict's peer fell behind the pace it must keep. Counted as a
+    /// timeout; apart so a caller can tell the peer's slowness from a fetch
+    /// that simply ran out of time.
+    Behind,
     /// The MSE handshake failed (or the peer hung up during it).
     Mse(&'static str),
     Handshake(&'static str),
@@ -80,7 +84,7 @@ impl Error {
     pub fn kind(&self) -> FailureKind {
         match self {
             Error::Connect(_) | Error::Denied => FailureKind::Unreachable,
-            Error::Timeout | Error::FirstWindow => FailureKind::TimedOut,
+            Error::Timeout | Error::FirstWindow | Error::Behind => FailureKind::TimedOut,
             Error::Io(_) | Error::NoExtensions | Error::NoMetadata | Error::Rejected => {
                 FailureKind::Refused
             }
@@ -99,6 +103,7 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "connection failed: {e}"),
             Error::Timeout => f.write_str("timed out"),
             Error::FirstWindow => f.write_str("the first window didn't arrive in time"),
+            Error::Behind => f.write_str("fell behind the pace a large dict must keep"),
             Error::Mse(why) => write!(f, "encryption handshake failed: {why}"),
             Error::Handshake(why) => write!(f, "bad handshake: {why}"),
             Error::NoExtensions => f.write_str("peer lacks the extension protocol"),

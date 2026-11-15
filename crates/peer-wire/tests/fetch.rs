@@ -724,7 +724,10 @@ async fn growth_waits_for_the_whole_first_window() {
         let mut o = budget.opts(held.clone());
         o.timeout = Duration::from_secs(3);
         let r = fetch(addr, InfoHash(hash), &o).await;
-        assert!(matches!(r, Err(Error::Timeout)), "{serve}: {r:?}");
+        assert!(
+            matches!(r, Err(Error::Timeout | Error::Behind)),
+            "{serve}: {r:?}"
+        );
         let calls = budget.calls.lock().unwrap().clone();
         let total = calls[0].1;
         let grew = calls.iter().any(|&(now, _)| now == total);

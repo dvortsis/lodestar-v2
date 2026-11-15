@@ -185,6 +185,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Fetches whose deadline ran out while they waited for a reservation.",
         get(&p.reserve_timeouts),
     );
+    o.one(
+        "fetch_late_room_timeouts_total",
+        "counter",
+        "Fetches that timed out after their room came late, not charged to the peer.",
+        get(&p.late_waits),
+    );
     for (name, value) in [
         ("fetch_finder_full_total", &p.finder_full),
         ("fetch_finder_closed_total", &p.finder_closed),
@@ -1758,6 +1764,7 @@ mod tests {
             "fetch_held_full_total",
             "fetch_reserved_bytes",
             "fetch_reserve_timeouts_total",
+            "fetch_late_room_timeouts_total",
         ] {
             let row = format!("| `{family}`");
             assert!(

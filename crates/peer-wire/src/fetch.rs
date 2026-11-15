@@ -455,7 +455,7 @@ where
 /// [`PACE_PARTS`] parts. At the end of each part from the second, the peer
 /// must have sent at least half of what an even pace would have brought by
 /// then, less one piece for rounding. A peer that has sent less is ended
-/// as a timeout, which gives its room back at once. No check comes in the
+/// as behind ([`Error::Behind`]), which gives its room back at once. No check comes in the
 /// first part or in the first [`PACE_FREE`], whichever is longer, for a
 /// transport or a peer that starts slowly; with less time than that left,
 /// the deadline alone ends the fetch. A wait for room is never counted:
@@ -469,6 +469,9 @@ struct Pace {
     need: usize,
     /// The part whose end is checked next.
     next: u32,
+    /// The most dict bytes seen in so far, and when they last grew.
+    seen: usize,
+    last_in: Instant,
 }
 
 const PACE_PARTS: u32 = 8;
@@ -504,6 +507,8 @@ impl Pace {
             base: got,
             need: size.saturating_sub(got),
             next,
+            seen: got,
+            last_in: now,
         })
     }
 
@@ -516,6 +521,10 @@ impl Pace {
     /// Runs the checks due by `now` against the `got` dict bytes in so
     /// far. `false`: the peer is behind.
     fn keeps_up(&mut self, now: Instant, got: usize) -> bool {
+        if got > self.seen {
+            self.seen = got;
+            self.last_in = now;
+        }
         while let Some(at) = self.next_check() {
             if now < at {
                 break;
@@ -528,6 +537,22 @@ impl Pace {
             self.next += 1;
         }
         true
+    }
+
+    /// At the deadline: how it ends. A peer that is behind, or sent nothing
+    /// for the last half [`PACE_FREE`] (1 s, whatever the timeout), had
+    /// stopped, which is its own failure ([`Error::Behind`]); one still
+    /// sending ran out of time ([`Error::Timeout`]), which may be the wait
+    /// for room's.
+    fn at_deadline(&mut self, now: Instant, got: usize) -> Error {
+        if !self.keeps_up(now, got) {
+            return Error::Behind;
+        }
+        if now.saturating_duration_since(self.last_in) > PACE_FREE / 2 {
+            Error::Behind
+        } else {
+            Error::Timeout
+        }
     }
 }
 
@@ -545,7 +570,7 @@ async fn bounded<T>(
         let due = match pace.as_mut() {
             Some(p) => {
                 if !p.keeps_up(Instant::now(), got) {
-                    return Err(Error::Timeout);
+                    return Err(Error::Behind);
                 }
                 p.next_check().unwrap_or(deadline)
             }
@@ -553,7 +578,15 @@ async fn bounded<T>(
         };
         match timeout_at(due, &mut write).await {
             Ok(written) => return Ok(written?),
-            Err(_) if due >= deadline => return Err(Error::Timeout),
+            // Still not written at the deadline: a peer that has stopped
+            // reading has stopped.
+            Err(_) if due >= deadline => {
+                return Err(if pace.is_some() {
+                    Error::Behind
+                } else {
+                    Error::Timeout
+                });
+            }
             Err(_) => {}
         }
     }
@@ -641,10 +674,16 @@ where
                 }
                 let due = match pace.as_mut() {
                     Some(p) => {
-                        if !p.keeps_up(Instant::now(), got) {
-                            return Err(Error::Timeout);
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return Err(p.at_deadline(now, got));
                         }
-                        p.next_check()
+                        if !p.keeps_up(now, got) {
+                            return Err(Error::Behind);
+                        }
+                        // The deadline too, so its end says how the peer
+                        // was doing.
+                        Some(p.next_check().map_or(deadline, |at| at.min(deadline)))
                     }
                     None => None,
                 };
@@ -1118,7 +1157,7 @@ mod tests {
             )
             .await
             .expect("it ends before the deadline");
-            assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+            assert!(matches!(got, Err(Error::Behind)), "{got:?}");
             let took = started.elapsed();
             assert!(
                 took >= Duration::from_millis(1_900) && took <= Duration::from_millis(2_100),
@@ -1126,6 +1165,118 @@ mod tests {
             );
             peer.abort();
         }
+    }
+
+    /// At the deadline, a large dict's peer that keeps its checks but had
+    /// stopped sending ends as behind, its own failure. One still sending
+    /// ran out of time, a timeout (which a late wait for room may excuse).
+    #[tokio::test(start_paused = true)]
+    async fn at_the_deadline_a_peer_that_stopped_is_behind() {
+        let deadline = Duration::from_secs(8);
+        // Both send above half an even pace, so every check passes: one
+        // too slowly to finish, the other at twice that for 4 s, then
+        // nothing.
+        for (serve, each, behind) in [(usize::MAX, 200, false), (FIRST_PIECES + 40, 100, true)] {
+            let info = vec![7u8; MIB];
+            let key = InfoHash(Sha1::digest(&info).into());
+            let (ours, theirs) = tokio::io::duplex(1 << 16);
+            let peer = tokio::spawn(scripted(theirs, info, serve, Then::Steady { each }));
+            let got = timeout(
+                deadline + Duration::from_secs(1),
+                fetch_on_stream(ours, &key, &plain(deadline), false),
+            )
+            .await
+            .expect("it ends at its deadline");
+            if behind {
+                assert!(matches!(got, Err(Error::Behind)), "{got:?}");
+            } else {
+                assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+            }
+            peer.abort();
+        }
+    }
+
+    /// At the deadline, a fetch still waiting to write to a large dict's
+    /// peer that keeps its checks but has stopped reading ends as behind.
+    #[tokio::test(start_paused = true)]
+    async fn at_the_deadline_a_peer_that_stopped_reading_is_behind() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let deadline = Duration::from_secs(8);
+        // 256 pieces: past the first window, a window of 64 requests goes
+        // out at once, and one more as each piece comes in.
+        let info = vec![7u8; 4 * MIB];
+        let key = InfoHash(Sha1::digest(&info).into());
+        // Room for about 120 requests (33 bytes each): the refills past
+        // those wait, with over half the dict in.
+        let (ours, theirs) = tokio::io::duplex(4 << 10);
+        let (mut rd, mut wr) = tokio::io::split(theirs);
+        let (asked, mut seen) = tokio::sync::watch::channel(0usize);
+        // The peer reads the first window's 4 requests and the 64 after
+        // it, then stops reading, the stream left open.
+        let reader = tokio::spawn(async move {
+            let mut hs = [0u8; HANDSHAKE_LEN];
+            rd.read_exact(&mut hs).await.unwrap();
+            let mut n = 0;
+            while n < 68 {
+                let mut len = [0u8; 4];
+                rd.read_exact(&mut len).await.unwrap();
+                let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+                rd.read_exact(&mut body).await.unwrap();
+                if body.len() > 2 && body[0] == 20 && body[1] == OUR_UT_METADATA {
+                    n += 1;
+                    asked.send_replace(n);
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+        // It sends the first window once asked, then all but the last four
+        // pieces at once. Those that get in before the refills fill the pipe
+        // are over half of an even pace at every check.
+        let writer = tokio::spawn({
+            let info = info.clone();
+            async move {
+                let frame = |ext_id: u8, body: Vec<u8>| {
+                    let mut f = ((body.len() + 2) as u32).to_be_bytes().to_vec();
+                    f.extend([20, ext_id]);
+                    f.extend(body);
+                    f
+                };
+                let hello = message::handshake(&key.0, b"-SC0001-scriptscript", true);
+                wr.write_all(&hello).await.unwrap();
+                let ext = message::our_extended_handshake(Some(info.len()));
+                wr.write_all(&frame(0, ext)).await.unwrap();
+                for (pieces, after) in [(0..FIRST_PIECES, FIRST_PIECES), (FIRST_PIECES..252, 68)] {
+                    seen.wait_for(|n| *n >= after).await.unwrap();
+                    for piece in pieces {
+                        let start = piece * METADATA_PIECE;
+                        let data = &info[start..start + METADATA_PIECE];
+                        let reply = message::metadata_data(piece, info.len(), data);
+                        if wr.write_all(&frame(OUR_UT_METADATA, reply)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                std::future::pending::<()>().await;
+            }
+        });
+        let mut opts = plain(deadline);
+        // A reservation, so the rest is asked for once the window is in.
+        opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+        let started = Instant::now();
+        let got = timeout(
+            deadline + Duration::from_secs(1),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("it ends at its deadline");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
+        assert!(
+            started.elapsed() >= deadline,
+            "at the deadline, not a check: {:?}",
+            started.elapsed()
+        );
+        reader.abort();
+        writer.abort();
     }
 
     /// A peer that floods other messages once the first window is in, so
@@ -1146,7 +1297,7 @@ mod tests {
         )
         .await
         .expect("it ends");
-        assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
         // The first check is a quarter of the way in, at two seconds; the
         // deadline is the slack either side.
         let took = started.elapsed();
@@ -1239,7 +1390,7 @@ mod tests {
         )
         .await
         .expect("it ends before the deadline");
-        assert!(matches!(got, Err(Error::Timeout)), "{got:?}");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
         let took = started.elapsed();
         assert!(
             took >= Duration::from_millis(1_900) && took <= Duration::from_millis(2_100),
@@ -1369,6 +1520,28 @@ mod tests {
         assert_eq!(opts.stats.first_window_timeouts(Transport::Tcp), 1);
         assert_eq!(opts.stats.first_window_timeouts(Transport::Utp), 0);
         peer.abort();
+    }
+
+    /// At a 30 s timeout, a peer silent for over 1 s at the deadline had
+    /// stopped, as at the default timeout: the threshold doesn't grow with
+    /// the parts.
+    #[test]
+    fn at_the_deadline_silence_is_measured_in_seconds_not_parts() {
+        let t0 = Instant::now();
+        let deadline = t0 + Duration::from_secs(30);
+        // Three quarters of the rest in: past half an even pace at every
+        // check.
+        let got = FIRST_WINDOW + (MIB - FIRST_WINDOW) * 3 / 4;
+        for (last, expect_behind) in [(28_500, true), (29_500, false)] {
+            let mut p = Pace::start(t0, deadline, FIRST_WINDOW, MIB).unwrap();
+            assert!(p.keeps_up(t0 + Duration::from_millis(last), got));
+            let e = p.at_deadline(deadline, got);
+            assert_eq!(
+                matches!(e, Error::Behind),
+                expect_behind,
+                "last piece {last} ms in: {e:?}"
+            );
+        }
     }
 
     /// A first-window timeout is counted by transport; other failures
