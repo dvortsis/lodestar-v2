@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T12:42Z",
+  "updated_at": "2026-11-15T13:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T12:42Z",
+  "last_heartbeat": "2026-11-15T13:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9935,6 +9935,12 @@
       "slice": "X-flake-store-migrate-race",
       "sha": "b96474ed",
       "at": "2026-11-15T12:42Z"
+    },
+    {
+      "pr": 925,
+      "slice": "X-win-restart-priority-test",
+      "sha": "72166891",
+      "at": "2026-11-15T13:38Z"
     }
   ],
   "active_sessions": {
@@ -10173,7 +10179,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T12:42Z",
+    "updated": "2026-11-15T13:38Z",
     "items": [
       {
         "slot": 1,
@@ -10182,7 +10188,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "#926 fix round: S8-07 + worker default + docs",
+        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #926 delta CHANGES (B1 + I1) fix round",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10193,7 +10199,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #928 merged; next X-cluster-start-retry PR, then X-store-wal-nits",
+        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #929 MERGE + fix round; #931 MERGE + fix round; then X-fuzz-tpdb-harness",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10209,12 +10215,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-win-restart-priority-test",
+        "slice": "X-flake-metainfo-bound-rss",
         "role": "build",
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T08:40Z",
-        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #925 at 3de082b4 (priority_lowered check after app.relaunch), waiting on CI",
+        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: X-flake-metainfo-bound-rss (bound.rs measures its own peak; keep 512 MiB)",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       }
@@ -10307,8 +10313,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T12:42Z",
-  "updated": "2026-11-15T12:42Z",
+  "heartbeat": "2026-11-15T13:38Z",
+  "updated": "2026-11-15T13:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10567,8 +10573,8 @@
       {
         "name": "Fable slot (owner-started reviewer)",
         "session": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "status": "idle",
-        "doing": "handed back after #904; one fix at a time when given work"
+        "status": "inactive",
+        "doing": "session inactive (send_message refused 2026-11-15); not available for work"
       },
       {
         "slot": "api-lane",
