@@ -389,6 +389,7 @@ placement:
   - X-claim-store-polish
   - X-fetch-pool-bytes
   - X-fetch-meta-reserve
+  - X-peerwire-model-test
   - X-refetch-private
   - X-gs-gate-polish
   - X-soak-screen

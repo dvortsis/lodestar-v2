@@ -12,7 +12,11 @@
 //! bounded number outstanding, and none past the first window before the
 //! whole result is reserved; and that a result fits its reservation.
 //!
-//! No timers: the peer always ends by closing. A failure prints the seed.
+//! The peer always ends by closing. The fetch keeps real deadlines (its
+//! timeout, the pace a large dict must keep, the first window's 4 s), so
+//! the test runs on tokio's paused clock: time moves only when every task
+//! is idle, so a slow or loaded machine can't trip them, and a fetch that
+//! truly hangs still ends at its own deadline. A failure prints the seed.
 
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
@@ -39,7 +43,8 @@ const WINDOW: usize = 64;
 const MAX_PEX: usize = 200;
 /// Turns a hostile peer gives the fetch to ask for more before it leaves.
 const YIELDS: usize = 64;
-/// A stuck fetch fails the test instead of hanging it.
+/// A stuck fetch fails the test instead of hanging it (on the paused
+/// clock, reached only when every task is idle).
 const STUCK: Duration = Duration::from_secs(60);
 
 /// xorshift64*: small, seeded, the same on every platform.
@@ -663,7 +668,7 @@ fn check_result(
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn fetches_end_right_whatever_the_peer_sends() {
     for seed in SEEDS {
         run(seed).await;
