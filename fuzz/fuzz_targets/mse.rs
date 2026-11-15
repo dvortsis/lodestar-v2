@@ -86,7 +86,11 @@ impl AsyncRead for Said<'_> {
 }
 
 impl AsyncWrite for Said<'_> {
-    fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -111,7 +115,8 @@ fn methods(bits: u8) -> u32 {
 /// Changes `answer` as each four-byte op says: a position, a kind and a
 /// value.
 fn change(answer: &mut Vec<u8>, ops: &[u8]) {
-    for op in ops.chunks_exact(4) {
+    let (ops, _) = ops.as_chunks::<4>();
+    for op in ops {
         if answer.is_empty() {
             break;
         }
@@ -154,7 +159,12 @@ fuzz_target!(|data: &[u8]| {
             &INITIAL,
             &mut our_rng
         ));
-        let mut responder = pin!(mse::respond(&mut far, &[INFO_HASH], allowed, &mut their_rng));
+        let mut responder = pin!(mse::respond(
+            &mut far,
+            &[INFO_HASH],
+            allowed,
+            &mut their_rng
+        ));
         let mut cx = Context::from_waker(Waker::noop());
         let (mut a, mut b) = (None, None);
         for _ in 0..64 {
@@ -193,7 +203,9 @@ fuzz_target!(|data: &[u8]| {
     change(&mut answer, ops);
     let mut rng = StdRng::seed_from_u64(ours);
     let mut peer = Said(&answer);
-    let replay = pin!(mse::initiate(&mut peer, &INFO_HASH, provide, &INITIAL, &mut rng));
+    let replay = pin!(mse::initiate(
+        &mut peer, &INFO_HASH, provide, &INITIAL, &mut rng
+    ));
     // Nothing here waits: it ends in one poll.
     let Poll::Ready(got) = replay.poll(&mut Context::from_waker(Waker::noop())) else {
         panic!("the initiator waits with nothing left to wait for");

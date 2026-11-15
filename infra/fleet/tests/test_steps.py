@@ -687,10 +687,12 @@ if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ] && [ "${6##*/}" != cap-inbound.pcap
   if [ $# -ne 7 ] || [ "$7" != "icmp and dst host 192.0.2.77" ] || [ "${6##*/}" != cap-host.pcap ]; then
     printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
   fi
-  if [ -n "$HOST_READ_FAILS" ]; then printf 'NOTAPCAPFILE-NOTAPCAPFILE' > "$6"; else cat "$STUB/empty.pcap" > "$6"; fi
-  [ -n "$HOST_CAPTURE_DIES" ] && exit 1
+  # The trap goes first: the file is the script's sign the capture is
+  # running, as tcpdump's own handlers are set before it writes the file.
   out=$6
   trap '[ -e "$STUB/host_leak" ] && [ -z "$HOST_READ_FAILS" ] && cat "$STUB/fixture-hostleak.pcap" > "$out"; exit 0' TERM
+  if [ -n "$HOST_READ_FAILS" ]; then printf 'NOTAPCAPFILE-NOTAPCAPFILE' > "$6"; else cat "$STUB/empty.pcap" > "$6"; fi
+  [ -n "$HOST_CAPTURE_DIES" ] && exit 1
   while :; do /bin/sleep 0.05; done
 fi
 # The stop window's precondition: the endpoint's packets to the host while
@@ -701,10 +703,12 @@ if [ "$1 $2 $3 $4 $5" = "-i eth0 -n -U -w" ] && [ "${6##*/}" = cap-inbound.pcap 
   if [ $# -ne 7 ] || [ "$7" != "udp and src host 192.0.2.77 and src port 1337" ]; then
     printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
   fi
-  cat "$STUB/empty.pcap" > "$6"
+  # The trap goes first, as for the host capture: once the file exists the
+  # script may stop the capture at any moment (X-leak-test-capture-kill).
   out=$6
   pre=; [ -e "$STUB/gluetun_stopped" ] || pre=1
   trap 'if [ -e "$STUB/drive" ] && { [ -n "$pre" ] || [ -z "$WINDOW_IDLE" ]; }; then cat "$STUB/fixture-inbound.pcap" > "$out"; fi; exit 0' TERM
+  cat "$STUB/empty.pcap" > "$6"
   while :; do /bin/sleep 0.05; done
 fi
 # Capture only: the pcap is the test's fixture for that phase (fixture-<phase>.pcap),

@@ -351,7 +351,7 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
     };
     let store = match Store::open(&db, config.store_config()) {
         Ok(s) => s,
-        Err(e) if store_busy(&e) => return Err(in_use()),
+        Err(e) if e.is_busy() => return Err(in_use()),
         Err(e) => return Err(Failure::Failed(format!("opening {}: {e}", db.display()))),
     };
     let take = |c: &lodestar_store::rusqlite::Connection| {
@@ -1176,7 +1176,7 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
     // Held by another command: a running import's live progress, if it
     // left any, else the plain refusal.
     let held = |e: lodestar_store::Error, ctx: &str| {
-        if store_busy(&e) {
+        if e.is_busy() {
             live_status(config, &db, id, json)
         } else {
             Err(Failure::Failed(format!("{ctx}: {e}")))
@@ -1241,17 +1241,12 @@ fn read_err<'a>(
     ctx: &'a str,
 ) -> impl Fn(lodestar_store::Error) -> Failure + 'a {
     move |e| {
-        if store_busy(&e) {
+        if e.is_busy() {
             held_elsewhere(db, verb)
         } else {
             Failure::Failed(format!("{ctx}: {e}"))
         }
     }
-}
-
-/// Whether a store error is another process's lock: busy or locked.
-fn store_busy(e: &lodestar_store::Error) -> bool {
-    matches!(e, lodestar_store::Error::Sqlite(e) if sqlite_busy(e))
 }
 
 /// Whether an SQLite error is another process's lock: busy or locked.
