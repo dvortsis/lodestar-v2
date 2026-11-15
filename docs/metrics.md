@@ -216,7 +216,7 @@ the metric they quote (e.g. "Index lag 42 s" → `formatSpan`; "Disk full in
 | Metric | Formatter | Notes |
 |---|---|---|
 | DHT nodes, routing-table size | `formatCount` | Snapshot |
-| Reply ratio (NAT-saturation signal): the share of resolved queries answered, responses and errors over those plus timeouts; queries still in flight don't count; unknown (—) until one resolves | `formatPercent` (f = 1) | Event time |
+| Reply ratio (NAT-saturation signal): the share of resolved queries answered, queries answered (a response or error matched to a query awaiting it) over those plus timeouts; queries still in flight and stray replies (late, duplicate, unknown or spoofed) don't count; unknown (—) until one resolves | `formatPercent` (f = 1) | Event time |
 | BEP 51 sample yield | `formatPercent` (f = 1) | Event time |
 | Keyspace coverage | `formatPercent` (f = 1) | Snapshot |
 | Seen-filter load factor | `formatPercent` (f = 1) | Snapshot |
