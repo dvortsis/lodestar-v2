@@ -10487,7 +10487,7 @@
         "role": "build",
         "agent": "claude-api-local",
         "model": "opus",
-        "doing": "api-lane: owner-run local Claude Code session on the Console workspace key (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); outside the 4+4 cap; ~$140 budget, stops at $130 or $25/slice; reserved: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, X-worker-service-log, M8-PERF-1; never merges; may report via PR comments",
+        "doing": "api-lane: owner-run local Claude Code session on the Console workspace key (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); outside the 4+4 cap; ~$140 budget, stops at $130 or $25/slice; reserved: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, X-worker-service-log, M8-PERF-1; order as listed, M8-PERF-1 last and best-effort; never merges; may report via PR comments",
         "since": "2026-11-15T07:01Z",
         "name": "API build lane (owner-run, local)",
         "session": "none (local; reports via PR comments if no send_message)",
