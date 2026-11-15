@@ -499,6 +499,7 @@ placement:
   - X-store-wal-nits
   - X-cluster-start-retry
   - X-worker-oversize-handback
+  - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
