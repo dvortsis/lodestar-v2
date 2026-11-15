@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T08:50Z",
+  "updated_at": "2026-11-15T09:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T08:50Z",
+  "last_heartbeat": "2026-11-15T09:03Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9881,6 +9881,12 @@
       "slice": "X-peerwire-model-test",
       "sha": "1c6491d7",
       "at": "2026-11-15T08:50Z"
+    },
+    {
+      "pr": 916,
+      "slice": "X-flake-rejudge-panic-time",
+      "sha": "1cfbfb54",
+      "at": "2026-11-15T09:03Z"
     }
   ],
   "active_sessions": {
@@ -10119,16 +10125,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T08:50Z",
+    "updated": "2026-11-15T09:03Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-peerwire-model-test",
+        "slice": "X-cli-win-data-dir",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T08:50Z",
-        "doing": "#915 merged 1c6491d7; #916 CI watch then merge (ready 3081f86f)",
+        "since": "2026-11-15T09:03Z",
+        "doing": "#915, #916 merged; now X-cli-win-data-dir (MSI data folder for the CLI + guide steps)",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10138,8 +10144,8 @@
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T07:41Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #919 X-store-migrate-race (CI, then fresh Opus review); #920 X-operator-cap-60 reopened as draft, held (operator unfunded); then X-flake-detect-macos-nits, X-cluster-start-retry",
+        "since": "2026-11-15T09:03Z",
+        "doing": "#919 MERGE (Opus), CI watch then merge; X-flake-detect-macos-nits PR next",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10254,8 +10260,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T08:50Z",
-  "updated": "2026-11-15T08:50Z",
+  "heartbeat": "2026-11-15T09:03Z",
+  "updated": "2026-11-15T09:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
