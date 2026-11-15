@@ -148,7 +148,23 @@ pub fn load_guarded(
         .before(explicit.as_deref(), data_env.as_deref(), !elsewhere)
         .map_err(why)?;
     let path = config_path(explicit, default_dir, &env);
-    let config = Config::load(path.as_deref(), &env)
+    let loaded = match (&path, &data_env, default_dir.to_str()) {
+        // No config.toml in its folder and no LODESTAR_DATA_DIR: loaded as if
+        // pointed at its folder (X-win-service-cwd-fallback), as the CLI's
+        // MSI branch does, so `data\config.toml` in the working folder (the
+        // system folder under the SCM) is never read. The folder isn't then
+        // counted as set by the environment.
+        (None, None, Some(d)) => Config::load(None, |k| match k {
+            "LODESTAR_DATA_DIR" => Some(d.to_owned()),
+            _ => env(k),
+        })
+        .map(|mut c| {
+            c.layers.env.retain(|v| *v != "LODESTAR_DATA_DIR");
+            c
+        }),
+        _ => Config::load(path.as_deref(), &env),
+    };
+    let config = loaded
         .map(|mut c| {
             default_data_dir_unless_set(&mut c, default_dir);
             c
@@ -1473,6 +1489,57 @@ mod tests {
         };
         let (c, d) = load_guarded(&svc, None, env_of(vec![]), once).unwrap();
         assert_eq!((c.unwrap().data_dir, d, calls.get()), (svc.clone(), svc, 1));
+    }
+
+    /// X-win-service-cwd-fallback: with no config.toml in its folder and
+    /// nothing set, the service never reads `data\config.toml` from its
+    /// working folder (the system folder under the SCM). The working folder is
+    /// the process's, so the check runs in a child run of this test binary
+    /// started in a folder holding such a file.
+    #[test]
+    fn the_service_never_reads_its_working_folders_config() {
+        const CHILD: &str = "SERVICE_CWD_TEST_CHILD";
+        if let Some(svc) = std::env::var_os(CHILD) {
+            let svc = PathBuf::from(svc);
+            let (c, d) = load_guarded(&svc, None, |_| None, || Ok(())).unwrap();
+            let c = c.unwrap();
+            assert_eq!(d, svc);
+            assert!(
+                !c.layers.in_file("http.bind"),
+                "the working folder's config.toml was read"
+            );
+            assert!(!c.layers.in_env("LODESTAR_DATA_DIR"));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        let work = root.path().join("System32");
+        std::fs::create_dir_all(work.join("data")).unwrap();
+        std::fs::write(
+            work.join("data").join("config.toml"),
+            "[http]\nbind = \"127.0.0.1:1\"\n",
+        )
+        .unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "windows::service::tests::the_service_never_reads_its_working_folders_config",
+                "--exact",
+                "--nocapture",
+            ])
+            .current_dir(&work)
+            .env(CHILD, &svc)
+            .output()
+            .unwrap();
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert!(out.status.success(), "{stdout}{stderr}");
+        assert!(
+            stdout.contains("1 passed"),
+            "the child didn't run the test: {stdout}"
+        );
     }
 
     #[test]
