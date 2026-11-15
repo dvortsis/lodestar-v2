@@ -68,7 +68,7 @@ class FakeS3:
     object, or If-Match names a missing object or a different ETag. A missing
     key reads as AccessDenied, as it does without s3:ListBucket."""
     def __init__(self, owner="111122223333"):
-        self.owner, self.version, self.calls, self.on_get, self.fail = owner, 0, [], None, set()
+        self.owner, self.version, self.calls, self.on_get, self.fail, self.racing = owner, 0, [], None, set(), set()
         self.objects = {("state-b", ch.AUTH_KEY): (json.dumps(auth()).encode(), AUTH_ETAG)}
 
     def _enter(self, op, bucket, key, owner, cond):
@@ -79,6 +79,9 @@ class FakeS3:
             raise RuntimeError("ServiceUnavailable")
         if set(cond) - {"IfNoneMatch", "IfMatch"}:
             raise AssertionError(f"unexpected S3 arguments {cond}")
+        for header in set(cond) & self.racing:  # 409: another conditional write to this key is in flight
+            self.racing.discard(header)
+            raise Conflict("ConditionalRequestConflict")
         current = self.objects.get((bucket, key))
         if "IfNoneMatch" in cond and (cond["IfNoneMatch"] != "*" or current is not None):
             raise Conflict()
@@ -342,8 +345,23 @@ def lost_lease_release_refused(m):
 
 
 # Each scenario, and the source edit that drops the precondition it depends on.
+def racing_takeover_is_busy(m):
+    """S3 answers 409 when a conditional write races another in flight: that is busy, never a win."""
+    s3 = FakeS3()
+    m.acquire_lease(s3, "control-b", "111122223333", "expiration", "crashed", START)
+    s3.racing.add("IfMatch")
+    try:
+        m.acquire_lease(s3, "control-b", "111122223333", "expiration", "a", START + timedelta(seconds=m.LEASE_SECONDS + 1))
+    except m.Busy:
+        return json.loads(s3.objects[("control-b", m.LEASE_KEYS["expiration"])][0])["holder"] == "crashed"
+    except Exception:
+        return False
+    return False
+
+
 SCENARIOS = {fresh_runs_act_once: (', IfNoneMatch="*"', ""), stale_takeover_happens_once: (', IfMatch=found["ETag"]', ""),
-             lost_lease_release_refused: ("now), IfMatch=etag)", "now))")}
+             lost_lease_release_refused: ("now), IfMatch=etag)", "now))"),
+             racing_takeover_is_busy: ('"PreconditionFailed", "ConditionalRequestConflict"', '"PreconditionFailed"')}
 
 
 class CleanupLease(unittest.TestCase):
@@ -361,10 +379,10 @@ class CleanupLease(unittest.TestCase):
         s3, api, second = FakeS3(), API(), {}
         def overlap(method, path):
             if method == "DELETE" and not second:  # the first run is mid-deletion, holding its lease
-                inner = API()
+                inner, before = API(), len(s3.calls)
                 with self.assertLogs(ch.LOG, level="WARNING") as logs:
                     second["result"] = invoke("expiration", END, {}, s3, inner, "req-2")
-                second.update(logs=logs.output, calls=inner.calls)
+                second.update(logs=logs.output, calls=inner.calls, s3_keys={c[2] for c in s3.calls[before:]})
                 # Leases are per mode: an emergency dry run is not blocked by expiration.
                 second["other_mode"] = invoke("emergency", END, {"dry_run": True}, s3, API(), "req-3")["status"]
             return api(method, path)
@@ -372,7 +390,8 @@ class CleanupLease(unittest.TestCase):
         self.assertEqual(second["result"], {"status": "busy", "event": "cleanup_busy", "mode": "expiration"})
         self.assertEqual(len(second["logs"]), 1)
         self.assertIn('"event": "cleanup_busy"', second["logs"][0])
-        self.assertEqual(second["calls"], [])  # nothing beyond the lease read
+        self.assertEqual(second["calls"], [])  # no Linode call, and in S3 nothing beyond the lease
+        self.assertEqual(second["s3_keys"], {ch.LEASE_KEYS["expiration"]})
         self.assertEqual(second["other_mode"], "dry_run")
         self.assertEqual([p for m, p in api.calls if m == "DELETE"], ["/linode/instances/11"])
         lease, _ = s3.lease("expiration")
@@ -412,6 +431,17 @@ class CleanupLease(unittest.TestCase):
                 self.assertIn('"stage": "lease"', logs.output[-1])
                 self.assertEqual(api.calls, [])
                 self.assertFalse([c for c in s3.calls if c[2] != ch.LEASE_KEYS["expiration"]])  # no authorization read, no flag
+
+    def test_racing_first_create_fails_closed(self):
+        # 409 on the very first create: the object may not exist yet, so the read is
+        # refused (no ListBucket) and the run stops at the lease with an alert.
+        s3, api = FakeS3(), API()
+        s3.racing.add("IfNoneMatch")
+        with self.assertLogs(ch.LOG, level="ERROR") as logs, self.assertRaises(RuntimeError):
+            invoke("expiration", END, {}, s3, api)
+        self.assertIn('"stage": "lease"', logs.output[-1])
+        self.assertEqual(api.calls, [])
+        self.assertEqual({c[2] for c in s3.calls}, {ch.LEASE_KEYS["expiration"]})
 
     def test_failed_run_releases_and_lost_lease_alerts(self):
         s3, api = FakeS3(), API()

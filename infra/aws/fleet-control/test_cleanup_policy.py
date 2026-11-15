@@ -77,13 +77,16 @@ def audit(t):
         if (r[name + "Errors"]["Properties"]["AlarmActions"] != [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]
                 or r[name + "Log"]["Properties"]["RetentionInDays"] != 14):
             errors.append("failure notification/retention missing")
-        if r[name + "Busy"]["Properties"] != {"LogGroupName": {"Ref": name + "Log"}, "FilterPattern": '{ $.event = "cleanup_busy" }',
+        if r[name + "Busy"]["Properties"] != {"LogGroupName": {"Ref": name + "Log"}, "FilterPattern": '"cleanup_busy"',
                 "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "MetricValue": "1"}]}:
             errors.append("busy run is not counted")
     if r["BusyAlarm"]["Properties"] != {"Namespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "Statistic": "Sum",
             "Period": 300, "EvaluationPeriods": 1, "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold",
             "TreatMissingData": "notBreaching", "AlarmActions": [TOPIC]}:
         errors.append("busy run does not notify")
+    # Term patterns match Lambda's text-format lines, where the JSON follows a level/time/request-id prefix.
+    if r["HeartbeatMetric"]["Properties"]["FilterPattern"] != '"cleanup_complete"' or r["HeartbeatMetric"]["Properties"]["LogGroupName"] != {"Ref": "ExpirationLog"}:
+        errors.append("heartbeat does not count successful expiration runs")
     if (r["HeartbeatAlarm"]["Properties"]["TreatMissingData"] != "breaching"
             or r["HeartbeatAlarm"]["Properties"]["AlarmActions"] != [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]):
         errors.append("missing cleanup heartbeat does not notify")

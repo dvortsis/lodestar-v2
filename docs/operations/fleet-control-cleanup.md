@@ -45,9 +45,16 @@ All four alarms email the SNS topic you name when you deploy:
 
 | Alarm | Fires when | What to do |
 |---|---|---|
-| `…ExpirationErrors`, `…EmergencyErrors` | A run failed: a refused check, a lease error, an unreadable API, a timeout | Read the function's log (CloudWatch ▸ Log groups ▸ `/aws/lambda/<stack>-expiration` or `-emergency`). A failure is never proof the fleet is gone. |
+| `…ExpirationErrors`, `…EmergencyErrors` | A run failed: a refused check, a lease error, an unreadable API, a timeout | Read the function's log (CloudWatch ▸ Log groups ▸ `/aws/lambda/<stack>-expiration` or `-emergency`). A failure is never proof the fleet is gone. If the reason is `cleanup lease malformed`, see [Clear a damaged lease](#clear-a-damaged-lease). |
 | `…BusyAlarm` | A run found the other run of the same function still holding the lease | Usually one run overlapping a slow or crashed one. If it repeats, look for a stuck run in the logs. |
 | `…HeartbeatAlarm` | No successful expiration run in an hour | Expected while scheduled expiration is off (the default). After you turn it on, it means expiration isn't running. |
+
+### Clear a damaged lease
+
+A lease object that can't be read as a valid lease stops that function on every run, on purpose: unknown lease state never authorizes cleanup. To clear it:
+1. Check no run is in progress: in the function's log group, the newest log stream should have no lines from the last 10 minutes.
+2. Open **S3 ▸** the control bucket **▸ locks/**, tick `cleanup-expiration.json` or `cleanup-emergency.json` (only the one the error names), and choose **Delete**. Type `permanently delete` to confirm.
+3. The next run creates a fresh lease. Deleting it removes no fleet data; it only lets the next run start.
 
 Logs keep 14 days and hold fixed summaries only: no tokens, response bodies or authorization contents.
 
@@ -117,8 +124,9 @@ Keep these in your private notes, never in GitHub or chat.
 
 1. On the change set page, choose **Execute change set**. Keep **Roll back all stack resources**, then **Execute change set**.
 2. Open the stack's **Events** tab and wait for **CREATE_COMPLETE** (a few minutes). If it shows **ROLLBACK**, copy the first failed event's reason and send it to the runner; don't retry.
-3. Open the **Outputs** tab. Copy **CleanupRoleArn** and **EmergencyFunctionArn** into your private notes. You need them for GitHub below.
-4. Check the concurrency: open **Lambda ▸ Functions ▸ lodestar-fleet-cleanup-emergency ▸ Configuration ▸ Concurrency**. It should say **Use unreserved account concurrency**. Check `lodestar-fleet-cleanup-expiration` the same way.
+3. The **HeartbeatAlarm** emails you within about an hour, and keeps doing so while scheduled expiration is off. That's expected; it stops once you turn expiration on.
+4. Open the **Outputs** tab. Copy **CleanupRoleArn** and **EmergencyFunctionArn** into your private notes. You need them for GitHub below.
+5. Check the concurrency: open **Lambda ▸ Functions ▸ lodestar-fleet-cleanup-emergency ▸ Configuration ▸ Concurrency**. It should say **Use unreserved account concurrency**. Check `lodestar-fleet-cleanup-expiration` the same way.
 
 ### Install the cleanup token (the third token)
 
@@ -133,6 +141,8 @@ The fleet uses three Linode tokens: the fleet token, the PIA firewall token and 
 3. Choose **Plaintext**, delete any placeholder, paste only the token (no quotes or spaces), and choose **Save**.
 4. **Test it, and test your alerts.** Open **Lambda ▸ lodestar-fleet-cleanup-emergency ▸ Test**. Create an event named `dryrun` with the body `{"dry_run": true}` and choose **Test**.
    - With no fleet registered yet, the expected result is a failure. The log line should show `"stage": "authorization"`: the lease worked, and there's no authorization to read. Within about 5 minutes the **EmergencyErrors** alarm should email you. That email shows alerts work.
+   - **Choose Test again** within a minute. The second run must also stop at `"stage": "authorization"`. That proves the first run released its lease. If it says `busy`, or either log has a `cleanup_lease_release_failed` line, stop and tell the runner.
+   - Run the same two tests on **lodestar-fleet-cleanup-expiration**, so its lease is checked too.
    - If the stage is `lease`, the lease permissions are wrong: tell the runner.
    - When a fleet exists, the same test returns `"status": "dry_run"` and deletes nothing.
 
@@ -151,9 +161,13 @@ This environment lets only you, on `main`, run the emergency teardown. It delibe
 
 ### Later: turn on scheduled expiration
 
-Turn it on only after a fleet has been registered, a dry run returned `dry_run`, and the alert email arrived.
+Scheduled expiration deletes VMs without you. Turn it on only when **all** of these are done:
+- a fleet has been registered, and a dry run of each function returned `dry_run`;
+- the alert email arrived;
+- the old watchdog is handed over, following [the legacy-watchdog handoff](fleet-watchdog-coordination.md). The existing watchdog can act on the same VMs without reading this stack's authorization, so the two must not both be live;
+- a disposable canary passed: a throwaway fleet, registered and then deleted by the emergency workflow, with every VM confirmed gone.
 
 1. Open **CloudFormation ▸ Stacks ▸ lodestar-fleet-cleanup ▸ Stack actions ▸ Create change set for current stack**. Choose **Use existing template**, then **Next**.
 2. Set **EnableExpiration** to `true` and leave every other parameter as it is. Choose **Next**, tick the IAM acknowledgement, then **Next** and **Create change set**.
 3. The change set should show **one row: Modify ExpirationSchedule**. If it shows anything else, delete it and tell the runner. Otherwise choose **Execute change set**.
-4. Within an hour the **HeartbeatAlarm** should return to **OK**.
+4. Within an hour the **HeartbeatAlarm** should return to **OK**. That also proves its log filter counts successful runs. If it stays in **ALARM** after two hours, tell the runner.

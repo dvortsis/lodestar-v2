@@ -86,7 +86,7 @@ The cleanup stack deletes the fleet's VMs at expiry or in an emergency. The full
 5. **Install the third token.**
    1. In Akamai Cloud Manager, open **API Tokens ▸ Create a Personal Access Token**. Name it `lodestar-cleanup`. Give it **Account: Read Only**, **Firewalls: Read Only**, **Linodes: Read/Write** and **No Access** to everything else. Copy the token.
    2. In AWS, open **Secrets Manager ▸ lodestar/akamai-cleanup-token ▸ Set secret value** (or **Retrieve secret value ▸ Edit**). Choose **Plaintext**, paste only the token, then **Save**.
-   3. Test it: open **Lambda ▸ lodestar-fleet-cleanup-emergency ▸ Test**, with the event `{"dry_run": true}`. With no fleet yet, it fails at `"stage": "authorization"` and the alarm emails you within about 5 minutes. That proves alerts work. A failure at `lease` means wrong permissions: tell the runner.
+   3. Test it: open **Lambda ▸ lodestar-fleet-cleanup-emergency ▸ Test**, with the event `{"dry_run": true}`. With no fleet yet, it fails at `"stage": "authorization"` and the alarm emails you within about 5 minutes. That proves alerts work. Choose **Test** again within a minute: it must stop at `authorization` again, not `busy`. Repeat both tests on `lodestar-fleet-cleanup-expiration`. A failure at `lease`, `busy`, or a `cleanup_lease_release_failed` log line: tell the runner.
 6. **Create the `fleet-cleanup` environment.**
    1. In GitHub, open **Settings ▸ Environments ▸ New environment**. Name it `fleet-cleanup`.
    2. Leave **Required reviewers** and **Wait timer** off, and untick **Allow administrators to bypass configured protection rules**.
@@ -94,4 +94,4 @@ The cleanup stack deletes the fleet's VMs at expiry or in an emergency. The full
    4. Add the environment secrets `AWS_CLEANUP_ROLE_ARN` (CleanupRoleArn) and `AWS_CLEANUP_FUNCTION_ARN` (EmergencyFunctionArn), and the environment variable `FLEET_CLEANUP_ENABLED` = `true`.
    5. Ask the runner to run the settings audit.
 
-Scheduled expiration stays off until a fleet is registered and a dry run passes. [Turn it on](fleet-control-cleanup.md#later-turn-on-scheduled-expiration) as a separate change set.
+Expect the HeartbeatAlarm to email about hourly while scheduled expiration is off. Expiration stays off until a fleet is registered, dry runs pass, the [legacy-watchdog handoff](fleet-watchdog-coordination.md) is done and a disposable canary passes. Then [turn it on](fleet-control-cleanup.md#later-turn-on-scheduled-expiration) as a separate change set.

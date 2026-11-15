@@ -279,7 +279,7 @@
 "LogGroupName": {
 "Ref": "ExpirationLog"
 },
-"FilterPattern": "{ $.event = \"cleanup_busy\" }",
+"FilterPattern": "\"cleanup_busy\"",
 "MetricTransformations": [
 {
 "MetricNamespace": "LodestarCleanup",
@@ -379,7 +379,7 @@
 "LogGroupName": {
 "Ref": "EmergencyLog"
 },
-"FilterPattern": "{ $.event = \"cleanup_busy\" }",
+"FilterPattern": "\"cleanup_busy\"",
 "MetricTransformations": [
 {
 "MetricNamespace": "LodestarCleanup",
@@ -515,7 +515,7 @@
 "LogGroupName": {
 "Ref": "ExpirationLog"
 },
-"FilterPattern": "{ $.event = \"cleanup_complete\" }",
+"FilterPattern": "\"cleanup_complete\"",
 "MetricTransformations": [
 {
 "MetricNamespace": "LodestarCleanup",

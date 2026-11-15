@@ -393,10 +393,6 @@ class Terraform(unittest.TestCase):
         self.assertRegex(text, r'required_version\s*=\s*">=\s*1\.1[0-9]\.')
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class CompactSource(unittest.TestCase):
     """The inline-code compaction that keeps cleanup.json under 51,200 bytes."""
 
@@ -412,3 +408,7 @@ class CompactSource(unittest.TestCase):
         code = bt.cleanup_code()
         compile(code, "index.py", "exec")
         self.assertLessEqual(max(len(line) - len(line.lstrip()) for line in code.splitlines()), 8)  # one space per level
+
+
+if __name__ == "__main__":
+    unittest.main()

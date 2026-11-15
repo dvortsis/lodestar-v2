@@ -370,7 +370,8 @@ def compact_indent(text: str) -> str:
     escapes every double quote), to fit both inline copies in the 51,200-byte
     template body. Tokenize-based, so spelling stays stable across Python
     versions (f-strings are left alone); refuses any change to the program."""
-    lines, depth, start, assigned, verbatim, quoted = text.splitlines(), 0, True, set(), set(), []
+    original = text.split("\n")[:-1]  # rows as tokenize counts them (splitlines also splits on \f)
+    lines, depth, start, assigned, verbatim, quoted = list(original), 0, True, set(), set(), []
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
         row = token.start[0]
         if (token.type == tokenize.STRING and token.start[0] == token.end[0] and token.string[0] == '"'
@@ -391,7 +392,7 @@ def compact_indent(text: str) -> str:
     for token in reversed(quoted):  # right to left keeps earlier columns valid
         row, col = token.start
         line = lines[row - 1]
-        col += len(line) - len(text.splitlines()[row - 1])  # shift from re-indenting
+        col += len(line) - len(original[row - 1])  # shift from re-indenting
         lines[row - 1] = line[:col] + "'" + token.string[1:-1] + "'" + line[col + len(token.string):]
     out = "\n".join(lines) + "\n"
     if ast.dump(ast.parse(out)) != ast.dump(ast.parse(text)):
@@ -447,7 +448,7 @@ def cleanup_stack() -> dict:
             "Statistic": "Sum", "Period": 300, "EvaluationPeriods": 1, "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold",
             "TreatMissingData": "notBreaching", "AlarmActions": [topic]}}
         resources[name + "Busy"] = {"Type": "AWS::Logs::MetricFilter", "Properties": {"LogGroupName": {"Ref": name + "Log"},
-            "FilterPattern": '{ $.event = "cleanup_busy" }', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "MetricValue": "1"}]}}
+            "FilterPattern": '"cleanup_busy"', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "MetricValue": "1"}]}}
     resources["BusyAlarm"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {"Namespace": "LodestarCleanup",
         "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "Statistic": "Sum", "Period": 300, "EvaluationPeriods": 1,
         "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold", "TreatMissingData": "notBreaching", "AlarmActions": [topic]}}
@@ -467,7 +468,7 @@ def cleanup_stack() -> dict:
                                                                                      "Resource": {"Fn::GetAtt": ["Emergency", "Arn"]}}])}],
     }}
     resources["HeartbeatMetric"] = {"Type": "AWS::Logs::MetricFilter", "Properties": {"LogGroupName": {"Ref": "ExpirationLog"},
-        "FilterPattern": '{ $.event = "cleanup_complete" }', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "MetricValue": "1"}]}}
+        "FilterPattern": '"cleanup_complete"', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "MetricValue": "1"}]}}
     resources["HeartbeatAlarm"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {"Namespace": "LodestarCleanup",
         "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "Statistic": "Sum", "Period": 3600, "EvaluationPeriods": 1,
         "Threshold": 1, "ComparisonOperator": "LessThanThreshold", "TreatMissingData": "breaching", "AlarmActions": [topic]}}
