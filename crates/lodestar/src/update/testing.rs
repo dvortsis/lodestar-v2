@@ -56,6 +56,8 @@ pub struct TrustRoot {
     pub statements: Vec<lodestar_update::SignedStatement>,
 }
 
+/// Read only by the debug build's `get`; release builds ignore it.
+#[cfg(debug_assertions)]
 pub const ENV: &str = "LODESTAR_UPDATE_TEST";
 
 #[cfg(debug_assertions)]
