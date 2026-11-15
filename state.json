@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T22:40Z",
+  "updated_at": "2026-11-15T23:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T22:40Z",
+  "last_heartbeat": "2026-11-15T23:00Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10049,6 +10049,12 @@
       "slice": "X-worker-oversize-nits",
       "sha": "b1758dd3b379ad61ddcc96418209392a7505d48e",
       "at": "2026-11-15T22:40Z"
+    },
+    {
+      "pr": 953,
+      "slice": "X-filter-split-nits",
+      "sha": "e3834d909922dadc44bead1d991e139a2397deae",
+      "at": "2026-11-15T23:00Z"
     }
   ],
   "active_sessions": {
@@ -10287,7 +10293,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T22:40Z",
+    "updated": "2026-11-15T23:00Z",
     "items": [
       {
         "slot": 1,
@@ -10302,12 +10308,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-filter-split-nits",
+        "slice": "X-filter-scratch-trim",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T21:30Z",
-        "doing": "X-filter-split-nits: #917 review optionals (#945 merged)",
+        "since": "2026-11-15T23:00Z",
+        "doing": "X-filter-scratch-trim: trim per-thread Scratch like ReadBufs (#953 merged)",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)"
       },
       {
@@ -10419,8 +10425,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T22:40Z",
-  "updated": "2026-11-15T22:40Z",
+  "heartbeat": "2026-11-15T23:00Z",
+  "updated": "2026-11-15T23:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
