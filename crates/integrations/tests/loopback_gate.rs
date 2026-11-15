@@ -150,8 +150,15 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
     assert!(!loopback_gate_is_set());
     assert_eq!(get(&c, &format!("http://127.0.0.1:{p}/")).await, Ok(200));
 
+    // A second refused port, for the refusals that aren't "not ready": no
+    // other request goes to it, so a log of it would show.
+    let r = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let gate = Arc::new(Refusing::default());
-    gate.0.lock().unwrap().insert(p);
+    gate.0.lock().unwrap().extend([p, r]);
     set_loopback_gate(gate.clone()).unwrap();
     assert!(loopback_gate_is_set());
     // Set once: a second gate is refused, and the first stays.
@@ -170,7 +177,7 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
     // A name that doesn't resolve now, on a refused port: refused as the
     // failed lookup it is, not as not ready.
     assert_eq!(
-        get(&c, &format!("http://nowhere.test:{p}/")).await,
+        get(&c, &format!("http://nowhere.test:{r}/")).await,
         Err(NetError::Resolve)
     );
     // A client whose policy never allows loopback is refused as blocked.
@@ -178,8 +185,8 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
         GuardedClient::with_resolver(NetPolicy::notification(false), TIMEOUT, names.clone())
             .unwrap();
     for url in [
-        format!("http://localhost:{p}/"),
-        format!("http://svc.test:{p}/"),
+        format!("http://localhost:{r}/"),
+        format!("http://svc.test:{r}/"),
     ] {
         assert_eq!(
             get(&public, &url).await,
@@ -241,12 +248,21 @@ async fn the_loopback_gate_refuses_a_port_until_allowed() {
     assert_ne!(words, ClientError::Unreachable.to_string());
     assert!(words.contains("isn't ready yet"), "{words}");
     let logged = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
-    let lines: Vec<&str> = logged
-        .lines()
-        .filter(|l| l.contains("integrations.companion_not_ready"))
-        .collect();
-    assert_eq!(lines.len(), 1, "{logged}");
-    assert!(lines[0].contains(&format!("port={p}")), "{}", lines[0]);
+    // The event's lines for a port: `port=<port>`, and no digit after it.
+    let logged_for = |port: u16| {
+        let field = format!("port={port}");
+        logged
+            .lines()
+            .filter(|l| l.contains("integrations.companion_not_ready"))
+            .filter(|l| {
+                l.match_indices(&field)
+                    .any(|(i, _)| !l[i + field.len()..].starts_with(|c: char| c.is_ascii_digit()))
+            })
+            .count()
+    };
+    assert_eq!(logged_for(p), 1, "{logged}");
+    // A failed lookup and a policy's block on the second port log nothing.
+    assert_eq!(logged_for(r), 0, "{logged}");
 
     // Another loopback port is untouched, and so is the same port on
     // another address.

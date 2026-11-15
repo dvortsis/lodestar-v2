@@ -9,9 +9,10 @@ A follow-up to X-cmp09-fix (#887) and X-cmp09-fix-2 (#893). Until now, a request
   - The test's message no longer adds a full stop to a text that already ends with one.
 - **Companions' adapters:** `AdapterError::NotReady`, in place of `Unreachable`.
   - Serve's guided steps report it as the refusal code `companion_not_ready`. The configure step's own code for it is `not_ready`.
-  - Only an entered URL can meet it: the companions' own client for loopback and container targets opts out of the gate.
+  - It comes from the gate, so only a request to an entered URL meets it: the companions' own client for loopback and container targets opts out of the gate.
+  - **Deliberately unchanged (runner's call):** `CompanionHttp`'s own refusal for a managed port that isn't ready stays `Unreachable`. Detection at a loopback target reads unreachable as "not here", and `NotReady` there would turn that into an error. Showing "starting" in the guided steps is a follow-up, X-companion-starting-steps.
   - Detection at an entered URL now fails with it, where it used to read as "not detected".
-  - Health reads it as unreachable, as before.
+  - Health reads it as unreachable, as before. So does the check for whether anything accepted the connection (`listening`), which can't meet it today.
 - **Sources (runner's call: a new `HttpError::NotReady(String)`):**
   - It carries the same sentence.
   - It doesn't back the host off, just as `EgressDown` doesn't.
@@ -44,21 +45,24 @@ A follow-up to X-cmp09-fix (#887) and X-cmp09-fix-2 (#893). Until now, a request
 - **The port stays refused after a restart** too, while that companion's folder (even an empty one) or its marker is left behind. It opens once that companion is started and found ready, or at the first restart after what was left is removed.
 
 ## No catalogue, no gate (runner's call: a comment, not a gate)
-- If the built-in catalogue can't be read, companions are off for the run. Nothing is started, so no port is Lodestar's and no gate is set. A companion you run yourself stays reachable. A comment at `companions::start` says so.
+- If the built-in catalogue can't be read, companions are off for the run and no gate is set. It can't happen: the catalogue is compiled in, and its tests load it. A comment at `companions::start` says so.
 
 ## Tests
 - **`crates/integrations/tests/loopback_gate.rs`:**
   - a refusal reads as the not-ready sentence, never as unreachable;
   - after many refusals of one port, the event is logged once, with `port=` and the port;
   - a name that doesn't resolve fails as a lookup;
-  - a client whose policy never allows loopback is refused as blocked, and neither is logged.
+  - a client whose policy never allows loopback is refused as blocked;
+  - neither of those two is logged: they go to a second refused port that nothing else touches, and no event names it.
 - **`crates/sources`:**
   - `HttpError::NotReady` doesn't back the host off;
   - the egress paces it by its own streak, `pace_by` cuts it short, and an answered request ends the streak.
-- **`crates/sources-plugins`:** Prowlarr doesn't count it as a hit. The download-clients source's mapping and its export rule have no test of their own: the fixture replayer can't produce the error.
+- **`crates/sources-plugins`:**
+  - Prowlarr doesn't count it as a hit.
+  - The download-clients source, on a qBittorrent whose exports are all refused as not ready (`tests/clients.rs`, its own `Fetch`): each poll asks for one export, the first torrent's; both torrents are found at once with the list's claims; and past `MAX_EXPORT_TRIES` polls that export is still asked for. The test fails with either the mapping or the export rule taken out.
 - **`crates/companions` and serve's wiring:**
   - `NetError::NotReady` becomes `AdapterError::NotReady`, coded `companion_not_ready`, not `companion_unreachable`;
-  - detection at an entered URL reports it, and health reads it as unreachable.
+  - detection at an entered URL reports it, and health and `listening` read it as unreachable.
 - **`crates/api`:** a client test that hits it gives `companion_not_ready` and the sentence with one full stop.
 - **`crates/lodestar/src/companions.rs`:** a hand-over marker with no folder reserves the port; a companion with neither is left alone.
 - **web:** `companion_not_ready` has its own words.

@@ -301,9 +301,8 @@ pub async fn start(
     store: Arc<Mutex<Store>>,
     integrations: watch::Receiver<crate::settings::integrations::Integrations>,
 ) -> Option<Companions> {
-    // No catalogue, no companions this run: nothing is started, so no
-    // port is Lodestar's and no gate is needed. A companion you run
-    // yourself on a port the catalogue would use stays reachable.
+    // No catalogue, no companions this run, and no gate. It can't happen:
+    // the catalogue is compiled in, and its tests load it.
     let catalogue = lodestar_companions::builtin().ok()?;
     start_with(data, store, integrations, catalogue, host()).await
 }

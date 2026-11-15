@@ -443,6 +443,9 @@ impl CompanionHttp {
                 // A companion Lodestar runs: `127.0.0.1` alone, and what
                 // carries something only to the child that's ready there.
                 if let Some(b) = self.bindings.as_ref().filter(|b| b.managed(p)) {
+                    // Unreachable, not `NotReady`, on purpose: detection at a
+                    // fixed target reads unreachable as "not here", and a
+                    // guided step's own words for "starting" are for later.
                     if !bare(request) && !b.ready(p) {
                         return Err(AdapterError::Unreachable);
                     }
@@ -540,7 +543,10 @@ fn bare(request: &ProbeRequest<'_>) -> bool {
 fn listening(got: &Result<ProbeResponse, AdapterError>) -> bool {
     !matches!(
         got,
-        Err(AdapterError::Unreachable | AdapterError::Timeout | AdapterError::Blocked)
+        Err(AdapterError::Unreachable
+            | AdapterError::NotReady
+            | AdapterError::Timeout
+            | AdapterError::Blocked)
     )
 }
 
@@ -648,6 +654,7 @@ mod tests {
     fn only_an_exchange_shows_a_listener() {
         for e in [
             AdapterError::Unreachable,
+            AdapterError::NotReady,
             AdapterError::Timeout,
             AdapterError::Blocked,
         ] {
