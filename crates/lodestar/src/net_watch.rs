@@ -190,11 +190,6 @@ pub fn default_routes_v4(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `/proc/net/route` has a usable IPv4 default route.
-pub fn parse_route_v4(text: &str) -> bool {
-    !default_routes_v4(text).is_empty()
-}
-
 /// The interfaces of the usable IPv6 default routes in
 /// `/proc/net/ipv6_route`: `::/0`, up, not a reject route, not through
 /// `lo` (the kernel always lists an unreachable `::/0` on `lo`).
@@ -215,11 +210,6 @@ pub fn default_routes_v6(text: &str) -> Vec<String> {
                 .then(|| f[9].to_owned())
         })
         .collect()
-}
-
-/// Whether `/proc/net/ipv6_route` has a usable IPv6 default route.
-pub fn parse_route_v6(text: &str) -> bool {
-    !default_routes_v6(text).is_empty()
 }
 
 /// Builds a [`Sample`] from the three files' text. `None` when the

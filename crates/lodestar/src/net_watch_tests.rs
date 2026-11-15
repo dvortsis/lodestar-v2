@@ -1,5 +1,15 @@
 use super::*;
 
+/// Whether `/proc/net/route` has a usable IPv4 default route.
+fn parse_route_v4(text: &str) -> bool {
+    !default_routes_v4(text).is_empty()
+}
+
+/// Whether `/proc/net/ipv6_route` has a usable IPv6 default route.
+fn parse_route_v6(text: &str) -> bool {
+    !default_routes_v6(text).is_empty()
+}
+
 /// A reading with `names`; with `default_route`, the route goes through
 /// the first of them (or `eth0` when there are none).
 fn up(names: &[&str], default_route: bool) -> Sample {
