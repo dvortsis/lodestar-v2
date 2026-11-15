@@ -73,6 +73,7 @@ DRIVE_URL=https://speed.cloudflare.com/__down?bytes=200000000
 cap_pid=""
 host_cap_pid=""
 in_cap_pid=""
+stuck=()  # captures stop_capture couldn't stop: cleanup tries each once more
 drive=""
 not_run=""
 
@@ -88,9 +89,10 @@ finish() {
 }
 cleanup() {
   trap '' HUP INT TERM  # a second signal must not cut the release short
-  [[ -n $cap_pid ]] && kill "$cap_pid" 2>/dev/null
-  [[ -n $host_cap_pid ]] && kill "$host_cap_pid" 2>/dev/null
-  [[ -n $in_cap_pid ]] && kill "$in_cap_pid" 2>/dev/null
+  local pid
+  for pid in "$cap_pid" "$host_cap_pid" "$in_cap_pid" "${stuck[@]}"; do  # a last try at any left running
+    [[ -n $pid ]] && ours "$pid" && env kill -s KILL "$pid" 2>/dev/null
+  done
   [[ -n $drive ]] && timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
   # The endpoint block never outlives the test, whatever ended it.
   [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
@@ -243,29 +245,41 @@ read_counter() {  # the counter's packets, or nothing when it can't be read
 # CAPTURE_STOP_WAIT seconds (at least 10) for it to go, then KILL and as long
 # again. A capture still running after that (a shell that may not signal
 # tcpdump, as an AppArmor-confined one can't) fails as its own line and is
-# left, instead of a wait that never returns. It's alive while /proc has it:
-# kill -0 is a signal too, which the same confinement can refuse. Signals go
-# through the kill on PATH, as the other tools do.
+# left (its pid kept, so cleanup tries once more), instead of a wait that
+# never returns. Signals go through the kill on PATH, as the other tools do.
 stop_capture() {  # $1: pid; $2: its name in the failure line
   local pid=$1
   [[ -n $pid ]] || return 0
+  ours "$pid" || return 0  # already gone: nothing of ours to signal
   env kill -s TERM "$pid" 2>/dev/null
-  if capture_gone "$pid" || { env kill -s KILL "$pid" 2>/dev/null; capture_gone "$pid"; }; then
+  if capture_gone "$pid" || { ours "$pid" && env kill -s KILL "$pid" 2>/dev/null; capture_gone "$pid"; }; then
     wait "$pid" 2>/dev/null
     return 0
   fi
   bad "capture_stopped_$2"
+  stuck+=("$pid")  # kept even once the next capture reuses its variable
   return 1
 }
 capture_gone() {  # $1: pid; true once it has exited, within the deadline
   local wait=${CAPTURE_STOP_WAIT:-15} until
   [[ $wait =~ ^[0-9]{1,4}$ ]] && ((wait >= 10)) || wait=10
   until=$((SECONDS + wait))
-  while [[ -d /proc/$1 ]]; do
+  while ours "$1"; do
     ((SECONDS >= until)) && return 1
     sleep 1
   done
   return 0
+}
+# Whether a capture is still this script's own: /proc has the pid and its
+# parent is this shell. Not kill -0, a signal the same confinement can refuse.
+# A capture that exited has been reaped, and its pid can belong to something
+# else by now: that one is never signalled.
+ours() {  # $1: pid
+  local stat ppid
+  [[ $1 =~ ^[0-9]{1,10}$ ]] || return 1
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  read -r _ ppid _ <<<"${stat##*) }"  # after the command name, which may hold spaces
+  [[ $ppid == "$$" ]]
 }
 judge_counter() {  # $1: phase
   local n=""
@@ -349,8 +363,8 @@ for k in sorted(icmp)[:40]:
 '
 judge_capture() {  # $1: phase. The capture must have run through every probe, then be readable, and the container sent nothing.
   local alive="" captured="" parsed
-  if [[ -d /proc/$cap_pid ]]; then alive=1; pass "capture_alive_$1"; else bad "capture_alive_$1"; fi
-  stop_capture "$cap_pid" "$1"; cap_pid=""
+  if ours "$cap_pid"; then alive=1; pass "capture_alive_$1"; else bad "capture_alive_$1"; fi
+  stop_capture "$cap_pid" "$1" && cap_pid=""
   if parsed=$(timeout 30 python3 -I -c "$CAPTURE_PARSE" "$work/cap-$1.pcap" "$cmac" "$ep_ip" "$1" 2>/dev/null); then
     captured=$(printf '%s\n' "$parsed" | sed -n "s/^count captured_packets_$1 \([0-9]*\)$/\1/p")
     pass "capture_read_$1"
@@ -383,19 +397,29 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
 # fails at once. The phase's capture and counter judge every attempt.
 HELD_TRIES=3
 held_bad=""
-held_dead=""  # an interface check never ran by its deadline: no bracket can be had
+held_dead=""  # an interface check never ran by its deadline, or the phase ran out: no bracket can be had
+held_until="" # the phase's own deadline (held_start), well inside the step's 900 s
+held_start() {
+  local wait=${HELD_PHASE_WAIT:-300}
+  [[ $wait =~ ^[0-9]{1,4}$ ]] || wait=300
+  held_until=$((SECONDS + wait))
+}
 held() {  # $1: the probe's line, or - for one only the capture judges; the rest: the probe
-  local n=$1 rc after try saved
+  local n=$1 rc after try saved index index_rc
   shift
   for ((try = 1; try <= HELD_TRIES; try++)); do
+    [[ -n $held_until ]] && ((SECONDS >= held_until)) && held_dead=1
     [[ -z $held_dead ]] || break
     saved=$not_run
     held_down; rc=$?
     if ((rc == 0)); then
+      index=$(iface_index); index_rc=$?
       "$@" >/dev/null 2>&1; rc=$?
       iface_seen_up >/dev/null 2>&1; after=$?
       if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
-      if ((after == 1)); then
+      # Down both times and the same interface: gluetun didn't recreate it
+      # in between (its ifindex would differ).
+      if ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]]; then
         [[ $n == - ]] && return
         if ((rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi
         return
@@ -421,6 +445,8 @@ held_down() {  # 0: the interface is down now (taken down again if it came back)
   return "$rc"
 }
 iface_up() { probe sh -c 'ip -o link show up dev "$1" | grep -q .' iface "$iface"; }
+# The interface's ifindex, empty while it's gone; NOT_RUN when the probe didn't run.
+iface_index() { probe sh -c 'cat "/sys/class/net/$1/ifindex" 2>/dev/null; true' ifindex "$iface"; }
 # iface_seen_up: iface_up, read by a probe that really ran. Under load a probe
 # container can take a long time to start; one that never ran its command is
 # tried again until IFACE_WAIT seconds (at least 10) have passed, and is never
@@ -475,8 +501,8 @@ start_inbound_capture() {
 }
 judge_inbound_capture() {
   local n=""
-  [[ -d /proc/$in_cap_pid ]] || n=dead
-  stop_capture "$in_cap_pid" inbound; in_cap_pid=""
+  ours "$in_cap_pid" || n=dead
+  stop_capture "$in_cap_pid" inbound && in_cap_pid=""
   if [[ -n $n ]]; then bad stop_window_exercised; return; fi
   n=$(timeout 30 python3 -I -c "$PCAP_COUNT" "$work/cap-inbound.pcap" 2>/dev/null)
   [[ $n =~ ^[0-9]{1,9}$ ]] && echo "count stop_window_endpoint_packets $n"
@@ -484,8 +510,8 @@ judge_inbound_capture() {
 }
 judge_host_capture() {
   local alive="" n=""
-  if [[ -d /proc/$host_cap_pid ]]; then alive=1; pass capture_alive_host; else bad capture_alive_host; fi
-  stop_capture "$host_cap_pid" host; host_cap_pid=""
+  if ours "$host_cap_pid"; then alive=1; pass capture_alive_host; else bad capture_alive_host; fi
+  stop_capture "$host_cap_pid" host && host_cap_pid=""
   if n=$(timeout 30 python3 -I -c "$PCAP_COUNT" "$work/cap-host.pcap" 2>/dev/null) && [[ $n =~ ^[0-9]{1,9}$ ]]; then
     pass capture_read_host
     echo "count host_icmp_to_endpoint $n"
@@ -641,6 +667,7 @@ check flow_alive_down running "$FLOW"
 start_counter
 start_capture ifdown
 check vpn_interface_down probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down
+held_start
 down_probes ifdown example.edu held
 # Every probe ran with the interface down (held): one that never got a clean
 # attempt fails here, apart from any leak line.
@@ -692,7 +719,7 @@ fi
 if [[ -z $stopped ]]; then
   :  # no window
 elif [[ -n $no_handshake ]]; then
-  stop_capture "$in_cap_pid" inbound; in_cap_pid=""
+  stop_capture "$in_cap_pid" inbound && in_cap_pid=""
   echo "skip stop_window_exercised"  # no session, so nothing to leave over
 else
   judge_inbound_capture

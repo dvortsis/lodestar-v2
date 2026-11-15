@@ -556,11 +556,17 @@ case "$1" in
     # IFACE_REUP=n: gluetun's own VPN restart brings the interface back just
     # after each of phase B's first n leak probes (REUP_LEAK: and that probe
     # got out).
-    reup=
+    reup=; recreate=
     case "$*" in "curl -"*|"nc -z"*|"sh -c dig"*|"sh -c echo"*)
       if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_REUP" ]; then
         k=$(cat "$STUB/reups" 2>/dev/null || echo 0)
         if [ "$k" -lt "$IFACE_REUP" ]; then echo $((k + 1)) > "$STUB/reups"; reup=1; fi
+      fi
+      # IFACE_RECREATE=n: gluetun recreates the interface (a new ifindex)
+      # during each of phase B's first n leak probes, and it stays down.
+      if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_RECREATE" ]; then
+        k=$(cat "$STUB/recreates" 2>/dev/null || echo 0)
+        if [ "$k" -lt "$IFACE_RECREATE" ]; then echo $((k + 1)) > "$STUB/recreates"; recreate=1; fi
       fi ;;
     esac
     echo "$*" >> "$STUB/probes"
@@ -579,6 +585,8 @@ case "$1" in
                       [ -n "$IFACE_MISSING" ] && exit 1
                       [ -e "$STUB/ifdown" ] && [ -z "$IFACE_BACK" ] && exit 1; exit 0 ;;
         "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
+        "sh -c cat \"/sys/class/net/\$1/ifindex\" 2>/dev/null; true ifindex ${VPN_IFACE-wg0}")
+                      cat "$STUB/ifindex" 2>/dev/null || echo 7 ;;
         "sh -c ip -6 -o addr show scope global | grep -q .") [ -n "$NS_V6" ] || exit 1; exit 0 ;;
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
@@ -596,6 +604,7 @@ case "$1" in
     )
     rc=$?
     [ -n "$reup" ] && rm -f "$STUB/ifdown"
+    [ -n "$recreate" ] && echo $(( $(cat "$STUB/ifindex" 2>/dev/null || echo 7) + 1 )) > "$STUB/ifindex"
     printf '\nprobe_rc=%s\n' "$rc" ;;
   *) bad "$*" ;;
 esac
@@ -733,6 +742,9 @@ trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done
 # signals are refused, as an AppArmor-confined shell's are, or
 # KILL_IGNORES_TERM names one a TERM leaves running.
 STUB_KILL = r"""#!/bin/sh
+# Every signal is logged with whether its target was there to get it.
+if [ -d "/proc/$3" ]; then there=alive; else there=gone; fi
+printf '%s %s %s\n' "$2" "$3" "$there" >> "$STUB/kills"
 if [ "$1" = "-s" ] && [ $# -eq 3 ] && [ -r "/proc/$3/cmdline" ]; then
   cmd=$(tr '\0' ' ' < "/proc/$3/cmdline")
   if [ -n "$KILL_DENIED" ]; then
@@ -1599,6 +1611,34 @@ class VMScripts(unittest.TestCase):
         self.assertIn("fail ipv4_blocked_ifdown", lines)
         self.assertIn("ok vpn_interface_down_during_probes", lines)  # the others got clean attempts
 
+    def test_a_capture_that_already_died_is_never_signalled(self):
+        """(review of #949) A capture that exited early has been reaped, and its pid
+        may belong to another process by now: it's judged dead, never signalled."""
+        rc, lines, raw = self.run_script("leak-test.sh", CAPTURE_DIES=1, HOST_CAPTURE_DIES=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail capture_alive_down", lines)
+        self.assertIn("fail capture_alive_host", lines)
+        kills = (self.stub / "kills").read_text().splitlines() if (self.stub / "kills").exists() else []
+        self.assertFalse([k for k in kills if k.endswith(" gone")], kills)
+
+    def test_phase_b_ends_at_its_own_deadline_as_a_failure(self):
+        """(review of #949) Past phase B's own deadline no probe runs: the phase
+        fails vpn_interface_held_down, and never passes."""
+        rc, lines, raw = self.run_script("leak-test.sh", HELD_PHASE_WAIT=0)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("skip ipv4_blocked_ifdown", lines)
+        self.assertNotIn("example.edu", (self.stub / "probes").read_text())
+
+    def test_phase_b_discards_an_attempt_across_a_recreated_interface(self):
+        """(review of #949) gluetun recreates the interface during a probe (a new
+        ifindex), down both times: that attempt is discarded and run again."""
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_RECREATE=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
+        probes = (self.stub / "probes").read_text().splitlines()
+        self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 2)
+
     def kill_stub_leftovers(self):
         """Ends any stub process the run couldn't stop (KILL_DENIED leaves one)."""
         for pid in os.listdir("/proc"):
@@ -1637,6 +1677,11 @@ class VMScripts(unittest.TestCase):
                 self.assertIn("fail leak_test", lines)
                 # Every other capture still stopped.
                 self.assertEqual([l for l in lines if l.startswith("fail capture_stopped_")], [f"fail {line}"])
+                # Its pid was kept, so the exit made one more try at it.
+                kills = (self.stub / "kills").read_text().splitlines()
+                denied = [k.split()[1] for k in kills if k.split()[0] == "TERM"]
+                self.assertTrue(any(sum(k.split()[:2] == ["KILL", pid] for k in kills) >= 2 for pid in denied), kills)
+                (self.stub / "kills").unlink()
 
     def test_an_idle_stop_window_proves_nothing_and_fails(self):
         """The window is judged only when the endpoint really kept sending to the host while gluetun was down;
