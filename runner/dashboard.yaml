@@ -410,6 +410,7 @@ placement:
   - X-win-upd-reoffer
   - X-win-upd-window
   - X-win-portable-restart-load
+  - X-win-restart-priority-test
   - X-win-upd-stop-wait
   - X-upd-stop-races
   - X-upd-stop-early
