@@ -563,6 +563,11 @@ impl RemoteIntake {
         }
     }
 
+    /// The built-in worker refuses `key` (held, or blocked by the filter).
+    pub fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.refusals.as_ref().is_some_and(|r| r.refuses(key))
+    }
+
     /// Starts the built-in worker's fetch of `key`, leased to it under
     /// `token`. A key it refuses (held, or blocked by the filter) ends its
     /// lease as blocked, as its own intake does, and is never fetched.
@@ -573,7 +578,7 @@ impl RemoteIntake {
         token: Token,
         lease: Lease,
     ) -> Started {
-        if self.refusals.as_ref().is_some_and(|r| r.refuses(&key)) {
+        if self.refuses_local(&key) {
             self.authority.lost(&key, token, Loss::Blocked as u8);
             return Started::Refused;
         }
@@ -1166,6 +1171,11 @@ impl InboundSink for RemoteSink {
     /// it ([`RemoteIntake::take_handed`]).
     fn handed_back(&self, key: InfoHash, token: Token, lease: Lease) -> bool {
         self.intake.take_handed(key, token, lease)
+    }
+
+    /// Held, or blocked by the filter: the built-in worker's own refusals.
+    fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.intake.refuses_local(key)
     }
 
     /// Hints for keys the built-in worker holds: into its pool as a reply,

@@ -227,6 +227,13 @@ pub trait InboundSink: Send + Sync + 'static {
     fn handed_back(&self, _key: InfoHash, _token: Token, _lease: Lease) -> bool {
         false
     }
+    /// The built-in worker refuses `key` before fetching (held, or blocked
+    /// by the content filter). Asked before a key a remote worker found too
+    /// large is granted to it: a refused key ends as blocked instead and is
+    /// never granted. Only reads; mustn't block.
+    fn refuses_local(&self, _key: &InfoHash) -> bool {
+        false
+    }
 }
 
 /// Whether grants may go out now (§19.5 backpressure): of `wanted` keys
@@ -2053,6 +2060,18 @@ impl ClusterServer {
                 },
                 // Too large for that worker: the built-in worker, which
                 // fetches larger dicts, takes it instead (once per key).
+                // A key it refuses is never granted to it: it ends here as
+                // blocked, as the built-in worker's own intake would end it.
+                // The worker's claim carries no size: the built-in worker
+                // fetches under its own bound, as for any other key.
+                Outcome::Lost { reason }
+                    if reason == LOSS_OVERSIZE
+                        && self.sink.as_ref().is_some_and(|s| s.refuses_local(&key)) =>
+                {
+                    self.leases
+                        .report(w, &key, token, Some(LOSS_BLOCKED))
+                        .inspect(|_| bump(&self.counters.outcomes))
+                }
                 Outcome::Lost { reason } if reason == LOSS_OVERSIZE && self.sink.is_some() => {
                     match self.leases.hand_to_local(w, &key, token, now) {
                         HandBack::Handed(local, lease) => {

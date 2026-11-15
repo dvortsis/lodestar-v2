@@ -1900,6 +1900,70 @@ fn keys_handed_back_go_to_the_built_in_worker() {
     );
 }
 
+/// A worker that says any key is too large lends the coordinator nothing
+/// from its report: a key handed back reaches the built-in worker's pool
+/// as a bare key built from the coordinator's own lease (its source and
+/// strategy, privacy from its own sources), with no peers, claims or
+/// provenance. The pool fetches it under the built-in worker's own bound,
+/// as any other key. A key the built-in worker refuses is reported as
+/// refused (`refuses_local`), so the server never grants it.
+#[test]
+fn a_key_handed_back_carries_nothing_from_the_report() {
+    use lodestar_cluster::HandBack;
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(2);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let (key, refused) = (InfoHash([5; 20]), InfoHash([6; 20]));
+    held.insert(refused.0);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(filter_blocking(&[])),
+        }),
+    });
+    assert!(intake.refuses_local(&refused));
+    assert!(!intake.refuses_local(&key));
+    let c = Claim {
+        key,
+        source: src(2),
+        strategy: 7,
+        at: now(),
+    };
+    let Claimed::Granted(t) = authority.claim(WorkerId(8), c, now()) else {
+        panic!("granted")
+    };
+    let HandBack::Handed(local, lease) = authority.hand_to_local(WorkerId(8), &key, t, now())
+    else {
+        panic!("handed")
+    };
+    assert_eq!(
+        (lease.source, lease.strategy),
+        (src(2), 7),
+        "the lease's own"
+    );
+    assert!(intake.take_handed(key, local, lease));
+    let d = to_pool.try_recv().expect("in the pool");
+    assert_eq!(d.found, lodestar_sources::Found::key(key, 7));
+    assert_eq!(d.source, src(2));
+    assert!(!d.reply);
+    assert!(to_pool.try_recv().is_err());
+}
+
 /// Parked keys handed to the built-in worker keep their privacy (§18.7,
 /// BEP 27: a key every source of which is private never reaches public
 /// peer finding), and one it refuses (held, or on the filter's hash

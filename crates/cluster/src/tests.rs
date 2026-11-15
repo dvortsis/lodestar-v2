@@ -1424,10 +1424,22 @@ mod queues {
         server.shutdown();
     }
 
-    /// Takes keys handed back while `take` is set, and records them.
+    /// Takes keys handed back while `take` is set, and records them. Keys
+    /// in `refuse` are ones the built-in worker refuses.
     struct HandSink {
         take: bool,
+        refuse: Vec<[u8; 20]>,
         got: std::sync::Mutex<Vec<([u8; 20], crate::Token)>>,
+    }
+
+    impl HandSink {
+        fn new(take: bool, refuse: Vec<[u8; 20]>) -> Arc<HandSink> {
+            Arc::new(HandSink {
+                take,
+                refuse,
+                got: std::sync::Mutex::new(Vec::new()),
+            })
+        }
     }
 
     impl crate::server::InboundSink for HandSink {
@@ -1440,58 +1452,75 @@ mod queues {
             self.got.lock().unwrap().push((key.0, token));
             self.take
         }
+
+        fn refuses_local(&self, key: &lodestar_metainfo::InfoHash) -> bool {
+            self.refuse.contains(&key.0)
+        }
+    }
+
+    /// A server over `authority` handing back to `sink`.
+    fn hand_server(authority: &Arc<LeaseAuthority>, sink: &Arc<HandSink>) -> Arc<ClusterServer> {
+        let c = super::cluster(2);
+        let pki = Pki {
+            coordinator: c.coord,
+            store: c.store,
+            secrets: c.secrets,
+        };
+        let clock = Arc::new(ManualClock::new(super::T0 * 1000));
+        let hooks = ServerHooks {
+            authority: authority.clone(),
+            stored: None,
+            sink: Some(sink.clone()),
+            admission: None,
+        };
+        let config = ServerConfig {
+            auto_tick: false,
+            ..ServerConfig::default()
+        };
+        ClusterServer::with_hooks(pki, clock, config, hooks).unwrap()
+    }
+
+    /// `key`, claimed by `worker` at `at`: its token.
+    fn claim_as(authority: &LeaseAuthority, worker: WorkerId, key: u8, at: i64) -> crate::Token {
+        let claim = crate::Claim {
+            key: lodestar_metainfo::InfoHash([key; 20]),
+            source: lodestar_store::SourceId::new(1).unwrap(),
+            strategy: 0,
+            at,
+        };
+        match authority.claim(worker, claim, at) {
+            crate::Claimed::Granted(token) => token,
+            other => panic!("granted: {other:?}"),
+        }
+    }
+
+    /// `worker`'s report that `key`, under `token`, is too large for it.
+    fn oversize(server: &ClusterServer, worker: WorkerId, key: u8, token: crate::Token) {
+        server.outcome_as(
+            worker,
+            &[OutcomeItem {
+                key: [key; 20],
+                token: token.0,
+                outcome: Outcome::Lost {
+                    reason: crate::leases::LOSS_OVERSIZE,
+                },
+            }],
+        );
     }
 
     /// A remote worker's report that a key is too large for it hands the
     /// key to the built-in worker through the sink, not as a loss. If the
-    /// sink can't take it now, the key waits for a re-grant instead.
+    /// sink can't take it now, the key waits for a re-grant (by the main
+    /// node: the lease is the built-in worker's) instead.
     #[tokio::test]
     async fn an_oversize_report_hands_the_key_to_the_built_in_worker() {
         for take in [true, false] {
             let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
-            let sink = Arc::new(HandSink {
-                take,
-                got: std::sync::Mutex::new(Vec::new()),
-            });
-            let c = super::cluster(2);
-            let pki = Pki {
-                coordinator: c.coord,
-                store: c.store,
-                secrets: c.secrets,
-            };
-            let clock = Arc::new(ManualClock::new(super::T0 * 1000));
-            let hooks = ServerHooks {
-                authority: authority.clone(),
-                stored: None,
-                sink: Some(sink.clone()),
-                admission: None,
-            };
-            let config = ServerConfig {
-                auto_tick: false,
-                ..ServerConfig::default()
-            };
-            let server = ClusterServer::with_hooks(pki, clock.clone(), config, hooks).unwrap();
-            // A lease held by a remote worker.
+            let sink = HandSink::new(take, Vec::new());
+            let server = hand_server(&authority, &sink);
             let remote = WorkerId(2);
-            let claim = crate::Claim {
-                key: lodestar_metainfo::InfoHash([1; 20]),
-                source: lodestar_store::SourceId::new(1).unwrap(),
-                strategy: 0,
-                at: super::T0,
-            };
-            let crate::Claimed::Granted(token) = authority.claim(remote, claim, super::T0) else {
-                panic!("granted")
-            };
-            server.outcome_as(
-                remote,
-                &[OutcomeItem {
-                    key: [1; 20],
-                    token: token.0,
-                    outcome: Outcome::Lost {
-                        reason: crate::leases::LOSS_OVERSIZE,
-                    },
-                }],
-            );
+            let token = claim_as(&authority, remote, 1, super::T0);
+            oversize(&server, remote, 1, token);
             let snap = server.snapshot();
             assert_eq!((snap.handed_back, snap.outcomes), (1, 0), "take {take}");
             let got = sink.got.lock().unwrap().clone();
@@ -1503,8 +1532,69 @@ mod queues {
             } else {
                 assert_eq!(authority.pending(), 1, "it waits for a re-grant");
             }
+            // The remote worker's token is spent: a repeat is stale.
+            oversize(&server, remote, 1, token);
+            let snap = server.snapshot();
+            assert_eq!(
+                (snap.handed_back, snap.stale_reports),
+                (1, 1),
+                "take {take}"
+            );
             server.shutdown();
         }
+    }
+
+    /// A key handed back once, then claimed and reported too large again
+    /// (by any worker), counts as a loss: it never goes round twice.
+    #[tokio::test]
+    async fn a_second_hand_back_of_a_key_is_a_loss() {
+        let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+        let sink = HandSink::new(true, Vec::new());
+        let server = hand_server(&authority, &sink);
+        let key = lodestar_metainfo::InfoHash([1; 20]);
+        let first = claim_as(&authority, WorkerId(2), 1, super::T0);
+        oversize(&server, WorkerId(2), 1, first);
+        // The built-in worker's fetch ends without a commit.
+        let local = sink.got.lock().unwrap()[0].1;
+        assert!(
+            authority
+                .report(WorkerId::LOCAL, &key, local, None)
+                .is_some()
+        );
+        let second = claim_as(&authority, WorkerId(3), 1, super::T0 + 1);
+        oversize(&server, WorkerId(3), 1, second);
+        let snap = server.snapshot();
+        assert_eq!((snap.handed_back, snap.outcomes), (1, 1));
+        assert_eq!(sink.got.lock().unwrap().len(), 1, "handed once");
+        assert!(!authority.in_flight(&key), "its lease ended");
+        assert_eq!(authority.pending(), 0);
+        server.shutdown();
+    }
+
+    /// A worker can claim a key is too large whatever its size: the report
+    /// carries no size, so it can't lend the built-in worker a bound. What
+    /// it can do is aim the claim at a key the built-in worker refuses
+    /// (held, or blocked by the filter). That key is checked before any
+    /// grant: it ends as blocked (remembered as such, as any blocked loss;
+    /// `LeaseAuthority::report`), and is never granted to the built-in
+    /// worker or handed to its pool.
+    #[tokio::test]
+    async fn an_oversize_claim_for_a_refused_key_never_reaches_the_built_in_worker() {
+        let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+        let sink = HandSink::new(true, vec![[9; 20]]);
+        let server = hand_server(&authority, &sink);
+        let key = lodestar_metainfo::InfoHash([9; 20]);
+        let token = claim_as(&authority, WorkerId(2), 9, super::T0);
+        oversize(&server, WorkerId(2), 9, token);
+        let snap = server.snapshot();
+        assert_eq!((snap.handed_back, snap.outcomes), (0, 1));
+        assert!(sink.got.lock().unwrap().is_empty(), "never handed back");
+        assert!(
+            !authority.in_flight(&key),
+            "never granted to the built-in worker"
+        );
+        assert_eq!(authority.pending(), 0);
+        server.shutdown();
     }
 
     fn server(config: ServerConfig, authority: Arc<LeaseAuthority>) -> Arc<ClusterServer> {

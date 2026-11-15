@@ -1465,6 +1465,10 @@ impl InboundSink for Sink {
             .is_some_and(|r| r.handed_back(key, token, lease))
     }
 
+    fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.remote.as_ref().is_some_and(|r| r.refuses_local(key))
+    }
+
     fn snapshot_ack(&self, worker: WorkerId, ack: SnapshotAck) {
         if ack.kind == SnapshotKind::HaveFilter {
             if let Some(server) = self.server.get().and_then(Weak::upgrade) {
