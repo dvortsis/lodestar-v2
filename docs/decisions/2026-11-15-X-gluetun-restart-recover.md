@@ -25,5 +25,7 @@ Two mechanisms, because neither alone covers every way gluetun restarts.
 - **(c) The fleet VM keeps `restart: "no"`, and its watcher is unchanged** (runner's call). With the setting, a gluetun restart outside Compose leaves a visibly dead Lodestar instead of one that looks alive in a dead network, and the watcher's `link_outage` note explains the gap. The soak's restart semantics don't change.
 
 ## Refinements for the runner to flag (§2.19)
+- **The Lodestar-gluetun Unraid template's Extra Parameters gain `--restart=unless-stopped`,** and `packaging/unraid/validate.py` requires it whenever the template sets `LODESTAR_EXIT_ON_NETWORK_LOSS`. Unraid adds no restart policy of its own, so without it (b)'s exit would leave Lodestar stopped. The runner approved it on 2026-11-15.
+- **A gluetun recreated outside Compose** is documented with its symptom (the web UI doesn't load; Lodestar stopped or restarting; on newer versions a log ending in `Network lost:`) and the fix (`docker compose up -d --force-recreate lodestar`). X-test-vm confirms it after merge (runner).
 - **Status 75** for the exit, and the 5 s sample and 30 s hold, are this slice's choices, approved by the runner with the plan.
 - **v0.5.1 ignores the variable** (it reads only the variables it knows), so the Unraid template and the guide's recipe can carry it now. The guide marks the self-restart "(Newer than v0.5.1)" and keeps the manual restart, and what it costs (the six-hour sampling wait), for v0.5.1.

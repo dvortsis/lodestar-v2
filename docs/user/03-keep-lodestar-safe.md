@@ -182,7 +182,9 @@ To run it:
 
 In v0.5.1, Lodestar ignores `LODESTAR_EXIT_ON_NETWORK_LOSS`. Compose still restarts Lodestar when Compose restarts gluetun. After any other gluetun restart, run `docker compose restart lodestar`. That restart costs the six-hour sampling wait. Search keeps working meanwhile.
 
-An automatic updater or any other tool that updates gluetun outside Compose makes a new gluetun container. Lodestar can't rejoin that one by itself, in any version. Run `docker compose up -d --force-recreate lodestar` afterwards. Updating with `docker compose pull && docker compose up -d` avoids this.
+An automatic updater or any other tool that updates gluetun outside Compose makes a new gluetun container. Lodestar can't rejoin that one by itself, in any version.
+
+You see it this way: the web UI doesn't load, and `docker compose ps` shows Lodestar stopped or restarting again and again. **(Newer than v0.5.1)** Its log, from `docker compose logs lodestar`, ends with a line that starts `Network lost:`. To fix it, run `docker compose up -d --force-recreate lodestar`. Updating with `docker compose pull && docker compose up -d` avoids this.
 
 To back up, restore or rebuild the index, use the Compose commands in [section 3.7](#37-back-up-and-restore). They work the same with this file.
 
