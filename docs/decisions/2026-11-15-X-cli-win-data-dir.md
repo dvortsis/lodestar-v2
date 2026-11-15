@@ -31,8 +31,10 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 ## The guide
 - **`docs/user/03-keep-lodestar-safe.md` §3.7** gets "Back up and restore on Windows":
   - backing up from an administrator's PowerShell with the MSI's `lodestar.exe`, with no variable, then copying the folder somewhere private;
-  - restoring with `Stop-Service`, removing the write-ahead files and the index, copying the files back, and `Start-Service`;
-  - the same for a portable copy from its folder.
+  - deleting the copy left in the `backups` folder once it's safe elsewhere;
+  - restoring as the Unraid and Compose steps now do: `Stop-Service`, removing the write-ahead files, copying the files back, `lodestar.exe reindex`, and `Start-Service`;
+  - the same for a portable copy from its folder, and how to set `LODESTAR_DATA_DIR` in PowerShell.
+- **"Rebuild the search index"** gets a Windows row: `reindex` from the MSI's executable needs no variable either.
 - **`docs/user/04-install-on-windows-and-linux.md`, "Install the MSI", step 4:** the log has a token line per start and only the newest works, so the command ends in `Select-Object -Last 1`.
 
 ## Tests

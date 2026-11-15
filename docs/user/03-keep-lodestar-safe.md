@@ -76,6 +76,105 @@ To use it:
 5. Open the web UI at your server address and the port you published on gluetun.
 6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
 
+### Run Lodestar through gluetun with Docker Compose
+<!-- index: gluetun Compose; network_mode service; WireGuard -->
+
+This one Compose file runs gluetun and Lodestar together. Lodestar uses gluetun's network (`network_mode: "service:gluetun"`) and starts only once gluetun reports healthy, so it never crawls on your normal network. Use it in place of the steps in [section 2.4](02-install-lodestar-on-unraid-and-docker.md#24-install-with-docker-compose). The example uses WireGuard, as Lodestar's post-rules do.
+
+To run it:
+
+1. In a terminal on your Docker host, make a folder and move into it:
+
+    ```bash
+    mkdir lodestar && cd lodestar
+    ```
+
+2. Download Lodestar's post-rules file and check it:
+
+    ```bash
+    curl -fsSL -o post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt
+    sha256sum post-rules.txt
+    ```
+
+   **Result:** The line starts with `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
+3. Make a file named `docker-compose.yml` in the same folder with this content:
+
+    ```yaml
+    services:
+      gluetun:
+        image: qmcgaw/gluetun:v3.41.3
+        container_name: gluetun
+        restart: unless-stopped
+        cap_add:
+          - NET_ADMIN
+        devices:
+          - /dev/net/tun:/dev/net/tun
+        environment:
+          TZ: Etc/UTC
+          # Fill these in from your VPN provider. Lodestar never sees them.
+          VPN_SERVICE_PROVIDER: "FILL_IN_YOURSELF"
+          VPN_TYPE: wireguard
+          VPN_INTERFACE: wg0
+          WIREGUARD_PRIVATE_KEY: "FILL_IN_YOURSELF"
+          WIREGUARD_ADDRESSES: "FILL_IN_YOURSELF"
+        volumes:
+          # Lodestar's post-rules: they close the gap when the VPN drops.
+          - ./post-rules.txt:/iptables/post-rules.txt:ro
+        ports:
+          # Lodestar's web UI. Lodestar shares gluetun's network,
+          # so its ports are published here.
+          - "8090:8090/tcp"
+
+      lodestar:
+        image: ghcr.io/dvortsis/lodestar-v2:0.5.1
+        container_name: lodestar
+        restart: unless-stopped
+        stop_grace_period: 60s
+        # All of Lodestar's traffic goes through gluetun.
+        network_mode: "service:gluetun"
+        depends_on:
+          gluetun:
+            condition: service_healthy
+        environment:
+          TZ: Etc/UTC
+        volumes:
+          - lodestar-data:/data
+
+    volumes:
+      lodestar-data:
+    ```
+
+4. Replace each `FILL_IN_YOURSELF` with the values from your VPN provider's WireGuard setup page. Keep `VPN_INTERFACE: wg0`: the post-rules name the tunnel `wg0`.
+
+   gluetun's own documentation lists the provider names it accepts. A provider it doesn't list (`VPN_SERVICE_PROVIDER: custom`) also needs its endpoint and public key: see gluetun's [custom provider page](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md).
+5. Check the file, then start gluetun alone:
+
+    ```bash
+    docker compose config -q && docker compose up -d gluetun
+    ```
+
+   **Result:** `docker compose config -q` prints nothing when the file is valid, and Docker starts only gluetun. If gluetun keeps restarting, run `docker compose logs gluetun` to see why.
+6. Before Lodestar starts, check that gluetun loaded the post-rules:
+
+    ```bash
+    docker compose exec gluetun iptables -S OUTPUT | head -4
+    docker compose exec gluetun ip link show wg0
+    ```
+
+   **Result:** After the first line (`-P OUTPUT DROP`), the next three lines name `wg0`: one ends in `CONNMARK --set-xmark 0x800000/0x800000` and two end in `-j DROP`. The second command shows the `wg0` link. If either is different, gluetun is running without the rules: check steps 2 to 4 before you start Lodestar. gluetun skips a missing rules file without a word, so this check is the only proof.
+7. Start Lodestar:
+
+    ```bash
+    docker compose up -d
+    ```
+
+   **Result:** Docker starts Lodestar once gluetun reports healthy. If gluetun can't connect, Lodestar doesn't start.
+8. Create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password). Open the web UI at `http://<server-ip>:8090`, the port published on gluetun.
+
+When gluetun restarts, restart Lodestar too: run `docker compose restart lodestar`. A container that shares a network stays attached to the old one.
+
+To back up, restore or rebuild the index, use the Compose commands in [section 3.7](#37-back-up-and-restore). They work the same with this file.
+
 ### Close gluetun's gap when the VPN drops
 
 gluetun's firewall is its kill switch. When the VPN drops, it blocks every new connection. On its own, though, it lets packets of connections that were already open leave through your normal network, with your home IP. Lodestar's post-rules file closes that gap.
@@ -83,7 +182,7 @@ gluetun's firewall is its kill switch. When the VPN drops, it blocks every new c
 > [!IMPORTANT]
 > Add the post-rules file to gluetun before you start Lodestar. Without it, a few packets can leave outside the VPN each time the tunnel drops.
 
-If Lodestar generated your gluetun from its [companion](glossary.md#companion) templates, most of this is done:
+The Compose file above already has the post-rules, and its step 6 is the check. **(Newer than v0.5.1)** Lodestar can generate gluetun from its [companion](glossary.md#companion) templates ([chapter 8](08-add-companions.md)). In v0.5.1 there are no companion templates, so use the Compose file above or the steps below. If Lodestar generated your gluetun, most of this is done:
 
 | Template | What it already has | What you do |
 |---|---|---|
@@ -247,8 +346,20 @@ To back up on Unraid:
     docker exec Lodestar /lodestar backup
     ```
 
-   With Compose, run `docker exec lodestar /lodestar backup` on the Docker host. Lodestar must be running.
-   **Result:** The command prints `Backup written to` and the folder name.
+   Lodestar must be running.
+   **Result:** After a few log lines, the command prints the folder and what it holds, for example:
+
+    ```text
+    Backup written to /data/backups/lodestar-backup-20261115-121546
+      lodestar.db    1.19 MiB
+      seal.key       32 B
+      auth.json      107 B
+    The store holds 0 torrents (schema v12).
+    The search index isn't included. After a restore, rebuild it with `lodestar reindex`.
+    The folder holds secrets (seal.key, auth.json): keep it private. Its README.txt has the restore steps.
+    ```
+
+   `/data` inside the container is your **Data** folder, `/mnt/cache/appdata/lodestar`.
 
 2. Copy that folder off the [cache pool](glossary.md#cache-pool). Replace `<backup-folder>` with the name printed and `<share>` with a private share you already have:
 
@@ -261,11 +372,10 @@ To back up on Unraid:
 To restore on Unraid:
 
 1. On the Docker tab, select the **Lodestar** icon, then **Stop**.
-2. Open the Unraid terminal. Delete the old write-ahead files and the old search index, which doesn't match the restored database and would show the wrong torrents. Check the path before you run it:
+2. Open the Unraid terminal. Delete the old write-ahead files, which belong to the old database. Check the path before you run it:
 
     ```bash
     rm -f /mnt/cache/appdata/lodestar/lodestar.db-wal /mnt/cache/appdata/lodestar/lodestar.db-shm
-    rm -rf /mnt/cache/appdata/lodestar/index
     ```
 
 3. Copy the files from the backup. Replace `<share>` and `<backup-folder>` as before. Add `config.toml` to the list only if the backup has one:
@@ -276,9 +386,81 @@ To restore on Unraid:
     ```
 
    The `-a` keeps the files' owner and permissions. If the backup came from another server, also run `chown 99:100 /mnt/cache/appdata/lodestar/lodestar.db /mnt/cache/appdata/lodestar/seal.key /mnt/cache/appdata/lodestar/auth.json`.
-4. On the Docker tab, select the **Lodestar** icon, then **Start**.
-   **Result:** Lodestar rebuilds the search index on start.
-5. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
+4. Mark the search index for rebuild. The old index doesn't match the restored database and would show the wrong torrents. In the same terminal, run:
+
+    ```bash
+    docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex
+    ```
+
+   Use the same image as your container's **Repository** field. If you changed **PUID** and **PGID**, use your numbers. **Result:** After a few log lines, it prints `The search index is marked for rebuild.` If it says `refused` and asks you to stop Lodestar, stop it on the Docker tab. Then run the command again.
+5. On the Docker tab, select the **Lodestar** icon, then **Start**.
+   **Result:** Lodestar rebuilds the search index from the database. Results fill in while it runs.
+6. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
+
+You can also copy the whole data folder while Lodestar is stopped. That copy includes a matching index, so step 4 doesn't apply when you restore it.
+
+### Back up and restore with Docker Compose
+<!-- index: backup Docker; named volume backup; docker cp; restore Docker -->
+
+With Compose and the recommended [named volume](glossary.md#named-volume-and-bind-mount), Docker keeps the data in a volume, not in a folder you browse. The commands below copy files in and out of it. Run them on the Docker host, in the folder that holds `docker-compose.yml`.
+
+- **The volume's name:** the commands assume that folder is named `lodestar`, so the volume is `lodestar_lodestar-data`. Run `docker volume ls` to see yours, and use its name if it differs.
+- **A bind mount** (`./data:/data`): the data is already in `./data`. Follow the Unraid steps above with that folder, your `PUID` and `PGID` in place of `99:100`, and the Compose `reindex` command below.
+
+To back up:
+
+1. Make the backup. Lodestar must be running:
+
+    ```bash
+    docker exec lodestar /lodestar backup
+    ```
+
+   **Result:** It prints `Backup written to /data/backups/lodestar-backup-<time>`, the files and the restore hint, as on Unraid.
+2. Copy the folder out of the volume, into the current folder. Replace `<backup-folder>` with the name printed, such as `lodestar-backup-20261115-121546`:
+
+    ```bash
+    docker cp lodestar:/data/backups/<backup-folder> .
+    ```
+
+   **Result:** The command ends without an error, and `ls <backup-folder>` shows `README.txt`, `auth.json`, `lodestar.db` and `seal.key`. Move that folder somewhere private: it holds the secrets in `seal.key` and `auth.json`.
+
+To restore, with the backup folder in the current folder:
+
+1. Stop Lodestar:
+
+    ```bash
+    docker compose stop lodestar
+    ```
+
+2. Delete the old write-ahead files, which belong to the old database:
+
+    ```bash
+    docker run --rm -v lodestar_lodestar-data:/data busybox:1.36 rm -f /data/lodestar.db-wal /data/lodestar.db-shm
+    ```
+
+   The image has no shell, so these steps use the small `busybox` image to reach the volume. **Result:** The command prints nothing.
+3. Copy the files from the backup into the volume, then give them to Lodestar's user. `65532` is the image's default user. If you set `PUID` and `PGID`, use your numbers:
+
+    ```bash
+    docker run --rm -v lodestar_lodestar-data:/data -v "$PWD/<backup-folder>":/backup:ro busybox:1.36 cp /backup/lodestar.db /backup/seal.key /backup/auth.json /data/
+    docker run --rm -v lodestar_lodestar-data:/data busybox:1.36 chown 65532:65532 /data/lodestar.db /data/seal.key /data/auth.json
+    ```
+
+   **Result:** Both commands print nothing. Add `/backup/config.toml` to the first command only if the backup has one.
+4. Mark the search index for rebuild:
+
+    ```bash
+    docker compose run --rm lodestar reindex
+    ```
+
+   **Result:** It prints `The search index is marked for rebuild.` If it says `refused` and that the store is open in another process, Lodestar is still running: repeat step 1.
+5. Start Lodestar:
+
+    ```bash
+    docker compose start lodestar
+    ```
+
+   **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
 
 ### Back up and restore on Windows
 <!-- index: backup on Windows; restore on Windows; ProgramData -->
@@ -304,7 +486,7 @@ To back up an installed Lodestar (the MSI):
     ```
 
    Lodestar can keep running.
-   **Result:** The command prints `Backup written to` and a folder under `C:\ProgramData\Lodestar\backups`.
+   **Result:** The command prints `Backup written to` and a folder under `C:\ProgramData\Lodestar\backups`, with the files it holds, as on Unraid.
 3. Copy that folder to a private place off this PC, for example a USB drive. Replace `<backup-folder>` with the name printed and `E:\` with your drive:
 
     ```powershell
@@ -326,11 +508,10 @@ To restore an installed Lodestar:
     Stop-Service Lodestar
     ```
 
-2. Delete the old write-ahead files and the old search index. Check the paths before you run it:
+2. Delete the old write-ahead files, which belong to the old database. Check the paths before you run it:
 
     ```powershell
     Remove-Item -Force -ErrorAction SilentlyContinue 'C:\ProgramData\Lodestar\lodestar.db-wal', 'C:\ProgramData\Lodestar\lodestar.db-shm'
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 'C:\ProgramData\Lodestar\index'
     ```
 
 3. Copy the files from the backup. Replace `E:\<backup-folder>` with where your backup is. Add `config.toml` to the list only if the backup has one:
@@ -339,18 +520,35 @@ To restore an installed Lodestar:
     Copy-Item 'E:\<backup-folder>\lodestar.db', 'E:\<backup-folder>\seal.key', 'E:\<backup-folder>\auth.json' 'C:\ProgramData\Lodestar\'
     ```
 
-4. Start the service:
+4. Mark the search index for rebuild:
+
+    ```powershell
+    & 'C:\Program Files\Lodestar\lodestar.exe' reindex
+    ```
+
+   **Result:** It prints `The search index is marked for rebuild.` If it says `refused` and that the store is open in another process, the service is still running: repeat step 1.
+5. Start the service:
 
     ```powershell
     Start-Service Lodestar
     ```
 
-   **Result:** Lodestar rebuilds the search index on start.
-5. Change the admin password when the app offers it **(planned)**, as in step 5 of the Unraid restore.
+   **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
 
-A portable copy works the same way from its own folder. Open PowerShell in the folder that holds `lodestar.exe` and run `.\lodestar.exe backup`; the backup goes under `data\backups`. To restore, stop Lodestar (**Ctrl+C** in its window), delete `data\lodestar.db-wal`, `data\lodestar.db-shm` and `data\index`, copy the files from the backup into `data`, then run **Start Lodestar.cmd** again.
+A portable copy works the same way from its own folder. Open PowerShell in the folder that holds `lodestar.exe` and run `.\lodestar.exe backup`; the backup goes under `data\backups`. To restore, stop Lodestar (**Ctrl+C** in its window) and delete `data\lodestar.db-wal` and `data\lodestar.db-shm`. Copy the files from the backup into `data`, run `.\lodestar.exe reindex`, then run **Start Lodestar.cmd** again.
 
-You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so the step that deletes it doesn't apply when you restore it.
+### Rebuild the search index
+<!-- index: reindex; rebuild index; lodestar reindex -->
+
+The search index is built from the database, so it can always be rebuilt. Do it after a restore, or when search shows torrents the database doesn't have. Lodestar must be stopped: a running Lodestar refuses, with a message that says so, and changes nothing.
+
+| Where | Commands |
+|---|---|
+| Docker Compose | `docker compose stop lodestar`, then `docker compose run --rm lodestar reindex`, then `docker compose start lodestar` |
+| Unraid | Stop **Lodestar** on the Docker tab. In the terminal, run `docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex`, with your **PUID** and **PGID** if you changed them, then start **Lodestar** again. |
+| Windows (the MSI) | In PowerShell opened with **Run as administrator**: `Stop-Service Lodestar`, then `& 'C:\Program Files\Lodestar\lodestar.exe' reindex`, then `Start-Service Lodestar` |
+
+**Result:** The command prints `The search index is marked for rebuild.` At the next start, Lodestar builds a new index from the database. Results fill in while it runs.
 
 ### Keep the data folder owner-only
 <!-- index: data folder permissions; chmod; folder mode -->
