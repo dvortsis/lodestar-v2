@@ -161,13 +161,16 @@ impl Writer {
 /// counts only.
 #[cfg(unix)]
 fn create(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o644)
         .custom_flags(crate::update::layout::nofollow())
-        .open(path)
+        .open(path)?;
+    // The umask filters the mode above; set it on the open file itself.
+    f.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    Ok(f)
 }
 
 #[cfg(not(unix))]
@@ -302,47 +305,55 @@ pub(super) mod tests {
     }
 
     /// Anything but a regular file at the name reads as none: a directory
-    /// everywhere, and on unix a link to a good file and a FIFO, which
-    /// mustn't hang the read.
+    /// everywhere, a link to a good file (unix and Windows), and on unix a
+    /// FIFO, which mustn't hang the read. (Windows has no FIFO in the file
+    /// system.)
     #[test]
     fn only_a_regular_file_is_read() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(path(dir.path())).unwrap();
         assert_eq!(read(dir.path(), 1_000), None);
         std::fs::remove_dir(path(dir.path())).unwrap();
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        let w = Writer::start(elsewhere.path(), 1, "magnetico", 1_000, &counters(1));
+        assert!(read(elsewhere.path(), 1_000).is_some());
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(path(elsewhere.path()), path(dir.path()));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(path(elsewhere.path()), path(dir.path()));
+        // Creating a link can need a privilege Windows doesn't always give.
+        if linked.is_ok() {
+            assert_eq!(read(dir.path(), 1_000), None, "a link isn't followed");
+            std::fs::remove_file(path(dir.path())).unwrap();
+        }
+        drop(w);
+
         #[cfg(unix)]
         {
-            let elsewhere = tempfile::tempdir().unwrap();
-            let w = Writer::start(elsewhere.path(), 1, "magnetico", 1_000, &counters(1));
-            assert!(read(elsewhere.path(), 1_000).is_some());
-            std::os::unix::fs::symlink(path(elsewhere.path()), path(dir.path())).unwrap();
-            assert_eq!(read(dir.path(), 1_000), None, "a link isn't followed");
-            drop(w);
-            std::fs::remove_file(path(dir.path())).unwrap();
-            rustix::fs::mknodat(
-                rustix::fs::CWD,
-                path(dir.path()),
-                rustix::fs::FileType::Fifo,
-                rustix::fs::Mode::from_raw_mode(0o644),
-                0,
-            )
-            .unwrap();
+            let made = std::process::Command::new("mkfifo")
+                .arg(path(dir.path()))
+                .status()
+                .unwrap();
+            assert!(made.success());
             assert_eq!(read(dir.path(), 1_000), None, "a FIFO doesn't hang");
         }
     }
 
-    /// The file is readable by other users on unix (counts only).
-    #[cfg(unix)]
+    /// The file is a regular, writable file that reads back; on unix it's
+    /// readable by other users (counts only), whatever the umask.
     #[test]
-    fn the_file_is_world_readable() {
-        use std::os::unix::fs::PermissionsExt;
+    fn the_file_is_regular_and_readable() {
         let dir = tempfile::tempdir().unwrap();
         let _w = Writer::start(dir.path(), 1, "magnetico", 1_000, &counters(1));
-        let mode = std::fs::metadata(path(dir.path()))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777 & !0o022, 0o644 & !0o022);
-        assert_ne!(mode & 0o044, 0, "readable beyond the owner");
+        let meta = std::fs::metadata(path(dir.path())).unwrap();
+        assert!(meta.is_file());
+        assert!(!meta.permissions().readonly());
+        assert!(read(dir.path(), 1_000).is_some());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(meta.permissions().mode() & 0o777, 0o644);
+        }
     }
 }

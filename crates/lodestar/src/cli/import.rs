@@ -955,7 +955,8 @@ async fn run_job(
     let stop = Arc::new(AtomicBool::new(false));
     {
         let (stop, cancel) = (stop.clone(), adapter.canceller());
-        let (data_dir, live) = (config.data_dir.clone(), live.clone());
+        // Weak: the handler outlives the run, and mustn't keep the file.
+        let (data_dir, live) = (config.data_dir.clone(), Arc::downgrade(&live));
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 eprintln!("Pausing at the last saved batch… (Ctrl-C again to quit now)");
@@ -970,10 +971,12 @@ async fn run_job(
                      saved batch."
                 );
                 // No drop runs on exit: the live view goes now, with the
-                // writer held so no heartbeat can put it back.
-                let _held = live
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // writer (if the run still has one) held so no heartbeat
+                // can put it back.
+                let held = live.upgrade();
+                let _guard = held
+                    .as_ref()
+                    .map(|l| l.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
                 progress::remove(&data_dir);
                 std::process::exit(130);
             }
@@ -1021,7 +1024,9 @@ async fn run_job(
         progress: Some(&progress),
     };
     let report = driver::run(store, id, adapter, &opts).await;
-    // The beat stops before the file goes, so it can't write it back.
+    // The beat stops before the file goes, so it can't write it back;
+    // then the last strong reference goes, and with it the file (the
+    // Ctrl-C handler holds only a weak one).
     beat.abort();
     let _ = beat.await;
     drop(live);
@@ -1192,18 +1197,7 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
         },
     };
     if json {
-        let out: Vec<_> = jobs
-            .iter()
-            .map(|j| {
-                json!({
-                    "job": j.id, "source": j.adapter, "phase": j.phase.label(),
-                    "control": j.control.label(), "reason": j.reason.map(Reason::label),
-                    "counters": counters_json(&j.counters), "waiting_candidates": j.open_candidates,
-                    "created_at": j.created_at, "updated_at": j.updated_at,
-                    "finished_at": j.finished_at, "live": false,
-                })
-            })
-            .collect();
+        let out: Vec<_> = jobs.iter().map(job_json).collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&out).map_err(failed("encoding"))?
@@ -1299,6 +1293,17 @@ fn live_status(config: &Config, db: &Path, id: Option<i64>, json: bool) -> Outco
         println!("{}", live_text(&p, now));
     }
     Ok(())
+}
+
+/// A job as `status --json` lists it, from the store.
+fn job_json(j: &ImportJob) -> serde_json::Value {
+    json!({
+        "job": j.id, "source": j.adapter, "phase": j.phase.label(),
+        "control": j.control.label(), "reason": j.reason.map(Reason::label),
+        "counters": counters_json(&j.counters), "waiting_candidates": j.open_candidates,
+        "created_at": j.created_at, "updated_at": j.updated_at,
+        "finished_at": j.finished_at, "live": false,
+    })
 }
 
 /// The running job as `status --json` lists a job, from its live

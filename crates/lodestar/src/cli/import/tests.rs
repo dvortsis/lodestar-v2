@@ -967,7 +967,15 @@ fn status_shows_a_running_imports_live_progress() {
     let src = dir.path().join("database.sqlite3");
     magnetico_db(&src, 600);
     let config = data(&dir.path().join("data"));
-    block_on(start(&config, &magnetico(&src), Some(1), true, None)).unwrap();
+    // The file is gone as soon as the run returns, inside the runtime, not
+    // only once the runtime is torn down.
+    let data_dir = config.data_dir.clone();
+    block_on(async {
+        start(&config, &magnetico(&src), Some(1), true, None).await?;
+        assert!(!progress::path(&data_dir).exists(), "removed by the run");
+        Ok(())
+    })
+    .unwrap();
     // The run wrote its file at start, handed it its batch, then removed it.
     assert!(progress::tests::counted(&config.data_dir, "written") >= 1);
     assert!(progress::tests::counted(&config.data_dir, "saved") >= 1);
@@ -1029,4 +1037,18 @@ fn status_shows_a_running_imports_live_progress() {
     assert!(matches!(&r, Err(Failure::Refused(_))), "no file: {r:?}");
     drop(import);
     status(&config, Some(1), false).unwrap();
+
+    // The full status lists the same keys, with "live": false.
+    let full = job_json(&self::job(&config, 1));
+    let live = &live_json(&p)[0];
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let mut live_keys = keys(live);
+    live_keys.retain(|k| k != "run_started_at");
+    assert_eq!(keys(&full), live_keys);
+    assert_eq!(full["live"], false);
+    assert_eq!(keys(&full["counters"]), keys(&live["counters"]));
 }
