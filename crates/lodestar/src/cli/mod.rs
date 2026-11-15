@@ -379,9 +379,22 @@ impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
         }
     }
 
-    /// Whether `p` is the service's folder, compared as Windows compares
-    /// paths. An empty path is the working folder, as it is when used.
-    fn is_service(&self, p: &Path) -> bool {
+    /// A guard for the service's own folder `dir`, as the service uses it
+    /// (`windows::service::load_guarded`).
+    // Off Windows only the tests call it.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn for_dir(dir: PathBuf, check: C) -> ServiceGuard<C> {
+        ServiceGuard {
+            dir: Some(dir),
+            check: Some(check),
+            answer: None,
+        }
+    }
+
+    /// Whether `p` is the service's folder or inside it, compared as
+    /// Windows compares paths (`windows::service::within`). An empty path
+    /// is the working folder, as it is when used.
+    fn covers(&self, p: &Path) -> bool {
         let p = if p.as_os_str().is_empty() {
             Path::new(".")
         } else {
@@ -389,7 +402,7 @@ impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
         };
         self.dir
             .as_deref()
-            .is_some_and(|s| crate::windows::service::same_dir(p, s))
+            .is_some_and(|s| crate::windows::service::within(p, s))
     }
 
     /// Checks the folder once; a later ask gets the same answer, so a
@@ -408,20 +421,20 @@ impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
     }
 
     /// Before anything is read: when the data folder named by
-    /// `LODESTAR_DATA_DIR` (or `worker --data`) is the service's, when the
-    /// config file is inside it, or when the caller reads `config.toml`
-    /// there (`reads_there`).
+    /// `LODESTAR_DATA_DIR` (or `worker --data`) is the service's folder or
+    /// inside it, when the config file is inside it, or when the caller
+    /// reads `config.toml` there (`reads_there`).
     pub(crate) fn before(
         &mut self,
         config_path: Option<&Path>,
         data_dir_env: Option<&str>,
         reads_there: bool,
     ) -> Result<(), LoadError> {
-        let Some(svc) = self.dir.clone() else {
+        if self.dir.is_none() {
             return Ok(());
-        };
-        let named = data_dir_env.is_some_and(|d| self.is_service(Path::new(d)));
-        let inside = config_path.is_some_and(|p| crate::windows::service::within(p, &svc));
+        }
+        let named = data_dir_env.is_some_and(|d| self.covers(Path::new(d)));
+        let inside = config_path.is_some_and(|p| self.covers(p));
         if named || inside || reads_there {
             self.ensure()?;
         }
@@ -429,9 +442,9 @@ impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
     }
 
     /// After loading, before anything opens the store: when the config's
-    /// data folder is the service's.
+    /// data folder is the service's folder or inside it.
     pub(crate) fn after(&mut self, data_dir: &Path) -> Result<(), LoadError> {
-        if self.is_service(data_dir) {
+        if self.covers(data_dir) {
             self.ensure()?;
         }
         Ok(())
@@ -1063,6 +1076,42 @@ mod tests {
         assert_eq!(c.data_dir, other);
         let c = load_serve_config(None, &install, &none, unasked).unwrap();
         assert_eq!(c.data_dir, PathBuf::from("data"));
+    }
+
+    /// X-win-service-path-hardening (b): a data folder inside the service's
+    /// folder is checked as the folder itself is; a sibling isn't.
+    #[test]
+    fn a_data_folder_inside_the_services_folder_is_checked() {
+        let root = tempfile::tempdir().unwrap();
+        let install = msi(root.path());
+        let svc = install.service_dir.clone().unwrap();
+        let inside = svc.join("data");
+        let named = env_of(&[("LODESTAR_DATA_DIR", inside.to_str().unwrap())]);
+        assert!(refused(load_config(
+            &Command::Vacuum,
+            None,
+            &install,
+            &named,
+            refuse
+        )));
+        let to_inside = root.path().join("inside.toml");
+        std::fs::write(
+            &to_inside,
+            format!("data_dir = \"{}\"\n", toml_path(&inside)),
+        )
+        .unwrap();
+        assert!(refused(load_config(
+            &Command::Vacuum,
+            Some(&to_inside),
+            &install,
+            env_of(&[]),
+            refuse
+        )));
+        // A sibling whose name starts the same isn't inside.
+        let sibling = root.path().join("ProgramData").join("Lodestar2");
+        let env = env_of(&[("LODESTAR_DATA_DIR", sibling.to_str().unwrap())]);
+        let (c, _) = load_config(&Command::Vacuum, None, &install, &env, unasked).unwrap();
+        assert_eq!(c.data_dir, sibling);
     }
 
     /// A refusal stays a refusal: a later ask gets the first answer, and

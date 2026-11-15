@@ -114,6 +114,53 @@ pub fn apply_witness_default(
     }
 }
 
+/// The service's config and data folder, with its own folder `default_dir`
+/// made private by `secure` before anything in it is read, by the same rule
+/// the CLI uses ([`crate::cli::ServiceGuard`]), so the two never disagree:
+/// - before any config is read: when neither `--config` (`explicit`) nor
+///   `LODESTAR_DATA_DIR` points elsewhere (`config.toml` there is read),
+///   when `LODESTAR_DATA_DIR` names that folder or a folder inside it, or
+///   when the config file is inside it;
+/// - after loading, before anything else: when the data folder is that
+///   folder or inside it.
+///
+/// `secure` runs at most once. An error says why the folder is used and
+/// isn't private. A config that failed to load has `default_dir` as its
+/// data folder, for the log.
+pub fn load_guarded(
+    default_dir: &Path,
+    explicit: Option<PathBuf>,
+    env: impl Fn(&str) -> Option<String>,
+    secure: impl FnOnce() -> Result<(), String>,
+) -> Result<(Result<Config, String>, PathBuf), String> {
+    use crate::cli::util::Failure;
+    use crate::cli::{LoadError, ServiceGuard};
+    let why = |e: LoadError| match e {
+        LoadError::Folder(Failure::Refused(m) | Failure::Failed(m)) => m,
+        LoadError::Config(e) => format!("config: {e}"),
+    };
+    let data_env = env("LODESTAR_DATA_DIR");
+    let elsewhere = explicit.is_some() || data_env.is_some();
+    let mut guard = ServiceGuard::for_dir(default_dir.to_path_buf(), |_: &Path| {
+        secure().map_err(Failure::Refused)
+    });
+    guard
+        .before(explicit.as_deref(), data_env.as_deref(), !elsewhere)
+        .map_err(why)?;
+    let path = config_path(explicit, default_dir, &env);
+    let config = Config::load(path.as_deref(), &env)
+        .map(|mut c| {
+            default_data_dir_unless_set(&mut c, default_dir);
+            c
+        })
+        .map_err(|e| format!("config: {e}"));
+    let data_dir = config
+        .as_ref()
+        .map_or(default_dir.to_path_buf(), |c| c.data_dir.clone());
+    guard.after(&data_dir).map_err(why)?;
+    Ok((config, data_dir))
+}
+
 /// Why the service won't open the store: an update rollback is in
 /// progress (the update helper's marker, `<data>\bin\rollback.json`).
 /// The SCM path refuses as `serve` and every CLI subcommand do (§12.2).
@@ -290,7 +337,7 @@ pub fn within(inner: &Path, outer: &Path) -> bool {
 /// A real path is verbatim (`\\?\C:\…`), so the prefix goes before
 /// comparing.
 fn norm(p: &Path) -> String {
-    let p = real(p);
+    let p = real(&full(p));
     let s = p.to_string_lossy().replace('/', "\\");
     let s = match s.strip_prefix(r"\\?\") {
         Some(rest) => match rest.strip_prefix(r"UNC\") {
@@ -299,7 +346,56 @@ fn norm(p: &Path) -> String {
         },
         None => s,
     };
-    s.trim_end_matches('\\').to_lowercase()
+    tidy(&s).to_lowercase()
+}
+
+/// The full path as Win32 makes it before opening anything
+/// (`GetFullPathNameW`, through `std::path::absolute`): relative to the
+/// working folder, with `.` and `..`, trailing dots and spaces, and `/`
+/// resolved. Elsewhere the path as given.
+fn full(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_path_buf()
+    }
+}
+
+/// The same rules on a path's text (`\` separators), for what Windows
+/// didn't resolve: a verbatim `\\?\` path, or any path off Windows. `.`
+/// and empty components go, `..` takes the one before it (never the drive
+/// or a UNC server and share), and trailing dots and spaces go from each
+/// name, as Win32 drops them.
+fn tidy(s: &str) -> String {
+    let (lead, body) = match s.strip_prefix(r"\\") {
+        Some(b) => (r"\\", b),
+        None => match s.strip_prefix('\\') {
+            Some(b) => ("\\", b),
+            None => ("", s),
+        },
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for c in body.split('\\') {
+        if c == ".." {
+            let keep = match (lead, out.first()) {
+                (r"\\", _) => 2,
+                (_, Some(first)) if first.ends_with(':') => 1,
+                _ => 0,
+            };
+            if out.len() > keep {
+                out.pop();
+            }
+            continue;
+        }
+        let c = c.trim_end_matches(['.', ' ']);
+        if !c.is_empty() {
+            out.push(c);
+        }
+    }
+    format!("{lead}{}", out.join("\\"))
 }
 
 /// `p` through its nearest existing folder's real path, with the rest
@@ -324,8 +420,10 @@ fn real(p: &Path) -> PathBuf {
 }
 
 /// Whether two paths name the same folder, as Windows compares them: the
-/// real paths when both exist (so case, 8.3 names and `..` don't matter),
-/// else case-insensitively with `/` as `\` and no trailing separator.
+/// real paths when both exist (so case, 8.3 names, links and `..` don't
+/// matter), else by their text as Win32 reads it ([`full`], [`tidy`]):
+/// case-insensitively, with `/` as `\`, no `\\?\` prefix, `.` and `..`
+/// resolved, and no trailing separator, dot or space.
 pub fn same_dir(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
@@ -928,11 +1026,10 @@ mod scm {
     }
 
     /// The config and the data folder, with `%ProgramData%\Lodestar` made
-    /// private ([`acl`]) before anything in it is read, whenever it's used:
-    /// for the config file when neither `--config` nor `LODESTAR_DATA_DIR`
-    /// points elsewhere, and for the data when the config doesn't. An
-    /// error says why it's used and isn't private. The third part is the
-    /// restart witness folder when it can't be used, and why.
+    /// private ([`acl`]) before anything in it is read, whenever it's used
+    /// ([`super::load_guarded`]). An error says why it's used and isn't
+    /// private. The third part is the restart witness folder when it can't
+    /// be used, and why.
     #[allow(clippy::type_complexity)]
     fn load(
         own: Option<&str>,
@@ -945,30 +1042,14 @@ mod scm {
         String,
     > {
         let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
-        let secure = || acl::secure_dir(&default_dir, own, &acl::Windows { own_sid: own });
         let env = |k: &str| std::env::var(k).ok();
         let explicit = CONFIG_PATH.get().cloned().flatten();
-        let elsewhere = explicit.is_some() || env("LODESTAR_DATA_DIR").is_some();
-        if !elsewhere {
-            secure()?;
-        }
-        let path = super::config_path(explicit, &default_dir, env);
-        let mut witness_refused = None;
-        let config = Config::load(path.as_deref(), env)
-            .map(|mut c| {
-                super::default_data_dir_unless_set(&mut c, &default_dir);
-                witness_refused =
-                    super::apply_witness_default(&mut c, &env, own, &acl::Windows { own_sid: own });
-                c
-            })
-            .map_err(|e| format!("config: {e}"));
-        // A config that failed to load logs to the default folder.
-        let data_dir = config
-            .as_ref()
-            .map_or(default_dir.clone(), |c| c.data_dir.clone());
-        if elsewhere && super::same_dir(&data_dir, &default_dir) {
-            secure()?;
-        }
+        let (mut config, data_dir) = super::load_guarded(&default_dir, explicit, env, || {
+            acl::secure_dir(&default_dir, own, &acl::Windows { own_sid: own })
+        })?;
+        let witness_refused = config.as_mut().ok().and_then(|c| {
+            super::apply_witness_default(c, &env, own, &acl::Windows { own_sid: own })
+        });
         Ok((config, data_dir, witness_refused))
     }
 
@@ -1213,6 +1294,74 @@ mod tests {
 
     fn role_of(s: &str) -> Option<ServiceCommand> {
         service_command(std::iter::once("lodestar").chain(s.split_whitespace()))
+    }
+
+    /// X-win-service-path-hardening (d): the service makes its own folder
+    /// private before it reads any config from there, however the folder
+    /// is named, and checks a data folder inside it too (b). A broken
+    /// `config.toml` proves the order: a refusal, not a config error.
+    #[test]
+    fn the_service_secures_its_folder_before_reading_from_it() {
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        std::fs::write(svc.join("config.toml"), "not toml [").unwrap();
+        let toml = |p: &Path| p.to_string_lossy().replace('\\', "/");
+        let env_of = |pairs: Vec<(&'static str, String)>| {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone())
+        };
+        let refuse = || Err::<(), _>("isn't private".to_string());
+        let refused = |r: Result<(Result<Config, String>, PathBuf), String>| matches!(r, Err(ref why) if why == "isn't private");
+
+        // Nothing set: its config.toml is read, so checked first.
+        assert!(refused(load_guarded(&svc, None, env_of(vec![]), refuse)));
+        // LODESTAR_DATA_DIR naming it, or a folder inside it.
+        for d in [svc.clone(), svc.join("data")] {
+            let env = env_of(vec![(
+                "LODESTAR_DATA_DIR",
+                d.to_string_lossy().into_owned(),
+            )]);
+            assert!(refused(load_guarded(&svc, None, env, refuse)), "{d:?}");
+        }
+        // `--config` inside it.
+        assert!(refused(load_guarded(
+            &svc,
+            Some(svc.join("config.toml")),
+            env_of(vec![]),
+            refuse
+        )));
+        // `--config` elsewhere naming a data folder inside it: checked after
+        // loading, before anything else.
+        let to_inside = root.path().join("inside.toml");
+        std::fs::write(
+            &to_inside,
+            format!("data_dir = \"{}\"\n", toml(&svc.join("data"))),
+        )
+        .unwrap();
+        assert!(refused(load_guarded(
+            &svc,
+            Some(to_inside),
+            env_of(vec![]),
+            refuse
+        )));
+
+        // Another folder: never checked.
+        let away = root.path().join("away.toml");
+        let other = root.path().join("D").join("Lodestar");
+        std::fs::write(&away, format!("data_dir = \"{}\"\n", toml(&other))).unwrap();
+        let unasked = || -> Result<(), String> { panic!("checked") };
+        let (c, d) = load_guarded(&svc, Some(away), env_of(vec![]), unasked).unwrap();
+        assert_eq!((c.unwrap().data_dir, d), (other.clone(), other));
+
+        // Private: read once, after one check.
+        std::fs::write(svc.join("config.toml"), "").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let once = || {
+            calls.set(calls.get() + 1);
+            Ok(())
+        };
+        let (c, d) = load_guarded(&svc, None, env_of(vec![]), once).unwrap();
+        assert_eq!((c.unwrap().data_dir, d, calls.get()), (svc.clone(), svc, 1));
     }
 
     #[test]
@@ -1648,6 +1797,36 @@ mod tests {
         let w = other.join("Lodestar-witness").join("deeper");
         assert!(within(&w, &data), "through the link");
         assert!(!within(&tmp.path().join("data-witness"), &data));
+    }
+
+    #[test]
+    fn paths_compare_as_windows_spells_them() {
+        let svc = Path::new(r"C:\ProgramData\Lodestar");
+        for same in [
+            r"c:/programdata/lodestar/",
+            r"C:\ProgramData\Lodestar.",
+            r"C:\ProgramData\Lodestar. .\",
+            r"C:\ProgramData\Lodestar\.",
+            r"C:\ProgramData\x\..\Lodestar",
+            r"C:\ProgramData\\Lodestar",
+            r"\\?\C:\ProgramData\Lodestar",
+            r"C:\..\ProgramData\Lodestar",
+        ] {
+            assert!(same_dir(Path::new(same), svc), "{same}");
+        }
+        for other in [
+            r"C:\ProgramData\Lodestar2",
+            r"C:\ProgramData\Lodestar\..",
+            r"C:\ProgramData\Lodestar\data",
+            r"D:\ProgramData\Lodestar",
+        ] {
+            assert!(!same_dir(Path::new(other), svc), "{other}");
+        }
+        assert!(within(Path::new(r"C:\ProgramData\Lodestar.\data"), svc));
+        assert!(within(Path::new(r"C:\ProgramData\x\..\Lodestar\d"), svc));
+        assert!(!within(Path::new(r"C:\ProgramData\Lodestar\..\Other"), svc));
+        // UNC: `..` never climbs above the share.
+        assert_eq!(tidy(r"\\srv\share\..\..\x"), r"\\srv\share\x");
     }
 
     #[test]
