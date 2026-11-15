@@ -74,7 +74,7 @@ To use it:
 4. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
    **Result:** Lodestar starts on gluetun's network.
 5. Open the web UI at your server address and the port you published on gluetun.
-6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one. **(Newer than v0.5.1)** Lodestar's gluetun template restarts it for you, so this step is only needed on v0.5.1.
+6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one. **(Newer than v0.5.1)** Lodestar notices it has lost gluetun's network within about half a minute and restarts itself. The web UI comes back as soon as Lodestar has started again. If Lodestar shows as stopped after gluetun was down for a while, start it again. On v0.5.1, restart Lodestar by hand.
 
 ### Run Lodestar through gluetun with Docker Compose
 <!-- index: gluetun Compose; network_mode service; WireGuard -->
