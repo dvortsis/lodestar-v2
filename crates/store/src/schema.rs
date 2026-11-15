@@ -963,10 +963,11 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
 /// looks again. A lock still held when the timeout runs out is that busy
 /// error, as before.
 ///
-/// SQLite keeps the old mode, without an error, where WAL can't work (a
-/// filesystem without shared memory): the mode the switch reports is
-/// checked, and anything but WAL is refused (in memory, `memory`;
-/// X-store-wal-nits).
+/// SQLite keeps the old mode, without an error, on a VFS without shared
+/// memory (macOS's network-share locking, or `unix-none`): the mode the
+/// switch reports is checked, and anything but WAL is refused (in memory,
+/// `memory`; X-store-wal-nits). On Linux the switch always reports WAL,
+/// and a filesystem that can't hold it fails later, with I/O errors.
 fn use_wal(conn: &Connection) -> Result<()> {
     let wal = |mode: String| mode.eq_ignore_ascii_case("wal");
     for _ in 0..3 {

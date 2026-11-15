@@ -439,17 +439,20 @@ pub(crate) fn failure_kind(
     e: &(dyn std::error::Error + 'static),
     default: &'static str,
 ) -> &'static str {
-    let mut at = Some(e);
-    while let Some(e) = at {
-        if matches!(
-            e.downcast_ref::<lodestar_store::Error>(),
-            Some(lodestar_store::Error::WalUnavailable)
-        ) {
-            return "store_wal_unavailable";
-        }
-        at = e.source();
+    // Bounded, in case a chain loops back on itself.
+    let wal = std::iter::successors(Some(e), |e| e.source())
+        .take(16)
+        .any(|e| {
+            matches!(
+                e.downcast_ref::<lodestar_store::Error>(),
+                Some(lodestar_store::Error::WalUnavailable)
+            )
+        });
+    if wal {
+        "store_wal_unavailable"
+    } else {
+        default
     }
-    default
 }
 
 #[cfg(test)]
