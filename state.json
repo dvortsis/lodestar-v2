@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T06:38Z",
+  "updated_at": "2026-11-15T06:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T06:38Z",
+  "last_heartbeat": "2026-11-15T06:55Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9839,6 +9839,12 @@
       "slice": "X-companion-starting-steps",
       "sha": "32cee536",
       "at": "2026-11-15T06:34Z"
+    },
+    {
+      "pr": 910,
+      "slice": "X-filter-budget-manyfile-perf",
+      "sha": "ca53baf3",
+      "at": "2026-11-15T06:55Z"
     }
   ],
   "active_sessions": {
@@ -10077,7 +10083,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T06:38Z",
+    "updated": "2026-11-15T06:55Z",
     "items": [
       {
         "slot": 1,
@@ -10086,7 +10092,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T06:34Z",
-        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #909 merged; X-rejudge-stall-nits, then X-peerwire-model-test from parked/",
+        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #914 X-rejudge-stall-nits; then X-peerwire-model-test (parked/), X-flake-rejudge-panic-time",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10097,7 +10103,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T06:34Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: X-flake-address-port (flaked #908), then X-flake-detect-macos-nits",
+        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #913 X-flake-address-port; then X-flake-detect-macos-nits, X-flake-cluster-off-binds",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10114,12 +10120,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-filter-budget-manyfile-perf",
+        "slice": "X-filter-split-reuse",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T04:36Z",
-        "doing": "#910 in progress; review on ready (session_01MMjhn8URRT9adbFfM1zGi1)",
+        "since": "2026-11-15T06:55Z",
+        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #910 merged; X-filter-split-reuse, then X-fuzz-peer-fetch from parked/",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       }
@@ -10212,8 +10218,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T06:38Z",
-  "updated": "2026-11-15T06:38Z",
+  "heartbeat": "2026-11-15T06:55Z",
+  "updated": "2026-11-15T06:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
