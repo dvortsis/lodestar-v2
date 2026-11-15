@@ -45,6 +45,11 @@ class ValidateTemplates(unittest.TestCase):
         dropped = re.sub(r"\s*<Config [^>]*LODESTAR_EXIT_ON_NETWORK_LOSS[^>]*>[^<]*</Config>", "", text)
         self.assertNotEqual(dropped, text)
         self.assertIn("variable LODESTAR_EXIT_ON_NETWORK_LOSS missing", self.check_text(name, dropped))
+        # Without a restart policy the exit would leave it stopped: Unraid adds none.
+        no_restart = text.replace(" --restart=unless-stopped", "")
+        self.assertNotEqual(no_restart, text)
+        self.assertIn("ExtraParams must contain --restart=unless-stopped with LODESTAR_EXIT_ON_NETWORK_LOSS",
+                      self.check_text(name, no_restart))
         # The plain template never sets it: a host-network install mustn't exit.
         self.assertNotIn("LODESTAR_EXIT_ON_NETWORK_LOSS", (HERE / "lodestar.xml").read_text(encoding="utf-8"))
 

@@ -178,9 +178,11 @@ To run it:
    **Result:** Docker starts Lodestar once gluetun reports healthy. If gluetun can't connect, Lodestar doesn't start.
 8. Create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password). Open the web UI at `http://<server-ip>:8090`, the port published on gluetun.
 
-When gluetun restarts or updates, Lodestar notices it has lost its network within about half a minute and restarts itself. The web UI comes back once its start wait is over.
+**(Newer than v0.5.1)** When gluetun restarts, Lodestar notices it has lost its network within about half a minute and restarts itself. The web UI comes back once its start wait is over.
 
-**(Newer than v0.5.1)** v0.5.1 ignores `LODESTAR_EXIT_ON_NETWORK_LOSS`. Compose still restarts Lodestar when Compose restarts gluetun. After any other gluetun restart, such as an update by another tool, run `docker compose restart lodestar`. In v0.5.1 that restart costs the six-hour sampling wait. Search keeps working meanwhile.
+In v0.5.1, Lodestar ignores `LODESTAR_EXIT_ON_NETWORK_LOSS`. Compose still restarts Lodestar when Compose restarts gluetun. After any other gluetun restart, run `docker compose restart lodestar`. That restart costs the six-hour sampling wait. Search keeps working meanwhile.
+
+An automatic updater or any other tool that updates gluetun outside Compose makes a new gluetun container. Lodestar can't rejoin that one by itself, in any version. Run `docker compose up -d --force-recreate lodestar` afterwards. Updating with `docker compose pull && docker compose up -d` avoids this.
 
 To back up, restore or rebuild the index, use the Compose commands in [section 3.7](#37-back-up-and-restore). They work the same with this file.
 

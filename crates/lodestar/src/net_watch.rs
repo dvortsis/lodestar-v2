@@ -26,6 +26,10 @@
 //! - A read that fails counts as "not lost": it never exits on doubt.
 //! - Anywhere but Linux the setting is ignored, with one log line.
 
+// Off Linux only `lost()`'s ignore branch runs; the rule and parsers stay
+// compiled (and tested) everywhere.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use std::time::{Duration, Instant};
 
 /// How often the namespace is read.
@@ -46,7 +50,9 @@ pub struct Sample {
 }
 
 impl Sample {
-    /// Nothing but `lo`, and no default route.
+    /// Nothing but `lo`, and no default route. A default route needs an
+    /// interface, so the route half never decides alone: it's kept as
+    /// defence in depth, as the approved rule states it.
     pub fn lost(&self) -> bool {
         self.interfaces.is_empty() && !self.default_route
     }
@@ -111,14 +117,24 @@ impl Rule {
     }
 }
 
+/// Devices the kernel puts in every new namespace on its own: `lo`, and
+/// the fallback tunnel devices it adds when a tunnel module is loaded
+/// (`net.core.fb_tunnels_only_for_init_net=0`, the default). They stay in
+/// an orphaned namespace after Docker removes `eth0`, so they never count
+/// as a network.
+const KERNEL_DEVICES: &[&str] = &[
+    "lo", "tunl0", "sit0", "ip6tnl0", "gre0", "gretap0", "erspan0", "ip_vti0", "ip6_vti0",
+    "ip6gre0",
+];
+
 /// The interface names in `/proc/net/dev` (two header lines, then
-/// `name: counters…`), without `lo`.
+/// `name: counters…`), without [`KERNEL_DEVICES`].
 pub fn parse_dev(text: &str) -> Vec<String> {
     text.lines()
         .skip(2)
         .filter_map(|l| l.split_once(':'))
         .map(|(name, _)| name.trim())
-        .filter(|n| !n.is_empty() && *n != "lo")
+        .filter(|n| !n.is_empty() && !KERNEL_DEVICES.contains(n))
         .map(str::to_owned)
         .collect()
 }

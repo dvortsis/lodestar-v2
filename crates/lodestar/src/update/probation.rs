@@ -395,7 +395,9 @@ impl Child {
 
     /// This version is on probation and its self-test hasn't decided yet.
     /// The network watch stays disarmed meanwhile, so its exit can't count
-    /// as a failed attempt (X-gluetun-restart-recover).
+    /// as a failed attempt (X-gluetun-restart-recover). Linux only, as the
+    /// watch is.
+    #[cfg(target_os = "linux")]
     pub fn undecided(&self) -> bool {
         self.in_probation && !PASSED.load(Ordering::SeqCst) && !FAILED.load(Ordering::SeqCst)
     }

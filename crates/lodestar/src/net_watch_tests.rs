@@ -169,6 +169,34 @@ wg0:1 1 0 0 0 0 0 0 1 1 0 0 0 0 0 0\n";
     assert!(parse_dev("").is_empty());
 }
 
+/// The kernel's fallback tunnel devices stay in an orphaned namespace and
+/// are in every new one: they never count as a network.
+#[test]
+fn fallback_tunnel_devices_are_not_a_network() {
+    let orphaned = "h\nh\n    lo: 1\n  sit0: 1\n tunl0: 1\nip6tnl0: 1\n  gre0: 1\ngretap0: 1\nerspan0: 1\nip_vti0: 1\nip6_vti0: 1\nip6gre0: 1\n";
+    assert!(parse_dev(orphaned).is_empty());
+    // A gluetun namespace orphaned with them left in it still exits.
+    let mut rule = Rule::default();
+    let t0 = Instant::now();
+    let left = sample_from(Some(orphaned), Some(""), Some("")).expect("sample");
+    let mut readings = vec![Some(up(&["eth0", "wg0"], true))];
+    readings.extend((0..=6).map(|_| Some(left.clone())));
+    assert_eq!(
+        run(&mut rule, t0, &readings, false).last(),
+        Some(&Verdict::Exit)
+    );
+    // `--network=none` on such a host never arms.
+    let mut none = Rule::default();
+    let readings: Vec<_> = (0..100).map(|_| Some(left.clone())).collect();
+    let verdicts = run(&mut none, t0, &readings, false);
+    assert!(
+        verdicts.iter().all(|v| *v == Verdict::Unarmed),
+        "{verdicts:?}"
+    );
+    // A real tunnel the user named, such as wg0, still counts.
+    assert_eq!(parse_dev("h\nh\n  wg0: 1\n"), vec!["wg0".to_owned()]);
+}
+
 #[test]
 fn parses_the_ipv4_route_table() {
     let head =
