@@ -998,9 +998,7 @@ fn wal_took(conn: &Connection, mode: String) -> Result<()> {
     if mode.eq_ignore_ascii_case("wal") || (in_memory && mode.eq_ignore_ascii_case("memory")) {
         return Ok(());
     }
-    Err(Error::Invalid(
-        "the data folder can't use SQLite's WAL journal (it needs a local disk, not a network share)",
-    ))
+    Err(Error::WalUnavailable)
 }
 
 /// Brings the schema up to date. Refuses to touch a database written by a
@@ -2141,12 +2139,30 @@ mod tests {
             )
             .unwrap();
             match use_wal(&conn) {
-                Err(Error::Invalid(why)) => assert!(why.contains("WAL"), "{why}"),
+                Err(e @ Error::WalUnavailable) => assert!(e.to_string().contains("WAL"), "{e}"),
                 other => panic!("expected a refusal, got {other:?}"),
             }
         }
         let memory = Connection::open_in_memory().unwrap();
         use_wal(&memory).unwrap();
         crate::Store::open_in_memory(crate::StoreConfig::default()).unwrap();
+    }
+
+    /// The other platforms' side of `a_folder_that_cant_use_wal_is_refused`
+    /// (whose refusal runs on Unix only): a store in an ordinary local
+    /// folder passes the check and is in WAL, so the check never refuses a
+    /// normal install. Windows has no VFS that keeps another mode.
+    #[test]
+    fn an_ordinary_folder_passes_the_wal_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let conn = Connection::open(&path).unwrap();
+        use_wal(&conn).unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        drop(conn);
+        drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
     }
 }

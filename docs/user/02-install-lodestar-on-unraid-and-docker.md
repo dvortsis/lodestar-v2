@@ -181,7 +181,7 @@ To install with the named volume:
    **Result:** The command prints `healthy` after about 30 seconds. `healthy` means only that the Lodestar process is alive. It doesn't mean Lodestar is finding torrents. The status pill on the **Search** screen and **Insights** show that ([section 5.3](05-use-lodestar.md#53-browse-discover-and-insights)).
 
 > [!WARNING]
-> Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there.
+> Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there. **(Planned)** Lodestar refuses to start if SQLite can't use its WAL journal there.
 
 To keep the data in a folder you own instead:
 

@@ -422,7 +422,7 @@ fn command_failed(command: &'static str, e: &(dyn std::error::Error + 'static)) 
     lodestar_log::log_event!(
         logging::events::APP_COMMAND_FAILED,
         command = command,
-        error = lodestar_log::Error::kind("failed")
+        error = lodestar_log::Error::kind(failure_kind(e, "failed"))
     );
     eprintln!(
         "{command}: {}",
@@ -431,9 +431,61 @@ fn command_failed(command: &'static str, e: &(dyn std::error::Error + 'static)) 
     ExitCode::FAILURE
 }
 
+/// A fixed label for why a command or the service failed, for the log
+/// line, which gets no message because a message can name a path. The
+/// store's refusal of a folder without WAL is named, as its fix is the
+/// user's (X-store-wal-nits); anything else is `default`.
+pub(crate) fn failure_kind(
+    e: &(dyn std::error::Error + 'static),
+    default: &'static str,
+) -> &'static str {
+    let mut at = Some(e);
+    while let Some(e) = at {
+        if matches!(
+            e.downcast_ref::<lodestar_store::Error>(),
+            Some(lodestar_store::Error::WalUnavailable)
+        ) {
+            return "store_wal_unavailable";
+        }
+        at = e.source();
+    }
+    default
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The WAL refusal is named wherever it sits in the chain; any other
+    /// failure keeps the caller's label.
+    #[test]
+    fn a_store_without_wal_is_named_in_the_failure_kind() {
+        #[derive(Debug)]
+        struct Wrapped(lodestar_store::Error);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "opening the store")
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let bare: BoxError = Box::new(lodestar_store::Error::WalUnavailable);
+        assert_eq!(failure_kind(&*bare, "failed"), "store_wal_unavailable");
+        let wrapped: BoxError = Box::new(Wrapped(lodestar_store::Error::WalUnavailable));
+        assert_eq!(failure_kind(&*wrapped, "serve"), "store_wal_unavailable");
+        let other: BoxError = Box::new(lodestar_store::Error::Corrupt("x"));
+        assert_eq!(failure_kind(&*other, "serve"), "serve");
+        // What the console and `docker logs` show: the plain fix.
+        assert!(
+            bare.to_string().starts_with(
+                "the data folder can't use SQLite's WAL journal: keep it on a local disk"
+            ),
+            "{bare}"
+        );
+    }
 
     #[test]
     fn healthcheck_needs_a_200() {
