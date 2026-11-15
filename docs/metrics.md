@@ -875,6 +875,14 @@ The fetch pool holds info dicts to a byte budget, `max_held_bytes` (64 MiB by de
 | `fetch_held_full_total` | counter | Times the budget (held plus reserved bytes), or a waiting reservation that holds dispatch (a whole dict's, a large dict's remainder, or a large dict's first window that only lacks room), stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. A result waiting for an output slot also stops fetching (outbox backpressure), but isn't counted here. |
 | `fetch_reserve_timeouts_total` | counter | Fetches whose deadline ran out while they waited for a reservation. The first two for a key aren't counted as failed fetches, and the peer is tried again later; the third is charged as a `timed_out` failure, so a key can't wait out for ever. A steady rise means the budget is too small for the dicts being fetched. |
 
+## First windows (X-fetch-first-window, 2026-11-14)
+
+A fetch of a dict larger than one request window (64 KiB) asks for that first window all at once and must have it within 4 s ([the decision](decisions/2026-11-14-X-fetch-first-window.md)). Past that the fetch ends as a timed-out failure of that peer; the key keeps its other peers.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `fetch_first_window_timeouts_total{transport}` | counter | Fetches of a large dict whose first window didn't arrive within 4 s of being requested, by transport (`tcp`, `utp`). They're also counted among the `timed_out` failures. A steady share of honest fetches here would mean the bound is too tight. |
+
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
 
 See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
