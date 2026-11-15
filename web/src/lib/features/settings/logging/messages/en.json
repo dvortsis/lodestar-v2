@@ -473,6 +473,8 @@
 	"settings_logging_ev_integrations_client_no_labels_h": "Your torrent client doesn't support labels.",
 	"settings_logging_ev_integrations_client_label_failed_n": "Label not set",
 	"settings_logging_ev_integrations_client_label_failed_h": "A label couldn't be set in your torrent client.",
+	"settings_logging_ev_integrations_companion_not_ready_n": "Companion not ready",
+	"settings_logging_ev_integrations_companion_not_ready_h": "Lodestar held back a request to one of its companions because the companion isn't ready yet. It clears once the companion starts; if you stopped or removed it, restart Lodestar.",
 	"settings_logging_ev_integrations_notify_attempt_n": "Notification sent",
 	"settings_logging_ev_integrations_notify_attempt_h": "An attempt to deliver a notification.",
 	"settings_logging_ev_integrations_notify_retry_n": "Notification retry",

@@ -281,12 +281,16 @@ impl fmt::Display for NetError {
             NetError::TooLarge => f.write_str("the response was too large"),
             NetError::Redirect => f.write_str("too many redirects, or an unsafe redirect"),
             NetError::Http => f.write_str("the HTTP exchange failed"),
-            NetError::NotReady => f.write_str("the local service isn't ready yet"),
+            NetError::NotReady => f.write_str(NOT_READY),
         }
     }
 }
 
 impl StdError for NetError {}
+
+/// What a request held back by the loopback gate tells you, in every
+/// error that carries it (download clients, sources, companions).
+pub const NOT_READY: &str = "Lodestar's own copy of this companion isn't ready yet. If you stopped or removed it, restart Lodestar to use your own.";
 
 /// Parses a user-entered URL and checks what can be checked without DNS:
 /// the scheme, the absence of embedded credentials, and an IP-literal host.
@@ -426,9 +430,12 @@ impl reqwest::dns::Resolve for GuardResolver {
             // The loopback gate, on every new connection: a name that
             // resolves to loopback is refused while a port a request is
             // sending it to is refused.
-            if addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback) && !pending.allowed(host)
+            if addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback)
+                && let Some(port) = pending.refused(host)
             {
-                return Err(Box::new(NetError::NotReady) as Box<dyn StdError + Send + Sync>);
+                return Err(
+                    Box::new(loopback_gate::refuse(port)) as Box<dyn StdError + Send + Sync>
+                );
             }
             if let Some(family) = family {
                 addrs.retain(|ip| Family::of(*ip) == family);
@@ -776,24 +783,24 @@ impl GuardedClient {
         let literal = literal_ip(url);
         if literal.is_none() && self.remote_dns {
             if local_name_class(host) == Some(AddrClass::Loopback) && !loopback_gate::allows(port) {
-                return Err(NetError::NotReady);
+                return Err(self.refuse_loopback(port));
             }
             return Ok(None);
         }
         if !loopback_gate::allows(port) {
             let loopback = match literal {
                 Some(ip) => classify(ip) == AddrClass::Loopback,
-                // A name that doesn't resolve now is refused too: it could
-                // only have failed anyway, and nothing is left to chance.
-                None => {
-                    local_name_class(host) == Some(AddrClass::Loopback)
-                        || self.resolver.resolve(host).await.map_or(true, |addrs| {
-                            addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback)
-                        })
-                }
+                None if local_name_class(host) == Some(AddrClass::Loopback) => true,
+                // A name that doesn't resolve now is refused too, as the
+                // failed lookup it is: it could only have failed anyway, and
+                // nothing is left to chance.
+                None => match self.resolver.resolve(host).await {
+                    Ok(addrs) => addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback),
+                    Err(_) => return Err(NetError::Resolve),
+                },
             };
             if loopback {
-                return Err(NetError::NotReady);
+                return Err(self.refuse_loopback(port));
             }
         }
         Ok(Some(self.pending.enter(host, port)))
@@ -801,6 +808,16 @@ impl GuardedClient {
 
     pub fn policy(&self) -> NetPolicy {
         self.policy
+    }
+
+    /// A loopback destination on a port the gate refuses: blocked, if this
+    /// client's policy never allows loopback (so it isn't a companion that
+    /// isn't ready), and otherwise not ready.
+    fn refuse_loopback(&self, port: u16) -> NetError {
+        match self.policy.check(IpAddr::V4(Ipv4Addr::LOCALHOST)) {
+            Err(blocked) => blocked,
+            Ok(()) => loopback_gate::refuse(port),
+        }
     }
 
     /// A request builder, for adapters in this crate. Finish it with
@@ -1186,7 +1203,7 @@ pub async fn resolve_tcp(
     };
     // The loopback gate.
     if !loopback_gate::allows(port) && addrs.iter().any(|ip| classify(*ip) == AddrClass::Loopback) {
-        return Err(NetError::NotReady);
+        return Err(loopback_gate::refuse(port));
     }
     Ok(addrs
         .into_iter()

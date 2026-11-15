@@ -855,6 +855,7 @@ fn adapter_code(e: AdapterError) -> &'static str {
         AdapterError::Refused(code) => code,
         AdapterError::Unauthorized => "companion_unauthorized",
         AdapterError::Timeout | AdapterError::Unreachable => "companion_unreachable",
+        AdapterError::NotReady => "companion_not_ready",
         AdapterError::Blocked => "address_refused",
         AdapterError::NotThisCompanion => "not_detected",
         _ => "companion_protocol",
@@ -1651,6 +1652,17 @@ mod tests {
 
     fn id(s: &str) -> CompanionId {
         CompanionId::parse(s).unwrap()
+    }
+
+    /// X-cmp09-starting-status: a companion that isn't ready has its own
+    /// code, which the web app words apart from unreachable.
+    #[test]
+    fn not_ready_has_its_own_code() {
+        assert_eq!(adapter_code(AdapterError::NotReady), "companion_not_ready");
+        assert_eq!(
+            adapter_code(AdapterError::Unreachable),
+            "companion_unreachable"
+        );
     }
 
     fn client(id: &str) -> DownloadClient {

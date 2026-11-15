@@ -189,9 +189,10 @@ pub(crate) fn not_found_or(
 /// is unreachable; an answer that broke a rule is unhealthy.
 pub(crate) fn health_of(e: AdapterError) -> HealthStatus {
     match e {
-        AdapterError::Timeout | AdapterError::Unreachable | AdapterError::Blocked => {
-            HealthStatus::Unreachable
-        }
+        AdapterError::Timeout
+        | AdapterError::Unreachable
+        | AdapterError::NotReady
+        | AdapterError::Blocked => HealthStatus::Unreachable,
         _ => HealthStatus::Unhealthy,
     }
 }
@@ -442,6 +443,9 @@ impl CompanionHttp {
                 // A companion Lodestar runs: `127.0.0.1` alone, and what
                 // carries something only to the child that's ready there.
                 if let Some(b) = self.bindings.as_ref().filter(|b| b.managed(p)) {
+                    // Unreachable, not `NotReady`, on purpose: detection at a
+                    // fixed target reads unreachable as "not here", and a
+                    // guided step's own words for "starting" are for later.
                     if !bare(request) && !b.ready(p) {
                         return Err(AdapterError::Unreachable);
                     }
@@ -539,7 +543,10 @@ fn bare(request: &ProbeRequest<'_>) -> bool {
 fn listening(got: &Result<ProbeResponse, AdapterError>) -> bool {
     !matches!(
         got,
-        Err(AdapterError::Unreachable | AdapterError::Timeout | AdapterError::Blocked)
+        Err(AdapterError::Unreachable
+            | AdapterError::NotReady
+            | AdapterError::Timeout
+            | AdapterError::Blocked)
     )
 }
 
@@ -591,7 +598,8 @@ fn join(base: &EnteredUrl, path: &RequestPath) -> Result<Url, AdapterError> {
 fn net_error(e: NetError) -> AdapterError {
     match e {
         NetError::Blocked(_) => AdapterError::Blocked,
-        NetError::Resolve | NetError::Connect | NetError::NotReady => AdapterError::Unreachable,
+        NetError::Resolve | NetError::Connect => AdapterError::Unreachable,
+        NetError::NotReady => AdapterError::NotReady,
         NetError::Timeout => AdapterError::Timeout,
         NetError::TooLarge => AdapterError::TooLarge,
         NetError::InvalidUrl(_) => AdapterError::Protocol("URL"),
@@ -646,6 +654,7 @@ mod tests {
     fn only_an_exchange_shows_a_listener() {
         for e in [
             AdapterError::Unreachable,
+            AdapterError::NotReady,
             AdapterError::Timeout,
             AdapterError::Blocked,
         ] {
@@ -773,6 +782,8 @@ mod tests {
         );
         assert_eq!(net_error(NetError::Connect), AdapterError::Unreachable);
         assert_eq!(net_error(NetError::Resolve), AdapterError::Unreachable);
+        // Not ready is its own error, never unreachable.
+        assert_eq!(net_error(NetError::NotReady), AdapterError::NotReady);
         assert_eq!(net_error(NetError::Timeout), AdapterError::Timeout);
         assert_eq!(net_error(NetError::TooLarge), AdapterError::TooLarge);
         assert!(matches!(
@@ -785,6 +796,7 @@ mod tests {
     fn health_and_detection_read_errors_the_same_way() {
         assert_eq!(health_of(AdapterError::Blocked), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::Timeout), HealthStatus::Unreachable);
+        assert_eq!(health_of(AdapterError::NotReady), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::TooLarge), HealthStatus::Unhealthy);
         let lo = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
         let entered = Target::Entered(EnteredUrl::parse("http://10.0.0.2").unwrap());
@@ -797,6 +809,11 @@ mod tests {
         assert_eq!(
             not_found_or(AdapterError::Blocked, &lo),
             Err(AdapterError::Blocked)
+        );
+        // Not ready is said, not read as "not here".
+        assert_eq!(
+            not_found_or(AdapterError::NotReady, &entered),
+            Err(AdapterError::NotReady)
         );
     }
 
