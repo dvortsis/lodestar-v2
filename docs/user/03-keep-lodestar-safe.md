@@ -74,7 +74,7 @@ To use it:
 4. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
    **Result:** Lodestar starts on gluetun's network.
 5. Open the web UI at your server address and the port you published on gluetun.
-6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
+6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one. **(Newer than v0.5.1)** Lodestar's gluetun template restarts it for you, so this step is only needed on v0.5.1.
 
 ### Run Lodestar through gluetun with Docker Compose
 <!-- index: gluetun Compose; network_mode service; WireGuard -->
@@ -395,7 +395,7 @@ To restore on Unraid:
    Use the same image as your container's **Repository** field. If you changed **PUID** and **PGID**, use your numbers. **Result:** After a few log lines, it prints `The search index is marked for rebuild.` If it says `refused` and asks you to stop Lodestar, stop it on the Docker tab. Then run the command again.
 5. On the Docker tab, select the **Lodestar** icon, then **Start**.
    **Result:** Lodestar rebuilds the search index from the database. Results fill in while it runs.
-6. Sign out the other sessions and replace your API keys. A restored `auth.json` brings back the sessions and keys that existed when the backup was taken, including any you revoked since. Open the web UI, go to **Settings**, then **Security**, and select **Sign out other sessions…**. Revoke each API key you use and create a new one, then paste the new keys into the apps that use them. Changing the admin password on the same page also signs out every other browser.
+6. Sign out the other sessions and replace your API keys. A restored `auth.json` brings back the sessions and keys that existed when the backup was taken, including any you revoked since. **(Newer than v0.5.1)** Open the web UI, go to **Settings**, then **Security**, and select **Sign out other sessions…**. Revoke each API key you use and create a new one, then paste the new keys into the apps that use them. Changing the admin password on the same page also signs out every other browser.
 
 You can also copy the whole data folder while Lodestar is stopped. That copy includes a matching index, so step 4 doesn't apply when you restore it.
 
