@@ -26,6 +26,7 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
 - **The dependency: `same-file` 1.0.6 (runner's OK).** It's a direct dependency of the lodestar crate on Windows only. It was already in `Cargo.lock` through walkdir, so nothing new is downloaded.
   - **Why:** its `Handle` reads the volume serial and file index through a safe API. The workspace forbids `unsafe` (`docs/owner-decisions.md` §1b.5), so calling `GetFileInformationByHandle` directly isn't possible.
   - No `unsafe` is added anywhere.
+  - **Shipped licences:** `same-file` and its `winapi-util` now ship in the Windows build, so both are listed in `web/licenses/rust.json` (Unlicense or MIT, both on the allowlist; owner §2.12).
 - **The fallback, for a path that can't be opened** (one that doesn't exist yet, or one this account can't read), compares the text as Win32 reads it:
   - the full path through `GetFullPathNameW` (`std::path::absolute`), which resolves `.`, `..`, trailing dots and spaces, and `/`;
   - the nearest existing folder's real path, as before;
