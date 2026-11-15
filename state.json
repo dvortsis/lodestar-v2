@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T20:20Z",
+  "updated_at": "2026-11-15T20:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T20:20Z",
+  "last_heartbeat": "2026-11-15T20:45Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10013,6 +10013,12 @@
       "slice": "X-cleanup-fits-quota",
       "sha": "82e4e6952a1728da459118753d57cc7d0d18e1ec",
       "at": "2026-11-15T20:20Z"
+    },
+    {
+      "pr": 939,
+      "slice": "X-worker-oversize-handback",
+      "sha": "64797fce14f26ab24edfad25ee1bd95f8a74ca11",
+      "at": "2026-11-15T20:45Z"
     }
   ],
   "active_sessions": {
@@ -10251,7 +10257,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T20:20Z",
+    "updated": "2026-11-15T20:45Z",
     "items": [
       {
         "slot": 1,
@@ -10287,14 +10293,13 @@
       },
       {
         "slot": 4,
-        "slice": "X-worker-oversize-handback",
+        "slice": "X-worker-oversize-nits",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T15:53Z",
-        "doing": "rebuild from parked/X-worker-oversize-handback on main (after #929); session_01MMjhn8URRT9adbFfM1zGi1",
-        "cap": "build (\u00a72.64 4+4)",
-        "status": "active"
+        "since": "2026-11-15T20:45Z",
+        "doing": "X-worker-oversize-nits: #939 review optionals (#939 merged)",
+        "cap": "build (\u00a72.64 4+4)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10385,8 +10390,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T20:20Z",
-  "updated": "2026-11-15T20:20Z",
+  "heartbeat": "2026-11-15T20:45Z",
+  "updated": "2026-11-15T20:45Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
