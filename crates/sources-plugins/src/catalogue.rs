@@ -20,8 +20,8 @@
 use lodestar_sources::Manifest;
 
 use crate::{
-    academic, archive_org, arr, clients, full_scrape, nyaa, prowlarr, stashdb, torrent_cache, tpdb,
-    wikidata,
+    academic, archive_org, arr, clients, full_scrape, musicbrainz, nyaa, prowlarr, stashdb,
+    torrent_cache, tpdb, wikidata,
 };
 
 /// `(module, manifest)` for every plugin, in `lib.rs` order. A module
@@ -32,6 +32,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("arr", &arr::MANIFEST),
     ("clients", &clients::MANIFEST),
     ("full_scrape", &full_scrape::MANIFEST),
+    ("musicbrainz", &musicbrainz::MANIFEST),
     ("nyaa", &nyaa::MANIFEST),
     ("nyaa", &nyaa::SUKEBEI_MANIFEST),
     ("prowlarr", &prowlarr::MANIFEST),

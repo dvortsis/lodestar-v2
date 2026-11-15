@@ -64,6 +64,10 @@ fn each_entry_is_its_plugins_own_manifest() {
         )
         .manifest()
         .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
+        )
+        .clone(),
         nyaa::Nyaa::new().manifest().clone(),
         nyaa::Sukebei::new().manifest().clone(),
         prowlarr::Prowlarr::unconfigured(creds()).manifest().clone(),

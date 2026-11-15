@@ -9,6 +9,7 @@ pub mod archive_org;
 mod common;
 pub mod json;
 pub mod lemmy;
+pub mod musicbrainz;
 pub mod nostr;
 pub mod rss;
 pub mod stashdb;

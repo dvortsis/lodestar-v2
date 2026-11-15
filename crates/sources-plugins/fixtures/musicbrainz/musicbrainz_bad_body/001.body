@@ -1,0 +1,58 @@
+{
+ "created": "2026-11-15T00:00:00.000Z",
+ "count": 3,
+ "offset": 0,
+ "release-groups": [
+  {
+   "id": "a1000000-0000-4000-8000-000000000001",
+   "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "score": 100,
+   "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "count": 40,
+   "title": "Harbour Lights",
+   "first-release-date": "2004-03-15",
+   "primary-type": "Album",
+   "artist-credit": [
+    {
+     "name": "The Quiet Engines",
+     "joinphrase": "",
+     "artist": {
+      "id": "9a000000-0000-4000-8000-000012559534",
+      "name": "The Quiet Engines",
+      "sort-name": "SENTINEL-SORT",
+      "disambiguation": "SENTINEL-DISAMBIGUATION",
+      "aliases": [
+       {
+        "sort-name": "SENTINEL-ALIAS",
+        "name": "SENTINEL-ALIAS",
+        "locale": null,
+        "type": null,
+        "primary": null,
+        "begin-date": null,
+        "end-date": null
+       }
+      ]
+     }
+    }
+   ],
+   "releases": [
+    {
+     "id": "7e000000-0000-4000-8000-000000000000",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Harbour Lights",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-000000000001",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Harbour Lights",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-000000000002",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Harbour Lights",
+     "status": "Official"
+    },
+    {
+     "id": 
