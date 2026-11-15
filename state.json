@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T18:53Z",
+  "updated_at": "2026-11-15T19:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T18:53Z",
+  "last_heartbeat": "2026-11-15T19:04Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9995,6 +9995,12 @@
       "slice": "X-fuzz-nits-1115",
       "sha": "fa71eacb",
       "at": "2026-11-15T18:53Z"
+    },
+    {
+      "pr": 937,
+      "slice": "X-store-busy-nits",
+      "sha": "8b596aa9b8afc1de53d8dd7c9ec6d02ebd529e17",
+      "at": "2026-11-15T19:04Z"
     }
   ],
   "active_sessions": {
@@ -10233,7 +10239,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T18:53Z",
+    "updated": "2026-11-15T19:04Z",
     "items": [
       {
         "slot": 1,
@@ -10242,18 +10248,18 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T15:59Z",
-        "doing": "#936 r1 CHANGES relayed (order test, implicit config, tidy over-match); session_01MMjhn8LCZuDPeXwdBzodLH",
+        "doing": "#936 r4 d906def8: self-check OK, CI watch; merge on green after merged-tree check; session_01MMjhn8LCZuDPeXwdBzodLH",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
       {
         "slot": 2,
-        "slice": "X-store-busy-nits",
+        "slice": "X-routing-table-metric",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T16:34Z",
-        "doing": "#937 X-store-busy-nits: review running, CI; session_01MMjhn9j5mWvNehxxWyykLf",
+        "since": "2026-11-15T19:04Z",
+        "doing": "routing-table size gauge on /metrics + metrics.md row (after #937 merged 8b596aa9); session_01MMjhn9j5mWvNehxxWyykLf",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10368,8 +10374,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T18:53Z",
-  "updated": "2026-11-15T18:53Z",
+  "heartbeat": "2026-11-15T19:04Z",
+  "updated": "2026-11-15T19:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
