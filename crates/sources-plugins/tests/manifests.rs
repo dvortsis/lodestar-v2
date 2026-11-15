@@ -10,7 +10,7 @@ use lodestar_sources::{Kind, Manifest, SourcePlugin};
 use lodestar_sources_plugins::full_scrape::{StaticPrivateTrackers, SystemClock};
 use lodestar_sources_plugins::{
     StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa, prowlarr,
-    stashdb, torrent_cache, tpdb,
+    stashdb, torrent_cache, tpdb, tvdb,
 };
 
 /// The adult enrichers are picked by id (`PipelineConfig::adult_enrichers`)
@@ -70,6 +70,7 @@ fn each_entry_is_its_plugins_own_manifest() {
         AdultEnricher::manifest(&stashdb).clone(),
         cache.manifest().clone(),
         AdultEnricher::manifest(&tpdb).clone(),
+        lodestar_sources::identify::Identifier::manifest(&tvdb::Tvdb::new(creds())).clone(),
         lodestar_sources::identify::Identifier::manifest(
             &lodestar_sources_plugins::wikidata::Wikidata::new(),
         )

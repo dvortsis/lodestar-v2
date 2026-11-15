@@ -14,6 +14,7 @@ pub mod rss;
 pub mod stashdb;
 pub mod torznab;
 pub mod tpdb;
+pub mod tvdb;
 pub mod wikidata;
 
 pub use common::external_ref;
