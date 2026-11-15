@@ -846,6 +846,83 @@ fn config_content(yaml: &str) -> Option<String> {
     Some(out)
 }
 
+/// Every template with gluetun sets its small health check to DNS
+/// (X-gluetun-restart-recover): with the default ICMP check, a provider that
+/// doesn't answer pings (PIA) makes gluetun restart the VPN every few minutes.
+#[test]
+fn every_gluetun_template_checks_health_with_dns() {
+    use lodestar_companions::compose::GLUETUN_HEALTH_CHECK;
+    assert_eq!(GLUETUN_HEALTH_CHECK, ("HEALTH_SMALL_CHECK_TYPE", "dns"));
+    let cat = golden_catalogue();
+    for (companion, route) in [
+        ("gluetun", Route::Direct),
+        ("qbittorrent", Route::Gluetun),
+        ("prowlarr", Route::Gluetun),
+        ("flaresolverr", Route::Gluetun),
+    ] {
+        let inp = input(companion, route);
+        let yaml = compose(&cat, &id(companion), &inp).expect("compose");
+        assert_eq!(
+            yaml.matches("\"HEALTH_SMALL_CHECK_TYPE\": \"dns\"").count(),
+            1,
+            "{companion}: {yaml}"
+        );
+        assert!(
+            yaml.contains("many providers don't answer pings"),
+            "{companion}"
+        );
+        let xml = unraid(&cat, &id(companion), &inp).expect("unraid");
+        let g = &xml[0];
+        assert_eq!(g.file_name, "my-gluetun.xml");
+        assert!(
+            g.xml.contains(
+                "<Config Name=\"HEALTH_SMALL_CHECK_TYPE\" Target=\"HEALTH_SMALL_CHECK_TYPE\" Default=\"dns\""
+            ),
+            "{companion}: {}",
+            g.xml
+        );
+        assert!(g.xml.contains("Keep dns:"), "{companion}");
+        // Only gluetun gets it: a routed companion isn't gluetun.
+        for other in &xml[1..] {
+            assert!(
+                !other.xml.contains("HEALTH_SMALL_CHECK_TYPE"),
+                "{companion}"
+            );
+        }
+    }
+    // A companion that isn't routed through gluetun never gets it.
+    let inp = input("qbittorrent", Route::Direct);
+    let yaml = compose(&cat, &id("qbittorrent"), &inp).expect("compose");
+    assert!(!yaml.contains("HEALTH_SMALL_CHECK_TYPE"));
+}
+
+/// A companion in gluetun's network restarts whenever Compose restarts
+/// gluetun (X-gluetun-restart-recover): otherwise it stays in gluetun's
+/// old namespace with nothing but `lo`.
+#[test]
+fn a_routed_companion_restarts_with_gluetun() {
+    let cat = golden_catalogue();
+    for companion in ["qbittorrent", "prowlarr", "flaresolverr"] {
+        let inp = input(companion, Route::Gluetun);
+        let yaml = compose(&cat, &id(companion), &inp).expect("compose");
+        assert!(
+            yaml.contains(
+                "    \"depends_on\":\n      \"gluetun\":\n        \"condition\": \"service_healthy\"\n        \"restart\": true\n"
+            ),
+            "{companion}: {yaml}"
+        );
+    }
+}
+
+#[test]
+fn a_direct_companion_has_no_gluetun_dependency() {
+    let cat = golden_catalogue();
+    let inp = input("qbittorrent", Route::Direct);
+    let yaml = compose(&cat, &id("qbittorrent"), &inp).expect("compose");
+    assert!(!yaml.contains("HEALTH_SMALL_CHECK_TYPE"));
+    assert!(!yaml.contains("depends_on"), "{yaml}");
+}
+
 /// Every template with gluetun carries the rules (compose: inline, exactly
 /// the embedded text; Unraid: a read-only Path at gluetun's post-rules
 /// location), and sets VPN_INTERFACE to the one interface the rules name.
