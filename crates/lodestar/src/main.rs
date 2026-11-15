@@ -130,7 +130,16 @@ fn run() -> ExitCode {
         }
         None => privdrop::Report::default(),
     };
-    let load = |path: Option<PathBuf>| Config::load(path.as_deref(), |k| std::env::var(k).ok());
+    // Hand-run `serve` and `healthcheck`: the service's folder only once
+    // it's found private, as for every other command (S8-07).
+    let load = |path: Option<PathBuf>| {
+        cli::load_serve_config(
+            path.as_deref(),
+            &cli::Install::here(),
+            |k| std::env::var(k).ok(),
+            cli::check_this_service_dir,
+        )
+    };
     match command {
         Command::Lists => {
             for e in subscriptions::CATALOG {
@@ -153,10 +162,7 @@ fn run() -> ExitCode {
                     ExitCode::FAILURE
                 }
             },
-            Err(e) => {
-                eprintln!("config: {e}");
-                ExitCode::FAILURE
-            }
+            Err(e) => cli::report(&e),
         },
         Command::Serve {
             fixture: Some(dir), ..
@@ -167,10 +173,7 @@ fn run() -> ExitCode {
         } => {
             let config = match load(config_path.clone()) {
                 Ok(c) => c,
-                Err(e) => {
-                    eprintln!("config: {e}");
-                    return ExitCode::FAILURE;
-                }
+                Err(e) => return cli::report(&e),
             };
             // On Unix, `serve` is the supervisor (§12.2), still
             // single-threaded here; the work runs in its `--child`.

@@ -54,10 +54,18 @@ pub fn hook() -> Option<ExitCode> {
         if role == service::Role::Worker {
             return None;
         }
-        // An unreadable config is `main`'s to report.
-        if let Ok(config) =
-            crate::config::Config::load(config_path.as_deref(), |k| std::env::var(k).ok())
-        {
+        // An unreadable config is `main`'s to report. So is the service's
+        // folder: this never reads it, and leaves its check to `main`.
+        if let Ok(config) = crate::cli::load_serve_config(
+            config_path.as_deref(),
+            &crate::cli::Install::here(),
+            |k| std::env::var(k).ok(),
+            |_| {
+                Err(crate::cli::util::Failure::Refused(
+                    "the service's folder is main's to check".into(),
+                ))
+            },
+        ) {
             startup(&config);
         }
     }
