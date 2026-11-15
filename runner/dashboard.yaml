@@ -796,6 +796,7 @@ placement:
   - X-fixed-sleep-nits
   - X-cluster06-fix
   - X-metainfo01-fix
+  - X-flake-metainfo-bound-rss
   - X-filter02-fix
   - X-update01-store01-fix
   - X-dht01-fix
