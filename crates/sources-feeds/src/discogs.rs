@@ -292,7 +292,7 @@ impl<'a> Parser<'a, '_> {
             return self.skip_in(s).map(|()| None);
         }
         let raw = self.j.num()?;
-        let n = digits(&raw);
+        let n = digits(raw);
         if n.is_none() {
             s.set(Bad::Malformed);
         }
