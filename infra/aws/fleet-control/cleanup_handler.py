@@ -22,12 +22,61 @@ FLAG_KEY = "locks/fleet-mismatch.json"
 TAGS = {"lodestar", "test", "managed-terraform"}
 TYPES = {"main": "g6-standard-4", "worker": "g6-nanode-1"}
 MAX_NODES = 2
+# One lease object per mode in the control bucket replaces reserved concurrency:
+# at most one run of each broker at a time. The lease outlives the 300 s timeout.
+LEASE_KEYS = {"expiration": "locks/cleanup-expiration.json", "emergency": "locks/cleanup-emergency.json"}
+LEASE_SECONDS = 600
+CONFLICT = {"PreconditionFailed", "ConditionalRequestConflict"}
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
 
 class Refused(RuntimeError):
     pass
+
+
+class Busy(Exception):
+    pass
+
+
+def conflict(exc):
+    # S3 answers 412 PreconditionFailed, or 409 while a racing conditional write is in flight.
+    return (getattr(exc, "response", None) or {}).get("Error", {}).get("Code") in CONFLICT
+
+
+def lease_body(mode, holder, expires):
+    return json.dumps({"version": 1, "mode": mode, "holder": holder, "expires_at": expires.isoformat()}).encode()
+
+
+def acquire_lease(s3, bucket, owner, mode, holder, now):
+    """Create the lease only if absent, or take over an expired one by its ETag. Busy if live."""
+    key, body = LEASE_KEYS[mode], lease_body(mode, holder, now + timedelta(seconds=LEASE_SECONDS))
+    try:
+        return s3.put_object(Bucket=bucket, Key=key, ExpectedBucketOwner=owner, Body=body, IfNoneMatch="*")["ETag"]
+    except Exception as exc:
+        if not conflict(exc):
+            raise
+    found = s3.get_object(Bucket=bucket, Key=key, ExpectedBucketOwner=owner)
+    raw = found["Body"].read(4097)
+    lease = json.loads(raw) if len(raw) <= 4096 else None
+    if not isinstance(lease, dict) or lease.get("version") != 1 or lease.get("mode") != mode:
+        raise Refused("cleanup lease malformed")
+    expires = timestamp(lease.get("expires_at"))
+    if expires > now + timedelta(seconds=LEASE_SECONDS + 60):
+        raise Refused("cleanup lease malformed")  # no real lease ends that late
+    if expires > now:
+        raise Busy()
+    try:
+        return s3.put_object(Bucket=bucket, Key=key, ExpectedBucketOwner=owner, Body=body, IfMatch=found["ETag"])["ETag"]
+    except Exception as exc:
+        if conflict(exc):
+            raise Busy() from None
+        raise
+
+
+def release_lease(s3, bucket, owner, mode, holder, etag, now):
+    # Overwrite only our own lease version with an already-expired one; a lost lease raises.
+    s3.put_object(Bucket=bucket, Key=LEASE_KEYS[mode], ExpectedBucketOwner=owner, Body=lease_body(mode, holder, now), IfMatch=etag)
 
 
 def timestamp(value, api=False):
@@ -271,8 +320,7 @@ def handler(event, context):
     # Fixed deployment mode; caller payload cannot select targets, credentials or mode.
     import boto3
     from botocore.config import Config
-    report = {"status": "failed", "event": "cleanup_failed"}
-    stage = "execution_identity"
+    where = {"stage": "execution_identity"}
     try:
         account, region = os.environ["AWS_ACCOUNT_ID"], os.environ["AWS_REGION"]
         if region != "us-east-1" or not re.fullmatch(r"[0-9]{12}", account):
@@ -282,46 +330,71 @@ def handler(event, context):
         if session.client("sts", config=cfg).get_caller_identity()["Account"] != account:
             raise Refused("AWS execution account mismatch")
         s3 = session.client("s3", config=cfg)
-        stage = "authorization"
-        bucket = os.environ["STATE_BUCKET"]
-        result = s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account)
-        etag = result["ETag"]
-        raw = result["Body"].read(65537)
-        if len(raw) > 65536:
-            raise Refused("authorization too large")
-        doc = json.loads(raw)
-        read_only = isinstance(event, dict) and event.get("dry_run") is True
-        if os.environ["CLEANUP_MODE"] == "emergency" and not read_only:
-            request = event if isinstance(event, dict) else {}
-            requested = timestamp(request.get("requested_at"))
-            now = datetime.now(timezone.utc)
-            validate_authorization(doc, os.environ["LINODE_ACCOUNT_EUUID"], timestamp(os.environ["MIN_CREATED_UTC"]), now)
-            if (not now - timedelta(minutes=10) <= requested <= now or timestamp(doc["created_at"]) > requested
-                    or any(timestamp(n["created"], api=True) > requested for n in doc["linodes"])):
-                raise Refused("emergency request is stale or predates this fleet")
-            if request.get("operation") == "prepare":
-                return {"status": "prepared", "authorization_version": etag}
-            if request.get("authorization_version") != etag:
-                raise Refused("emergency authorization version changed")
-        def unchanged():
-            # IfMatch pins the current authorization; replacement/revocation stops work.
-            s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account, IfMatch=etag)["Body"].close()
-        def mark():
-            s3.put_object(Bucket=os.environ["CONTROL_BUCKET"], Key=FLAG_KEY, ExpectedBucketOwner=account,
-                          Body=json.dumps({"mismatch": True, "reasons": ["independent cleanup; owner reconciliation required"]}).encode())
-        stage = "cleanup_credential"
-        secret = session.client("secretsmanager", config=cfg).get_secret_value(SecretId=os.environ["CLEANUP_SECRET_ARN"])["SecretString"]
-        token = json.loads(secret)["token"] if secret.startswith("{") else secret
-        if not isinstance(token, str) or not 20 <= len(token) <= 512 or any(c.isspace() for c in token):
-            raise Refused("cleanup credential invalid")
-        stage = "scoped_cleanup"
-        report = cleanup(doc, os.environ["LINODE_ACCOUNT_EUUID"], timestamp(os.environ["MIN_CREATED_UTC"]),
-                         os.environ["CLEANUP_MODE"], datetime.now(timezone.utc), transport(token), unchanged, mark,
-                         dry_run=read_only, remaining=lambda: context.get_remaining_time_in_millis() / 1000, github=github_get)
-        report["event"] = "cleanup_read_only" if read_only else "cleanup_complete"
-        LOG.info(json.dumps(report))
+        where["stage"] = "lease"
+        mode, control, holder = os.environ["CLEANUP_MODE"], os.environ["CONTROL_BUCKET"], str(context.aws_request_id)
+        try:
+            etag = acquire_lease(s3, control, account, mode, holder, datetime.now(timezone.utc))
+        except Busy:
+            busy = {"status": "busy", "event": "cleanup_busy", "mode": mode}
+            LOG.warning(json.dumps(busy))  # The busy metric filter alarms; nothing else ran.
+            return busy
+        try:
+            report = broker(event, context, session, s3, cfg, account, where)
+        except BaseException:
+            try:
+                release_lease(s3, control, account, mode, holder, etag, datetime.now(timezone.utc))
+            except Exception:
+                LOG.error(json.dumps({"event": "cleanup_lease_release_failed", "mode": mode}))
+            raise
+        if report.get("event"):
+            LOG.info(json.dumps(report))  # before release: a failed release still leaves the summary
+        where["stage"] = "lease_release"
+        release_lease(s3, control, account, mode, holder, etag, datetime.now(timezone.utc))
         return report
     except Exception as exc:
-        report.update(status="failed", event="cleanup_failed", stage=stage, reason=str(exc) if isinstance(exc, Refused) else "dependency unavailable or malformed data")
+        report = {"status": "failed", "event": "cleanup_failed", "stage": where["stage"],
+                  "reason": str(exc) if isinstance(exc, Refused) else "dependency unavailable or malformed data"}
         LOG.error(json.dumps(report))  # No exception/body/credential text; Errors alarm notifies.
         raise RuntimeError("cleanup failed; inspect scoped inventory and authorization; no empty-fleet assumption") from None
+
+
+def broker(event, context, session, s3, cfg, account, where):
+    """Runs only while this invocation holds its mode's lease."""
+    where["stage"] = "authorization"
+    bucket = os.environ["STATE_BUCKET"]
+    result = s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account)
+    etag = result["ETag"]
+    raw = result["Body"].read(65537)
+    if len(raw) > 65536:
+        raise Refused("authorization too large")
+    doc = json.loads(raw)
+    read_only = isinstance(event, dict) and event.get("dry_run") is True
+    if os.environ["CLEANUP_MODE"] == "emergency" and not read_only:
+        request = event if isinstance(event, dict) else {}
+        requested = timestamp(request.get("requested_at"))
+        now = datetime.now(timezone.utc)
+        validate_authorization(doc, os.environ["LINODE_ACCOUNT_EUUID"], timestamp(os.environ["MIN_CREATED_UTC"]), now)
+        if (not now - timedelta(minutes=10) <= requested <= now or timestamp(doc["created_at"]) > requested
+                or any(timestamp(n["created"], api=True) > requested for n in doc["linodes"])):
+            raise Refused("emergency request is stale or predates this fleet")
+        if request.get("operation") == "prepare":
+            return {"status": "prepared", "authorization_version": etag}
+        if request.get("authorization_version") != etag:
+            raise Refused("emergency authorization version changed")
+    def unchanged():
+        # IfMatch pins the current authorization; replacement/revocation stops work.
+        s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account, IfMatch=etag)["Body"].close()
+    def mark():
+        s3.put_object(Bucket=os.environ["CONTROL_BUCKET"], Key=FLAG_KEY, ExpectedBucketOwner=account,
+                      Body=json.dumps({"mismatch": True, "reasons": ["independent cleanup; owner reconciliation required"]}).encode())
+    where["stage"] = "cleanup_credential"
+    secret = session.client("secretsmanager", config=cfg).get_secret_value(SecretId=os.environ["CLEANUP_SECRET_ARN"])["SecretString"]
+    token = json.loads(secret)["token"] if secret.startswith("{") else secret
+    if not isinstance(token, str) or not 20 <= len(token) <= 512 or any(c.isspace() for c in token):
+        raise Refused("cleanup credential invalid")
+    where["stage"] = "scoped_cleanup"
+    report = cleanup(doc, os.environ["LINODE_ACCOUNT_EUUID"], timestamp(os.environ["MIN_CREATED_UTC"]),
+                     os.environ["CLEANUP_MODE"], datetime.now(timezone.utc), transport(token), unchanged, mark,
+                     dry_run=read_only, remaining=lambda: context.get_remaining_time_in_millis() / 1000, github=github_get)
+    report["event"] = "cleanup_read_only" if read_only else "cleanup_complete"
+    return report

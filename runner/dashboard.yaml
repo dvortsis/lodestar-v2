@@ -491,6 +491,7 @@ placement:
   - X-fuzz-nits-1115
   - X-operator-unattended-wake
   - X-operator-check8-compare
+  - X-cleanup-fits-quota
   - X-store-migrate-race
   - X-flake-store-migrate-race
   - X-store-wal-nits
