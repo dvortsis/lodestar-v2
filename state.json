@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T03:26Z",
+  "updated_at": "2026-11-15T03:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T03:26Z",
+  "last_heartbeat": "2026-11-15T03:28Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8902,6 +8902,12 @@
       "from": "X-test-vm 2026-11-15",
       "note": "D3 -> re-test #881; D2 -> re-test #869; gluetun-restart recovery and Windows portable restart under load need run reports; keep Linode token and AWS test user",
       "owner": "runner"
+    },
+    {
+      "id": "X-filter-budget-model-skew",
+      "from": 907,
+      "note": "15 ms worst-case check uses per-model skew like ENGINE_SPEED; bars unchanged",
+      "owner": "slot 32 after #907"
     }
   ],
   "main_health": [
@@ -9806,6 +9812,12 @@
       "slice": "X-cmp09-starting-status",
       "sha": "9681dcf3",
       "at": "2026-11-15T03:26Z"
+    },
+    {
+      "pr": 906,
+      "slice": "X-floor-renew-metrics-nits",
+      "sha": "bd239634",
+      "at": "2026-11-15T03:28Z"
     }
   ],
   "active_sessions": {
@@ -10044,7 +10056,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T03:26Z",
+    "updated": "2026-11-15T03:28Z",
     "items": [
       {
         "slot": 1,
@@ -10208,12 +10220,12 @@
       },
       {
         "slot": 30,
-        "slice": "X-floor-renew-metrics-nits",
+        "slice": "X-import-status-lock",
         "role": "build",
         "agent": "session_01MMjhn9hfwMf4Ydg4La5rEh",
         "model": "opus",
-        "since": "2026-11-15T02:04Z",
-        "doing": "follow-up to #905",
+        "since": "2026-11-15T03:28Z",
+        "doing": "import status safe beside a writer",
         "cap": "kept build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10223,8 +10235,8 @@
         "role": "build",
         "agent": "session_01MMjhn8URRT9adbFfM1zGi1",
         "status": "active",
-        "since": "2026-11-15T03:13Z",
-        "doing": "CI no-fail-fast + #902 doc nit",
+        "since": "2026-11-15T03:28Z",
+        "doing": "#907 re-run, then X-filter-budget-model-skew",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -10324,8 +10336,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T03:26Z",
-  "updated": "2026-11-15T03:26Z",
+  "heartbeat": "2026-11-15T03:28Z",
+  "updated": "2026-11-15T03:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
