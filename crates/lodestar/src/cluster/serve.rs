@@ -41,6 +41,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use lodestar_api::dto::workers::{
+    ClusterStartFailure, ClusterStartKind as StartKind, ClusterStartStep as StartStep,
+};
 use lodestar_cluster::assign::Politeness;
 use lodestar_cluster::proto::{
     HintItem, Outcome, Payload, ReverifyReply, SnapshotAck, SnapshotKind,
@@ -230,16 +233,15 @@ pub fn server_config(c: &config::Cluster) -> ServerConfig {
 /// Its text never holds key material: `ClusterError`'s doesn't.
 #[derive(Debug)]
 pub struct StartError {
-    /// `bind`, `store`, `secrets`, `pki` or `server`.
-    step: &'static str,
-    /// A fixed kind for the log line.
-    kind: &'static str,
+    step: StartStep,
+    /// A fixed kind for the log line and the workers API.
+    kind: StartKind,
     detail: String,
 }
 
 impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cluster port ({}): {}", self.step, self.detail)
+        write!(f, "cluster port ({}): {}", self.step.as_str(), self.detail)
     }
 }
 
@@ -248,13 +250,13 @@ impl std::error::Error for StartError {}
 impl StartError {
     fn bind(listen: SocketAddr, e: &std::io::Error) -> StartError {
         StartError {
-            step: "bind",
+            step: StartStep::Bind,
             kind: io_kind(e.kind()),
             detail: format!("binding cluster.listen {listen}: {e}"),
         }
     }
 
-    fn pki(step: &'static str, e: &ClusterError) -> StartError {
+    fn pki(step: StartStep, e: &ClusterError) -> StartError {
         StartError {
             step,
             kind: cluster_kind(e),
@@ -264,32 +266,32 @@ impl StartError {
 
     fn task() -> StartError {
         StartError {
-            step: "pki",
-            kind: "task_failed",
+            step: StartStep::Pki,
+            kind: StartKind::TaskFailed,
             detail: "the PKI task failed".into(),
         }
     }
 }
 
-fn io_kind(k: std::io::ErrorKind) -> &'static str {
+fn io_kind(k: std::io::ErrorKind) -> StartKind {
     use std::io::ErrorKind as K;
     match k {
-        K::AddrInUse => "addr_in_use",
-        K::AddrNotAvailable => "addr_not_available",
-        K::PermissionDenied => "permission_denied",
-        _ => "io",
+        K::AddrInUse => StartKind::AddrInUse,
+        K::AddrNotAvailable => StartKind::AddrNotAvailable,
+        K::PermissionDenied => StartKind::PermissionDenied,
+        _ => StartKind::Io,
     }
 }
 
-fn cluster_kind(e: &ClusterError) -> &'static str {
+fn cluster_kind(e: &ClusterError) -> StartKind {
     match e {
-        ClusterError::Store(_) => "store",
-        ClusterError::Secret(_) => "secrets",
-        ClusterError::Tls(_) | ClusterError::Verifier(_) => "tls",
-        ClusterError::Io(..) => "io",
-        ClusterError::Corrupt(_) => "corrupt",
-        ClusterError::Random => "random",
-        _ => "pki",
+        ClusterError::Store(_) => StartKind::Store,
+        ClusterError::Secret(_) => StartKind::Secrets,
+        ClusterError::Tls(_) | ClusterError::Verifier(_) => StartKind::Tls,
+        ClusterError::Io(..) => StartKind::Io,
+        ClusterError::Corrupt(_) => StartKind::Corrupt,
+        ClusterError::Random => StartKind::Random,
+        _ => StartKind::Pki,
     }
 }
 
@@ -356,6 +358,10 @@ pub(crate) struct FloorReports {
     pub lapsed_refused: AtomicU64,
     /// Lapsed keys forgotten because the map was at [`LAPSED_CAP`].
     pub lapsed_evicted: AtomicU64,
+    /// Expiry ticks the writer has finished, skipped ones included (for
+    /// tests to wait on).
+    #[cfg(test)]
+    expiries: AtomicU64,
 }
 
 /// One pending report: who reported it, and when.
@@ -546,6 +552,8 @@ impl FloorReports {
             turned_away: AtomicU64::new(0),
             lapsed_refused: AtomicU64::new(0),
             lapsed_evicted: AtomicU64::new(0),
+            #[cfg(test)]
+            expiries: AtomicU64::new(0),
         }
     }
 
@@ -967,12 +975,19 @@ async fn write_floor(
             () = floor.wake.notified() => false,
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = expire.tick() => {
-                let (f, db, config) = (floor.clone(), db.clone(), config.clone());
-                // The clock that stamps the reports (`Sink::outcomes`).
-                let now = clock.now_secs();
-                // A failure is tried again at the next tick; holds only
-                // last longer meanwhile.
-                let _ = tokio::task::spawn_blocking(move || f.expire(&db, config, now)).await;
+                // No database yet: no server has opened, so no report was
+                // written, and opening one would create it (with workers
+                // off, nothing is created; X-store-migrate-race).
+                if db.exists() {
+                    let (f, db, config) = (floor.clone(), db.clone(), config.clone());
+                    // The clock that stamps the reports (`Sink::outcomes`).
+                    let now = clock.now_secs();
+                    // A failure is tried again at the next tick; holds only
+                    // last longer meanwhile.
+                    let _ = tokio::task::spawn_blocking(move || f.expire(&db, config, now)).await;
+                }
+                #[cfg(test)]
+                floor.expiries.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             _ = stopped.changed() => true,
@@ -1108,12 +1123,13 @@ fn open_pki(
     errors: Arc<AtomicU64>,
     floor: Arc<FloorReports>,
 ) -> Result<(Pki, StoreCheck), StartError> {
-    let store_err = |e: lodestar_store::Error| StartError::pki("store", &ClusterError::Store(e));
+    let store_err =
+        |e: lodestar_store::Error| StartError::pki(StartStep::Store, &ClusterError::Store(e));
     let mut store = Store::open(&w.db, w.store.clone()).map_err(store_err)?;
     let secrets = SecretStore::open_or_create(&w.data_dir)
-        .map_err(|e| StartError::pki("secrets", &ClusterError::Secret(e)))?;
+        .map_err(|e| StartError::pki(StartStep::Secrets, &ClusterError::Secret(e)))?;
     let coordinator = Coordinator::open(&mut store, &secrets, w.clock.now_secs())
-        .map_err(|e| StartError::pki("pki", &e))?;
+        .map_err(|e| StartError::pki(StartStep::Pki, &e))?;
     let reader = Store::open_reader(&w.db, w.store.clone()).map_err(store_err)?;
     Ok((
         Pki {
@@ -1971,6 +1987,8 @@ impl Totals {
 struct State {
     /// The server serving the port now, and where.
     current: Option<(Arc<ClusterServer>, SocketAddr)>,
+    /// Why the port couldn't open, while it's tried again.
+    failing: Option<ClusterStartFailure>,
     /// Counters of the servers already stopped.
     base: Totals,
 }
@@ -2059,7 +2077,7 @@ impl Inner {
         let paused = tokio::task::spawn_blocking(move || saved_pauses(&db, store))
             .await
             .map_err(|_| StartError::task())?
-            .map_err(|e| StartError::pki("pauses", &ClusterError::Store(e)))?;
+            .map_err(|e| StartError::pki(StartStep::Pauses, &ClusterError::Store(e)))?;
         let preparer = check
             .reader
             .lock()
@@ -2090,7 +2108,7 @@ impl Inner {
             admission: attached.as_ref().map(|a| a.sink.clone() as _),
         };
         let server = ClusterServer::with_hooks(pki, self.wiring.clock.clone(), config, hooks)
-            .map_err(|e| StartError::pki("server", &e))?;
+            .map_err(|e| StartError::pki(StartStep::Server, &e))?;
         let _ = sink.server.set(Arc::downgrade(&server));
         if let (Some(a), Some(r)) = (&attached, &self.wiring.remote) {
             a.serving(r, &server);
@@ -2164,24 +2182,53 @@ impl Inner {
         lodestar_log::log_event!(events::CLUSTER_CLOSED, reason = reason);
     }
 
-    /// Opens the port, logging and counting a failure.
-    async fn try_open(&self) -> Option<Running> {
+    /// Opens the port. A failure is counted, and the next try is set in
+    /// `retry` (X-cluster-start-retry); a success clears it.
+    async fn try_open(&self, retry: &mut Option<StartRetry>) -> Option<Running> {
         match self.open().await {
-            Ok(r) => Some(r),
+            Ok(r) => {
+                *retry = None;
+                self.state().failing = None;
+                Some(r)
+            }
             Err(e) => {
-                self.failed(&e);
+                let next = StartRetry::after(retry.take(), &e);
+                self.counted(&e, next.said);
+                self.state().failing = Some(ClusterStartFailure {
+                    step: e.step,
+                    kind: e.kind,
+                    next_retry_at: self
+                        .wiring
+                        .clock
+                        .now_secs()
+                        .saturating_add(i64::try_from(next.wait.as_secs()).unwrap_or(i64::MAX)),
+                });
+                *retry = Some(next);
                 None
             }
         }
     }
 
+    /// Workers are off: nothing is tried, so nothing is failing.
+    fn not_trying(&self, retry: &mut Option<StartRetry>) {
+        *retry = None;
+        self.state().failing = None;
+    }
+
     fn failed(&self, e: &StartError) {
+        self.counted(e, true);
+    }
+
+    /// Counts a failed start, and logs it if `say`.
+    fn counted(&self, e: &StartError, say: bool) {
         self.start_failures.fetch_add(1, Ordering::Relaxed);
-        lodestar_log::log_event!(
-            events::CLUSTER_START_FAILED,
-            step = e.step,
-            error = lodestar_log::Error::kind(e.kind)
-        );
+        if say {
+            lodestar_log::log_event!(
+                events::CLUSTER_START_FAILED,
+                step = e.step.as_str(),
+                error = lodestar_log::Error::kind(e.kind.as_str())
+            );
+        }
     }
 }
 
@@ -2264,11 +2311,24 @@ impl ClusterHandle {
     // Settings → Workers calls it (WK-14); tests do today.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_allowed(&self, allowed: bool) {
-        self.0.allowed.send_replace(allowed);
+        // Only a change wakes the port's task: a settings save that leaves
+        // "Allow workers" as it was doesn't try a failing start at once or
+        // reset its back-off.
+        self.0.allowed.send_if_modified(|now| {
+            let changed = *now != allowed;
+            *now = allowed;
+            changed
+        });
     }
 
     pub fn allowed(&self) -> bool {
         *self.0.allowed.borrow()
+    }
+
+    /// Why the cluster port couldn't open, while it's being tried again
+    /// (for the workers API).
+    pub fn start_failure(&self) -> Option<ClusterStartFailure> {
+        self.0.state().failing
     }
 
     /// Where the cluster port is listening, while it is.
@@ -2319,6 +2379,12 @@ impl ClusterHandle {
             "gauge",
             "1 while the cluster port is bound and served.",
             u8::from(snapshot.is_some()),
+        );
+        o.one(
+            "cluster_start_failing",
+            "gauge",
+            "1 while Allow workers is on but the cluster port couldn't open and is being tried again.",
+            u8::from(inner.state().failing.is_some()),
         );
         let connected = snapshot
             .as_ref()
@@ -2431,7 +2497,7 @@ impl ClusterHandle {
             ),
             (
                 "cluster_start_failures_total",
-                "Times turning the cluster port on failed (bind or PKI).",
+                "Times turning the cluster port on failed (bind or PKI), each retry included.",
                 inner.start_failures.load(Ordering::Relaxed),
             ),
             (
@@ -2706,6 +2772,38 @@ impl FloorWriter {
     }
 }
 
+/// The first wait before a failed start is tried again.
+const START_RETRY_FIRST: Duration = Duration::from_secs(2);
+/// The longest wait between tries.
+const START_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// The next try after a failed start, while "Allow workers" stays on: 2 s,
+/// doubling to 5 minutes (X-cluster-start-retry). A run of failures logs
+/// its first, and then only a failure of another step or kind; every try
+/// is counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartRetry {
+    at: tokio::time::Instant,
+    wait: Duration,
+    /// The step and kind last logged.
+    seen: (StartStep, StartKind),
+    /// Whether this failure was logged.
+    said: bool,
+}
+
+impl StartRetry {
+    fn after(last: Option<StartRetry>, e: &StartError) -> StartRetry {
+        let wait = last.map_or(START_RETRY_FIRST, |r| (r.wait * 2).min(START_RETRY_MAX));
+        let seen = (e.step, e.kind);
+        StartRetry {
+            at: tokio::time::Instant::now() + wait,
+            wait,
+            seen,
+            said: last.is_none_or(|r| r.seen != seen),
+        }
+    }
+}
+
 /// Follows "Allow workers" and reseal requests until `stopped`.
 async fn run(
     inner: Arc<Inner>,
@@ -2714,7 +2812,10 @@ async fn run(
     mut stopped: watch::Receiver<bool>,
     mut running: Option<Running>,
 ) {
+    // Set only while workers are allowed and the port isn't open.
+    let mut retry: Option<StartRetry> = None;
     loop {
+        let due = retry.map(|r| r.at);
         tokio::select! {
             _ = stopped.changed() => break,
             changed = allowed.changed() => {
@@ -2722,11 +2823,17 @@ async fn run(
                     break;
                 }
                 let want = *allowed.borrow_and_update();
+                if !want {
+                    inner.not_trying(&mut retry);
+                }
                 match (want, running.take()) {
                     (false, Some(r)) => inner.close(r, "workers_off").await,
-                    (true, None) => running = inner.try_open().await,
+                    (true, None) => running = inner.try_open(&mut retry).await,
                     (_, r) => running = r,
                 }
+            }
+            () = tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now)), if due.is_some() => {
+                running = inner.try_open(&mut retry).await;
             }
             Some(reply) = reseals.recv() => {
                 if let Some(r) = running.take() {
@@ -2737,7 +2844,9 @@ async fn run(
                     .await
                     .unwrap_or(Err(ClusterError::Corrupt("the reseal task failed")));
                 if *allowed.borrow_and_update() {
-                    running = inner.try_open().await;
+                    running = inner.try_open(&mut retry).await;
+                } else {
+                    inner.not_trying(&mut retry);
                 }
                 let _ = reply.send(resealed);
             }
@@ -2746,6 +2855,8 @@ async fn run(
     if let Some(r) = running {
         inner.close(r, "shutdown").await;
     }
+    // Stopped: nothing is tried any more, so nothing is failing.
+    inner.state().failing = None;
 }
 
 #[cfg(test)]
@@ -2864,6 +2975,14 @@ mod tests {
         // Not even the database or the secrets key is touched.
         assert!(!dir.path().join("lodestar.db").exists());
         assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
+        // Still nothing once the floor writer's first expiry (at start)
+        // is done: it finds no database and leaves it uncreated.
+        until("the first expiry", || {
+            let n = h.0.floor.expiries.load(Ordering::Relaxed);
+            (n >= 1, n)
+        })
+        .await;
+        assert!(!dir.path().join("lodestar.db").exists());
         let off = metrics(&h);
         assert_eq!(series(&off, "lodestar_cluster_allowed"), 0);
         assert_eq!(series(&off, "lodestar_cluster_listening"), 0);
@@ -3011,7 +3130,7 @@ mod tests {
         let e = Cluster::start(wiring(dir.path(), true, addr))
             .await
             .unwrap_err();
-        assert_eq!(e.step, "bind");
+        assert_eq!((e.step, e.kind), (StartStep::Bind, StartKind::AddrInUse));
         assert!(e.to_string().contains("cluster.listen"), "{e}");
         assert!(!dir.path().join("lodestar.db").exists());
         assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
@@ -3028,7 +3147,98 @@ mod tests {
         })
         .await;
         assert_eq!(h.local_addr(), None);
+        // It's tried again with workers still allowed, nothing toggled
+        // (X-cluster-start-retry)...
+        until("a second try", || {
+            let n = series(&metrics(&h), "lodestar_cluster_start_failures_total");
+            (n >= 2, n)
+        })
+        .await;
+        assert_eq!(h.local_addr(), None);
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_listening"), 0);
+        assert_eq!(series(&m, "lodestar_cluster_start_failing"), 1);
+        // The workers API says why, in fixed labels, and when it tries next.
+        let failing = h.start_failure().expect("failing");
+        assert_eq!(
+            (failing.step, failing.kind),
+            (StartStep::Bind, StartKind::AddrInUse)
+        );
+        let now = SystemClock.now_secs();
+        assert!(
+            failing.next_retry_at > now - 2 && failing.next_retry_at <= now + 300,
+            "{failing:?} at {now}"
+        );
+        // ...and opens once the port is free.
+        drop(taken);
+        until("listening once the port is free", || {
+            (h.local_addr() == Some(addr), h.local_addr())
+        })
+        .await;
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_listening"), 1);
+        assert_eq!(series(&m, "lodestar_cluster_start_failing"), 0);
+        assert_eq!(h.start_failure(), None, "a start clears it");
         cluster.shutdown().await;
+    }
+
+    /// Turning workers off while a start keeps failing stops the tries and
+    /// clears what the API and the gauge say.
+    #[tokio::test]
+    async fn turning_workers_off_stops_the_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let taken = std::net::TcpListener::bind(any_port()).unwrap();
+        let addr = taken.local_addr().unwrap();
+        let cluster = Cluster::start(wiring(dir.path(), false, addr))
+            .await
+            .unwrap();
+        let h = cluster.handle();
+        h.set_allowed(true);
+        until("failing", || {
+            (h.start_failure().is_some(), h.start_failure())
+        })
+        .await;
+        h.set_allowed(false);
+        until("cleared", || {
+            (h.start_failure().is_none(), h.start_failure())
+        })
+        .await;
+        assert_eq!(series(&metrics(&h), "lodestar_cluster_start_failing"), 0);
+        // Allowed again, it tries at once, from the first wait.
+        drop(taken);
+        h.set_allowed(true);
+        until("listening", || {
+            (h.local_addr() == Some(addr), h.local_addr())
+        })
+        .await;
+        assert_eq!(h.start_failure(), None);
+        cluster.shutdown().await;
+    }
+
+    /// A failed start waits 2 s, then twice as long each time, up to 5
+    /// minutes. A run of failures logs its first, and then only a failure
+    /// of another step or kind.
+    #[tokio::test]
+    async fn a_failed_start_backs_off_and_logs_a_new_cause_only() {
+        let bind = StartError::bind(any_port(), &std::io::ErrorKind::AddrInUse.into());
+        let store = StartError::pki(StartStep::Store, &ClusterError::Corrupt("unreadable"));
+        let first = StartRetry::after(None, &bind);
+        assert_eq!(first.wait, START_RETRY_FIRST);
+        assert!(first.said, "a run's first failure is logged");
+        let mut r = first;
+        let mut waits = vec![r.wait.as_secs()];
+        for _ in 0..10 {
+            r = StartRetry::after(Some(r), &bind);
+            assert!(!r.said, "the same cause isn't logged again");
+            waits.push(r.wait.as_secs());
+        }
+        assert_eq!(waits, [2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300]);
+        let other = StartRetry::after(Some(r), &store);
+        assert!(other.said, "another step is logged");
+        assert_eq!(other.wait, START_RETRY_MAX, "and the wait keeps growing");
+        assert!(!StartRetry::after(Some(other), &store).said);
+        assert!(StartRetry::after(Some(other), &bind).said, "and back again");
+        assert!(r.at <= tokio::time::Instant::now() + START_RETRY_MAX);
     }
 
     #[tokio::test]
@@ -3130,7 +3340,7 @@ mod tests {
         let e = Cluster::start(wiring(dir.path(), true, any_port()))
             .await
             .unwrap_err();
-        assert_eq!(e.step, "pki", "{e}");
+        assert_eq!(e.step, StartStep::Pki, "{e}");
         assert!(e.to_string().starts_with("cluster port (pki): "), "{e}");
     }
 
@@ -3149,7 +3359,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 39, "{text}");
+        assert_eq!(families.len(), 40, "{text}");
         // The lapsed-key series render, each as one series, at 0 here.
         for name in [
             "lodestar_cluster_claims_denied_excluded_total",

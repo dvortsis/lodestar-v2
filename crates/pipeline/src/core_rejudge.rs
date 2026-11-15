@@ -165,9 +165,11 @@ pub fn rejudge_stored(
     ctx: &Backfill<'_>,
     mark: &dyn Fn(&Store, &[[u8; 20]]),
 ) -> Result<Option<CoreRejudged>, Error> {
-    rejudge_with(store, filter, limit, ctx, mark, &rejudge_core)
+    rejudge_with(store, filter, limit, ctx, mark, &rejudge_core, BATCH_TIME)
 }
 
+/// [`rejudge_stored`] with the judge and the batch's time given: what tests
+/// vary. `batch_time` is [`BATCH_TIME`] outside them.
 pub(crate) fn rejudge_with(
     store: &mut Store,
     filter: &Handle,
@@ -175,6 +177,7 @@ pub(crate) fn rejudge_with(
     ctx: &Backfill<'_>,
     mark: &dyn Fn(&Store, &[[u8; 20]]),
     judge: &Judge<'_>,
+    batch_time: Duration,
 ) -> Result<Option<CoreRejudged>, Error> {
     let Some(mut before) = store.core_rejudge_due(CORE_VERSION)? else {
         return Ok(None);
@@ -190,7 +193,9 @@ pub(crate) fn rejudge_with(
     }
     let mut stalls = load_stalls(store, before.start)?;
     if before.phase >= RETRY_PHASE {
-        return retry_stall(store, filter, limit, ctx, mark, judge, before, stalls);
+        return retry_stall(
+            store, filter, limit, ctx, mark, judge, batch_time, before, stalls,
+        );
     }
     // The generation first, then the rules, as the backfill reads them.
     let generation = store.class_gen()?;
@@ -232,7 +237,16 @@ pub(crate) fn rejudge_with(
             ..CoreRejudged::default()
         }));
     }
-    let b = judge_ids(store, &ids, before.after, before.phase, &engine, ctx, judge)?;
+    let b = judge_ids(
+        store,
+        &ids,
+        before.after,
+        before.phase,
+        &engine,
+        ctx,
+        judge,
+        batch_time,
+    )?;
     if b.tripped() {
         // Most of the batch wouldn't read: hold only what today's core
         // holds among the torrents that did read, and note the range to
@@ -429,16 +443,30 @@ fn save_stalls(store: &mut Store, stalls: &[Stall]) -> Result<(), Error> {
 /// range of its own, so a run of batches the breaker stops is logged once,
 /// not once a batch.
 fn add_stall(stalls: &mut Vec<Stall>, new: Stall) -> bool {
-    if let Some(s) = stalls
-        .iter_mut()
-        .find(|s| s.phase == new.phase && s.after <= new.after && new.after <= s.to)
-    {
+    // Of the ranges of its phase it starts inside (more than one once
+    // widening past `MAX_STALLS` has made them overlap), the one reaching
+    // furthest, so the fewest rows are added and none twice; the earliest
+    // of those on a tie.
+    let containing = stalls
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.phase == new.phase && s.after <= new.after && new.after <= s.to)
+        .fold(None::<(usize, i64)>, |best, (i, s)| match best {
+            Some((_, to)) if to >= s.to => best,
+            _ => Some((i, s.to)),
+        });
+    if let Some((i, _)) = containing {
+        let s = &mut stalls[i];
         if new.to > s.to {
             // The rows past the old end, in proportion to the ids the new
-            // range covers there (all of them when it follows on).
+            // range covers there (all of them when it follows on). That
+            // share is at most `new.rows` (`beyond` <= `span`), which is
+            // what a product too large to hold is capped at.
             let span = i128::from(new.to) - i128::from(new.after);
             let beyond = i128::from(new.to) - i128::from(s.to);
-            let extra = i128::from(new.rows) * beyond / span;
+            let extra = i128::from(new.rows)
+                .checked_mul(beyond)
+                .map_or(i128::from(new.rows), |p| p / span);
             s.rows = s
                 .rows
                 .saturating_add(u64::try_from(extra).unwrap_or(u64::MAX));
@@ -481,6 +509,7 @@ fn retry_stall(
     ctx: &Backfill<'_>,
     mark: &dyn Fn(&Store, &[[u8; 20]]),
     judge: &Judge<'_>,
+    batch_time: Duration,
     before: CorePass,
     mut stalls: Vec<Stall>,
 ) -> Result<Option<CoreRejudged>, Error> {
@@ -517,7 +546,16 @@ fn retry_stall(
             ..CoreRejudged::default()
         }));
     }
-    let b = judge_ids(store, &ids, stall.after, stall.phase, &engine, ctx, judge)?;
+    let b = judge_ids(
+        store,
+        &ids,
+        stall.after,
+        stall.phase,
+        &engine,
+        ctx,
+        judge,
+        batch_time,
+    )?;
     if b.tripped() {
         // Hold what today's core holds among the torrents that did read,
         // then send the range to the back of the list, whole.
@@ -625,8 +663,12 @@ impl Batch {
     }
 }
 
-/// Judges `ids` (after `from`) in `phase`, as many as [`BATCH_TIME`]
-/// allows (at least one).
+/// Judges `ids` (after `from`) in `phase`, as many as `batch_time`
+/// ([`BATCH_TIME`] outside tests) allows (at least one).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a batch's inputs, its time among them"
+)]
 fn judge_ids(
     store: &mut Store,
     ids: &[i64],
@@ -635,6 +677,7 @@ fn judge_ids(
     engine: &Engine,
     ctx: &Backfill<'_>,
     judge: &Judge<'_>,
+    batch_time: Duration,
 ) -> Result<Batch, Error> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -650,7 +693,7 @@ fn judge_ids(
         rows: 0,
     };
     for &id in ids {
-        if b.rows > 0 && started.elapsed() >= BATCH_TIME {
+        if b.rows > 0 && started.elapsed() >= batch_time {
             break;
         }
         // The whole of one torrent's judgment, so a panic anywhere in it
@@ -962,6 +1005,55 @@ mod tests {
         assert_eq!(totals(&full).rows, MAX_STALLS as u64 + 4);
     }
 
+    /// X-rejudge-stall-nits: the rows past the old end are worked out
+    /// without overflowing at the edges of the ids and of the rows: a
+    /// product too large to hold is capped at the new range's rows, which
+    /// is all of them when it follows on.
+    #[test]
+    fn the_share_past_the_end_never_overflows() {
+        let mut stalls = vec![stall(1, i64::MIN, i64::MIN + 1, 0)];
+        assert!(!add_stall(
+            &mut stalls,
+            stall(1, i64::MIN + 1, i64::MAX, u64::MAX)
+        ));
+        assert_eq!(stalls, [stall(1, i64::MIN, i64::MAX, u64::MAX)]);
+        // Just inside the edge, the share is still exact: half the ids,
+        // half the rows.
+        let mut stalls = vec![stall(1, 0, 50, 0)];
+        assert!(!add_stall(&mut stalls, stall(1, 0, 100, u64::MAX - 1)));
+        assert_eq!(stalls[0].rows, (u64::MAX - 1) / 2);
+    }
+
+    /// X-rejudge-stall-nits: when ranges of its phase overlap (widening past
+    /// the cap can make them), a new range starting inside more than one is
+    /// merged into the one reaching furthest, so its rows are added once
+    /// and only past that end; the others are left as they were.
+    #[test]
+    fn a_range_inside_several_merges_into_the_furthest() {
+        let mut stalls = vec![
+            stall(1, 0, 40, 40),
+            stall(2, 0, 100, 100),
+            stall(1, 10, 80, 70),
+            stall(1, 20, 60, 40),
+        ];
+        // Starts inside all three phase-1 ranges and reaches 90: 10 of its
+        // 60 ids are past the furthest end (80).
+        assert!(!add_stall(&mut stalls, stall(1, 30, 90, 60)));
+        assert_eq!(
+            stalls,
+            [
+                stall(1, 0, 40, 40),
+                stall(2, 0, 100, 100),
+                stall(1, 10, 90, 80),
+                stall(1, 20, 60, 40),
+            ]
+        );
+        // A tie goes to the earliest.
+        let mut tied = vec![stall(1, 0, 50, 10), stall(1, 10, 50, 10)];
+        assert!(!add_stall(&mut tied, stall(1, 20, 60, 40)));
+        assert_eq!(tied, [stall(1, 0, 60, 20), stall(1, 10, 50, 10)]);
+    }
+
     /// Judging one torrent panics: that torrent is held under CS-0a and
     /// deleted, and the batch goes on to the next, which is judged.
     #[test]
@@ -990,7 +1082,10 @@ mod tests {
             assert!(!row.name.contains("panics"), "judging failed");
             rejudge_core(row, files, adult, e, now)
         };
-        let b = rejudge_with(&mut store, &filter, 10, &ctx, &|_, _| {}, &judge)
+        // A batch time it can't reach: the panic's backtrace (with
+        // `RUST_BACKTRACE` set, slow in a debug build) mustn't end the batch
+        // before the next torrent.
+        let b = rejudge_with(&mut store, &filter, 10, &ctx, &|_, _| {}, &judge, UNREACHED)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -1003,5 +1098,54 @@ mod tests {
             store.quarantine_rule(&bad_hash).unwrap().as_deref(),
             Some("CS-0a")
         );
+    }
+
+    /// A batch time no test reaches.
+    const UNREACHED: Duration = Duration::from_secs(3600);
+
+    /// X-flake-rejudge-panic-time: the real [`BATCH_TIME`] still ends a
+    /// batch. A judge that takes it all on the first torrent leaves the
+    /// next for the next batch; given time it can't reach, both are judged.
+    #[test]
+    fn the_batch_time_ends_a_batch() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        // Long names, as the panic test's, so each reaches the judge.
+        let long = |n: &str| format!("{n} {}", "word ".repeat(600));
+        let (first, _) = add(&mut store, &long("first film"));
+        let (second, _) = add(&mut store, &long("second film"));
+        let filter = Handle::new(Engine::new(Core::new(
+            Lists {
+                sexual: TermSet::of(&["lexa"]),
+                child_roles: TermSet::of(&["rolea"]),
+                codes: TermSet::of(&["codex"]),
+            },
+            CsList::default(),
+            Switches::default(),
+        )));
+        let ctx = Backfill {
+            filter: Some(&filter),
+            sealer: None,
+            quarantine_secs: 86_400,
+            adult: Default::default(),
+        };
+        // Takes the whole batch time on the first torrent: waits on the
+        // condition the batch checks, not for a fixed time.
+        let slow = |row: &TorrentRow, files: &[FileInfo], adult, e: &Engine, now| {
+            if row.name.starts_with("first") {
+                let started = Instant::now();
+                while started.elapsed() < BATCH_TIME {
+                    std::hint::spin_loop();
+                }
+            }
+            rejudge_core(row, files, adult, e, now)
+        };
+        let b = rejudge_with(&mut store, &filter, 10, &ctx, &|_, _| {}, &slow, BATCH_TIME)
+            .unwrap()
+            .unwrap();
+        assert_eq!((b.judged, b.after.after), (1, first));
+        let b = rejudge_with(&mut store, &filter, 10, &ctx, &|_, _| {}, &slow, UNREACHED)
+            .unwrap()
+            .unwrap();
+        assert_eq!((b.judged, b.after.after), (1, second));
     }
 }

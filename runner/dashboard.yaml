@@ -383,12 +383,16 @@ placement:
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
+  - X-flake-rejudge-panic-time
   - X-fuzz-cache-1105
+  - X-fuzz-peer-fetch
+  - X-fuzz-tpdb-harness
   - X-claim-trackers
   - X-claim-store
   - X-claim-store-polish
   - X-fetch-pool-bytes
   - X-fetch-meta-reserve
+  - X-peerwire-model-test
   - X-refetch-private
   - X-gs-gate-polish
   - X-soak-screen
@@ -406,6 +410,8 @@ placement:
   - X-win-upd-1920
   - X-win-upd-reoffer
   - X-win-upd-window
+  - X-win-portable-restart-load
+  - X-win-restart-priority-test
   - X-win-upd-stop-wait
   - X-upd-stop-races
   - X-upd-stop-early
@@ -425,6 +431,7 @@ placement:
   - X-flake-portable-restart-2
   - X-fleet-polish
   - X-win-log-held-open
+  - X-cli-win-data-dir
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
@@ -476,8 +483,15 @@ placement:
   - X-ci-no-fail-fast
   - X-flake-dataset-macos
   - X-flake-detect-macos
+  - X-flake-address-port
+  - X-flake-detect-macos-nits
+  - X-flake-supervise-restarts
   - X-operator-unattended-wake
   - X-operator-check8-compare
+  - X-store-migrate-race
+  - X-flake-store-migrate-race
+  - X-store-wal-nits
+  - X-cluster-start-retry
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
@@ -776,13 +790,16 @@ placement:
   - X-filter01-hardening
   - X-rejudge-pending-gate
   - X-filter15-fix
+  - X-rejudge-stall-nits
   - X-filter13-fix
   - X-filter14-fix
   - X-filter-budget-manyfile-perf
+  - X-filter-split-reuse
   - X-filter12-fix
   - X-fixed-sleep-nits
   - X-cluster06-fix
   - X-metainfo01-fix
+  - X-flake-metainfo-bound-rss
   - X-filter02-fix
   - X-update01-store01-fix
   - X-dht01-fix
@@ -792,7 +809,11 @@ placement:
   - X-cmp01-fix
   - X-sec-S6-02-03
   - X-floor-renew-metrics-nits
+  - X-import-progress-visible
   - X-import-status-lock
+  - X-store-load-busy-map
+  - X-first-run-search-gate
+  - D-docker-guide-1115
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small

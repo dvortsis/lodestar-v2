@@ -405,7 +405,9 @@ struct OwnPort {
 /// but not listening won't do for one: macOS (as the BSDs) drops a
 /// connection to it instead of refusing it, so the connection times out.
 /// The range starts at a place set by the process id, so two test runs on
-/// one machine rarely meet; a port another program holds is skipped.
+/// one machine rarely meet; a port another program holds is skipped. Each
+/// port is unique only within this process: two test binaries whose ids
+/// fall in the same bucket (`pid % 40`) walk the same ports.
 fn own_port() -> OwnPort {
     static NEXT: OnceLock<AtomicU16> = OnceLock::new();
     let next = NEXT.get_or_init(|| AtomicU16::new(20_000 + (std::process::id() % 40) as u16 * 250));
@@ -456,13 +458,15 @@ async fn a_closed_port_refuses_and_is_never_handed_out() {
         io::ErrorKind::ConnectionRefused,
         "{refused}"
     );
-    if let Err(e) = TcpStream::connect((Ipv6Addr::LOCALHOST, closed.port)).await {
-        assert!(
-            e.kind() == io::ErrorKind::ConnectionRefused || no_ipv6(&e),
-            "[::1]:{}: {e}",
-            closed.port
-        );
-    }
+    // Never a connection: refused, or no IPv6 on this host.
+    let e = TcpStream::connect((Ipv6Addr::LOCALHOST, closed.port))
+        .await
+        .unwrap_err();
+    assert!(
+        e.kind() == io::ErrorKind::ConnectionRefused || no_ipv6(&e),
+        "[::1]:{}: {e}",
+        closed.port
+    );
     assert!(closed.port < EPHEMERAL_FLOOR, "{}", closed.port);
     assert_ne!(
         ClosedPort::new().port,
