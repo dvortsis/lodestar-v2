@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T07:51Z",
+  "updated_at": "2026-11-15T07:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T07:51Z",
+  "last_heartbeat": "2026-11-15T07:52Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9857,6 +9857,12 @@
       "slice": "X-flake-address-port",
       "sha": "e67b6671",
       "at": "2026-11-15T07:41Z"
+    },
+    {
+      "pr": 914,
+      "slice": "X-rejudge-stall-nits",
+      "sha": "4062b10f",
+      "at": "2026-11-15T07:52Z"
     }
   ],
   "active_sessions": {
@@ -10095,16 +10101,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T07:51Z",
+    "updated": "2026-11-15T07:52Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-rejudge-stall-nits",
+        "slice": "X-peerwire-model-test",
         "role": "build",
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T06:34Z",
-        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #914 X-rejudge-stall-nits; then X-peerwire-model-test (parked/), X-flake-rejudge-panic-time",
+        "doing": "session_01MMjhn8LCZuDPeXwdBzodLH: #914 merged; #915 X-peerwire-model-test (delta OK, CI \u2192 merge); #916 X-flake-rejudge-panic-time open",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10115,7 +10121,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T07:41Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #919 X-store-migrate-race (CI, then fresh Opus review); #920 X-operator-cap-60 closed unmerged (operator unfunded; reopen if funded); then X-flake-detect-macos-nits, X-cluster-start-retry",
+        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #919 X-store-migrate-race (CI, then fresh Opus review); #920 X-operator-cap-60 reopened as draft, held (operator unfunded); then X-flake-detect-macos-nits, X-cluster-start-retry",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10137,7 +10143,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T06:55Z",
-        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #910 merged; X-filter-split-reuse, then X-fuzz-peer-fetch from parked/",
+        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #917 X-filter-split-reuse and #918 X-fuzz-peer-fetch open; await ready",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       }
@@ -10231,7 +10237,7 @@
     }
   ],
   "heartbeat": "2026-11-15T07:21Z",
-  "updated": "2026-11-15T07:51Z",
+  "updated": "2026-11-15T07:52Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
