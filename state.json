@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-14T22:46Z",
+  "updated_at": "2026-11-15T00:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-14T22:46Z",
+  "last_heartbeat": "2026-11-15T00:11Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8877,7 +8877,8 @@
     "X-dht-reply-ratio-resolved (product reply_ratio over resolved queries; owner flag)",
     "X-rejudge-stall-followups (slot 15 later)",
     "X-cmp09-starting-status (slot 7, running)",
-    "X-floor-renew-metrics (after #897)"
+    "X-floor-renew-metrics (after #897)",
+    "X-floor-renew-metrics: carries 2 nits from #897 review (lapsed_from doc, decisions file txn note)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -9266,13 +9267,25 @@
       "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     },
-    "895": {
-      "slice": "X-filter-budget-fix",
-      "added": "2026-11-14T20:26Z"
-    },
     "896": {
       "slice": "X-flake-dataset-macos",
-      "added": "2026-11-14T21:38Z"
+      "status": "fresh review running cf3b824f"
+    },
+    "897": {
+      "slice": "X-floor-renew",
+      "status": "delta security review MERGE; merge on green be631ae0"
+    },
+    "901": {
+      "slice": "X-rejudge-stall-followups",
+      "status": "fresh review running 211ae01b"
+    },
+    "899": {
+      "slice": "X-flake-detect-macos",
+      "status": "after #896: bring main in, full CI, review"
+    },
+    "902": {
+      "slice": "X-dht-reply-ratio-resolved",
+      "status": "CI running fe0c6f62"
     }
   },
   "merged_log": [
@@ -9729,6 +9742,22 @@
       "sha": "b23e9427",
       "slice": "X-cmp09-fix-2",
       "at": "2026-11-14T22:46Z"
+    },
+    {
+      "pr": 895,
+      "sha": "e1b4ff88",
+      "date": "2026-11-14"
+    },
+    {
+      "pr": 900,
+      "sha": "7d382a99",
+      "date": "2026-11-14"
+    },
+    {
+      "pr": 898,
+      "slice": "X-fetch-first-window",
+      "sha": "78ab597c",
+      "date": "2026-11-15"
     }
   ],
   "active_sessions": {
@@ -9967,7 +9996,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-14T22:46Z",
+    "updated": "2026-11-15T00:11Z",
     "items": [
       {
         "slot": 1,
@@ -10059,7 +10088,7 @@
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
         "since": "2026-11-14T22:46Z",
-        "doing": "#896 review round; then X-flake-detect-macos, X-rejudge-stall-followups",
+        "doing": "#896, #901 in review; #899 after #896",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -10136,27 +10165,27 @@
         "agent": "session_01MMjhn9hfwMf4Ydg4La5rEh",
         "model": "opus",
         "since": "2026-11-14T09:33Z",
-        "doing": "#897 review round (CHANGES)",
+        "doing": "#897 awaiting merge; next X-floor-renew-metrics",
         "cap": "kept build (\u00a72.64 4+4)",
         "status": "active"
       },
       {
         "slot": 32,
-        "slice": "X-filter-budget-fix",
+        "slice": "X-dht-reply-ratio-resolved",
         "role": "build",
         "agent": "session_01MMjhn8URRT9adbFfM1zGi1",
         "status": "active",
         "since": "2026-11-14T07:27Z",
-        "doing": "#895 re-run then ready; X-flake-dht-bootstrap PR open",
+        "doing": "#902 CI",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
         "slot": 33,
-        "slice": "X-fetch-first-window",
+        "slice": "X-fetch-wait-credit",
         "role": "build (owner-started reviewer; one build slot, one fix at a time)",
         "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "#898 review round (CHANGES)",
-        "since": "2026-11-14T14:34Z",
+        "doing": "building from fresh main after #898",
+        "since": "2026-11-15T00:11Z",
         "status": "active"
       }
     ]
@@ -10247,8 +10276,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-14T22:46Z",
-  "updated": "2026-11-14T22:46Z",
+  "heartbeat": "2026-11-15T00:11Z",
+  "updated": "2026-11-15T00:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
