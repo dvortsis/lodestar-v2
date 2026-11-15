@@ -463,7 +463,8 @@ pub(crate) fn load_serve_config(
 
 /// `serve --fixture DIR`'s check, before anything is read or written:
 /// [`ServiceGuard`]'s, with `DIR` as the data folder and `--config` as the
-/// config file.
+/// config file. Only the `fixture` feature and the tests use it.
+#[cfg(any(test, feature = "fixture"))]
 pub(crate) fn check_fixture(
     dir: &Path,
     config_path: Option<&Path>,

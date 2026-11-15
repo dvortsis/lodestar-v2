@@ -266,7 +266,9 @@ type Supervised = Option<&'static update::probation::Child>;
 #[cfg(not(unix))]
 type Supervised = Option<std::convert::Infallible>;
 
-/// An unsupervised run (`serve --fixture`, Windows).
+/// An unsupervised run: `serve --fixture`, its only caller, so release
+/// builds without the `fixture` feature leave it out.
+#[cfg(feature = "fixture")]
 async fn serve(config: Config) -> Result<(), BoxError> {
     serve_as(config, None, None).await.map(|_| ())
 }
