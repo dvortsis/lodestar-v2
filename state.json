@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T12:05Z",
+  "updated_at": "2026-11-15T12:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T12:05Z",
+  "last_heartbeat": "2026-11-15T12:32Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9923,6 +9923,12 @@
       "slice": "X-first-run-search-gate",
       "sha": "a8563c71",
       "at": "2026-11-15T12:05Z"
+    },
+    {
+      "pr": 930,
+      "slice": "D-docker-guide-1115",
+      "sha": "b789ca4e",
+      "at": "2026-11-15T12:32Z"
     }
   ],
   "active_sessions": {
@@ -10161,7 +10167,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T12:05Z",
+    "updated": "2026-11-15T12:32Z",
     "items": [
       {
         "slot": 1,
@@ -10170,7 +10176,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "#926 green after one re-run; Opus review running",
+        "doing": "#926 fix round: S8-07 + worker default + docs",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10187,17 +10193,17 @@
       },
       {
         "slot": 3,
-        "slice": "D-docker-guide-1115",
+        "slice": "X-flake-supervise-restarts",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T12:05Z",
-        "doing": "Docker guide fixes G1-G6, T1, T2 from the tester's run",
+        "since": "2026-11-15T12:32Z",
+        "doing": "root-cause the companions supervise flake under load",
         "cap": "build (\u00a72.64 4+4)"
       },
       {
         "slot": 4,
-        "slice": null,
+        "slice": "X-win-restart-priority-test",
         "role": "build",
         "agent": "claude",
         "model": "opus",
@@ -10295,8 +10301,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T12:05Z",
-  "updated": "2026-11-15T12:05Z",
+  "heartbeat": "2026-11-15T12:32Z",
+  "updated": "2026-11-15T12:32Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
