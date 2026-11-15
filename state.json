@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T22:31Z",
+  "updated_at": "2026-11-15T22:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T22:31Z",
+  "last_heartbeat": "2026-11-15T22:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10037,6 +10037,12 @@
       "slice": "X-release-dead-code",
       "sha": "c080f5fde4d62e971d4b22a72108d13012b416cb",
       "at": "2026-11-15T22:31Z"
+    },
+    {
+      "pr": 936,
+      "slice": "X-win-service-path-hardening",
+      "sha": "be2cb36be487c7804bcc3b88cb965c399e090a65",
+      "at": "2026-11-15T22:38Z"
     }
   ],
   "active_sessions": {
@@ -10275,16 +10281,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T22:31Z",
+    "updated": "2026-11-15T22:38Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-win-service-path-hardening",
+        "slice": "X-win-service-cwd-fallback",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T15:59Z",
-        "doing": "#936 X-win-service-path-hardening CI on e5a12b7f; then X-win-service-cwd-fallback (#949 merged)",
+        "since": "2026-11-15T22:38Z",
+        "doing": "X-win-service-cwd-fallback (#936 merged be2cb36b)",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10407,8 +10413,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T22:31Z",
-  "updated": "2026-11-15T22:31Z",
+  "heartbeat": "2026-11-15T22:38Z",
+  "updated": "2026-11-15T22:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
