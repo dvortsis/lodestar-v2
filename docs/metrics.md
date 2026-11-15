@@ -918,6 +918,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | --- | --- | --- |
 | `cluster_allowed` | gauge | 1 when Allow workers is on. |
 | `cluster_listening` | gauge | 1 while the cluster port is bound and served. 0 with `cluster_allowed 1` means it couldn't open and is tried again (2 s, doubling to 5 minutes): see `cluster_start_failures_total` and the `cluster.start_failed` log line. |
+| `cluster_start_failing` | gauge | 1 while Allow workers is on but the port couldn't open and is being tried again; `GET /workers` says why in `start_failure`. |
 | `cluster_workers_connected` | gauge | Remote workers with a live session. |
 | `cluster_handshaking` | gauge | Connections still in their pre-authentication handshake (TLS, then the WebSocket upgrade or a join request). |
 | `cluster_leases_held` | gauge | Leases remote workers hold now. `leases_outstanding` counts every lease, local and remote, plus keys waiting for a re-grant. |

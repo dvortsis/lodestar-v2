@@ -121,8 +121,101 @@ pub struct Worker {
 pub struct WorkerList {
     /// "Allow workers" is on and the cluster port is serving.
     pub allowed: bool,
+    /// Why the cluster port couldn't open, while "Allow workers" is on and
+    /// it's being tried again; null otherwise (X-cluster-start-retry).
+    #[schema(required = true)]
+    pub start_failure: Option<ClusterStartFailure>,
     /// Every joined worker, by id. Empty on a single machine.
     pub workers: Vec<Worker>,
+}
+
+/// A cluster port that couldn't open, and when it's tried next. Fixed
+/// labels only: never error text, an address, a path or key material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClusterStartFailure {
+    pub step: ClusterStartStep,
+    pub kind: ClusterStartKind,
+    /// When it's tried again, in unix seconds.
+    pub next_retry_at: i64,
+}
+
+/// What the cluster port was doing when it failed to open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterStartStep {
+    /// Binding `cluster.listen`.
+    Bind,
+    /// Opening the store.
+    Store,
+    /// Opening the secrets key.
+    Secrets,
+    /// Opening the cluster's certificate authority.
+    Pki,
+    /// Reading the workers saved as paused.
+    Pauses,
+    /// Starting the server.
+    Server,
+}
+
+impl ClusterStartStep {
+    /// The label, as the API and the `cluster.start_failed` log line say it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClusterStartStep::Bind => "bind",
+            ClusterStartStep::Store => "store",
+            ClusterStartStep::Secrets => "secrets",
+            ClusterStartStep::Pki => "pki",
+            ClusterStartStep::Pauses => "pauses",
+            ClusterStartStep::Server => "server",
+        }
+    }
+}
+
+/// Why the cluster port failed to open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterStartKind {
+    /// Another program holds the port.
+    AddrInUse,
+    /// The address isn't one of this machine's.
+    AddrNotAvailable,
+    /// Not allowed to bind the port, or to read a file.
+    PermissionDenied,
+    /// Another I/O error.
+    Io,
+    /// The store couldn't be read or written.
+    Store,
+    /// The secrets key couldn't be opened.
+    Secrets,
+    /// A certificate or key couldn't be built or checked.
+    Tls,
+    /// Stored cluster data is damaged.
+    Corrupt,
+    /// The system's random source failed.
+    Random,
+    /// Another certificate-authority error.
+    Pki,
+    /// The background task opening it failed.
+    TaskFailed,
+}
+
+impl ClusterStartKind {
+    /// The label, as the API and the `cluster.start_failed` log line say it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClusterStartKind::AddrInUse => "addr_in_use",
+            ClusterStartKind::AddrNotAvailable => "addr_not_available",
+            ClusterStartKind::PermissionDenied => "permission_denied",
+            ClusterStartKind::Io => "io",
+            ClusterStartKind::Store => "store",
+            ClusterStartKind::Secrets => "secrets",
+            ClusterStartKind::Tls => "tls",
+            ClusterStartKind::Corrupt => "corrupt",
+            ClusterStartKind::Random => "random",
+            ClusterStartKind::Pki => "pki",
+            ClusterStartKind::TaskFailed => "task_failed",
+        }
+    }
 }
 
 /// `POST /workers/tokens`. `Debug` redacts the password.
