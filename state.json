@@ -10894,5 +10894,41 @@
       "at": "2026-11-14T16:11Z"
     }
   ],
-  "review_sessions": []
+  "review_sessions": [],
+  "parked": {
+    "updated": "2026-11-15T05:25Z",
+    "note": "Finished or WIP work from the owner-started Fable slot, saved as parked/ branches (runner decision A, 2026-11-15). No PRs. Deleting them stays the owner's call.",
+    "items": [
+      {
+        "ref": "parked/X-worker-oversize-handback",
+        "sha": "be79123a",
+        "state": "needs rebase (serve.rs family count, docs/metrics.md rows) + check run"
+      },
+      {
+        "ref": "parked/X-peerwire-model-test",
+        "sha": "d03533db",
+        "state": "ready; test-only; needs check run"
+      },
+      {
+        "ref": "parked/X-fuzz-peer-fetch",
+        "sha": "db645b9d",
+        "state": "ready; MSE + peer_fetch fuzz targets, honest seeds only; needs check run"
+      },
+      {
+        "ref": "parked/X-cluster06-verify",
+        "sha": "f7b4323b",
+        "state": "ready; re-grant model test only (fixes already on main via #871 work); needs check run"
+      },
+      {
+        "ref": "parked/X-cluster-regrant-look",
+        "sha": "789a4f6d",
+        "state": "WIP; re-check against main's bounded scan and per-worker share; test overlaps X-cluster06-verify"
+      },
+      {
+        "ref": "parked/X-junk-backoff",
+        "sha": "2d745f7b",
+        "state": "WIP; rebase over #898/#904 pool.rs; decisions file on branch"
+      }
+    ]
+  }
 }
