@@ -10,8 +10,7 @@
 //!   then goes through the store's one writer, this process.
 //! - `status` only reads, and is safe while the server runs. While a
 //!   writing verb holds the store (an import above all), it waits a few
-//!   seconds, then says so and what to do: that import shows its own
-//!   progress.
+//!   seconds, then says so and what to do.
 //!
 //! Ctrl-C during an import pauses it after the batch in flight (or
 //! cancels that batch's read): `resume` carries on from the last
@@ -61,7 +60,7 @@ pub struct ImportArgs {
 pub enum Action {
     /// Check a source without importing: what it is, how many torrents it
     /// holds, and whether there's room (only reads; safe while the server
-    /// runs; it can't read the store while an import runs)
+    /// runs; while an import runs it can't read the store, and says so)
     Inspect {
         #[command(flatten)]
         source: SourceArgs,
@@ -82,8 +81,8 @@ pub enum Action {
         json: bool,
     },
     /// Show the import jobs, or one job in detail (only reads; safe while
-    /// the server runs; it can't read the store while an import runs, which
-    /// shows its own progress)
+    /// the server runs; while an import runs it can't read the store, and
+    /// says so)
     Status {
         /// The job's number
         job: Option<i64>,
@@ -352,14 +351,7 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
     };
     let store = match Store::open(&db, config.store_config()) {
         Ok(s) => s,
-        Err(lodestar_store::Error::Sqlite(e))
-            if matches!(
-                e.sqlite_error_code(),
-                Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-            ) =>
-        {
-            return Err(in_use());
-        }
+        Err(e) if store_busy(&e) => return Err(in_use()),
         Err(e) => return Err(Failure::Failed(format!("opening {}: {e}", db.display()))),
     };
     let take = |c: &lodestar_store::rusqlite::Connection| {
@@ -369,14 +361,7 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
     };
     match take(store.connection()) {
         Ok(()) => Ok(store),
-        Err(e)
-            if matches!(
-                e.sqlite_error_code(),
-                Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-            ) =>
-        {
-            Err(in_use())
-        }
+        Err(e) if sqlite_busy(&e) => Err(in_use()),
         Err(e) => Err(Failure::Failed(format!("locking {}: {e}", db.display()))),
     }
 }
@@ -443,7 +428,11 @@ impl Space {
 /// What `rows` more torrents need, by this store's own size per torrent
 /// once it holds enough, and the data folder's free space.
 fn space(config: &Config, store: &Store, rows: Option<u64>) -> Space {
-    let stored = store.count().unwrap_or(0);
+    space_with(config, store.count().unwrap_or(0), rows)
+}
+
+/// [`space`], given the store's torrent count.
+fn space_with(config: &Config, stored: u64, rows: Option<u64>) -> Space {
     let used = store_bytes(&config.db_path()) + config.index_path().parent().map_or(0, dir_bytes);
     let (per_record, measured) = if stored >= MEASURE_FROM {
         ((used / stored).max(1), true)
@@ -566,16 +555,19 @@ async fn inspect(config: &Config, args: &SourceArgs, json: bool) -> Outcome {
             verb,
             "opening the store",
         ))?;
-        // Read once here, so a held store is reported, not hidden by the
-        // size estimate's fallback.
-        store
+        // Read here, so a held store is reported, not hidden by the size
+        // estimate's fallback.
+        let stored = store
             .count()
             .map_err(read_err(&db, verb, "counting the store's torrents"))?;
-        Some(store)
+        Some((store, stored))
     } else {
         None
     };
-    let space = store.as_ref().map(|s| space(config, s, opened.rows));
+    let space = store
+        .as_ref()
+        .map(|(_, stored)| space_with(config, *stored, opened.rows));
+    let store = store.map(|(s, _)| s);
     let existing = match &store {
         Some(s) => job_for_mapped(
             s,
@@ -1224,12 +1216,14 @@ fn read_err<'a>(
 
 /// Whether a store error is another process's lock: busy or locked.
 fn store_busy(e: &lodestar_store::Error) -> bool {
+    matches!(e, lodestar_store::Error::Sqlite(e) if sqlite_busy(e))
+}
+
+/// Whether an SQLite error is another process's lock: busy or locked.
+fn sqlite_busy(e: &lodestar_store::rusqlite::Error) -> bool {
     matches!(
-        e,
-        lodestar_store::Error::Sqlite(e) if matches!(
-            e.sqlite_error_code(),
-            Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-        )
+        e.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
     )
 }
 
@@ -1239,9 +1233,9 @@ fn store_busy(e: &lodestar_store::Error) -> bool {
 fn held_elsewhere(db: &Path, verb: &str) -> Failure {
     Failure::Refused(format!(
         "another lodestar command is using the store {} on its own, so it can't be read now. \
-         An import (start or resume) shows its progress where it runs, and Ctrl-C there pauses \
-         it after the current batch. Run `lodestar {verb}` again once that command has paused \
-         or finished.",
+         If that's an import (start or resume), it reports what it did when it stops, and \
+         Ctrl-C where it runs pauses it at the last saved batch. Run `lodestar {verb}` again \
+         once that command has paused or finished.",
         db.display()
     ))
 }

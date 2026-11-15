@@ -9,9 +9,9 @@ A UX fix from the import-host test run (runner, 2026-11-15): `lodestar import st
 
 ## What changed
 
-- **`status` and `inspect` wait, then say what to do.** The store's busy timeout (5 s) bounds the wait on a held store. Past it, they refuse with a sentence instead of the SQLite error: another lodestar command has the store to itself; an import shows its progress where it runs, and Ctrl-C there pauses it; run the same command again once it has paused or finished. Nothing was read and nothing changed.
-- **Every store read in `status` and `inspect` maps the lock** (`read_err`): opening the store, reading the jobs, and `inspect`'s job lookup. `inspect` also reads the torrent count once before its size estimate, whose fallback would otherwise hide a held store.
-- **The help text now says it.** `status`: "only reads; safe while the server runs; it can't read the store while an import runs, which shows its own progress". `inspect`: "only reads; safe while the server runs; it can't read the store while an import runs". `docs/operations.md` says the same in the import section.
+- **`status` and `inspect` wait, then say what to do.** The store's busy timeout (5 s) bounds the wait on a held store. Past it, they refuse with a sentence instead of the SQLite error: another lodestar command has the store to itself; an import reports what it did when it stops, and Ctrl-C where it runs pauses it at the last saved batch; run the same command again once it has paused or finished. Nothing was read and nothing changed.
+- **Every store read in `status` and `inspect` maps the lock** (`read_err`): opening the store, reading the jobs, and `inspect`'s job lookup. `inspect` reads the torrent count once, mapped, and hands it to its size estimate (`space_with`), whose fallback would otherwise hide a held store.
+- **The help text now says it.** `status` and `inspect`: "only reads; safe while the server runs; while an import runs it can't read the store, and says so". `docs/operations.md` says the same in the import section.
 - **Not done:** showing an import's progress from another process while it runs. That needs the import to publish its progress outside the store (a side file, say). It's a possible follow-up, not part of this fix.
 
 ## Help claims checked
@@ -29,3 +29,4 @@ A UX fix from the import-host test run (runner, 2026-11-15): `lodestar import st
 
 - **A reader at the moment an import starts makes that start refuse** (`resume_refuses_another_source_and_any_reader_blocks_writes`): the exclusive lock can't be taken while any connection is open. The refusal says to stop the other process and try again, which is safe.
 - **The new test waits out the busy timeout** once per locked call, about 25 s in all. It's bounded, with no fixed sleep.
+- **Logged by the runner, not changed here:** in the store crate, `Store::load` reads `codec_has(..).ok() != Some(true)`, so a busy error in a narrow race reads as `Corrupt`. Existing code; a follow-up.
