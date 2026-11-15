@@ -928,6 +928,9 @@ pub(crate) const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// Pragmas that persist in the file and can only be set before the first
 /// table exists, then the per-connection ones.
 pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
+    // First, so switching a new file to WAL waits for a connection opening
+    // it at the same time instead of failing at once.
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     let page_count: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
     if page_count == 0 {
         conn.pragma_update(None, "page_size", 16384)?;
@@ -942,7 +945,6 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     // folder (which also holds seal.key) mustn't yield purged quarantine
     // names or deleted torrents (owner, 2026-10-22).
     conn.pragma_update(None, "secure_delete", true)?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(())
 }
 
@@ -1027,19 +1029,26 @@ fn migrate_with(
 
 /// [`migrate_with`], running `created` in the first migration's
 /// transaction when the store had no schema.
+///
+/// One `BEGIN IMMEDIATE` transaction holds the write lock from reading the
+/// version to the last migration (X-store-migrate-race): connections that
+/// open the same store at once wait for it, with their busy timeout, then
+/// find the schema current. Reading the version outside the lock let two of
+/// them both apply the same migration, and the second failed.
 fn migrate_creating(
     conn: &mut Connection,
     path: Option<&Path>,
     migrations: &[(i64, &str)],
     created: Option<&str>,
 ) -> Result<()> {
-    conn.execute_batch(
+    let tx = crate::begin_write(conn)?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
              version    INTEGER PRIMARY KEY,
              applied_at INTEGER NOT NULL
          ) STRICT;",
     )?;
-    let current: i64 = conn
+    let current: i64 = tx
         .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
             r.get::<_, Option<i64>>(0)
         })
@@ -1054,16 +1063,21 @@ fn migrate_creating(
         });
     }
     if current == latest {
+        tx.commit()?;
         return Ok(());
     }
+    // `VACUUM INTO` can't run inside a transaction, so the snapshot is read
+    // through a second connection while this one holds the lock: nothing
+    // has been written yet, and nobody else can write.
     if current > 0
         && let Some(path) = path
     {
-        take_snapshot(conn, path, current + 1)?;
+        let reader = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        reader.busy_timeout(BUSY_TIMEOUT)?;
+        take_snapshot(&reader, path, current + 1)?;
     }
     let mut first = current == 0;
     for (version, sql) in migrations.iter().filter(|(v, _)| *v > current) {
-        let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         if std::mem::take(&mut first)
             && let Some(created) = created
@@ -1074,8 +1088,8 @@ fn migrate_creating(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, unixepoch())",
             [version],
         )?;
-        tx.commit()?;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -1875,5 +1889,138 @@ mod tests {
         );
         let backup = Connection::open(dir.path().join("t.pre-v2.1.db")).unwrap();
         assert_eq!(version(&backup), 1);
+    }
+
+    /// Opens `path` from `n` threads at once (a barrier lines them up),
+    /// returning each open's result.
+    fn open_at_once(path: &Path, n: usize) -> Vec<Result<()>> {
+        let start = std::sync::Arc::new(std::sync::Barrier::new(n));
+        let opens: Vec<_> = (0..n)
+            .map(|_| {
+                let (path, start) = (path.to_path_buf(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    crate::Store::open(&path, crate::StoreConfig::default()).map(drop)
+                })
+            })
+            .collect();
+        opens.into_iter().map(|t| t.join().unwrap()).collect()
+    }
+
+    /// Every table, index, trigger and view, by kind and name.
+    fn objects(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, name FROM sqlite_master
+                 WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn versions(conn: &Connection) -> Vec<i64> {
+        let mut stmt = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// The schema a single open creates, to compare a raced one with.
+    fn reference() -> Vec<(String, String)> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ref.db");
+        drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
+        objects(&Connection::open(&path).unwrap())
+    }
+
+    /// X-store-migrate-race: connections that open a new database at once
+    /// all succeed. One creates the schema; the others wait for its lock,
+    /// then find it current. Every migration ran once.
+    #[test]
+    fn a_new_store_opened_at_once_is_created_once() {
+        let want = reference();
+        let all: Vec<i64> = MIGRATIONS.iter().map(|(v, _)| *v).collect();
+        for _ in 0..12 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("t.db");
+            for open in open_at_once(&path, 8) {
+                open.unwrap();
+            }
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(version(&conn), latest_schema_version());
+            assert_eq!(versions(&conn), all);
+            assert_eq!(objects(&conn), want);
+            assert_eq!(fresh_marker(&conn).as_deref(), Some("1"));
+        }
+    }
+
+    /// The same for an upgrade: connections that open an older store at
+    /// once all succeed, the migrations run once, and one snapshot is
+    /// taken, not one per connection.
+    #[test]
+    fn an_older_store_opened_at_once_is_upgraded_once() {
+        let want = reference();
+        let all: Vec<i64> = MIGRATIONS.iter().map(|(v, _)| *v).collect();
+        for _ in 0..6 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("t.db");
+            {
+                let mut old = Connection::open(&path).unwrap();
+                configure(&old, 0).unwrap();
+                migrate_with(&mut old, Some(&path), &MIGRATIONS[..13]).unwrap();
+            }
+            for open in open_at_once(&path, 8) {
+                open.unwrap();
+            }
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(versions(&conn), all);
+            assert_eq!(objects(&conn), want);
+            assert_eq!(fresh_marker(&conn), None, "an upgraded store isn't fresh");
+            let snapshots: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".pre-v"))
+                .collect();
+            assert_eq!(snapshots, ["t.pre-v14.db"]);
+            assert_eq!(
+                version(&Connection::open(dir.path().join("t.pre-v14.db")).unwrap()),
+                13
+            );
+        }
+    }
+
+    /// A connection that waits past its busy timeout for another's lock
+    /// gets SQLite's busy error, not a corrupt store or a failed migration,
+    /// and changes nothing; once the lock is free it migrates.
+    #[test]
+    fn a_migration_that_cant_get_the_lock_says_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut holder = Connection::open(&path).unwrap();
+        migrate_with(&mut holder, Some(&path), &FAKE[..1]).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let mut waiter = Connection::open(&path).unwrap();
+        waiter
+            .busy_timeout(std::time::Duration::from_millis(50))
+            .unwrap();
+        match migrate_with(&mut waiter, Some(&path), FAKE) {
+            Err(Error::Sqlite(rusqlite::Error::SqliteFailure(e, _))) => {
+                assert_eq!(e.code, rusqlite::ErrorCode::DatabaseBusy, "{e}");
+            }
+            other => panic!("expected SQLite's busy error, got {other:?}"),
+        }
+        assert!(!dir.path().join("t.pre-v2.db").exists(), "no snapshot");
+
+        holder.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(version(&holder), 1, "nothing migrated");
+        migrate_with(&mut waiter, Some(&path), FAKE).unwrap();
+        assert_eq!(version(&waiter), 2);
     }
 }
