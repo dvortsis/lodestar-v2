@@ -144,22 +144,32 @@ To run it:
       lodestar-data:
     ```
 
-4. Replace each `FILL_IN_YOURSELF` with the values from your VPN provider's WireGuard setup page. gluetun's own documentation lists the provider names it accepts. Keep `VPN_INTERFACE: wg0`: the post-rules name the tunnel `wg0`.
-5. Check the file, then start both containers:
+4. Replace each `FILL_IN_YOURSELF` with the values from your VPN provider's WireGuard setup page. Keep `VPN_INTERFACE: wg0`: the post-rules name the tunnel `wg0`.
+
+   gluetun's own documentation lists the provider names it accepts. A provider it doesn't list (`VPN_SERVICE_PROVIDER: custom`) also needs its endpoint and public key: see gluetun's [custom provider page](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md).
+5. Check the file, then start gluetun alone:
 
     ```bash
-    docker compose config -q && docker compose up -d
+    docker compose config -q && docker compose up -d gluetun
     ```
 
-   **Result:** `docker compose config -q` prints nothing when the file is valid. Docker then starts gluetun, waits until it reports healthy, and starts Lodestar. If gluetun can't connect, Lodestar doesn't start: run `docker compose logs gluetun` to see why.
-6. Check that gluetun loaded the post-rules:
+   **Result:** `docker compose config -q` prints nothing when the file is valid, and Docker starts only gluetun. If gluetun keeps restarting, run `docker compose logs gluetun` to see why.
+6. Before Lodestar starts, check that gluetun loaded the post-rules:
 
     ```bash
     docker compose exec gluetun iptables -S OUTPUT | head -4
+    docker compose exec gluetun ip link show wg0
     ```
 
-   **Result:** After the first line (`-P OUTPUT DROP`), the next three lines name `wg0`: one ends in `CONNMARK --set-xmark 0x800000/0x800000` and two end in `-j DROP`.
-7. Create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password). Open the web UI at `http://<server-ip>:8090`, the port published on gluetun.
+   **Result:** After the first line (`-P OUTPUT DROP`), the next three lines name `wg0`: one ends in `CONNMARK --set-xmark 0x800000/0x800000` and two end in `-j DROP`. The second command shows the `wg0` link. If either is different, gluetun is running without the rules: check steps 2 to 4 before you start Lodestar. gluetun skips a missing rules file without a word, so this check is the only proof.
+7. Start Lodestar:
+
+    ```bash
+    docker compose up -d
+    ```
+
+   **Result:** Docker starts Lodestar once gluetun reports healthy. If gluetun can't connect, Lodestar doesn't start.
+8. Create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password). Open the web UI at `http://<server-ip>:8090`, the port published on gluetun.
 
 When gluetun restarts, restart Lodestar too: run `docker compose restart lodestar`. A container that shares a network stays attached to the old one.
 
@@ -382,7 +392,7 @@ To restore on Unraid:
     docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex
     ```
 
-   Use the same image as your container's **Repository** field. **Result:** After a few log lines, it prints `The search index is marked for rebuild.` If it says `refused` and that Lodestar is running, stop Lodestar first.
+   Use the same image as your container's **Repository** field. If you changed **PUID** and **PGID**, use your numbers. **Result:** After a few log lines, it prints `The search index is marked for rebuild.` If it says `refused` and asks you to stop Lodestar, stop it on the Docker tab. Then run the command again.
 5. On the Docker tab, select the **Lodestar** icon, then **Start**.
    **Result:** Lodestar rebuilds the search index from the database. Results fill in while it runs.
 6. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
@@ -460,7 +470,7 @@ The search index is built from the database, so it can always be rebuilt. Do it 
 | Where | Commands |
 |---|---|
 | Docker Compose | `docker compose stop lodestar`, then `docker compose run --rm lodestar reindex`, then `docker compose start lodestar` |
-| Unraid | Stop **Lodestar** on the Docker tab. In the terminal, run `docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex`, then start **Lodestar** again. |
+| Unraid | Stop **Lodestar** on the Docker tab. In the terminal, run `docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex`, with your **PUID** and **PGID** if you changed them, then start **Lodestar** again. |
 
 **Result:** The command prints `The search index is marked for rebuild.` At the next start, Lodestar builds a new index from the database. Results fill in while it runs.
 

@@ -149,7 +149,7 @@ Docker Compose runs Lodestar from one file, `docker-compose.yml`. The file maps 
 | Bind mount | You want the data in a folder you pick, such as `./data`. |
 
 > [!IMPORTANT]
-> **Using a VPN? Do [section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn) first.** Lodestar starts crawling as soon as the container starts, and the steps below give it your normal network. To keep your home IP away from DHT peers, use the gluetun example in section 3.3 in place of these steps.
+> **Using a VPN? Do [section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn) first.** Lodestar starts crawling as soon as the container starts, and the steps below give it your normal network. To keep your home IP away from DHT peers, use the [gluetun Compose file](03-keep-lodestar-safe.md#run-lodestar-through-gluetun-with-docker-compose) in place of these steps.
 
 To install with the named volume:
 
