@@ -462,6 +462,81 @@ To restore, with the backup folder in the current folder:
 
    **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
 
+### Back up and restore on Windows
+<!-- index: backup on Windows; restore on Windows; ProgramData -->
+
+On Windows, `lodestar backup` finds the data folder by itself, so you don't need to set `LODESTAR_DATA_DIR`:
+
+- **Installed (the MSI):** the service's folder, `C:\ProgramData\Lodestar`. If that folder isn't private, the command refuses, as the service does, and says how to fix it.
+- **Portable:** the `data` folder beside `lodestar.exe`, when you run it from that folder.
+
+If the command says `no store at`, it names the folder it looked in. Point it at the folder that holds `lodestar.db`, for example `D:\Lodestar`, then run it again in the same window:
+
+```powershell
+$env:LODESTAR_DATA_DIR = 'D:\Lodestar'
+```
+
+To back up an installed Lodestar (the MSI):
+
+1. From Start, open **PowerShell** with **Run as administrator**. Only administrators and the service can open the data folder.
+2. Paste:
+
+    ```powershell
+    & 'C:\Program Files\Lodestar\lodestar.exe' backup
+    ```
+
+   Lodestar can keep running.
+   **Result:** The command prints `Backup written to` and a folder under `C:\ProgramData\Lodestar\backups`, with the files it holds, as on Unraid.
+3. Copy that folder to a private place off this PC, for example a USB drive. Replace `<backup-folder>` with the name printed and `E:\` with your drive:
+
+    ```powershell
+    Copy-Item -Recurse 'C:\ProgramData\Lodestar\backups\<backup-folder>' 'E:\'
+    ```
+
+   **Result:** The copy finishes without an error.
+4. Delete the copy left in `C:\ProgramData\Lodestar\backups` once it's safe elsewhere. It holds `auth.json` and `seal.key`, the keys listed above. Replace `<backup-folder>` as before:
+
+    ```powershell
+    Remove-Item -Recurse 'C:\ProgramData\Lodestar\backups\<backup-folder>'
+    ```
+
+To restore an installed Lodestar:
+
+1. Open **PowerShell** with **Run as administrator**, then stop the service:
+
+    ```powershell
+    Stop-Service Lodestar
+    ```
+
+2. Delete the old write-ahead files, which belong to the old database. Check the paths before you run it:
+
+    ```powershell
+    Remove-Item -Force -ErrorAction SilentlyContinue 'C:\ProgramData\Lodestar\lodestar.db-wal', 'C:\ProgramData\Lodestar\lodestar.db-shm'
+    ```
+
+3. Copy the files from the backup. Replace `E:\<backup-folder>` with where your backup is. Add `config.toml` to the list only if the backup has one:
+
+    ```powershell
+    Copy-Item 'E:\<backup-folder>\lodestar.db', 'E:\<backup-folder>\seal.key', 'E:\<backup-folder>\auth.json' 'C:\ProgramData\Lodestar\'
+    ```
+
+4. Mark the search index for rebuild:
+
+    ```powershell
+    & 'C:\Program Files\Lodestar\lodestar.exe' reindex
+    ```
+
+   **Result:** It prints `The search index is marked for rebuild.` If it says `refused` and that the store is open in another process, the service is still running: repeat step 1.
+5. Start the service:
+
+    ```powershell
+    Start-Service Lodestar
+    ```
+
+   **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
+
+A portable copy works the same way from its own folder. Open PowerShell in the folder that holds `lodestar.exe` and run `.\lodestar.exe backup`; the backup goes under `data\backups`. To restore, stop Lodestar (**Ctrl+C** in its window) and delete `data\lodestar.db-wal` and `data\lodestar.db-shm`. Copy the files from the backup into `data`, run `.\lodestar.exe reindex`, then run **Start Lodestar.cmd** again.
+
 ### Rebuild the search index
 <!-- index: reindex; rebuild index; lodestar reindex -->
 
@@ -471,6 +546,7 @@ The search index is built from the database, so it can always be rebuilt. Do it 
 |---|---|
 | Docker Compose | `docker compose stop lodestar`, then `docker compose run --rm lodestar reindex`, then `docker compose start lodestar` |
 | Unraid | Stop **Lodestar** on the Docker tab. In the terminal, run `docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex`, with your **PUID** and **PGID** if you changed them, then start **Lodestar** again. |
+| Windows (the MSI) | In PowerShell opened with **Run as administrator**: `Stop-Service Lodestar`, then `& 'C:\Program Files\Lodestar\lodestar.exe' reindex`, then `Start-Service Lodestar` |
 
 **Result:** The command prints `The search index is marked for rebuild.` At the next start, Lodestar builds a new index from the database. Results fill in while it runs.
 

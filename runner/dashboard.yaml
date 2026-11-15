@@ -430,6 +430,7 @@ placement:
   - X-flake-portable-restart-2
   - X-fleet-polish
   - X-win-log-held-open
+  - X-cli-win-data-dir
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity

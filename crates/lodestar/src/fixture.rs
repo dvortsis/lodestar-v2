@@ -247,6 +247,16 @@ mod imp {
                 }
             },
         };
+        // The service's folder only once it's found private, as for every
+        // hand-run command (S8-07); before anything is read or written.
+        if let Err(e) = crate::cli::check_fixture(
+            &dir,
+            config_path,
+            &crate::cli::Install::here(),
+            crate::cli::check_this_service_dir,
+        ) {
+            return crate::cli::report(&e);
+        }
         // Before anything is written or logged.
         let found = inspect(&dir);
         if let Found::Foreign(why) = &found {
