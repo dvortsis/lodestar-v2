@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T07:38Z",
+  "updated_at": "2026-11-15T07:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T07:38Z",
+  "last_heartbeat": "2026-11-15T07:41Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9851,6 +9851,12 @@
       "slice": "X-import-status-lock",
       "sha": "d9574e1c",
       "at": "2026-11-15T07:21Z"
+    },
+    {
+      "pr": 913,
+      "slice": "X-flake-address-port",
+      "sha": "e67b6671",
+      "at": "2026-11-15T07:41Z"
     }
   ],
   "active_sessions": {
@@ -10089,7 +10095,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T07:38Z",
+    "updated": "2026-11-15T07:41Z",
     "items": [
       {
         "slot": 1,
@@ -10104,12 +10110,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-flake-address-port",
+        "slice": "X-store-migrate-race",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T06:34Z",
-        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #913 X-flake-address-port; then X-flake-detect-macos-nits, X-store-migrate-race (fresh Opus review), X-cluster-start-retry",
+        "since": "2026-11-15T07:41Z",
+        "doing": "session_01MMjhn9j5mWvNehxxWyykLf: #913 merged; X-store-migrate-race (PR pending, fresh Opus review), then X-flake-detect-macos-nits, X-cluster-start-retry",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10225,7 +10231,7 @@
     }
   ],
   "heartbeat": "2026-11-15T07:21Z",
-  "updated": "2026-11-15T07:38Z",
+  "updated": "2026-11-15T07:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
