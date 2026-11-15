@@ -65,7 +65,9 @@ fn top_id(body: &[u8]) -> Option<String> {
     let id = serde_json::from_str::<First>(item.get()).ok()?.get("id")?.get().to_owned();
     match id.as_bytes().first()? {
         b'"' => serde_json::from_str::<String>(&id).ok(),
-        b'-' | b'0'..=b'9' => Some(id),
+        // The contract: a non-negative integer, as its digits. `-1`, `1e5`
+        // and `-0` are no id, so a parser that kept one isn't agreed with.
+        _ if id.bytes().all(|b| b.is_ascii_digit()) => Some(id),
         _ => None,
     }
 }
