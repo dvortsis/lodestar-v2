@@ -14,7 +14,10 @@ REQUIRED = ["Name", "Repository", "Network", "Support", "Project",
 CONFIG_ATTRS = ["Name", "Target", "Default", "Mode", "Description", "Type", "Display", "Required"]
 TEMPLATES = {
     "lodestar.xml": {"webui": True, "ports": {"8090", "6881"}, "paths": {"/data"}},
-    "lodestar-gluetun.xml": {"webui": True, "extra": "--network=container:gluetun", "paths": {"/data"}},
+    # LODESTAR_EXIT_ON_NETWORK_LOSS: without it, Lodestar stays in a dead network after gluetun
+    # restarts (X-gluetun-restart-recover).
+    "lodestar-gluetun.xml": {"webui": True, "extra": "--network=container:gluetun", "paths": {"/data"},
+                             "vars": {"LODESTAR_EXIT_ON_NETWORK_LOSS"}},
     "lodestar-worker.xml": {"webui": False, "vars": {"LODESTAR_JOIN", "LODESTAR_TOKEN"}, "requires": "v0.6"},
 }
 NETWORK_CONTAINER = re.compile(r"--net(?:work)?[= ]container:(\S+)")

@@ -439,7 +439,13 @@ class Compose(unittest.TestCase):
         self.assertEqual(lod["volumes"], ["./data:/data", "./witness:/var/lib/lodestar-witness"])
         self.assertEqual(lod["cap_add"], ["CHOWN", "SETGID", "SETUID"])
         # The arm's switches pass through by name; nothing else is set.
-        self.assertEqual(lod["environment"], ["TZ=Etc/UTC", "LODESTAR_DHT_SAFE_RESTART",
+        # LODESTAR_EXIT_ON_NETWORK_LOSS: it exits (and, restart "no", stays down)
+        # rather than looking alive in gluetun's dead network; Compose restarts it
+        # with gluetun (X-gluetun-restart-recover).
+        self.assertEqual(lod["restart"], "no")
+        self.assertEqual(lod["depends_on"], {"gluetun": {"condition": "service_started", "restart": True}})
+        self.assertEqual(lod["environment"], ["TZ=Etc/UTC", "LODESTAR_EXIT_ON_NETWORK_LOSS=true",
+                                              "LODESTAR_DHT_SAFE_RESTART",
                                               "LODESTAR_DHT_COORDINATED_ADMISSION", "LODESTAR_DHT_UTP",
                                               "LODESTAR_DHT_ROUTE_BACKOFF"])
         self.assertIn("no-new-privileges:true", lod["security_opt"])

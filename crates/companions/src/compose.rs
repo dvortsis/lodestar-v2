@@ -1017,6 +1017,11 @@ A container that already has one of these names stops it from starting.";
 const VPN_NOTE: &str = "Fill these in yourself, from your VPN provider. Lodestar never asks for
 or stores them. gluetun won't start until they are real values.";
 
+/// Why a companion in gluetun's network restarts with it
+/// (X-gluetun-restart-recover): a container that shares another's network
+/// stays in the old, dead one when that one restarts.
+const DEPENDS_NOTE: &str = "It starts once gluetun is healthy, and Compose restarts it whenever it\nrestarts gluetun: otherwise it stays in gluetun's old network, with none.";
+
 fn environment(c: &Checked<'_>) -> Y {
     Y::Map(
         c.env
@@ -1113,11 +1118,14 @@ pub fn compose(
                     s(NetworkMode::ServiceGluetun.compose_value()),
                 ),
                 (
-                    None,
+                    Some(DEPENDS_NOTE),
                     "depends_on".to_owned(),
                     map(vec![(
                         GLUETUN,
-                        map(vec![("condition", s("service_healthy"))]),
+                        map(vec![
+                            ("condition", s("service_healthy")),
+                            ("restart", Y::B(true)),
+                        ]),
                     )]),
                 ),
             ];

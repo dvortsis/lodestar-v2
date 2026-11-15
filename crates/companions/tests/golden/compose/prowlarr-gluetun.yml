@@ -51,9 +51,12 @@
     "restart": "unless-stopped"
     # All of its traffic goes through gluetun.
     "network_mode": "service:gluetun"
+    # It starts once gluetun is healthy, and Compose restarts it whenever it
+    # restarts gluetun: otherwise it stays in gluetun's old network, with none.
     "depends_on":
       "gluetun":
         "condition": "service_healthy"
+        "restart": true
     "environment":
       "PUID": "99"
       "PGID": "100"

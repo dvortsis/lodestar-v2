@@ -37,6 +37,17 @@ class ValidateTemplates(unittest.TestCase):
             self.assertNotIn("/data/hot", text, name)
             self.assertNotIn("/data/cold", text, name)
 
+    def test_the_gluetun_variant_keeps_its_network_loss_exit(self):
+        # Without it, Lodestar stays in gluetun's old, dead network after gluetun restarts.
+        name = "lodestar-gluetun.xml"
+        text = (HERE / name).read_text(encoding="utf-8")
+        self.assertIn('Target="LODESTAR_EXIT_ON_NETWORK_LOSS" Default="true"', text)
+        dropped = re.sub(r"\s*<Config [^>]*LODESTAR_EXIT_ON_NETWORK_LOSS[^>]*>[^<]*</Config>", "", text)
+        self.assertNotEqual(dropped, text)
+        self.assertIn("variable LODESTAR_EXIT_ON_NETWORK_LOSS missing", self.check_text(name, dropped))
+        # The plain template never sets it: a host-network install mustn't exit.
+        self.assertNotIn("LODESTAR_EXIT_ON_NETWORK_LOSS", (HERE / "lodestar.xml").read_text(encoding="utf-8"))
+
     def test_a_not_used_yet_field_is_refused(self):
         for name in ("lodestar.xml", "lodestar-gluetun.xml"):
             text = (HERE / name).read_text(encoding="utf-8")

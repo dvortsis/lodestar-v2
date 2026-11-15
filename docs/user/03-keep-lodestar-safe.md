@@ -137,8 +137,12 @@ To run it:
         depends_on:
           gluetun:
             condition: service_healthy
+            # Compose restarts Lodestar whenever it restarts gluetun.
+            restart: true
         environment:
           TZ: Etc/UTC
+          # Lodestar restarts itself when gluetun restarts outside Compose.
+          LODESTAR_EXIT_ON_NETWORK_LOSS: "true"
         volumes:
           - lodestar-data:/data
 
@@ -149,13 +153,14 @@ To run it:
 4. Replace each `FILL_IN_YOURSELF` with the values from your VPN provider's WireGuard setup page. Keep `VPN_INTERFACE: wg0`: the post-rules name the tunnel `wg0`.
 
    gluetun's own documentation lists the provider names it accepts. A provider it doesn't list (`VPN_SERVICE_PROVIDER: custom`) also needs its endpoint and public key: see gluetun's [custom provider page](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md).
-5. Check the file, then start gluetun alone:
+5. Check that your Docker Compose is version 2.17 or later, then check the file and start gluetun alone:
 
     ```bash
+    docker compose version
     docker compose config -q && docker compose up -d gluetun
     ```
 
-   **Result:** `docker compose config -q` prints nothing when the file is valid, and Docker starts only gluetun. If gluetun keeps restarting, run `docker compose logs gluetun` to see why.
+   **Result:** The first line shows the version, such as `Docker Compose version v2.29.7`. An older version refuses the file with "Additional property restart is not allowed": update Docker first. `docker compose config -q` prints nothing when the file is valid, and Docker starts only gluetun. If gluetun keeps restarting, run `docker compose logs gluetun` to see why.
 6. Before Lodestar starts, check that gluetun loaded the post-rules:
 
     ```bash
@@ -173,7 +178,7 @@ To run it:
    **Result:** Docker starts Lodestar once gluetun reports healthy. If gluetun can't connect, Lodestar doesn't start.
 8. Create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password). Open the web UI at `http://<server-ip>:8090`, the port published on gluetun.
 
-When gluetun restarts, restart Lodestar too: run `docker compose restart lodestar`. A container that shares a network stays attached to the old one.
+When gluetun restarts or updates, Lodestar notices it has lost its network within about half a minute and restarts itself; the web UI comes back once its start wait is over. **(Newer than v0.5.1)** v0.5.1 ignores `LODESTAR_EXIT_ON_NETWORK_LOSS`: Compose still restarts Lodestar when it restarts gluetun itself, but after any other gluetun restart, such as an update by another tool, run `docker compose restart lodestar`. That restart costs the six-hour sampling wait; search keeps working meanwhile.
 
 To back up, restore or rebuild the index, use the Compose commands in [section 3.7](#37-back-up-and-restore). They work the same with this file.
 

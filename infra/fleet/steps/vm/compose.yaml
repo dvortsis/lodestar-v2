@@ -50,15 +50,24 @@ services:
     image: ${LODESTAR_IMAGE:?start-block sets it from the screen rules}
     container_name: lodestar
     network_mode: service:gluetun
+    # Compose restarts it when it restarts gluetun: a container in another's
+    # network stays in the old, dead one (X-gluetun-restart-recover).
     depends_on:
-      - gluetun
+      gluetun:
+        condition: service_started
+        restart: true
     profiles:
       - block
     # The arm comes from start-block and arm-switch (block-lib.sh). A bare name
     # passes the caller's value through, and leaves the variable unset when the
     # caller has none, so every other switch stays at its shipped default.
+    # LODESTAR_EXIT_ON_NETWORK_LOSS: when gluetun's container restarts outside
+    # Compose, Lodestar is left with only lo; it exits after 30 s instead of
+    # looking alive. restart: "no" keeps it down, and the watcher's link_outage
+    # note explains the gap (runner's decision, X-gluetun-restart-recover).
     environment:
       - TZ=Etc/UTC
+      - LODESTAR_EXIT_ON_NETWORK_LOSS=true
       - LODESTAR_DHT_SAFE_RESTART
       - LODESTAR_DHT_COORDINATED_ADMISSION
       - LODESTAR_DHT_UTP
