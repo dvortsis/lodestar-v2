@@ -5,7 +5,8 @@ The optional notes from two reviews, folded into one slice by the runner: #919's
 ## The migration's lock window includes the snapshot
 - **Adds to `2026-11-15-X-store-migrate-race.md`:** the one `BEGIN IMMEDIATE` that covers a migration also covers the pre-migration snapshot (`VACUUM INTO`, read through a second connection while the lock is held).
   - So on a large store, a long upgrade holds the write lock for the snapshot as well as the migrations. Another connection opening the store meanwhile waits its busy timeout (5 s), then gets the busy error.
-  - That error is safe to retry: nothing was written. The cluster's start retries it (`2026-11-15-X-cluster-start-retry.md`), and the import commands say the store is in use (`cli/import.rs`).
+  - That error is safe to retry: nothing was written. The import commands say the store is in use (`cli/import.rs`).
+  - The cluster's start will retry it once workers can be turned on and off. That isn't live yet (`2026-11-15-X-cluster-start-retry.md`), so at boot, with `[cluster] enabled` on, a busy failure during a long upgrade is still fatal.
 
 ## The busy test runs as the store runs
 - **`a_migration_that_cant_get_the_lock_says_busy`** now sets both connections up with `configure`, as `Store::open` does, so the test runs in WAL, which it checks. Before, it ran in SQLite's default rollback-journal mode.

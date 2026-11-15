@@ -976,10 +976,10 @@ async fn write_floor(
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = expire.tick() => {
                 // No database yet: no server has opened, so no report was
-                // written, and opening one would create it (with workers
-                // off, nothing is created; X-store-migrate-race).
-                // The check is file I/O, so it runs off the async threads with
-                // the work it guards (X-store-busy-nits).
+                // written, and opening one would create it (with workers off,
+                // nothing is created; X-store-migrate-race). The check is file
+                // I/O, so it runs off the async threads with the expiry it
+                // guards (X-store-busy-nits).
                 let (f, db, config) = (floor.clone(), db.clone(), config.clone());
                 // The clock that stamps the reports (`Sink::outcomes`).
                 let now = clock.now_secs();
