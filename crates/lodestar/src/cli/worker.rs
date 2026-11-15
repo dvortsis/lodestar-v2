@@ -693,12 +693,20 @@ mod tests {
             rotate_key: false,
             join_only: false,
         });
-        let config = crate::cli::load_config(&worker, None, |_| None).unwrap();
+        let (config, _) =
+            crate::cli::load_config(&worker, None, &crate::cli::Install::default(), |_| None)
+                .unwrap();
         // The folder, and the config.toml read from it.
         assert_eq!(config.data_dir, dir.path());
         assert!(config.cluster.enabled);
         // Other commands keep LODESTAR_DATA_DIR.
-        let other = crate::cli::load_config(&Command::Vacuum, None, |_| None).unwrap();
+        let (other, _) = crate::cli::load_config(
+            &Command::Vacuum,
+            None,
+            &crate::cli::Install::default(),
+            |_| None,
+        )
+        .unwrap();
         assert_eq!(other.data_dir, std::path::PathBuf::from("data"));
     }
 

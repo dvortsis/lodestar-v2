@@ -105,10 +105,23 @@ pub fn refuse_during_helper_rollback(data_dir: &Path) -> Outcome {
     }
 }
 
+/// No store at `db`, in plain words: the folder looked in, and how to
+/// point a command at another one.
+pub fn no_store(db: &Path) -> String {
+    let folder = db.parent().unwrap_or(db);
+    format!(
+        "no store at {}. Lodestar looked in the data folder {}. To use another folder, set \
+         LODESTAR_DATA_DIR to the folder that holds lodestar.db, or pass --config with a \
+         config.toml whose data_dir names it.",
+        db.display(),
+        folder.display()
+    )
+}
+
 /// A read-only connection that never creates the file.
 pub fn open_read_only(db: &Path) -> Outcome<Connection> {
     if !db.is_file() {
-        return Err(Failure::Failed(format!("no store at {}", db.display())));
+        return Err(Failure::Failed(no_store(db)));
     }
     let conn = Connection::open_with_flags(
         db,

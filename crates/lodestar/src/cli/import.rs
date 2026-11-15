@@ -1126,7 +1126,7 @@ fn state(j: &ImportJob) -> String {
 fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
     let db = config.db_path();
     if !db.is_file() {
-        return Err(Failure::Failed(format!("no store at {}", db.display())));
+        return Err(Failure::Failed(super::util::no_store(&db)));
     }
     // A read-only connection: WAL readers don't wait on the server's
     // writes. Only a command holding the store to itself blocks it, and

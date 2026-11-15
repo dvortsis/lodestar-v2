@@ -280,7 +280,63 @@ To restore on Unraid:
    **Result:** Lodestar rebuilds the search index on start.
 5. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
 
-You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
+### Back up and restore on Windows
+<!-- index: backup on Windows; restore on Windows; ProgramData -->
+
+On Windows, `lodestar backup` finds the data folder by itself. The installed service's folder is `C:\ProgramData\Lodestar`, and a portable copy's is the `data` folder beside `lodestar.exe`. You don't need to set `LODESTAR_DATA_DIR`. If the command says `no store at`, it names the folder it looked in. Set `LODESTAR_DATA_DIR` to the folder that holds `lodestar.db` and run it again.
+
+To back up an installed Lodestar (the MSI):
+
+1. From Start, open **PowerShell** with **Run as administrator**. Only administrators and the service can open the data folder.
+2. Paste:
+
+    ```powershell
+    & 'C:\Program Files\Lodestar\lodestar.exe' backup
+    ```
+
+   Lodestar can keep running.
+   **Result:** The command prints `Backup written to` and a folder under `C:\ProgramData\Lodestar\backups`.
+3. Copy that folder to a private place off this PC, for example a USB drive. Replace `<backup-folder>` with the name printed and `E:\` with your drive:
+
+    ```powershell
+    Copy-Item -Recurse 'C:\ProgramData\Lodestar\backups\<backup-folder>' 'E:\'
+    ```
+
+   **Result:** The copy finishes without an error.
+
+To restore an installed Lodestar:
+
+1. Open **PowerShell** with **Run as administrator**, then stop the service:
+
+    ```powershell
+    Stop-Service Lodestar
+    ```
+
+2. Delete the old write-ahead files and the old search index. Check the paths before you run it:
+
+    ```powershell
+    Remove-Item -Force -ErrorAction SilentlyContinue 'C:\ProgramData\Lodestar\lodestar.db-wal', 'C:\ProgramData\Lodestar\lodestar.db-shm'
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 'C:\ProgramData\Lodestar\index'
+    ```
+
+3. Copy the files from the backup. Replace `E:\<backup-folder>` with where your backup is. Add `config.toml` to the list only if the backup has one:
+
+    ```powershell
+    Copy-Item 'E:\<backup-folder>\lodestar.db', 'E:\<backup-folder>\seal.key', 'E:\<backup-folder>\auth.json' 'C:\ProgramData\Lodestar\'
+    ```
+
+4. Start the service:
+
+    ```powershell
+    Start-Service Lodestar
+    ```
+
+   **Result:** Lodestar rebuilds the search index on start.
+5. Change the admin password when the app offers it **(planned)**, as in step 5 of the Unraid restore.
+
+A portable copy works the same way from its own folder. Open PowerShell in the folder that holds `lodestar.exe` and run `.\lodestar.exe backup`; the backup goes under `data\backups`. To restore, stop Lodestar (**Ctrl+C** in its window), delete `data\lodestar.db-wal`, `data\lodestar.db-shm` and `data\index`, copy the files from the backup into `data`, then start **Start Lodestar.cmd** again.
+
+You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so the step that deletes it doesn't apply when you restore it.
 
 ### Keep the data folder owner-only
 <!-- index: data folder permissions; chmod; folder mode -->

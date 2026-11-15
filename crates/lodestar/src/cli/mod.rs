@@ -213,22 +213,95 @@ pub struct StatsArgs {
     pub json: bool,
 }
 
-/// The config for `command`. `lodestar worker --data <dir>` is the data
-/// folder for the config too (its config.toml, its log), as it is for the
-/// privilege drop, so the two agree.
-fn load_config(
+/// Where this executable is, for [`msi_data_dir`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Install {
+    /// This executable (`current_exe`).
+    pub exe: Option<PathBuf>,
+    /// `%ProgramFiles%`, as the system has it.
+    pub program_files: Option<PathBuf>,
+    /// `%ProgramData%`.
+    pub program_data: Option<String>,
+}
+
+impl Install {
+    /// This process's: on Windows only. Elsewhere nothing, so no
+    /// executable is ever the MSI's.
+    fn here() -> Install {
+        #[cfg(windows)]
+        {
+            Install {
+                exe: std::env::current_exe().ok(),
+                program_files: crate::update::windows::msi::system_program_files(),
+                program_data: std::env::var("ProgramData").ok(),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Install::default()
+        }
+    }
+}
+
+/// The MSI's data folder, `%ProgramData%\Lodestar`, when this is the MSI's
+/// executable: `%ProgramFiles%\Lodestar\lodestar.exe`, the only place the
+/// MSI installs (`main.wxs`). It's where the service keeps its data when
+/// nothing else chose a folder, so the CLI finds the same store. `None`
+/// for any other executable (the portable zip, Docker, Linux, a build),
+/// which keeps `data` in the working folder as before.
+pub(crate) fn msi_data_dir(install: &Install) -> Option<PathBuf> {
+    let (exe, pf) = (install.exe.as_deref()?, install.program_files.as_deref()?);
+    crate::windows::service::same_dir(exe, &pf.join("Lodestar").join("lodestar.exe"))
+        .then(|| crate::windows::service::default_data_dir(install.program_data.clone()))
+}
+
+/// The config for `command`, and the `config.toml` it was read from (if
+/// any). `lodestar worker --data <dir>` is the data folder for the config
+/// too (its config.toml, its log), as it is for the privilege drop, so the
+/// two agree.
+///
+/// Run from the MSI's executable ([`msi_data_dir`]) with no
+/// `LODESTAR_DATA_DIR` and no `--data`, the folder is the service's, found
+/// as the service finds it: `config.toml` there if present, and the data
+/// there unless the config file chose another folder. `--config` and
+/// `LODESTAR_DATA_DIR` still win. It only reads that folder: its
+/// permissions are the service's to set.
+pub(crate) fn load_config(
     command: &Command,
     config_path: Option<&Path>,
+    install: &Install,
     env: impl Fn(&str) -> Option<String>,
-) -> Result<Config, crate::config::ConfigError> {
+) -> Result<(Config, Option<PathBuf>), crate::config::ConfigError> {
     let data = match command {
         Command::Worker(a) => a.data.as_ref().and_then(|d| d.to_str()).map(str::to_owned),
         _ => None,
     };
-    Config::load(config_path, |k| match (k, &data) {
+    let env = |k: &str| match (k, &data) {
         ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
         _ => env(k),
-    })
+    };
+    let msi = msi_data_dir(install).filter(|_| env("LODESTAR_DATA_DIR").is_none());
+    let Some(dir) = msi else {
+        let file = config_file(config_path, env);
+        return Ok((Config::load(config_path, env)?, file));
+    };
+    let file = crate::windows::service::config_path(config_path.map(Path::to_path_buf), &dir, env);
+    let mut config = match (&file, dir.to_str()) {
+        // No config.toml there: loaded as if pointed at that folder, so
+        // `data\config.toml` in the working folder is never read, and not
+        // counted as set by the environment.
+        (None, Some(d)) => {
+            let mut c = Config::load(None, |k| match k {
+                "LODESTAR_DATA_DIR" => Some(d.to_owned()),
+                _ => env(k),
+            })?;
+            c.layers.env.retain(|v| *v != "LODESTAR_DATA_DIR");
+            c
+        }
+        _ => Config::load(file.as_deref(), env)?,
+    };
+    crate::windows::service::default_data_dir_unless_set(&mut config, &dir);
+    Ok((config, file))
 }
 
 /// Parses the process's arguments; on bad ones (or `--help`,
@@ -246,13 +319,15 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
     if let Command::UpdateHelper(a) = command {
         return update_helper::run(&a, config_path);
     }
-    let config = match load_config(&command, config_path, |k| std::env::var(k).ok()) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("config: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let install = Install::here();
+    let (config, file) =
+        match load_config(&command, config_path, &install, |k| std::env::var(k).ok()) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("config: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
     crate::settings::log::init(&config.log);
     dropped.log(&config.data_dir);
     // Its own exit statuses: a bad setting or value is 2, as clap's are.
@@ -262,11 +337,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
     let (name, outcome) = match command {
         Command::Backup(a) => (
             "backup",
-            backup::run(
-                &config,
-                config_file(config_path).as_deref(),
-                a.to.as_deref(),
-            ),
+            backup::run(&config, file.as_deref(), a.to.as_deref()),
         ),
         Command::Rollback(a) => (
             "rollback",
@@ -312,13 +383,11 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
 
 /// The `config.toml` that [`Config::load`] reads: `--config`, else
 /// `$LODESTAR_DATA_DIR/config.toml` or `data/config.toml` if present.
-fn config_file(explicit: Option<&Path>) -> Option<PathBuf> {
+fn config_file(explicit: Option<&Path>, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     match explicit {
         Some(p) => Some(p.to_path_buf()),
         None => {
-            let dir = std::env::var_os("LODESTAR_DATA_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("data"));
+            let dir = env("LODESTAR_DATA_DIR").map_or_else(|| PathBuf::from("data"), PathBuf::from);
             Some(dir.join("config.toml")).filter(|p| p.is_file())
         }
     }
@@ -327,6 +396,139 @@ fn config_file(explicit: Option<&Path>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X-cli-win-data-dir: an install whose executable is the MSI's, in
+    /// folders under `root` (no real Program Files or ProgramData).
+    fn msi(root: &Path) -> Install {
+        let pf = root.join("Program Files");
+        Install {
+            exe: Some(pf.join("Lodestar").join("lodestar.exe")),
+            program_files: Some(pf),
+            program_data: Some(root.join("ProgramData").to_string_lossy().into_owned()),
+        }
+    }
+
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |k| pairs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+    }
+
+    /// A TOML string for a path, on any platform.
+    fn toml_path(p: &Path) -> String {
+        p.to_string_lossy().replace('\\', "/")
+    }
+
+    /// The MSI's executable finds the service's folder with nothing set,
+    /// reads its config.toml, and lets that file, `--config`,
+    /// `LODESTAR_DATA_DIR` and `worker --data` choose another, in that
+    /// order of strength; any other executable keeps `data`.
+    #[test]
+    fn the_msi_executable_finds_the_services_data_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let install = msi(root.path());
+        let service_dir = root.path().join("ProgramData").join("Lodestar");
+        assert_eq!(msi_data_dir(&install), Some(service_dir.clone()));
+        let none = env_of(&[]);
+
+        // Nothing set and no config.toml there: the service's folder.
+        let (c, file) = load_config(&Command::Vacuum, None, &install, &none).unwrap();
+        assert_eq!((c.data_dir.clone(), file), (service_dir.clone(), None));
+        assert!(!c.layers.in_env("LODESTAR_DATA_DIR"));
+
+        // Its config.toml is read; a data_dir there wins.
+        std::fs::create_dir_all(&service_dir).unwrap();
+        let moved = root.path().join("D").join("Lodestar");
+        let config_toml = service_dir.join("config.toml");
+        std::fs::write(
+            &config_toml,
+            format!("data_dir = \"{}\"\n", toml_path(&moved)),
+        )
+        .unwrap();
+        let (c, file) = load_config(&Command::Vacuum, None, &install, &none).unwrap();
+        assert_eq!((c.data_dir, file), (moved, Some(config_toml.clone())));
+
+        // `--config` without a data_dir: the service's folder still.
+        let other = root.path().join("other.toml");
+        std::fs::write(&other, "").unwrap();
+        let (c, file) = load_config(&Command::Vacuum, Some(&other), &install, &none).unwrap();
+        assert_eq!((c.data_dir, file), (service_dir.clone(), Some(other)));
+
+        // LODESTAR_DATA_DIR wins, and the service's config.toml isn't read.
+        let chosen = root.path().join("chosen");
+        let env = env_of(&[("LODESTAR_DATA_DIR", chosen.to_str().unwrap())]);
+        let (c, file) = load_config(&Command::Vacuum, None, &install, &env).unwrap();
+        assert_eq!((c.data_dir, file), (chosen, None));
+
+        // `worker --data` wins too.
+        let mine = root.path().join("worker");
+        let worker = Command::Worker(worker::WorkerArgs {
+            join: None,
+            token_file: None,
+            data: Some(mine.clone()),
+            rotate_key: false,
+            join_only: false,
+        });
+        let (c, _) = load_config(&worker, None, &install, &none).unwrap();
+        assert_eq!(c.data_dir, mine);
+    }
+
+    /// Any other executable is left as before: the portable zip's (beside
+    /// its own folder), one elsewhere in Program Files, and every one on
+    /// a platform with no MSI.
+    #[test]
+    fn other_executables_keep_data_in_the_working_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let mut portable = msi(root.path());
+        portable.exe = Some(root.path().join("Lodestar portable").join("lodestar.exe"));
+        let mut elsewhere = msi(root.path());
+        elsewhere.exe = Some(
+            root.path()
+                .join("Program Files")
+                .join("Other")
+                .join("lodestar.exe"),
+        );
+        let mut no_program_files = msi(root.path());
+        no_program_files.program_files = None;
+        for install in [portable, elsewhere, no_program_files, Install::default()] {
+            assert_eq!(msi_data_dir(&install), None, "{install:?}");
+            let (c, _) = load_config(&Command::Vacuum, None, &install, env_of(&[])).unwrap();
+            assert_eq!(c.data_dir, PathBuf::from("data"), "{install:?}");
+        }
+        // This test binary is never the MSI's, on any platform.
+        assert_eq!(msi_data_dir(&Install::here()), None);
+    }
+
+    /// The MSI's executable is matched as Windows compares paths: by case.
+    #[test]
+    fn the_msi_executable_matches_whatever_its_case() {
+        let root = tempfile::tempdir().unwrap();
+        let mut install = msi(root.path());
+        let pf = install.program_files.clone().unwrap();
+        install.exe = Some(pf.join("LODESTAR").join("Lodestar.EXE"));
+        // The same on every platform (`same_dir` compares as Windows does);
+        // off Windows `Install::here` names no executable, so it never applies.
+        assert!(msi_data_dir(&install).is_some());
+    }
+
+    /// No store: the message names the folder looked in and how to point
+    /// at another.
+    #[test]
+    fn no_store_says_where_it_looked() {
+        let db = Path::new("data").join("lodestar.db");
+        let words = util::no_store(&db);
+        assert!(words.starts_with("no store at"), "{words}");
+        assert!(
+            words.contains(&format!("data folder {}", Path::new("data").display())),
+            "{words}"
+        );
+        assert!(
+            words.contains("LODESTAR_DATA_DIR") && words.contains("--config"),
+            "{words}"
+        );
+    }
 
     fn args(s: &str) -> Result<Cli, clap::error::ErrorKind> {
         Cli::try_parse_from(std::iter::once("lodestar").chain(s.split_whitespace()))
