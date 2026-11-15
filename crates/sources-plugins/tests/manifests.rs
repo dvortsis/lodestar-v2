@@ -55,6 +55,10 @@ fn each_entry_is_its_plugins_own_manifest() {
     let stashdb = stashdb::StashDb::new(creds());
     let plugins: Vec<Manifest> = vec![
         academic::Academic::new().manifest().clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::anilist::AniList::new(),
+        )
+        .clone(),
         archive_org::ArchiveOrg::new().manifest().clone(),
         arr::ArrWebhooks::new().manifest().clone(),
         clients::Clients::unconfigured().manifest().clone(),
