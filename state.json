@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T16:34Z",
+  "updated_at": "2026-11-15T17:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T16:34Z",
+  "last_heartbeat": "2026-11-15T17:02Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9977,6 +9977,12 @@
       "slice": "X-cluster-start-retry",
       "sha": "dc55f53a5e9f318fb15cfd98507b01c6417a1a1d",
       "at": "2026-11-15T16:34Z"
+    },
+    {
+      "pr": 935,
+      "slice": "X-fuzz-slow-targets",
+      "sha": "aa1853847e3ae0368bb97e49c22251de208d9572",
+      "at": "2026-11-15T17:02Z"
     }
   ],
   "active_sessions": {
@@ -10215,7 +10221,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T16:34Z",
+    "updated": "2026-11-15T17:02Z",
     "items": [
       {
         "slot": 1,
@@ -10224,7 +10230,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T15:59Z",
-        "doing": "#936 X-win-service-path-hardening at 3c2efe3f: Opus + security review running, CI; session_01MMjhn8LCZuDPeXwdBzodLH",
+        "doing": "#936 r1 CHANGES relayed (order test, implicit config, tidy over-match); session_01MMjhn8LCZuDPeXwdBzodLH",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10235,19 +10241,20 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T16:34Z",
-        "doing": "store busy nits: migrate-lock decisions line, WAL busy test, serve.rs exists() off the async task, import store_busy reuse; session_01MMjhn9j5mWvNehxxWyykLf",
+        "doing": "#937 X-store-busy-nits: review running, CI; session_01MMjhn9j5mWvNehxxWyykLf",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
       {
         "slot": 3,
-        "slice": "X-fuzz-slow-targets",
+        "slice": "X-fuzz-nits-1115",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T15:32Z",
-        "doing": "#935 X-fuzz-slow-targets: review MERGE, waiting on CI",
-        "cap": "build (\u00a72.64 4+4)"
+        "since": "2026-11-15T17:02Z",
+        "doing": "fuzz nits from #918 and #935 reviews (peer_fetch docs, mse.rs fmt/clippy, README PROPTEST_CASES exceptions); session_01MMjhn9hfwMf4Ydg4La5rEh",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "active"
       },
       {
         "slot": 4,
@@ -10349,8 +10356,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T16:34Z",
-  "updated": "2026-11-15T16:34Z",
+  "heartbeat": "2026-11-15T17:02Z",
+  "updated": "2026-11-15T17:02Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
