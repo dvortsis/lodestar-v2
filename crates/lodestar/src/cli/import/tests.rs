@@ -900,3 +900,59 @@ fn start_stores_a_hash_sukebei_claims_as_adult() {
         assert!(!bit && class != adult, "{i}");
     }
 }
+
+/// `status` only reads: it answers while another connection is writing
+/// (as the running server does), and while a writing verb holds the store
+/// to itself it says so plainly once the busy timeout runs out, instead of
+/// a bare "database is locked". Writing verbs still refuse beside it.
+#[test]
+fn status_reads_beside_a_writer_and_names_a_command_holding_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 600);
+    let config = data(&dir.path().join("data"));
+    block_on(start(&config, &magnetico(&src), Some(1), true, None)).unwrap();
+
+    // A writer with a transaction open, as the server has while it writes.
+    let server = Store::open(config.db_path(), config.store_config()).unwrap();
+    server
+        .connection()
+        .execute_batch("BEGIN IMMEDIATE; UPDATE settings SET value = value WHERE 0;")
+        .unwrap();
+    status(&config, None, false).unwrap();
+    status(&config, Some(1), true).unwrap();
+    server.connection().execute_batch("COMMIT;").unwrap();
+    drop(server);
+
+    // An import holds the store to itself.
+    let import = open_exclusive(&config).unwrap();
+    let began = std::time::Instant::now();
+    for r in [status(&config, None, false), status(&config, Some(1), true)] {
+        assert!(
+            matches!(&r, Err(Failure::Refused(m))
+                if m.contains("lodestar import status` again") && m.contains("Ctrl-C")),
+            "{r:?}"
+        );
+    }
+    let r = block_on(inspect(&config, &magnetico(&src), true));
+    assert!(
+        matches!(&r, Err(Failure::Refused(m)) if m.contains("lodestar import inspect` again")),
+        "{r:?}"
+    );
+    // Bounded by the store's busy timeout per call, with room to spare.
+    assert!(began.elapsed() < std::time::Duration::from_secs(60));
+    // No second writer beside it.
+    let r = run(
+        &config,
+        ImportArgs {
+            action: Action::Pause { job: 1 },
+        },
+    );
+    assert!(matches!(&r, Err(Failure::Refused(_))), "{r:?}");
+    let r = block_on(resume(&config, 1, &magnetico(&src), None, true));
+    assert!(matches!(&r, Err(Failure::Refused(_))), "{r:?}");
+    drop(import);
+
+    // Free again: it reads.
+    status(&config, Some(1), false).unwrap();
+}
