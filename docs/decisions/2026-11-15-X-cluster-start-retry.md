@@ -1,4 +1,4 @@
-# X-cluster-start-retry decisions (#PR)
+# X-cluster-start-retry decisions (#929)
 
 A cluster port that fails to open is now tried again while "Allow workers" stays on. Before, it stayed closed until someone turned workers off and on again, or a key rotation resealed the PKI (architecture §20, the cluster port). This is the runner's call, as UX: the owner shouldn't have to toggle workers to recover. The runner flags it under `docs/owner-decisions.md` §2.19. It was found while root-causing the `off_binds` flake (`2026-11-15-X-store-migrate-race.md`).
 
