@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T18:38Z",
+  "updated_at": "2026-11-15T18:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T18:38Z",
+  "last_heartbeat": "2026-11-15T18:42Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10227,7 +10227,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T18:38Z",
+    "updated": "2026-11-15T18:42Z",
     "items": [
       {
         "slot": 1,
@@ -10362,8 +10362,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T18:38Z",
-  "updated": "2026-11-15T18:38Z",
+  "heartbeat": "2026-11-15T18:42Z",
+  "updated": "2026-11-15T18:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10610,7 +10610,7 @@
     ]
   },
   "extra": {
-    "updated": "2026-11-15T05:18Z",
+    "updated": "2026-11-15T18:42Z",
     "max": 4,
     "items": [
       {
@@ -10636,6 +10636,26 @@
         "name": "api-lane",
         "session": "none (local; reports via PR comments if no send_message)",
         "status": "active"
+      },
+      {
+        "slot": "ct-1",
+        "slice": "X-gluetun-restart-recover",
+        "role": "build",
+        "agent": "claude",
+        "model": "opus",
+        "since": "2026-11-15T18:42Z",
+        "status": "active",
+        "doing": "cloud-testing: gluetun DNS health check + recover after gluetun restart (X-test-vm findings 1-2); plan first; session_01MMjhnD97xKWJbZnwCWbYoW"
+      },
+      {
+        "slot": "ct-2",
+        "slice": "D-guide-backup-fixes",
+        "role": "docs",
+        "agent": "claude",
+        "model": "sonnet",
+        "since": "2026-11-15T18:42Z",
+        "status": "active",
+        "doing": "cloud-testing: guide \u00a73.7 backup restore vs README.txt, \u00a73.3 wording (X-test-vm N3-N4); session_01MMjhnAM1VzppkT9GKFCVdd"
       }
     ],
     "note": "Owner \u00a72.64: 4 build (slots) + 4 cloud-testing (here, shared with the X-test-vm coordinator) + the owner-approved Fable slot. Cloud-testing share 1 is lent to X-flake-detect-macos (slot 2)."
