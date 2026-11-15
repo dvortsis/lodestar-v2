@@ -30,7 +30,14 @@ The five shapes are the ones that ran slow on #907's EPYC 9V45 job: long CJK fol
 | EPYC 9V45, 2026-11-14 23:24 | #895 | 6.02 | 5.82 | 4.15 | 5.24 | 1.28 |
 | EPYC 9V45, 2026-11-15 03:22 (#907, failed) | #895 | 15.40 | 16.33 | 11.30 | 7.22 | 3.35 |
 
-On #907's 9V45 job, calibration read 0.62–0.70× the reference's time, so its raw times were scaled up: long CJK folder read 24.42 ms, alternating folders 25.90 ms and typical Latin 17.92 ms, all over the 15 ms bar. This change's own CI jobs give the "after" rows for whichever runner models they draw. They're added in the review round.
+On #907's 9V45 job, calibration read 0.62–0.70× the reference's time, so its raw times were scaled up: long CJK folder read 24.42 ms, alternating folders 25.90 ms and typical Latin 17.92 ms, all over the 15 ms bar.
+
+### CI after this change
+| Runner, date (UTC) | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
+|---|---|---|---|---|---|
+| EPYC 9V45, 2026-11-15 04:34 (#910) | 4.04 | 3.00 | 2.79 | 3.20 | 1.05 |
+
+On that job the worst case on the reference scale was 8.86 ms (ASCII words read anew), against 25.90 ms on #907's 9V45 job, and the 50 µs gate read the mixed set at 43.0 µs.
 
 ### This build VM, back to back
 An Intel Xeon at 2.10 GHz with 4 vCPUs and a noisy host, calibrating at 1.02–1.03× the reference.
