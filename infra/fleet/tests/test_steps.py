@@ -553,8 +553,19 @@ case "$1" in
     # (Without its post-rules it leaks only flows opened earlier: the capture and
     # the host counter see those; a fresh probe still fails.)
     if [ -e "$STUB/ifdown" ] && [ -n "$FIREWALL_OFF" ]; then leak=1; else leak=; fi
+    # IFACE_REUP=n: gluetun's own VPN restart brings the interface back just
+    # after each of phase B's first n leak probes (REUP_LEAK: and that probe
+    # got out).
+    reup=
+    case "$*" in "curl -"*|"nc -z"*|"sh -c dig"*|"sh -c echo"*)
+      if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_REUP" ]; then
+        k=$(cat "$STUB/reups" 2>/dev/null || echo 0)
+        if [ "$k" -lt "$IFACE_REUP" ]; then echo $((k + 1)) > "$STUB/reups"; reup=1; fi
+      fi ;;
+    esac
     echo "$*" >> "$STUB/probes"
     (
+      [ -n "$reup" ] && [ -n "$REUP_LEAK" ] && exit 0
       case "$*" in
         "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
@@ -583,7 +594,9 @@ case "$1" in
         *) exit 99 ;;
       esac
     )
-    printf '\nprobe_rc=%s\n' "$?" ;;
+    rc=$?
+    [ -n "$reup" ] && rm -f "$STUB/ifdown"
+    printf '\nprobe_rc=%s\n' "$rc" ;;
   *) bad "$*" ;;
 esac
 """
@@ -989,7 +1002,7 @@ class VMScripts(unittest.TestCase):
         self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu  | grep -Eq", probes)  # phase B: another fresh name
         self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu @1.1.1.1", probes)
         self.assertIn("ip link set dev wg0 down", probes)  # gluetun's own interface, from its config
-        self.assertIn("ok vpn_interface_stayed_down", lines)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
         # A timed-out dig's ";;" lines never count as an answer: only an address does.
         self.assertIn("grep -Eq '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$'", probes)
         # Phase B runs with the interface down; recovery recreates gluetun.
@@ -1033,7 +1046,7 @@ class VMScripts(unittest.TestCase):
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
             "no DNS answer with the tunnel up": ({"DIG_UP_FAIL": 1}, "dns_up"),
             # gluetun's own VPN restart brings the interface back mid-phase.
-            "the interface comes back up": ({"IFACE_BACK": 1}, "vpn_interface_stayed_down"),
+            "the interface comes back up and stays up": ({"IFACE_BACK": 1}, "vpn_interface_held_down"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
             # The host's own IPv6 (0d's separate check, OP-3b).
@@ -1543,7 +1556,7 @@ class VMScripts(unittest.TestCase):
         waits for one that runs, within its deadline, instead of failing on it."""
         rc, lines, raw = self.run_script("leak-test.sh", IFACE_NOT_RUN=3)
         self.assertEqual(rc, 0, raw)
-        self.assertIn("ok vpn_interface_stayed_down", lines)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
         self.assertNotIn("fail probe_ran", lines)
 
     def test_a_stuck_icmp_rule_fails_the_run_and_input_still_comes_off(self):
@@ -1551,6 +1564,36 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("fail guards_released", lines)
         self.assertEqual((self.copies("host"), self.copies("icmp")), (0, 1))  # both were tried
+
+    def test_phase_b_takes_the_interface_down_again_and_runs_the_probe_again(self):
+        """X-leak-test-capture-kill (runner's call): gluetun's VPN restart brings the
+        interface back during a phase B probe; that attempt is discarded, the
+        interface goes down again, and the probe runs again and counts."""
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=2)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
+        self.assertIn("ok ipv4_blocked_ifdown", lines)
+        probes = (self.stub / "probes").read_text().splitlines()
+        self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 3)
+        self.assertEqual(probes.count("ip link set dev wg0 down"), 3)  # the phase's own, then one per re-up
+
+    def test_phase_b_fails_when_the_interface_wont_stay_down(self):
+        """The interface back during every attempt: no probe gets a clean one, so
+        each is skipped and the run fails vpn_interface_held_down, not a leak line."""
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("skip ipv4_blocked_ifdown", lines)
+        self.assertNotIn("ok vpn_interface_down_during_probes", lines)
+        self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+
+    def test_a_leak_in_a_discarded_phase_b_attempt_is_a_leak(self):
+        """A probe that gets out while the interface came back is a leak all the
+        same: it fails at once and isn't run again."""
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1, REUP_LEAK=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail ipv4_blocked_ifdown", lines)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)  # the others got clean attempts
 
     def kill_stub_leftovers(self):
         """Ends any stub process the run couldn't stop (KILL_DENIED leaves one)."""
@@ -1611,7 +1654,7 @@ class VMScripts(unittest.TestCase):
     def test_a_probe_that_never_runs_by_the_deadline_fails_both_checks(self):
         rc, lines, _ = self.run_script("leak-test.sh", IFACE_NOT_RUN=100000)
         self.assertEqual(rc, 1)
-        self.assertIn("fail vpn_interface_stayed_down", lines)
+        self.assertIn("fail vpn_interface_held_down", lines)
         self.assertIn("fail probe_ran", lines)
 
     def test_the_post_rules_are_back_after_the_start(self):

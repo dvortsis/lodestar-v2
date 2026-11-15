@@ -360,13 +360,65 @@ judge_capture() {  # $1: phase. The capture must have run through every probe, t
   fi
   if [[ -n $alive && -s $work/cap-$1.pcap && $captured == 0 ]]; then pass "no_egress_captured_$1"; else bad "no_egress_captured_$1"; fi
 }
-down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer it)
-  refute "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
-  refute "tcp_literal_blocked_$1" probe nc -z -w 5 1.1.1.1 443  # no DNS needed
-  refute "ipv6_blocked_$1" probe curl -6 -s -m 8 "$V6_URL"
-  refute "dns_blocked_$1" resolves "$2" 3
-  refute "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
-  probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53' >/dev/null 2>&1  # the capture judges it
+down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer it); $3: refute, or held (phase B)
+  local judge=${3:-refute}
+  "$judge" "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
+  "$judge" "tcp_literal_blocked_$1" probe nc -z -w 5 1.1.1.1 443  # no DNS needed
+  "$judge" "ipv6_blocked_$1" probe curl -6 -s -m 8 "$V6_URL"
+  "$judge" "dns_blocked_$1" resolves "$2" 3
+  "$judge" "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
+  if [[ $judge == held ]]; then
+    held - probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53'  # the capture judges it
+  else
+    probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53' >/dev/null 2>&1  # the capture judges it
+  fi
+}
+# Phase B's probes (the runner's call, X-leak-test-capture-kill): each one
+# counts only when the VPN interface was down both just before it and just
+# after it. gluetun's own VPN restart can bring the interface back at any
+# moment; then the attempt is discarded and run again with the interface
+# taken down first, at most HELD_TRIES times. A probe that never gets a clean
+# attempt is skipped and fails vpn_interface_held_down, a harness failure of
+# its own. A probe that gets out is a leak whatever the interface did, and
+# fails at once. The phase's capture and counter judge every attempt.
+HELD_TRIES=3
+held_bad=""
+held_dead=""  # an interface check never ran by its deadline: no bracket can be had
+held() {  # $1: the probe's line, or - for one only the capture judges; the rest: the probe
+  local n=$1 rc after try saved
+  shift
+  for ((try = 1; try <= HELD_TRIES; try++)); do
+    [[ -z $held_dead ]] || break
+    saved=$not_run
+    held_down; rc=$?
+    if ((rc == 0)); then
+      "$@" >/dev/null 2>&1; rc=$?
+      iface_seen_up >/dev/null 2>&1; after=$?
+      if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
+      if ((after == 1)); then
+        [[ $n == - ]] && return
+        if ((rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi
+        return
+      fi
+      ((after == NOT_RUN)) && { held_dead=1; break; }
+    elif ((rc == NOT_RUN)); then
+      held_dead=1; break  # its deadline already passed: not_run stays set
+    fi
+    not_run=$saved  # a discarded attempt's unrun probe is no verdict either
+  done
+  held_bad=1
+  [[ $n == - ]] || echo "skip $n"
+}
+held_down() {  # 0: the interface is down now (taken down again if it came back); NOT_RUN: unknown
+  local rc
+  iface_seen_up >/dev/null 2>&1; rc=$?
+  ((rc == 1)) && return 0
+  ((rc == 0)) || return "$rc"
+  probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down >/dev/null 2>&1
+  iface_seen_up >/dev/null 2>&1; rc=$?
+  ((rc == 1)) && return 0
+  ((rc == 0)) && return 1
+  return "$rc"
 }
 iface_up() { probe sh -c 'ip -o link show up dev "$1" | grep -q .' iface "$iface"; }
 # iface_seen_up: iface_up, read by a probe that really ran. Under load a probe
@@ -589,10 +641,10 @@ check flow_alive_down running "$FLOW"
 start_counter
 start_capture ifdown
 check vpn_interface_down probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down
-down_probes ifdown example.edu
-# gluetun's own VPN restart could bring the interface back mid-phase: fail
-# closed unless it's still down (or gone) after the last probe.
-refute vpn_interface_stayed_down iface_seen_up
+down_probes ifdown example.edu held
+# Every probe ran with the interface down (held): one that never got a clean
+# attempt fails here, apart from any leak line.
+if [[ -z $held_bad ]]; then pass vpn_interface_down_during_probes; else bad vpn_interface_held_down; fi
 judge_capture ifdown
 judge_counter ifdown
 # The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules

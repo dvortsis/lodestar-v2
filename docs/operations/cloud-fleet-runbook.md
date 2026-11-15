@@ -120,6 +120,9 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - `recreate_guard_lifted` or `guards_released`: a guard rule wouldn't come off. Tell the runner before anything else runs on that VM. Next to `host_guarded` or `recreate_guarded`, `guards_released` can also mean the rule was rejected outright: tell the runner either way.
   - `post_rules_after_restart_ipv4` or `_ipv6`: gluetun's post-rules weren't in place after its VPN restart in phase B. It's a stop: tell the runner.
 - **`container_mac`:** gluetun's MAC couldn't be read, so the capture can't be judged. Ask for the run again; if it repeats, tell the runner.
+- **The test's own harness:** these failure names mean the test couldn't measure something. They don't mean a leak, though the run still fails.
+  - `capture_stopped_<name>`: a packet capture wouldn't stop, even after a forced kill. That happens when the shell running the test may not signal `tcpdump`, as an AppArmor-confined shell (a snap terminal or a snap-installed SSM agent) can't. Run the test from an unconfined root shell and ask for the run again; if it repeats, tell the runner.
+  - `vpn_interface_held_down`: in the second down phase, gluetun kept bringing its VPN interface back, so a probe couldn't run with it down. The probe's own line reads `skip`. Ask for the run again; if it repeats, tell the runner.
 - **Fails:** `failed (exit 1); <n> ok; failed: <names>, leak_test`. **That's a stop condition: no crawl starts on that VM.** Tell the runner, with the failed names.
 
 ### 3.3 `/fleet run start-block <vm> <rules commit>`
