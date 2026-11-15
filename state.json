@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T15:38Z",
+  "updated_at": "2026-11-15T15:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T15:38Z",
+  "last_heartbeat": "2026-11-15T15:53Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9953,6 +9953,12 @@
       "slice": "X-flake-supervise-restarts",
       "sha": "cfe1fef4",
       "at": "2026-11-15T15:27Z"
+    },
+    {
+      "pr": 934,
+      "slice": "X-flake-metainfo-bound-rss",
+      "sha": "2384a8de",
+      "at": "2026-11-15T15:53Z"
     }
   ],
   "active_sessions": {
@@ -10191,7 +10197,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T15:38Z",
+    "updated": "2026-11-15T15:53Z",
     "items": [
       {
         "slot": 1,
@@ -10227,12 +10233,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-flake-metainfo-bound-rss",
+        "slice": "X-worker-oversize-handback",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T08:40Z",
-        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: X-flake-metainfo-bound-rss (bound.rs measures its own peak; keep 512 MiB)",
+        "since": "2026-11-15T15:53Z",
+        "doing": "rebuild from parked/X-worker-oversize-handback on main (after #929); session_01MMjhn8URRT9adbFfM1zGi1",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       }
@@ -10325,8 +10331,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T15:38Z",
-  "updated": "2026-11-15T15:38Z",
+  "heartbeat": "2026-11-15T15:53Z",
+  "updated": "2026-11-15T15:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
