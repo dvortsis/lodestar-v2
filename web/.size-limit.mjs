@@ -477,7 +477,8 @@ const eventNamesComponents = componentIds(
 // Gzipped: measured + max(10%, 300 B), rounded up (X-event-names-split, 2026-11-11), so about three
 // new events fit in any chunk. A new component needs a line.
 const eventNamesLimits = {
-	system: '6230 B',
+	// runner §2.26, X-gluetun-restart-recover: measured 6460 B with the two network-watch events, + 10%.
+	system: '7110 B',
 	auth: '1630 B',
 	dht: '1120 B',
 	filters: '1740 B',
