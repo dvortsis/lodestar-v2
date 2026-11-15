@@ -45,34 +45,60 @@ fn second_reader(body: &[u8]) -> Option<serde_json::Value> {
     }
 }
 
-/// An id as the second reader sees it: a string's text, or a number's own
-/// digits. A number is taken as its raw JSON text, as the plugin keeps it:
-/// `Value` reads one past `u64::MAX` (20 digits) as an `f64`, whose digits
-/// differ (X-fuzz-tpdb-harness).
-fn id_of(v: &serde_json::Value, body: &[u8]) -> Option<String> {
-    match v {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Number(_) => raw_id(body),
-        _ => None,
-    }
-}
-
-/// The top item's `id` as its raw JSON text, read through `RawValue` the way
-/// `Value` reads the rest (the last of a repeated key wins).
-fn raw_id(body: &[u8]) -> Option<String> {
+/// The top item's `id` as the second reader sees it: a string's text, or a
+/// number's own digits (X-fuzz-tpdb-harness).
+/// - **A number** is taken as its raw JSON text, as the plugin keeps it:
+///   `Value` reads one past `u64::MAX` (20 digits) as an `f64`, whose digits
+///   differ (`1e+20`).
+/// - **A repeated key:** the first is kept, as the plugin's parser keeps the
+///   first `id`; `Value` and a map keep the last.
+fn top_id(body: &[u8]) -> Option<String> {
     use serde_json::value::RawValue;
-    use std::collections::HashMap;
-    type Fields = HashMap<String, Box<RawValue>>;
     let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
-    let top: Fields = serde_json::from_slice(root).ok()?;
+    let top: First = serde_json::from_slice(root).ok()?;
     let data = top.get("data")?.get();
     let item = match data.as_bytes().first()? {
         b'[' => serde_json::from_str::<Vec<Box<RawValue>>>(data).ok()?.into_iter().next()?,
         b'{' => serde_json::from_str::<Box<RawValue>>(data).ok()?,
         _ => return None,
     };
-    let fields: Fields = serde_json::from_str(item.get()).ok()?;
-    Some(fields.get("id")?.get().to_owned())
+    let id = serde_json::from_str::<First>(item.get()).ok()?.get("id")?.get().to_owned();
+    match id.as_bytes().first()? {
+        b'"' => serde_json::from_str::<String>(&id).ok(),
+        b'-' | b'0'..=b'9' => Some(id),
+        _ => None,
+    }
+}
+
+/// A JSON object's fields as raw text, the first of a repeated key kept.
+struct First(Vec<(String, Box<serde_json::value::RawValue>)>);
+
+impl First {
+    fn get(&self, key: &str) -> Option<&serde_json::value::RawValue> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| &**v)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for First {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<First, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = First;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<First, A::Error> {
+                let mut out: Vec<(String, Box<serde_json::value::RawValue>)> = Vec::new();
+                while let Some((k, v)) = map.next_entry::<String, Box<serde_json::value::RawValue>>()? {
+                    if !out.iter().any(|(seen, _)| *seen == k) {
+                        out.push((k, v));
+                    }
+                }
+                Ok(First(out))
+            }
+        }
+        d.deserialize_map(Fields)
+    }
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -143,7 +169,8 @@ fuzz_target!(|data: &[u8]| {
                 other => panic!("accepted a `data` of {other}"),
             };
             if let Ok(Lookup::Match(s)) = plugin::parse_answer(body) {
-                assert_eq!(top.and_then(|t| id_of(&t["id"], body)), Some(s.scene_id));
+                assert!(top.is_some(), "a match needs a top item");
+                assert_eq!(top_id(body), Some(s.scene_id));
             }
         }
     }

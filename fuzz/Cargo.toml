@@ -35,6 +35,8 @@ semver = "=1.0.28"
 # `arbitrary_precision`, which would change how every crate here reads
 # numbers (X-fuzz-tpdb-harness).
 serde_json = { version = "1.0.154", features = ["raw_value"] }
+# `tpdb`'s reader of a repeated key (the first is kept, as the plugin does).
+serde = "1.0.229"
 sha2 = "0.11"
 # The plugins' own pin: `verified_claims` compares trackers in its form.
 url = "2.5.8"
