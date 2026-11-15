@@ -954,20 +954,27 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
 /// `PRAGMA journal_mode=WAL` reads the file's header, then needs the
 /// exclusive lock to change it: a read upgraded to a write, which SQLite
 /// refuses at once with `SQLITE_BUSY` rather than call the busy handler. So
-/// a connection opening a new store while another switches or migrates it
-/// failed with "database is locked" though its busy timeout was set. Here a
-/// file already in WAL is left alone (the mode lives in the file), and a
-/// busy switch first waits for the lock as a write transaction from scratch
-/// does, through the busy timeout, then looks again. A lock still held when
-/// the timeout runs out is that busy error, as before.
+/// a connection opening a new store while another held the write lock
+/// before the file was in WAL (its own WAL switch, or the `auto_vacuum`
+/// setup on a new file) failed with "database is locked" though its busy
+/// timeout was set. Here a file already in WAL is left alone (the mode
+/// lives in the file), and a busy switch first waits for the lock as a
+/// write transaction from scratch does, through the busy timeout, then
+/// looks again. A lock still held when the timeout runs out is that busy
+/// error, as before.
+///
+/// SQLite keeps the old mode, without an error, where WAL can't work (a
+/// filesystem without shared memory): the mode the switch reports is
+/// checked, and anything but WAL is refused (in memory, `memory`;
+/// X-store-wal-nits).
 fn use_wal(conn: &Connection) -> Result<()> {
     let wal = |mode: String| mode.eq_ignore_ascii_case("wal");
     for _ in 0..3 {
         if wal(conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?) {
             return Ok(());
         }
-        match conn.pragma_update(None, "journal_mode", "WAL") {
-            Ok(()) => return Ok(()),
+        match conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0)) {
+            Ok(mode) => return wal_took(conn, mode),
             Err(e)
                 if matches!(
                     e.sqlite_error_code(),
@@ -980,8 +987,20 @@ fn use_wal(conn: &Connection) -> Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    Ok(())
+    let mode = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+    wal_took(conn, mode)
+}
+
+/// Whether the switch to WAL took: `wal`, or `memory` for a store in
+/// memory, where WAL doesn't apply.
+fn wal_took(conn: &Connection, mode: String) -> Result<()> {
+    let in_memory = conn.path().is_none_or(str::is_empty);
+    if mode.eq_ignore_ascii_case("wal") || (in_memory && mode.eq_ignore_ascii_case("memory")) {
+        return Ok(());
+    }
+    Err(Error::Invalid(
+        "the data folder can't use SQLite's WAL journal (it needs a local disk, not a network share)",
+    ))
 }
 
 /// Brings the schema up to date. Refuses to touch a database written by a
@@ -2079,8 +2098,10 @@ mod tests {
         let started = std::time::Instant::now();
         let e = use_wal(&waiter).unwrap_err();
         assert!(e.is_busy(), "{e}");
+        // Half: Windows can wake a little early, and the bare pragma
+        // failed after microseconds.
         assert!(
-            started.elapsed() >= timeout,
+            started.elapsed() >= timeout / 2,
             "waited {:?}",
             started.elapsed()
         );
@@ -2101,5 +2122,31 @@ mod tests {
         use_wal(&late).unwrap();
         assert_eq!(mode(&late), "wal");
         holder.execute_batch("ROLLBACK").unwrap();
+    }
+
+    /// X-store-wal-nits: where SQLite can't use WAL it keeps the old mode
+    /// without an error; the store refuses to open rather than run without
+    /// WAL. A store in memory reports `memory`, and opens.
+    #[test]
+    fn a_folder_that_cant_use_wal_is_refused() {
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let uri = format!("file:{}?vfs=unix-none", dir.path().join("t.db").display());
+            let conn = Connection::open_with_flags(
+                &uri,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+                    | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            )
+            .unwrap();
+            match use_wal(&conn) {
+                Err(Error::Invalid(why)) => assert!(why.contains("WAL"), "{why}"),
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
+        let memory = Connection::open_in_memory().unwrap();
+        use_wal(&memory).unwrap();
+        crate::Store::open_in_memory(crate::StoreConfig::default()).unwrap();
     }
 }
