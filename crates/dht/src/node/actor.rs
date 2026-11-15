@@ -1635,6 +1635,9 @@ impl Actor {
             self.seed_warned = false;
         }
         let pending = self.take_pending(tid);
+        // Matched to a query still awaiting it, from the address asked: the
+        // query resolves here, once; `maintain` counts the rest as timeouts.
+        Stats::inc(&self.stats.answered);
         self.stats
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
@@ -3631,6 +3634,60 @@ mod tests {
         quiet.start_bootstrap(&sockets, Vec::new());
         assert!(!quiet.seed_warned);
         assert_eq!(count(), start + 3);
+    }
+
+    /// Only a reply matched to a query still awaiting it, from the address
+    /// asked, counts as answered: each query resolves once, as answered or
+    /// timed out. A duplicate, an unknown transaction id, a spoofed sender
+    /// and a reply after its query timed out are all reply packets, but
+    /// none raises `answered`.
+    #[test]
+    fn only_matched_replies_count_as_answered() {
+        let (mut a, sockets) = fixture();
+        let peer: SocketAddr = "127.0.0.9:6881".parse().unwrap();
+        let other: SocketAddr = "127.0.0.10:6881".parse().unwrap();
+        let reply = |tid: u64| {
+            let bytes = tid.to_be_bytes();
+            Message {
+                transaction_id: &bytes,
+                version: None,
+                ip: None,
+                read_only: false,
+                body: Body::Response(Response {
+                    id: NodeId([7; 20]),
+                    ..Response::default()
+                }),
+            }
+            .encode()
+        };
+        let snap = |a: &Actor| {
+            let s = a.stats.snapshot();
+            (s.responses_in, s.answered, s.timeouts)
+        };
+
+        // Matched: answered.
+        let tid = pretend_seed_sent(&mut a, peer);
+        a.on_packet(&sockets, 0, &reply(tid), peer);
+        assert_eq!(snap(&a), (1, 1, 0));
+        // The same reply again: the query already resolved.
+        a.on_packet(&sockets, 0, &reply(tid), peer);
+        assert_eq!(snap(&a), (2, 1, 0), "a duplicate isn't another answer");
+        // A transaction id we never sent.
+        a.on_packet(&sockets, 0, &reply(tid ^ 0xdead_beef), peer);
+        assert_eq!(snap(&a), (3, 1, 0), "an unknown tid isn't an answer");
+
+        // From an address other than the one asked: spoofed.
+        let tid = pretend_seed_sent(&mut a, peer);
+        a.on_packet(&sockets, 0, &reply(tid), other);
+        assert_eq!(snap(&a), (4, 1, 0), "a spoofed reply isn't an answer");
+        // The query times out, then its reply arrives late.
+        a.cfg.query_timeout = Duration::ZERO;
+        a.maintain(&sockets);
+        assert_eq!(snap(&a), (4, 1, 1));
+        a.on_packet(&sockets, 0, &reply(tid), peer);
+        assert_eq!(snap(&a), (5, 1, 1), "a late reply isn't an answer");
+
+        assert_eq!(a.stats.snapshot().reply_ratio(), Some(0.5));
     }
 
     #[test]

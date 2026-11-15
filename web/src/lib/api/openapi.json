@@ -14554,7 +14554,7 @@
               "null"
             ],
             "format": "double",
-            "description": "DHT responses per query sent since the start (the NAT-saturation\nsignal); null with the DHT off. Snapshot."
+            "description": "Answered share of resolved queries since start (the NAT-saturation\nsignal); null with the DHT off or until a query resolves. Snapshot."
           },
           "reported": {
             "type": "integer",

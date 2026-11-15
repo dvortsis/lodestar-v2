@@ -325,8 +325,9 @@ pub fn ephemeral_ports(p: PortPressure, since: i64) -> InsightsException {
 /// [`InsightsSource::stage_snapshot`].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct StageSnapshot {
-    /// DHT responses per query sent since the start (as `/metrics`'
-    /// `dht_reply_ratio`); `None` with the DHT off.
+    /// Answered share of resolved queries since start (as `/metrics`'
+    /// `dht_reply_ratio`); `None` with the DHT off or until a query
+    /// resolves.
     pub dht_reply_ratio: Option<f64>,
 }
 

@@ -272,6 +272,11 @@ pub struct Stats {
     pub queries_in_unsolicited: AtomicU64,
     pub responses_in: AtomicU64,
     pub errors_in: AtomicU64,
+    /// Queries answered: a response or error matched to a query still
+    /// awaiting it, from the address asked. Each query resolves once, as
+    /// answered here or as a timeout, so a late, duplicate, unknown or
+    /// spoofed reply never counts.
+    pub answered: AtomicU64,
     pub queries_out: AtomicU64,
     pub timeouts: AtomicU64,
     /// Queries not sent because of the rate limit or outstanding cap.
@@ -402,6 +407,7 @@ impl Stats {
             queries_in_unsolicited: g(&self.queries_in_unsolicited),
             responses_in: g(&self.responses_in),
             errors_in: g(&self.errors_in),
+            answered: g(&self.answered),
             queries_out: g(&self.queries_out),
             timeouts: g(&self.timeouts),
             throttled: g(&self.throttled),
@@ -717,6 +723,7 @@ pub struct StatsSnapshot {
     pub queries_in_unsolicited: u64,
     pub responses_in: u64,
     pub errors_in: u64,
+    pub answered: u64,
     pub queries_out: u64,
     pub timeouts: u64,
     pub throttled: u64,
@@ -796,14 +803,17 @@ pub struct StatsSnapshot {
 }
 
 impl StatsSnapshot {
-    /// Responses per query sent. A collapsing ratio is the symptom of NAT
-    /// saturation the dashboard warns about (§5).
-    pub fn reply_ratio(&self) -> f64 {
-        if self.queries_out == 0 {
-            0.0
-        } else {
-            (self.responses_in + self.errors_in) as f64 / self.queries_out as f64
-        }
+    /// The share of resolved queries that were answered: queries answered
+    /// (by a matched response or error) over those plus timeouts. Reply
+    /// packets that match no query awaiting them, such as one arriving
+    /// after its query timed out, don't count. A collapsing ratio is the symptom
+    /// of NAT saturation the dashboard warns about (§5). Queries still
+    /// awaiting their reply have no outcome yet and don't count, so the
+    /// ratio doesn't dip while lookups are under way. `None` until a
+    /// query has resolved: unknown, not 0%.
+    pub fn reply_ratio(&self) -> Option<f64> {
+        let resolved = self.answered + self.timeouts;
+        (resolved > 0).then(|| self.answered as f64 / resolved as f64)
     }
 }
 
@@ -1174,5 +1184,57 @@ impl Node {
             Ok(result) => result,
             Err(e) => Err(StateError::Io(io::Error::other(e))),
         }
+    }
+}
+
+#[cfg(test)]
+mod reply_ratio_tests {
+    use super::StatsSnapshot;
+
+    fn stats(sent: u64, answered: u64, timeouts: u64) -> StatsSnapshot {
+        StatsSnapshot {
+            queries_out: sent,
+            responses_in: answered,
+            answered,
+            timeouts,
+            outstanding: sent - answered - timeouts,
+            ..StatsSnapshot::default()
+        }
+    }
+
+    /// Unknown until a query has resolved, however many are out.
+    #[test]
+    fn nothing_resolved_is_unknown() {
+        assert_eq!(StatsSnapshot::default().reply_ratio(), None);
+        assert_eq!(stats(40, 0, 0).reply_ratio(), None);
+    }
+
+    /// Queries still awaiting their reply don't lower the ratio: the same
+    /// answers and timeouts give the same ratio whatever is in flight.
+    #[test]
+    fn queries_in_flight_dont_lower_it() {
+        let settled = stats(10, 9, 1).reply_ratio();
+        assert_eq!(settled, Some(0.9));
+        for in_flight in [1, 10, 1_000] {
+            assert_eq!(stats(10 + in_flight, 9, 1).reply_ratio(), settled);
+        }
+    }
+
+    /// Timeouts lower it.
+    #[test]
+    fn timeouts_lower_it() {
+        assert_eq!(stats(4, 4, 0).reply_ratio(), Some(1.0));
+        assert_eq!(stats(4, 1, 3).reply_ratio(), Some(0.25));
+        assert_eq!(stats(4, 0, 4).reply_ratio(), Some(0.0));
+    }
+
+    /// Reply packets that answered no query (late, duplicate, unknown or
+    /// spoofed) don't raise it: only matched answers count.
+    #[test]
+    fn stray_reply_packets_dont_raise_it() {
+        let mut s = stats(4, 1, 3);
+        s.responses_in += 50;
+        s.errors_in += 50;
+        assert_eq!(s.reply_ratio(), Some(0.25));
     }
 }

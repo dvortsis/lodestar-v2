@@ -4821,8 +4821,8 @@ export interface components {
             rediscovered: number;
             /**
              * Format: double
-             * @description DHT responses per query sent since the start (the NAT-saturation
-             *     signal); null with the DHT off. Snapshot.
+             * @description Answered share of resolved queries since start (the NAT-saturation
+             *     signal); null with the DHT off or until a query resolves. Snapshot.
              */
             reply_ratio: number | null;
             /**

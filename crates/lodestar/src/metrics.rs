@@ -478,12 +478,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Queries awaiting a reply.",
             d.outstanding,
         );
-        o.one(
-            "dht_reply_ratio",
-            "gauge",
-            "Responses per query sent (collapses under NAT saturation).",
-            d.reply_ratio(),
-        );
+        render_reply_ratio(&mut o, d);
         o.one(
             "dht_packets_in_total",
             "counter",
@@ -1195,6 +1190,18 @@ fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
 }
 
 /// CR-1a-S's streaming families on the DHT's side (docs/metrics.md).
+/// `dht_reply_ratio`, left out until a query has resolved: unknown, not 0.
+fn render_reply_ratio(o: &mut Out, d: &StatsSnapshot) {
+    if let Some(ratio) = d.reply_ratio() {
+        o.one(
+            "dht_reply_ratio",
+            "gauge",
+            "Share of resolved queries answered: queries answered over those plus timeouts (collapses under NAT saturation).",
+            ratio,
+        );
+    }
+}
+
 fn render_stream_dht(o: &mut Out, d: &StatsSnapshot) {
     o.one(
         "dht_peer_stream_batches_total",
@@ -1833,6 +1840,30 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
+
+    /// No series until a query has resolved; then the answered share.
+    #[test]
+    fn the_reply_ratio_is_left_out_until_a_query_resolves() {
+        let mut o = Out(String::new());
+        render_reply_ratio(&mut o, &StatsSnapshot::default());
+        assert!(!o.0.contains("dht_reply_ratio"), "{}", o.0);
+
+        let d = StatsSnapshot {
+            queries_out: 10,
+            answered: 3,
+            timeouts: 1,
+            outstanding: 6,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_reply_ratio(&mut o, &d);
+        assert!(
+            o.0.contains("# TYPE lodestar_dht_reply_ratio gauge\n"),
+            "{}",
+            o.0
+        );
+        assert!(o.0.contains("lodestar_dht_reply_ratio 0.75\n"), "{}", o.0);
     }
 
     #[test]

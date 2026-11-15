@@ -697,8 +697,8 @@ pub struct DiscoverKpi {
     pub keyspace_coverage: Option<f64>,
     /// Keys stored already, seen again. Event time.
     pub rediscovered: u64,
-    /// DHT responses per query sent since the start (the NAT-saturation
-    /// signal); null with the DHT off. Snapshot.
+    /// Answered share of resolved queries since start (the NAT-saturation
+    /// signal); null with the DHT off or until a query resolves. Snapshot.
     #[schema(required = true)]
     pub reply_ratio: Option<f64>,
     /// Keys the sources reported. Event time.

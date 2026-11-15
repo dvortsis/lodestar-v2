@@ -216,7 +216,7 @@ the metric they quote (e.g. "Index lag 42 s" → `formatSpan`; "Disk full in
 | Metric | Formatter | Notes |
 |---|---|---|
 | DHT nodes, routing-table size | `formatCount` | Snapshot |
-| Reply ratio (NAT-saturation signal) | `formatPercent` (f = 1) | Event time |
+| Reply ratio (NAT-saturation signal): the share of resolved queries answered, queries answered (a response or error matched to a query awaiting it) over those plus timeouts; queries still in flight and stray replies (late, duplicate, unknown or spoofed) don't count; unknown (—) until one resolves | `formatPercent` (f = 1) | Event time |
 | BEP 51 sample yield | `formatPercent` (f = 1) | Event time |
 | Keyspace coverage | `formatPercent` (f = 1) | Snapshot |
 | Seen-filter load factor | `formatPercent` (f = 1) | Snapshot |
@@ -548,7 +548,7 @@ per-type list while hidden (totals count it, as on the overview).
 | Discover | `kpi.reported`, `.rediscovered`, `.dropped`; `trend[].reported`…; `by_source[]` | metrics 1, 2, 3 (dim = source) | Event time |
 | Discover | `kpi.harvested`, `trend[].harvested` | cohort harvested (first harvests, ≈) | Discovery cohort |
 | Discover | `by_strategy[]`: the DHT's `sample`, `get_peers`, `announce`, `lookup`, `refetch` from any source, otherwise `<plugin>:<n>` (that plugin's own code) | metric 1's key: volume, not yield | Event time |
-| Discover | `kpi.dht_nodes`, `kpi.reply_ratio` | the DHT now (`/crawler`'s routing nodes; `/metrics`' `dht_reply_ratio`, since start, null before the first query) | Snapshot |
+| Discover | `kpi.dht_nodes`, `kpi.reply_ratio` | the DHT now (`/crawler`'s routing nodes; `/metrics`' `dht_reply_ratio`: answered share of resolved queries since start, null until a query resolves, and left out of `/metrics` until then) | Snapshot |
 | Discover | `kpi.bep51_sample_yield`, `.keyspace_coverage`, `.seen_filter_load`; `by_ip_family` | **null** until the DHT counts samples / reports coverage and the filter's load; until leases carry the address family | — |
 | Fetch | `kpi.fetched`, `.lost`; `trend[]`; `losses[]` (count and share of all losses, by reason) | metric 14 (dims `Fetched`, `Lost`; `reason` filters `lost` and `losses`) | Event time |
 | Discover | `by_worker[]`: `worker` (0 = this server's crawler), `granted`, `marginal` (≈: its finds no other worker claimed while in flight, counted as their leases end), `rediscovered`, `dropped`. Left out unless a remote worker counted something in the range (a single machine shows none). The built-in crawler's rediscovered and dropped are the fleet's totals less the remote workers' | metric 18 (granted, marginal; rediscovered and dropped, keys 4 and 5, for remote workers). Metric 17 isn't read: up to 256 rows an hour is too many for the 50 ms budget | Granted, marginal: discovery time; rediscovered, dropped: event time |

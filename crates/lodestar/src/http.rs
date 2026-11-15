@@ -409,6 +409,15 @@ mod tests {
         assert_eq!(STATUS_PAGE.matches("r.status === 409").count(), 2);
     }
 
+    /// The reply ratio is null until a DHT query resolves: the page shows
+    /// "—" then, not the "0%" that `null * 100` would give.
+    #[test]
+    fn the_status_page_shows_an_unknown_reply_ratio_as_a_dash() {
+        assert!(STATUS_PAGE.contains(
+            r#"s.dht && s.dht.reply_ratio != null ? (s.dht.reply_ratio * 100).toFixed(0) + "%" : "—""#
+        ));
+    }
+
     /// The page reads errors through the API's envelope
     /// (`{ "error": { "message", "start", "end" } }`), not as a string.
     #[test]

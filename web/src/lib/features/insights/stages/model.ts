@@ -37,6 +37,8 @@ export interface Metric {
 	approx?: boolean;
 	/** A reading as of the last update (a queue, a size, a total), not a count over the range. */
 	snapshot?: boolean;
+	/** One line on what the value means, under it. */
+	help?: string;
 }
 
 export interface Series {
@@ -212,7 +214,10 @@ export function mapDiscover(r: DiscoverResponse): StageModel {
 			prevOf(p, (x) => x.reported)
 		),
 		metric('dht_nodes', m.insights_stage_discover_nodes(), k.dht_nodes, 'count'),
-		metric('reply_ratio', m.insights_stage_discover_reply(), k.reply_ratio, 'percent')
+		{
+			...metric('reply_ratio', m.insights_stage_discover_reply(), k.reply_ratio, 'percent'),
+			help: m.insights_stage_discover_reply_help()
+		}
 	];
 	out.more = [
 		metric(

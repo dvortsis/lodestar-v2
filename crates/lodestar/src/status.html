@@ -182,7 +182,7 @@ async function refresh() {
     $("pending").textContent = fmt.format(s.fetch.pending);
     $("active").textContent = fmt.format(s.fetch.active);
     $("nodes").textContent = s.dht ? fmt.format(s.dht.routing_nodes) : "—";
-    $("ratio").textContent = s.dht && s.dht.queries_out ? (s.dht.reply_ratio * 100).toFixed(0) + "%" : "—";
+    $("ratio").textContent = s.dht && s.dht.reply_ratio != null ? (s.dht.reply_ratio * 100).toFixed(0) + "%" : "—";
     fill("sources", s.sources.map((x) => [[x.name], x.enabled === false ? ["disabled", ""] : [x.running ? "running" : "stopped", x.running ? "ok" : "bad"], [fmt.format(x.dropped), "n"]]));
     if (s.funnel_24h) {
       const f = s.funnel_24h;
