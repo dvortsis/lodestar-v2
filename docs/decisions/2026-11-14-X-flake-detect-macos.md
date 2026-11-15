@@ -20,4 +20,9 @@ Eight tests in `crates/companions/tests/detect.rs` failed on macOS. They hadn't 
 ## Also unmasked on macOS: one supervise test
 - **What failed:** with the detect tests passing, cargo went on to `crates/companions/tests/supervise.rs`. There, `credentialed_requests_follow_the_run_found_ready` waited 60 s for its run to be found ready ("run 1 never found ready").
 - **Why:** that's the product failing closed, as designed. A run is ready only once the listener on its port is found to be its process (`supervise::listener`, X-cmp09-fix), which can be told only on Linux and Windows. Elsewhere the owner is `Unknown`, so no run is ever ready, and no native companion is offered there.
-- **The change:** the test is gated on Linux and Windows, as `only_the_childs_own_listener_counts` already is in the same file. The listener check gated that test when it landed, but missed this one, which predates it. Nothing else changes.
+- **The change:** the test is gated on Linux and Windows, as `only_the_childs_own_listener_counts` already is in the same file. The listener check gated that test when it landed, but missed this one, which predates it.
+- **Its counterpart elsewhere** (the runner's ask, so macOS still tests something real): `credentialed_requests_stay_held_where_the_listener_cant_be_told` starts the same child.
+  - Once a readiness attempt's health check passes, the refusal reads `listener_unverified` (a condition wait with the file's 60 s deadline).
+  - The run is never ready.
+  - A bare probe gets 200, but a request that carries something is held as unreachable.
+  - Checked on Linux with the listener's owner forced to `Unknown`, where it passes; with it trusted, it fails.
