@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T07:34Z",
+  "updated_at": "2026-11-15T07:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T07:34Z",
+  "last_heartbeat": "2026-11-15T07:37Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10089,7 +10089,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T07:34Z",
+    "updated": "2026-11-15T07:37Z",
     "items": [
       {
         "slot": 1,
@@ -10225,7 +10225,7 @@
     }
   ],
   "heartbeat": "2026-11-15T07:21Z",
-  "updated": "2026-11-15T07:34Z",
+  "updated": "2026-11-15T07:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10488,16 +10488,40 @@
         "doing": "handed back after #904; one fix at a time when given work"
       },
       {
-        "slot": "api-lane",
+        "slot": "api-lane-1",
         "slice": "ENR-mb",
         "role": "build",
         "agent": "claude-api-local",
         "model": "opus",
-        "doing": "api-lane: owner-run local Claude Code session with a key from its own workspace lodestar-build-lane, $140 limit (never the lodestar-operator workspace) (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); outside the 4+4 cap; ~$140 budget, stops at $130 or $25/slice; reserved: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, X-worker-service-log, M8-PERF-1; order as listed, M8-PERF-1 last and best-effort; never merges; may report via PR comments; live 2026-11-15T07:34Z (owner report via session_01MMjhnA1awRT8P19wZUdtY9), started with ENR-mb",
+        "doing": "api-lane-1: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb; stops at $50. owner-run local Claude Code; own workspace lodestar-build-lane, $140 limit, shared by the three lanes (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); lodestar-operator limit $200\u2192$60; outside the 4+4 cap; total stop $130; never merges; reports by PR comments signed (api-lane-N)",
         "since": "2026-11-15T07:34Z",
-        "name": "API build lane (owner-run, local)",
+        "name": "api-lane-1",
         "session": "none (local; reports via PR comments if no send_message)",
         "status": "active"
+      },
+      {
+        "slot": "api-lane-2",
+        "slice": "ENR-anilist",
+        "role": "build",
+        "agent": "claude-api-local",
+        "model": "opus",
+        "doing": "api-lane-2: ENR-anilist, ENR-discogs, X-worker-service-log; stops at $40. owner-run local Claude Code; own workspace lodestar-build-lane, $140 limit, shared by the three lanes (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); lodestar-operator limit $200\u2192$60; outside the 4+4 cap; total stop $130; never merges; reports by PR comments signed (api-lane-N)",
+        "since": "2026-11-15T07:37Z",
+        "name": "api-lane-2",
+        "session": "none (local; reports via PR comments if no send_message)",
+        "status": "starting"
+      },
+      {
+        "slot": "api-lane-3",
+        "slice": "ENR-srrdb",
+        "role": "build",
+        "agent": "claude-api-local",
+        "model": "opus",
+        "doing": "api-lane-3: ENR-srrdb, ENR-predb, then M8-PERF-1 (last, best-effort); stops at $40. owner-run local Claude Code; own workspace lodestar-build-lane, $140 limit, shared by the three lanes (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); lodestar-operator limit $200\u2192$60; outside the 4+4 cap; total stop $130; never merges; reports by PR comments signed (api-lane-N)",
+        "since": "2026-11-15T07:37Z",
+        "name": "api-lane-3",
+        "session": "none (local; reports via PR comments if no send_message)",
+        "status": "starting"
       }
     ],
     "note": "Owner \u00a72.64: 4 build (slots) + 4 cloud-testing (here, shared with the X-test-vm coordinator) + the owner-approved Fable slot. Cloud-testing share 1 is lent to X-flake-detect-macos (slot 2)."
