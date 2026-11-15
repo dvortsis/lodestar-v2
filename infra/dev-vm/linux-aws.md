@@ -41,7 +41,8 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    ```
 
    - It reads the login into memory with the instance role and writes `/home/lodestar/lodestar/secrets/wg0.conf`. Nothing is kept on disk. Run it again for a fresh key.
-   - **Never print, copy or read the secret.** Check only the script's `OK` or `FAILED` line.
+   - **Never print, copy or read the secret.** Check only the exit code and the script's last line.
+   - Exit 0 means the file was written. Exit 5 ("empty username or password") means the owner hasn't filled the secret in yet, and exit 7 that it couldn't be read. Neither prints a `FAILED` line. Exits 10–16 are PIA's own stages, printed as `FAILED (<n>)`.
 6. **Run the lane** from `linux-lane.md`, as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`.
    - A command over a few minutes runs in `tmux` on the instance (`sudo -iu lodestar tmux new -d -s lane '<command> > ~/results/<name>.log 2>&1'`), and the session polls the log's tail in later calls.
    - The connector gives up after 60 s, so keep each call under 45 s.
@@ -54,4 +55,9 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
 
 - **The connector's sign-in** lasts 12 h unless the owner raised it (`docs/decisions/2026-11-12-X-test-vm.md`). A lane that may outlast it sets `ExpiresAt` to its end, so the expiration guard deletes the instance if the session can't.
 - **Run Command output is capped at 24,000 characters.** Fetch tails only.
+- **`AWS-RunShellScript` runs commands with `/bin/sh`,** so bash syntax fails. Send a script as a quoted heredoc (`cat > /root/lane.sh <<'EOF' … EOF`), then run it with `bash`. The connector refuses `import base64`, so encoding a script doesn't work.
+- **A root-owned file can't overwrite a `lodestar` one in `/tmp`** (the sticky bit). Remove the old file first.
+- **Git refuses `~lodestar/lodestar-v2` when run as root,** because the owner differs. Pass `-c safe.directory='*'` to git, or run the command as `lodestar`.
+- **Timings on `c6a.xlarge`:** the bootstrap takes about 4 min, and building Lodestar's image from `main` about 10–12 min.
+- **A lane that needs the VPN can't start until the secret is filled in.** Check with one `pia-login.sh --aws-secret` run before the image build, and say so at once if it exits 5.
 - **`ExpiresAt` is a backstop, not the plan.** The session deletes its own instance.
