@@ -476,6 +476,7 @@ placement:
   - X-ci-no-fail-fast
   - X-flake-dataset-macos
   - X-flake-detect-macos
+  - X-flake-address-port
   - X-operator-unattended-wake
   - X-operator-check8-compare
   - X-store-migrate-race
@@ -777,9 +778,11 @@ placement:
   - X-filter01-hardening
   - X-rejudge-pending-gate
   - X-filter15-fix
+  - X-rejudge-stall-nits
   - X-filter13-fix
   - X-filter14-fix
   - X-filter-budget-manyfile-perf
+  - X-filter-split-reuse
   - X-filter12-fix
   - X-fixed-sleep-nits
   - X-cluster06-fix
@@ -793,6 +796,7 @@ placement:
   - X-cmp01-fix
   - X-sec-S6-02-03
   - X-floor-renew-metrics-nits
+  - X-import-status-lock
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small

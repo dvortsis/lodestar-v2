@@ -557,12 +557,6 @@ pub const CORE_VERSION: i64 = 2;
 const V1_TOKENS: usize = 128;
 const V1_FILES: usize = 1_000;
 
-thread_local! {
-    /// The earlier reading's tokenizer, kept per thread like the main one.
-    static SPLITTING: std::cell::RefCell<crate::normalize::Tokenizer> =
-        std::cell::RefCell::new(crate::normalize::Tokenizer::splitting());
-}
-
 /// Whether version 1 of the core read `item` whole: within its limits,
 /// in both readings. Unmetered: it reads each path of a torrent within
 /// those limits once, and twice only where the earlier reading differs.
@@ -582,7 +576,7 @@ pub fn read_whole_by_v1(item: &Item) -> bool {
             return true;
         }
         out.clear();
-        SPLITTING.with(|t| t.borrow_mut().text(text, &mut out));
+        normalize::with_splitting(|t| t.text(text, &mut out));
         out.len() <= V1_TOKENS
     };
     fits(item.name) && item.files.iter().all(|f| fits(&f.path.join("/")))
@@ -1081,8 +1075,8 @@ impl Core {
     /// The hits of the earlier reading, with the characters
     /// [`Tokenizer::splitting`] names as word breaks, where `marks` (the
     /// joined reading found one in the name or a path); `None` otherwise,
-    /// when both readings are the same. Rare, so it pays for a tokenizer
-    /// of its own.
+    /// when both readings are the same. Read with the thread's tokenizer
+    /// for that reading ([`normalize::with_splitting`]).
     pub(crate) fn pattern_hits_split(
         &self,
         item: &Item,
@@ -1092,11 +1086,13 @@ impl Core {
         if !marks {
             return None;
         }
-        let mut tok = Tokenizer::splitting();
-        tok.meter(normalize::CUT_ONLY);
-        let mut scratch = Scratch::default();
-        let s = self.patterns_with(&mut tok, &mut scratch, item, neutral, None);
-        if tok.over() {
+        let (s, over) = normalize::with_splitting(|tok| {
+            tok.meter(normalize::CUT_ONLY);
+            let mut scratch = Scratch::default();
+            let s = self.patterns_with(tok, &mut scratch, item, neutral, None);
+            (s, tok.over())
+        });
+        if over {
             // A text of this reading reached the token cap: it isn't read
             // whole, so the torrent is too large to judge.
             return Some(vec![self.too_large_hit()]);
