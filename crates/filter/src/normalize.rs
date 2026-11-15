@@ -264,24 +264,21 @@ struct Plan {
     round: u32,
 }
 
-/// Plans displaced from the cache during one metered read
-/// ([`Tokenizer::plan_spill`], [`Tokenizer::char_spill`]): when a word
-/// (or character) finds its slot held by another this read has used, the
-/// two trade places, so the slot holds the latest and nothing this read
-/// has used is lost. A word goes here only where its place in
-/// [`Tokenizer::kept`] is taken too. The map's hash is keyed at random
-/// (std's), so no choice of words makes its look-ups slow, and each
-/// look-up is charged the same ([`cost::PROBED`]). Buffers are kept from
-/// read to read.
+/// Character readings displaced from the cache during one metered read
+/// ([`Tokenizer::char_spill`]): when a character finds its slot held by
+/// another this read has used, the two trade places, so the slot holds
+/// the latest and nothing this read has used is lost. The map's hash is
+/// keyed at random (std's), so no choice of characters makes its
+/// look-ups slow, and each look-up is charged the same
+/// ([`cost::PROBED`]). Buffers are kept from read to read. Words have
+/// their own store, [`WordSpill`].
 ///
 /// Bounded by charges already paid: every entry was charged as new in
-/// this read, at least [`cost::PLAN`] for a word and [`cost::CHAR_PLAN`]
-/// for a character, so a read within the budget keeps at most about
-/// `BUDGET / PLAN` words and `BUDGET / CHAR_PLAN` characters, counting
-/// [`Tokenizer::kept`]'s words too (checked in debug builds).
-/// [`Tokenizer::meter`] empties it at the start of every read, and the
-/// meter's guard (`Unmeter`) at its end, a panic included, so nothing
-/// carries over between torrents.
+/// this read, at least [`cost::CHAR_PLAN`], so a read within the budget
+/// keeps at most about `BUDGET / CHAR_PLAN` characters (checked in debug
+/// builds). [`Tokenizer::meter`] empties it at the start of every read,
+/// and the meter's guard (`Unmeter`) at its end, a panic included, so
+/// nothing carries over between torrents.
 #[derive(Debug)]
 struct Spill<K, P> {
     map: std::collections::HashMap<K, P>,
@@ -318,6 +315,229 @@ impl<K: std::hash::Hash + Eq, P> Spill<K, P> {
     }
 }
 
+/// Tokens a [`WordSpill`] entry holds in place; a word with more keeps
+/// the rest in a buffer of the store's.
+const STASHED_TOKENS: usize = 6;
+
+/// One word's plan, as [`WordSpill`] keeps it: in place, with no buffer
+/// of its own unless it has more than [`STASHED_TOKENS`] tokens.
+#[derive(Debug, Clone, Copy)]
+struct Stashed {
+    /// The word as written ([`Plan::key`]): at most
+    /// [`MAX_PLANNED_BYTES`], since longer words aren't kept.
+    key: [u8; MAX_PLANNED_BYTES],
+    key_len: u8,
+    empty: bool,
+    advance: u32,
+    letter: Option<char>,
+    tokens: [(Token, bool); STASHED_TOKENS],
+    /// How many tokens: past [`STASHED_TOKENS`], all of them are in
+    /// [`WordSpill::long`]`[more]`.
+    count: u32,
+    more: u32,
+    /// The next entry whose key hashes the same ([`NONE`] for none).
+    next: u32,
+    /// Its key's hash ([`WordSpill::hash`]).
+    hash: u64,
+}
+
+/// No entry.
+const NONE: u32 = u32::MAX;
+
+const NO_TOKEN: (Token, bool) = (
+    Token {
+        pos: 0,
+        hash: 0,
+        num: None,
+    },
+    false,
+);
+
+/// Plans of words displaced from the cache during one metered read
+/// ([`Tokenizer::plan_spill`]): when a word finds its slot held by
+/// another this read has used, the two trade places, so the slot holds
+/// the latest and nothing this read has used is lost. A word goes here
+/// only where its place in [`Tokenizer::kept`] is taken too.
+///
+/// A read with many distinct words (a file number each, say) keeps most
+/// of them here, so it costs no allocation per word: entries sit in one
+/// array, copied in and out, and freed entries are reused within the
+/// read. The index is keyed by a hash keyed at random (std's), so no
+/// choice of words makes its look-ups slow, and each look-up is charged
+/// the same ([`cost::PROBED`]); words whose hashes are equal are chained,
+/// compared by their bytes.
+///
+/// Bounded by charges already paid: every entry was charged as new in
+/// this read, at least [`cost::PLAN`], so a read within the budget keeps
+/// at most about `BUDGET / PLAN` words, counting [`Tokenizer::kept`]'s
+/// too (checked in debug builds). [`Tokenizer::meter`] empties it at the
+/// start of every read, and the meter's guard (`Unmeter`) at its end, a
+/// panic included, so nothing carries over between torrents. Up to
+/// [`STASH_KEPT`] entries' room is kept between reads.
+#[derive(Debug, Default)]
+struct WordSpill {
+    keys: std::hash::RandomState,
+    index: crate::hash::IdMap<u32>,
+    entries: Vec<Stashed>,
+    free: Vec<u32>,
+    /// Tokens of entries with more than [`STASHED_TOKENS`].
+    long: Vec<Vec<(Token, bool)>>,
+    long_free: Vec<u32>,
+}
+
+/// Entries whose room [`WordSpill`] keeps between reads; a larger read's
+/// is freed when the next starts.
+const STASH_KEPT: usize = 1_024;
+
+impl WordSpill {
+    fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    fn hash(&self, word: &[u8]) -> u64 {
+        use std::hash::BuildHasher;
+        self.keys.hash_one(word)
+    }
+
+    /// Empties it for a new read, keeping some room.
+    fn clear(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.index.clear();
+        self.entries.clear();
+        self.free.clear();
+        self.long_free.clear();
+        self.long_free.extend(0..self.long.len() as u32);
+        if self.entries.capacity() > STASH_KEPT {
+            self.entries.shrink_to(STASH_KEPT);
+            self.index.shrink_to(STASH_KEPT);
+            self.free.shrink_to(STASH_KEPT);
+        }
+        if self.long.len() > SPILL_KEPT {
+            self.long.truncate(SPILL_KEPT);
+            self.long.shrink_to(SPILL_KEPT);
+            self.long_free.clear();
+            self.long_free.extend(0..self.long.len() as u32);
+        }
+    }
+
+    /// The entry holding `word`'s plan.
+    fn find(&self, word: &str) -> Option<u32> {
+        self.find_hashed(word, self.hash(word.as_bytes()))
+    }
+
+    fn find_hashed(&self, word: &str, h: u64) -> Option<u32> {
+        let mut at = *self.index.get(&h)?;
+        while at != NONE {
+            let e = &self.entries[at as usize];
+            if &e.key[..usize::from(e.key_len)] == word.as_bytes() {
+                return Some(at);
+            }
+            at = e.next;
+        }
+        None
+    }
+
+    /// A free entry, its fields stale.
+    fn alloc(&mut self) -> u32 {
+        if let Some(at) = self.free.pop() {
+            return at;
+        }
+        self.entries.push(Stashed {
+            key: [0; MAX_PLANNED_BYTES],
+            key_len: 0,
+            empty: false,
+            advance: 0,
+            letter: None,
+            tokens: [NO_TOKEN; STASHED_TOKENS],
+            count: 0,
+            more: NONE,
+            next: NONE,
+            hash: 0,
+        });
+        (self.entries.len() - 1) as u32
+    }
+
+    /// Keeps a copy of `plan`, a word this read has used.
+    fn put(&mut self, plan: &Plan) {
+        self.put_hashed(plan, self.hash(plan.key.as_bytes()));
+    }
+
+    fn put_hashed(&mut self, plan: &Plan, h: u64) {
+        let key = plan.key.as_bytes();
+        debug_assert!(key.len() <= MAX_PLANNED_BYTES, "only short words are kept");
+        let more = if plan.tokens.len() <= STASHED_TOKENS {
+            NONE
+        } else {
+            let more = match self.long_free.pop() {
+                Some(m) => m,
+                None => {
+                    self.long.push(Vec::new());
+                    (self.long.len() - 1) as u32
+                }
+            };
+            let buf = &mut self.long[more as usize];
+            buf.clear();
+            buf.extend_from_slice(&plan.tokens);
+            more
+        };
+        let at = self.alloc();
+        let next = self.index.insert(h, at).unwrap_or(NONE);
+        let e = &mut self.entries[at as usize];
+        e.key[..key.len()].copy_from_slice(key);
+        e.key_len = key.len() as u8;
+        e.empty = plan.empty;
+        e.advance = plan.advance;
+        e.letter = plan.letter;
+        e.count = plan.tokens.len() as u32;
+        if more == NONE {
+            e.tokens[..plan.tokens.len()].copy_from_slice(&plan.tokens);
+        }
+        e.more = more;
+        e.next = next;
+        e.hash = h;
+    }
+
+    /// Moves entry `at`'s plan into `plan`, reusing its buffers, as used
+    /// by read `round`, and frees the entry.
+    fn take(&mut self, at: u32, plan: &mut Plan, round: u32) {
+        let e = &self.entries[at as usize];
+        let (next, more, h) = (e.next, e.more, e.hash);
+        let key = &e.key[..usize::from(e.key_len)];
+        plan.key.clear();
+        plan.key
+            .push_str(std::str::from_utf8(key).expect("a key copied from a str"));
+        plan.empty = e.empty;
+        plan.advance = e.advance;
+        plan.letter = e.letter;
+        plan.round = round;
+        plan.tokens.clear();
+        if more == NONE {
+            plan.tokens.extend_from_slice(&e.tokens[..e.count as usize]);
+        } else {
+            plan.tokens.extend_from_slice(&self.long[more as usize]);
+            self.long_free.push(more);
+        }
+        // Unlink it from its hash's chain.
+        let head = self.index.get_mut(&h).expect("an entry is indexed");
+        if *head == at {
+            if next == NONE {
+                self.index.remove(&h);
+            } else {
+                *head = next;
+            }
+        } else {
+            let mut prev = *head;
+            while self.entries[prev as usize].next != at {
+                prev = self.entries[prev as usize].next;
+            }
+            self.entries[prev as usize].next = next;
+        }
+        self.free.push(at);
+    }
+}
+
 /// Turns text into tokens, reusing its buffers across calls.
 #[derive(Debug, Default)]
 pub struct Tokenizer {
@@ -334,17 +554,20 @@ pub struct Tokenizer {
     /// planned, or charged as new, twice in one torrent whatever the
     /// cache's size. Each was charged as new, so the budget bounds how
     /// many.
-    plan_spill: Spill<String, Plan>,
+    plan_spill: WordSpill,
     /// The first place a displaced word is kept ([`Tokenizer::trade`]):
-    /// direct-mapped by [`slot2`], an entry kept while its round is this
-    /// read's. [`Tokenizer::plan_spill`] holds those whose place here is
-    /// taken.
+    /// in either of its two places ([`places`]), an entry kept while its
+    /// round is this read's. [`Tokenizer::plan_spill`] holds those whose
+    /// places here are both taken.
     kept: Vec<Plan>,
     /// Words this read keeps, in [`Tokenizer::kept`] and
     /// [`Tokenizer::plan_spill`] together.
     kept_words: usize,
     /// The plan of a word too long to keep.
     long: Plan,
+    /// A plan's buffers, for [`Tokenizer::trade`] to exchange a word
+    /// with one in [`Tokenizer::plan_spill`].
+    exchange: Plan,
     /// [`paths_apart`]'s folders, kept so their buffers carry over
     /// between torrents.
     folders: [Paused; FOLDERS],
@@ -846,8 +1069,10 @@ impl Tokenizer {
     /// in [`Tokenizer::kept`], or in [`Tokenizer::plan_spill`] where that
     /// is taken. `word`'s plan comes back from where it was kept, or is
     /// made anew; one made anew is left for `emit` to charge, its round
-    /// not yet this read's. Plans move by swapping in place, so a trade
-    /// hashes no more than the word's bytes unless both places are taken.
+    /// not yet this read's. Plans move by swapping in place, or are copied
+    /// in and out of the store, so a trade allocates nothing once the
+    /// buffers have grown, and hashes no more than the word's bytes unless
+    /// both places are taken.
     #[cold]
     #[inline(never)]
     fn trade(&mut self, at: usize, word: &str) {
@@ -856,37 +1081,43 @@ impl Tokenizer {
             self.kept.resize_with(KEPT, Plan::default);
         }
         let round = self.round;
-        let w2 = slot2(word);
-        if self.kept[w2].round == round && self.kept[w2].key == word {
-            // Kept in its place: the two trade, and the one displaced
-            // moves to its own place.
+        let held = |p: &Plan| p.round == round && p.key == word;
+        let w2 = places(word).into_iter().find(|&w| held(&self.kept[w]));
+        if let Some(w2) = w2 {
+            // Kept in one of its places: the two trade, and the one
+            // displaced moves to one of its own.
             std::mem::swap(&mut self.plans[at], &mut self.kept[w2]);
             self.keep_from(w2);
             return;
         }
-        let back = if self.plan_spill.map.is_empty() {
+        let back = if self.plan_spill.is_empty() {
             None
         } else {
-            self.plan_spill.map.remove_entry(word)
+            self.plan_spill.find(word)
         };
         match back {
-            Some((key, plan)) => {
-                self.kept_words -= 1;
-                let held = std::mem::replace(&mut self.plans[at], plan);
-                self.keep(held, Some(key));
+            Some(from) => {
+                // Kept in the store: it comes back, and the one displaced
+                // is kept in its place, or in the store where that is
+                // taken.
+                if let Some(to) = self.free_place(&self.plans[at].key) {
+                    std::mem::swap(&mut self.plans[at], &mut self.kept[to]);
+                    self.plan_spill.take(from, &mut self.plans[at], round);
+                } else {
+                    self.plan_spill.take(from, &mut self.exchange, round);
+                    self.plan_spill.put(&self.plans[at]);
+                    std::mem::swap(&mut self.plans[at], &mut self.exchange);
+                }
             }
             None => {
                 // New to this read: the one displaced is kept, and the
                 // slot's buffer is planned for `word`.
-                let h2 = slot2(&self.plans[at].key);
-                if self.kept[h2].round != round {
+                if let Some(h2) = self.free_place(&self.plans[at].key) {
                     std::mem::swap(&mut self.plans[at], &mut self.kept[h2]);
-                    self.kept_words += 1;
                 } else {
-                    let spare = self.plan_spill.spare.pop().unwrap_or_default();
-                    let held = std::mem::replace(&mut self.plans[at], spare);
-                    self.spill(held, None);
+                    self.plan_spill.put(&self.plans[at]);
                 }
+                self.kept_words += 1;
                 let plan = &mut self.plans[at];
                 plan.round = 0;
                 plan.key.clear();
@@ -903,55 +1134,28 @@ impl Tokenizer {
         );
     }
 
-    /// Moves the plan at `kept[from]`, a word this read keeps, to its own
-    /// place, or to [`Tokenizer::plan_spill`] where that is taken;
-    /// `kept[from]` is left free.
+    /// Moves the plan at `kept[from]`, a word this read keeps, to one of
+    /// its own places, or to [`Tokenizer::plan_spill`] where both are
+    /// taken; `kept[from]` is left free. It stays where it is if that's
+    /// one of them.
     fn keep_from(&mut self, from: usize) {
-        let to = slot2(&self.kept[from].key);
-        if to == from {
+        if places(&self.kept[from].key).contains(&from) {
             return;
         }
-        if self.kept[to].round != self.round {
+        if let Some(to) = self.free_place(&self.kept[from].key) {
             self.kept.swap(from, to);
-            self.kept[from].round = 0;
         } else {
-            let spare = self.plan_spill.spare.pop().unwrap_or_default();
-            let held = std::mem::replace(&mut self.kept[from], spare);
-            self.kept[from].round = 0;
-            self.kept_words -= 1;
-            self.spill(held, None);
+            self.plan_spill.put(&self.kept[from]);
         }
+        self.kept[from].round = 0;
     }
 
-    /// Keeps `held`, a word this read has used, in its place or in
-    /// [`Tokenizer::plan_spill`]; `key` is a buffer to reuse for its key
-    /// there.
-    fn keep(&mut self, held: Plan, key: Option<String>) {
-        let to = slot2(&held.key);
-        if self.kept[to].round != self.round {
-            let free = std::mem::replace(&mut self.kept[to], held);
-            if self.plan_spill.spare.len() < SPILL_KEPT {
-                self.plan_spill.spare.push(free);
-            }
-            self.kept_words += 1;
-        } else {
-            self.spill(held, key);
-        }
-    }
-
-    /// Keeps `held` in [`Tokenizer::plan_spill`], its key in `key`'s
-    /// buffer where one is given.
-    fn spill(&mut self, held: Plan, key: Option<String>) {
-        self.kept_words += 1;
-        let key = match key {
-            Some(mut k) => {
-                k.clear();
-                k.push_str(&held.key);
-                k
-            }
-            None => held.key.clone(),
-        };
-        self.plan_spill.map.insert(key, held);
+    /// One of `key`'s places in [`Tokenizer::kept`] that this read isn't
+    /// using, if either is free.
+    fn free_place(&self, key: &str) -> Option<usize> {
+        places(key)
+            .into_iter()
+            .find(|&p| self.kept[p].round != self.round)
     }
 
     #[inline]
@@ -1068,16 +1272,19 @@ fn slot(word: &str) -> usize {
     (crate::hash::fmix64(mix) as usize) % PLANS
 }
 
-/// Places in [`Tokenizer::kept`].
-const KEPT: usize = 512;
+/// Places in [`Tokenizer::kept`]: a power of two.
+const KEPT: usize = 2048;
 
-/// A word's place in [`Tokenizer::kept`]: from all its bytes, so words
-/// that share a [`slot`] seldom share this too.
-fn slot2(word: &str) -> usize {
+/// A word's two places in [`Tokenizer::kept`], from all its bytes, so
+/// words that share a [`slot`] seldom share these too. A word is kept in
+/// whichever is free, so the table fills well before words overflow to
+/// [`Tokenizer::plan_spill`].
+fn places(word: &str) -> [usize; 2] {
     let h = word.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
     });
-    (crate::hash::fmix64(h) as usize) % KEPT
+    let h = crate::hash::fmix64(h);
+    [h as usize % KEPT, (h >> 32) as usize % KEPT]
 }
 
 /// Runs `f` with this thread's tokenizer, or a new one if it's in use.
@@ -1461,6 +1668,132 @@ mod tests {
                 "case {case} again"
             );
         }
+    }
+
+    /// A metered read, whose words trade places through
+    /// [`Tokenizer::kept`] and [`WordSpill`], reads exactly what an
+    /// unmetered one does, which never trades: no plan is changed on the
+    /// way in or out. The vocabularies run from a few hundred words to
+    /// thousands, past both tables, and some words have more tokens than
+    /// a [`WordSpill`] entry holds in place. What each read is charged is
+    /// pinned too.
+    #[test]
+    fn a_metered_read_reads_what_an_unmetered_one_does() {
+        let unmetered = |tok: &mut Tokenizer, name: &str, paths: &[Vec<String>]| {
+            let (mut out, mut ends, mut apart) = (Vec::new(), Vec::new(), Vec::new());
+            tok.text(name, &mut out);
+            ends.push(out.len());
+            paths_apart_with(
+                tok,
+                paths.iter().map(|p| &p[..]),
+                &mut out,
+                &mut ends,
+                &mut apart,
+            );
+            out
+        };
+        let mut checked = 0;
+        let mut charged = 0u64;
+        let mut tok = Tokenizer::default();
+        for case in 0..48u64 {
+            let (name, mut paths) = colliding(case * 7 + 1);
+            // Words of many parts, each with more tokens than an entry
+            // holds in place, and distinct numbers past every table.
+            paths.extend((0..3_000u64).map(|i| {
+                vec![
+                    format!("a{}b{}c{}d", i % 97, i % 89, i % 83),
+                    format!("{}", i * 7 + case),
+                ]
+            }));
+            let (work, cold, metered_out) = metered(&mut tok, &name, &paths);
+            if work > crate::core::BUDGET {
+                continue;
+            }
+            checked += 1;
+            charged = charged.wrapping_mul(1_000_003).wrapping_add(work);
+            charged = charged.wrapping_mul(1_000_003).wrapping_add(cold);
+            let plain = unmetered(&mut Tokenizer::default(), &name, &paths);
+            assert_eq!(metered_out, plain, "case {case}");
+        }
+        assert!(checked >= 24, "only {checked} cases fit the budget");
+        // Every case's work and cold work, folded: the same on `main`
+        // before the flat store (#910), so no word is lost from a table
+        // and planned, or charged, again.
+        assert_eq!(checked, 48);
+        assert_eq!(charged, 17_323_027_761_506_347_612);
+    }
+
+    fn plan_of(word: &str) -> Plan {
+        let mut plan = Plan::default();
+        plan.word.push_str(word);
+        plan.word.make_ascii_lowercase();
+        make_plan(&mut plan, &mut String::new(), &mut String::new());
+        plan.key.push_str(word);
+        plan
+    }
+
+    fn same_plan(a: &Plan, b: &Plan) -> bool {
+        a.key == b.key
+            && a.tokens == b.tokens
+            && a.advance == b.advance
+            && a.letter == b.letter
+            && a.empty == b.empty
+    }
+
+    /// Words whose hashes are equal share a chain: each is found, and
+    /// comes back whole, whether it's the chain's first, middle or last;
+    /// the others stay found.
+    #[test]
+    fn a_word_spill_chain_keeps_each_word() {
+        let words = ["alpha", "a1b2c3d4e5", "z"];
+        for gone in 0..words.len() {
+            let mut spill = WordSpill::default();
+            for w in words {
+                spill.put_hashed(&plan_of(w), 7);
+            }
+            let at = spill.find_hashed(words[gone], 7).expect("kept");
+            let mut back = Plan::default();
+            spill.take(at, &mut back, 3);
+            assert!(same_plan(&back, &plan_of(words[gone])), "{}", words[gone]);
+            assert_eq!(back.round, 3);
+            for (i, w) in words.iter().enumerate() {
+                assert_eq!(spill.find_hashed(w, 7).is_some(), i != gone, "{w}");
+            }
+            // Its entry is reused.
+            spill.put_hashed(&plan_of("again"), 7);
+            assert_eq!(spill.entries.len(), words.len());
+            assert!(spill.find_hashed("again", 7).is_some());
+        }
+    }
+
+    /// Plans with more tokens than an entry holds in place keep them all,
+    /// and their buffer is reused after [`WordSpill::clear`].
+    #[test]
+    fn a_word_spill_keeps_long_plans_and_clears() {
+        let mut spill = WordSpill::default();
+        let long = plan_of("a1b2c3d4e5f6");
+        assert!(long.tokens.len() > STASHED_TOKENS);
+        let short = plan_of("hello");
+        spill.put(&long);
+        spill.put(&short);
+        for p in [&long, &short] {
+            let at = spill.find(&p.key).expect("kept");
+            let mut back = plan_of("stale");
+            spill.take(at, &mut back, 1);
+            assert!(same_plan(&back, p), "{}", p.key);
+        }
+        assert!(spill.is_empty());
+        spill.put(&long);
+        spill.clear();
+        assert!(spill.is_empty() && spill.find(&long.key).is_none());
+        spill.put(&long);
+        assert_eq!(spill.long.len(), 1, "the buffer is reused");
+        // Room past what's kept between reads is freed.
+        for i in 0..3 * STASH_KEPT {
+            spill.put(&plan_of(&format!("w{i}")));
+        }
+        spill.clear();
+        assert!(spill.entries.capacity() <= STASH_KEPT);
     }
 
     fn toks(text: &str) -> Vec<Token> {
