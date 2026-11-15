@@ -486,6 +486,7 @@ placement:
   - X-flake-address-port
   - X-flake-detect-macos-nits
   - X-flake-supervise-restarts
+  - X-fuzz-slow-targets
   - X-operator-unattended-wake
   - X-operator-check8-compare
   - X-store-migrate-race

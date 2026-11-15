@@ -53,3 +53,5 @@ cargo +nightly fuzz run metainfo fuzz/corpus/metainfo fuzz/seeds/metainfo -- -ma
 ```
 
 CI runs each target for a short time on every pull request (`fuzz` job). Crashes land in `fuzz/artifacts/<target>/`. Minimise one with `cargo +nightly fuzz tmin <target> <file>`, then add it as a regression test in the owning crate.
+
+The parsers' property tests run a fixed number of cases in CI. For a deep run, set `PROPTEST_CASES`: proptest applies it on top of each suite's own count, so `PROPTEST_CASES=50000 cargo test -p lodestar-bencode --test roundtrip` runs 50,000 cases per property. Unset, each suite runs its usual count. A value that isn't a number is ignored with a warning on stderr.
