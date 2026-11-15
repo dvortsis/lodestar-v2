@@ -231,6 +231,24 @@ async fn wait_status(
     got.unwrap_or_else(|| panic!("waited for {what}; last saw {:?}", *rx.borrow()))
 }
 
+/// Waits until it has restarted `n` times, or needs attention, and returns
+/// what it saw then. It waits one restart at a time, each with the whole
+/// [`DEADLINE`]: a start costs a process spawn, an fsync and, on Windows, a
+/// PowerShell identity check, so on a loaded host a run of restarts can take
+/// longer than one deadline while each restart still comes. A restart that
+/// never comes still fails within one deadline.
+async fn wait_restarts(rx: &mut watch::Receiver<Status>, n: u32) -> Status {
+    let mut s = *rx.borrow();
+    while s.restarts < n && !matches!(s.state, State::NeedsAttention(_)) {
+        let next = s.restarts + 1;
+        s = wait_status(rx, &format!("restart {next} of {n}"), |s| {
+            s.restarts >= next || matches!(s.state, State::NeedsAttention(_))
+        })
+        .await;
+    }
+    s
+}
+
 async fn wait_line(ring: &LogRing, prefix: &str) -> String {
     let until = Instant::now() + DEADLINE;
     loop {
@@ -319,6 +337,7 @@ async fn crashes_back_off_then_need_attention_until_restarted() {
     let mut rx = sup
         .status(&id("prowlarr"))
         .unwrap_or_else(|| panic!("no status"));
+    wait_restarts(&mut rx, 5).await;
     let s = wait_status(&mut rx, "needs attention", |s| {
         matches!(s.state, State::NeedsAttention(_))
     })
@@ -334,6 +353,9 @@ async fn crashes_back_off_then_need_attention_until_restarted() {
     );
 
     assert!(sup.restart(&id("prowlarr")));
+    // Until the first new crash, the status may still read Needs attention.
+    wait_status(&mut rx, "restart 6", |s| s.restarts >= 6).await;
+    wait_restarts(&mut rx, 10).await;
     let s = wait_status(&mut rx, "a second crash loop", |s| {
         s.restarts == 10 && matches!(s.state, State::NeedsAttention(_))
     })
@@ -357,11 +379,9 @@ async fn crashes_outside_the_window_never_need_attention() {
     let mut rx = sup
         .status(&id("prowlarr"))
         .unwrap_or_else(|| panic!("no status"));
-    let s = wait_status(&mut rx, "eight restarts", |s| {
-        s.restarts >= 8 || matches!(s.state, State::NeedsAttention(_))
-    })
-    .await;
+    let s = wait_restarts(&mut rx, 8).await;
     assert!(!matches!(s.state, State::NeedsAttention(_)), "{s:?}");
+    assert!(s.restarts >= 8, "{s:?}");
     sup.shutdown().await;
 }
 
