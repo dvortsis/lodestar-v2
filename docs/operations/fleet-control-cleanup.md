@@ -1,145 +1,173 @@
-# Fleet-control approval and cleanup separation
+# Fleet cleanup stack
 
-This is a proposed source change, not a deployed service. No AWS/Linode resources, IAM, secrets, GitHub settings or Terraform state were changed while preparing it. The original PR #632 work remains in its original working tree; this proposal starts from `main`.
+The cleanup stack deletes the fleet's Linode VMs when their time is up, or when you ask in an emergency. It runs on its own in AWS, so cleanup never depends on GitHub approvals, Terraform or the provisioning credential.
 
-## Authorization model
+**Where things stand:**
 
-| Operation | Identity and authorization | Available authority |
+| Stack | State |
+|---|---|
+| Fleet-control (`fleet-control.json`) | Deployed, at the owner's request |
+| PIA delivery (`pia-delivery.json`) | Deployed, at the owner's request |
+| Cleanup (`cleanup.json`) | **Not deployed yet.** Follow [Deploy the cleanup stack](#deploy-the-cleanup-stack) below. |
+
+The cleanup stack couldn't deploy before because it reserved Lambda concurrency, and this account's Lambda concurrency limit (10) leaves nothing to reserve. It now uses a lease instead, which gives the same guarantee: at most one run of each cleanup function at a time ([decision](../decisions/2026-11-15-X-cleanup-fits-quota.md)). No agent or CI deploys anything; you do, with the steps at the end.
+
+## Who can do what
+
+| Operation | Who starts it | What it can do |
 |---|---|---|
-| Provisioning, PIA delivery, operator work | Existing exact main-workflow OIDC roles; selected main branch; sole owner required reviewer; administrator bypass disabled | Existing reviewed fleet provisioning/PIA scopes. Native approval must occur before job execution. |
-| Scheduled expiration | Separately owner-deployed EventBridge rule invokes only the expiration Lambda | Exact registered Linode deletion after expiration or a confirmed security tripwire; expiration has no GitHub dependency or Terraform access. Disabled by default. |
-| Emergency teardown | Owner-only, first-attempt `workflow_dispatch` of `fleet-emergency-down.yml` at main; `fleet-cleanup` environment has main-only branch restrictions and no reviewer/timer queue | `LodestarFleetCleanupInvoker` may invoke only the emergency Lambda. It cannot read credentials, state, or invoke the expiration/other functions. |
-| Broker execution | Separate Lambda service role and dedicated cleanup credential | Read one authorization object, set one mismatch flag, read its own token and write its own logs. No Terraform state, IAM, provisioning or credential access in the GitHub invoker. |
+| Scheduled expiration | An EventBridge schedule, every 15 minutes, **off by default** | Delete the registered VMs once their authorization has expired, or earlier if the firewall audit finds a definite security problem. No GitHub dependency. |
+| Emergency teardown | You, by running `fleet-emergency-down.yml` on `main` | `LodestarFleetCleanupInvoker` can invoke the emergency function only. It can't read credentials or state, or call anything else. |
+| The functions themselves | Their own Lambda role, `Executor` | Read one authorization object, set the mismatch flag, take and release their own lease, read their own Linode token and write their own logs. Nothing else. |
 
-Installing/enabling the cleanup stack is a separate owner authorization. The emergency dispatch is itself the owner's explicit teardown request; it does not wait for a second environment approval. The role's exact workflow/main/environment trust, workflow actor gate, runtime context check and signed token claim checks all constrain that request. The client rejects requests queued for over ten minutes, prepares a non-secret authorization version and executes only that version. The server also checks request freshness and that all registered resources predate the request. Changed registry versions and delayed/replayed requests fail; the invoke client waits for the broker and never automatically retries. Re-runs and schedule/PR/comment events cannot take this emergency path. `FLEET_CLEANUP_ENABLED` is an independent owner-installed switch for emergency invocation; it does not control expiration.
+`fleet.yml` no longer tears fleets down. `/fleet down` and the old tag-wide delete paths refuse before touching the cloud.
 
-The existing `fleet.yml` no longer schedules cleanup or accepts manual teardown. Its owner-gated provisioning jobs remain protected. Live `/fleet down`, legacy `reap`/`dispatch-down`, and the old tag-wide `LiveBackend` delete methods refuse before cloud access/deletion. Dry-run decision models remain for pure tests; they are not an alternate live execution path. The retired live fallback tests have been replaced with broker scope/expiration/mutation/refusal tests.
+## What the cleanup functions check
 
-AWS trust also checks the cleanup caller's immutable owner `actor_id`, repository ID, main `ref` and environment directly, in addition to the exact customized subject/audience. [AWS documents these GitHub condition keys](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html). Thus another actor cannot assume the invoker role merely by changing a workflow's job-level actor gate. Direct `workflow_ref` remains carried in the customized subject; the design does not substitute the `job_workflow_ref` claim, and the runner refuses a token whose `job_workflow_ref` differs from the expected `workflow_ref` (which would mean a reusable workflow ran the job).
+- **What to delete comes only from the registration.** After an approved apply, the fleet controller writes `fleet/cleanup-authorization.json` with the exact VM and firewall IDs, labels, types, creation times and an expiry at most 44 hours after creation. The functions never search by tag. A missing, malformed, future or over-long authorization fails.
+- **Before any write, every target is checked:** the AWS account and region, the Linode account, each VM's region, type, label, tags and creation time, and each firewall's complete device list. Any foreign device, change or unreadable answer stops the run.
+- **The authorization is pinned.** Before each deletion the function re-reads the authorization with `If-Match` on its version, so replacing or revoking it stops further work. It also confirms each VM is gone (404) before counting it.
+- **One run per function at a time.** Before anything else the function takes a lease, `locks/cleanup-expiration.json` or `locks/cleanup-emergency.json` in the control bucket.
+  - It creates the lease only if none exists (`If-None-Match: *`).
+  - It takes over an expired lease only by its exact version (`If-Match`). The lease lasts 600 s, longer than the 300 s function timeout.
+  - It releases the lease at the end by overwriting its own version.
+  - A run that finds a live lease does nothing, logs one `cleanup_busy` line, returns `status: busy` and triggers the busy alarm. A lease error means no cleanup that run, and the Errors alarm fires.
+- **Before the first deletion it sets `locks/fleet-mismatch.json`.** It never clears that flag, and never touches Terraform state. After any cleanup you reconcile by hand before the next fleet.
+- **Emergency requests are fresh and pinned.** The workflow first asks the function to prepare (read-only), then executes that exact authorization version. Requests over ten minutes old, re-runs and changed authorizations fail.
 
-## Resource boundary
+## What it never deletes
 
-After an approved apply, the controller obtains exact VM IDs from Terraform output, checks their API identity/account/address/region/type/ownership/creation time and firewall bindings, then writes `fleet/cleanup-authorization.json` in the existing versioned state bucket. Registration failure marks the fleet mismatched and fails the provisioning job. A partial apply that never yields a valid registration is **not automatically adoptable**; it requires owner inventory/recovery. The independent broker never searches for resources to delete by tag alone.
+Firewalls, volumes, reserved IPs, buckets, secrets and Terraform state. A Cloud Firewall can protect other services, and checking its attachments isn't atomic with deleting it, so firewalls are left for you to remove after checking. That's why the cleanup token needs only read access to firewalls.
 
-Registration requires each firewall's complete device inventory to contain exactly its expected Linode members, with no missing, foreign, duplicate or malformed devices. Each VM independently must report exactly that firewall through the VM-to-firewall API. Shared firewalls are accepted only when both views agree for every member. Paginated inventories require explicit, consistent page/count metadata, complete page contents and unique resource IDs; unreadable, truncated or changing inventories fail closed. Verification failure preserves the initial fleet intent and mismatch signal, publishes no successful fleet manifest or replacement cleanup authorization, and requires owner recovery. A failed authorization write also requires recovery; a lost write response is not proof that no authorization was recorded. These reads are not an atomic snapshot: concurrent external attachment writers remain prohibited during provisioning and cleanup.
+## Alerts
 
-The authorization contains account UUID, fixed region `us-east`, deployment label `fleet`, creation/expiration timestamps, exact VM IDs/types/labels/creation timestamps, and corresponding firewall IDs/labels/creation timestamps, approved admin `/32`s and member IDs. Expiry must be after creation and at most 44 hours later. API creation timestamps must match exactly, fall after the owner-selected activation floor, and fit the recorded creation window. At most two nodes/firewalls are accepted, with unique main/worker roles matching the current preset. Missing, malformed, future, unbounded or partially readable authorization fails closed.
+All four alarms email the SNS topic you name when you deploy:
 
-The broker additionally checks:
+| Alarm | Fires when | What to do |
+|---|---|---|
+| `…ExpirationErrors`, `…EmergencyErrors` | A run failed: a refused check, a lease error, an unreadable API, a timeout | Read the function's log (CloudWatch ▸ Log groups ▸ `/aws/lambda/<stack>-expiration` or `-emergency`). A failure is never proof the fleet is gone. If the reason is `cleanup lease malformed`, see [Clear a damaged lease](#clear-a-damaged-lease). |
+| `…BusyAlarm` | A run found the other run of the same function still holding the lease | Usually one run overlapping a slow or crashed one. If it repeats, look for a stuck run in the logs. |
+| `…HeartbeatAlarm` | No successful expiration run in an hour | Expected while scheduled expiration is off (the default). After you turn it on, it means expiration isn't running. |
 
-- Actual AWS execution account against its CloudFormation-pinned account, `us-east-1`, same-account S3 policies and `ExpectedBucketOwner` on every S3 call.
-- Actual Linode account UUID at planning and before each VM deletion; exact API region, approved type, labels and all `lodestar`, `test`, `managed-terraform` tags.
-- Every authorized firewall's identity and its complete bounded device inventory. Any foreign device, changed resource, incomplete pagination or unreadable API prevents the affected cleanup. The entire initial target set is validated before the first write.
-- Current authorization ETag with `IfMatch` before mutation. Replaced/revoked authorization stops further work.
-- Remaining invocation time before starting deletion, and confirmation that each requested VM returns 404. Unconfirmed deletion fails and never counts as success.
+### Clear a damaged lease
 
-The expiration function cannot select early teardown from its input. It retains the original pure firewall auditor: disabled/default-ACCEPT firewalls, unapproved ingress, duplicate job rules or confirmed stale job ingress independently authorize a scoped security teardown before expiry. Unlike the old reaper it does not rewrite firewall rules; confirmed stale ingress terminates the affected registered fleet rather than attempting an unfenced rule-set repair. Unknown/rate-limited audit data marks the fleet mismatched and alerts without authorizing early deletion. Public GitHub metadata is cached per invocation; expiration and owner-emergency teardown skip this dependency. The emergency function may delete before expiry only within the same account/region/ownership/creation boundaries; its mode is fixed in its separately authorized deployment. Caller payload cannot supply targets, token, URLs, scope or mode. `dry_run=true` only reduces authority and never writes the flag or deletes resources. STS authenticates GitHub JWT signatures; local decoded-claim checks are consistency checks, not signature verification.
+A lease object that can't be read as a valid lease stops that function on every run, on purpose: unknown lease state never authorizes cleanup. To clear it:
+1. Check no run is in progress: in the function's log group, the newest log stream should have no lines from the last 10 minutes.
+2. Open **S3 ▸** the control bucket **▸ locks/**, tick `cleanup-expiration.json` or `cleanup-emergency.json` (only the one the error names), and choose **Delete**. Type `permanently delete` to confirm.
+3. The next run creates a fresh lease. Deleting it removes no fleet data; it only lets the next run start.
 
-Before deletion the broker sets `locks/fleet-mismatch.json` to true. It never clears that flag, updates Terraform state, writes an idle tombstone or migrates state. Successful compute teardown does not authorize recreation. Owner reconciliation must confirm inventory, retained resources and state/ledger/manifest ownership before another provision.
+Logs keep 14 days and hold fixed summaries only: no tokens, response bodies or authorization contents.
 
-## Deliberately retained resources
+## Cost
 
-The broker **never deletes firewalls, volumes, reserved IPs, buckets, secrets or Terraform state**. Cloud Firewalls can protect multiple services and are not a VM-region boundary. A read of their attachments is not an atomic deletion condition. The cleanup token therefore needs only `firewall:read_only`, alongside `account:read_only` and the Linode permission needed to delete the registered VMs. Its API adapter only permits GET and exact Linode DELETE paths; POST, PUT, arbitrary URLs/redirects and firewall DELETE are rejected. The token is never delivered to GitHub. Linode's token scopes are broader than HTTP DELETE; the private broker supplies that narrower method/target boundary.
+About **$1–2 a month plus usage**: one secret ($0.40), two custom metrics (about $0.30 each), four alarms (about $0.10 each), plus small Lambda, log, S3 and EventBridge charges. The log groups and the secret are kept if you delete the stack, and keep their small charges until you delete them yourself. See [Secrets Manager pricing](https://aws.amazon.com/secrets-manager/pricing/) and [CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/).
 
-[Akamai documents Cloud Firewalls as available at no charge and attachable to multiple services](https://techdocs.akamai.com/cloud-computing/docs/cloud-firewall). Retained firewalls do not leave compute running, but still require separately approved owner cleanup. Full cloud cleanup is not claimed until that cleanup and state reconciliation are independently verified. Concurrent external writers remain an operational risk: use the dedicated fleet account and prohibit uncoordinated ownership/attachment changes; API reads/deletes are not a cross-resource transaction.
+## Deploy the cleanup stack
 
-## Failure reporting and rollback
+You do this in the AWS console. It takes about 20 minutes. You'll review exactly what will be created before anything is created.
 
-Two Lambda Errors alarms and a missing-success heartbeat alarm notify an existing owner-approved SNS topic. Selected target confirmations and fixed failure summaries go to retained 14-day log groups. Provider response bodies, exception text, tokens and raw authorization/state never enter public logs. A timeout, unreadable state, failed delete or missing credential is not an empty fleet. A partial failure leaves the mismatch flag set; confirmed deletions are logged and a later invocation rechecks each exact ID. No attached/shared firewall is deleted on a partial failure.
+### Before you start: gather five values
 
-The schedule starts disabled (`EnableExpiration=false`). Owner setup must verify SNS delivery/topic policy, heartbeat behavior, function credentials, the exact authorization and a disposable canary before a separate change set enables it. Existing deployed guard/watchdog services were not modified or re-verified. Before migration the owner must inspect their actual account/region/tag/activation scopes and coordinate retirement or coexistence using the [legacy-watchdog handoff procedure](fleet-watchdog-coordination.md); this PR cannot certify the live legacy watchdog or its token's account.
+Keep these in your private notes, never in GitHub or chat.
 
-## Owner deployment procedure — commands prepared only
+1. **The two bucket names.** In the AWS console, set the region (top right) to **US East (N. Virginia) us-east-1**. Open **CloudFormation ▸ Stacks**, choose the fleet-control stack, then the **Outputs** tab. Copy **StateBucketName** and **ControlBucketName**.
+2. **A notification topic name.** Open **Simple Notification Service ▸ Topics**.
+   - If a topic you already use for Lodestar alerts has a **Confirmed** email subscription, copy its **Name** (not the ARN).
+   - If not, choose **Create topic ▸ Standard**, name it `lodestar-alerts`, and create it. Then choose **Create subscription ▸ Protocol: Email**, enter your address, and click the link in the email AWS sends. Wait until the subscription shows **Confirmed**.
+3. **Your Linode account UUID (`euuid`).** This pins cleanup to one Akamai account. Use the value your private fleet configuration records. To read it again, run `linode-cli account view --format euuid --text --no-headers` with a read-only token.
+4. **An activation time** in UTC, written like `2026-11-15T18:00:00Z`. Use the current UTC time, rounded down to the minute. Cleanup refuses any VM created before it, so nothing older can ever be deleted by mistake.
+5. **The template file.** On GitHub, open `infra/aws/fleet-control/cleanup.json` on `main`, after this change has merged, and choose **Download raw file**. If the runner gave you a SHA-256 for it, check it in PowerShell with `Get-FileHash .\cleanup.json` and stop if it differs.
 
-First review/merge this draft through the normal owner process; the agent does not merge it. Establish the proposed canonical account through the private owner configuration (the user selected account ending `8045`), confirm live Linode/state inventory, and resolve any existing stacks, retained resources and secret-name collisions. Do not create another fleet/state backend if one already exists.
+### Create a change set and review it
 
-Deploy fleet-control's backend only through the separately approved procedure in [the bootstrap runbook](fleet-control-bootstrap.md). Cleanup is a separate stack with **13 Adds**: two Lambda functions, two IAM roles, two retained log groups, one retained empty cleanup secret, one schedule, one scoped invocation permission, one heartbeat metric filter and three alarms. It creates no GitHub provider, bucket, VM or Terraform state. Its provider ARN is constructed from the stack's own account and must already exist. Its execution role cannot access the provisioning token or Terraform state. Notification ARNs are also built from the stack account and region. The heartbeat alarm may alert during the intentionally disabled commissioning period; that is not proof of failed deletion.
+1. Open **CloudFormation ▸ Stacks ▸ Create stack ▸ With new resources (standard)**.
+2. Under **Prerequisite - Prepare template**, choose **Choose an existing template**. Under **Specify template**, choose **Upload a template file ▸ Choose file**, pick `cleanup.json`, then **Next**.
+   - The console saves the file in an S3 bucket it creates, named `cf-templates-…`. That's normal; the template holds no secrets.
+3. **Stack name:** `lodestar-fleet-cleanup`. Fill in the parameters:
 
-The owner supplies these private, non-secret parameters from verified outputs/inventory. Do not infer bucket names, account UUID, activation floor or notification topic from this repository. Preserve existing named secrets/roles; stop on collisions and review adoption/reference options.
+   | Parameter | Value |
+   |---|---|
+   | ControlBucketName | the ControlBucketName output |
+   | EnableExpiration | `false` (leave it; you turn it on later) |
+   | LinodeAccountEuuid | your Linode `euuid` |
+   | MinCreatedUtc | your activation time |
+   | NotificationTopicName | the topic **name** |
+   | StateBucketName | the StateBucketName output |
 
-```powershell
-$OwnerProfile = Read-Host 'Existing authorized owner deployment profile'
-$ExpectedAccountId = Read-Host 'Approved canonical AWS account ID'
-$Region = 'us-east-1'
-$Stack = 'lodestar-fleet-cleanup'
-$ChangeSet = 'cleanup-owner-review'
-$StateBucket = Read-Host 'Verified fleet StateBucketName output'
-$ControlBucket = Read-Host 'Verified fleet ControlBucketName output'
-$LinodeAccount = Read-Host 'Verified intended Linode account euuid'
-$Activation = Read-Host 'Approved activation floor in UTC YYYY-MM-DDTHH:MM:SSZ'
-$Topic = Read-Host 'Existing same-account notification topic NAME with confirmed delivery'
-$Template = (Resolve-Path 'infra/aws/fleet-control/cleanup.json').Path
-$ExpectedHash = Read-Host 'SHA256 of the exact reviewed cleanup template'
-if ((Get-FileHash -LiteralPath $Template -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedHash.ToLowerInvariant()) { throw 'Template differs from owner review' }
-$IdentityJson = aws sts get-caller-identity --profile $OwnerProfile --output json
-if ($LASTEXITCODE -ne 0 -or ($IdentityJson | ConvertFrom-Json).Account -cne $ExpectedAccountId) { throw 'Wrong/unavailable owner identity' }
-$Parameters = @(
-  "ParameterKey=StateBucketName,ParameterValue=$StateBucket",
-  "ParameterKey=ControlBucketName,ParameterValue=$ControlBucket",
-  "ParameterKey=LinodeAccountEuuid,ParameterValue=$LinodeAccount",
-  "ParameterKey=MinCreatedUtc,ParameterValue=$Activation",
-  "ParameterKey=NotificationTopicName,ParameterValue=$Topic",
-  'ParameterKey=EnableExpiration,ParameterValue=false'
-)
-```
+   Choose **Next**.
+4. On **Configure stack options**, leave the defaults. Under **Stack failure options**, keep **Roll back all stack resources**. At the bottom, tick **I acknowledge that AWS CloudFormation might create IAM resources with custom names**. Choose **Next**.
+5. On **Review and create**, choose **Create change set** (not **Submit**). Name it `cleanup-owner-review`, then **Create change set**.
+6. Wait until the change set's status is **CREATE_COMPLETE**, then open its **Changes** tab. You should see **exactly 16 rows, every one with Action Add**:
 
-After explicit approval to **create only the change set**, a human may run:
+   | Logical ID | Type |
+   |---|---|
+   | CleanupToken | AWS::SecretsManager::Secret |
+   | Executor, LodestarFleetCleanupInvoker | AWS::IAM::Role |
+   | ExpirationLog, EmergencyLog | AWS::Logs::LogGroup |
+   | Expiration, Emergency | AWS::Lambda::Function |
+   | ExpirationErrors, EmergencyErrors, HeartbeatAlarm, BusyAlarm | AWS::CloudWatch::Alarm |
+   | HeartbeatMetric, ExpirationBusy, EmergencyBusy | AWS::Logs::MetricFilter |
+   | ExpirationSchedule | AWS::Events::Rule |
+   | SchedulePermission | AWS::Lambda::Permission |
 
-```powershell
-aws cloudformation create-change-set --stack-name $Stack --change-set-name $ChangeSet --change-set-type CREATE --template-body "file://$Template" --parameters $Parameters --capabilities CAPABILITY_NAMED_IAM --region $Region --profile $OwnerProfile
-if ($LASTEXITCODE -ne 0) { throw 'Creation failed; inspect, do not deploy' }
-aws cloudformation wait change-set-create-complete --stack-name $Stack --change-set-name $ChangeSet --region $Region --profile $OwnerProfile
-if ($LASTEXITCODE -ne 0) { throw 'Change set is not ready' }
-aws cloudformation describe-change-set --stack-name $Stack --change-set-name $ChangeSet --include-property-values --region $Region --profile $OwnerProfile
-```
+7. Open the **Template** tab and search for `ScopedCleanup`. The Executor role should have exactly five permissions:
+   - read `fleet/cleanup-authorization.json` in the state bucket;
+   - write `locks/fleet-mismatch.json` in the control bucket;
+   - read and write `locks/cleanup-expiration.json` and `locks/cleanup-emergency.json` in the control bucket, and nothing else there;
+   - read the `CleanupToken` secret;
+   - write its own two log groups.
 
-Review the actual ARN, 13 Adds, all IAM policies, same-account provider/S3/notification configuration and fixed modes. Stop on any unexpected changes/removals/replacements or unknown ownership. Execution needs a second explicit approval; pin it to the approved ARN:
+   Search for `InvokeEmergencyOnly`: the invoker role may only invoke the `Emergency` function. Search for `ReservedConcurrentExecutions`: there should be **no match**.
+8. **If anything differs** (another row, a Modify or Remove, a wider permission, a name collision), choose **Delete change set**, stop, and tell the runner. Don't execute it.
 
-```powershell
-$ReviewedChangeSetArn = Read-Host 'Exact separately approved change-set ARN'
-if (-not $ReviewedChangeSetArn.StartsWith("arn:aws:cloudformation:${Region}:${ExpectedAccountId}:changeSet/${ChangeSet}/", [StringComparison]::Ordinal)) { throw 'Unexpected ARN' }
-$IdentityJson = aws sts get-caller-identity --profile $OwnerProfile --output json
-if ($LASTEXITCODE -ne 0 -or ($IdentityJson | ConvertFrom-Json).Account -cne $ExpectedAccountId) { throw 'Wrong/unavailable owner identity' }
-aws cloudformation execute-change-set --change-set-name $ReviewedChangeSetArn --region $Region --profile $OwnerProfile
-if ($LASTEXITCODE -ne 0) { throw 'Execution failed; inspect events' }
-aws cloudformation wait stack-create-complete --stack-name $Stack --region $Region --profile $OwnerProfile
-```
+### Create the stack
 
-No command above was executed. Subsequent owner actions, each requiring separate authorization:
+1. On the change set page, choose **Execute change set**. Keep **Roll back all stack resources**, then **Execute change set**.
+2. Open the stack's **Events** tab and wait for **CREATE_COMPLETE** (a few minutes). If it shows **ROLLBACK**, copy the first failed event's reason and send it to the runner; don't retry.
+3. The **HeartbeatAlarm** emails you within about an hour, and keeps doing so while scheduled expiration is off. That's expected; it stops once you turn expiration on.
+4. Open the **Outputs** tab. Copy **CleanupRoleArn** and **EmergencyFunctionArn** into your private notes. You need them for GitHub below.
+5. Check the concurrency: open **Lambda ▸ Functions ▸ lodestar-fleet-cleanup-emergency ▸ Configuration ▸ Concurrency**. It should say **Use unreserved account concurrency**. Check `lodestar-fleet-cleanup-expiration` the same way.
 
-1. Populate the dedicated cleanup credential through the secure console process, after verifying account and least-privilege scopes; no values in chat/Git/logs.
-2. Install the reviewed OIDC customization and environment policies. Keep owner approvals for provisioning/PIA/operator environments. Configure `fleet-cleanup` for selected `main` only with no tags, reviewer/timer/custom-approval queue, and no administrator bypass. Set its role/function outputs and the independent emergency switch. No provisioning secrets belong there.
-3. Independently inspect live account inventory, state and legacy cleanup services. Verify exact created-ID registration, read-only broker validation, signed JWT/STS claims, negative owner/branch/re-run cases, alert delivery and a disposable deletion canary. **No live access/canary was available in this remediation.**
-4. Only after those checks, approve a separate UPDATE change set setting `EnableExpiration=true`; verify recurring heartbeat. Do not enable live provisioning without this independently verified cleanup arrangement.
-5. For an emergency, the owner intentionally dispatches the pinned main workflow, which has no target inputs. Its two internal calls prepare and then execute one version of the already registered authorization; neither can choose a different fleet or supply targets. Inspect its conclusion and broker logs/alarms. Confirm every registered VM is gone, separately remove only verified retained firewalls, then explicitly reconcile state/ledger/manifest/authorization and clear the mismatch flag. No automatic state repair or Terraform apply/destroy is authorized here.
+### Install the cleanup token (the third token)
 
-## Cost and remaining live limits
+The fleet uses three Linode tokens: the fleet token, the PIA firewall token and this cleanup token. The cleanup token stays in AWS and never reaches GitHub.
 
-The separate cleanup stack adds one secret (about $0.40/month), one custom heartbeat metric (about $0.30/month), three standard alarms (about $0.30/month), and Lambda/log/S3/SNS/EventBridge usage. At low usage, budget roughly **$1/month plus usage** in addition to the backend; do not treat this as a cap or an actual bill. [Secrets pricing](https://aws.amazon.com/secrets-manager/pricing/), [CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/), [Lambda pricing](https://aws.amazon.com/lambda/pricing/). Retained secrets/logs may continue charging after stack removal. Existing services, Linodes and PIA are excluded.
+1. In **Akamai Cloud Manager**, open your profile menu ▸ **API Tokens ▸ Create a Personal Access Token**.
+   - **Label:** `lodestar-cleanup`.
+   - **Expiry:** the shortest you're willing to renew, for example 6 months. Put a reminder in your calendar.
+   - **Access:** **Account: Read Only**, **Firewalls: Read Only**, **Linodes: Read/Write**. Set everything else to **No Access**.
+   - Choose **Create Token** and copy the token. Cloud Manager shows it only once.
+2. In AWS, open **Secrets Manager ▸ Secrets ▸ lodestar/akamai-cleanup-token**. In **Secret value**, choose **Set secret value**. If the console shows **Retrieve secret value** instead, choose it, then **Edit**.
+3. Choose **Plaintext**, delete any placeholder, paste only the token (no quotes or spaces), and choose **Save**.
+4. **Test it, and test your alerts.** Open **Lambda ▸ lodestar-fleet-cleanup-emergency ▸ Test**. Create an event named `dryrun` with the body `{"dry_run": true}` and choose **Test**.
+   - With no fleet registered yet, the expected result is a failure. The log line should show `"stage": "authorization"`: the lease worked, and there's no authorization to read. Within about 5 minutes the **EmergencyErrors** alarm should email you. That email shows alerts work.
+   - **Choose Test again** within a minute. The second run must also stop at `"stage": "authorization"`. That proves the first run released its lease. If it says `busy`, or either log has a `cleanup_lease_release_failed` line, stop and tell the runner.
+   - Run the same two tests on **lodestar-fleet-cleanup-expiration**, so its lease is checked too.
+   - If the stage is `lease`, the lease permissions are wrong: tell the runner.
+   - When a fleet exists, the same test returns `"status": "dry_run"` and deletes nothing.
 
-Local unit/mutation/schema/security checks prove the proposed code's behavior under tested inputs. They do not prove that a backend, cleanup stack, intended cloud account, restricted token, notification path or native GitHub protections exist. Live inventory/ownership, actual JWT issuance/STS trust, Linode deletion semantics/permissions, notification delivery, concurrent-writer controls and full retained-resource/state cleanup remain deployment gates.
+### Create the `fleet-cleanup` environment in GitHub
 
-## Local validation record
+This environment lets only you, on `main`, run the emergency teardown. It deliberately has no reviewer or timer: your dispatch is the approval.
 
-The dedicated branch was checked without cloud credentials or deployment operations:
+1. On GitHub, open the repository ▸ **Settings ▸ Environments ▸ New environment**. Name it `fleet-cleanup`, then **Configure environment**.
+2. **Deployment protection rules:** leave **Required reviewers** and **Wait timer** unticked. Untick **Allow administrators to bypass configured protection rules**.
+3. **Deployment branches and tags:** choose **Selected branches and tags ▸ Add deployment branch or tag rule**. Set **Ref type: Branch** and **Name pattern:** `main`, then **Add rule**. Add no other rules.
+4. **Environment secrets ▸ Add environment secret**, twice:
+   - `AWS_CLEANUP_ROLE_ARN`: the **CleanupRoleArn** output;
+   - `AWS_CLEANUP_FUNCTION_ARN`: the **EmergencyFunctionArn** output.
+5. **Environment variables ▸ Add environment variable:** `FLEET_CLEANUP_ENABLED` with the value `true`. Until it's `true`, the emergency workflow does nothing.
+6. Ask the runner to run the settings audit (`python infra/fleet/deployment_policy.py audit`). It reads your settings and should report no `fleet-cleanup` problems.
 
-- Fleet control plane: 182 tests; PIA bridge: 38 tests.
-- Existing Akamai watchdog: 26 tests; AWS expiration guard: 15 tests, with fake clients only.
-- CloudFormation/broker suite: 43 tests, including 40 independent policy-widening mutations across the IAM audits and packaged-Lambda execution checks.
-- Reproducible template generation on Windows and Linux; cfn-lint 1.60.0 and explicit CloudFormation Guard 3.2.1 rules across all three fleet-control templates.
-- Terraform formatting and backend-disabled initialization/validation; the pure PowerShell StateBackend tests and PowerShell syntax parsing.
-- Gitleaks 8.30.1 on every changed/new file and Git whitespace checks.
+### Later: turn on scheduled expiration
 
-Read-only GitHub inspection still reports default OIDC subjects and an unprotected `cloud-fleet` environment. The deployment-policy audit is expected to refuse this live configuration. These are unresolved commissioning blockers, not successful live security checks. No signed JWT/STS exchange, service-side CloudFormation deployment validation or live Linode canary was performed.
+Scheduled expiration deletes VMs without you. Turn it on only when **all** of these are done:
+- a fleet has been registered, and a dry run of each function returned `dry_run`;
+- the alert email arrived;
+- the old watchdog is handed over, following [the legacy-watchdog handoff](fleet-watchdog-coordination.md). The existing watchdog can act on the same VMs without reading this stack's authorization, so the two must not both be live;
+- a disposable canary passed: a throwaway fleet, registered and then deleted by the emergency workflow, with every VM confirmed gone.
 
-### Main integration and security diff review, 2026-11-11
-
-Merged `origin/main` at `b7d3d366cebe1b8c1de0615063050fa13ba0195d` without rewriting the published branch. Both textual conflicts retain both implementations: infrastructure shell/certificate LF and Windows CMD CRLF rules, plus emergency-cleanup and operator-tripwire workflow coverage. Main's exact operator-lock IAM keys, block lifecycle/PIA renewal protections and state ownership checks remain intact.
-
-The new operator apply job now supplies the read-only Actions token required by the protection audit. The injection harness continues to receive no real GitHub token or App key: the identical pinned-repository protection audit uses public metadata GETs, verified readable anonymously. Denied, partial, missing or rate-limited metadata fails before OIDC/STS; there is no retry that changes authentication. New positive/negative tests cover this path. Actual signed claims and STS access remain untested.
-
-The merged operator suite exposed a CRLF mock-docstring failure. Its parser now accepts LF/CRLF while a regression compares the rest of the uploaded Python AST and still rejects missing docstrings. The operator prompt and new runbooks now require owner cleanup instead of disabled live `/fleet down`; partial-apply failures explicitly require owner inventory/registration recovery. Updating a live operator agent to the reviewed prompt remains a separately authorized owner action.
-
-Final local suites: **227 fleet tests (226 passed; one optional real-HAProxy test skipped because HAProxy is unavailable), 38 PIA, 186 operator, 44 template/broker tests including 40 independent IAM mutations, 26 watchdog and 15 expiration-guard tests**. Template generation/schema/Guard, Terraform formatting and validation, pure PowerShell checks, Gitleaks and whitespace checks were repeated. The HAProxy runtime check is not claimed as passing.
-
-A separate manual inspection of the net security diff against main checked the exact account/region/resource/creation/expiry boundaries, owner/main OIDC and native approval checks, invocation-only cleanup role, default-disabled independent expiration, PIA fencing/renewal, exact-ID registration and retained Terraform state. This was not a live or external-model security certification. Native GitHub settings remain unconfigured; live account/state/Linode inventory, legacy watchdog coexistence, notifications, signed JWT/STS, concurrency controls, disposable deletion canary and owner reconciliation remain the commissioning blockers above. A fresh owner/security review of the changed operator implementation is still required before deployment.
+1. Open **CloudFormation ▸ Stacks ▸ lodestar-fleet-cleanup ▸ Stack actions ▸ Create change set for current stack**. Choose **Use existing template**, then **Next**.
+2. Set **EnableExpiration** to `true` and leave every other parameter as it is. Choose **Next**, tick the IAM acknowledgement, then **Next** and **Create change set**.
+3. The change set should show **one row: Modify ExpirationSchedule**. If it shows anything else, delete it and tell the runner. Otherwise choose **Execute change set**.
+4. Within an hour the **HeartbeatAlarm** should return to **OK**. That also proves its log filter counts successful runs. If it stays in **ALARM** after two hours, tell the runner.

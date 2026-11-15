@@ -57,15 +57,16 @@ pub use join::{
     valid_worker_name,
 };
 pub use leases::{
-    BatchAnswer, Claim, Claimed, FetchedReport, Lease, LeaseAuthority, LeaseEvents, LeaseTable,
+    BatchAnswer, Claim, Claimed, FetchedReport, HAND_BACK_ALLOWANCE, HAND_BACK_WINDOW_SECS,
+    HANDED_BACK, HandBack, LOSS_OVERSIZE, Lease, LeaseAuthority, LeaseEvents, LeaseTable,
     MAX_PENDING, MAX_PENDING_PER_WORKER, MIN_RETURN_ALLOWANCE, NoEvents, PENDING_HIGH_WATER,
     RECENT_COMMITS, REST_AFTER_DRAIN_SECS, RETURN_WINDOW_SECS, Regranted, RestoredLease, Token,
     WorkerId,
 };
 pub use link::{CoordinatorLink, Link, LinkError, WorkerLink, local_pair};
 pub use server::{
-    CLUSTER_PATH, ClusterServer, FleetSnapshot, GrantAdmission, InboundSink, KeyCheck, PauseSource,
-    Pki, SendError, ServerConfig, ServerHooks, StoredKeys, WorkerStatus,
+    CLUSTER_PATH, ClusterServer, FleetSnapshot, GrantAdmission, InboundSink, KeyCheck, LocalIntake,
+    PauseSource, Pki, SendError, ServerConfig, ServerHooks, StoredKeys, WorkerStatus,
 };
 pub use tls::{ALPN_CLUSTER, ALPN_JOIN, CoordinatorTls, PeerIdentity, coordinator_server_name};
 pub use worker::{Credentials, Joining, Renewal};

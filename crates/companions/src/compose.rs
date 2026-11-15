@@ -61,6 +61,17 @@ pub const GLUETUN_POST_RULES_TARGET: &str = "/iptables/post-rules.txt";
 /// WireGuard only (`VPN_TYPE`), and the rules name `wg0`.
 pub const GLUETUN_INTERFACE: &str = "wg0";
 
+/// gluetun's small health check, as every template sets it
+/// (X-gluetun-restart-recover). Its default pings 1.1.1.1 and 8.8.8.8
+/// through the tunnel, and many VPN providers (PIA among them) don't answer
+/// pings, so gluetun restarts the VPN every few minutes. A DNS lookup
+/// through the tunnel checks the same thing. Only what triggers a VPN
+/// restart changes: gluetun's firewall and the post-rules don't depend on it.
+pub const GLUETUN_HEALTH_CHECK: (&str, &str) = ("HEALTH_SMALL_CHECK_TYPE", "dns");
+
+/// The note that goes with [`GLUETUN_HEALTH_CHECK`] in every template.
+pub const GLUETUN_HEALTH_NOTE: &str = "Keep dns. gluetun's default health check pings through the VPN, and\nmany providers don't answer pings, so gluetun would restart the VPN\nevery few minutes.";
+
 /// The compose config that carries the post-rules.
 const POST_RULES_CONFIG: &str = "gluetun-post-rules";
 
@@ -526,6 +537,7 @@ const PROFILES: &[Profile] = &[
             ),
             ("VPN_TYPE", Env::Fixed("wireguard")),
             ("VPN_INTERFACE", Env::Fixed(GLUETUN_INTERFACE)),
+            (GLUETUN_HEALTH_CHECK.0, Env::Fixed(GLUETUN_HEALTH_CHECK.1)),
             (
                 "WIREGUARD_PRIVATE_KEY",
                 Env::Vpn {
@@ -1005,11 +1017,23 @@ A container that already has one of these names stops it from starting.";
 const VPN_NOTE: &str = "Fill these in yourself, from your VPN provider. Lodestar never asks for
 or stores them. gluetun won't start until they are real values.";
 
+/// Why a companion in gluetun's network restarts with it
+/// (X-gluetun-restart-recover): a container that shares another's network
+/// stays in the old, dead one when that one restarts.
+const DEPENDS_NOTE: &str = "It starts once gluetun is healthy, and Compose restarts it whenever it\nrestarts gluetun: otherwise it stays in gluetun's old network, with none.";
+
 fn environment(c: &Checked<'_>) -> Y {
     Y::Map(
         c.env
             .iter()
-            .map(|(k, v, vpn)| (vpn.map(|(h, _)| h), (*k).to_owned(), s(v.as_str())))
+            .map(|(k, v, vpn)| {
+                let note = match vpn {
+                    Some((help, _)) => Some(*help),
+                    None if *k == GLUETUN_HEALTH_CHECK.0 => Some(GLUETUN_HEALTH_NOTE),
+                    None => None,
+                };
+                (note, (*k).to_owned(), s(v.as_str()))
+            })
             .collect(),
     )
 }
@@ -1094,11 +1118,14 @@ pub fn compose(
                     s(NetworkMode::ServiceGluetun.compose_value()),
                 ),
                 (
-                    None,
+                    Some(DEPENDS_NOTE),
                     "depends_on".to_owned(),
                     map(vec![(
                         GLUETUN,
-                        map(vec![("condition", s("service_healthy"))]),
+                        map(vec![
+                            ("condition", s("service_healthy")),
+                            ("restart", Y::B(true)),
+                        ]),
                     )]),
                 ),
             ];

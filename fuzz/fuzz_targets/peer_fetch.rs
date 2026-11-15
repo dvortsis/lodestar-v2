@@ -3,7 +3,10 @@
 //! from its BEP 3 handshake on; what the fetch writes is thrown away. This
 //! reaches the framing and the fetch loop (sizes, the request window,
 //! piece assembly, PEX), which `peer_wire` doesn't. MSE isn't reached: its
-//! key exchange is random.
+//! key exchange is random. Nor are the pace checks (`Error::Behind`) or the
+//! first-window deadline: they fall due seconds into a fetch, and here the
+//! whole fetch runs in one poll, in microseconds, on a runtime that is
+//! never driven. Their unit tests in `lodestar_peer_wire::fetch` cover them.
 #![no_main]
 
 use std::future::Future;

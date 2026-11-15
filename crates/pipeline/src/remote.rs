@@ -60,8 +60,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 
 use lodestar_cluster::proto::{HintItem, Outcome, Payload};
 use lodestar_cluster::{
-    ClusterServer, GrantAdmission, InboundSink, Lease, LeaseAuthority, RestoredLease, StoredKeys,
-    Token, WorkerId,
+    ClusterServer, GrantAdmission, InboundSink, Lease, LeaseAuthority, LocalIntake, RestoredLease,
+    StoredKeys, Token, WorkerId,
 };
 use lodestar_filter::{Handle, HeldSet, Trail, Verdict};
 use lodestar_metainfo::{InfoHash, Limits};
@@ -203,6 +203,15 @@ pub struct RemoteStats {
     /// those it refused (held or blocked), whose leases ended.
     pub parked: AtomicU64,
     pub parked_refused: AtomicU64,
+}
+
+/// What [`RemoteIntake::start_local`] did with a key.
+enum Started {
+    /// The built-in worker refuses it: its lease ended as blocked.
+    Refused,
+    Fetching,
+    /// No room in the pool now.
+    Full,
 }
 
 fn bump(c: &AtomicU64) {
@@ -528,28 +537,71 @@ impl RemoteIntake {
                 let Some(lease) = self.authority.current(&key, token) else {
                     continue;
                 };
-                if self.refusals.as_ref().is_some_and(|r| r.refuses(&key)) {
-                    self.authority.lost(&key, token, Loss::Blocked as u8);
-                    bump(&self.stats.parked_refused);
-                    continue;
-                }
-                let mut found = Found::key(key, lease.strategy);
-                found.private_source = self.private(lease.sources | (1u64 << lease.source.get()));
-                let d = Discovery {
-                    source: lease.source,
-                    found,
-                    at: lease.discovered_at,
-                    reply: false,
-                };
-                self.leases.insert(key, token);
-                if pool.try_send(d).is_err() {
-                    self.leases.take(&key);
-                    self.authority.requeue(&key, token);
-                } else {
-                    bump(&self.stats.parked);
+                match self.start_local(&pool, key, token, lease) {
+                    Started::Refused => bump(&self.stats.parked_refused),
+                    Started::Fetching => bump(&self.stats.parked),
+                    Started::Full => {
+                        self.authority.requeue(&key, token);
+                    }
                 }
             }
         }
+    }
+
+    /// A key a remote worker found too large, now leased to the built-in
+    /// worker under `token`: into its pool, as a parked key is
+    /// ([`hand_parked`](Self::hand_parked)), refused first if the built-in
+    /// worker refuses it (its lease then ended as blocked). `Full` if the
+    /// pool is gone or full: the lease is left for the server to end.
+    pub fn take_handed(&self, key: InfoHash, token: Token, lease: Lease) -> LocalIntake {
+        let Some(pool) = self.pool() else {
+            return LocalIntake::Full;
+        };
+        match self.start_local(&pool, key, token, lease) {
+            Started::Refused => LocalIntake::Refused,
+            Started::Fetching => LocalIntake::Fetching,
+            Started::Full => LocalIntake::Full,
+        }
+    }
+
+    /// The built-in worker refuses `key` (held, or blocked by the filter).
+    pub fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.refusals.as_ref().is_some_and(|r| r.refuses(key))
+    }
+
+    /// Starts the built-in worker's fetch of `key`, leased to it under
+    /// `token`. A key it refuses (held, or blocked by the filter) ends its
+    /// lease as blocked, as its own intake does, and is never fetched.
+    fn start_local(
+        &self,
+        pool: &mpsc::Sender<Discovery>,
+        key: InfoHash,
+        token: Token,
+        lease: Lease,
+    ) -> Started {
+        if self.refuses_local(&key) {
+            // As the server's own check before a hand-back does (a blocked
+            // report): the loss is remembered with the recent commits under
+            // the lock that ends the lease, so a remote claim whose store
+            // check ran before the refusal isn't granted the key.
+            self.authority
+                .report(WorkerId::LOCAL, &key, token, Some(Loss::Blocked as u8));
+            return Started::Refused;
+        }
+        let mut found = Found::key(key, lease.strategy);
+        found.private_source = self.private(lease.sources | (1u64 << lease.source.get()));
+        let d = Discovery {
+            source: lease.source,
+            found,
+            at: lease.discovered_at,
+            reply: false,
+        };
+        self.leases.insert(key, token);
+        if pool.try_send(d).is_err() {
+            self.leases.take(&key);
+            return Started::Full;
+        }
+        Started::Fetching
     }
 
     fn writer(&self) -> Option<mpsc::Sender<Results>> {
@@ -1120,6 +1172,17 @@ impl InboundSink for RemoteSink {
     /// The server ended their leases (losses) or kept them (`Fetched`,
     /// which the commit ends); nothing is stored for them here.
     fn outcomes(&self, _worker: WorkerId, _accepted: Vec<(InfoHash, Lease, Outcome)>) {}
+
+    /// A key a remote worker found too large: the built-in worker fetches
+    /// it ([`RemoteIntake::take_handed`]).
+    fn handed_back(&self, key: InfoHash, token: Token, lease: Lease) -> LocalIntake {
+        self.intake.take_handed(key, token, lease)
+    }
+
+    /// Held, or blocked by the filter: the built-in worker's own refusals.
+    fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.intake.refuses_local(key)
+    }
 
     /// Hints for keys the built-in worker holds: into its pool as a reply,
     /// so they're merged into a queued key and never admit one.

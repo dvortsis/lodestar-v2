@@ -1712,6 +1712,45 @@ mod tests {
         );
     }
 
+    /// End to end through the core: an earlier reading that reaches the
+    /// token cap, metered with `CUT_ONLY` on the thread's splitting
+    /// tokenizer, leaves it unmetered, so `read_whole_by_v1`'s unmetered
+    /// earlier reading after it on the same thread still reads its text
+    /// whole. A meter left running would read that text as nothing, and
+    /// a text past version 1's limits in the earlier reading would pass
+    /// for whole (X-filter-split-nits).
+    #[test]
+    fn a_cut_earlier_reading_leaves_the_next_one_whole() {
+        let c = core();
+        let none = TermSet::default();
+        let item = |name| Item {
+            hashes: &[],
+            name,
+            files: &[],
+            content_type: ContentType::Video,
+        };
+        // Within version 1's limit joined, past it apart: `a` and `b` are
+        // one word joined and two apart.
+        let small = "a\u{0600}b ".repeat(V1_TOKENS / 2 + 8);
+        let mut joined = Vec::new();
+        normalize::tokens(&small, &mut joined);
+        let mut apart = Vec::new();
+        normalize::with_splitting(|t| t.text(&small, &mut apart));
+        assert!(joined.len() <= V1_TOKENS, "{} joined", joined.len());
+        assert!(apart.len() > V1_TOKENS, "{} apart", apart.len());
+        assert!(!read_whole_by_v1(&item(&small)), "before");
+
+        // An earlier reading past the token cap: held as too large.
+        let huge = "a\u{0600}".repeat(normalize::MAX_TOKENS + 1);
+        let hits = c.pattern_hits_split(&item(&huge), &none, true);
+        assert_eq!(hits, Some(vec![c.too_large_hit()]));
+
+        assert!(!read_whole_by_v1(&item(&small)), "after the cut");
+        // And the next earlier reading through the core reads whole too.
+        let hits = c.pattern_hits_split(&item(&small), &none, true).unwrap();
+        assert!(!hits.contains(&c.too_large_hit()), "{hits:?}");
+    }
+
     proptest! {
         /// The sorted pairing finds what scanning every pair finds: the
         /// first of `first`, in order, with one of `second` close enough,
