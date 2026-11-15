@@ -61,7 +61,10 @@ def acquire_lease(s3, bucket, owner, mode, holder, now):
     lease = json.loads(raw) if len(raw) <= 4096 else None
     if not isinstance(lease, dict) or lease.get("version") != 1 or lease.get("mode") != mode:
         raise Refused("cleanup lease malformed")
-    if timestamp(lease.get("expires_at")) > now:
+    expires = timestamp(lease.get("expires_at"))
+    if expires > now + timedelta(seconds=LEASE_SECONDS + 60):
+        raise Refused("cleanup lease malformed")  # no real lease ends that late
+    if expires > now:
         raise Busy()
     try:
         return s3.put_object(Bucket=bucket, Key=key, ExpectedBucketOwner=owner, Body=body, IfMatch=found["ETag"])["ETag"]
@@ -343,10 +346,10 @@ def handler(event, context):
             except Exception:
                 LOG.error(json.dumps({"event": "cleanup_lease_release_failed", "mode": mode}))
             raise
+        if report.get("event"):
+            LOG.info(json.dumps(report))  # before release: a failed release still leaves the summary
         where["stage"] = "lease_release"
         release_lease(s3, control, account, mode, holder, etag, datetime.now(timezone.utc))
-        if report.get("event"):
-            LOG.info(json.dumps(report))
         return report
     except Exception as exc:
         report = {"status": "failed", "event": "cleanup_failed", "stage": where["stage"],

@@ -22,14 +22,15 @@ The cleanup stack (`infra/aws/fleet-control/cleanup.json`) gave both broker func
 - **The heartbeat is unaffected:** it counts only `cleanup_complete`, so a busy run never counts as a successful one.
 
 ## Fail closed
-- **Any lease error stops the run before any action:** a failed create, a failed read, a malformed, oversized or other-mode lease object, or a failed takeover that isn't a precondition conflict. The run then fails with stage `lease`, and the function's Errors alarm notifies.
+- **Any lease error stops the run before any action:** a failed create, a failed read, a malformed, oversized or other-mode lease object, or one that expires more than `LEASE_SECONDS` + 60 s from now (no real lease ends that late, so it would otherwise read as busy forever), or a failed takeover that isn't a precondition conflict. The run then fails with stage `lease`, and the function's Errors alarm notifies.
 - **A failure after acquiring still releases** the lease (best effort) and re-raises, so the next run isn't held up. If that release itself fails, it logs `cleanup_lease_release_failed` and the lease simply expires.
 - **A malformed lease object blocks that mode until the owner removes it.** That's deliberate: unknown lease state never authorizes work. The runbook says how to clear it ("Clear a damaged lease").
+- **The summary is logged before the release.** A run that deleted VMs and then failed to release still leaves its summary (and the heartbeat's `cleanup_complete`) in the log, then raises.
 - **A 409 (`ConditionalRequestConflict`) counts as busy.** On a takeover, the run returns busy. On the very first create, the object may not exist yet, so the read is refused (no `s3:ListBucket`) and the run fails closed at `lease`. Both cases are tested.
 
 ## Template size
-- **`cleanup_code()` now compacts the inlined source.** Indentation becomes one space per block level, and plain double-quoted strings get single quotes, because JSON escapes every `"`. With the lease the template came to 51,521 bytes, over CloudFormation's 51,200-byte inline body limit, because the handler is inlined into both functions. Compacted, it's 50,234 bytes. The other way out, uploading the template to S3 for packaging, is an owner-reviewed change (`render()` refuses it), so it wasn't taken.
-- **Only about 1 KB of headroom is left** (51,200 is a repository rule in `render()`; the console's own upload path isn't bound by it). The next change that grows the handler goes to the runner for an owner decision on packaging, not more compaction.
+- **`cleanup_code()` now compacts the inlined source.** Indentation becomes one space per block level, and plain double-quoted strings get single quotes, because JSON escapes every `"`. With the lease the template came to 51,521 bytes, over CloudFormation's 51,200-byte inline body limit, because the handler is inlined into both functions. Compacted, it's 50,440 bytes. The other way out, uploading the template to S3 for packaging, is an owner-reviewed change (`render()` refuses it), so it wasn't taken.
+- **Only 760 bytes of headroom are left** (51,200 is a repository rule in `render()`; the console's own upload path isn't bound by it). The next change that grows the handler goes to the runner for an owner decision on packaging, not more compaction.
 - **The compaction can't change the program.** It works on tokens, not `ast.unparse`, so spelling stays stable across Python versions, and f-strings and strings containing quotes or backslashes are left alone. It refuses to build if the result's AST differs from the original's. `test_cleanup_policy.py` runs the packaged code's lease scenarios as well as its cleanup checks.
 
 ## Checks

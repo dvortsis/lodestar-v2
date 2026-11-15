@@ -420,6 +420,7 @@ class CleanupLease(unittest.TestCase):
             "read error": lambda s3: (ch.acquire_lease(s3, "control-b", "111122223333", "expiration", "x", START), s3.fail.add(("get", ch.LEASE_KEYS["expiration"]))),
             "malformed lease": lambda s3: s3.objects.update({("control-b", ch.LEASE_KEYS["expiration"]): (b"not json", '"bad"')}),
             "other mode's lease": lambda s3: s3.objects.update({("control-b", ch.LEASE_KEYS["expiration"]): (ch.lease_body("emergency", "x", START), '"bad"')}),
+            "far-future lease": lambda s3: s3.objects.update({("control-b", ch.LEASE_KEYS["expiration"]): (ch.lease_body("expiration", "x", END + timedelta(seconds=ch.LEASE_SECONDS + 61)), '"far"')}),
             "oversized lease": lambda s3: s3.objects.update({("control-b", ch.LEASE_KEYS["expiration"]): (b" " * 4097, '"big"')}),
         }.items():
             with self.subTest(case=name):
@@ -456,9 +457,10 @@ class CleanupLease(unittest.TestCase):
                 s3.objects[("control-b", ch.LEASE_KEYS["expiration"])] = (ch.lease_body("expiration", "thief", END), '"stolen"')
             return api2(method, path)
         api2 = API()
-        with self.assertLogs(ch.LOG, level="ERROR") as logs, self.assertRaises(RuntimeError):
+        with self.assertLogs(ch.LOG, level="INFO") as logs, self.assertRaises(RuntimeError):
             invoke("expiration", END, {}, s3, steal)
         self.assertIn('"stage": "lease_release"', logs.output[-1])
+        self.assertIn("cleanup_complete", " ".join(logs.output))  # the summary was logged before the release failed
         self.assertEqual(s3.lease("expiration")[0]["holder"], "thief")
 
 
