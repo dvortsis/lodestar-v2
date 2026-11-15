@@ -47,9 +47,9 @@ TYPE = "g6-dedicated-4"
 # Magnetico dumps, their restore and Lodestar's store at once (2026-11-13).
 TYPES = ("g6-dedicated-4", "g6-nanode-1", "g6-dedicated-8", "g6-dedicated-16")
 MAX_VMS = 3  # a hard ceiling on concurrent claude-dev VMs
-# The owner's cap is $50 per cloud for the whole testing period (2026-11-12T16:58Z);
+# The owner's cap is $100 per cloud for the whole testing period (raised from $50 on 2026-11-15Z);
 # status warns from here so the coordinator can delete in time.
-STOP_USD = 45.0
+STOP_USD = 90.0
 IMAGE = "linode/ubuntu24.04"
 TAGS = ["claude-dev"]
 HERE = Path(__file__).resolve().parent
@@ -109,7 +109,7 @@ def cmd_status(_a) -> None:
         print(f"  firewall {f['label']} id={f['id']} status={f['status']}")
     spent = max(running, float(acct["balance_uninvoiced"]))
     flag = "STOP LINE REACHED: delete the test VMs" if spent >= STOP_USD else "ok"
-    print(f"test spend so far (live VMs or uninvoiced, whichever is larger): ${spent:.2f} of the $50 cap, stop line ${STOP_USD:.0f}: {flag}")
+    print(f"test spend so far (live VMs or uninvoiced, whichever is larger): ${spent:.2f} of the $100 cap, stop line ${STOP_USD:.0f}: {flag}")
 
 
 def render_user_data(pubkey: str, host_priv: str, host_pub: str, worker: bool = False) -> str:
