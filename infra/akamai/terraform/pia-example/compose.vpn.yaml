@@ -29,6 +29,9 @@ services:
       VPN_SERVICE_PROVIDER: custom
       VPN_TYPE: wireguard
       VPN_INTERFACE: wg0  # the post-rules below name it
+      # PIA doesn't answer pings, so the default (ICMP) check restarts the VPN
+      # every few minutes; a DNS lookup through the tunnel checks the same thing.
+      HEALTH_SMALL_CHECK_TYPE: dns
       # The helper reads the tunnel with the host's wg over netlink, so it must
       # be the kernel's WireGuard, never the userspace fallback.
       WIREGUARD_IMPLEMENTATION: kernelspace

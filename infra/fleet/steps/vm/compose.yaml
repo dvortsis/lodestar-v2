@@ -29,6 +29,9 @@ services:
       VPN_SERVICE_PROVIDER: custom
       VPN_TYPE: wireguard
       VPN_INTERFACE: wg0  # named, so the leak test reads it rather than assuming
+      # PIA doesn't answer pings, so the default (ICMP) check restarted the VPN
+      # every few minutes; a DNS lookup through the tunnel checks the same thing.
+      HEALTH_SMALL_CHECK_TYPE: dns
       FIREWALL_VPN_INPUT_PORTS: ""
       TZ: Etc/UTC
     volumes:

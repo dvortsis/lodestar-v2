@@ -355,6 +355,8 @@ class Compose(unittest.TestCase):
         self.assertEqual(g["environment"]["VPN_INTERFACE"], "wg0")  # the leak test's phase B reads it
         self.assertEqual(g["environment"]["TZ"], "Etc/UTC")
         self.assertEqual(g["environment"]["FIREWALL_VPN_INPUT_PORTS"], "")
+        # PIA doesn't answer pings: the ICMP check restarts the VPN every few minutes.
+        self.assertEqual(g["environment"]["HEALTH_SMALL_CHECK_TYPE"], "dns")
         self.assertFalse(any(k.startswith("FIREWALL_ENABLED") for k in g["environment"]))  # its firewall stays on
         self.assertEqual(g["oom_score_adj"], -500)
         self.assertEqual(g["volumes"], ["./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro"])
@@ -393,6 +395,7 @@ class Compose(unittest.TestCase):
         g = doc["services"]["gluetun"]
         self.assertEqual(g["image"], self.svc["gluetun"]["image"])  # pinned, the version the rules were checked on
         self.assertEqual(g["environment"]["VPN_INTERFACE"], "wg0")
+        self.assertEqual(g["environment"]["HEALTH_SMALL_CHECK_TYPE"], "dns")  # PIA doesn't answer pings
         self.assertEqual(g["configs"], self.svc["gluetun"]["configs"])
         self.assertEqual(doc["configs"], self.doc["configs"])
 

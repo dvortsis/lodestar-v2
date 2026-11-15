@@ -115,6 +115,8 @@ To run it:
           VPN_SERVICE_PROVIDER: "FILL_IN_YOURSELF"
           VPN_TYPE: wireguard
           VPN_INTERFACE: wg0
+          # Many VPN providers don't answer pings: check the VPN with DNS.
+          HEALTH_SMALL_CHECK_TYPE: dns
           WIREGUARD_PRIVATE_KEY: "FILL_IN_YOURSELF"
           WIREGUARD_ADDRESSES: "FILL_IN_YOURSELF"
         volumes:
@@ -252,7 +254,7 @@ If gluetun stops or keeps restarting instead:
 |---|---|
 | `post-rules.txt: is a directory` | The file wasn't at the host path, so Docker made a folder there. Delete the folder, repeat step 1, and start gluetun again. |
 | `ip6tables is required` | Your server's kernel has no IPv6 firewall. Delete the three lines that start with `ip6tables` from the file, then start gluetun again. |
-| `restarting VPN`, again and again | gluetun's health check pings an address outside the VPN, such as one on your network set with `HEALTH_ICMP_TARGET_IP`, and the rules drop that ping. Add the variable `HEALTH_SMALL_CHECK_TYPE` with value `dns`, or remove `HEALTH_ICMP_TARGET_IP`. |
+| `restarting VPN`, again and again | gluetun's health check pings through the VPN by default, and many VPN providers, PIA among them, don't answer pings. A ping to an address on your network, set with `HEALTH_ICMP_TARGET_IP`, fails too, because the rules drop it. Add the variable `HEALTH_SMALL_CHECK_TYPE` with value `dns`, remove `HEALTH_ICMP_TARGET_IP` if you set it, and restart gluetun. gluetun then checks the VPN with a DNS lookup through it. Lodestar's templates already set it. A few restarts in the first half minute after gluetun starts are normal. |
 
 To undo it, remove the Path and the Variable from gluetun, select **Apply**, and restart Lodestar.
 

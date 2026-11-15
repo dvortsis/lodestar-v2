@@ -32,6 +32,10 @@
       "VPN_SERVICE_PROVIDER": "FILL_IN_YOURSELF"
       "VPN_TYPE": "wireguard"
       "VPN_INTERFACE": "wg0"
+      # Keep dns. gluetun's default health check pings through the VPN, and
+      # many providers don't answer pings, so gluetun would restart the VPN
+      # every few minutes.
+      "HEALTH_SMALL_CHECK_TYPE": "dns"
       # Your WireGuard private key, from your provider.
       "WIREGUARD_PRIVATE_KEY": "FILL_IN_YOURSELF"
       # Your WireGuard address, from your provider.
