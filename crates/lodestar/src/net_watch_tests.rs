@@ -1,9 +1,15 @@
 use super::*;
 
+/// A reading with `names`; with `default_route`, the route goes through
+/// the first of them (or `eth0` when there are none).
 fn up(names: &[&str], default_route: bool) -> Sample {
     Sample {
         interfaces: names.iter().map(|s| (*s).to_owned()).collect(),
-        default_route,
+        route_interfaces: if default_route {
+            vec![names.first().copied().unwrap_or("eth0").to_owned()]
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -156,6 +162,66 @@ fn held_during_an_update_self_test() {
     );
 }
 
+/// gluetun killed (OOM, `docker kill`, a stop timeout) with kernel
+/// WireGuard: its clean-up never runs, so `wg0` stays in the orphaned
+/// namespace while `eth0` and the default route go. Still lost.
+#[test]
+fn an_orphaned_wg0_does_not_hide_the_loss() {
+    let mut rule = Rule::default();
+    let t0 = Instant::now();
+    let mut readings = vec![Some(up(&["eth0", "wg0"], true))];
+    readings.extend((0..=6).map(|_| Some(up(&["wg0"], false))));
+    let verdicts = run(&mut rule, t0, &readings, false);
+    assert_eq!(verdicts.last(), Some(&Verdict::Exit), "{verdicts:?}");
+    assert_eq!(verdicts[1], Verdict::Losing(Duration::ZERO));
+}
+
+/// `eth0` and `wg0` with the default route: never lost.
+#[test]
+fn eth0_and_wg0_with_a_route_stay_fine() {
+    let mut rule = Rule::default();
+    let t0 = Instant::now();
+    let readings: Vec<_> = (0..100).map(|_| Some(up(&["eth0", "wg0"], true))).collect();
+    let verdicts = run(&mut rule, t0, &readings, false);
+    assert!(verdicts.iter().all(|v| *v == Verdict::Fine), "{verdicts:?}");
+}
+
+/// `wg0` kept, and the default route back within the hold: not lost.
+#[test]
+fn a_route_back_within_the_hold_breaks_it() {
+    let mut rule = Rule::default();
+    let t0 = Instant::now();
+    let mut readings = vec![Some(up(&["eth0", "wg0"], true))];
+    readings.extend((0..5).map(|_| Some(up(&["wg0"], false))));
+    readings.push(Some(up(&["wg0"], true)));
+    readings.extend((0..5).map(|_| Some(up(&["wg0"], false))));
+    let verdicts = run(&mut rule, t0, &readings, false);
+    assert!(!verdicts.contains(&Verdict::Exit), "{verdicts:?}");
+    assert_eq!(verdicts[6], Verdict::Fine);
+}
+
+/// The interfaces a default route goes through, per family, merged.
+#[test]
+fn records_which_interfaces_carry_the_default_route() {
+    let head = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n";
+    let v4 = format!("{head}eth0\t00000000\t010011AC\t0003\t0\t0\t0\t00000000\n");
+    let z = "00000000000000000000000000000000";
+    let v6 = format!(
+        "{z} 00 {z} 00 fe800000000000000000000000000001 00000400 00000001 00000000 00450003     eth1\n"
+    );
+    assert_eq!(default_routes_v4(&v4), vec!["eth0".to_owned()]);
+    assert_eq!(default_routes_v6(&v6), vec!["eth1".to_owned()]);
+    let s = sample_from(Some("h\nh\n eth0: 1\n eth1: 1\n"), Some(&v4), Some(&v6)).expect("sample");
+    assert_eq!(
+        s.route_interfaces,
+        vec!["eth0".to_owned(), "eth1".to_owned()]
+    );
+    // The same interface for both families is recorded once.
+    let v6_eth0 = v6.replace("eth1", "eth0");
+    let both = sample_from(Some("h\nh\n eth0: 1\n"), Some(&v4), Some(&v6_eth0)).expect("s");
+    assert_eq!(both.route_interfaces, vec!["eth0".to_owned()]);
+}
+
 #[test]
 fn parses_proc_net_dev() {
     let text = "Inter-|   Receive                                                |  Transmit\n \
@@ -251,8 +317,10 @@ fn builds_a_sample_and_never_guesses() {
     let v4 = format!("{head}eth0\t00000000\t010011AC\t0003\t0\t0\t0\t00000000\n");
     let s = sample_from(Some("h\nh\n eth0: 1\n"), Some(&v4), None).expect("sample");
     assert_eq!(s, up(&["eth0"], true));
-    assert!(!s.lost());
-    assert!(gone().lost());
+    assert!(!s.lost(&[]));
+    assert!(gone().lost(&[]));
+    assert!(up(&["wg0"], false).lost(&["eth0".to_owned()]));
+    assert!(!up(&["wg0"], false).lost(&[]));
 }
 
 #[test]

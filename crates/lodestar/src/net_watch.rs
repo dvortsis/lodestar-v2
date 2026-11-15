@@ -11,8 +11,13 @@
 //! With `LODESTAR_EXIT_ON_NETWORK_LOSS=true` (off by default; only our
 //! gluetun recipes set it), Linux only: every [`SAMPLE`] it reads the
 //! interfaces (`/proc/net/dev`) and the default routes (`/proc/net/route`,
-//! `/proc/net/ipv6_route`) of its own namespace. "Lost" means no interface
-//! but `lo` **and** no default route. Once that has held for [`HOLD`]
+//! `/proc/net/ipv6_route`) of its own namespace. Once armed, it remembers
+//! the interfaces that carried a default route (normally `eth0`). "Lost"
+//! means none of those is left **and** there is no default route; with no
+//! such interface ever seen, it means no interface but `lo` and no default
+//! route. A gluetun killed with kernel WireGuard leaves its `wg0` in the
+//! orphaned namespace, so `wg0` alone can't keep it "fine". Once lost has
+//! held for [`HOLD`]
 //! without a break, it logs one line and stops the way a signal does (the
 //! store is flushed), then exits [`EXIT_CODE`], and the restart policy
 //! starts it again inside the other container's current namespace.
@@ -45,16 +50,30 @@ pub const EXIT_CODE: u8 = 75;
 pub struct Sample {
     /// Interfaces other than `lo`, up or down.
     pub interfaces: Vec<String>,
-    /// An IPv4 or IPv6 default route through an interface other than `lo`.
-    pub default_route: bool,
+    /// The interfaces an IPv4 or IPv6 default route goes through (never
+    /// `lo`); empty with no default route.
+    pub route_interfaces: Vec<String>,
 }
 
 impl Sample {
-    /// Nothing but `lo`, and no default route. A default route needs an
-    /// interface, so the route half never decides alone: it's kept as
-    /// defence in depth, as the approved rule states it.
-    pub fn lost(&self) -> bool {
-        self.interfaces.is_empty() && !self.default_route
+    /// Whether there is a default route.
+    pub fn default_route(&self) -> bool {
+        !self.route_interfaces.is_empty()
+    }
+
+    /// Lost, given `anchors`, the interfaces that carried a default route
+    /// since the rule armed. With anchors: no default route and none of
+    /// them left (other interfaces, such as an orphaned `wg0`, don't
+    /// count). Without: nothing but `lo` and no default route.
+    pub fn lost(&self, anchors: &[String]) -> bool {
+        if self.default_route() {
+            return false;
+        }
+        if anchors.is_empty() {
+            self.interfaces.is_empty()
+        } else {
+            !anchors.iter().any(|a| self.interfaces.contains(a))
+        }
     }
 }
 
@@ -77,6 +96,9 @@ pub enum Verdict {
 #[derive(Debug, Default)]
 pub struct Rule {
     armed: bool,
+    /// The interfaces that carried a default route, recorded the first
+    /// time one is seen after arming (normally `eth0`).
+    anchors: Vec<String>,
     lost_since: Option<Instant>,
 }
 
@@ -99,11 +121,14 @@ impl Rule {
         if !self.armed {
             return Verdict::Unarmed;
         }
+        if self.anchors.is_empty() && sample.default_route() {
+            self.anchors = sample.route_interfaces.clone();
+        }
         if held {
             self.lost_since = None;
             return Verdict::Held;
         }
-        if !sample.lost() {
+        if !sample.lost(&self.anchors) {
             self.lost_since = None;
             return Verdict::Fine;
         }
@@ -144,37 +169,57 @@ const RTF_UP: u32 = 0x1;
 /// `RTF_REJECT`: an unreachable route, never a way out.
 const RTF_REJECT: u32 = 0x200;
 
-/// Whether `/proc/net/route` has a usable IPv4 default route: destination
-/// and mask 0, up, not a reject route, not through `lo`.
-pub fn parse_route_v4(text: &str) -> bool {
-    text.lines().skip(1).any(|l| {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        // Iface Destination Gateway Flags RefCnt Use Metric Mask …
-        if f.len() < 8 || f[0] == "lo" {
-            return false;
-        }
-        let flags = u32::from_str_radix(f[3], 16).unwrap_or(0);
-        f[1] == "00000000" && f[7] == "00000000" && flags & RTF_UP != 0 && flags & RTF_REJECT == 0
-    })
+/// The interfaces of the usable IPv4 default routes in `/proc/net/route`:
+/// destination and mask 0, up, not a reject route, not through `lo`.
+pub fn default_routes_v4(text: &str) -> Vec<String> {
+    text.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            // Iface Destination Gateway Flags RefCnt Use Metric Mask …
+            if f.len() < 8 || f[0] == "lo" {
+                return None;
+            }
+            let flags = u32::from_str_radix(f[3], 16).unwrap_or(0);
+            (f[1] == "00000000"
+                && f[7] == "00000000"
+                && flags & RTF_UP != 0
+                && flags & RTF_REJECT == 0)
+                .then(|| f[0].to_owned())
+        })
+        .collect()
 }
 
-/// Whether `/proc/net/ipv6_route` has a usable IPv6 default route:
-/// `::/0`, up, not a reject route, not through `lo` (the kernel always
-/// lists an unreachable `::/0` on `lo`).
+/// Whether `/proc/net/route` has a usable IPv4 default route.
+pub fn parse_route_v4(text: &str) -> bool {
+    !default_routes_v4(text).is_empty()
+}
+
+/// The interfaces of the usable IPv6 default routes in
+/// `/proc/net/ipv6_route`: `::/0`, up, not a reject route, not through
+/// `lo` (the kernel always lists an unreachable `::/0` on `lo`).
+pub fn default_routes_v6(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            // dest plen src splen next-hop metric refcnt use flags iface
+            if f.len() < 10 || f[9] == "lo" {
+                return None;
+            }
+            let flags = u32::from_str_radix(f[8], 16).unwrap_or(0);
+            (f[0].bytes().all(|b| b == b'0')
+                && f[0].len() == 32
+                && f[1] == "00"
+                && flags & RTF_UP != 0
+                && flags & RTF_REJECT == 0)
+                .then(|| f[9].to_owned())
+        })
+        .collect()
+}
+
+/// Whether `/proc/net/ipv6_route` has a usable IPv6 default route.
 pub fn parse_route_v6(text: &str) -> bool {
-    text.lines().any(|l| {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        // dest plen src splen next-hop metric refcnt use flags iface
-        if f.len() < 10 || f[9] == "lo" {
-            return false;
-        }
-        let flags = u32::from_str_radix(f[8], 16).unwrap_or(0);
-        f[0].bytes().all(|b| b == b'0')
-            && f[0].len() == 32
-            && f[1] == "00"
-            && flags & RTF_UP != 0
-            && flags & RTF_REJECT == 0
-    })
+    !default_routes_v6(text).is_empty()
 }
 
 /// Builds a [`Sample`] from the three files' text. `None` when the
@@ -182,9 +227,15 @@ pub fn parse_route_v6(text: &str) -> bool {
 /// route of that family (IPv6 can be off).
 pub fn sample_from(dev: Option<&str>, v4: Option<&str>, v6: Option<&str>) -> Option<Sample> {
     let interfaces = parse_dev(dev?);
+    let mut route_interfaces = v4.map(default_routes_v4).unwrap_or_default();
+    for i in v6.map(default_routes_v6).unwrap_or_default() {
+        if !route_interfaces.contains(&i) {
+            route_interfaces.push(i);
+        }
+    }
     Some(Sample {
         interfaces,
-        default_route: v4.is_some_and(parse_route_v4) || v6.is_some_and(parse_route_v6),
+        route_interfaces,
     })
 }
 
