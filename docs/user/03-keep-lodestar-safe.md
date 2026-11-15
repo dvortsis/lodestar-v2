@@ -336,8 +336,20 @@ To back up on Unraid:
     docker exec Lodestar /lodestar backup
     ```
 
-   With Compose, run `docker exec lodestar /lodestar backup` on the Docker host. Lodestar must be running.
-   **Result:** The command prints `Backup written to` and the folder name.
+   Lodestar must be running.
+   **Result:** After a few log lines, the command prints the folder and what it holds, for example:
+
+    ```text
+    Backup written to /data/backups/lodestar-backup-20261115-121546
+      lodestar.db    1.19 MiB
+      seal.key       32 B
+      auth.json      107 B
+    The store holds 0 torrents (schema v12).
+    The search index isn't included. After a restore, rebuild it with `lodestar reindex`.
+    The folder holds secrets (seal.key, auth.json): keep it private. Its README.txt has the restore steps.
+    ```
+
+   `/data` inside the container is your **Data** folder, `/mnt/cache/appdata/lodestar`.
 
 2. Copy that folder off the [cache pool](glossary.md#cache-pool). Replace `<backup-folder>` with the name printed and `<share>` with a private share you already have:
 
@@ -350,11 +362,10 @@ To back up on Unraid:
 To restore on Unraid:
 
 1. On the Docker tab, select the **Lodestar** icon, then **Stop**.
-2. Open the Unraid terminal. Delete the old write-ahead files and the old search index, which doesn't match the restored database and would show the wrong torrents. Check the path before you run it:
+2. Open the Unraid terminal. Delete the old write-ahead files, which belong to the old database. Check the path before you run it:
 
     ```bash
     rm -f /mnt/cache/appdata/lodestar/lodestar.db-wal /mnt/cache/appdata/lodestar/lodestar.db-shm
-    rm -rf /mnt/cache/appdata/lodestar/index
     ```
 
 3. Copy the files from the backup. Replace `<share>` and `<backup-folder>` as before. Add `config.toml` to the list only if the backup has one:
@@ -365,11 +376,93 @@ To restore on Unraid:
     ```
 
    The `-a` keeps the files' owner and permissions. If the backup came from another server, also run `chown 99:100 /mnt/cache/appdata/lodestar/lodestar.db /mnt/cache/appdata/lodestar/seal.key /mnt/cache/appdata/lodestar/auth.json`.
-4. On the Docker tab, select the **Lodestar** icon, then **Start**.
-   **Result:** Lodestar rebuilds the search index on start.
-5. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
+4. Mark the search index for rebuild. The old index doesn't match the restored database and would show the wrong torrents. In the same terminal, run:
 
-You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
+    ```bash
+    docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex
+    ```
+
+   Use the same image as your container's **Repository** field. **Result:** After a few log lines, it prints `The search index is marked for rebuild.` If it says `refused` and that Lodestar is running, stop Lodestar first.
+5. On the Docker tab, select the **Lodestar** icon, then **Start**.
+   **Result:** Lodestar rebuilds the search index from the database. Results fill in while it runs.
+6. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
+
+You can also copy the whole data folder while Lodestar is stopped. That copy includes a matching index, so step 4 doesn't apply when you restore it.
+
+### Back up and restore with Docker Compose
+<!-- index: backup Docker; named volume backup; docker cp; restore Docker -->
+
+With Compose and the recommended [named volume](glossary.md#named-volume-and-bind-mount), Docker keeps the data in a volume, not in a folder you browse. The commands below copy files in and out of it. Run them on the Docker host, in the folder that holds `docker-compose.yml`.
+
+- **The volume's name:** the commands assume that folder is named `lodestar`, so the volume is `lodestar_lodestar-data`. Run `docker volume ls` to see yours, and use its name if it differs.
+- **A bind mount** (`./data:/data`): the data is already in `./data`. Follow the Unraid steps above with that folder, your `PUID` and `PGID` in place of `99:100`, and the Compose `reindex` command below.
+
+To back up:
+
+1. Make the backup. Lodestar must be running:
+
+    ```bash
+    docker exec lodestar /lodestar backup
+    ```
+
+   **Result:** It prints `Backup written to /data/backups/lodestar-backup-<time>`, the files and the restore hint, as on Unraid.
+2. Copy the folder out of the volume, into the current folder. Replace `<backup-folder>` with the name printed, such as `lodestar-backup-20261115-121546`:
+
+    ```bash
+    docker cp lodestar:/data/backups/<backup-folder> .
+    ```
+
+   **Result:** The command ends without an error, and `ls <backup-folder>` shows `README.txt`, `auth.json`, `lodestar.db` and `seal.key`. Move that folder somewhere private: it holds the secrets in `seal.key` and `auth.json`.
+
+To restore, with the backup folder in the current folder:
+
+1. Stop Lodestar:
+
+    ```bash
+    docker compose stop lodestar
+    ```
+
+2. Delete the old write-ahead files, which belong to the old database:
+
+    ```bash
+    docker run --rm -v lodestar_lodestar-data:/data busybox:1.36 rm -f /data/lodestar.db-wal /data/lodestar.db-shm
+    ```
+
+   The image has no shell, so these steps use the small `busybox` image to reach the volume. **Result:** The command prints nothing.
+3. Copy the files from the backup into the volume, then give them to Lodestar's user. `65532` is the image's default user. If you set `PUID` and `PGID`, use your numbers:
+
+    ```bash
+    docker run --rm -v lodestar_lodestar-data:/data -v "$PWD/<backup-folder>":/backup:ro busybox:1.36 cp /backup/lodestar.db /backup/seal.key /backup/auth.json /data/
+    docker run --rm -v lodestar_lodestar-data:/data busybox:1.36 chown 65532:65532 /data/lodestar.db /data/seal.key /data/auth.json
+    ```
+
+   **Result:** Both commands print nothing. Add `/backup/config.toml` to the first command only if the backup has one.
+4. Mark the search index for rebuild:
+
+    ```bash
+    docker compose run --rm lodestar reindex
+    ```
+
+   **Result:** It prints `The search index is marked for rebuild.` If it says `refused` and that the store is open in another process, Lodestar is still running: repeat step 1.
+5. Start Lodestar:
+
+    ```bash
+    docker compose start lodestar
+    ```
+
+   **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
+
+### Rebuild the search index
+<!-- index: reindex; rebuild index; lodestar reindex -->
+
+The search index is built from the database, so it can always be rebuilt. Do it after a restore, or when search shows torrents the database doesn't have. Lodestar must be stopped: a running Lodestar refuses, with a message that says so, and changes nothing.
+
+| Where | Commands |
+|---|---|
+| Docker Compose | `docker compose stop lodestar`, then `docker compose run --rm lodestar reindex`, then `docker compose start lodestar` |
+| Unraid | Stop **Lodestar** on the Docker tab. In the terminal, run `docker run --rm -v /mnt/cache/appdata/lodestar:/data -e PUID=99 -e PGID=100 ghcr.io/dvortsis/lodestar-v2:0.5.1 reindex`, then start **Lodestar** again. |
+
+**Result:** The command prints `The search index is marked for rebuild.` At the next start, Lodestar builds a new index from the database. Results fill in while it runs.
 
 ### Keep the data folder owner-only
 <!-- index: data folder permissions; chmod; folder mode -->
