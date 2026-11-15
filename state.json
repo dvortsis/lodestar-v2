@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T10:24Z",
+  "updated_at": "2026-11-15T12:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T10:24Z",
+  "last_heartbeat": "2026-11-15T12:05Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9917,6 +9917,12 @@
       "slice": "X-import-progress-visible",
       "sha": "39cb203c",
       "at": "2026-11-15T10:24Z"
+    },
+    {
+      "pr": 927,
+      "slice": "X-first-run-search-gate",
+      "sha": "a8563c71",
+      "at": "2026-11-15T12:05Z"
     }
   ],
   "active_sessions": {
@@ -10155,7 +10161,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T10:24Z",
+    "updated": "2026-11-15T12:05Z",
     "items": [
       {
         "slot": 1,
@@ -10164,31 +10170,30 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "#915, #916 merged; now X-cli-win-data-dir (MSI data folder for the CLI + guide steps)",
+        "doing": "#926 green after one re-run; Opus review running",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
       {
         "slot": 2,
-        "slice": "X-store-migrate-race",
+        "slice": "X-flake-store-migrate-race",
         "role": "build",
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T09:03Z",
-        "doing": "#919 (73fca2f4) and #923 (639a2432) merged; now X-cluster-start-retry from fresh main",
+        "doing": "#928 MERGE review, CI running; then X-cluster-start-retry PR",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
       {
         "slot": 3,
-        "slice": "X-store-load-busy-map",
+        "slice": "D-docker-guide-1115",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T07:21Z",
-        "doing": "#922 merged (39cb203c); now X-first-run-search-gate (U1 /search setup+notice gate, A1 Notifications labels, settings save lead)",
-        "cap": "build (\u00a72.64 4+4)",
-        "status": "active"
+        "since": "2026-11-15T12:05Z",
+        "doing": "Docker guide fixes G1-G6, T1, T2 from the tester's run",
+        "cap": "build (\u00a72.64 4+4)"
       },
       {
         "slot": 4,
@@ -10197,7 +10202,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T08:40Z",
-        "doing": "#924 merged (6b9d56c3); now X-win-restart-priority-test (review follow-up: successor lowers itself test, restore prior class, decisions note)",
+        "doing": "#925 fix round after review",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       }
@@ -10290,8 +10295,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T10:24Z",
-  "updated": "2026-11-15T10:24Z",
+  "heartbeat": "2026-11-15T12:05Z",
+  "updated": "2026-11-15T12:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
