@@ -477,6 +477,7 @@ placement:
   - X-flake-dataset-macos
   - X-flake-detect-macos
   - X-flake-address-port
+  - X-flake-detect-macos-nits
   - X-operator-unattended-wake
   - X-operator-check8-compare
   - X-pia-vm-helper
