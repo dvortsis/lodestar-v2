@@ -111,6 +111,7 @@ impl Fetcher for PeerWireFetcher {
         reservation: Reservation,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         let mut opts = self.0.clone();
+        reservation.late_after(opts.timeout / 2);
         let behind = reservation.clone();
         opts.reserve = Some(Reserve(Arc::new(move |now, total| {
             let r = reservation.clone();
@@ -193,9 +194,10 @@ pub const fn largest_dict(max_held_bytes: usize) -> usize {
 }
 
 /// A large claim whose room took this long in all, its first window's and
-/// its growth's (half the default fetch timeout), leaves its peer too
-/// little time: a timeout after it, if the peer never
-/// fell behind its pace, isn't the peer's ([`LATE_WAITS_FREE`]).
+/// its growth's, leaves its peer too little time: a timeout after it, if
+/// the peer was still sending, isn't the peer's ([`LATE_WAITS_FREE`]).
+/// Half the default fetch timeout; a fetcher with another timeout sets
+/// half of its own ([`Reservation::late_after`]).
 const LATE_ROOM: Duration = Duration::from_secs(4);
 
 /// Late wait-outs a key may have uncharged, apart from
@@ -554,6 +556,8 @@ struct Claim {
     credit: bool,
     /// How long its reservations have waited for room, in ms.
     room_wait_ms: AtomicU64,
+    /// From how long a wait, in ms, its room came late ([`LATE_ROOM`]).
+    late_room_ms: AtomicU64,
     /// It grew after waiting [`LATE_ROOM`] or longer for room in all.
     long_wait: AtomicBool,
     /// Its fetch ended for falling behind the pace a large dict must keep.
@@ -591,6 +595,7 @@ impl Reservation {
             proven: AtomicBool::new(false),
             credit,
             room_wait_ms: AtomicU64::new(0),
+            late_room_ms: AtomicU64::new(LATE_ROOM.as_millis() as u64),
             long_wait: AtomicBool::new(false),
             behind: AtomicBool::new(false),
         }))
@@ -632,7 +637,7 @@ impl Reservation {
                 // its time.
                 let waited = u64::try_from(asked.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let total = claim.room_wait_ms.fetch_add(waited, Ordering::Relaxed) + waited;
-                if growing && total >= LATE_ROOM.as_millis() as u64 {
+                if growing && total >= claim.late_room_ms.load(Ordering::Relaxed) {
                     claim.long_wait.store(true, Ordering::Relaxed);
                 }
                 return;
@@ -776,12 +781,14 @@ impl Reservation {
             if !(in_turn && (alone || (under_cap && fits && beside_floor))) {
                 if !queued {
                     // A retry with credit goes ahead of growths without
-                    // it, behind any credited one already waiting.
+                    // it, behind any credited one already waiting, and
+                    // never ahead of the front, which keeps its turn.
                     let at = if claim.credit {
                         s.growth
                             .iter()
+                            .skip(1)
                             .position(|&(.., c)| !c)
-                            .unwrap_or(s.growth.len())
+                            .map_or(s.growth.len(), |i| i + 1)
                     } else {
                         s.growth.len()
                     };
@@ -947,6 +954,13 @@ impl Reservation {
 
     fn waited_out(&self) -> bool {
         self.0.waited_out.load(Ordering::Relaxed)
+    }
+
+    /// Its room comes late after waits of `wait` in all: half the fetch's
+    /// timeout ([`LATE_ROOM`] by default).
+    pub fn late_after(&self, wait: Duration) {
+        let ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+        self.0.late_room_ms.store(ms, Ordering::Relaxed);
     }
 
     /// The fetch ended for falling behind its pace: always the peer's.
@@ -5119,6 +5133,216 @@ mod budget {
             left.iter().any(|q| q.info_hash == spared),
             "spared, it waits to be tried again"
         );
+    }
+
+    /// A credited retry's growth goes behind the front, behind credited
+    /// growths already waiting, and ahead of growths without credit.
+    #[tokio::test(start_paused = true)]
+    async fn a_credited_growth_goes_ahead_of_uncredited_ones_but_not_the_front() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        // Results the consumer hasn't taken: every growth waits, and none
+        // is short by so little that the windows behind the front could
+        // let it pass.
+        let results = Reservation::for_peer(b.clone(), Some(net(100)));
+        tokio::time::timeout(within, results.reserve(4_000_000, 4_000_000))
+            .await
+            .expect("alone, it fits");
+        results.settle(results.bytes());
+        drop(results);
+        let claim = |n: u8, credit: bool| {
+            let b = b.clone();
+            async move {
+                let r = Reservation::for_retry(b.clone(), Some(net(n)), credit);
+                tokio::time::timeout(within, r.reserve(1_000, 300_000))
+                    .await
+                    .expect("the window fits");
+                r
+            }
+        };
+        let (front, plain) = (claim(1, false).await, claim(2, false).await);
+        let (first, second) = (claim(3, true).await, claim(4, true).await);
+        let mut waits = Vec::new();
+        for r in [&front, &plain, &first, &second] {
+            waits.push(growing(r, 300_000));
+            let n = waits.len();
+            queued(&b, |s| s.growth.len() == n).await;
+        }
+        let order: Vec<u64> = b.lock().growth.iter().map(|g| g.0).collect();
+        assert_eq!(
+            order,
+            [front.0.id, first.0.id, second.0.id, plain.0.id],
+            "front, then the credited in turn, then the rest"
+        );
+        // The consumer takes the results: they all grow, in that order.
+        let (held, _) = b.usage();
+        b.release_held(held);
+        for w in waits {
+            tokio::time::timeout(within, w)
+                .await
+                .expect("it grows")
+                .unwrap();
+        }
+        drop((front, plain, first, second));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A credited growth doesn't go ahead of a front passed by its own
+    /// network, which keeps its place.
+    #[tokio::test(start_paused = true)]
+    async fn a_credited_growth_does_not_displace_a_passed_front() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        let front = window(&b, 1, 64 << 10, 3_100_000).await;
+        let passer = window(&b, 1, 64 << 10, 2_000_000).await;
+        let later = Reservation::for_retry(b.clone(), Some(net(3)), true);
+        tokio::time::timeout(within, later.reserve(1_000, 20_000))
+            .await
+            .expect("the window fits");
+        let mut wait = growing(&front, 3_100_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(within, passer.reserve(2_000_000, 2_000_000))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        let mut after = growing(&later, 20_000);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "credit doesn't pass the front");
+        assert_eq!(b.lock().growth.front().map(|g| g.0), Some(front.0.id));
+        drop(passer);
+        tokio::time::timeout(within, &mut wait)
+            .await
+            .expect("the front grows first")
+            .unwrap();
+        drop(front);
+        tokio::time::timeout(within, &mut after)
+            .await
+            .expect("then the credited one")
+            .unwrap();
+        drop(later);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// The late threshold follows the fetch's timeout: at a 30 s timeout,
+    /// half of it, so a room 8 s late isn't late and one 16 s late is.
+    #[tokio::test(start_paused = true)]
+    async fn the_late_threshold_follows_the_fetch_timeout() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let within = Duration::from_secs(20);
+        for (wait, late) in [(8, false), (16, true)] {
+            let blocker = Reservation::for_peer(b.clone(), Some(net(100)));
+            blocker.reserve(700_000, 700_000).await;
+            let r = Reservation::for_peer(b.clone(), Some(net(1)));
+            r.late_after(Duration::from_secs(30) / 2);
+            let mut admitted = tokio::spawn({
+                let r = r.clone();
+                async move { r.reserve(64 << 10, 400_000).await }
+            });
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            assert!(!admitted.is_finished(), "no room beside the blocker");
+            drop(blocker);
+            tokio::time::timeout(within, &mut admitted)
+                .await
+                .expect("let in once the blocker ends")
+                .unwrap();
+            tokio::time::timeout(within, r.reserve(400_000, 400_000))
+                .await
+                .expect("it grows at once");
+            assert_eq!(r.late(), late, "after {wait} s");
+            drop(r);
+        }
+        assert_eq!(used(&b), 0);
+    }
+
+    /// Fetches whose every growth comes late and then times out.
+    struct AlwaysLate(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Fetcher for AlwaysLate {
+        fn fetch(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            Box::pin(async { Err(FailureKind::Unreachable) })
+        }
+
+        fn fetch_reserving(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+            reservation: Reservation,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            let tries = self.0.clone();
+            Box::pin(async move {
+                tries.fetch_add(1, Ordering::SeqCst);
+                reservation.late_after(Duration::ZERO);
+                reservation.reserve(64 << 10, 400_000).await;
+                reservation.reserve(400_000, 400_000).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Err(FailureKind::TimedOut)
+            })
+        }
+    }
+
+    /// A key has `LATE_WAITS_FREE` late timeouts uncharged; the next is
+    /// charged, and the key ends once its attempts are used.
+    #[tokio::test(start_paused = true)]
+    async fn the_late_allowance_is_spent_and_then_charged() {
+        let key = InfoHash([7; 20]);
+        let peer = SocketAddr::from(([198, 51, 1, 1], 6881));
+        let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (disc_tx, discoveries) = mpsc::channel(4);
+        let (out_tx, _out) = mpsc::channel(4);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: 1_000_000,
+                max_attempts: 1,
+                retry_backoff: Duration::from_secs(1),
+                ..PoolConfig::default()
+            },
+            Arc::new(AlwaysLate(tries.clone())),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        disc_tx
+            .send(Discovery {
+                source: SourceId::new(0).unwrap(),
+                found: crate::Found::key(key, 0).with_peers(vec![peer]),
+                at: 1_700_000_000,
+                reply: false,
+            })
+            .await
+            .unwrap();
+        let stats = handle.stats();
+        until("the charged timeout", async || {
+            handle.queued().await;
+            stats.failure_count(FailureKind::TimedOut) >= 1
+        })
+        .await;
+        assert_eq!(
+            stats.late_waits.load(Ordering::Relaxed),
+            u64::from(LATE_WAITS_FREE),
+            "the allowance, uncharged"
+        );
+        assert_eq!(
+            stats.failure_count(FailureKind::TimedOut),
+            1,
+            "then charged"
+        );
+        assert_eq!(
+            tries.load(Ordering::SeqCst),
+            usize::from(LATE_WAITS_FREE) + 1,
+            "no attempt after the charged one"
+        );
+        stop.send(true).unwrap();
+        task.await.unwrap();
     }
 
     /// A large claim whose room took [`LATE_ROOM`] or more in all, its

@@ -208,6 +208,10 @@ impl Wire {
                 max_metadata: lodestar_sources::pool::largest_dict(BUDGET),
                 ..FetchOptions::default()
             };
+            // As the real fetcher does: late from half its timeout.
+            if let Some(r) = &reservation {
+                r.late_after(DEADLINE / 2);
+            }
             let behind = reservation.clone();
             // Time spent waiting for room, and when the growth's came.
             let room: Arc<Mutex<(Duration, Option<tokio::time::Instant>)>> = Arc::default();
@@ -489,11 +493,11 @@ fn paused<T>(f: impl std::future::Future<Output = T>) -> T {
         .block_on(f)
 }
 
-/// Seed 51 once lost an honest key: its peer's room came so late that its
-/// fetch timed out, and the timeout was charged to the peer
+/// A key this seed once lost now arrives: its honest peer's room came so
+/// late that its fetch timed out, and the timeout was charged to the peer
 /// (X-fetch-wait-credit).
 #[test]
-fn seed_51_fetches_every_honest_key() {
+fn a_late_room_no_longer_loses_an_honest_key() {
     assert_eq!(paused(run(51)).missing, 0);
 }
 
@@ -580,6 +584,66 @@ fn a_half_pace_staller_with_a_late_room_earns_no_credit() {
         );
         assert_eq!(stats.late_waits.load(Ordering::Relaxed), 0, "no credit");
         assert_eq!(stats.failure_count(FailureKind::TimedOut), 1, "charged");
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    });
+}
+
+/// One peer's word that a dict is too large doesn't end its key (the size
+/// rule needs peers in three networks): the key is fetched from its honest
+/// peer.
+#[test]
+fn one_peer_saying_too_large_does_not_end_a_key() {
+    paused(async {
+        let wire = Arc::new(Wire {
+            peers: Mutex::new(HashMap::new()),
+            stalled: Arc::default(),
+        });
+        let (dict, key) = dict_of(300_000, 1);
+        let liar = SocketAddr::from(([198, 51, 1, 1], 6881));
+        let honest = SocketAddr::from(([198, 52, 1, 1], 6881));
+        let info = Arc::new(dict);
+        for (addr, peer) in [(liar, Peer::Oversize), (honest, Peer::Honest { each: 5 })] {
+            wire.peers
+                .lock()
+                .unwrap()
+                .insert(addr, (info.clone(), key, peer));
+        }
+        let (disc_tx, disc_rx) = mpsc::channel(4);
+        let (out_tx, mut out) = mpsc::channel(4);
+        let (stop, shutdown) = Shutdown::new();
+        let (_handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: BUDGET,
+                ..PoolConfig::default()
+            },
+            wire.clone(),
+            PoolIo {
+                discoveries: disc_rx,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        // The liar is tried first.
+        disc_tx
+            .send(Discovery {
+                source: SourceId::new(0).unwrap(),
+                found: Found::key(key, 0).with_peers(vec![liar, honest]),
+                at: 1_700_000_000,
+                reply: false,
+            })
+            .await
+            .unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(30), out.recv())
+            .await
+            .expect("fetched from the honest peer")
+            .unwrap();
+        assert_eq!(got.key, key);
+        assert_eq!(&got.fetched.info, &*info);
         stop.send(true).unwrap();
         task.await.unwrap();
     });

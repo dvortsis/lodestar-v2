@@ -455,7 +455,7 @@ where
 /// [`PACE_PARTS`] parts. At the end of each part from the second, the peer
 /// must have sent at least half of what an even pace would have brought by
 /// then, less one piece for rounding. A peer that has sent less is ended
-/// as a timeout, which gives its room back at once. No check comes in the
+/// as behind ([`Error::Behind`]), which gives its room back at once. No check comes in the
 /// first part or in the first [`PACE_FREE`], whichever is longer, for a
 /// transport or a peer that starts slowly; with less time than that left,
 /// the deadline alone ends the fetch. A wait for room is never counted:
@@ -539,13 +539,16 @@ impl Pace {
         true
     }
 
-    /// At the deadline: how it ends. A peer that sent nothing for the last
-    /// part, or the last [`PACE_FREE`] if longer, had stopped, which is its own failure ([`Error::Behind`]); one
-    /// still sending ran out of time ([`Error::Timeout`]), which may be the
-    /// wait for room's.
+    /// At the deadline: how it ends. A peer that is behind, or sent nothing
+    /// for the last half [`PACE_FREE`] (1 s, whatever the timeout), had
+    /// stopped, which is its own failure ([`Error::Behind`]); one still
+    /// sending ran out of time ([`Error::Timeout`]), which may be the wait
+    /// for room's.
     fn at_deadline(&mut self, now: Instant, got: usize) -> Error {
-        self.keeps_up(now, got);
-        if now.saturating_duration_since(self.last_in) > self.part.max(PACE_FREE / 2) {
+        if !self.keeps_up(now, got) {
+            return Error::Behind;
+        }
+        if now.saturating_duration_since(self.last_in) > PACE_FREE / 2 {
             Error::Behind
         } else {
             Error::Timeout
@@ -1517,6 +1520,28 @@ mod tests {
         assert_eq!(opts.stats.first_window_timeouts(Transport::Tcp), 1);
         assert_eq!(opts.stats.first_window_timeouts(Transport::Utp), 0);
         peer.abort();
+    }
+
+    /// At a 30 s timeout, a peer silent for over 1 s at the deadline had
+    /// stopped, as at the default timeout: the threshold doesn't grow with
+    /// the parts.
+    #[test]
+    fn at_the_deadline_silence_is_measured_in_seconds_not_parts() {
+        let t0 = Instant::now();
+        let deadline = t0 + Duration::from_secs(30);
+        // Three quarters of the rest in: past half an even pace at every
+        // check.
+        let got = FIRST_WINDOW + (MIB - FIRST_WINDOW) * 3 / 4;
+        for (last, expect_behind) in [(28_500, true), (29_500, false)] {
+            let mut p = Pace::start(t0, deadline, FIRST_WINDOW, MIB).unwrap();
+            assert!(p.keeps_up(t0 + Duration::from_millis(last), got));
+            let e = p.at_deadline(deadline, got);
+            assert_eq!(
+                matches!(e, Error::Behind),
+                expect_behind,
+                "last piece {last} ms in: {e:?}"
+            );
+        }
     }
 
     /// A first-window timeout is counted by transport; other failures
