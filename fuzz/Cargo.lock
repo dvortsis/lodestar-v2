@@ -1379,6 +1379,7 @@ dependencies = [
  "lodestar-utp",
  "rand 0.10.3",
  "semver",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",

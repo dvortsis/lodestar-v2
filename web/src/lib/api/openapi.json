@@ -12621,6 +12621,57 @@
           }
         }
       },
+      "ClusterStartFailure": {
+        "type": "object",
+        "description": "A cluster port that couldn't open, and when it's tried next. Fixed\nlabels only: never error text, an address, a path or key material.",
+        "required": [
+          "step",
+          "kind",
+          "next_retry_at"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ClusterStartKind"
+          },
+          "next_retry_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it's tried again, in unix seconds."
+          },
+          "step": {
+            "$ref": "#/components/schemas/ClusterStartStep"
+          }
+        }
+      },
+      "ClusterStartKind": {
+        "type": "string",
+        "description": "Why the cluster port failed to open.",
+        "enum": [
+          "addr_in_use",
+          "addr_not_available",
+          "permission_denied",
+          "io",
+          "store",
+          "secrets",
+          "tls",
+          "corrupt",
+          "random",
+          "pki",
+          "task_failed"
+        ]
+      },
+      "ClusterStartStep": {
+        "type": "string",
+        "description": "What the cluster port was doing when it failed to open.",
+        "enum": [
+          "bind",
+          "store",
+          "secrets",
+          "pki",
+          "pauses",
+          "server"
+        ]
+      },
       "CollectionCreate": {
         "type": "object",
         "description": "`POST /collections`.",
@@ -27153,12 +27204,24 @@
         "description": "`GET /workers`.",
         "required": [
           "allowed",
+          "start_failure",
           "workers"
         ],
         "properties": {
           "allowed": {
             "type": "boolean",
             "description": "\"Allow workers\" is on and the cluster port is serving."
+          },
+          "start_failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClusterStartFailure",
+                "description": "Why the cluster port couldn't open, while \"Allow workers\" is on and\nit's being tried again; null otherwise (X-cluster-start-retry). While\nit's set, `allowed` is false: the port isn't serving."
+              }
+            ]
           },
           "workers": {
             "type": "array",

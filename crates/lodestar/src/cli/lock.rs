@@ -37,7 +37,7 @@ impl StoreLock {
     /// open.
     pub fn acquire(db: &Path) -> Outcome<StoreLock> {
         if !db.is_file() {
-            return Err(Failure::Failed(format!("no store at {}", db.display())));
+            return Err(Failure::Failed(super::util::no_store(db)));
         }
         let conn = Connection::open_with_flags(
             db,

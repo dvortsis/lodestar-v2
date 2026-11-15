@@ -166,18 +166,22 @@ service, no firewall rules, no helper. Unpack it under your own user folder
 `Start Lodestar.cmd`, which keeps the data in the `data` folder beside it.
 
 **Commands from §10 on Windows.** Stop the service first
-(`Stop-Service Lodestar`) for any command marked "server stopped". Then, in an
-administrator PowerShell window (only Administrators can read the data
-folder), tell the command where the data is and run it. The MSI:
+(`Stop-Service Lodestar`) for any command marked "server stopped". Then run
+the command in an administrator PowerShell window (only Administrators can
+read the data folder). The MSI's `lodestar.exe` finds the service's data
+folder, `C:\ProgramData\Lodestar`, by itself, as the service does:
 
 ```powershell
-$env:LODESTAR_DATA_DIR = 'C:\ProgramData\Lodestar'
 & 'C:\Program Files\Lodestar\lodestar.exe' stats
 ```
 
-For the portable ZIP, set `LODESTAR_DATA_DIR` to its `data` folder and run the
-`lodestar.exe` beside `Start Lodestar.cmd`. Without the variable the command
-looks for a `data` folder in the folder you're in, and stops with "no store".
+Like the service, a command refuses that folder (exit status 3) if it isn't
+private, however it was named, and says how to fix it.
+
+For the portable ZIP, run the `lodestar.exe` beside `Start Lodestar.cmd` from
+that folder: it finds the `data` folder there. From anywhere else, set
+`LODESTAR_DATA_DIR` to that `data` folder first, or the command stops with
+"no store" and names the folder it looked in.
 
 Follow [Chapter 4](user/04-install-on-windows-and-linux.md) for the guided
 steps, and `packaging/windows/README.md` for every option.

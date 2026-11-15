@@ -995,7 +995,9 @@ lodestar_log::catalogue! {
         fields: { reason: Label },
     }
     /// The cluster port couldn't open: binding it, or opening the cluster
-    /// PKI, failed. Nothing listens until the next change.
+    /// PKI, failed. While workers stay allowed it's tried again, after 2 s
+    /// doubling to 5 minutes; a run of failures is logged at its first and
+    /// again only when the step or kind changes (X-cluster-start-retry).
     CLUSTER_START_FAILED {
         id: "cluster.start_failed",
         component: Workers,

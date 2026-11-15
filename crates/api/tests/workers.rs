@@ -107,6 +107,7 @@ impl WorkersApi for Fake {
         Box::pin(async move {
             Ok(WorkerList {
                 allowed: true,
+                start_failure: None,
                 workers: self.workers.lock().unwrap().values().cloned().collect(),
             })
         })
@@ -541,7 +542,10 @@ async fn ids_are_checked_and_unknown_ones_are_404() {
     let r = send(&off, req("GET", "/api/v1/workers", Some(&cookie), None)).await;
     assert_eq!(
         (r.status, r.body.clone()),
-        (200, json!({ "allowed": false, "workers": [] }))
+        (
+            200,
+            json!({ "allowed": false, "start_failure": null, "workers": [] })
+        )
     );
     let r = send(
         &off,
@@ -708,4 +712,61 @@ fn debug_never_shows_the_token_or_password() {
     ] {
         assert!(!text.contains("lsj1") && !text.contains(PASSWORD), "{text}");
     }
+}
+
+/// X-cluster-start-retry: the start failure's labels are the log line's,
+/// and `start_failure` is always in the list, null when nothing fails.
+#[test]
+fn start_failure_labels_match_the_log_and_are_null_when_fine() {
+    use lodestar_api::dto::workers::{
+        ClusterStartFailure, ClusterStartKind as K, ClusterStartStep as S,
+    };
+    let steps = [S::Bind, S::Store, S::Secrets, S::Pki, S::Pauses, S::Server];
+    for s in steps {
+        assert_eq!(
+            serde_json::to_value(s).unwrap(),
+            serde_json::json!(s.as_str())
+        );
+    }
+    let kinds = [
+        K::AddrInUse,
+        K::AddrNotAvailable,
+        K::PermissionDenied,
+        K::Io,
+        K::Store,
+        K::Secrets,
+        K::Tls,
+        K::Corrupt,
+        K::Random,
+        K::Pki,
+        K::TaskFailed,
+    ];
+    for k in kinds {
+        assert_eq!(
+            serde_json::to_value(k).unwrap(),
+            serde_json::json!(k.as_str())
+        );
+    }
+    let fine = WorkerList {
+        allowed: true,
+        start_failure: None,
+        workers: vec![],
+    };
+    assert_eq!(
+        serde_json::to_value(&fine).unwrap(),
+        serde_json::json!({"allowed": true, "start_failure": null, "workers": []})
+    );
+    let failing = WorkerList {
+        allowed: true,
+        start_failure: Some(ClusterStartFailure {
+            step: S::Bind,
+            kind: K::AddrInUse,
+            next_retry_at: 1_700_000_000,
+        }),
+        workers: vec![],
+    };
+    assert_eq!(
+        serde_json::to_value(&failing).unwrap()["start_failure"],
+        serde_json::json!({"step": "bind", "kind": "addr_in_use", "next_retry_at": 1_700_000_000})
+    );
 }

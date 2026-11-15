@@ -386,6 +386,7 @@ placement:
   - X-flake-rejudge-panic-time
   - X-fuzz-cache-1105
   - X-fuzz-peer-fetch
+  - X-fuzz-tpdb-harness
   - X-claim-trackers
   - X-claim-store
   - X-claim-store-polish
@@ -430,6 +431,7 @@ placement:
   - X-flake-portable-restart-2
   - X-fleet-polish
   - X-win-log-held-open
+  - X-cli-win-data-dir
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
@@ -489,6 +491,7 @@ placement:
   - X-store-migrate-race
   - X-flake-store-migrate-race
   - X-store-wal-nits
+  - X-cluster-start-retry
   - X-worker-oversize-handback
   - X-pia-vm-helper
   - X-fleet-sudo-narrow

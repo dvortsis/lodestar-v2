@@ -535,6 +535,7 @@ impl Workers {
         let Some(server) = self.follow() else {
             return Ok(WorkerList {
                 allowed: false,
+                start_failure: self.cluster.start_failure(),
                 workers: Vec::new(),
             });
         };
@@ -546,6 +547,7 @@ impl Workers {
             .collect();
         Ok(WorkerList {
             allowed: self.cluster.allowed(),
+            start_failure: self.cluster.start_failure(),
             workers,
         })
     }
@@ -987,6 +989,7 @@ mod tests {
             list,
             WorkerList {
                 allowed: false,
+                start_failure: None,
                 workers: vec![]
             }
         );

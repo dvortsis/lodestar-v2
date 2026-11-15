@@ -77,8 +77,10 @@ export const test = base.extend<
 			mock.on('getInsightsIndex', indexFixture());
 			mock.on('getInsightsServe', serveFixture());
 			mock.on('getInsightsEvents', { annotations: [], paused: [], truncated: false });
-			// A single-machine fixture: no fleet, so the status pill adds nothing (WK-17).
+			// A single-machine fixture: no fleet, so the status pill adds nothing (WK-17), and
+			// workers are off, so Settings → Overview has no workers row (X-cluster-start-retry).
 			mock.on('insightsFleetSummary', { fleet: null });
+			mock.on('listWorkers', { allowed: false, start_failure: null, workers: [] });
 			// The documented `/system` example has a change waiting for a restart, which the status pill
 			// shows as "Restart needed" (§10.10.6). Nothing is pending by default; the restart specs
 			// override this.

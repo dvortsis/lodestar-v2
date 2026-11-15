@@ -238,6 +238,7 @@ pub(crate) async fn list_workers(handle: Handle) -> ApiResult<Json<WorkerList>> 
     let Some(Extension(api)) = handle else {
         return Ok(Json(WorkerList {
             allowed: false,
+            start_failure: None,
             workers: Vec::new(),
         }));
     };

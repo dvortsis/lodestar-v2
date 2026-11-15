@@ -1,10 +1,11 @@
 <script lang="ts">
 	// Settings → Overview (§10.10.3): "is anything wrong, and what did I change?". Loaded on demand
-	// by the route. Reads `/system`, the network check and every section's values; the decisions
-	// are in `logic.ts`.
+	// by the route. Reads `/system`, the network check, `/workers` and every section's values; the
+	// decisions are in `logic.ts`.
 	import { resolve } from '$app/paths';
 	import { tick } from 'svelte';
 	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import type { Route } from '$lib/shell/nav';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
@@ -19,9 +20,13 @@
 	import {
 		changedFromDefault,
 		needsAttention,
+		retryIn,
+		startReason,
 		type Attention,
 		type ChangedGroup,
-		type ChangedRow
+		type ChangedRow,
+		type StartFailure,
+		type StartReason
 	} from './logic';
 
 	interface Group extends ChangedGroup {
@@ -51,9 +56,11 @@
 		// Health: best-effort, and shown as soon as it is in, whatever the settings reads do.
 		void Promise.all([
 			api.get('/system', { signal: ctl.signal }),
-			api.get('/network/check', { signal: ctl.signal }).catch(() => undefined)
+			api.get('/network/check', { signal: ctl.signal }).catch(() => undefined),
+			api.get('/workers', { signal: ctl.signal }).catch(() => undefined)
 		]).then(
-			([system, network]) => (attention = needsAttention(system, network, screenOf)),
+			([system, network, workers]) =>
+				(attention = needsAttention(system, network, screenOf, workers)),
 			(e: unknown) => {
 				if (!isAbort(e)) attentionFailed = true;
 			}
@@ -87,6 +94,28 @@
 
 	const href = (path: string) => resolve(path as Route);
 
+	// The retry time reads "in 2 minutes", as of when the rows were built.
+	const locale = $derived(currentLocale());
+	const REASONS: Record<StartReason, () => string> = {
+		port_in_use: m.settings_overview_workers_reason_port_in_use,
+		address: m.settings_overview_workers_reason_address,
+		permission: m.settings_overview_workers_reason_permission,
+		port: m.settings_overview_workers_reason_port,
+		database: m.settings_overview_workers_reason_database,
+		secrets: m.settings_overview_workers_reason_secrets,
+		certificates: m.settings_overview_workers_reason_certificates,
+		server: m.settings_overview_workers_reason_server
+	};
+	function startFailing(f: StartFailure): string {
+		const at = retryIn(f.next_retry_at, Date.now() / 1000);
+		return m.settings_overview_workers_start_failing({
+			reason: REASONS[startReason(f)](),
+			when: at
+				? new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(at.value, at.unit)
+				: m.settings_overview_workers_soon()
+		});
+	}
+
 	function sentence(a: Attention): string {
 		switch (a.kind) {
 			case 'rebuild_failed':
@@ -101,6 +130,8 @@
 				return m.settings_overview_restart({ count: formatCount(a.count ?? 0) });
 			case 'errors':
 				return m.settings_overview_errors({ count: formatCount(a.count ?? 0) });
+			case 'workers_start_failing':
+				return a.startFailure ? startFailing(a.startFailure) : '';
 			case 'rebuilding':
 				return m.settings_overview_rebuilding();
 		}
@@ -134,13 +165,15 @@
 				<li class="flex flex-wrap items-start gap-x-3 gap-y-1">
 					<Icon class="mt-0.5 size-5 shrink-0 {statusInk[a.severity]}" aria-hidden="true" />
 					<span class="min-w-0 flex-1" data-testid="attention-{a.kind}">{sentence(a)}</span>
-					<a
-						class="ls-focus text-primary underline"
-						href={a.href ? resolve(a.href as Route) : href(`/settings/${a.screen}`)}
-						>{a.href
-							? m.settings_overview_go_logs()
-							: m.settings_overview_go({ screen: titleOf(a.screen) })}</a
-					>
+					{#if a.href}
+						<a class="ls-focus text-primary underline" href={resolve(a.href as Route)}
+							>{m.settings_overview_go_logs()}</a
+						>
+					{:else if a.screen}
+						<a class="ls-focus text-primary underline" href={href(`/settings/${a.screen}`)}
+							>{m.settings_overview_go({ screen: titleOf(a.screen) })}</a
+						>
+					{/if}
 				</li>
 			{/each}
 		</ul>
