@@ -1823,10 +1823,10 @@ impl StoredKeys for Gate {
 
 /// Keys a remote worker found too large go to the built-in worker's pool
 /// as parked keys do: keeping their privacy, ended as blocked if it refuses
-/// them, and left for a re-grant (`false`) when the pool is full.
+/// them, and left for the server to end (`Full`) when the pool is full.
 #[test]
 fn keys_handed_back_go_to_the_built_in_worker() {
-    use lodestar_cluster::HandBack;
+    use lodestar_cluster::{HandBack, LocalIntake};
     use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
     let epoch = (now() as u32).wrapping_sub(10);
     let authority = Arc::new(LeaseAuthority::new(
@@ -1875,15 +1875,15 @@ fn keys_handed_back_go_to_the_built_in_worker() {
         };
         taken.insert(key, intake.take_handed(key, local, lease));
     }
-    // The pool takes two; the refused key is handled; the last finds it
-    // full and is left for a re-grant.
+    // The pool takes two; the refused key ends as blocked; the last finds
+    // it full and is left for the server to end.
     assert_eq!(
         taken,
         HashMap::from([
-            (private, true),
-            (public, true),
-            (blocked, true),
-            (extra, false)
+            (private, LocalIntake::Fetching),
+            (public, LocalIntake::Fetching),
+            (blocked, LocalIntake::Refused),
+            (extra, LocalIntake::Full)
         ])
     );
     let mut handed = HashMap::new();
@@ -1896,7 +1896,7 @@ fn keys_handed_back_go_to_the_built_in_worker() {
     assert_eq!(
         authority.get(&extra).map(|l| l.holder),
         Some(WorkerId::LOCAL),
-        "still leased to it, for the server to requeue"
+        "still leased to it, for the server to end"
     );
 }
 
@@ -1909,7 +1909,7 @@ fn keys_handed_back_go_to_the_built_in_worker() {
 /// refused (`refuses_local`), so the server never grants it.
 #[test]
 fn a_key_handed_back_carries_nothing_from_the_report() {
-    use lodestar_cluster::HandBack;
+    use lodestar_cluster::{HandBack, LocalIntake};
     use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
     let epoch = (now() as u32).wrapping_sub(10);
     let authority = Arc::new(LeaseAuthority::new(
@@ -1956,7 +1956,7 @@ fn a_key_handed_back_carries_nothing_from_the_report() {
         (src(2), 7),
         "the lease's own"
     );
-    assert!(intake.take_handed(key, local, lease));
+    assert_eq!(intake.take_handed(key, local, lease), LocalIntake::Fetching);
     let d = to_pool.try_recv().expect("in the pool");
     assert_eq!(d.found, lodestar_sources::Found::key(key, 7));
     assert_eq!(d.source, src(2));

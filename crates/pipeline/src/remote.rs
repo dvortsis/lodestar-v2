@@ -60,8 +60,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 
 use lodestar_cluster::proto::{HintItem, Outcome, Payload};
 use lodestar_cluster::{
-    ClusterServer, GrantAdmission, InboundSink, Lease, LeaseAuthority, RestoredLease, StoredKeys,
-    Token, WorkerId,
+    ClusterServer, GrantAdmission, InboundSink, Lease, LeaseAuthority, LocalIntake, RestoredLease,
+    StoredKeys, Token, WorkerId,
 };
 use lodestar_filter::{Handle, HeldSet, Trail, Verdict};
 use lodestar_metainfo::{InfoHash, Limits};
@@ -551,15 +551,16 @@ impl RemoteIntake {
     /// A key a remote worker found too large, now leased to the built-in
     /// worker under `token`: into its pool, as a parked key is
     /// ([`hand_parked`](Self::hand_parked)), refused first if the built-in
-    /// worker refuses it. `false` if the pool is gone or full: the key then
-    /// waits for a re-grant.
-    pub fn take_handed(&self, key: InfoHash, token: Token, lease: Lease) -> bool {
+    /// worker refuses it (its lease then ended as blocked). `Full` if the
+    /// pool is gone or full: the lease is left for the server to end.
+    pub fn take_handed(&self, key: InfoHash, token: Token, lease: Lease) -> LocalIntake {
         let Some(pool) = self.pool() else {
-            return false;
+            return LocalIntake::Full;
         };
         match self.start_local(&pool, key, token, lease) {
-            Started::Refused | Started::Fetching => true,
-            Started::Full => false,
+            Started::Refused => LocalIntake::Refused,
+            Started::Fetching => LocalIntake::Fetching,
+            Started::Full => LocalIntake::Full,
         }
     }
 
@@ -1169,7 +1170,7 @@ impl InboundSink for RemoteSink {
 
     /// A key a remote worker found too large: the built-in worker fetches
     /// it ([`RemoteIntake::take_handed`]).
-    fn handed_back(&self, key: InfoHash, token: Token, lease: Lease) -> bool {
+    fn handed_back(&self, key: InfoHash, token: Token, lease: Lease) -> LocalIntake {
         self.intake.take_handed(key, token, lease)
     }
 

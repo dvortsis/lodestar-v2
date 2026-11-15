@@ -1462,10 +1462,17 @@ impl InboundSink for Sink {
         }
     }
 
-    fn handed_back(&self, key: InfoHash, token: lodestar_cluster::Token, lease: Lease) -> bool {
+    fn handed_back(
+        &self,
+        key: InfoHash,
+        token: lodestar_cluster::Token,
+        lease: Lease,
+    ) -> lodestar_cluster::LocalIntake {
         self.remote
             .as_ref()
-            .is_some_and(|r| r.handed_back(key, token, lease))
+            .map_or(lodestar_cluster::LocalIntake::Full, |r| {
+                r.handed_back(key, token, lease)
+            })
     }
 
     fn refuses_local(&self, key: &InfoHash) -> bool {

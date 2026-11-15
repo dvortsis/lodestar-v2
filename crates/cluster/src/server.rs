@@ -222,10 +222,11 @@ pub trait InboundSink: Send + Sync + 'static {
     /// In memory only (§18.7).
     fn local_hints(&self, _hints: Vec<HintItem>) {}
     /// A key a remote worker found too large, now leased to the built-in
-    /// worker under `token`: start its fetch there. `false` if it can't be
-    /// taken now; the key then waits for a re-grant. Mustn't block.
-    fn handed_back(&self, _key: InfoHash, _token: Token, _lease: Lease) -> bool {
-        false
+    /// worker under `token`: start its fetch there. [`LocalIntake::Full`]
+    /// if it can't be taken now; the server then ends it as an oversize
+    /// loss. Mustn't block.
+    fn handed_back(&self, _key: InfoHash, _token: Token, _lease: Lease) -> LocalIntake {
+        LocalIntake::Full
     }
     /// The built-in worker refuses `key` before fetching (held, or blocked
     /// by the content filter). Asked before a key a remote worker found too
@@ -234,6 +235,20 @@ pub trait InboundSink: Send + Sync + 'static {
     fn refuses_local(&self, _key: &InfoHash) -> bool {
         false
     }
+}
+
+/// What [`InboundSink::handed_back`] did with a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalIntake {
+    /// In the built-in worker's fetch pool.
+    Fetching,
+    /// The built-in worker refuses it now (its hold or filter verdict
+    /// changed since the server asked): the sink ended its lease as
+    /// blocked.
+    Refused,
+    /// No room: the lease is still the built-in worker's, for the server
+    /// to end.
+    Full,
 }
 
 /// Whether grants may go out now (§19.5 backpressure): of `wanted` keys
@@ -2059,9 +2074,15 @@ impl ClusterServer {
                     FetchedReport::Stale => None,
                 },
                 // Too large for that worker: the built-in worker, which
-                // fetches larger dicts, takes it instead (once per key).
+                // fetches larger dicts, takes it instead (once per key, and
+                // within the worker's hand-back allowance).
                 // A key it refuses is never granted to it: it ends here as
                 // blocked, as the built-in worker's own intake would end it.
+                // The authority records the loss as blocked, while the sink
+                // is told the worker's own `Lost { oversize }`: the refusal
+                // is the server's, so it deliberately stays off the worker's
+                // floor budget, which counts the blocked losses a worker
+                // reports itself.
                 // The worker's claim carries no size: the built-in worker
                 // fetches under its own bound, as for any other key.
                 Outcome::Lost { reason }
@@ -2075,15 +2096,29 @@ impl ClusterServer {
                 Outcome::Lost { reason } if reason == LOSS_OVERSIZE && self.sink.is_some() => {
                     match self.leases.hand_to_local(w, &key, token, now) {
                         HandBack::Handed(local, lease) => {
-                            let taken = self
-                                .sink
-                                .as_ref()
-                                .is_some_and(|sink| sink.handed_back(key, local, lease));
-                            if !taken {
-                                self.leases.requeue(&key, local);
+                            let intake = self.sink.as_ref().map_or(LocalIntake::Full, |sink| {
+                                sink.handed_back(key, local, lease)
+                            });
+                            match intake {
+                                LocalIntake::Fetching => {
+                                    bump(&self.counters.handed_back);
+                                    continue;
+                                }
+                                // Ended by the sink, as blocked.
+                                LocalIntake::Refused => {
+                                    bump(&self.counters.outcomes);
+                                    Some(lease)
+                                }
+                                // No room: an oversize loss, as before
+                                // hand-backs. Never parked: a parked key
+                                // would count against no remote worker's
+                                // limits, and goes to a remote worker
+                                // again when it's re-granted.
+                                LocalIntake::Full => self
+                                    .leases
+                                    .report(WorkerId::LOCAL, &key, local, Some(LOSS_OVERSIZE))
+                                    .inspect(|_| bump(&self.counters.outcomes)),
                             }
-                            bump(&self.counters.handed_back);
-                            continue;
                         }
                         HandBack::Lost(lease) => {
                             bump(&self.counters.outcomes);

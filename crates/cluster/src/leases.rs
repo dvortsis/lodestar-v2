@@ -469,6 +469,18 @@ pub const LOSS_OVERSIZE: u8 = 5;
 /// handed back twice; the oldest is forgotten first.
 pub const HANDED_BACK: usize = 16_384;
 
+/// Keys one remote worker may hand to the built-in worker per
+/// [`HAND_BACK_WINDOW_SECS`]; past it, its oversize reports are losses, as
+/// before hand-backs. The built-in worker grows one large dict at a time,
+/// so it can't take many more than this from the whole fleet in an hour
+/// anyway, while a worker reporting random keys as too large could
+/// otherwise keep the built-in worker's fetch intake (shared with its own
+/// discoveries) full. The runner's call (2026-11-15).
+pub const HAND_BACK_ALLOWANCE: usize = 120;
+
+/// The window [`HAND_BACK_ALLOWANCE`] counts over.
+pub const HAND_BACK_WINDOW_SECS: i64 = 3600;
+
 /// The most keys that wait for a re-grant at once. A key handed back past
 /// it is dropped ([`LOSS_EVICTED`]).
 pub const MAX_PENDING: usize = 262_144;
@@ -603,6 +615,11 @@ struct AuthorityState {
     /// Keys a remote worker found too large and handed to the built-in
     /// worker, oldest first: each is handed back once.
     handed: (HashSet<InfoHash>, VecDeque<InfoHash>),
+    /// Each remote worker's hand-backs in the current window: when it
+    /// began, and how many.
+    hand_backs: HashMap<WorkerId, (i64, usize)>,
+    /// [`HAND_BACK_ALLOWANCE`], lifted only by tests.
+    hand_back_allowance: usize,
 }
 
 /// A remote worker's keys handed back unfetched in the window that began at
@@ -847,6 +864,8 @@ impl LeaseAuthority {
                 returns: HashMap::new(),
                 latest: 0,
                 handed: (HashSet::new(), VecDeque::new()),
+                hand_backs: HashMap::new(),
+                hand_back_allowance: HAND_BACK_ALLOWANCE,
             }),
             events,
         }
@@ -1231,7 +1250,8 @@ impl LeaseAuthority {
     /// keeping its cohort, sources and strategy: not a loss, and not a new
     /// harvest. A key handed back before (within [`HANDED_BACK`] keys) is
     /// ended as a loss instead, as [`report`](Self::report) would, so none
-    /// goes round twice.
+    /// goes round twice; so is any key from a worker that has spent its
+    /// [`HAND_BACK_ALLOWANCE`] for the window.
     pub fn hand_to_local(
         &self,
         worker: WorkerId,
@@ -1253,7 +1273,11 @@ impl LeaseAuthority {
         if !holds {
             return HandBack::Stale;
         }
-        if s.handed.0.contains(key) {
+        let allowance = s.hand_back_allowance;
+        let spent = s.hand_backs.get(&worker).is_some_and(|&(since, n)| {
+            now.saturating_sub(since) < HAND_BACK_WINDOW_SECS && n >= allowance
+        });
+        if spent || s.handed.0.contains(key) {
             drop(s);
             return match self.report(worker, key, token, Some(LOSS_OVERSIZE)) {
                 Some(lease) => HandBack::Lost(lease),
@@ -1264,6 +1288,11 @@ impl LeaseAuthority {
             return HandBack::Stale;
         };
         let local = s.table.regrant(WorkerId::LOCAL, *key, lease, now);
+        let window = s.hand_backs.entry(worker).or_insert((now, 0));
+        if now.saturating_sub(window.0) >= HAND_BACK_WINDOW_SECS {
+            *window = (now, 0);
+        }
+        window.1 += 1;
         let (set, order) = &mut s.handed;
         set.insert(*key);
         order.push_back(*key);
@@ -1275,6 +1304,12 @@ impl LeaseAuthority {
         let granted = s.table.get(key).copied().unwrap_or(lease);
         self.gauge(&s);
         HandBack::Handed(local, granted)
+    }
+
+    /// Lifts [`HAND_BACK_ALLOWANCE`] to `n` (tests only).
+    #[cfg(test)]
+    pub(crate) fn set_hand_back_allowance(&self, n: usize) {
+        self.lock().hand_back_allowance = n;
     }
 
     /// Ends the leases of workers silent past the TTL, and leases marked
@@ -1947,6 +1982,7 @@ mod tests {
     #[test]
     fn the_keys_handed_back_are_bounded() {
         let (a, _) = counted();
+        a.set_hand_back_allowance(usize::MAX);
         let key = |n: u32| {
             let mut k = [0u8; 20];
             k[..4].copy_from_slice(&n.to_be_bytes());
@@ -1966,6 +2002,46 @@ mod tests {
         let s = a.lock();
         assert_eq!(s.handed.0.len(), HANDED_BACK);
         assert!(!s.handed.0.contains(&key(0)), "the oldest went first");
+    }
+
+    /// A remote worker hands back at most [`HAND_BACK_ALLOWANCE`] keys per
+    /// [`HAND_BACK_WINDOW_SECS`]; past it its reports are losses, and the
+    /// allowance comes back with the next window. Another worker's is its
+    /// own.
+    #[test]
+    fn hand_backs_keep_to_a_per_worker_allowance() {
+        let (a, ev) = counted();
+        let key = |w: u8, n: u32| {
+            let mut k = [w; 20];
+            k[..4].copy_from_slice(&n.to_be_bytes());
+            InfoHash(k)
+        };
+        let hand = |w: WorkerId, k: InfoHash, at: i64| {
+            let mut c = claim(1, 0);
+            c.key = k;
+            let Claimed::Granted(t) = a.claim(w, c, at) else {
+                panic!("granted")
+            };
+            a.hand_to_local(w, &k, t, at)
+        };
+        for n in 0..HAND_BACK_ALLOWANCE as u32 {
+            assert!(matches!(hand(A, key(1, n), 10), HandBack::Handed(..)));
+        }
+        assert_eq!(get(&ev.lost), 0);
+        let over = key(1, u32::MAX);
+        assert!(matches!(hand(A, over, 10), HandBack::Lost(_)));
+        assert_eq!(get(&ev.lost), 1);
+        assert!(!a.in_flight(&over), "lost, not handed or parked");
+        // Another worker's allowance is its own.
+        assert!(matches!(hand(B, key(2, 0), 10), HandBack::Handed(..)));
+        // Still spent just before the window ends, back once it has.
+        let last = 10 + HAND_BACK_WINDOW_SECS - 1;
+        assert!(matches!(hand(A, key(1, 1 << 20), last), HandBack::Lost(_)));
+        let next = 10 + HAND_BACK_WINDOW_SECS;
+        for n in 0..HAND_BACK_ALLOWANCE as u32 {
+            assert!(matches!(hand(A, key(3, n), next), HandBack::Handed(..)));
+        }
+        assert!(matches!(hand(A, key(3, u32::MAX), next), HandBack::Lost(_)));
     }
 
     #[test]

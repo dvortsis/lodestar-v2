@@ -1424,19 +1424,27 @@ mod queues {
         server.shutdown();
     }
 
-    /// Takes keys handed back while `take` is set, and records them. Keys
-    /// in `refuse` are ones the built-in worker refuses.
+    /// Answers every key handed back with `intake`, and records them. Keys
+    /// in `refuse` are ones the built-in worker refuses. With
+    /// `LocalIntake::Refused` it ends the lease as blocked, as the intake
+    /// does for a refusal that changed in between.
     struct HandSink {
-        take: bool,
+        intake: crate::LocalIntake,
         refuse: Vec<[u8; 20]>,
+        authority: Arc<LeaseAuthority>,
         got: std::sync::Mutex<Vec<([u8; 20], crate::Token)>>,
     }
 
     impl HandSink {
-        fn new(take: bool, refuse: Vec<[u8; 20]>) -> Arc<HandSink> {
+        fn new(
+            authority: &Arc<LeaseAuthority>,
+            intake: crate::LocalIntake,
+            refuse: Vec<[u8; 20]>,
+        ) -> Arc<HandSink> {
             Arc::new(HandSink {
-                take,
+                intake,
                 refuse,
+                authority: authority.clone(),
                 got: std::sync::Mutex::new(Vec::new()),
             })
         }
@@ -1448,9 +1456,16 @@ mod queues {
             key: lodestar_metainfo::InfoHash,
             token: crate::Token,
             _lease: crate::Lease,
-        ) -> bool {
+        ) -> crate::LocalIntake {
             self.got.lock().unwrap().push((key.0, token));
-            self.take
+            if self.intake == crate::LocalIntake::Refused {
+                assert!(
+                    self.authority
+                        .lost(&key, token, crate::leases::LOSS_BLOCKED)
+                        .is_some()
+                );
+            }
+            self.intake
         }
 
         fn refuses_local(&self, key: &lodestar_metainfo::InfoHash) -> bool {
@@ -1480,10 +1495,22 @@ mod queues {
         ClusterServer::with_hooks(pki, clock, config, hooks).unwrap()
     }
 
+    /// Key `n`: its first four bytes, the rest zero.
+    fn nth_key(n: u32) -> [u8; 20] {
+        let mut k = [0xEE; 20];
+        k[..4].copy_from_slice(&n.to_be_bytes());
+        k
+    }
+
     /// `key`, claimed by `worker` at `at`: its token.
-    fn claim_as(authority: &LeaseAuthority, worker: WorkerId, key: u8, at: i64) -> crate::Token {
+    fn claim_key(
+        authority: &LeaseAuthority,
+        worker: WorkerId,
+        key: [u8; 20],
+        at: i64,
+    ) -> crate::Token {
         let claim = crate::Claim {
-            key: lodestar_metainfo::InfoHash([key; 20]),
+            key: lodestar_metainfo::InfoHash(key),
             source: lodestar_store::SourceId::new(1).unwrap(),
             strategy: 0,
             at,
@@ -1494,12 +1521,17 @@ mod queues {
         }
     }
 
+    /// `[key; 20]`, claimed by `worker` at `at`: its token.
+    fn claim_as(authority: &LeaseAuthority, worker: WorkerId, key: u8, at: i64) -> crate::Token {
+        claim_key(authority, worker, [key; 20], at)
+    }
+
     /// `worker`'s report that `key`, under `token`, is too large for it.
-    fn oversize(server: &ClusterServer, worker: WorkerId, key: u8, token: crate::Token) {
+    fn oversize_key(server: &ClusterServer, worker: WorkerId, key: [u8; 20], token: crate::Token) {
         server.outcome_as(
             worker,
             &[OutcomeItem {
-                key: [key; 20],
+                key,
                 token: token.0,
                 outcome: Outcome::Lost {
                     reason: crate::leases::LOSS_OVERSIZE,
@@ -1508,40 +1540,65 @@ mod queues {
         );
     }
 
+    fn oversize(server: &ClusterServer, worker: WorkerId, key: u8, token: crate::Token) {
+        oversize_key(server, worker, [key; 20], token);
+    }
+
     /// A remote worker's report that a key is too large for it hands the
     /// key to the built-in worker through the sink, not as a loss. If the
-    /// sink can't take it now, the key waits for a re-grant (by the main
-    /// node: the lease is the built-in worker's) instead.
+    /// sink has no room for it now, it's an oversize loss, as before
+    /// hand-backs: not parked, and not counted as handed back.
     #[tokio::test]
     async fn an_oversize_report_hands_the_key_to_the_built_in_worker() {
-        for take in [true, false] {
+        use crate::LocalIntake::{Fetching, Full};
+        for intake in [Fetching, Full] {
             let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
-            let sink = HandSink::new(take, Vec::new());
+            let sink = HandSink::new(&authority, intake, Vec::new());
             let server = hand_server(&authority, &sink);
             let remote = WorkerId(2);
             let token = claim_as(&authority, remote, 1, super::T0);
             oversize(&server, remote, 1, token);
             let snap = server.snapshot();
-            assert_eq!((snap.handed_back, snap.outcomes), (1, 0), "take {take}");
             let got = sink.got.lock().unwrap().clone();
             assert_eq!(got.len(), 1);
             let key = lodestar_metainfo::InfoHash([1; 20]);
-            if take {
+            if intake == Fetching {
+                assert_eq!((snap.handed_back, snap.outcomes), (1, 0));
                 let lease = authority.current(&key, got[0].1).expect("leased to it");
                 assert_eq!(lease.holder, WorkerId::LOCAL);
             } else {
-                assert_eq!(authority.pending(), 1, "it waits for a re-grant");
+                assert_eq!((snap.handed_back, snap.outcomes), (0, 1));
+                assert!(!authority.in_flight(&key), "lost, not parked");
+                assert_eq!(authority.pending(), 0);
             }
             // The remote worker's token is spent: a repeat is stale.
             oversize(&server, remote, 1, token);
             let snap = server.snapshot();
-            assert_eq!(
-                (snap.handed_back, snap.stale_reports),
-                (1, 1),
-                "take {take}"
-            );
+            assert_eq!(snap.stale_reports, 1, "{intake:?}");
             server.shutdown();
         }
+    }
+
+    /// Hand-backs the sink has no room for never park keys: one worker
+    /// claiming and reporting keys as too large, past
+    /// `MAX_PENDING_PER_WORKER` of them (its hand-back allowance lifted),
+    /// leaves nothing waiting in the shared queue, and every one is a loss.
+    #[tokio::test]
+    async fn hand_backs_with_no_room_never_fill_the_shared_queue() {
+        let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+        authority.set_hand_back_allowance(usize::MAX);
+        let sink = HandSink::new(&authority, crate::LocalIntake::Full, Vec::new());
+        let server = hand_server(&authority, &sink);
+        let n = crate::MAX_PENDING_PER_WORKER as u32 + 64;
+        for i in 0..n {
+            let token = claim_key(&authority, WorkerId(2), nth_key(i), super::T0);
+            oversize_key(&server, WorkerId(2), nth_key(i), token);
+            assert!(authority.pending() <= crate::MAX_PENDING_PER_WORKER);
+        }
+        assert_eq!(authority.pending(), 0);
+        let snap = server.snapshot();
+        assert_eq!((snap.handed_back, snap.outcomes), (0, u64::from(n)));
+        server.shutdown();
     }
 
     /// A key handed back once, then claimed and reported too large again
@@ -1549,7 +1606,7 @@ mod queues {
     #[tokio::test]
     async fn a_second_hand_back_of_a_key_is_a_loss() {
         let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
-        let sink = HandSink::new(true, Vec::new());
+        let sink = HandSink::new(&authority, crate::LocalIntake::Fetching, Vec::new());
         let server = hand_server(&authority, &sink);
         let key = lodestar_metainfo::InfoHash([1; 20]);
         let first = claim_as(&authority, WorkerId(2), 1, super::T0);
@@ -1577,11 +1634,13 @@ mod queues {
     /// (held, or blocked by the filter). That key is checked before any
     /// grant: it ends as blocked (remembered as such, as any blocked loss;
     /// `LeaseAuthority::report`), and is never granted to the built-in
-    /// worker or handed to its pool.
+    /// worker or handed to its pool. A refusal that changed in between
+    /// (the sink answering `Refused`) ends the same way. Neither counts as
+    /// handed back.
     #[tokio::test]
     async fn an_oversize_claim_for_a_refused_key_never_reaches_the_built_in_worker() {
         let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
-        let sink = HandSink::new(true, vec![[9; 20]]);
+        let sink = HandSink::new(&authority, crate::LocalIntake::Fetching, vec![[9; 20]]);
         let server = hand_server(&authority, &sink);
         let key = lodestar_metainfo::InfoHash([9; 20]);
         let token = claim_as(&authority, WorkerId(2), 9, super::T0);
@@ -1593,6 +1652,21 @@ mod queues {
             !authority.in_flight(&key),
             "never granted to the built-in worker"
         );
+        assert_eq!(authority.pending(), 0);
+        server.shutdown();
+
+        // Refused only once handed over: the race window.
+        let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+        let sink = HandSink::new(&authority, crate::LocalIntake::Refused, Vec::new());
+        let server = hand_server(&authority, &sink);
+        let token = claim_as(&authority, WorkerId(2), 9, super::T0);
+        oversize(&server, WorkerId(2), 9, token);
+        let snap = server.snapshot();
+        assert_eq!(
+            (snap.handed_back, snap.outcomes, snap.stale_reports),
+            (0, 1, 0)
+        );
+        assert!(!authority.in_flight(&key), "ended as blocked");
         assert_eq!(authority.pending(), 0);
         server.shutdown();
     }
