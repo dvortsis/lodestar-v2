@@ -256,6 +256,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "openlibrary"
+path = "fuzz_targets/openlibrary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
 test = false
