@@ -17,25 +17,26 @@
   - Between reads, the store keeps room for 1,024 entries (240 B each, about 240 KB). Before, it kept up to 1,024 plans with their buffers.
   - `kept` holds up to 2,048 plans of 88 B, plus their buffers as they're used: about 0.5 MB per tokenizer when full, against about 0.13 MB before. There's one tokenizer per thread that judges.
   - Within a read, the store holds at most about `BUDGET / PLAN` words, as before, since each was charged as new (checked in debug builds).
+  - **The earlier reading's tokenizer (`read_split`):** it builds a new tokenizer for each read, so `kept` is allocated and freed per read: 2,048 × 88 B, about 180 KB, against 45 KB before. That only happens to a read that trades at all, which means a torrent with a mark character and more than 512 distinct words. Reusing the thread's splitting tokenizer there would avoid it; that's a follow-up, not part of this change.
 
 ## Numbers
 The five shapes are the ones that ran slow on #907's EPYC 9V45 job: long CJK folder, alternating folders, typical Latin, spelled out, and long folder with a mark. Times are the core's raw best of five passes, in milliseconds, at each build's largest torrent the budget allows. #895 lowered that size: long CJK folder fell from 17,152 files to 13,696, alternating folders from 25,600 to 18,432, and typical Latin from 12,672 to 8,576.
 
 ### CI before this change (`filter budget` jobs)
-| Runner, date (UTC) | Code | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
+| Runner, date | Code | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
 |---|---|---|---|---|---|---|
-| EPYC 7763, 2026-11-14 09:11–20:42, 11 jobs | before #895 | 5.37–6.16 | 5.02–5.15 | 6.26–6.55 | 5.31–5.43 | 1.98–2.53 |
-| EPYC 7763, 2026-11-14 18:05 to 2026-11-15 02:23, 5 jobs | #895 | 10.17–14.30 | 10.35–14.53 | 8.11–10.31 | 5.64–10.77 | 2.67–4.02 |
-| EPYC 9V45, 2026-11-14 10:54, 14:34, 17:57 | before #895 | 3.50–4.08 | 2.53–2.68 | 2.98–3.25 | 2.77–2.97 | 1.05–1.27 |
-| EPYC 9V45, 2026-11-14 23:24 | #895 | 6.02 | 5.82 | 4.15 | 5.24 | 1.28 |
-| EPYC 9V45, 2026-11-15 03:22 (#907, failed) | #895 | 15.40 | 16.33 | 11.30 | 7.22 | 3.35 |
+| EPYC 7763, 2026-11-14 09:11Z–20:42Z, 11 jobs | before #895 | 5.37–6.16 | 5.02–5.15 | 6.26–6.55 | 5.31–5.43 | 1.98–2.53 |
+| EPYC 7763, 2026-11-14 18:05Z to 2026-11-15 02:23Z, 5 jobs | #895 | 10.17–14.30 | 10.35–14.53 | 8.11–10.31 | 5.64–10.77 | 2.67–4.02 |
+| EPYC 9V45, 2026-11-14 10:54Z, 14:34Z, 17:57Z | before #895 | 3.50–4.08 | 2.53–2.68 | 2.98–3.25 | 2.77–2.97 | 1.05–1.27 |
+| EPYC 9V45, 2026-11-14 23:24Z | #895 | 6.02 | 5.82 | 4.15 | 5.24 | 1.28 |
+| EPYC 9V45, 2026-11-15 03:22Z (#907, failed) | #895 | 15.40 | 16.33 | 11.30 | 7.22 | 3.35 |
 
 On #907's 9V45 job, calibration read 0.62–0.70× the reference's time, so its raw times were scaled up: long CJK folder read 24.42 ms, alternating folders 25.90 ms and typical Latin 17.92 ms, all over the 15 ms bar.
 
 ### CI after this change
-| Runner, date (UTC) | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
+| Runner, date | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
 |---|---|---|---|---|---|
-| EPYC 9V45, 2026-11-15 04:34 (#910) | 4.04 | 3.00 | 2.79 | 3.20 | 1.05 |
+| EPYC 9V45, 2026-11-15 04:34Z (#910) | 4.04 | 3.00 | 2.79 | 3.20 | 1.05 |
 
 On that job the worst case on the reference scale was 8.86 ms (ASCII words read anew), against 25.90 ms on #907's 9V45 job, and the 50 µs gate read the mixed set at 43.0 µs.
 
@@ -71,6 +72,7 @@ The typical set is 0.2% higher, from checking two places on its 6,048 trades. Th
   - **metered:** its words trade places through `kept` and the store;
   - **unmetered:** it never trades.
   - **The check:** the tokens must match. The texts use vocabularies of a few hundred to thousands of words, words with more tokens than an entry holds, and 3,000 distinct numbers. A store that changed a plan on the way in or out fails it; with a token dropped on the way out, it and the three tests around it fail.
+  - **Charges pinned:** each case's work and cold work are folded into one number. It's the same on `main` before this change, so a word lost from a table and planned again fails it even where the tokens still match. A mutation that drops a word on its way to the store fails it.
 - `a_word_spill_chain_keeps_each_word` forces three words onto one hash. Taking back the chain's first, middle or last word returns it whole and leaves the other two found, and its entry is reused.
 - `a_word_spill_keeps_long_plans_and_clears`:
   - plans with more tokens than an entry holds come back whole;

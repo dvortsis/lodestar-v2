@@ -1675,7 +1675,8 @@ mod tests {
     /// unmetered one does, which never trades: no plan is changed on the
     /// way in or out. The vocabularies run from a few hundred words to
     /// thousands, past both tables, and some words have more tokens than
-    /// a [`WordSpill`] entry holds in place.
+    /// a [`WordSpill`] entry holds in place. What each read is charged is
+    /// pinned too.
     #[test]
     fn a_metered_read_reads_what_an_unmetered_one_does() {
         let unmetered = |tok: &mut Tokenizer, name: &str, paths: &[Vec<String>]| {
@@ -1692,6 +1693,7 @@ mod tests {
             out
         };
         let mut checked = 0;
+        let mut charged = 0u64;
         let mut tok = Tokenizer::default();
         for case in 0..48u64 {
             let (name, mut paths) = colliding(case * 7 + 1);
@@ -1703,15 +1705,22 @@ mod tests {
                     format!("{}", i * 7 + case),
                 ]
             }));
-            let (work, _, metered_out) = metered(&mut tok, &name, &paths);
+            let (work, cold, metered_out) = metered(&mut tok, &name, &paths);
             if work > crate::core::BUDGET {
                 continue;
             }
             checked += 1;
+            charged = charged.wrapping_mul(1_000_003).wrapping_add(work);
+            charged = charged.wrapping_mul(1_000_003).wrapping_add(cold);
             let plain = unmetered(&mut Tokenizer::default(), &name, &paths);
             assert_eq!(metered_out, plain, "case {case}");
         }
         assert!(checked >= 24, "only {checked} cases fit the budget");
+        // Every case's work and cold work, folded: the same on `main`
+        // before the flat store (#910), so no word is lost from a table
+        // and planned, or charged, again.
+        assert_eq!(checked, 48);
+        assert_eq!(charged, 17_323_027_761_506_347_612);
     }
 
     fn plan_of(word: &str) -> Plan {
