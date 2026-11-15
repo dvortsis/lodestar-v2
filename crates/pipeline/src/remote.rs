@@ -580,7 +580,12 @@ impl RemoteIntake {
         lease: Lease,
     ) -> Started {
         if self.refuses_local(&key) {
-            self.authority.lost(&key, token, Loss::Blocked as u8);
+            // As the server's own check before a hand-back does (a blocked
+            // report): the loss is remembered with the recent commits under
+            // the lock that ends the lease, so a remote claim whose store
+            // check ran before the refusal isn't granted the key.
+            self.authority
+                .report(WorkerId::LOCAL, &key, token, Some(Loss::Blocked as u8));
             return Started::Refused;
         }
         let mut found = Found::key(key, lease.strategy);
