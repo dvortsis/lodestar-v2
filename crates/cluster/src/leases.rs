@@ -1274,6 +1274,20 @@ impl LeaseAuthority {
         per_target: usize,
         now: i64,
     ) -> Vec<(WorkerId, Regranted)> {
+        self.regrant_pending_except(targets, per_target, now, &|_, _| false)
+    }
+
+    /// [`regrant_pending`](Self::regrant_pending), but a key never goes to
+    /// a target `skip` names for it: it waits for another, still counted
+    /// against its last holder. `skip` runs under the authority's lock, so
+    /// it must be quick and take none of this authority's locks.
+    pub fn regrant_pending_except(
+        &self,
+        targets: &[WorkerId],
+        per_target: usize,
+        now: i64,
+        skip: &dyn Fn(WorkerId, &InfoHash) -> bool,
+    ) -> Vec<(WorkerId, Regranted)> {
         let mut s = self.lock_at(now);
         if s.pending.is_empty() || targets.is_empty() || per_target == 0 {
             return Vec::new();
@@ -1321,7 +1335,9 @@ impl LeaseAuthority {
             let Some(target) = load
                 .iter_mut()
                 .filter(|t| {
-                    t.got.len() < per_target && (t.room > 0 || (t.worker == last && !t.resting))
+                    t.got.len() < per_target
+                        && (t.room > 0 || (t.worker == last && !t.resting))
+                        && !skip(t.worker, &key)
                 })
                 .min_by_key(|t| (t.held, t.worker))
             else {
@@ -1796,6 +1812,31 @@ mod tests {
         assert_eq!(a.pending(), 1);
         assert_eq!(get(&ev.harvested), 5);
         assert_eq!(get(&ev.outstanding), 5);
+    }
+
+    #[test]
+    fn a_regrant_never_goes_to_a_skipped_target() {
+        let (a, _) = counted();
+        a.claim(A, claim(1, 0), 0);
+        a.claim(A, claim(2, 0), 0);
+        a.claim(B, claim(9, 0), 0);
+        a.evict(A);
+        let first = InfoHash([1; 20]);
+        let skip = |w: WorkerId, k: &InfoHash| w == B && *k == first;
+        let out = a.regrant_pending_except(&[B], 3, 1, &skip);
+        let keys: Vec<InfoHash> = out
+            .iter()
+            .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
+            .collect();
+        assert_eq!(keys, vec![InfoHash([2; 20])]);
+        // It waits, still counted against the worker that held it last.
+        assert_eq!(a.pending(), 1);
+        assert_eq!(a.lock().parked_by(A), 1);
+        assert_eq!(a.lock().parked_by(B), 0);
+        // Not skipped, it goes.
+        let out = a.regrant_pending(&[B], 3, 2);
+        assert_eq!(out[0].1[0].0, first);
+        assert_eq!(a.pending(), 0);
     }
 
     #[test]

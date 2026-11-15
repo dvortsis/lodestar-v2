@@ -47,6 +47,8 @@ pub struct FetchStats {
     attempts: [AtomicU64; 2],
     successes: [AtomicU64; 2],
     connect_timeouts: [AtomicU64; 2],
+    /// Large dicts whose first window didn't arrive in time.
+    first_window_timeouts: [AtomicU64; 2],
     /// The same attempts and successes by address family (CR-4), indexed
     /// by [`crate::route::family_index`].
     family_attempts: [AtomicU64; 2],
@@ -91,6 +93,16 @@ impl FetchStats {
         self.connect_timeouts[t.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn first_window_timed_out(&self, t: Transport) {
+        self.first_window_timeouts[t.index()].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Large dicts whose first window didn't arrive in time
+    /// ([`crate::FIRST_WINDOW_DEADLINE`]).
+    pub fn first_window_timeouts(&self, t: Transport) -> u64 {
+        self.first_window_timeouts[t.index()].load(Ordering::Relaxed)
+    }
+
     pub fn attempts(&self, t: Transport) -> u64 {
         self.attempts[t.index()].load(Ordering::Relaxed)
     }
@@ -133,6 +145,11 @@ impl FetchStats {
             "fetch_connect_timeouts_total",
             "Peer connections that didn't open in time, by transport.",
             &|t| self.connect_timeouts(t),
+        );
+        family(
+            "fetch_first_window_timeouts_total",
+            "Large info dictionaries whose first window didn't arrive in time, by transport.",
+            &|t| self.first_window_timeouts(t),
         );
         let mut by_family = |name: &str, kind: &str, help: &str, value: &dyn Fn(usize) -> u64| {
             let _ = writeln!(out, "# HELP lodestar_{name} {help}");

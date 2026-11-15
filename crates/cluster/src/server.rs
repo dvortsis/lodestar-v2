@@ -168,6 +168,13 @@ pub trait StoredKeys: Send + Sync + 'static {
             .map(|s| if s { KeyCheck::Stored } else { KeyCheck::Free })
             .collect()
     }
+    /// Whether `worker` must not be given `key`: its claim of it is denied
+    /// as stored, and a re-grant of it goes to another target. By default
+    /// never. Called under the lease authority's lock, so it must be a
+    /// quick in-memory answer that takes none of the server's locks.
+    fn excludes(&self, _worker: WorkerId, _key: &InfoHash) -> bool {
+        false
+    }
 }
 
 /// One key's answer before a grant or a re-grant
@@ -409,6 +416,7 @@ struct Counters {
     busy_check_failed: AtomicU64,
     busy_unknown: AtomicU64,
     busy_capped: AtomicU64,
+    denied_excluded: AtomicU64,
     reconcile_returned: AtomicU64,
     reconcile_unknown: AtomicU64,
     reconcile_refused: AtomicU64,
@@ -488,6 +496,10 @@ pub struct FleetSnapshot {
     /// Claimed keys denied as busy because the worker holds its lease cap
     /// (CLUSTER-02), per key.
     pub busy_capped: u64,
+    /// Claimed keys denied as stored only because the store check
+    /// excludes them for the claiming worker
+    /// ([`StoredKeys::excludes`]), per key.
+    pub denied_excluded: u64,
     /// Leases a worker's reconcile list left out, given back for re-grant
     /// (WK-11b).
     pub reconcile_returned: u64,
@@ -980,6 +992,7 @@ impl ClusterServer {
             busy_check_failed: get(&c.busy_check_failed),
             busy_unknown: get(&c.busy_unknown),
             busy_capped: get(&c.busy_capped),
+            denied_excluded: get(&c.denied_excluded),
             reconcile_returned: get(&c.reconcile_returned),
             reconcile_unknown: get(&c.reconcile_unknown),
             reconcile_refused: get(&c.reconcile_refused),
@@ -1543,8 +1556,36 @@ impl ClusterServer {
                         let check = check.clone();
                         let keys: Vec<InfoHash> =
                             batch.items.iter().map(|i| InfoHash(i.key)).collect();
-                        match tokio::task::spawn_blocking(move || check.key_checks(&keys)).await {
-                            Ok(s) if s.len() == batch.items.len() => Some(s),
+                        let w = peer.worker;
+                        let checked = tokio::task::spawn_blocking(move || {
+                            let checks = check.key_checks(&keys);
+                            // A key not for this worker is denied as stored;
+                            // counted where the store alone would have let
+                            // it through.
+                            let mut excluded = 0u64;
+                            let checks = checks
+                                .into_iter()
+                                .zip(&keys)
+                                .map(|(c, k)| {
+                                    if check.excludes(w, k) {
+                                        if matches!(c, KeyCheck::Free | KeyCheck::Unknown) {
+                                            excluded += 1;
+                                        }
+                                        KeyCheck::Stored
+                                    } else {
+                                        c
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            (checks, excluded)
+                        });
+                        match checked.await {
+                            Ok((s, excluded)) if s.len() == batch.items.len() => {
+                                self.counters
+                                    .denied_excluded
+                                    .fetch_add(excluded, Ordering::Relaxed);
+                                Some(s)
+                            }
                             // Fails closed: a check that died or came back
                             // short grants nothing (#607's review).
                             _ => None,
@@ -2157,10 +2198,15 @@ impl ClusterServer {
                 return;
             }
             // Leased to their targets now, so no other claim or re-grant
-            // can take them while the check runs; nothing is sent yet.
-            let batches =
-                self.leases
-                    .regrant_pending(&targets, MAX_GRANT_BATCH, self.clock.now_secs());
+            // can take them while the check runs; nothing is sent yet. A
+            // key goes to no target the check excludes it for.
+            let skip = |w: WorkerId, k: &InfoHash| check.excludes(w, k);
+            let batches = self.leases.regrant_pending_except(
+                &targets,
+                MAX_GRANT_BATCH,
+                self.clock.now_secs(),
+                &skip,
+            );
             // Marked for the target's session already, so its reconcile
             // meanwhile leaves them (WK-11b).
             for (w, keys) in &batches {
@@ -2185,10 +2231,13 @@ impl ClusterServer {
             .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
             .collect();
         let n = keys.len();
-        let answer = tokio::task::spawn_blocking(move || check.key_checks(&keys))
-            .await
-            .ok()
-            .filter(|a| a.len() == n);
+        let answer = {
+            let check = check.clone();
+            tokio::task::spawn_blocking(move || check.key_checks(&keys))
+        }
+        .await
+        .ok()
+        .filter(|a| a.len() == n);
         let batches = reserved.disarm();
         let mut fleet = lock(&self.fleet);
         // A check that died or came back short counts here; a key's own
@@ -2198,6 +2247,7 @@ impl ClusterServer {
             vec![KeyCheck::Unknown; n]
         });
         let mut answer = answer.into_iter();
+        let stored = &check;
         for (w, ks) in batches {
             let mut send = Vec::with_capacity(ks.len());
             for (key, token) in ks {
@@ -2212,6 +2262,13 @@ impl ClusterServer {
                 if !current {
                     continue;
                 }
+                // Excluded for `w` since it was reserved (the store check
+                // changed meanwhile): it waits again.
+                let check = if check == KeyCheck::Free && stored.excludes(w, &key) {
+                    KeyCheck::Unknown
+                } else {
+                    check
+                };
                 // Each ends only under `w`'s current token.
                 match check {
                     KeyCheck::Free => send.push((key, token)),

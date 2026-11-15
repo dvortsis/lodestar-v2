@@ -730,14 +730,49 @@ impl Store {
     /// Deletes workers' floor reports written before `before` (Unix
     /// seconds); the caller sets how long a report holds its key. Only
     /// `worker-floor:` rows go; a local floor row, a list's or a user's is
-    /// never touched. Returns the hashes let go, for the caller to
-    /// reconcile its in-memory held set.
-    pub fn expire_worker_floor(&mut self, before: i64) -> Result<Vec<[u8; 20]>> {
+    /// never touched. Returns each hash let go with the worker whose row
+    /// it was (`None` for a rule whose id doesn't parse), for the caller
+    /// to reconcile its in-memory state.
+    pub fn expire_worker_floor(&mut self, before: i64) -> Result<Vec<([u8; 20], Option<u32>)>> {
+        self.expire_worker_floor_with(before, |_| {})
+    }
+
+    /// [`expire_worker_floor`](Self::expire_worker_floor), with
+    /// `before_commit` given the rows deleted inside the write transaction,
+    /// before it commits: until then every other connection still reads
+    /// those keys as held. If the commit fails nothing is deleted, though
+    /// `before_commit` has run.
+    pub fn expire_worker_floor_with(
+        &mut self,
+        before: i64,
+        before_commit: impl FnOnce(&[([u8; 20], Option<u32>)]),
+    ) -> Result<Vec<([u8; 20], Option<u32>)>> {
         let sql = format!(
-            "DELETE FROM tombstones WHERE at < ?1 AND {} RETURNING hash",
+            "DELETE FROM tombstones WHERE at < ?1 AND {} RETURNING hash, rule",
             worker_floor_sql("rule")
         );
-        self.delete_returning(&sql, params![before])
+        let tx = crate::begin_write(&mut self.conn)?;
+        let gone: Vec<([u8; 20], Option<u32>)> = {
+            let mut stmt = tx.prepare(&sql)?;
+            let rows = stmt.query_map(params![before], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (hash, rule) = row?;
+                let worker = rule
+                    .strip_prefix(WORKER_FLOOR_PREFIX)
+                    .and_then(|id| id.parse::<u32>().ok());
+                out.push((hash20(hash)?, worker));
+            }
+            out
+        };
+        before_commit(&gone);
+        tx.commit()?;
+        if !gone.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(gone)
     }
 
     /// Deletes one worker's floor reports (`worker-floor:<worker>`), for a
@@ -1548,9 +1583,13 @@ mod tests {
         put_row(&s, 3, "CS-1a", 1);
         put_row(&s, 4, "user", 1);
         put_row(&s, 5, "WORKER-FLOOR:7", 1);
-        assert_eq!(s.expire_worker_floor(20).unwrap(), vec![[1; 20]]);
+        put_row(&s, 6, "worker-floor:x", 1);
+        let mut gone = s.expire_worker_floor(20).unwrap();
+        gone.sort();
+        assert_eq!(gone, vec![([1; 20], Some(7)), ([6; 20], None)]);
         let left = rules(&s);
         assert!(!left.contains_key(&1));
+        assert!(!left.contains_key(&6));
         assert_eq!(left[&2], "worker-floor:7");
         assert_eq!(left[&3], "CS-1a");
         assert_eq!(left[&4], "user");
@@ -1562,6 +1601,27 @@ mod tests {
         // Held again by the next report.
         s.tombstone_from_worker(&[[1; 20]], 8, 60).unwrap();
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// Expiry's hook runs before its delete commits: another connection
+    /// still reads the key as held then, and free after.
+    #[test]
+    fn expirys_hook_runs_before_the_delete_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let mut seen = Vec::new();
+        let gone = s
+            .expire_worker_floor_with(20, |rows| {
+                seen = rows.to_vec();
+                assert_eq!(reader.held_among(&[[1; 20]]).unwrap(), vec![true]);
+            })
+            .unwrap();
+        assert_eq!(seen, vec![([1; 20], Some(7))]);
+        assert_eq!(gone, seen);
+        assert_eq!(reader.held_among(&[[1; 20]]).unwrap(), vec![false]);
     }
 
     /// The main node's own judgement, as its writer records a floor hit:
@@ -1594,7 +1654,7 @@ mod tests {
     fn a_lapsed_report_is_held_again_by_the_main_nodes_judgement() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
         s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
-        assert_eq!(s.expire_worker_floor(11).unwrap(), vec![[1; 20]]);
+        assert_eq!(s.expire_worker_floor(11).unwrap(), vec![([1; 20], Some(7))]);
         assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
         judged(&mut s, [1; 20], "CS-1a", Held::Tombstone, 20);
         assert_eq!(rules(&s)[&1], "CS-1a");

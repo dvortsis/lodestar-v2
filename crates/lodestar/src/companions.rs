@@ -248,6 +248,10 @@ pub struct Companions {
     /// the child started there is running and was found ready. `None`
     /// when it couldn't be built (logged as `companion_http`).
     pub(crate) http: Option<Arc<CompanionHttp>>,
+    /// The companions' ports and readiness, behind the loopback gate and
+    /// `http`: read by tests.
+    #[cfg(test)]
+    pub(crate) bindings: Arc<Bindings>,
 }
 
 impl Companions {
@@ -314,6 +318,14 @@ async fn start_with(
     let routes = Arc::new(CompanionRoutes::new(store.clone()));
     let (run, api) = (wiring.clone(), wiring.clone());
     let bindings = Arc::new(Bindings::new());
+    // Before any source or download client is built (serve starts the
+    // companions first): from here, a request through any guarded client
+    // to a companion's port waits for that companion to be ready.
+    // `CompanionHttp`'s own loopback client applies its finer rule instead.
+    // Set once per process; a later start in the same process (tests)
+    // keeps the first.
+    reserve_installed(&bindings, &data, catalogue, host);
+    let _ = lodestar_integrations::net::set_loopback_gate(Arc::new(ReadyPorts(bindings.clone())));
     let http = CompanionHttp::new()
         .ok()
         .map(|h| Arc::new(h.with_bindings(bindings.clone())));
@@ -344,7 +356,7 @@ async fn start_with(
     // kills companions an earlier run left behind. Nothing is native in a
     // container (Q17).
     if !host.in_container {
-        match supervise(&folder, routes, http.clone(), bindings).await {
+        match supervise(&folder, routes, http.clone(), bindings.clone()).await {
             Ok((supervised, api)) => wiring.wire(supervised, api),
             Err(code) => lodestar_log::log_event!(
                 INSTALL_FAILED,
@@ -421,7 +433,53 @@ async fn start_with(
         tasks,
         release: Mutex::new(None),
         http,
+        #[cfg(test)]
+        bindings,
     })
+}
+
+/// The process's loopback gate (X-cmp09-fix-2): a port Lodestar runs a
+/// companion on is allowed only while that companion is ready; every
+/// other port always.
+struct ReadyPorts(Arc<Bindings>);
+
+impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
+    fn allow(&self, port: u16) -> bool {
+        !self.0.managed(port) || self.0.ready(port)
+    }
+}
+
+/// At serve, before recovery and before any start: the port of every
+/// catalogue companion with a folder here (installed, or left mid-install
+/// by a crash) is a managed port from now on, not ready, so neither the
+/// gate nor `CompanionHttp` treats it as a hand-run companion's. Only a
+/// start that claims it and is found ready opens it; a failed recovery or
+/// a start that fails first leaves it refused. A folder that can't be read
+/// counts as there. Nothing is native in a container (Q17).
+fn reserve_installed(bindings: &Bindings, data: &Path, catalogue: &Catalogue, host: Host) {
+    if host.in_container {
+        return;
+    }
+    for entry in catalogue.entries() {
+        let there = !matches!(
+            lodestar_companions::layout::Install::existing(data, &entry.id),
+            Ok(None)
+        );
+        if let Some(p) = loopback_port(catalogue, &entry.id).filter(|_| there) {
+            // Claimed and let go at once: managed, held by none, not ready.
+            if bindings.claim(p) {
+                bindings.release(p);
+            }
+        }
+    }
+}
+
+/// The loopback port a catalogue companion is reached on, as the manager
+/// starts it: its health check's port.
+fn loopback_port(catalogue: &Catalogue, id: &CompanionId) -> Option<u16> {
+    let entry = catalogue.get(id.as_str())?;
+    let health = entry.health.as_ref()?;
+    Some(entry.port(health.port.as_str())?.number.get())
 }
 
 /// The supervisor in its sandbox, with the guarded client, and CMP-8b's
@@ -3465,6 +3523,90 @@ mod tests {
         assert_eq!(routes.configured(&prowlarr), None);
         let gluetun = CompanionId::parse("gluetun").unwrap();
         assert!(routes.route(&gluetun).await.is_none());
+    }
+
+    /// X-cmp09-fix-2: serve's start of the companions sets the process's
+    /// loopback gate.
+    #[tokio::test]
+    async fn the_start_sets_the_loopback_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        // Set by this start or an earlier one in this process; nothing
+        // else sets it.
+        assert!(lodestar_integrations::net::loopback_gate_is_set());
+        c.shutdown().await;
+    }
+
+    /// The gate allows a port no companion holds, and not a held one
+    /// that isn't ready.
+    #[test]
+    fn the_gate_refuses_a_companions_port_until_ready() {
+        use lodestar_integrations::net::LoopbackGate;
+        let bindings = Arc::new(Bindings::new());
+        let gate = ReadyPorts(bindings.clone());
+        assert!(gate.allow(8080));
+        let (_tx, rx) = tokio::sync::watch::channel(lodestar_companions::supervise::Status {
+            state: lodestar_companions::supervise::State::Running,
+            restarts: 0,
+            last_exit: None,
+            run: 1,
+            up: true,
+            pid: None,
+        });
+        assert!(bindings.hold(8080, rx));
+        assert!(!gate.allow(8080) && gate.allow(9696));
+        // The catalogue's ports, as the manager starts them.
+        let cat = lodestar_companions::builtin().unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        assert_eq!(loopback_port(cat, &qbt), Some(8080));
+    }
+
+    /// X-cmp09-fix-2: an installed companion's port is refused from serve's
+    /// start, whatever its recovery or its start make of it, until a start
+    /// finds it ready; a companion with no folder leaves its port alone.
+    #[tokio::test]
+    async fn an_installed_companions_port_is_refused_until_it_is_ready() {
+        use lodestar_integrations::net::LoopbackGate;
+        let dir = tempfile::tempdir().unwrap();
+        // A folder that isn't a valid install: its recovery fails, and so
+        // would its start.
+        std::fs::create_dir_all(dir.path().join("companions/qbittorrent/9.9.9")).unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        let (q, p) = (
+            loopback_port(cat, &qbt).unwrap(),
+            loopback_port(cat, &prowlarr).unwrap(),
+        );
+        let gate = ReadyPorts(c.bindings.clone());
+        assert!(c.bindings.managed(q) && !c.bindings.ready(q));
+        assert!(!gate.allow(q));
+        // A start that fails leaves it refused.
+        assert!(c.api.manager.start(&qbt).await.is_err());
+        assert!(!gate.allow(q));
+        // No folder: untouched, for a companion you run yourself.
+        assert!(!c.bindings.managed(p) && gate.allow(p));
+        c.shutdown().await;
     }
 
     /// X-cmp09-fix: serve's runner answers the readiness methods from the

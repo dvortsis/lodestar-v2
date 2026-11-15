@@ -875,6 +875,14 @@ The fetch pool holds info dicts to a byte budget, `max_held_bytes` (64 MiB by de
 | `fetch_held_full_total` | counter | Times the budget (held plus reserved bytes), or a waiting reservation that holds dispatch (a whole dict's, a large dict's remainder, or a large dict's first window that only lacks room), stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. A result waiting for an output slot also stops fetching (outbox backpressure), but isn't counted here. |
 | `fetch_reserve_timeouts_total` | counter | Fetches whose deadline ran out while they waited for a reservation. The first two for a key aren't counted as failed fetches, and the peer is tried again later; the third is charged as a `timed_out` failure, so a key can't wait out for ever. A steady rise means the budget is too small for the dicts being fetched. |
 
+## First windows (X-fetch-first-window, 2026-11-14)
+
+A fetch of a dict larger than one request window (64 KiB) asks for that first window all at once and must have it within 4 s ([the decision](decisions/2026-11-14-X-fetch-first-window.md)). Past that the fetch ends as a timed-out failure of that peer; the key keeps its other peers.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `fetch_first_window_timeouts_total{transport}` | counter | Fetches of a large dict whose first window didn't arrive within 4 s of being requested, by transport (`tcp`, `utp`). They're also counted among the `timed_out` failures. A steady share of honest fetches here would mean the bound is too tight. |
+
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
 
 See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
@@ -882,6 +890,14 @@ See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
 | Series | Type | Meaning |
 | --- | --- | --- |
 | `filter_rows_unreadable{kind}` | gauge | Stored filter rows the engine couldn't read at its last load, by `kind`: `rule`, `unless`, `class_rule`, `override`, `exception`, `allow`, `pack_override`. Enabled withholding rules, the `unless` of an enabled rule, Is adult classification rules and pack-rule overrides (the stronger action kept, the `unless` dropped; RP-2) fail closed; the rest are skipped, which only tightens. Every kind is rendered, 0 included. It drops back to 0 once the row is fixed or removed. The Insights exception `filter_rows_unreadable` names the rows. |
+
+## Core re-judge stalled ranges (X-rejudge-stall, 2026-11-14)
+
+See [the decision](decisions/2026-11-14-X-rejudge-stall.md). The core re-judge (§20.5) keeps the range of a batch whose stored torrents mostly wouldn't read, moves past it, and judges it again later; the pass stays unfinished while any range is left. Gauges as of the writer's last re-judge batch (0 before the first, and with no pass under way). Ids and counts only.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `core_rejudge_stalled_ranges` / `core_rejudge_stalled_rows` | gauge | Ranges of stored torrents the core re-judge skipped because most of a batch wouldn't read, still to judge again, and the stored torrents they covered when they stopped (a range judged again in part loses those judged). Nothing in a range is held or changed until it reads. A range is logged when it stops (`pipeline.core_rejudge_stalled`) and when it's judged through (`pipeline.core_rejudge_stall_cleared`). |
 
 ## Source egress and kill switch (SRC-5, 2026-11-02)
 
@@ -912,6 +928,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | `cluster_regrants_total` | counter | Keys granted again after their lease ended without an outcome. |
 | `cluster_busy_total` | counter | Claimed keys denied because grants were held back (§19.5 backpressure). |
 | `cluster_claims_busy_total{cause}` | counter | Claimed keys denied as busy ("claim again later"), per key, by cause: `held_back` (grants held back, the same denials as `cluster_busy_total`: the writer's queue was full, §19.5, or too many commits happened during the store check), `check_failed` (the batch's store check died or came back short, so the whole batch was denied, #607), `key_unknown` (the store couldn't read that key, #628) and `capped` (the worker already holds its lease cap, twice its assigned pool cap, so it claims again once it holds fewer: [X-lease-reconcile-every-session](decisions/2026-11-13-X-lease-reconcile-every-session.md)). A remote worker claims a busy key again with back-off, about a minute at most, then drops it and logs `worker.claims_gave_up` in its own log. Steady growth in the first three means the coordinator can't keep up: check its disk and load. Steady growth in `capped` means a worker sits at its cap: its pool is slow, or its leases aren't coming back ([X-wk-busy-metrics](decisions/2026-11-08-X-wk-busy-metrics.md)). |
+| `cluster_claims_denied_excluded_total` | counter | Claimed keys denied as stored only because the store check excludes that key for the claiming worker, per key. The worker drops the key; another worker or the built-in one may take it ([X-floor-renew](decisions/2026-11-14-X-floor-renew.md)). Normally 0 or close to it. |
 | `cluster_stale_reports_total` | counter | Worker reports with a stale fencing token, ignored. A `Fetched` report for a key committed (or lost as blocked) lately isn't counted: the worker sends it on `Accepted`, so the commit often comes first ([X-wk-fetched-lease-nits](decisions/2026-11-12-X-wk-fetched-lease-nits.md)). |
 | `cluster_lease_reconcile_total{result}` | counter | What workers' reconcile lists did (WK-11b): after a spool replay with lease-count drift, a worker lists the leases it still holds. `returned`: leases on record for that worker, handed to it on an earlier session, that its list left out, given back for re-grant as after an expiry (no loss counted). `unknown`: listed leases not on record for it, mostly ones committed or ended while the list travelled; counted, never created. `refused`: lists refused whole (a paused or replaced worker, the built-in worker, parts out of order, or a second round within one heartbeat interval). Steady `returned` growth means workers keep losing grants across reconnects ([WK-11b](decisions/2026-11-12-WK-11b.md)). Kept in `FleetSnapshot` as `reconcile_returned`, `reconcile_unknown` and `reconcile_refused`. |
 | `cluster_revoked_total` | counter | Sessions closed because their certificate was revoked or expired. |
@@ -940,6 +957,9 @@ Every second while the port is served, the coordinator plans the fleet and sends
 | `cluster_floor_report_write_failures_total` | counter | Writes of workers' floor drops the store refused. The reports are kept, still refused, and tried again after 5 s; the `cluster.floor_report_failed` log line says so once per streak. |
 | `cluster_floor_reports_over_budget_total` | counter | Floor drops a worker reported past its budget (100 in a rolling hour). They're dropped: the worker is untrusted by then, and the floor still applies to whoever fetches the key next. The first one pauses the worker (a saved pause), takes its leases back and says so (`cluster.floor_reports_over_budget`). |
 | `cluster_floor_reports_turned_away_total` | counter | Floor drops within a worker's budget reported while 100,000 were already pending (writes failing for a long time): counted, nothing else, and they use up no budget. |
+| `cluster_floor_reports_lapsed_total` | counter | Floor drops refused because that same worker's earlier report of the key lapsed: nothing is held and no budget is used. Another worker's report of the key is taken as usual ([X-floor-renew](decisions/2026-11-14-X-floor-renew.md)). |
+| `cluster_floor_lapsed_keys` | gauge | Keys whose worker floor report lapsed, remembered with their last workers so the store check can exclude them for those workers. At most 65,536; past that the oldest is forgotten. Kept in memory: 0 after a restart until reports lapse again. |
+| `cluster_floor_lapsed_evicted_total` | counter | Lapsed keys forgotten because 65,536 were already remembered: the oldest goes first, and that key is then treated as it was before the store check could exclude it. Steady growth means many keys lapse in a short time. |
 
 ## Remote intake (WK-9, 2026-11-07)
 
