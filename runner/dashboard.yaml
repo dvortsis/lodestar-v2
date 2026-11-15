@@ -698,6 +698,7 @@ placement:
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
+  - X-gluetun-restart-recover
   - X-ci-filter-fleet
   - X-ci-filter-rust-inputs
   - X-ci-filter-docs-user
