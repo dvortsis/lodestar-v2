@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T16:10Z",
+  "updated_at": "2026-11-15T16:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T16:10Z",
+  "last_heartbeat": "2026-11-15T16:34Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9971,6 +9971,12 @@
       "slice": "X-fuzz-tpdb-harness",
       "sha": "298fa8f97da9cb83926ad85b1fb02ef1f7c7c47c",
       "at": "2026-11-15T16:10Z"
+    },
+    {
+      "pr": 929,
+      "slice": "X-cluster-start-retry",
+      "sha": "dc55f53a5e9f318fb15cfd98507b01c6417a1a1d",
+      "at": "2026-11-15T16:34Z"
     }
   ],
   "active_sessions": {
@@ -10209,7 +10215,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T16:10Z",
+    "updated": "2026-11-15T16:34Z",
     "items": [
       {
         "slot": 1,
@@ -10218,18 +10224,18 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T15:59Z",
-        "doing": "Windows service-folder path comparison and service load order; session_01MMjhn8LCZuDPeXwdBzodLH",
+        "doing": "#936 X-win-service-path-hardening at 3c2efe3f: Opus + security review running, CI; session_01MMjhn8LCZuDPeXwdBzodLH",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
       {
         "slot": 2,
-        "slice": "X-cluster-start-retry",
+        "slice": "X-store-busy-nits",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T09:03Z",
-        "doing": "#929 X-cluster-start-retry waiting on CI; #932 merged 298fa8f9",
+        "since": "2026-11-15T16:34Z",
+        "doing": "store busy nits: migrate-lock decisions line, WAL busy test, serve.rs exists() off the async task, import store_busy reuse; session_01MMjhn9j5mWvNehxxWyykLf",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10343,8 +10349,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T16:10Z",
-  "updated": "2026-11-15T16:10Z",
+  "heartbeat": "2026-11-15T16:34Z",
+  "updated": "2026-11-15T16:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
