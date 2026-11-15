@@ -2,12 +2,16 @@
 //! store (IMP-4, `docs/decisions/2026-10-31-IMP-4b.md`).
 //!
 //! - `inspect` only reads: the source's identity, what it holds, a row
-//!   estimate and whether the data folder has room.
+//!   estimate and whether the data folder has room. Like `status`, it
+//!   says so plainly when a writing verb holds the store.
 //! - `start`, `resume`, `pause`, `cancel` and `remove` write the store, so
 //!   they run while the server is stopped: they hold the store
 //!   exclusively, and refuse while anything else has it open. The import
 //!   then goes through the store's one writer, this process.
-//! - `status` only reads, and is safe while the server runs.
+//! - `status` only reads, and is safe while the server runs. While a
+//!   writing verb holds the store (an import above all), it waits a few
+//!   seconds, then says so and what to do: that import shows its own
+//!   progress.
 //!
 //! Ctrl-C during an import pauses it after the batch in flight (or
 //! cancels that batch's read): `resume` carries on from the last
@@ -57,7 +61,7 @@ pub struct ImportArgs {
 pub enum Action {
     /// Check a source without importing: what it is, how many torrents it
     /// holds, and whether there's room (only reads; safe while the server
-    /// runs)
+    /// runs; it can't read the store while an import runs)
     Inspect {
         #[command(flatten)]
         source: SourceArgs,
@@ -77,8 +81,9 @@ pub enum Action {
         #[arg(long)]
         json: bool,
     },
-    /// Show the import jobs, or one job in detail (safe while the server
-    /// runs)
+    /// Show the import jobs, or one job in detail (only reads; safe while
+    /// the server runs; it can't read the store while an import runs, which
+    /// shows its own progress)
     Status {
         /// The job's number
         job: Option<i64>,
@@ -521,12 +526,21 @@ fn hex8(b: &[u8]) -> String {
 
 /// The unfinished job already bound to this source identity, if any.
 fn job_for(store: &Store, adapter: &Adapter) -> Outcome<Option<ImportJob>> {
+    job_for_mapped(store, adapter, |e| {
+        Failure::Failed(format!("reading the import jobs: {e}"))
+    })
+}
+
+/// [`job_for`], with its read errors mapped by `err`.
+fn job_for_mapped(
+    store: &Store,
+    adapter: &Adapter,
+    err: impl Fn(lodestar_store::Error) -> Failure,
+) -> Outcome<Option<ImportJob>> {
     let (dataset, schema_sig) = adapter.identity();
     let mut before = None;
     loop {
-        let page = store
-            .import_jobs(before, 100)
-            .map_err(failed("reading the import jobs"))?;
+        let page = store.import_jobs(before, 100).map_err(&err)?;
         let Some(last) = page.last() else {
             return Ok(None);
         };
@@ -546,13 +560,28 @@ async fn inspect(config: &Config, args: &SourceArgs, json: bool) -> Outcome {
     let opened = open_source(args).await?;
     let db = config.db_path();
     let store = if db.is_file() {
-        Some(Store::open_reader(&db, config.store_config()).map_err(failed("opening the store"))?)
+        let verb = "import inspect";
+        let store = Store::open_reader(&db, config.store_config()).map_err(read_err(
+            &db,
+            verb,
+            "opening the store",
+        ))?;
+        // Read once here, so a held store is reported, not hidden by the
+        // size estimate's fallback.
+        store
+            .count()
+            .map_err(read_err(&db, verb, "counting the store's torrents"))?;
+        Some(store)
     } else {
         None
     };
     let space = store.as_ref().map(|s| space(config, s, opened.rows));
     let existing = match &store {
-        Some(s) => job_for(s, &opened.adapter)?,
+        Some(s) => job_for_mapped(
+            s,
+            &opened.adapter,
+            read_err(&db, "import inspect", "reading the import jobs"),
+        )?,
         None => None,
     };
     let (dataset, schema_sig) = opened.adapter.identity();
@@ -1107,13 +1136,27 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
     if !db.is_file() {
         return Err(Failure::Failed(format!("no store at {}", db.display())));
     }
-    let store =
-        Store::open_reader(&db, config.store_config()).map_err(failed("opening the store"))?;
+    // A read-only connection: WAL readers don't wait on the server's
+    // writes. Only a command holding the store to itself blocks it, and
+    // then the store's busy timeout bounds the wait.
+    let verb = "import status";
+    let store = Store::open_reader(&db, config.store_config()).map_err(read_err(
+        &db,
+        verb,
+        "opening the store",
+    ))?;
     let jobs = match id {
-        Some(id) => vec![load(&store, id)?],
-        None => store
-            .import_jobs(None, 50)
-            .map_err(failed("reading the import jobs"))?,
+        Some(id) => vec![
+            store
+                .import_job(id)
+                .map_err(read_err(&db, verb, "reading the import job"))?
+                .ok_or_else(|| Failure::Failed(format!("there's no import job {id}")))?,
+        ],
+        None => {
+            store
+                .import_jobs(None, 50)
+                .map_err(read_err(&db, verb, "reading the import jobs"))?
+        }
     };
     if json {
         let out: Vec<_> = jobs
@@ -1161,6 +1204,46 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
         }
     }
     Ok(())
+}
+
+/// A reading verb's store error: another command's lock becomes
+/// [`held_elsewhere`]; anything else fails with `ctx`.
+fn read_err<'a>(
+    db: &'a Path,
+    verb: &'a str,
+    ctx: &'a str,
+) -> impl Fn(lodestar_store::Error) -> Failure + 'a {
+    move |e| {
+        if store_busy(&e) {
+            held_elsewhere(db, verb)
+        } else {
+            Failure::Failed(format!("{ctx}: {e}"))
+        }
+    }
+}
+
+/// Whether a store error is another process's lock: busy or locked.
+fn store_busy(e: &lodestar_store::Error) -> bool {
+    matches!(
+        e,
+        lodestar_store::Error::Sqlite(e) if matches!(
+            e.sqlite_error_code(),
+            Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+        )
+    )
+}
+
+/// What a reading verb (`lodestar {verb}`) says when another command
+/// holds the store to itself past the busy timeout: nothing was read, and
+/// nothing changed.
+fn held_elsewhere(db: &Path, verb: &str) -> Failure {
+    Failure::Refused(format!(
+        "another lodestar command is using the store {} on its own, so it can't be read now. \
+         An import (start or resume) shows its progress where it runs, and Ctrl-C there pauses \
+         it after the current batch. Run `lodestar {verb}` again once that command has paused \
+         or finished.",
+        db.display()
+    ))
 }
 
 /// One job change (pause, cancel), server stopped.

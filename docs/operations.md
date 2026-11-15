@@ -385,7 +385,7 @@ docker run --rm -it -e PUID=99 -e PGID=100 \
 
 Outside Docker, run `lodestar import …` directly.
 
-**Check the source first.** `inspect` only reads. It's safe while Lodestar runs:
+**Check the source first.** `inspect` only reads. It's safe while Lodestar runs, but not while an import runs:
 ```bash
 lodestar import inspect --source magnetico --path /import/database.sqlite3
 lodestar import inspect --source bitmagnet --host <host> --password-file <file>
@@ -398,6 +398,7 @@ lodestar import start --source magnetico --path /import/database.sqlite3 --limit
 lodestar import status
 lodestar import resume 1 --source magnetico --path /import/database.sqlite3
 ```
+- **`status` only reads, and works while Lodestar runs.** It can't read Lodestar's database while an import runs: the import keeps it to itself. The import shows its own progress instead. `status` waits a few seconds, then tells you to run it again once the import pauses or finishes.
 - **Ctrl-C pauses the job at the last saved batch.** A second Ctrl-C quits at once. Either way, `resume` carries on from the last saved batch, with the same source flags. Nothing is imported twice.
 - **`resume` checks the source is the same database** the job started on. If it changed, the job is blocked and says why. Start a new job for the new database.
 - **Start Lodestar again afterwards.** It indexes the imported torrents and re-fetches incomplete file lists.
