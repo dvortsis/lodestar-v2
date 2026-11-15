@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T06:55Z",
+  "updated_at": "2026-11-15T07:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T06:55Z",
+  "last_heartbeat": "2026-11-15T07:01Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10083,7 +10083,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T06:55Z",
+    "updated": "2026-11-15T07:01Z",
     "items": [
       {
         "slot": 1,
@@ -10218,8 +10218,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T06:55Z",
-  "updated": "2026-11-15T06:55Z",
+  "heartbeat": "2026-11-15T07:01Z",
+  "updated": "2026-11-15T07:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10480,6 +10480,15 @@
         "session": "session_01MMjhnBh7zpNQt1KJTfEEZk",
         "status": "idle",
         "doing": "handed back after #904; one fix at a time when given work"
+      },
+      {
+        "slot": "api-lane",
+        "slice": "ENR-mb",
+        "role": "build",
+        "agent": "claude-api-local",
+        "model": "opus",
+        "doing": "api-lane: owner-run local Claude Code session on the Console workspace key (owner 2026-11-15, amends \u00a72.67, relayed by session_01MMjhnA1awRT8P19wZUdtY9); outside the 4+4 cap; ~$140 budget, stops at $130 or $25/slice; reserved: ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, X-worker-service-log, M8-PERF-1; never merges; may report via PR comments",
+        "since": "2026-11-15T07:01Z"
       }
     ],
     "note": "Owner \u00a72.64: 4 build (slots) + 4 cloud-testing (here, shared with the X-test-vm coordinator) + the owner-approved Fable slot. Cloud-testing share 1 is lent to X-flake-detect-macos (slot 2)."
@@ -10948,5 +10957,17 @@
         "state": "WIP; rebase over #898/#904 pool.rs; decisions file on branch"
       }
     ]
-  }
+  },
+  "reserved_for_api_lane": [
+    "ENR-mb",
+    "ENR-ol",
+    "ENR-tmdb",
+    "ENR-tvdb",
+    "ENR-anilist",
+    "ENR-discogs",
+    "ENR-srrdb",
+    "ENR-predb",
+    "X-worker-service-log",
+    "M8-PERF-1"
+  ]
 }
