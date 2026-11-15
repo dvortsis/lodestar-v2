@@ -21,7 +21,7 @@ This builds on X-fetch-first-window (`2026-11-14-X-fetch-first-window.md`). Arch
   - a peer that is behind, or sent nothing for the last second (half `PACE_FREE`, the same at any timeout: runner decision), or that we were still waiting to write to, ends as `Behind`;
   - a peer still sending ends as a timeout, which may be credited.
 - **Counted** as `fetch_late_room_timeouts_total` (`docs/metrics.md`).
-- **What's left:** a peer that stops within its last second can still earn a credit, at most four times a key and within the deadline.
+- **What's left:** a narrow case at the deadline can still earn a credit, capped at four per key and inside the 8 s bound.
 
 ## Evidence
 The combined wire model (`crates/sources/tests/pool_wire_model.rs`) runs the real pool and the real fetch loop over in-memory pipes. Each run has scripted honest, slow, stalling, junk and oversize peers, a worker's 4 MiB budget and the 8 s deadline. Over 1,000 seeds:

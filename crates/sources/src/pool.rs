@@ -968,7 +968,8 @@ impl Reservation {
         self.0.behind.store(true, Ordering::Relaxed);
     }
 
-    /// Its growth's room came late (after [`LATE_ROOM`]) and the peer never
+    /// Its growth's room came late (after its late threshold
+    /// ([`Reservation::late_after`], [`LATE_ROOM`] by default)) and the peer never
     /// fell behind: a timeout from here is the wait's, not the peer's.
     fn late(&self) -> bool {
         self.0.long_wait.load(Ordering::Relaxed) && !self.0.behind.load(Ordering::Relaxed)
@@ -5253,6 +5254,24 @@ mod budget {
         assert_eq!(used(&b), 0);
     }
 
+    /// The real fetcher sets each reservation's late threshold to half its
+    /// own timeout.
+    #[tokio::test]
+    async fn the_peer_wire_fetcher_sets_the_late_threshold_from_its_timeout() {
+        let fetcher = PeerWireFetcher(FetchOptions {
+            timeout: Duration::from_secs(30),
+            ..FetchOptions::default()
+        });
+        let r = Reservation::new(Arc::new(Budget::new(1_000_000)));
+        // Building the fetch is enough: it's never run.
+        let _fetch = fetcher.fetch_reserving(
+            SocketAddr::from(([192, 0, 2, 1], 6881)),
+            InfoHash([1; 20]),
+            r.clone(),
+        );
+        assert_eq!(r.0.late_room_ms.load(Ordering::Relaxed), 15_000);
+    }
+
     /// Fetches whose every growth comes late and then times out.
     struct AlwaysLate(Arc<std::sync::atomic::AtomicUsize>);
 
@@ -5297,7 +5316,7 @@ mod budget {
             PoolConfig {
                 max_held_bytes: 1_000_000,
                 max_attempts: 1,
-                retry_backoff: Duration::from_secs(1),
+                retry_backoff: Duration::from_millis(100),
                 ..PoolConfig::default()
             },
             Arc::new(AlwaysLate(tries.clone())),
