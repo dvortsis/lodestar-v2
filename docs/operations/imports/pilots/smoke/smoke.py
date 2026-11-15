@@ -264,12 +264,57 @@ def store_sizes(db):
     return out, per, counts
 
 
+HEX = set("0123456789abcdef")
+
+
+def segment_files(folder):
+    """A Tantivy folder's segment-file bytes, split by whether a live segment
+    (one in meta.json) owns them, plus its deleted docs and live segments.
+    Files are named {segment id, 32 hex digits}.{component}; meta.json, the
+    managed list and locks are no segment's."""
+    try:
+        with open(os.path.join(folder, "meta.json")) as f:
+            segments = json.load(f)["segments"]
+    except FileNotFoundError:
+        return {"live": 0, "stale": 0, "deleted": 0, "segments": 0}
+    ids = {s["segment_id"].replace("-", "").lower() for s in segments}
+    out = {"live": 0, "stale": 0, "segments": len(ids),
+           "deleted": sum((s.get("deletes") or {}).get("num_deleted_docs", 0) for s in segments)}
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        head = name.split(".", 1)[0].lower()
+        if os.path.isfile(path) and len(head) == 32 and set(head) <= HEX:
+            out["live" if head in ids else "stale"] += os.lstat(path).st_size
+    return out
+
+
+def index_live(index):
+    """The search indexes as the size budget counts them (X-index-bytes-1m):
+    the live segment files of the newest v{schema}-t{tokenizer} folder (the
+    torrent index) and of its files/ (the file index). Stale segment files
+    (merged away, not yet collected), deleted docs and older version folders
+    are reported beside them, not counted."""
+    versions = []
+    for name in os.listdir(index) if os.path.isdir(index) else []:
+        m = re.fullmatch(r"v(\d+)-t(\d+)", name)
+        if m and os.path.isfile(os.path.join(index, name, "meta.json")):
+            versions.append(((int(m[1]), int(m[2])), name))
+    if not versions:
+        return {"torrent": 0, "files": 0, "stale": 0, "deleted": 0, "segments": 0, "other_versions": 0}
+    current = os.path.join(index, max(versions)[1])
+    t, f = segment_files(current), segment_files(os.path.join(current, "files"))
+    return {"torrent": t["live"], "files": f["live"], "stale": t["stale"] + f["stale"],
+            "deleted": t["deleted"], "segments": t["segments"],
+            "other_versions": du(index) - du(current)}
+
+
 def data_sizes(data):
     db = os.path.join(data, "lodestar.db")
     files = {k: os.path.getsize(db + k) if os.path.exists(db + k) else 0 for k in ("", "-wal", "-shm")}
     index = os.path.join(data, "index")
     file_index = sum(du(os.path.join(r, d)) for r, ds, _ in os.walk(index) for d in ds if d == "files")
     return {"db": files[""], "wal": files["-wal"], "index": du(index), "file_index": file_index,
+            "index_live": index_live(index),
             "hot": du(os.path.join(data, "hot")), "total": du(data) - du(os.path.join(data, "backups"))}
 
 
@@ -510,9 +555,18 @@ def main():
         "provenance": round((store["provenance"] - empty_store["provenance"]) / stored, 1),
         "sqlite_file": round((sizes["db"] - e["db"]) / stored, 1),
         "search_index": round((sizes["index"] - e["index"]) / stored, 1),
-        "file_index": round((sizes["file_index"] - e["file_index"]) / stored, 1),
-        "torrent_index": round((sizes["index"] - sizes["file_index"]
-                                - e["index"] + e["file_index"]) / stored, 1),
+        # The budget figures (§3): live segments only (X-index-bytes-1m).
+        "torrent_index": round((sizes["index_live"]["torrent"]
+                                - e["index_live"]["torrent"]) / stored, 1),
+        "file_index": round((sizes["index_live"]["files"] - e["index_live"]["files"]) / stored, 1),
+        # On disk, as reports before X-index-bytes-1m measured them (there,
+        # "torrent_index" and "file_index" are these): every file under
+        # index/, stale segments and other version folders included.
+        "torrent_index_on_disk": round((sizes["index"] - sizes["file_index"]
+                                        - e["index"] + e["file_index"]) / stored, 1),
+        "file_index_on_disk": round((sizes["file_index"] - e["file_index"]) / stored, 1),
+        "index_stale": round(sizes["index_live"]["stale"] / stored, 1),
+        "index_other_versions": round(sizes["index_live"]["other_versions"] / stored, 1),
         "hot": round((sizes["hot"] - e["hot"]) / stored, 1),
         "all_in": round((sizes["total"] - e["total"]) / stored, 1),
     }

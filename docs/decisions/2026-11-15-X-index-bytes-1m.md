@@ -34,5 +34,12 @@ X-test-vm's 1M Magnetico import reported the torrent index at 652 B/torrent, aga
 - **`size-report`** now prints the same line under its own torrent-index figure.
 - **Nothing ships in the product binary.** `DiskStats` is a small read-only API in `lodestar-search`; only the bench calls it.
 
-## Schema
-- **No schema change** (brief step 5). The runner decides on the host's `index-stats` figure, if the X-test-vm host can produce it.
+## The pilot script now reports live segments (runner, 2026-11-15)
+- **`smoke.py`'s `torrent_index` and `file_index` are now the budget figures.** They count the live segment files of the newest `v{schema}-t{tokenizer}` folder and of its `files/`, read from `meta.json` (`index_live`). That's the same count `DiskStats` makes: on a 25,000-torrent index both give 505 B/torrent.
+- **The old figures stay, labelled as on disk.** `torrent_index_on_disk` and `file_index_on_disk` are the old `du` figures, so earlier pilot reports stay comparable: in reports from before this change, `torrent_index` and `file_index` are those on-disk figures.
+- **The extra bytes are shown beside them, not counted:** `index_stale` (segment files no live segment owns) and `index_other_versions` (other `v*-t*` folders), both per record. `sizes.index_live` holds the raw bytes, plus deleted docs and the segment count.
+
+## Schema, and what reopens this
+- **No schema change** (brief step 5). On the evidence above, the 652 B figure is suspected to be a measurement artefact: the 1M synthetic index is 446 B/torrent, the Magnetico pilots measured 360 B (10k) and 306 B (100k), and `du` counts more than the live index.
+- **The host re-measure is pending.** The runner asks X-test-vm to run `index-stats` on its next 1M import after this merges.
+- **This slice reopens if that host's live segments come out over 512 B/torrent.** The per-part table then says where to cut, by the brief's step 3.
