@@ -1011,6 +1011,31 @@ async fn an_excluded_key_is_denied_to_that_worker_only() {
             }
         );
         assert_eq!(c.server.snapshot().denied_excluded, 1);
+        // One the store can't read is counted: the exclusion decides it.
+        check.unknown.lock().unwrap().push(key(4));
+        check.excluded.lock().unwrap().push((nas.worker(), key(4)));
+        let got = a.claim(found(&*c.clock, &[4])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(4),
+                reason: DenyReason::Stored
+            }
+        );
+        assert_eq!(c.server.snapshot().denied_excluded, 2);
+        // A draining worker's excluded key is denied as draining, and not
+        // counted.
+        check.excluded.lock().unwrap().push((nas.worker(), key(5)));
+        assert!(c.server.drain(nas.worker()));
+        let got = a.claim(found(&*c.clock, &[5])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(5),
+                reason: DenyReason::Draining
+            }
+        );
+        assert_eq!(c.server.snapshot().denied_excluded, 2);
         assert!(c.server.lease(&InfoHash(key(1))).is_some());
     })
     .await;

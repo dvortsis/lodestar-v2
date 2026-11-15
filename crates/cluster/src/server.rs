@@ -498,7 +498,9 @@ pub struct FleetSnapshot {
     pub busy_capped: u64,
     /// Claimed keys denied as stored only because the store check
     /// excludes them for the claiming worker
-    /// ([`StoredKeys::excludes`]), per key.
+    /// ([`StoredKeys::excludes`]), per key: the store found them free or
+    /// couldn't read them. A key denied for another reason (a draining or
+    /// paused worker) isn't counted.
     pub denied_excluded: u64,
     /// Leases a worker's reconcile list left out, given back for re-grant
     /// (WK-11b).
@@ -1559,42 +1561,38 @@ impl ClusterServer {
                         let w = peer.worker;
                         let checked = tokio::task::spawn_blocking(move || {
                             let checks = check.key_checks(&keys);
-                            // A key not for this worker is denied as stored;
-                            // counted where the store alone would have let
-                            // it through.
-                            let mut excluded = 0u64;
+                            // A key not for this worker is denied as stored.
+                            // `only` marks those the store alone would have
+                            // let through (free, or a failed read), which
+                            // `claim` counts where it answers stored.
+                            let mut only = Vec::with_capacity(keys.len());
                             let checks = checks
                                 .into_iter()
                                 .zip(&keys)
                                 .map(|(c, k)| {
-                                    if check.excludes(w, k) {
-                                        if matches!(c, KeyCheck::Free | KeyCheck::Unknown) {
-                                            excluded += 1;
-                                        }
-                                        KeyCheck::Stored
-                                    } else {
-                                        c
-                                    }
+                                    let x = check.excludes(w, k);
+                                    only.push(x && matches!(c, KeyCheck::Free | KeyCheck::Unknown));
+                                    if x { KeyCheck::Stored } else { c }
                                 })
                                 .collect::<Vec<_>>();
-                            (checks, excluded)
+                            (checks, only)
                         });
                         match checked.await {
-                            Ok((s, excluded)) if s.len() == batch.items.len() => {
-                                self.counters
-                                    .denied_excluded
-                                    .fetch_add(excluded, Ordering::Relaxed);
-                                Some(s)
-                            }
+                            Ok((s, only)) if s.len() == batch.items.len() => Some((s, only)),
                             // Fails closed: a check that died or came back
                             // short grants nothing (#607's review).
                             _ => None,
                         }
                     }
-                    None => Some(vec![KeyCheck::Free; batch.items.len()]),
+                    None => Some((
+                        vec![KeyCheck::Free; batch.items.len()],
+                        vec![false; batch.items.len()],
+                    )),
                 };
                 let items = match checks {
-                    Some(checks) => self.claim(peer, &mut batch.items, &checks, checked_at),
+                    Some((checks, only)) => {
+                        self.claim(peer, &mut batch.items, &checks, &only, checked_at)
+                    }
                     None => {
                         bump(&self.counters.check_failures);
                         self.counters
@@ -1860,6 +1858,7 @@ impl ClusterServer {
         peer: &Peer,
         items: &mut [ClaimItem],
         checks: &[KeyCheck],
+        excluded_only: &[bool],
         checked_at: u64,
     ) -> Vec<GrantItem> {
         let w = peer.worker;
@@ -1884,6 +1883,10 @@ impl ClusterServer {
             if draining {
                 out[i] = deny(DenyReason::Draining);
             } else if matches!(check, KeyCheck::Stored | KeyCheck::Held) {
+                // Denied as stored only because it's excluded for `w`.
+                if excluded_only.get(i).copied().unwrap_or(false) {
+                    bump(&self.counters.denied_excluded);
+                }
                 out[i] = deny(DenyReason::Stored);
             } else if check == KeyCheck::Unknown {
                 // Not known to be stored: "claim again later" (#615's review).
