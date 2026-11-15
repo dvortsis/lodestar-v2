@@ -8,9 +8,10 @@
 //!   they run while the server is stopped: they hold the store
 //!   exclusively, and refuse while anything else has it open. The import
 //!   then goes through the store's one writer, this process.
-//! - `status` only reads, and is safe while the server runs. While a
-//!   writing verb holds the store (an import above all), it waits a few
-//!   seconds, then says so and what to do.
+//! - `status` only reads, and is safe while the server runs. While an
+//!   import holds the store, it shows that import's live progress from
+//!   the side file the import writes (`progress`). While anything else
+//!   holds it, it waits a few seconds, then says so and what to do.
 //!
 //! Ctrl-C during an import pauses it after the batch in flight (or
 //! cancels that batch's read): `resume` carries on from the last
@@ -81,8 +82,7 @@ pub enum Action {
         json: bool,
     },
     /// Show the import jobs, or one job in detail (only reads; safe while
-    /// the server runs; while an import runs it can't read the store, and
-    /// says so)
+    /// the server runs; while an import runs, that import's live progress)
     Status {
         /// The job's number
         job: Option<i64>,
@@ -945,6 +945,7 @@ async fn run_job(
     let stop = Arc::new(AtomicBool::new(false));
     {
         let (stop, cancel) = (stop.clone(), adapter.canceller());
+        let data_dir = config.data_dir.clone();
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 eprintln!("Pausing at the last saved batch… (Ctrl-C again to quit now)");
@@ -958,12 +959,41 @@ async fn run_job(
                     "Stopped. Nothing is lost: `lodestar import resume` carries on from the last \
                      saved batch."
                 );
+                // No drop runs on exit: the live view goes now.
+                progress::remove(&data_dir);
                 std::process::exit(130);
             }
         });
     }
     let started = std::time::Instant::now();
+    // The live view `status` reads while this import holds the store;
+    // removed when the run ends, however it ends.
+    let at_start = load(store, id)?.counters;
+    let live = Arc::new(std::sync::Mutex::new(progress::Writer::start(
+        &config.data_dir,
+        id,
+        adapter.name(),
+        unix_now(),
+        &at_start,
+    )));
+    // Beats while the source is slow, so the view doesn't lapse.
+    let beat = {
+        let live = live.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(progress::HEARTBEAT);
+            every.tick().await;
+            loop {
+                every.tick().await;
+                live.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .heartbeat(unix_now());
+            }
+        })
+    };
     let progress = |c: &ImportCounters| {
+        live.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .saved(c, unix_now());
         if !json && c.read % 50_000 < magnetico::MAX_PARENTS as u64 {
             eprintln!(
                 "{} read, {} new, {} a second",
@@ -986,9 +1016,12 @@ async fn run_job(
         now: unix_now,
         progress: Some(&progress),
     };
-    let report = driver::run(store, id, adapter, &opts)
-        .await
-        .map_err(|e| Failure::Failed(format!("job {id}: {e}")))?;
+    let report = driver::run(store, id, adapter, &opts).await;
+    // The beat stops before the file goes, so it can't write it back.
+    beat.abort();
+    let _ = beat.await;
+    drop(live);
+    let report = report.map_err(|e| Failure::Failed(format!("job {id}: {e}")))?;
     let _ = store.checkpoint();
     // What the import stored, this build's core judged: recorded when the
     // store was judged before it, else the server's re-judge runs.
@@ -1131,24 +1164,28 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
     // A read-only connection: WAL readers don't wait on the server's
     // writes. Only a command holding the store to itself blocks it, and
     // then the store's busy timeout bounds the wait.
-    let verb = "import status";
-    let store = Store::open_reader(&db, config.store_config()).map_err(read_err(
-        &db,
-        verb,
-        "opening the store",
-    ))?;
-    let jobs = match id {
-        Some(id) => vec![
-            store
-                .import_job(id)
-                .map_err(read_err(&db, verb, "reading the import job"))?
-                .ok_or_else(|| Failure::Failed(format!("there's no import job {id}")))?,
-        ],
-        None => {
-            store
-                .import_jobs(None, 50)
-                .map_err(read_err(&db, verb, "reading the import jobs"))?
+    // Held by another command: a running import's live progress, if it
+    // left any, else the plain refusal.
+    let held = |e: lodestar_store::Error, ctx: &str| {
+        if store_busy(&e) {
+            live_status(config, &db, id, json)
+        } else {
+            Err(Failure::Failed(format!("{ctx}: {e}")))
         }
+    };
+    let store = match Store::open_reader(&db, config.store_config()) {
+        Ok(s) => s,
+        Err(e) => return held(e, "opening the store"),
+    };
+    let jobs = match id {
+        Some(id) => match store.import_job(id) {
+            Ok(j) => vec![j.ok_or_else(|| Failure::Failed(format!("there's no import job {id}")))?],
+            Err(e) => return held(e, "reading the import job"),
+        },
+        None => match store.import_jobs(None, 50) {
+            Ok(jobs) => jobs,
+            Err(e) => return held(e, "reading the import jobs"),
+        },
     };
     if json {
         let out: Vec<_> = jobs
@@ -1238,6 +1275,64 @@ fn held_elsewhere(db: &Path, verb: &str) -> Failure {
          once that command has paused or finished.",
         db.display()
     ))
+}
+
+/// `status` while another command holds the store: the running import's
+/// live progress when it left a recent one (for this job, if one was
+/// named), else [`held_elsewhere`].
+fn live_status(config: &Config, db: &Path, id: Option<i64>, json: bool) -> Outcome {
+    let now = unix_now();
+    let Some(p) = progress::read(&config.data_dir, now).filter(|p| id.is_none_or(|i| i == p.job))
+    else {
+        return Err(held_elsewhere(db, "import status"));
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&live_json(&p)).map_err(failed("encoding"))?
+        );
+    } else {
+        println!("{}", live_text(&p, now));
+    }
+    Ok(())
+}
+
+/// The running job as `status --json` lists a job, from its live
+/// progress: the same keys, `null` for what only the store knows, and
+/// `"live": true`. Only this job is listed.
+fn live_json(p: &progress::Progress) -> serde_json::Value {
+    json!([{
+        "job": p.job, "source": p.source, "phase": Phase::Reading.label(),
+        "control": Control::Running.label(), "reason": null,
+        "counters": {
+            "read": p.read, "new": p.new, "merged": p.merged, "candidates": p.candidates,
+            "filtered": p.filtered, "quarantined": p.quarantined, "invalid": p.invalid,
+            "files_dropped": p.files_dropped, "partial": p.partial,
+            "source_bytes": p.source_bytes,
+        },
+        "waiting_candidates": null, "created_at": null, "updated_at": p.updated_at,
+        "finished_at": null, "live": true, "run_started_at": p.run_started_at,
+    }])
+}
+
+/// The running job as `status` prints a job, from its live progress.
+fn live_text(p: &progress::Progress, now: i64) -> String {
+    let age = now.saturating_sub(p.updated_at).max(0);
+    format!(
+        "Job {} ({}): importing now. {} read: {} new, {} already stored, {} waiting for \
+         details, {} filtered, {} quarantined, {} invalid.\n  Live from the running import, \
+         updated {age} s ago. The full status, and any other jobs, show here once it pauses \
+         or finishes; Ctrl-C where it runs pauses it at the last saved batch.",
+        p.job,
+        p.source,
+        format_count(p.read),
+        format_count(p.new),
+        format_count(p.merged),
+        format_count(p.candidates),
+        format_count(p.filtered),
+        format_count(p.quarantined),
+        format_count(p.invalid)
+    )
 }
 
 /// One job change (pause, cancel), server stopped.
@@ -1330,6 +1425,8 @@ fn remove_all(store: &mut Store, id: i64) -> Outcome<Removed> {
     }
     Ok(total)
 }
+
+mod progress;
 
 #[cfg(test)]
 mod tests;

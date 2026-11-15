@@ -956,3 +956,77 @@ fn status_reads_beside_a_writer_and_names_a_command_holding_the_store() {
     // Free again: it reads.
     status(&config, Some(1), false).unwrap();
 }
+
+/// While an import holds the store, `status` shows that import's live
+/// progress from its side file: for no job named, or its own job. Another
+/// job, a stale file or none gives the plain refusal. The run removes its
+/// file when it ends.
+#[test]
+fn status_shows_a_running_imports_live_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 600);
+    let config = data(&dir.path().join("data"));
+    block_on(start(&config, &magnetico(&src), Some(1), true, None)).unwrap();
+    // The run wrote its file at start, handed it its batch, then removed it.
+    assert!(progress::tests::counted(&config.data_dir, "written") >= 1);
+    assert!(progress::tests::counted(&config.data_dir, "saved") >= 1);
+    assert!(
+        !progress::path(&config.data_dir).exists(),
+        "the run removed its file"
+    );
+
+    let import = open_exclusive(&config).unwrap();
+    let counters = ImportCounters {
+        read: 500,
+        new: 500,
+        ..ImportCounters::default()
+    };
+    let live = progress::Writer::start(&config.data_dir, 1, "magnetico", unix_now(), &counters);
+    // What status prints: the live view, in the same words and keys.
+    let p = progress::read(&config.data_dir, unix_now()).unwrap();
+    let text = live_text(&p, p.updated_at + 3);
+    assert!(
+        text.starts_with("Job 1 (magnetico): importing now. 500 read: 500 new"),
+        "{text}"
+    );
+    assert!(text.contains("updated 3 s ago"), "{text}");
+    let out = live_json(&p);
+    let job = &out[0];
+    assert_eq!(job["phase"], Phase::Reading.label());
+    assert_eq!(job["control"], Control::Running.label());
+    assert_eq!(job["live"], true);
+    assert_eq!(job["counters"]["read"], 500);
+    let normal = ["job", "source", "phase", "control", "reason", "counters"];
+    let normal = normal.iter().chain(&[
+        "waiting_candidates",
+        "created_at",
+        "updated_at",
+        "finished_at",
+    ]);
+    for key in normal {
+        assert!(job.get(key).is_some(), "{key} missing: {out}");
+    }
+    let counter_keys: Vec<_> = counters_json(&ImportCounters::default())
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    for key in counter_keys {
+        assert!(job["counters"].get(&key).is_some(), "counter {key} missing");
+    }
+    status(&config, None, false).unwrap();
+    status(&config, None, true).unwrap();
+    status(&config, Some(1), false).unwrap();
+    let r = status(&config, Some(2), false);
+    assert!(
+        matches!(&r, Err(Failure::Refused(m)) if m.contains("lodestar import status` again")),
+        "{r:?}"
+    );
+    drop(live);
+    let r = status(&config, None, false);
+    assert!(matches!(&r, Err(Failure::Refused(_))), "no file: {r:?}");
+    drop(import);
+    status(&config, Some(1), false).unwrap();
+}
