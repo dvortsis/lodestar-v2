@@ -5,8 +5,8 @@
 //! piece assembly, PEX), which `peer_wire` doesn't. MSE isn't reached: its
 //! key exchange is random. Nor are the pace checks (`Error::Behind`) or the
 //! first-window deadline: they fall due seconds into a fetch, and here the
-//! whole fetch runs in one poll, in microseconds, on a clock nothing
-//! advances. Their unit tests in `lodestar_peer_wire::fetch` cover them.
+//! whole fetch runs in one poll, in microseconds, on a runtime that is
+//! never driven. Their unit tests in `lodestar_peer_wire::fetch` cover them.
 #![no_main]
 
 use std::future::Future;
