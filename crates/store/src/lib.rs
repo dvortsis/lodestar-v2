@@ -160,6 +160,11 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::Sqlite(e) if self.is_busy() => write!(
+                f,
+                "the store is busy: another process holds it ({e}). Nothing is wrong with the \
+                 store; try again once that process has finished"
+            ),
             Error::Sqlite(e) => write!(f, "sqlite: {e}"),
             Error::Codec(e) => e.fmt(f),
             Error::Compression(e) => write!(f, "compression: {e}"),
@@ -174,6 +179,21 @@ impl fmt::Display for Error {
             Error::ImportNotRunning => write!(f, "the import job isn't taking batches"),
             Error::NeverVerified => write!(f, "a usenet item is never verified"),
         }
+    }
+}
+
+impl Error {
+    /// Whether another connection's lock refused this call (SQLite busy or
+    /// locked): nothing is wrong with the store, and the same call can be
+    /// tried again once that connection lets go.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            Error::Sqlite(e) if matches!(
+                e.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+            )
+        )
     }
 }
 
@@ -657,8 +677,8 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        if active.is_some_and(|id| codec_has(&conn, id).ok() != Some(true)) {
-            return Err(Error::Corrupt("active file dictionary is missing"));
+        if let Some(id) = active {
+            active_dict_present(&conn, id)?;
         }
         codec.set_active(active);
         Ok(Store {
@@ -1699,6 +1719,18 @@ fn add_sources(conn: &Connection, id: i64, bits: u64) -> Result<()> {
     Ok(())
 }
 
+/// The active file dictionary `id` is stored: `Corrupt` only when the read
+/// answered and it isn't there. A read that fails (a busy or locked store
+/// above all) stays its own error, so a store that's only busy is never
+/// reported as corrupt.
+fn active_dict_present(conn: &Connection, id: i64) -> Result<()> {
+    if codec_has(conn, id)? {
+        Ok(())
+    } else {
+        Err(Error::Corrupt("active file dictionary is missing"))
+    }
+}
+
 fn codec_has(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
     conn.query_row("SELECT 1 FROM zstd_dicts WHERE id = ?1", [id], |_| Ok(()))
         .optional()
@@ -1787,6 +1819,93 @@ fn get_u64(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    /// A store with an active file dictionary, on disk, and a second
+    /// connection holding it exclusively (as an import does).
+    fn store_with_dict(dir: &std::path::Path) -> std::path::PathBuf {
+        let db = dir.join("lodestar.db");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        store
+            .conn
+            .execute("INSERT INTO zstd_dicts (id, kind, created_at, samples, data) VALUES (7, 'file', 1, 1, x'00')", [])
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 7)",
+                [FILE_DICT_SETTING],
+            )
+            .unwrap();
+        drop(store);
+        db
+    }
+
+    fn hold_exclusively(db: &std::path::Path) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open(db).unwrap();
+        c.pragma_update(None, "locking_mode", "EXCLUSIVE").unwrap();
+        c.execute_batch("BEGIN IMMEDIATE; COMMIT;").unwrap();
+        c
+    }
+
+    /// The active-dictionary check maps a refused read to the busy error,
+    /// not to `Corrupt`; a dictionary that's really missing is `Corrupt`.
+    #[test]
+    fn a_busy_dictionary_check_is_busy_and_a_missing_one_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store_with_dict(dir.path());
+        let read_only = || {
+            rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap()
+        };
+        // Free: present, and an id that isn't stored is corrupt.
+        let reader = read_only();
+        active_dict_present(&reader, 7).unwrap();
+        let missing = active_dict_present(&reader, 8).unwrap_err();
+        assert!(matches!(missing, Error::Corrupt(_)), "{missing}");
+        assert!(!missing.is_busy());
+        // The lock can't be taken while another connection has the store
+        // open, so the reader opens again once it's held.
+        drop(reader);
+
+        // Held: no wait (busy timeout 0), and the error says busy.
+        let held = hold_exclusively(&db);
+        let reader = read_only();
+        reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let busy = active_dict_present(&reader, 7).unwrap_err();
+        assert!(busy.is_busy(), "{busy}");
+        let says = busy.to_string();
+        assert!(
+            says.contains("try again") && !says.contains("corrupt"),
+            "{says}"
+        );
+        assert!(!matches!(busy, Error::Corrupt(_)));
+        drop(held);
+        active_dict_present(&reader, 7).unwrap();
+    }
+
+    /// Opening a store another connection holds exclusively fails as busy
+    /// once the busy timeout runs out, never as corrupt; free again, it
+    /// opens, and a store whose active dictionary is gone is corrupt.
+    #[test]
+    fn opening_a_held_store_is_busy_never_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store_with_dict(dir.path());
+        let held = hold_exclusively(&db);
+        let began = std::time::Instant::now();
+        let e = Store::open_reader(&db, StoreConfig::default()).unwrap_err();
+        assert!(e.is_busy(), "{e}");
+        // Bounded by the store's busy timeout, with room to spare.
+        assert!(began.elapsed() < std::time::Duration::from_secs(60));
+        drop(held);
+        Store::open_reader(&db, StoreConfig::default()).unwrap();
+
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute("DELETE FROM zstd_dicts WHERE id = 7", [])
+            .unwrap();
+        drop(c);
+        let e = Store::open_reader(&db, StoreConfig::default()).unwrap_err();
+        assert!(matches!(e, Error::Corrupt(_)), "{e}");
+    }
+
     use super::*;
 
     #[test]

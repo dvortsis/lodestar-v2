@@ -793,6 +793,7 @@ placement:
   - X-sec-S6-02-03
   - X-floor-renew-metrics-nits
   - X-import-status-lock
+  - X-store-load-busy-map
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
