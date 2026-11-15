@@ -11,6 +11,7 @@
 	import QueryBar from '$lib/features/search/query/QueryBar.svelte';
 	import { registerSearchCommands } from '$lib/features/search/query/commands';
 	import { onFirstInteraction } from '$lib/features/search/query/engaged';
+	import { checkFirstRun } from '$lib/features/auth/first-check';
 
 	let bar = $state<ReturnType<typeof QueryBar>>();
 
@@ -35,6 +36,15 @@
 			stop();
 			off?.();
 		};
+	});
+
+	// A fresh instance, a signed-out visitor or a pending Legal Notice can't search yet: one check
+	// after mount sends the browser to setup or sign-in (X-first-run-search-gate). The check has no
+	// imports, so the bare first load gains one small response; navigation loads only to leave.
+	onMount(() => {
+		let mounted = true;
+		void checkFirstRun(() => mounted && location.pathname === '/search');
+		return () => (mounted = false);
 	});
 
 	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs

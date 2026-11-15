@@ -485,6 +485,7 @@ placement:
   - X-operator-unattended-wake
   - X-operator-check8-compare
   - X-store-migrate-race
+  - X-flake-store-migrate-race
   - X-cluster-start-retry
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
@@ -805,6 +806,8 @@ placement:
   - X-import-progress-visible
   - X-import-status-lock
   - X-store-load-busy-map
+  - X-first-run-search-gate
+  - D-docker-guide-1115
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
