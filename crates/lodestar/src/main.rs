@@ -175,6 +175,10 @@ fn run() -> ExitCode {
                 Ok(c) => c,
                 Err(e) => return cli::report(&e),
             };
+            // The start-up checks the hook left here, once the service's
+            // folder passed: run once either way.
+            #[cfg(windows)]
+            windows::STARTUP.run_deferred(|| windows::startup(&config));
             // On Unix, `serve` is the supervisor (§12.2), still
             // single-threaded here; the work runs in its `--child`.
             #[cfg(unix)]

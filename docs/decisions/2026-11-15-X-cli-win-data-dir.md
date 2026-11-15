@@ -19,7 +19,9 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 
 ## The folder must be private first (S8-07, from the runner's reviews)
 - **The CLI checks the service's folder is private, as the service does,** before it uses it (`cli::check_service_dir`). It's the read-only half of the service's `acl::secure_dir`: the same inspection and the same verdict (`acl::verdict`), with the service's SID. It never creates the folder and changes no permission.
-- **One guard for every hand-run command** (`cli::ServiceGuard`): the maintenance commands (`cli::load_config`), and `serve` and `healthcheck` run by hand (`cli::load_serve_config`, from `main`) share it, so they can't drift apart. The service the SCM starts keeps its own check and never comes here. The Windows start-up hook, which reads the config for its priority and port checks before `main`, goes through the same loader but never checks or reads the service's folder itself: when the folder would need a check, it leaves the start-up checks out and `main` checks and refuses.
+- **One guard for every hand-run command** (`cli::ServiceGuard`): the maintenance commands (`cli::load_config`), and `serve` and `healthcheck` run by hand (`cli::load_serve_config`, from `main`) share it, so they can't drift apart. The service the SCM starts keeps its own check and never comes here. The Windows start-up hook, which reads the config for its priority and port checks before `main`, goes through the same loader but never checks or reads the service's folder itself. When the folder would need a check, the hook leaves both to `main`: `main` checks the folder, refuses if it isn't private, and otherwise runs the start-up checks itself (`windows::STARTUP`). They run exactly once either way.
+- **`serve --fixture`** goes through the same guard (`cli::check_fixture`) before anything is read or written: a fixture folder that is the service's, or a `--config` inside it, is checked first.
+- **A refusal stays a refusal:** the guard checks once and gives every later ask the same answer.
 - **Where the service's folder is:** worked out exactly as the service works out its own (`windows::service::default_data_dir`), including its fallback when `%ProgramData%` is unset, so on Windows it's never unknown and nothing skips the check (`cli::Install::windows`). Off Windows there's no service folder and nothing is checked.
   - **Not taken (the review's O3):** reading `%ProgramData%` from the system's known folder instead of the environment. The service reads the environment, so the CLI matches it exactly; moving both together belongs with the follow-up below.
 - **When it's checked:** whenever the service's folder is the one in use, from any executable (the MSI's or a portable one) and however it was named, mirroring the service's own rule (`windows::service` `load()`):
@@ -29,10 +31,10 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 - **When it isn't:** a folder that isn't used isn't checked. `--config` or `LODESTAR_DATA_DIR` naming another data folder works from the MSI's executable whatever state the service's folder is in, as "What still wins" says, so `no store`'s advice to pass `--config` leads somewhere.
 - **Not private:** the command refuses with exit status 3 and the service's own words (`acl::refusal`): what's wrong and the fix, the installer's Repair or `icacls`. Nothing in the folder is read.
 - **Its permissions can't be read:** refused the same way, with a hint to run the command from an administrator's PowerShell.
-- **Missing:** `no store at`, naming the folder; nothing is created.
+- **Missing:** `no store at`, naming the folder; nothing is created. For `serve` run by hand, it adds: install or start the Lodestar service first, or point `LODESTAR_DATA_DIR` at a folder of your own.
 - **Commands that write there:** `backup` (its `backups` folder, unless `--to`), `vacuum`, `reindex`, `rollback`, `rollup`, `import`, `settings` and `companion` add or change files in the service's folder. New files inherit the folder's permissions and belong to the administrator's default owner (normally Administrators), which the service's verdict accepts. `stats` and `import status` only read. The tester confirms on a VM that the service still starts after a `backup`.
 - An administrator's PowerShell can open the folder, as before with `LODESTAR_DATA_DIR`; a standard one is refused by the folder's own permissions.
-- **Follow-up, X-win-service-path-hardening (runner's call):** making the path comparison stricter for more ways of spelling a folder, and the service's own order of reading and checking, are left to that slice.
+- **Follow-up, X-win-service-path-hardening (runner's call):** making the path comparison stricter for more ways of spelling a folder, checking a data folder inside the service's folder as well as the folder itself (in the CLI and the service), and the service's own order of reading and checking, are left to that slice.
 
 ## When there's no store
 - `no store at <db>` now goes on to name the data folder looked in, and how to point at another: `LODESTAR_DATA_DIR`, or `--config` with a `data_dir`.
@@ -61,6 +63,8 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 - **`cli::tests::an_unset_program_data_still_checks_the_services_folder`:** with `%ProgramData%` unset, the MSI's executable's folder is the service's fallback, and the check is asked and refuses.
 - **`cli::tests::hand_run_serve_checks_the_services_folder`:** `serve` and `healthcheck`'s loader checks the service's folder when `LODESTAR_DATA_DIR` names it, when the config file is inside it, and when a config elsewhere names it; another folder, or nothing set, isn't checked and keeps `data`.
 - **`cli::tests::an_empty_data_folder_is_the_working_folder`.**
+- **`cli::tests::a_refusal_is_given_again`**, **`a_fixture_in_the_services_folder_is_checked`** and **`hand_run_serve_without_the_service_folder_says_what_to_do`.**
+- **`windows::tests::the_startup_checks_run_exactly_once`:** run by the hook, main runs nothing; deferred, main runs them once; neither, nothing.
 - **`cli::tests::other_executables_keep_data_in_the_working_folder`:** a portable executable, one elsewhere in Program Files, no `%ProgramFiles%`, and no install at all keep `data`. The test binary itself is never the MSI's, on any platform.
 - **`cli::tests::the_msi_executable_matches_whatever_its_case`** runs on every platform.
 - **`cli::tests::no_store_says_where_it_looked`** checks the message.

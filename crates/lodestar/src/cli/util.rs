@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lodestar_store::rusqlite::{self, Connection, OpenFlags, OptionalExtension};
 
 /// Why a command didn't do its job.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
     /// It refused for safety (the store is in use, an update rollback is
     /// in progress, no confirmation, …). Nothing was changed.

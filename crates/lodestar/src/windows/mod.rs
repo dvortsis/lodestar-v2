@@ -55,8 +55,9 @@ pub fn hook() -> Option<ExitCode> {
             return None;
         }
         // An unreadable config is `main`'s to report. So is the service's
-        // folder: this never reads it, and leaves its check to `main`.
-        if let Ok(config) = crate::cli::load_serve_config(
+        // folder: this never reads it, and leaves its check to `main`,
+        // which then runs the start-up checks once the folder passes.
+        match crate::cli::load_serve_config(
             config_path.as_deref(),
             &crate::cli::Install::here(),
             |k| std::env::var(k).ok(),
@@ -66,10 +67,63 @@ pub fn hook() -> Option<ExitCode> {
                 ))
             },
         ) {
-            startup(&config);
+            Ok(config) => STARTUP.run_now(|| startup(&config)),
+            Err(crate::cli::LoadError::Folder(_)) => STARTUP.defer(),
+            Err(crate::cli::LoadError::Config(_)) => {}
         }
     }
     None
+}
+
+/// The [`startup`] checks, run exactly once: by [`hook`], or, when it left
+/// the service's folder to `main`, by `main` once the folder passes.
+pub static STARTUP: Startup = Startup::new();
+
+/// Whether the [`startup`] checks have run, and whether [`hook`] left them
+/// to `main`.
+#[derive(Debug)]
+pub struct Startup {
+    deferred: std::sync::atomic::AtomicBool,
+    ran: std::sync::atomic::AtomicBool,
+}
+
+impl Startup {
+    pub const fn new() -> Startup {
+        Startup {
+            deferred: std::sync::atomic::AtomicBool::new(false),
+            ran: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// [`hook`] left them to `main`.
+    pub fn defer(&self) {
+        self.deferred
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Runs `f` unless the checks have already run.
+    pub fn run_now(&self, f: impl FnOnce()) {
+        if !self.ran.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            f();
+        }
+    }
+
+    /// `main`'s turn: runs `f` only if [`hook`] left the checks to it and
+    /// they haven't run. Whether it ran.
+    pub fn run_deferred(&self, f: impl FnOnce()) -> bool {
+        let owed = self.deferred.load(std::sync::atomic::Ordering::SeqCst)
+            && !self.ran.swap(true, std::sync::atomic::Ordering::SeqCst);
+        if owed {
+            f();
+        }
+        owed
+    }
+}
+
+impl Default for Startup {
+    fn default() -> Startup {
+        Startup::new()
+    }
 }
 
 /// Lowers the process priority and checks the port range, on a thread of
@@ -457,6 +511,36 @@ mod tests {
     use std::io::Read;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    /// The start-up checks run exactly once: by the hook, or by `main`
+    /// when the hook left them to it (S8-07's deferred path).
+    #[test]
+    fn the_startup_checks_run_exactly_once() {
+        let runs = std::cell::Cell::new(0);
+        let run = || runs.set(runs.get() + 1);
+
+        // The hook ran them: main has nothing owed.
+        let s = super::Startup::new();
+        s.run_now(run);
+        assert!(!s.run_deferred(run));
+        assert_eq!(runs.get(), 1);
+
+        // The hook deferred: main runs them, once.
+        runs.set(0);
+        let s = super::Startup::new();
+        s.defer();
+        assert!(s.run_deferred(run));
+        assert!(!s.run_deferred(run));
+        s.run_now(run);
+        assert_eq!(runs.get(), 1);
+
+        // Neither (not a service command line, or a broken config): main
+        // runs nothing.
+        runs.set(0);
+        let s = super::Startup::new();
+        assert!(!s.run_deferred(run));
+        assert_eq!(runs.get(), 0);
+    }
 
     const LONG: Duration = Duration::from_secs(10);
 

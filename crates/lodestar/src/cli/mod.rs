@@ -320,8 +320,8 @@ pub(crate) fn check_service_dir(
 }
 
 /// [`check_service_dir`] for this machine's service: on Windows, with the
-/// service's SID. Elsewhere it's never asked ([`Install::here`] names no
-/// executable there), and refuses if it were.
+/// service's SID. Elsewhere it's never asked (off Windows
+/// [`Install::here`] has no service folder), and refuses if it were.
 pub(crate) fn check_this_service_dir(dir: &Path) -> FolderCheck {
     #[cfg(windows)]
     {
@@ -366,6 +366,8 @@ pub(crate) struct ServiceGuard<C> {
     dir: Option<PathBuf>,
     /// Taken by the first check.
     check: Option<C>,
+    /// The first check's answer, given again to every later ask.
+    answer: Option<FolderCheck>,
 }
 
 impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
@@ -373,6 +375,7 @@ impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
         ServiceGuard {
             dir: install.service_dir.clone(),
             check: Some(check),
+            answer: None,
         }
     }
 
@@ -389,11 +392,19 @@ impl<C: FnOnce(&Path) -> FolderCheck> ServiceGuard<C> {
             .is_some_and(|s| crate::windows::service::same_dir(p, s))
     }
 
+    /// Checks the folder once; a later ask gets the same answer, so a
+    /// refusal stays a refusal.
     fn ensure(&mut self) -> Result<(), LoadError> {
-        match (self.dir.as_deref(), self.check.take()) {
-            (Some(dir), Some(c)) => c(dir).map_err(LoadError::Folder),
-            _ => Ok(()),
+        let Some(dir) = self.dir.as_deref() else {
+            return Ok(());
+        };
+        if let Some(c) = self.check.take() {
+            self.answer = Some(c(dir));
         }
+        self.answer
+            .clone()
+            .unwrap_or(Ok(()))
+            .map_err(LoadError::Folder)
     }
 
     /// Before anything is read: when the data folder named by
@@ -438,7 +449,29 @@ pub(crate) fn load_serve_config(
     env: impl Fn(&str) -> Option<String>,
     check: impl FnOnce(&Path) -> FolderCheck,
 ) -> Result<Config, LoadError> {
-    load_config(&Command::Healthcheck, config_path, install, env, check).map(|(c, _)| c)
+    load_config(&Command::Healthcheck, config_path, install, env, check)
+        .map(|(c, _)| c)
+        .map_err(|e| match e {
+            LoadError::Folder(Failure::Failed(m)) => LoadError::Folder(Failure::Failed(format!(
+                "{m} To run Lodestar by hand on the installed service's data, install or start \
+                 the Lodestar service first; otherwise point LODESTAR_DATA_DIR at a folder of \
+                 your own."
+            ))),
+            e => e,
+        })
+}
+
+/// `serve --fixture DIR`'s check, before anything is read or written:
+/// [`ServiceGuard`]'s, with `DIR` as the data folder and `--config` as the
+/// config file.
+pub(crate) fn check_fixture(
+    dir: &Path,
+    config_path: Option<&Path>,
+    install: &Install,
+    check: impl FnOnce(&Path) -> FolderCheck,
+) -> Result<(), LoadError> {
+    let dir = dir.to_string_lossy();
+    ServiceGuard::new(install, check).before(config_path, Some(&dir), false)
 }
 
 /// Prints why the config couldn't be had, and its exit status: 3 for a
@@ -1030,6 +1063,65 @@ mod tests {
         assert_eq!(c.data_dir, other);
         let c = load_serve_config(None, &install, &none, unasked).unwrap();
         assert_eq!(c.data_dir, PathBuf::from("data"));
+    }
+
+    /// A refusal stays a refusal: a later ask gets the first answer, and
+    /// the check runs once.
+    #[test]
+    fn a_refusal_is_given_again() {
+        let root = tempfile::tempdir().unwrap();
+        let install = msi(root.path());
+        let svc = install.service_dir.clone().unwrap();
+        let calls = std::cell::Cell::new(0);
+        let mut guard = ServiceGuard::new(&install, |d: &Path| {
+            calls.set(calls.get() + 1);
+            refuse(d)
+        });
+        assert!(guard.before(None, svc.to_str(), false).is_err());
+        assert!(matches!(
+            guard.after(&svc),
+            Err(LoadError::Folder(Failure::Refused(_)))
+        ));
+        assert_eq!(calls.get(), 1);
+    }
+
+    /// `serve --fixture`: a fixture folder or config file in the service's
+    /// folder is checked first; anywhere else isn't.
+    #[test]
+    fn a_fixture_in_the_services_folder_is_checked() {
+        let root = tempfile::tempdir().unwrap();
+        let install = msi(root.path());
+        let svc = install.service_dir.clone().unwrap();
+        let refused =
+            |r: Result<(), LoadError>| matches!(r, Err(LoadError::Folder(Failure::Refused(_))));
+        assert!(refused(check_fixture(&svc, None, &install, refuse)));
+        let fx = root.path().join("fixture");
+        assert!(refused(check_fixture(
+            &fx,
+            Some(&svc.join("config.toml")),
+            &install,
+            refuse
+        )));
+        let other = root.path().join("other.toml");
+        assert!(check_fixture(&fx, Some(&other), &install, unasked).is_ok());
+    }
+
+    /// Hand-run `serve` with the service's folder missing says how to go
+    /// on.
+    #[test]
+    fn hand_run_serve_without_the_service_folder_says_what_to_do() {
+        let root = tempfile::tempdir().unwrap();
+        let install = msi(root.path());
+        let svc = install.service_dir.clone().unwrap();
+        let named = env_of(&[("LODESTAR_DATA_DIR", svc.to_str().unwrap())]);
+        let missing = |d: &Path| Err(Failure::Failed(util::no_store(&d.join("lodestar.db"))));
+        match load_serve_config(None, &install, &named, missing) {
+            Err(LoadError::Folder(Failure::Failed(m))) => {
+                assert!(m.starts_with("no store at"), "{m}");
+                assert!(m.contains("start the Lodestar service first"), "{m}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// An empty data folder is the working folder, so it's the service's
