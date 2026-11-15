@@ -428,6 +428,15 @@ fn measure(
         group(index.num_docs()),
         index.segments()
     );
+    // What a `du` of the same folder would add (index-stats explains it).
+    let disk = lodestar_search::DiskStats::read(index_path)?;
+    println!(
+        "    live segments     {:.0} B per torrent; {} deleted docs; {:.0} B stale; {:.0} B with subfolders (du)",
+        disk.live_bytes as f64 / n,
+        group(disk.deleted),
+        disk.stale_bytes as f64 / n,
+        disk.recursive_bytes as f64 / n
+    );
 
     println!(
         "  file index          {:.1} MB = {:.0} B per torrent ({} files, {:.0} B each)",
