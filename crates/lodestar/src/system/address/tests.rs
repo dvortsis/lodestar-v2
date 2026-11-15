@@ -39,12 +39,51 @@ impl Clock for FakeClock {
 
 const T0: u64 = 1_800_000_000;
 
+/// The lowest ephemeral port on any target: Linux hands out 32768 and up by
+/// default, macOS and Windows 49152 and up.
+const EPHEMERAL_FLOOR: u16 = 32768;
+
+/// A loopback port no other test in this binary can be handed while this
+/// one uses it. The server under test binds the port itself, later, so a
+/// port taken from `bind(127.0.0.1:0)` and released could meanwhile go to
+/// another test running in parallel (X-flake-address-port). These ports come
+/// from below every target's ephemeral range, which `bind(.., 0)` never
+/// returns, and each is handed out once. Free when picked: one another
+/// program holds, or one the system reserves (Windows refuses those with
+/// access denied), is skipped. Unique within one process only: test
+/// processes on one machine start at places set by their process ids, so
+/// they rarely meet.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static NEXT: std::sync::OnceLock<std::sync::atomic::AtomicU16> = std::sync::OnceLock::new();
+    let next = NEXT.get_or_init(|| {
+        std::sync::atomic::AtomicU16::new(20_000 + (std::process::id() % 40) as u16 * 250)
+    });
+    loop {
+        let port = next.fetch_add(1, Ordering::Relaxed);
+        assert!(port < EPHEMERAL_FLOOR, "out of this binary's own ports");
+        match std::net::TcpListener::bind(local(port)) {
+            Ok(_) => return port,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+                ) => {}
+            Err(e) => panic!("binding 127.0.0.1:{port}: {e}"),
+        }
+    }
+}
+
+/// [`free_port`]'s ports are its own: below the ephemeral range, and never
+/// handed out twice.
+#[test]
+fn a_free_port_is_never_handed_out_twice() {
+    let ports: Vec<u16> = (0..64).map(|_| free_port()).collect();
+    let unique: std::collections::BTreeSet<_> = ports.iter().collect();
+    assert_eq!(unique.len(), ports.len(), "{ports:?}");
+    assert!(ports.iter().all(|&p| p < EPHEMERAL_FLOOR), "{ports:?}");
+    for p in ports {
+        std::net::TcpListener::bind(local(p)).unwrap_or_else(|e| panic!("127.0.0.1:{p}: {e}"));
+    }
 }
 
 fn local(port: u16) -> SocketAddr {
