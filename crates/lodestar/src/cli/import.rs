@@ -942,10 +942,20 @@ async fn run_job(
         .map_err(failed("reading the sources"))?
         .store_mark();
     store.set_adult_mark(mark);
+    // The live view `status` reads while this import holds the store;
+    // removed when the run ends, however it ends.
+    let at_start = load(store, id)?.counters;
+    let live = Arc::new(std::sync::Mutex::new(progress::Writer::start(
+        &config.data_dir,
+        id,
+        adapter.name(),
+        unix_now(),
+        &at_start,
+    )));
     let stop = Arc::new(AtomicBool::new(false));
     {
         let (stop, cancel) = (stop.clone(), adapter.canceller());
-        let data_dir = config.data_dir.clone();
+        let (data_dir, live) = (config.data_dir.clone(), live.clone());
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 eprintln!("Pausing at the last saved batch… (Ctrl-C again to quit now)");
@@ -959,23 +969,17 @@ async fn run_job(
                     "Stopped. Nothing is lost: `lodestar import resume` carries on from the last \
                      saved batch."
                 );
-                // No drop runs on exit: the live view goes now.
+                // No drop runs on exit: the live view goes now, with the
+                // writer held so no heartbeat can put it back.
+                let _held = live
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 progress::remove(&data_dir);
                 std::process::exit(130);
             }
         });
     }
     let started = std::time::Instant::now();
-    // The live view `status` reads while this import holds the store;
-    // removed when the run ends, however it ends.
-    let at_start = load(store, id)?.counters;
-    let live = Arc::new(std::sync::Mutex::new(progress::Writer::start(
-        &config.data_dir,
-        id,
-        adapter.name(),
-        unix_now(),
-        &at_start,
-    )));
     // Beats while the source is slow, so the view doesn't lapse.
     let beat = {
         let live = live.clone();
@@ -1196,7 +1200,7 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
                     "control": j.control.label(), "reason": j.reason.map(Reason::label),
                     "counters": counters_json(&j.counters), "waiting_candidates": j.open_candidates,
                     "created_at": j.created_at, "updated_at": j.updated_at,
-                    "finished_at": j.finished_at,
+                    "finished_at": j.finished_at, "live": false,
                 })
             })
             .collect();

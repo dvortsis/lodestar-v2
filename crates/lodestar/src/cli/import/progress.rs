@@ -147,17 +147,35 @@ impl Writer {
         let tmp = tmp_path(&self.data_dir);
         // A new file each time, never through whatever sits at the name.
         let _ = std::fs::remove_file(&tmp);
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, &text));
+        let written = create(&tmp).and_then(|mut f| std::io::Write::write_all(&mut f, &text));
         if written.is_err() || std::fs::rename(&tmp, path(&self.data_dir)).is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
         #[cfg(test)]
         tests::count(&self.data_dir, "written");
     }
+}
+
+/// A new file at `path`, never through a link at the name. Readable by
+/// all on unix, so `status` run as another user can read it: it holds
+/// counts only.
+#[cfg(unix)]
+fn create(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .custom_flags(crate::update::layout::nofollow())
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn create(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 impl Drop for Writer {
@@ -171,7 +189,8 @@ impl Drop for Writer {
 /// reads as none.
 pub fn read(data_dir: &Path, now: i64) -> Option<Progress> {
     let mut text = Vec::new();
-    std::fs::File::open(path(data_dir))
+    // Not through a link, never blocking on a FIFO, a regular file only.
+    crate::update::layout::open_nofollow(&path(data_dir))
         .ok()?
         .take(MAX_BYTES + 1)
         .read_to_end(&mut text)
@@ -280,5 +299,50 @@ pub(super) mod tests {
         assert_eq!(read(dir.path(), 1_000), None);
         std::fs::write(path(dir.path()), vec![b' '; MAX_BYTES as usize + 1]).unwrap();
         assert_eq!(read(dir.path(), 1_000), None);
+    }
+
+    /// Anything but a regular file at the name reads as none: a directory
+    /// everywhere, and on unix a link to a good file and a FIFO, which
+    /// mustn't hang the read.
+    #[test]
+    fn only_a_regular_file_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(path(dir.path())).unwrap();
+        assert_eq!(read(dir.path(), 1_000), None);
+        std::fs::remove_dir(path(dir.path())).unwrap();
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            let w = Writer::start(elsewhere.path(), 1, "magnetico", 1_000, &counters(1));
+            assert!(read(elsewhere.path(), 1_000).is_some());
+            std::os::unix::fs::symlink(path(elsewhere.path()), path(dir.path())).unwrap();
+            assert_eq!(read(dir.path(), 1_000), None, "a link isn't followed");
+            drop(w);
+            std::fs::remove_file(path(dir.path())).unwrap();
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                path(dir.path()),
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_raw_mode(0o644),
+                0,
+            )
+            .unwrap();
+            assert_eq!(read(dir.path(), 1_000), None, "a FIFO doesn't hang");
+        }
+    }
+
+    /// The file is readable by other users on unix (counts only).
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let _w = Writer::start(dir.path(), 1, "magnetico", 1_000, &counters(1));
+        let mode = std::fs::metadata(path(dir.path()))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777 & !0o022, 0o644 & !0o022);
+        assert_ne!(mode & 0o044, 0, "readable beyond the owner");
     }
 }
