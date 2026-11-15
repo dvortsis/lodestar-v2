@@ -901,15 +901,16 @@ mod scm {
                             );
                             super::RESTART
                         }
-                        // Its message can name a path: the kind only.
-                        Err(_) => {
+                        // Its message can name a path: the kind only, or the
+                        // store's WAL refusal by name (X-store-wal-nits).
+                        Err(e) => {
                             let kind = match role {
                                 super::Role::Serve => "serve",
                                 super::Role::Worker => "worker",
                             };
                             lodestar_log::log_event!(
                                 crate::logging::events::SERVICE_FAILED,
-                                error = lodestar_log::Error::kind(kind)
+                                error = lodestar_log::Error::kind(crate::failure_kind(&*e, kind))
                             );
                             1
                         }

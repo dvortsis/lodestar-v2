@@ -487,6 +487,7 @@ placement:
   - X-operator-check8-compare
   - X-store-migrate-race
   - X-flake-store-migrate-race
+  - X-store-wal-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
