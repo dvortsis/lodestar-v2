@@ -407,6 +407,7 @@ placement:
   - X-win-upd-1920
   - X-win-upd-reoffer
   - X-win-upd-window
+  - X-win-portable-restart-load
   - X-win-upd-stop-wait
   - X-upd-stop-races
   - X-upd-stop-early
