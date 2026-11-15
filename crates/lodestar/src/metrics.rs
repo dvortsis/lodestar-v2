@@ -1210,7 +1210,7 @@ fn render_routing(o: &mut Out, d: &StatsSnapshot) {
     o.one(
         "dht_routing_good_nodes",
         "gauge",
-        "Routing-table nodes that answered within 15 minutes.",
+        "Routing-table nodes good by BEP 5: answered us within 15 minutes, or answered before and queried us within 15 minutes.",
         d.routing_good_nodes,
     );
 }

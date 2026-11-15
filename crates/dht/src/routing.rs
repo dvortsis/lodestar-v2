@@ -153,11 +153,14 @@ impl RoutingTable {
         self.len() == 0
     }
 
-    /// Number of nodes in the main buckets that are good at `now`. A node
-    /// that stops answering keeps its slot, as bad, until a verified
-    /// replacement takes it, so [`len`](Self::len) alone can't show a
-    /// table whose network has gone; this count falls to 0 within
-    /// [`GOOD_FOR_SECS`] of the last reply.
+    /// Number of nodes in the main buckets that are good at `now`, by
+    /// BEP 5: answered us within [`GOOD_FOR_SECS`], or answered before and
+    /// queried us within it. A node that stops answering keeps its slot,
+    /// as bad, until a verified replacement takes it, so
+    /// [`len`](Self::len) alone can't show a table whose network has
+    /// gone; this count falls to 0 within [`GOOD_FOR_SECS`] of the node
+    /// last hearing from its peers. A node that keeps querying us counts
+    /// even if our own queries are lost.
     pub fn good(&self, now: u64) -> usize {
         self.entries()
             .filter(|e| e.status(now) == Status::Good)
