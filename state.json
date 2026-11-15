@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T02:04Z",
+  "updated_at": "2026-11-15T03:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T02:04Z",
+  "last_heartbeat": "2026-11-15T03:13Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8884,6 +8884,24 @@
       "from": 905,
       "note": "count excluded claims only on the Stored path; Unknown-key test; doc clause; heading form",
       "owner": "slot 30"
+    },
+    {
+      "id": "X-ci-no-fail-fast",
+      "from": "896/899",
+      "note": "--no-fail-fast on multi-binary cargo test steps; rides #902 metrics.rs doc nit",
+      "owner": "slot 32"
+    },
+    {
+      "id": "X-companion-starting-steps",
+      "from": 903,
+      "note": "guided steps show starting for a managed companion not yet ready",
+      "owner": "unassigned (after #903)"
+    },
+    {
+      "id": "cloud-retests",
+      "from": "X-test-vm 2026-11-15",
+      "note": "D3 -> re-test #881; D2 -> re-test #869; gluetun-restart recovery and Windows portable restart under load need run reports; keep Linode token and AWS test user",
+      "owner": "runner"
     }
   ],
   "main_health": [
@@ -9277,17 +9295,9 @@
       "slice": "X-flake-dataset-macos",
       "status": "review MERGE + 1 Important (docs supersede); round pending, then self-check + merge"
     },
-    "901": {
-      "slice": "X-rejudge-stall-followups",
-      "status": "review MERGE + 3 Important; round pending, then delta review"
-    },
     "899": {
       "slice": "X-flake-detect-macos",
       "status": "after #896: bring main in, full CI, review"
-    },
-    "902": {
-      "slice": "X-dht-reply-ratio-resolved",
-      "status": "fresh review running fe0c6f62"
     },
     "904": {
       "slice": "X-fetch-wait-credit",
@@ -9776,6 +9786,18 @@
       "slice": "X-floor-renew-metrics",
       "sha": "4ec787fe",
       "at": "2026-11-15T02:04Z"
+    },
+    {
+      "pr": 902,
+      "slice": "X-dht-reply-ratio-resolved",
+      "sha": "5c81a26a",
+      "at": "2026-11-15T03:13Z"
+    },
+    {
+      "pr": 901,
+      "slice": "X-rejudge-stall-followups",
+      "sha": "3bde82ef",
+      "at": "2026-11-15T03:13Z"
     }
   ],
   "active_sessions": {
@@ -10014,7 +10036,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T02:04Z",
+    "updated": "2026-11-15T03:13Z",
     "items": [
       {
         "slot": 1,
@@ -10105,8 +10127,8 @@
         "slice": "X-flake-dataset-macos",
         "role": "build",
         "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-14T22:46Z",
-        "doing": "#896, #901 in review; #899 after #896",
+        "since": "2026-11-15T03:13Z",
+        "doing": "#899 (carries #896)",
         "cap": "kept cloud-testing (\u00a72.64 4+4)",
         "model": "opus",
         "status": "active"
@@ -10189,12 +10211,12 @@
       },
       {
         "slot": 32,
-        "slice": "X-dht-reply-ratio-resolved",
+        "slice": "X-ci-no-fail-fast",
         "role": "build",
         "agent": "session_01MMjhn8URRT9adbFfM1zGi1",
         "status": "active",
-        "since": "2026-11-14T07:27Z",
-        "doing": "#902 CI",
+        "since": "2026-11-15T03:13Z",
+        "doing": "CI no-fail-fast + #902 doc nit",
         "cap": "kept build (\u00a72.64 4+4)"
       },
       {
@@ -10294,8 +10316,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T02:04Z",
-  "updated": "2026-11-15T02:04Z",
+  "heartbeat": "2026-11-15T03:13Z",
+  "updated": "2026-11-15T03:13Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
