@@ -609,6 +609,40 @@ fn changes_between_batches_stop_the_run_truthfully() {
     assert!(j.counters.conserved());
 }
 
+/// X-import-rate-1m: a batch prepared on several threads gives exactly
+/// the rows one preparer gives, record for record and in order.
+#[test]
+fn preparing_on_several_threads_matches_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let rows: Vec<TorrentRow> = (1..=300u32)
+        .map(|i| {
+            let files: Vec<(String, i64)> = (0..(i % 7 + 1))
+                .map(|f| (format!("d{}/f{f}.bin", i % 5), i64::from(f + 1) * 1000))
+                .collect();
+            let files: Vec<(&str, i64)> = files.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+            TorrentRow::good(i, &files)
+        })
+        .collect();
+    let path = fixture(dir.path(), "p.sqlite3", &rows);
+    let mut a = adapter(&path);
+    let batch = block_on(a.read(&[], NOW)).unwrap().unwrap();
+    assert!(batch.records.len() >= MIN_PARALLEL_RECORDS, "{}", batch.records.len());
+    let (store, _) = mem();
+    let shown = |v: Vec<Option<(lodestar_metainfo::Info, Result<Prepared, Error>)>>| {
+        v.into_iter()
+            .map(|r| r.map(|(info, p)| (info.name.raw, p.map_err(|e| e.to_string()))))
+            .collect::<Vec<_>>()
+    };
+    let one = shown(prepare_all(&mut [store.preparer()], &batch.records));
+    let mut four: Vec<Preparer> = (0..4).map(|_| store.preparer()).collect();
+    let many = shown(prepare_all(&mut four, &batch.records));
+    assert_eq!(one.len(), batch.records.len());
+    assert_eq!(one, many);
+    // Preparers keep no state between batches: the same batch again
+    // gives the same rows.
+    assert_eq!(shown(prepare_all(&mut four, &batch.records)), many);
+}
+
 /// The pilots' pass line (IMP-4b decisions file): 100,000 synthetic
 /// Magnetico torrents, three files each, into a file-backed store through
 /// the full filter. Run it in release, on its own:

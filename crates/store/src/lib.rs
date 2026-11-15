@@ -1351,7 +1351,43 @@ impl Store {
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
+
+    /// Tunes this connection for a long run of large write transactions
+    /// (an offline import, X-import-rate-1m), or back to SQLite's defaults.
+    /// Only this connection changes; nothing is written to the file.
+    ///
+    /// - **Page cache:** [`BULK_CACHE_MIB`] instead of SQLite's 2 MiB. A
+    ///   batch's dirty pages then stay in memory until it commits instead
+    ///   of spilling into the WAL mid-transaction (and being rewritten
+    ///   there), and the hash and id b-trees' inner pages stay cached
+    ///   between batches, so each lookup and insert doesn't read them
+    ///   again once the file outgrows `mmap_size`.
+    /// - **WAL auto-checkpoint:** every [`BULK_CHECKPOINT_PAGES`] pages
+    ///   (64 MiB at the store's 16 KiB pages) instead of SQLite's 1,000
+    ///   (16 MiB): about one checkpoint, with its `fsync`, every few
+    ///   batches instead of one every batch. The WAL stays bounded by it.
+    pub fn set_bulk_writes(&self, on: bool) -> Result<()> {
+        let (cache_kib, checkpoint) = if on {
+            (BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES)
+        } else {
+            (DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES)
+        };
+        self.conn.pragma_update(None, "cache_size", -cache_kib)?;
+        self.conn
+            .query_row(&format!("PRAGMA wal_autocheckpoint = {checkpoint}"), [], |_| Ok(()))?;
+        Ok(())
+    }
 }
+
+/// [`Store::set_bulk_writes`]'s page cache. An offline import runs with
+/// the server stopped, so this is memory the server would otherwise hold.
+pub const BULK_CACHE_MIB: i64 = 256;
+/// [`Store::set_bulk_writes`]'s WAL auto-checkpoint, in pages.
+pub const BULK_CHECKPOINT_PAGES: i64 = 4096;
+/// SQLite's default page cache (`-2000`: 2,000 KiB).
+const DEFAULT_CACHE_KIB: i64 = 2000;
+/// SQLite's default WAL auto-checkpoint, in pages.
+const DEFAULT_CHECKPOINT_PAGES: i64 = 1000;
 
 /// Derives a torrent's rows from its info dict (the prepare step).
 fn prepare(
@@ -1829,6 +1865,35 @@ fn get_u64(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X-import-rate-1m: bulk writes change only this connection's page
+    /// cache and WAL auto-checkpoint, and setting them back restores
+    /// SQLite's defaults. Another connection keeps the defaults throughout.
+    #[test]
+    fn bulk_writes_tune_only_this_connection_and_go_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        let other = Store::open(&db, StoreConfig::default()).unwrap();
+        let read = |s: &Store| {
+            let cache: i64 = s
+                .conn
+                .pragma_query_value(None, "cache_size", |r| r.get(0))
+                .unwrap();
+            let checkpoint: i64 = s
+                .conn
+                .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))
+                .unwrap();
+            (cache, checkpoint)
+        };
+        let defaults = (-DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES);
+        assert_eq!(read(&store), defaults, "SQLite's own defaults");
+        store.set_bulk_writes(true).unwrap();
+        assert_eq!(read(&store), (-BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES));
+        assert_eq!(read(&other), defaults);
+        store.set_bulk_writes(false).unwrap();
+        assert_eq!(read(&store), defaults);
+    }
 
     /// A store with an active file dictionary, on disk, and a second
     /// connection holding it exclusively (as an import does).
