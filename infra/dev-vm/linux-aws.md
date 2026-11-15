@@ -20,7 +20,7 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - `c6a.xlarge` (4 vCPU, 8 GiB);
    - `IamInstanceProfile={Name: lodestar-claude-testvm-linux}`;
    - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1}`, so containers can't reach the metadata service;
-   - `/dev/sda1` with `VolumeSize` up to 100, `VolumeType=gp3`, `Encrypted=true`;
+   - `/dev/sda1` with `VolumeSize=100`, `VolumeType=gp3`, `Encrypted=true`. A block with `ROLE=main` needs 50 GiB free for its collector after the image build, and the test user can't grow a volume later (`ec2:ModifyVolume` is denied);
    - the network interface with a public IPv4, exactly as `windows.md` Phase 2 step 2 says (the subnet has no NAT; the security group allows no inbound traffic);
    - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume.
 3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
@@ -42,8 +42,11 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
 
    - It reads the login into memory with the instance role and writes `/home/lodestar/lodestar/secrets/wg0.conf`. Nothing is kept on disk. Run it again for a fresh key.
    - **Never print, copy or read the secret.** Check only the exit code and the script's last line.
+   - **Run it again immediately before `start-block.sh` or `leak-test.sh`.** A key registered 17 min before gluetun first used it got no handshake reply; a fresh one worked at once.
    - Exit 0 means the file was written. Exit 5 ("empty username or password") means the owner hasn't filled the secret in yet, and exit 7 that it couldn't be read. Neither prints a `FAILED` line. Exits 10–16 are PIA's own stages, printed as `FAILED (<n>)`.
 6. **Run the lane** from `linux-lane.md`, as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`.
+   - `sudo -i` joins a multi-line command into one line, so put anything longer than one line in a script file and run that.
+   - **Launch anything that runs `tcpdump` (the leak test, start-block, your own captures) with `systemd-run --wait --pipe --collect`.** See the AppArmor pitfall below.
    - A command over a few minutes runs in `tmux` on the instance (`sudo -iu lodestar tmux new -d -s lane '<command> > ~/results/<name>.log 2>&1'`), and the session polls the log's tail in later calls.
    - The connector gives up after 60 s, so keep each call under 45 s.
 7. **Teardown:**
@@ -58,6 +61,9 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
 - **`AWS-RunShellScript` runs commands with `/bin/sh`,** so bash syntax fails. Send a script as a quoted heredoc (`cat > /root/lane.sh <<'EOF' … EOF`), then run it with `bash`. The connector refuses `import base64`, so encoding a script doesn't work.
 - **A root-owned file can't overwrite a `lodestar` one in `/tmp`** (the sticky bit). Remove the old file first.
 - **Git refuses `~lodestar/lodestar-v2` when run as root,** because the owner differs. Pass `-c safe.directory='*'` to git, or run the command as `lodestar`.
-- **Timings on `c6a.xlarge`:** the bootstrap takes about 4 min, and building Lodestar's image from `main` about 10–12 min.
-- **A lane that needs the VPN can't start until the secret is filled in.** Check with one `pia-login.sh --aws-secret` run before the image build, and say so at once if it exits 5.
+- **AppArmor stops SSM commands from signalling `tcpdump`.** The SSM agent is a snap, so its commands carry the label `snap.amazon-ssm-agent.amazon-ssm-agent`, and Ubuntu's enforced `tcpdump` profile refuses signals from it, even `kill -9` (the denials are in `dmesg`). `leak-test.sh` then hangs on its captures until its 900 s limit and leaves them running. A command started with `systemd-run` runs unconfined and isn't affected.
+- **Lodestar's port is only reachable through gluetun's network namespace,** not from the host: `nsenter -t "$(docker inspect -f '{{.State.Pid}}' gluetun)" -n curl -s http://127.0.0.1:8090/healthz`.
+- **The connector refuses file paths outside `/tmp` inside `run_script` code,** even `/dev/null`.
+- **Timings on `c6a.xlarge`:** the bootstrap takes 2–4 min, and building Lodestar's image from `main` about 10–12 min.
+- **A lane that needs the VPN can't start until the secret is filled in.** Check with one `pia-login.sh --aws-secret` run before the image build, and say so at once if it exits 5. Then run it again just before the block (step 5).
 - **`ExpiresAt` is a backstop, not the plan.** The session deletes its own instance.
