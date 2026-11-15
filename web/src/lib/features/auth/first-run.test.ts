@@ -1,15 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const goto = vi.hoisted(() => vi.fn());
-const get = vi.hoisted(() => vi.fn());
 const toSetup = vi.hoisted(() => vi.fn());
 const setSession = vi.hoisted(() => vi.fn());
 vi.mock('$app/navigation', () => ({ goto }));
-vi.mock('$lib/api/client', () => ({ api: { get } }));
 vi.mock('./nav', () => ({ toSetup }));
 vi.mock('./session.svelte', () => ({ setSession }));
 
-import { firstRunTarget, gateFirstRun } from './first-run';
+import { checkFirstRun } from './first-check';
+import { firstRunTarget, leaveForFirstRun } from './first-run';
 
 const status = (logged_in: boolean, notice_required: boolean, setup_required: boolean) => ({
 	logged_in,
@@ -17,10 +16,16 @@ const status = (logged_in: boolean, notice_required: boolean, setup_required: bo
 	setup_required
 });
 
+const fetchMock = vi.fn();
+const answer = (body: unknown, ok = true) =>
+	fetchMock.mockResolvedValueOnce({ ok, json: () => Promise.resolve(body) });
+
 beforeEach(() => {
-	for (const f of [goto, get, toSetup, setSession]) f.mockReset();
+	for (const f of [goto, toSetup, setSession, fetchMock]) f.mockReset();
+	vi.stubGlobal('fetch', fetchMock);
 	history.replaceState(null, '', '/search?q=ubuntu');
 });
+afterEach(() => vi.unstubAllGlobals());
 
 describe('firstRunTarget', () => {
 	it('sends a fresh instance to setup, whatever else it says', () => {
@@ -38,38 +43,44 @@ describe('firstRunTarget', () => {
 	});
 });
 
-describe('gateFirstRun', () => {
+describe('leaveForFirstRun', () => {
 	it('goes to setup on a fresh instance', async () => {
-		get.mockResolvedValue(status(false, false, true));
-		await gateFirstRun();
-		expect(get).toHaveBeenCalledExactlyOnceWith('/auth');
+		await leaveForFirstRun(status(false, false, true));
 		expect(setSession).toHaveBeenCalledWith('setup_required');
 		expect(toSetup).toHaveBeenCalledOnce();
 		expect(goto).not.toHaveBeenCalled();
 	});
 
 	it('goes to sign-in with the current page as next, replacing the entry', async () => {
-		get.mockResolvedValue(status(false, false, false));
-		await gateFirstRun();
+		await leaveForFirstRun(status(false, false, false));
 		expect(setSession).toHaveBeenCalledWith('signed_out');
-		expect(goto).toHaveBeenCalledExactlyOnceWith(
-			expect.stringMatching(/^\/login\?next=%2Fsearch%3Fq%3Dubuntu$/),
-			{ replaceState: true }
-		);
+		expect(goto).toHaveBeenCalledExactlyOnceWith('/login?next=%2Fsearch%3Fq%3Dubuntu', {
+			replaceState: true
+		});
 	});
 
 	it('keeps the session signed in when only the notice is pending', async () => {
-		get.mockResolvedValue(status(true, true, false));
-		await gateFirstRun();
+		await leaveForFirstRun(status(true, true, false));
 		expect(setSession).not.toHaveBeenCalled();
 		expect(goto).toHaveBeenCalledOnce();
 	});
+});
 
-	it('does nothing when signed in, or when the check fails', async () => {
-		get.mockResolvedValueOnce(status(true, false, false));
-		await gateFirstRun();
-		get.mockRejectedValueOnce(new Error('offline'));
-		await gateFirstRun();
+describe('checkFirstRun', () => {
+	it('asks GET /auth once and leaves when it must', async () => {
+		answer(status(false, false, true));
+		await checkFirstRun();
+		expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/api/v1/auth', expect.any(Object));
+		expect(toSetup).toHaveBeenCalledOnce();
+	});
+
+	it('stays when signed in, when the answer is not OK, and when the request fails', async () => {
+		answer(status(true, false, false));
+		await checkFirstRun();
+		answer({}, false);
+		await checkFirstRun();
+		fetchMock.mockRejectedValueOnce(new Error('offline'));
+		await checkFirstRun();
 		expect(goto).not.toHaveBeenCalled();
 		expect(toSetup).not.toHaveBeenCalled();
 		expect(setSession).not.toHaveBeenCalled();
