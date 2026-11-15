@@ -758,6 +758,10 @@ pub enum AdapterError {
     /// A companion Lodestar runs on this address isn't ready yet, so
     /// nothing was sent (the network guard's loopback gate).
     NotReady,
+    /// The companion Lodestar runs on this address is still starting (a
+    /// start holds its port, and it isn't found ready yet), so nothing that
+    /// carries something was sent.
+    Starting,
     /// The SSRF guard refused the address.
     Blocked,
     /// The answer passed the byte cap.
@@ -781,6 +785,7 @@ impl fmt::Display for AdapterError {
             AdapterError::Timeout => f.write_str("timed out"),
             AdapterError::Unreachable => f.write_str("unreachable"),
             AdapterError::NotReady => f.write_str("not ready yet"),
+            AdapterError::Starting => f.write_str("still starting"),
             AdapterError::Blocked => f.write_str("address not allowed"),
             AdapterError::TooLarge => f.write_str("answer too large"),
             AdapterError::NotThisCompanion => f.write_str("not the expected companion"),

@@ -267,6 +267,27 @@ impl Bindings {
         self.ports().get(&port).and_then(|p| p.refusal)
     }
 
+    /// Whether the companion on `port` is still starting: a start holds the
+    /// port (claimed, and not released by its stop, its removal or a failed
+    /// start), and its child is about to start, starting, running or
+    /// backing off before its next start. Not while it waits for you, is
+    /// held, or is stopped. Says nothing about readiness.
+    pub fn starting(&self, port: u16) -> bool {
+        let ports = self.ports();
+        let Some(p) = ports.get(&port).filter(|p| p.held) else {
+            return false;
+        };
+        p.status.as_ref().is_none_or(|rx| {
+            matches!(
+                rx.borrow().state,
+                State::Starting
+                    | State::Running
+                    | State::Unhealthy { .. }
+                    | State::BackingOff { .. }
+            )
+        })
+    }
+
     /// The run last found ready on `port`, if any.
     pub fn ready_run(&self, port: u16) -> Option<u64> {
         self.ports().get(&port).and_then(|p| p.ready)
@@ -312,6 +333,40 @@ mod tests {
             up,
             pid: None,
         }
+    }
+
+    /// X-companion-starting-steps: still starting while a start is under
+    /// way, about to start included; not once it waits for you, is held
+    /// or stopped, nor once the port is released or never held.
+    #[test]
+    fn starting_means_a_start_under_way() {
+        let b = Bindings::new();
+        assert!(!b.starting(9000));
+        assert!(b.claim(9000));
+        assert!(b.starting(9000), "claimed, about to start");
+        let (tx, rx) = watch::channel(status(State::Starting, 0));
+        b.attach(9000, rx);
+        for state in [
+            State::Starting,
+            State::Running,
+            State::Unhealthy { failures: 1 },
+            State::BackingOff {
+                delay: std::time::Duration::from_secs(1),
+            },
+        ] {
+            tx.send_replace(status(state, 1));
+            assert!(b.starting(9000), "{state:?}");
+        }
+        for state in [
+            State::NeedsAttention(super::super::Attention::CrashLoop),
+            State::Held,
+            State::Stopped,
+        ] {
+            tx.send_replace(status(state, 1));
+            assert!(!b.starting(9000), "{state:?}");
+        }
+        b.release(9000);
+        assert!(b.managed(9000) && !b.starting(9000));
     }
 
     #[test]

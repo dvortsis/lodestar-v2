@@ -10,7 +10,7 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import CompanionRow from './CompanionRow.svelte';
-	import { failureWords, type Detected } from './logic';
+	import { failureWords, isStarting, type Detected } from './logic';
 	import { CompanionsStore } from './store.svelte';
 
 	const store = new CompanionsStore();
@@ -25,47 +25,39 @@
 	}
 	let busy = $state(false);
 	let error = $state('');
+	/** Set when the last request was refused because the companion is still starting: Try again
+	 * runs it once more. */
+	let again = $state<(() => Promise<void>) | null>(null);
+	/** Runs `step`, showing its refusal in words; one refused as still starting can be tried again. */
+	async function run(step: () => Promise<void>) {
+		busy = true;
+		error = '';
+		again = null;
+		try {
+			await step();
+		} catch (x) {
+			error = failureWords(x);
+			if (isStarting(x)) again = () => run(step);
+		} finally {
+			busy = false;
+		}
+	}
 	let url = $state('');
 	let target = $state('');
 
-	async function detect() {
-		busy = true;
-		error = '';
-		try {
-			await store.detect();
-		} catch (e) {
-			error = failureWords(e);
-		} finally {
-			busy = false;
-		}
-	}
-	async function addFound(d: Detected) {
-		busy = true;
-		error = '';
-		try {
-			await store.addAt(d.id, d.target);
-		} catch (x) {
-			error = failureWords(x);
-		} finally {
-			busy = false;
-		}
-	}
+	const detect = () => run(() => store.detect());
+	const addFound = (d: Detected) => run(() => store.addAt(d.id, d.target));
 	async function add(e: Event) {
 		e.preventDefault();
 		if (!target || !url) {
 			error = m.settings_companions_add_choose_first();
 			return;
 		}
-		busy = true;
-		error = '';
-		try {
-			await store.addAt(target, { kind: 'url', url });
+		const [id, at] = [target, url];
+		await run(async () => {
+			await store.addAt(id, { kind: 'url', url: at });
 			url = '';
-		} catch (x) {
-			error = failureWords(x);
-		} finally {
-			busy = false;
-		}
+		});
 	}
 </script>
 
@@ -98,8 +90,18 @@
 			<div>
 				<Button dense loading={busy} onclick={detect}>{m.settings_companions_detect()}</Button>
 			</div>
+			{#if store.starting.length > 0}
+				<ul class="text-small" data-starting>
+					{#each store.starting as id (id)}
+						<li>{m.settings_companions_detect_starting({ name: nameOf(id) })}</li>
+					{/each}
+				</ul>
+				<div>
+					<Button dense loading={busy} onclick={detect}>{m.settings_companions_retry()}</Button>
+				</div>
+			{/if}
 			{#if store.detected}
-				{#if store.detected.length === 0}
+				{#if store.detected.length === 0 && store.starting.length === 0}
 					<p class="text-small text-muted-text">{m.settings_companions_detect_none()}</p>
 				{:else}
 					<ul class="text-small" data-detected>
@@ -142,6 +144,14 @@
 				<div><Button type="submit" loading={busy}>{m.settings_companions_add()}</Button></div>
 			</form>
 		</div>
-		{#if error}<Banner kind="error">{error}</Banner>{/if}
+		{#if error && again}
+			{@const retryStep = again}
+			<Banner kind="info">
+				{error}
+				{#snippet action()}<Button dense loading={busy} onclick={() => void retryStep()}
+						>{m.settings_companions_retry()}</Button
+					>{/snippet}
+			</Banner>
+		{:else if error}<Banner kind="error">{error}</Banner>{/if}
 	{/if}
 </section>

@@ -192,6 +192,7 @@ pub(crate) fn health_of(e: AdapterError) -> HealthStatus {
         AdapterError::Timeout
         | AdapterError::Unreachable
         | AdapterError::NotReady
+        | AdapterError::Starting
         | AdapterError::Blocked => HealthStatus::Unreachable,
         _ => HealthStatus::Unhealthy,
     }
@@ -323,9 +324,12 @@ fn is_localhost(host: &str) -> bool {
 ///   supervisor holds a child on ([`Bindings`]) is asked on `127.0.0.1`
 ///   alone, never on `::1`, and a request that carries anything goes out
 ///   only while that child is running and was found ready in its current
-///   run. Otherwise it's refused as [`AdapterError::Unreachable`] before
-///   any connection. Bare probes still go (they find it ready), to
-///   `127.0.0.1` alone.
+///   run. Otherwise it's refused before any connection: as
+///   [`AdapterError::Starting`] while a start is under way
+///   ([`Bindings::starting`]), and as [`AdapterError::NotReady`] otherwise
+///   (X-companion-starting-steps).
+///   Bare probes still go (they find it ready), to `127.0.0.1` alone; one
+///   that finds nothing there gets the same answer.
 /// - **`localhost` in a URL you entered** is `127.0.0.1` alone.
 pub struct CompanionHttp {
     fixed: GuardedClient,
@@ -443,13 +447,27 @@ impl CompanionHttp {
                 // A companion Lodestar runs: `127.0.0.1` alone, and what
                 // carries something only to the child that's ready there.
                 if let Some(b) = self.bindings.as_ref().filter(|b| b.managed(p)) {
-                    // Unreachable, not `NotReady`, on purpose: detection at a
-                    // fixed target reads unreachable as "not here", and a
-                    // guided step's own words for "starting" are for later.
-                    if !bare(request) && !b.ready(p) {
-                        return Err(AdapterError::Unreachable);
+                    if b.ready(p) {
+                        return self.once(&self.fixed, url(false)?, request).await;
                     }
-                    return self.once(&self.fixed, url(false)?, request).await;
+                    // Not ready: still starting while a start is under way,
+                    // and otherwise not ready (stopped, removed, failed, or
+                    // waiting for you). Only for a managed port, so detection
+                    // still reads nothing at an unmanaged one as "not here".
+                    let why = if b.starting(p) {
+                        AdapterError::Starting
+                    } else {
+                        AdapterError::NotReady
+                    };
+                    // What carries something is refused before it's sent.
+                    if !bare(request) {
+                        return Err(why);
+                    }
+                    // A bare probe goes, as before; nothing there yet is why.
+                    return match self.once(&self.fixed, url(false)?, request).await {
+                        Err(AdapterError::Unreachable | AdapterError::Timeout) => Err(why),
+                        got => got,
+                    };
                 }
                 let remembered = self.loopback_of(p);
                 // `127.0.0.1` keeps a port for good.
@@ -545,6 +563,7 @@ fn listening(got: &Result<ProbeResponse, AdapterError>) -> bool {
         got,
         Err(AdapterError::Unreachable
             | AdapterError::NotReady
+            | AdapterError::Starting
             | AdapterError::Timeout
             | AdapterError::Blocked)
     )
@@ -655,6 +674,7 @@ mod tests {
         for e in [
             AdapterError::Unreachable,
             AdapterError::NotReady,
+            AdapterError::Starting,
             AdapterError::Timeout,
             AdapterError::Blocked,
         ] {
@@ -797,6 +817,7 @@ mod tests {
         assert_eq!(health_of(AdapterError::Blocked), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::Timeout), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::NotReady), HealthStatus::Unreachable);
+        assert_eq!(health_of(AdapterError::Starting), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::TooLarge), HealthStatus::Unhealthy);
         let lo = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
         let entered = Target::Entered(EnteredUrl::parse("http://10.0.0.2").unwrap());
@@ -809,6 +830,11 @@ mod tests {
         assert_eq!(
             not_found_or(AdapterError::Blocked, &lo),
             Err(AdapterError::Blocked)
+        );
+        // Still starting at a fixed target is said, not read as "not here".
+        assert_eq!(
+            not_found_or(AdapterError::Starting, &lo),
+            Err(AdapterError::Starting)
         );
         // Not ready is said, not read as "not here".
         assert_eq!(

@@ -687,6 +687,7 @@ placement:
   - X-cmp9b-catch
   - X-cmp13-installer-pins
   - X-companion-pins-polish
+  - X-companion-starting-steps
   - X-macos-pidfile-fifo
 - ws: ws-m6
   match:

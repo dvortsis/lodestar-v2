@@ -573,6 +573,7 @@ pub(crate) fn code(e: &AdapterError) -> &'static str {
         AdapterError::Timeout => "timeout",
         AdapterError::Unreachable => "unreachable",
         AdapterError::NotReady => "not_ready",
+        AdapterError::Starting => "starting",
         AdapterError::Blocked => "blocked",
         AdapterError::TooLarge => "too_large",
         AdapterError::NotThisCompanion => "not_this_companion",

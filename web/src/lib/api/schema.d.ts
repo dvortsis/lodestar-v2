@@ -307,7 +307,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Runs detection on its fixed targets and lists what answered. */
+        /**
+         * Runs detection on its fixed targets and lists what answered, and the
+         *     companions Lodestar runs that are still starting.
+         */
         post: operations["detectCompanions"];
         delete?: never;
         options?: never;
@@ -4688,6 +4691,12 @@ export interface components {
         };
         DetectedCompanions: {
             found: components["schemas"]["DetectedCompanion"][];
+            /**
+             * @description Companions Lodestar runs that are still starting, so detection
+             *     couldn't look for them yet: try again in a moment. Never one that
+             *     is in `found`.
+             */
+            starting: string[];
         };
         Detection: {
             /** @description Corrections that say adult or not. */
@@ -13076,7 +13085,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_unauthorized`, `companion_protocol`). */
+            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_starting`, `companion_unauthorized`, `companion_protocol`). */
             409: {
                 headers: {
                     [name: string]: unknown;
