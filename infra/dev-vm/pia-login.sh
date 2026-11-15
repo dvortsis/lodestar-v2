@@ -8,11 +8,18 @@
 #
 #   sudo infra/dev-vm/pia-login.sh [--keep] [region-id]   asks for the login
 #   sudo infra/dev-vm/pia-login.sh --rekey [region-id]    uses the kept login
+#   sudo infra/dev-vm/pia-login.sh --aws-secret NAME [region-id]
+#                                         reads the login from AWS Secrets Manager
 #
 # --keep (owner, 2026-11-12T16:55Z, docs/decisions/2026-11-12-X-test-vm.md):
 # after a success, the login and region are also kept in /root/.lodestar-pia
 # (root:root, 0700/0600) on the VM's encrypted disk, so --rekey can register a
 # fresh key later without the owner. The kept login goes with the VM at deletion.
+#
+# --aws-secret (owner, 2026-11-15, the same decisions file): on an AWS test
+# instance, the login is read with the instance role from the Secrets Manager
+# secret the owner filled in (infra/dev-vm/aws-claude-testvm.json), straight
+# into memory. Nothing is kept on disk; run it again for a fresh key.
 #
 # Writes /home/lodestar/lodestar/secrets/wg0.conf (root:root 0600), where the
 # fleet's compose.yaml reads it from when run from /home/lodestar/lodestar.
@@ -28,13 +35,19 @@ store=/root/.lodestar-pia
 
 mode=ask
 region=""
-for arg in "$@"; do
-  case $arg in
+secret_id=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
     --keep) mode=keep ;;
     --rekey) mode=rekey ;;
-    -*) echo "unknown option: $arg" >&2; exit 2 ;;
-    *) region=$arg ;;
+    --aws-secret)
+      mode=aws
+      [[ $# -ge 2 && $2 =~ ^[A-Za-z0-9/_+=.@-]{1,512}$ ]] || { echo "--aws-secret needs a secret name" >&2; exit 2; }
+      secret_id=$2; shift ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) region=$1 ;;
   esac
+  shift
 done
 if [[ $mode == rekey && -z $region && -f $store/region ]]; then region=$(<"$store/region"); fi
 
@@ -55,6 +68,14 @@ if [[ $mode == rekey ]]; then
   [[ -f $store/login.json ]] || { echo "no kept login: run once with --keep" >&2; exit 6; }
   pia_user=$(jq -j '.username' "$store/login.json")
   pia_pass=$(jq -j '.password' "$store/login.json")
+elif [[ $mode == aws ]]; then
+  command -v aws >/dev/null || { echo "the AWS CLI is missing (snap install aws-cli --classic)" >&2; exit 7; }
+  # The value goes from the CLI's stdout into memory; errors are summarised, never echoed.
+  pia_secret=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id "$secret_id" \
+    --query SecretString --output text 2>/dev/null) || { echo "the secret $secret_id could not be read" >&2; exit 7; }
+  pia_user=$(printf '%s' "$pia_secret" | jq -j '.username // empty' 2>/dev/null) || pia_user=""
+  pia_pass=$(printf '%s' "$pia_secret" | jq -j '.password // empty' 2>/dev/null) || pia_pass=""
+  unset pia_secret
 else
   read -r -s -p "PIA username (hidden): " pia_user; echo
   read -r -s -p "PIA password: " pia_pass; echo
@@ -110,6 +131,7 @@ if [[ $rc -eq 0 ]]; then
   case $mode in
     keep) echo "OK: WireGuard configuration written (root only). The login is kept root-only in $store for --rekey." ;;
     rekey) echo "OK: WireGuard configuration written (root only), from the kept login." ;;
+    aws) echo "OK: WireGuard configuration written (root only), from the AWS secret. Nothing is kept." ;;
     *) echo "OK: WireGuard configuration written (root only). The login is deleted." ;;
   esac
 else

@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the Windows test instance the Lodestar guardrails allow (c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, mandatory tags with ExpiresAt), and read EC2, SSM and cost data. Owner decision 2026-11-12Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs: they are parameters.",
+  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, mandatory tags with ExpiresAt), and read EC2, SSM, quota and cost data. The Linux test instances get their own role, which can read only the PIA login secret this stack creates; the user itself is denied Secrets Manager. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters.",
   "Parameters": {
     "SubnetId": {
       "Type": "AWS::EC2::Subnet::Id",
@@ -52,7 +52,7 @@
         "ManagedPolicyName": {
           "Fn::Sub": "${UserName}-policy"
         },
-        "Description": "X-test-vm: what Claude may do in AWS (the Windows test instance only).",
+        "Description": "X-test-vm: what Claude may do in AWS (the guarded test instances only).",
         "PolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -72,15 +72,20 @@
                 "iam:GetInstanceProfile",
                 "iam:ListInstanceProfiles",
                 "ce:GetCostAndUsage",
-                "budgets:ViewBudget"
+                "budgets:ViewBudget",
+                "servicequotas:GetServiceQuota"
               ],
               "Resource": "*"
             },
             {
-              "Sid": "ReadLatestWindowsAmiIds",
+              "Sid": "ReadLatestAmiIds",
               "Effect": "Allow",
               "Action": "ssm:GetParameter",
-              "Resource": "arn:aws:ssm:us-east-1::parameter/aws/service/ami-windows-latest/*"
+              "Resource": [
+                "arn:aws:ssm:us-east-1::parameter/aws/service/ami-windows-latest/*",
+                "arn:aws:ssm:us-east-1::parameter/aws/service/ami-amazon-linux-latest/*",
+                "arn:aws:ssm:us-east-1::parameter/aws/service/canonical/ubuntu/server/*"
+              ]
             },
             {
               "Sid": "RunOnlyTheGuardedInstance",
@@ -159,7 +164,7 @@
               }
             },
             {
-              "Sid": "RunOnlyAmazonImages",
+              "Sid": "RunOnlyAmazonOrCanonicalImages",
               "Effect": "Allow",
               "Action": "ec2:RunInstances",
               "Resource": [
@@ -168,7 +173,10 @@
               ],
               "Condition": {
                 "StringEquals": {
-                  "ec2:Owner": "amazon"
+                  "ec2:Owner": [
+                    "amazon",
+                    "099720109477"
+                  ]
                 }
               }
             },
@@ -191,12 +199,20 @@
               }
             },
             {
-              "Sid": "PassOnlyTheInstanceRoleToEc2",
+              "Sid": "PassOnlyTheTestInstanceRolesToEc2",
               "Effect": "Allow",
               "Action": "iam:PassRole",
-              "Resource": {
-                "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/${InstanceRoleName}"
-              },
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/${InstanceRoleName}"
+                },
+                {
+                  "Fn::GetAtt": [
+                    "LinuxTestVmRole",
+                    "Arn"
+                  ]
+                }
+              ],
               "Condition": {
                 "StringEquals": {
                   "iam:PassedToService": "ec2.amazonaws.com"
@@ -238,10 +254,13 @@
               }
             },
             {
-              "Sid": "RunCommandsOnlyWithThePowerShellDocument",
+              "Sid": "RunCommandsOnlyWithTheStandardScriptDocuments",
               "Effect": "Allow",
               "Action": "ssm:SendCommand",
-              "Resource": "arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript"
+              "Resource": [
+                "arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript",
+                "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"
+              ]
             },
             {
               "Sid": "CancelOwnCommands",
@@ -262,9 +281,99 @@
                   "aws:RequestedRegion": "us-east-1"
                 }
               }
+            },
+            {
+              "Sid": "NoSecretsManager",
+              "Effect": "Deny",
+              "Action": "secretsmanager:*",
+              "Resource": "*"
             }
           ]
         }
+      }
+    },
+    "PiaLoginSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${UserName}/pia-login"
+        },
+        "Description": "X-test-vm: the owner's PIA login for the Linux test instances. The owner types the values in the console (Retrieve secret value, Edit). Only LinuxTestVmRole can read it; Claude's user is denied Secrets Manager. Keep the keys username and password.",
+        "SecretString": "{\"username\":\"\",\"password\":\"\"}",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "LinuxTestVmRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${UserName}-linux"
+        },
+        "Description": "X-test-vm: the Linux test instances' role. SSM management, and reading the PIA login secret, nothing else.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "ReadOnlyThePiaLoginSecret",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": {
+                    "Ref": "PiaLoginSecret"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "LinuxTestVmInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "InstanceProfileName": {
+          "Fn::Sub": "${UserName}-linux"
+        },
+        "Roles": [
+          {
+            "Ref": "LinuxTestVmRole"
+          }
+        ]
       }
     }
   },
@@ -277,6 +386,16 @@
     "SignInUrl": {
       "Value": {
         "Fn::Sub": "https://${AWS::AccountId}.signin.aws.amazon.com/console"
+      }
+    },
+    "PiaLoginSecretName": {
+      "Value": {
+        "Fn::Sub": "${UserName}/pia-login"
+      }
+    },
+    "LinuxInstanceProfile": {
+      "Value": {
+        "Ref": "LinuxTestVmInstanceProfile"
       }
     }
   }

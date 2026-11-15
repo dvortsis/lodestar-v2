@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "aws-claude-testvm.json"
+# Canonical's public AMI publisher account (Ubuntu images); not the owner's.
+CANONICAL = "099720109477"
 
 
 def statements():
@@ -21,7 +23,7 @@ def actions(st):
 class PolicyTests(unittest.TestCase):
     def test_no_account_or_resource_ids_in_the_public_repo(self):
         text = TEMPLATE.read_text()
-        self.assertIsNone(re.search(r"\b\d{12}\b", text))
+        self.assertEqual(re.findall(r"\b\d{12}\b", text), [CANONICAL])
         self.assertIsNone(re.search(r"\b(subnet|sg|vpc|ami|i)-[0-9a-f]{8,17}\b", text))
 
     def test_only_the_mcp_sign_in_policy_and_our_own(self):
@@ -82,8 +84,44 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/Environment"], "Test")
         cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnLodestarTestInstances")
         self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/Project"], "Lodestar")
-        doc = next(s for s in sts if s["Sid"] == "RunCommandsOnlyWithThePowerShellDocument")
-        self.assertEqual(doc["Resource"], "arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript")
+        doc = next(s for s in sts if s["Sid"] == "RunCommandsOnlyWithTheStandardScriptDocuments")
+        self.assertEqual(doc["Resource"], ["arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript",
+                                           "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"])
+
+    def test_images_only_from_amazon_or_canonical(self):
+        _, _, sts = statements()
+        img = next(s for s in sts if s["Sid"] == "RunOnlyAmazonOrCanonicalImages")
+        self.assertEqual(img["Condition"], {"StringEquals": {"ec2:Owner": ["amazon", CANONICAL]}})
+
+    def test_pass_role_names_only_the_two_test_roles(self):
+        _, _, sts = statements()
+        pr = next(s for s in sts if s["Sid"] == "PassOnlyTheTestInstanceRolesToEc2")
+        self.assertEqual(pr["Resource"], [{"Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/${InstanceRoleName}"},
+                                          {"Fn::GetAtt": ["LinuxTestVmRole", "Arn"]}])
+
+    def test_the_user_is_denied_secrets_manager(self):
+        _, _, sts = statements()
+        self.assertFalse(any(a.startswith("secretsmanager:") for s in sts if s["Effect"] == "Allow"
+                             for a in actions(s)))
+        deny = next(s for s in sts if s["Sid"] == "NoSecretsManager")
+        self.assertEqual((deny["Effect"], deny["Action"], deny["Resource"]), ("Deny", "secretsmanager:*", "*"))
+
+    def test_only_the_linux_role_reads_the_pia_secret(self):
+        t, _, _ = statements()
+        res = t["Resources"]
+        secret = res["PiaLoginSecret"]["Properties"]
+        self.assertEqual(json.loads(secret["SecretString"]), {"username": "", "password": ""})
+        self.assertNotIn("ResourcePolicy", res)
+        role = res["LinuxTestVmRole"]["Properties"]
+        trust = role["AssumeRolePolicyDocument"]["Statement"]
+        self.assertEqual(trust, [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"},
+                                  "Action": "sts:AssumeRole"}])
+        self.assertEqual(role["ManagedPolicyArns"], ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"])
+        (inline,) = role["Policies"]
+        self.assertEqual(inline["PolicyDocument"]["Statement"],
+                         [{"Effect": "Allow", "Action": "secretsmanager:GetSecretValue",
+                           "Resource": {"Ref": "PiaLoginSecret"}}])
+        self.assertEqual(res["LinuxTestVmInstanceProfile"]["Properties"]["Roles"], [{"Ref": "LinuxTestVmRole"}])
 
     def test_region_fence(self):
         _, _, sts = statements()
