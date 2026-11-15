@@ -76,15 +76,32 @@ fn report(dir: &Path, torrents: Option<u64>) -> Result<String, Box<dyn std::erro
     writeln!(out, "index-stats {}", dir.display())?;
     writeln!(out, "  per torrent of        {n:.0}")?;
     writeln!(out, "  segments              {}", s.segments)?;
-    writeln!(out, "  docs                  {} ({} deleted, awaiting a merge)", s.docs, s.deleted)?;
+    writeln!(
+        out,
+        "  docs                  {} ({} deleted, awaiting a merge)",
+        s.docs, s.deleted
+    )?;
     let rows = [
         ("live segments", s.live_bytes, "the budget figure"),
-        ("top-level files", s.top_level_bytes, "what size-report counts"),
-        ("stale segment files", s.stale_bytes, "merged away, not yet collected"),
+        (
+            "top-level files",
+            s.top_level_bytes,
+            "what size-report counts",
+        ),
+        (
+            "stale segment files",
+            s.stale_bytes,
+            "merged away, not yet collected",
+        ),
         ("everything (du)", s.recursive_bytes, "incl. the file index"),
     ];
     for (label, bytes, note) in rows {
-        writeln!(out, "  {label:<21} {:>9.1} MB = {:>6.1} B per torrent  ({note})", mb(bytes), per(bytes))?;
+        writeln!(
+            out,
+            "  {label:<21} {:>9.1} MB = {:>6.1} B per torrent  ({note})",
+            mb(bytes),
+            per(bytes)
+        )?;
     }
     let files = dir.join("files");
     if files.join("meta.json").is_file() {
@@ -126,8 +143,20 @@ mod tests {
 
         assert_eq!(resolve(tmp.path()), index_dir);
         assert_eq!(resolve(&index_dir), index_dir);
-        let text = run(vec![tmp.path().display().to_string(), "--torrents".into(), "10".into()]).unwrap();
-        for want in ["segments", "live segments", "top-level files", "stale segment files", "everything (du)", "file index (live)"] {
+        let text = run(vec![
+            tmp.path().display().to_string(),
+            "--torrents".into(),
+            "10".into(),
+        ])
+        .unwrap();
+        for want in [
+            "segments",
+            "live segments",
+            "top-level files",
+            "stale segment files",
+            "everything (du)",
+            "file index (live)",
+        ] {
             assert!(text.contains(want), "{want} missing from\n{text}");
         }
         assert!(run(vec![]).is_err());

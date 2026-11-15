@@ -139,19 +139,28 @@ mod tests {
 
         let s = DiskStats::read(&dir).unwrap();
         assert_eq!((s.segments, s.docs, s.deleted), (2, 19, 1));
-        assert!(0 < s.live_bytes && s.live_bytes <= s.top_level_bytes, "{s:?}");
+        assert!(
+            0 < s.live_bytes && s.live_bytes <= s.top_level_bytes,
+            "{s:?}"
+        );
         // The file index lives in a subdirectory: `du` counts it, the
         // top level doesn't.
         assert!(s.top_level_bytes < s.recursive_bytes, "{s:?}");
         assert_eq!((s.stale_bytes, s.stale_files.len()), (0, 0), "{s:?}");
         let parts = space_by_field_at(&dir).unwrap();
-        assert!(parts.iter().any(|(p, b)| p == "postings name" && *b > 0), "{parts:?}");
+        assert!(
+            parts.iter().any(|(p, b)| p == "postings name" && *b > 0),
+            "{parts:?}"
+        );
 
         // A segment file no live segment owns is stale; `meta.json` never is.
         let orphan = "0123456789abcdef0123456789abcdef.idx";
         std::fs::write(dir.join(orphan), [0u8; 100]).unwrap();
         let s = DiskStats::read(&dir).unwrap();
-        assert_eq!((s.stale_bytes, s.stale_files), (100, vec![orphan.to_owned()]));
+        assert_eq!(
+            (s.stale_bytes, s.stale_files),
+            (100, vec![orphan.to_owned()])
+        );
         std::fs::remove_file(dir.join(orphan)).unwrap();
 
         // Merged into one, the delete is gone with the old segments.
@@ -171,7 +180,13 @@ mod tests {
         let id = "0123456789abcdef0123456789abcdef";
         assert_eq!(segment_id(&format!("{id}.idx")), Some(id));
         assert_eq!(segment_id(&format!("{id}.12.del")), Some(id));
-        for other in ["meta.json", ".managed.json", ".tantivy-writer.lock", "abc.idx", "files"] {
+        for other in [
+            "meta.json",
+            ".managed.json",
+            ".tantivy-writer.lock",
+            "abc.idx",
+            "files",
+        ] {
             assert_eq!(segment_id(other), None, "{other}");
         }
     }
