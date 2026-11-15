@@ -745,6 +745,33 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     assert_eq!(info["method"], "relaunch", "{info}");
     let log = std::fs::read_to_string(&jsonl).unwrap();
     assert!(log.contains("app.relaunch"), "{log}");
+    // The new copy starts at normal priority for the hand-over
+    // (X-win-portable-restart-load), then lowers itself as any start does:
+    // serving, it's the one copy left on this config, below normal.
+    let config = config.display().to_string().replace('\'', "''");
+    let priority = wait_for(Duration::from_secs(30), || {
+        let out = Command::new("powershell.exe")
+            .env_remove("PSModulePath")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(format!(
+                "Get-CimInstance Win32_Process -Filter \"Name='lodestar.exe'\" | \
+                 Where-Object {{ $_.CommandLine -like '*{config}*' }} | \
+                 ForEach-Object {{ (Get-Process -Id $_.ProcessId).PriorityClass }}"
+            ))
+            .output()
+            .ok()?;
+        let classes: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        (classes == ["BelowNormal"]).then_some(classes)
+    });
+    assert!(
+        priority.is_some(),
+        "the new copy isn't below normal\n{}",
+        dump(&console, &jsonl, &seen)
+    );
     (first, second)
 }
 
