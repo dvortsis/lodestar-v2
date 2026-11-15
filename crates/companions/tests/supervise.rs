@@ -846,7 +846,11 @@ fn no_companion_survives_a_killed_work_child() {
 /// something reaches the companion only once the run that's up has been
 /// found ready on 127.0.0.1. When the child dies, such requests are held
 /// at once, and stay held through its restart until the new run is found
-/// ready, though the new child answers.
+/// ready, though the new child answers. Linux and Windows only: elsewhere
+/// the listener's owner can't be told, so by design no run is ever found
+/// ready (`supervise::listener`), as in
+/// `only_the_childs_own_listener_counts`.
+#[cfg(any(target_os = "linux", windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn credentialed_requests_follow_the_run_found_ready() {
     use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
