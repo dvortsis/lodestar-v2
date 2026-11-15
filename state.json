@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T20:56Z",
+  "updated_at": "2026-11-15T21:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T20:56Z",
+  "last_heartbeat": "2026-11-15T21:30Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10025,6 +10025,12 @@
       "slice": "X-leak-test-capture-kill-2",
       "sha": "544b8cbf00202a5427c191576ec8683ee45ea6d2",
       "at": "2026-11-15T20:56Z"
+    },
+    {
+      "pr": 945,
+      "slice": "X-routing-table-metric",
+      "sha": "cdc9adebbfc9fd13b983ae7ff9dbf4e9556d5d14",
+      "at": "2026-11-15T21:30Z"
     }
   ],
   "active_sessions": {
@@ -10263,7 +10269,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T20:56Z",
+    "updated": "2026-11-15T21:30Z",
     "items": [
       {
         "slot": 1,
@@ -10278,14 +10284,13 @@
       },
       {
         "slot": 2,
-        "slice": "X-routing-table-metric",
+        "slice": "X-filter-split-nits",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T19:04Z",
-        "doing": "#945 review MERGE; fix round 47ef019a self-checked; CI watch then merge; session_01MMjhn9j5mWvNehxxWyykLf",
-        "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
-        "status": "active"
+        "since": "2026-11-15T21:30Z",
+        "doing": "X-filter-split-nits: #917 review optionals (#945 merged)",
+        "cap": "cloud-testing share used for build (\u00a72.64 4+4)"
       },
       {
         "slot": 3,
@@ -10396,8 +10401,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T20:56Z",
-  "updated": "2026-11-15T20:56Z",
+  "heartbeat": "2026-11-15T21:30Z",
+  "updated": "2026-11-15T21:30Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
