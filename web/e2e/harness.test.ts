@@ -20,10 +20,12 @@ test.describe('OpenAPI mock', () => {
 
 	test('answers an operation with a typed override', async ({ page, mock }) => {
 		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
+		// The search page checks `/auth` once itself after mount (X-first-run-search-gate).
+		await expect.poll(() => mock.calls('getAuthStatus').length).toBe(1);
 		const res = await fetchJson(page, '/api/v1/auth');
 		expect(res.status).toBe(200);
 		expect(res.body).toEqual({ logged_in: true, notice_required: false, setup_required: false });
-		expect(mock.calls('getAuthStatus')).toHaveLength(1);
+		expect(mock.calls('getAuthStatus')).toHaveLength(2);
 	});
 
 	test('matches path templates, preferring static segments', async ({ page, mock }) => {

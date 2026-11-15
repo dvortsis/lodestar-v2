@@ -141,13 +141,15 @@ test('setup already done redirects to /login', async ({ page, go, mock }) => {
 });
 
 test('sign in returns to next', async ({ page, go, mock }) => {
-	mock.on('getAuthStatus', signedOut);
+	// Signed in once the password is taken, so the search page it lands on stays.
+	let signedIn = false;
+	mock.on('getAuthStatus', () => ({ status: 200, body: { ...signedOut, logged_in: signedIn } }));
 	let attempts = 0;
-	mock.on('login', () =>
-		++attempts === 1
-			? { status: 401, body: envelope('bad_password') }
-			: { status: 200, body: { ok: true } }
-	);
+	mock.on('login', () => {
+		if (++attempts === 1) return { status: 401, body: envelope('bad_password') };
+		signedIn = true;
+		return { status: 200, body: { ok: true } };
+	});
 	// The search page parses the query it lands on (S-search-1).
 	mock.on('parseQuery', { ast: { op: 'word', field: 'any', word: 'ubuntu' }, canonical: 'ubuntu' });
 	// ...and asks for its results (S-search-2): none, so the request can't outlive the test unmocked.
@@ -176,8 +178,13 @@ for (const evil of [
 		go,
 		mock
 	}) => {
-		mock.on('getAuthStatus', signedOut);
-		mock.on('login', { ok: true });
+		// Signed in once the password is taken, so the search page it lands on stays.
+		let signedIn = false;
+		mock.on('getAuthStatus', () => ({ status: 200, body: { ...signedOut, logged_in: signedIn } }));
+		mock.on('login', () => {
+			signedIn = true;
+			return { status: 200, body: { ok: true } };
+		});
 		await go(`/login?next=${encodeURIComponent(evil)}`);
 		await page.getByLabel('Password').fill('correct horse battery');
 		await page.getByRole('button', { name: 'Sign in' }).click();
@@ -206,13 +213,16 @@ test('a signed-in visitor with a dot-segment next lands home, not stuck', async 
 
 test('a 429 counts down from Retry-After and unlocks', async ({ page, go, mock }) => {
 	await page.clock.install();
-	mock.on('getAuthStatus', signedOut);
+	// Signed in once the password is taken, so the search page it lands on stays.
+	let signedIn = false;
+	mock.on('getAuthStatus', () => ({ status: 200, body: { ...signedOut, logged_in: signedIn } }));
 	let attempts = 0;
-	mock.on('login', () =>
-		++attempts === 1
-			? { status: 429, body: envelope('rate_limited'), headers: { 'Retry-After': '3' } }
-			: { status: 200, body: { ok: true } }
-	);
+	mock.on('login', () => {
+		if (++attempts === 1)
+			return { status: 429, body: envelope('rate_limited'), headers: { 'Retry-After': '3' } };
+		signedIn = true;
+		return { status: 200, body: { ok: true } };
+	});
 	await go('/login');
 	await page.getByLabel('Password').fill('correct horse battery');
 	await page.getByRole('button', { name: 'Sign in' }).click();
