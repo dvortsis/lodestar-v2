@@ -362,3 +362,10 @@ path = "fuzz_targets/mse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "discogs"
+path = "fuzz_targets/discogs.rs"
+test = false
+doc = false
+bench = false

@@ -7,6 +7,7 @@
 
 pub mod archive_org;
 mod common;
+pub mod discogs;
 pub mod json;
 pub mod lemmy;
 pub mod nostr;

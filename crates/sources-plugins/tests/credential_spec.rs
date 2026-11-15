@@ -217,6 +217,30 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     let s = stashdb::StashDb::new(rec.clone());
     lookup_once(&s).await;
     check(AdultEnricher::manifest(&s), AdultEnricher::policy(&s), &rec);
+
+    // Discogs (ENR-discogs), an identifier with an Account credential.
+    let rec = Arc::new(Recording::default());
+    let d = lodestar_sources_plugins::discogs::Discogs::new(rec.clone());
+    discogs_once(&d).await;
+    use lodestar_sources::identify::Identifier;
+    check(Identifier::manifest(&d), Identifier::policy(&d), &rec);
+}
+
+async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        d.policy(),
+        &UserLimits::default(),
+    );
+    let q = Query::new(
+        "Synthetic Artist - Synthetic Album",
+        Some(2001),
+        MediaKind::Music,
+    )
+    .unwrap();
+    d.lookup(&kit, &q).await.unwrap_err().0
 }
 
 /// The rest are built without a credential store, so they can't read
@@ -271,6 +295,7 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
+        lodestar_sources_plugins::discogs::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
     assert_eq!(listed, BTreeSet::from(checked));
@@ -289,4 +314,15 @@ async fn the_declared_names_are_the_ones_it_uses() {
     let with = lookup_once(&stashdb::StashDb::new(stored())).await;
     let without = lookup_once(&stashdb::StashDb::new(none())).await;
     assert_ne!(with, without, "stashdb: {with}");
+    let token = || {
+        Arc::new(StaticCredentials::new([(
+            lodestar_sources_plugins::discogs::TOKEN,
+            "fakeDiscogsToken0000",
+        )]))
+    };
+    let d = lodestar_sources_plugins::discogs::Discogs::new;
+    let with = discogs_once(&d(token())).await;
+    let without = discogs_once(&d(none())).await;
+    assert_ne!(with, without, "discogs: {with}");
+    assert!(!with.contains("fakeDiscogsToken"), "{with}");
 }

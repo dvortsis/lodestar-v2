@@ -58,6 +58,10 @@ fn each_entry_is_its_plugins_own_manifest() {
         archive_org::ArchiveOrg::new().manifest().clone(),
         arr::ArrWebhooks::new().manifest().clone(),
         clients::Clients::unconfigured().manifest().clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::discogs::Discogs::new(creds()),
+        )
+        .clone(),
         full_scrape::FullScrape::unconfigured(
             Arc::new(StaticPrivateTrackers::none()),
             Arc::new(SystemClock::default()),
