@@ -2,6 +2,8 @@
 
 The 10M bench dataset's determinism tests (`bench/tests/dataset.rs`, M8-PERF-1a) failed on macOS on every merge since they were added. Linux and Windows passed. This records the cause and what the tests compare now. It is the runner's call, as a test-correctness question.
 
+**Supersedes** the "Deterministic" bullet of `2026-11-12-M8-PERF-1a.md` (its line 9), for the 10M bench mode that measures the architecture §3 budgets (milestone M8, §14). That bullet said two clean builds give the same SQLite file byte for byte, apart from two header counters. Now a file-tree blob counts by the tree it decodes to, both in the content digest and in the byte check. The byte check excuses blobs that only encode the same tree differently, and nothing else (below). The build itself is unchanged.
+
 ## What macOS showed
 Each finding below comes from a diagnostic CI run started by hand on the branch.
 - **Where the content differed:** `torrent_files` only, the stored file-tree blobs. Same codec (zstd), same dictionary id, different bytes, first at torrent 56 in every run. All the other digested tables matched, the dictionary's bytes included.

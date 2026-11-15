@@ -894,15 +894,18 @@ fn file_tree(
     let id: i64 = row.get(1)?;
     let dict: Option<i64> = row.get(2)?;
     let data: Vec<u8> = row.get(3)?;
-    lodestar_store::Codec::from_id(id)
-        .and_then(|c| codec.decompress(c, dict, &data).ok())
-        .ok_or_else(|| {
-            lodestar_store::rusqlite::Error::FromSqlConversionFailure(
-                3,
-                lodestar_store::rusqlite::types::Type::Blob,
-                format!("torrent {torrent}'s file tree won't decode").into(),
-            )
-        })
+    let failed = |why: String| {
+        lodestar_store::rusqlite::Error::FromSqlConversionFailure(
+            3,
+            lodestar_store::rusqlite::types::Type::Blob,
+            format!("torrent {torrent}'s file tree won't decode: {why}").into(),
+        )
+    };
+    let kind =
+        lodestar_store::Codec::from_id(id).ok_or_else(|| failed(format!("unknown codec {id}")))?;
+    codec
+        .decompress(kind, dict, &data)
+        .map_err(|e| failed(e.to_string()))
 }
 
 /// The digest's reading of one column: `torrent_files.data` as its tree,

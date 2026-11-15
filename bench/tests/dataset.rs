@@ -140,7 +140,7 @@ fn file_trees(a: &Path, b: &Path) -> String {
             continue;
         }
         blobs += 1;
-        let same = x.1 == y.1 && x.2 == y.2 && {
+        let same = (x.0, x.1, x.2) == (y.0, y.1, y.2) && {
             let t = tree(&mut ca, x);
             t.is_some() && t == tree(&mut cb, y)
         };
@@ -175,7 +175,8 @@ fn trees_only(db: &Path) -> Vec<u8> {
     let (rows, mut codec) = blobs(&copy);
     let c = Connection::open(&copy).unwrap();
     for row in rows {
-        let tree = tree(&mut codec, &row).expect("a blob that decodes");
+        let tree = tree(&mut codec, &row)
+            .unwrap_or_else(|| panic!("torrent {}'s file tree won't decode", row.0));
         c.execute(
             "UPDATE torrent_files SET data = ?2 WHERE torrent_id = ?1",
             params![row.0, tree],
