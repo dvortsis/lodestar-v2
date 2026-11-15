@@ -27219,7 +27219,7 @@
               },
               {
                 "$ref": "#/components/schemas/ClusterStartFailure",
-                "description": "Why the cluster port couldn't open, while \"Allow workers\" is on and\nit's being tried again; null otherwise (X-cluster-start-retry)."
+                "description": "Why the cluster port couldn't open, while \"Allow workers\" is on and\nit's being tried again; null otherwise (X-cluster-start-retry). While\nit's set, `allowed` is false: the port isn't serving."
               }
             ]
           },

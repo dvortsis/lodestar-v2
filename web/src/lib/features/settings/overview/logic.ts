@@ -109,7 +109,9 @@ export function needsAttention(
 		out.push({
 			kind: 'workers_start_failing',
 			severity: 'warning',
-			startFailure: workers.start_failure
+			startFailure: workers.start_failure,
+			// Where the fix is in config.toml, the row says so; otherwise the logs say why.
+			...(USER_FIXES.has(startReason(workers.start_failure)) ? {} : { href: '/logs' })
 		});
 	if (system.restart_required.length > 0)
 		out.push({
@@ -147,6 +149,9 @@ export type StartReason =
 	| 'secrets'
 	| 'certificates'
 	| 'server';
+
+/** The reasons whose row says what to change; the others link to the logs. */
+const USER_FIXES: ReadonlySet<StartReason> = new Set(['port_in_use', 'address', 'permission']);
 
 /** The plain-words reason for a start failure: the kind where it says more, else the step. */
 export function startReason(f: StartFailure): StartReason {

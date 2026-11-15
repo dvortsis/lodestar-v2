@@ -122,7 +122,8 @@ pub struct WorkerList {
     /// "Allow workers" is on and the cluster port is serving.
     pub allowed: bool,
     /// Why the cluster port couldn't open, while "Allow workers" is on and
-    /// it's being tried again; null otherwise (X-cluster-start-retry).
+    /// it's being tried again; null otherwise (X-cluster-start-retry). While
+    /// it's set, `allowed` is false: the port isn't serving.
     #[schema(required = true)]
     pub start_failure: Option<ClusterStartFailure>,
     /// Every joined worker, by id. Empty on a single machine.

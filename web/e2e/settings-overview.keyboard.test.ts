@@ -87,9 +87,9 @@ test.describe('keyboard: Settings → Overview', () => {
 		await go('/settings');
 		const row = page.getByTestId('attention-workers_start_failing');
 		await expect(row).toHaveText(
-			/^Workers can't start yet: another program is using the cluster port\. Trying again in \d+ minutes?\.$/
+			/^Workers can't start yet: another program is using the cluster port\. Close that program, or set another port under \[cluster\] in config\.toml\. Trying again in \d+ minutes?\.$/
 		);
-		// No Workers screen to send them to yet: the row has no link.
+		// The fix is in config.toml, and there's no Workers screen yet: no link.
 		await expect(page.getByTestId('attention-list').getByRole('link')).toHaveCount(0);
 		await expectNoA11yViolations(page);
 		// Recovered: the next load has no row.

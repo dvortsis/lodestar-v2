@@ -153,6 +153,20 @@ describe('needsAttention', () => {
 			expect(rows[0]!.screen).toBeUndefined();
 		});
 
+		it('links to the logs when the fix is not in config.toml', () => {
+			const store: StartFailure = { step: 'store', kind: 'store', next_retry_at: 0 };
+			const [row] = needsAttention(system(), undefined, undefined, workers(store));
+			expect(row).toMatchObject({ kind: 'workers_start_failing', href: '/logs' });
+			const bind: StartFailure = { step: 'bind', kind: 'io', next_retry_at: 0 };
+			expect(needsAttention(system(), undefined, undefined, workers(bind))[0]!.href).toBe('/logs');
+			for (const kind of ['addr_in_use', 'addr_not_available', 'permission_denied'] as const) {
+				const own: StartFailure = { step: 'bind', kind, next_retry_at: 0 };
+				expect(
+					needsAttention(system(), undefined, undefined, workers(own))[0]!.href
+				).toBeUndefined();
+			}
+		});
+
 		it('goes away once the port opens', () => {
 			expect(needsAttention(system(), undefined, undefined, workers(null, true))).toEqual([]);
 		});

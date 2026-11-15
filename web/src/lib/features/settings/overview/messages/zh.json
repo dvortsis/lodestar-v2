@@ -26,12 +26,12 @@
 	"settings_overview_changed_unavailable": "无法加载已更改的设置。",
 	"settings_overview_workers_start_failing": "工作节点暂时无法启动：{reason}。{when}重试。",
 	"settings_overview_workers_soon": "稍后",
-	"settings_overview_workers_reason_port_in_use": "另一个程序正在使用集群端口",
-	"settings_overview_workers_reason_address": "集群地址不属于这台电脑",
-	"settings_overview_workers_reason_permission": "Lodestar 没有使用集群端口的权限",
-	"settings_overview_workers_reason_port": "集群端口无法打开",
-	"settings_overview_workers_reason_database": "数据库无法打开",
-	"settings_overview_workers_reason_secrets": "密钥文件无法打开",
-	"settings_overview_workers_reason_certificates": "工作节点的证书无法加载",
-	"settings_overview_workers_reason_server": "工作节点服务无法启动"
+	"settings_overview_workers_reason_port_in_use": "另一个程序正在使用集群端口。请关闭该程序，或在 config.toml 的 [cluster] 中设置其他端口",
+	"settings_overview_workers_reason_address": "集群地址不属于这台电脑。请在 config.toml 的 [cluster] 中设置其他地址",
+	"settings_overview_workers_reason_permission": "Lodestar 没有使用集群端口的权限。请在 config.toml 的 [cluster] 中选择 1024 以上的端口",
+	"settings_overview_workers_reason_port": "集群端口无法打开。日志中有原因",
+	"settings_overview_workers_reason_database": "数据库无法打开。日志中有原因",
+	"settings_overview_workers_reason_secrets": "密钥文件无法打开。日志中有原因",
+	"settings_overview_workers_reason_certificates": "工作节点的证书无法加载。日志中有原因",
+	"settings_overview_workers_reason_server": "工作节点服务无法启动。日志中有原因"
 }

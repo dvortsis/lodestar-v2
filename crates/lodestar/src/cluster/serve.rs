@@ -2311,7 +2311,14 @@ impl ClusterHandle {
     // Settings → Workers calls it (WK-14); tests do today.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_allowed(&self, allowed: bool) {
-        self.0.allowed.send_replace(allowed);
+        // Only a change wakes the port's task: a settings save that leaves
+        // "Allow workers" as it was doesn't try a failing start at once or
+        // reset its back-off.
+        self.0.allowed.send_if_modified(|now| {
+            let changed = *now != allowed;
+            *now = allowed;
+            changed
+        });
     }
 
     pub fn allowed(&self) -> bool {
@@ -2848,6 +2855,8 @@ async fn run(
     if let Some(r) = running {
         inner.close(r, "shutdown").await;
     }
+    // Stopped: nothing is tried any more, so nothing is failing.
+    inner.state().failing = None;
 }
 
 #[cfg(test)]
