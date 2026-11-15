@@ -44,6 +44,7 @@ A follow-up to X-cmp09-starting-status (#903), and the runner's UX call. When a 
   - `Bindings::starting` (unit test): true for a claimed port and a child that is starting, running, unhealthy or backing off; false once it waits for you, is held or stopped, once released, and for a port never held;
   - with nothing managed there, detection finds nothing ("not here");
   - a ready managed port is asked as before.
+- **The supervisor and manager tests** (`tests/supervise.rs`, `tests/supervised.rs`, `tests/manager.rs`) that check a credentialed request is held back now expect the new answers: `Starting` while a run is up or restarting, and `NotReady` while held or after a stop.
 - **`crates/companions` unit tests:** health and `listening` read `Starting` as unreachable, and `not_found_or` passes it through at a fixed target.
 - **Serve's wiring:**
   - `Starting` is coded `companion_starting`;

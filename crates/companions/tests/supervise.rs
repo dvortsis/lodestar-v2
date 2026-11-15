@@ -911,7 +911,7 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     wait_status(&mut rx, "the first run", |s| s.up && s.run == 1).await;
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
@@ -927,7 +927,7 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     wait_status(&mut rx, "the exit seen", |s| !(s.up && s.run == 1)).await;
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
@@ -945,7 +945,7 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     }
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );

@@ -2435,7 +2435,7 @@ async fn a_restart_with_no_back_off_is_checked_again_and_found_ready() {
     assert!(!bindings.ready(port));
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
@@ -2445,7 +2445,7 @@ async fn a_restart_with_no_back_off_is_checked_again_and_found_ready() {
     .await;
     let got = client.send(carrying()).await;
     assert!(
-        matches!(got, Err(AdapterError::Unreachable)),
+        matches!(got, Err(AdapterError::Starting)),
         "{:?}",
         got.map(|r| r.status())
     );
