@@ -328,10 +328,39 @@ pub fn idle_during_rollback(
     }
 }
 
-/// Whether `inner` is `outer` or inside it, compared as [`same_dir`] does.
+/// Whether `inner` is `outer` or inside it, compared as [`same_dir`] does,
+/// by whole path parts: `inner` or one of its folders is `outer` by what
+/// the system says it is ([`same_object`]), or by its text.
 pub fn within(inner: &Path, outer: &Path) -> bool {
+    let full_inner = full(inner);
+    if full_inner
+        .ancestors()
+        .any(|a| same_object(a, outer) == Some(true))
+    {
+        return true;
+    }
     let (i, o) = (norm(inner), norm(outer));
     i == o || i.starts_with(&format!("{o}\\"))
+}
+
+/// Whether two existing paths are the same file or folder by what the
+/// system says it is: the volume serial number and file index, each
+/// opened with `FILE_FLAG_BACKUP_SEMANTICS` (`same_file::Handle`), after
+/// links and junctions. `None` when either can't be opened (missing, or
+/// not readable by this account), and always off Windows: the caller
+/// then compares the text.
+fn same_object(a: &Path, b: &Path) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        let a = same_file::Handle::from_path(full(a)).ok()?;
+        let b = same_file::Handle::from_path(full(b)).ok()?;
+        Some(a == b)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (a, b);
+        None
+    }
 }
 
 /// A real path is verbatim (`\\?\C:\…`), so the prefix goes before
@@ -419,13 +448,14 @@ fn real(p: &Path) -> PathBuf {
     }
 }
 
-/// Whether two paths name the same folder, as Windows compares them: the
-/// real paths when both exist (so case, 8.3 names, links and `..` don't
+/// Whether two paths name the same folder, as Windows compares them: by
+/// what the system says each is when both can be opened ([`same_object`]),
+/// and by the real paths when both exist (so case, 8.3 names, links and `..` don't
 /// matter), else by their text as Win32 reads it ([`full`], [`tidy`]):
 /// case-insensitively, with `/` as `\`, no `\\?\` prefix, `.` and `..`
 /// resolved, and no trailing separator, dot or space.
 pub fn same_dir(a: &Path, b: &Path) -> bool {
-    norm(a) == norm(b)
+    same_object(a, b) == Some(true) || norm(a) == norm(b)
 }
 
 /// What a service command line runs.
@@ -1345,6 +1375,16 @@ mod tests {
             refuse
         )));
 
+        // A sibling whose name starts the same: never checked.
+        let sibling = root.path().join("ProgramData").join("Lodestar2");
+        let env = env_of(vec![(
+            "LODESTAR_DATA_DIR",
+            sibling.to_string_lossy().into_owned(),
+        )]);
+        let unasked_sibling = || -> Result<(), String> { panic!("sibling checked") };
+        let (_, d) = load_guarded(&svc, None, env, unasked_sibling).unwrap();
+        assert_eq!(d, sibling);
+
         // Another folder: never checked.
         let away = root.path().join("away.toml");
         let other = root.path().join("D").join("Lodestar");
@@ -1827,6 +1867,72 @@ mod tests {
         assert!(!within(Path::new(r"C:\ProgramData\Lodestar\..\Other"), svc));
         // UNC: `..` never climbs above the share.
         assert_eq!(tidy(r"\\srv\share\..\..\x"), r"\\srv\share\x");
+    }
+
+    /// X-win-service-path-hardening (c), on Windows: a folder is the
+    /// service's by what the system says it is, however it's spelled or
+    /// reached.
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_is_compared_by_what_it_is() {
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("Lodestar");
+        std::fs::create_dir_all(svc.join("data")).unwrap();
+        let shown = svc.to_string_lossy().into_owned();
+
+        // A junction to it (no privilege needed, unlike a symbolic link).
+        let link = root.path().join("link");
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&svc)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(same_dir(&link, &svc));
+        assert!(within(&link.join("data"), &svc));
+        assert!(within(&link.join("not-yet"), &svc));
+
+        // Another case, the verbatim form and a trailing dot.
+        for spelled in [
+            shown.to_uppercase(),
+            format!(r"\\?\{shown}"),
+            format!("{shown}."),
+        ] {
+            assert!(same_dir(Path::new(&spelled), &svc), "{spelled}");
+        }
+
+        // Its 8.3 short name, when the volume makes them.
+        // Passed to cmd as written: Rust's quoting is for C programs.
+        use std::os::windows::process::CommandExt as _;
+        let out = std::process::Command::new("cmd")
+            .raw_arg(r#"/C for %I in ("%LODESTAR_P%") do @echo %~sI"#)
+            .env("LODESTAR_P", &svc)
+            .output()
+            .unwrap();
+        let short = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !short.is_empty() && !short.eq_ignore_ascii_case(&shown) {
+            assert!(same_dir(Path::new(&short), &svc), "{short}");
+        }
+
+        // A sibling with a similar name is neither.
+        let sibling = root.path().join("Lodestar2");
+        std::fs::create_dir_all(&sibling).unwrap();
+        assert!(!same_dir(&sibling, &svc));
+        assert!(!within(&sibling, &svc));
+        assert_eq!(same_object(&sibling, &svc), Some(false));
+        assert_eq!(same_object(&link, &svc), Some(true));
+    }
+
+    /// Off Windows nothing is compared by file identity: the text decides.
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_folders_are_compared_by_text() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(same_object(root.path(), root.path()), None);
+        assert!(same_dir(root.path(), root.path()));
+        let sibling = root.path().with_extension("2");
+        assert!(!within(&sibling, root.path()));
     }
 
     #[test]
