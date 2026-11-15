@@ -1285,6 +1285,33 @@ mod bound {
         );
     }
 
+    /// Review O2: a bare probe at a managed port that's starting, which
+    /// accepts the connection but never answers, ends at its deadline as
+    /// starting too (not a bare timeout, which detection reads as "not
+    /// here"), whichever deadline fires first.
+    #[tokio::test]
+    async fn a_silent_starting_port_past_its_deadline_says_starting() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let keep = Arc::clone(&held);
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = listener.accept().await {
+                keep.lock().unwrap().push(sock);
+            }
+        });
+        let target = Target::Loopback(PortNumber::new(port).unwrap());
+        let bindings = Arc::new(Bindings::new());
+        let (_tx, rx) = watch::channel(status(State::Starting, 0));
+        bindings.hold(port, rx);
+        let client = bound(&bindings);
+        let short = Limits::new(Duration::from_millis(200), 1024).unwrap();
+        let got = client.send(ProbeRequest::new(&target, path(), short)).await;
+        assert_eq!(got.err(), Some(AdapterError::Starting));
+        let qbt = detect::detector(&id("qbittorrent")).unwrap();
+        assert_ne!(qbt.detect(&client, &target).await, Ok(None));
+    }
+
     /// A ready companion is asked as before: what carries something goes,
     /// and detection finds it.
     #[tokio::test]

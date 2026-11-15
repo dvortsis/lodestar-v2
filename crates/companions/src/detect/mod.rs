@@ -454,11 +454,7 @@ impl CompanionHttp {
                     // and otherwise not ready (stopped, removed, failed, or
                     // waiting for you). Only for a managed port, so detection
                     // still reads nothing at an unmanaged one as "not here".
-                    let why = if b.starting(p) {
-                        AdapterError::Starting
-                    } else {
-                        AdapterError::NotReady
-                    };
+                    let why = not_ready(b, p);
                     // What carries something is refused before it's sent.
                     if !bare(request) {
                         return Err(why);
@@ -556,6 +552,16 @@ fn bare(request: &ProbeRequest<'_>) -> bool {
         && !request.path.as_str().contains('?')
 }
 
+/// Why a managed port that isn't ready is refused: still starting while a
+/// start is under way ([`Bindings::starting`]), and otherwise not ready.
+fn not_ready(b: &Bindings, port: u16) -> AdapterError {
+    if b.starting(port) {
+        AdapterError::Starting
+    } else {
+        AdapterError::NotReady
+    }
+}
+
 /// Whether the outcome shows something accepted the connection: an answer,
 /// or a failure that can only follow one.
 fn listening(got: &Result<ProbeResponse, AdapterError>) -> bool {
@@ -577,9 +583,20 @@ impl GuardedHttp for CompanionHttp {
         Box::pin(async move {
             // One deadline for everything, both loopback families and the
             // whole body included, so a slow drip can't outlast it.
+            // Past the deadline at a managed port that isn't ready, the
+            // answer is the same as a probe that found nothing there.
             tokio::time::timeout(request.limits.timeout(), self.dispatch(&request))
                 .await
-                .unwrap_or(Err(AdapterError::Timeout))
+                .unwrap_or_else(|_| {
+                    Err(match (request.target, self.bindings.as_deref()) {
+                        (Target::Loopback(port), Some(b))
+                            if b.managed(port.get()) && !b.ready(port.get()) =>
+                        {
+                            not_ready(b, port.get())
+                        }
+                        _ => AdapterError::Timeout,
+                    })
+                })
         })
     }
 }

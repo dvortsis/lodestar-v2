@@ -352,34 +352,26 @@ describe('detect, add and templates', () => {
 		await until(() => expect(calls).toBe(2));
 	});
 	it('a refusal while the companion is still starting offers Try again, which asks again', async () => {
+		// As in use: a target detection found, refused while Lodestar's copy is starting.
+		const target = { kind: 'loopback', port: 8080 };
+		answers['POST /companions/detect'] = () =>
+			reply(200, { found: [{ id: 'qbittorrent', version: '5.0.0', target }], starting: [] });
 		let calls = 0;
 		answers['POST /companions/qbittorrent/target'] = () => {
 			calls += 1;
 			return calls === 1
 				? fail(409, 'companion_starting')
-				: reply(200, {
-						id: 'qbittorrent',
-						version: '5.0.0',
-						target: { kind: 'loopback', port: 8080 }
-					});
+				: reply(200, { id: 'qbittorrent', version: '5.0.0', target });
 		};
 		await open();
-		await fireEvent.change(screen.getByLabelText('Companion'), {
-			target: { value: 'qbittorrent' }
-		});
-		await fireEvent.input(screen.getByLabelText(/Address/), {
-			target: { value: 'http://127.0.0.1:8080' }
-		});
-		await fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Look for companions' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Add qBittorrent' }));
 		await until(() => expect(screen.getByText(/still starting/)).toBeTruthy());
 		expect(document.body.textContent).not.toContain("didn't answer");
 		expect(document.body.textContent).not.toContain('companion_starting');
 		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 		await until(() => expect(calls).toBe(2));
-		expect(bodies['POST /companions/qbittorrent/target']).toEqual({
-			kind: 'url',
-			url: 'http://127.0.0.1:8080'
-		});
+		expect(bodies['POST /companions/qbittorrent/target']).toEqual(target);
 		await until(() => expect(screen.queryByText(/still starting/)).toBeNull());
 	});
 	it('words a starting companion apart from one that did not answer', () => {
