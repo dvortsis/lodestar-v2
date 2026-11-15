@@ -148,6 +148,9 @@ Docker Compose runs Lodestar from one file, `docker-compose.yml`. The file maps 
 | **[Named volume](glossary.md#named-volume-and-bind-mount) (recommended)** | The default in the file. Docker manages the volume and keeps it across updates. |
 | Bind mount | You want the data in a folder you pick, such as `./data`. |
 
+> [!IMPORTANT]
+> **Using a VPN? Do [section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn) first.** Lodestar starts crawling as soon as the container starts, and the steps below give it your normal network. To keep your home IP away from DHT peers, use the gluetun example in section 3.3 in place of these steps.
+
 To install with the named volume:
 
 1. In a terminal on your Docker host, make a folder and move into it:
