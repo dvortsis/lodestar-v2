@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T20:45Z",
+  "updated_at": "2026-11-15T20:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T20:45Z",
+  "last_heartbeat": "2026-11-15T20:56Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10019,6 +10019,12 @@
       "slice": "X-worker-oversize-handback",
       "sha": "64797fce14f26ab24edfad25ee1bd95f8a74ca11",
       "at": "2026-11-15T20:45Z"
+    },
+    {
+      "pr": 949,
+      "slice": "X-leak-test-capture-kill-2",
+      "sha": "544b8cbf00202a5427c191576ec8683ee45ea6d2",
+      "at": "2026-11-15T20:56Z"
     }
   ],
   "active_sessions": {
@@ -10257,7 +10263,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T20:45Z",
+    "updated": "2026-11-15T20:56Z",
     "items": [
       {
         "slot": 1,
@@ -10266,7 +10272,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T15:59Z",
-        "doing": "#946 (leak-test flake fix) merged 27deb6f4; #936 awaits one infra re-run then merge; X-leak-test-capture-kill parts 2-3 on slice/X-leak-test-capture-kill-2; session_01MMjhn8LCZuDPeXwdBzodLH",
+        "doing": "#936 X-win-service-path-hardening CI on e5a12b7f; then X-win-service-cwd-fallback (#949 merged)",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10390,8 +10396,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T20:45Z",
-  "updated": "2026-11-15T20:45Z",
+  "heartbeat": "2026-11-15T20:56Z",
+  "updated": "2026-11-15T20:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
