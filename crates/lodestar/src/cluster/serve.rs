@@ -354,6 +354,8 @@ pub(crate) struct FloorReports {
     pub turned_away: AtomicU64,
     /// Reports refused as [`Reported::Lapsed`].
     pub lapsed_refused: AtomicU64,
+    /// Lapsed keys forgotten because the map was at [`LAPSED_CAP`].
+    pub lapsed_evicted: AtomicU64,
 }
 
 /// One pending report: who reported it, and when.
@@ -430,7 +432,8 @@ impl LapsedKey {
 }
 
 impl Lapsed {
-    fn insert(&mut self, key: [u8; 20], worker: u32, cap: usize) {
+    /// Returns how many keys the cap pushed out.
+    fn insert(&mut self, key: [u8; 20], worker: u32, cap: usize) -> u64 {
         // Wraps after 2^32 lapses; a stale entry matching by chance only
         // forgets a key early, which is the bound's own fallback.
         let seq = self.next;
@@ -443,15 +446,18 @@ impl Lapsed {
         entry.push(worker);
         entry.seq = seq;
         self.order.push_back((key, seq));
+        let mut evicted = 0;
         while self.by_key.len() > cap {
             let Some((k, q)) = self.order.pop_front() else {
                 break;
             };
             if self.by_key.get(&k).is_some_and(|e| e.seq == q) {
                 self.by_key.remove(&k);
+                evicted += 1;
             }
         }
         self.compact();
+        evicted
     }
 
     /// Whether `worker`'s report of `key` is one of its last lapsed ones.
@@ -539,6 +545,7 @@ impl FloorReports {
             over_budget: AtomicU64::new(0),
             turned_away: AtomicU64::new(0),
             lapsed_refused: AtomicU64::new(0),
+            lapsed_evicted: AtomicU64::new(0),
         }
     }
 
@@ -756,7 +763,8 @@ impl FloorReports {
             let mut lapsed = self.lapsed();
             for (k, w) in chunk {
                 if let Some(w) = w.filter(|w| !revoked.contains(w)) {
-                    lapsed.insert(*k, w, self.lapsed_cap);
+                    let n = lapsed.insert(*k, w, self.lapsed_cap);
+                    self.lapsed_evicted.fetch_add(n, Ordering::Relaxed);
                 }
             }
         }
@@ -2515,6 +2523,11 @@ impl ClusterHandle {
                 "Floor drops refused because the same worker's report of the key lapsed: nothing held, no budget used.",
                 &floor.lapsed_refused,
             ),
+            (
+                "cluster_floor_lapsed_evicted_total",
+                "Lapsed keys forgotten because 65,536 were already remembered (oldest out).",
+                &floor.lapsed_evicted,
+            ),
         ] {
             o.one(name, "counter", help, n.load(Ordering::Relaxed));
         }
@@ -3136,7 +3149,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 38, "{text}");
+        assert_eq!(families.len(), 39, "{text}");
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
@@ -3731,6 +3744,7 @@ mod tests {
         lapse(&floor, &db, &[(3, 6)], at + 4 * WORKER_FLOOR_HOLD_SECS);
         let from = |w: u32, k: usize| floor.lapsed_from(WorkerId(w), &key_n(k));
         assert!(!from(4, 1), "the oldest went");
+        assert_eq!(floor.lapsed_evicted.load(Ordering::Relaxed), 1);
         assert!(from(5, 2) && from(6, 3));
         for w in [4, 5, 6, 7] {
             for k in 1..=3 {

@@ -959,6 +959,7 @@ Every second while the port is served, the coordinator plans the fleet and sends
 | `cluster_floor_reports_turned_away_total` | counter | Floor drops within a worker's budget reported while 100,000 were already pending (writes failing for a long time): counted, nothing else, and they use up no budget. |
 | `cluster_floor_reports_lapsed_total` | counter | Floor drops refused because that same worker's earlier report of the key lapsed: nothing is held and no budget is used. Another worker's report of the key is taken as usual ([X-floor-renew](decisions/2026-11-14-X-floor-renew.md)). |
 | `cluster_floor_lapsed_keys` | gauge | Keys whose worker floor report lapsed, remembered with their last workers so the store check can exclude them for those workers. At most 65,536; past that the oldest is forgotten. Kept in memory: 0 after a restart until reports lapse again. |
+| `cluster_floor_lapsed_evicted_total` | counter | Lapsed keys forgotten because 65,536 were already remembered: the oldest goes first, and that key is then treated as it was before the store check could exclude it. Steady growth means many keys lapse in a short time. |
 
 ## Remote intake (WK-9, 2026-11-07)
 
