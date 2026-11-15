@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T04:36Z",
+  "updated_at": "2026-11-15T05:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T04:36Z",
+  "last_heartbeat": "2026-11-15T05:18Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10061,199 +10061,54 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T04:36Z",
+    "updated": "2026-11-15T05:18Z",
     "items": [
       {
         "slot": 1,
-        "status": "idle",
-        "doing": "UP-1 #765 merged 8f820fcc; session archived"
+        "slice": "X-companion-starting-steps",
+        "role": "build",
+        "agent": "claude",
+        "model": "opus",
+        "since": "2026-11-15T03:26Z",
+        "doing": "#909 under review (session_01MMjhn8LCZuDPeXwdBzodLH)",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "active"
       },
       {
         "slot": 2,
-        "status": "idle",
-        "doing": "CMP-D #782 merged 74dec644 after runner delta check (B1, I1-I7 fixed); session archived"
+        "slice": "X-flake-detect-macos",
+        "role": "build",
+        "agent": "claude",
+        "model": "opus",
+        "since": "2026-11-15T03:13Z",
+        "doing": "#899 under review; carries #896 X-flake-dataset-macos (session_01MMjhn9j5mWvNehxxWyykLf)",
+        "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
+        "status": "active"
       },
       {
         "slot": 3,
-        "status": "idle",
-        "doing": "WK-11b #779 merged 4e19431a; session archived 00:0xZ"
+        "slice": "X-import-status-lock",
+        "role": "build",
+        "agent": "claude",
+        "model": "opus",
+        "since": "2026-11-15T03:28Z",
+        "doing": "#908 waiting on CI, then merge (session_01MMjhn9hfwMf4Ydg4La5rEh)",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "active"
       },
       {
         "slot": 4,
-        "status": "idle",
-        "doing": "X-cmp-egress-api #805 merged (c6b7511a) 2026-11-13T04:16Z; session archived"
-      },
-      {
-        "slot": 5,
-        "status": "idle",
-        "doing": "M8-PERF-1a #780 merged (198205d2) 2026-11-13T02:15Z; session archived (\u00a72.65 drain); M8-PERF-1b WIP on wip/M8-PERF-1b for a later slice"
-      },
-      {
-        "slot": 6,
-        "status": "idle",
-        "doing": "X-soak-screen-calibrate #796 merged (4b20e531) 2026-11-13T02:00Z; session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 7,
-        "slice": "X-companion-starting-steps",
-        "role": "build",
-        "agent": "session_01MMjhn8LCZuDPeXwdBzodLH",
-        "doing": "guided steps show starting",
-        "since": "2026-11-15T03:26Z",
-        "cap": "kept build (\u00a72.64 4+4)",
-        "model": "opus",
-        "status": "active"
-      },
-      {
-        "slot": 8,
-        "status": "idle",
-        "doing": "X-win-soak-attach-proc-hash #792 merged (2815ad5a); session archived; cloud-testing slot free for the next ready cloud-testing slice"
-      },
-      {
-        "slot": 9,
-        "status": "idle",
-        "doing": "X-ci-main-signal #784 merged (6ffe3745); session archived (\u00a72.64)"
-      },
-      {
-        "slot": 10,
-        "status": "idle",
-        "doing": "ENR-14 #764 merged 55e155a9; session archived"
-      },
-      {
-        "slot": 11,
-        "status": "idle",
-        "doing": "retired: M8-REL-1 #783 merged (1dc0791c) 2026-11-13T03:21Z, session archived; over cap (\u00a72.65)"
-      },
-      {
-        "slot": 12,
-        "status": "idle",
-        "doing": "X-un1-nits #769 merged f47369b8; session archived"
-      },
-      {
-        "slot": 13,
-        "slice": "X-test-vm",
-        "role": "other",
-        "agent": "claude",
-        "doing": "cloud-testing (owner-started): session_01MMjhnBD1KHxsn7QRHHmpeM: X-test-vm coordinator. Owner 03:40Z: 3 of 4 shared tester slots on its lanes (Linux lane; Windows phase 3 session_01MMjhnA7rUxSNpacLYEdDvK, about 10-14 h; an owner-started import lane on a temporary Linode, real Bitmagnet/Magnetico dumps plus synthetic 200k and 1M). Slot 30 is the 4th. Findings reach the runner as numbers only.",
-        "since": "2026-11-12T06:37:34Z",
-        "status": "active",
-        "cap": "kept cloud-testing (\u00a72.64 4+4 from 00:00Z)"
-      },
-      {
-        "slot": 14,
-        "doing": "X-operator-unattended-wake done (#890, #891 merged); session archived",
-        "slice": "X-operator-unattended-wake",
-        "role": "cloud-testing",
-        "since": "2026-11-14T17:23Z",
-        "status": "idle"
-      },
-      {
-        "slot": 15,
-        "slice": "X-flake-dataset-macos",
-        "role": "build",
-        "agent": "session_01MMjhn9j5mWvNehxxWyykLf",
-        "since": "2026-11-15T03:13Z",
-        "doing": "#899 (carries #896)",
-        "cap": "kept cloud-testing (\u00a72.64 4+4)",
-        "model": "opus",
-        "status": "active"
-      },
-      {
-        "slot": 16,
-        "status": "idle",
-        "doing": "idle: cloud testing paused until the AWS connector is reconnected"
-      },
-      {
-        "slot": 17,
-        "status": "idle",
-        "doing": "X-utp-backoff #788 merged (eb6620d2) 2026-11-13T02:20Z after runner delta check of rv-788 B1 option (b); session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 18,
-        "status": "idle",
-        "doing": "NOS-0 #789 merged (4ca4eccf) 2026-11-13T05:22Z; session archived"
-      },
-      {
-        "slot": 19,
-        "status": "idle",
-        "doing": "LEM-0 #787 merged (304fbd8e) 2026-11-13T02:05Z; session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 20,
-        "status": "idle",
-        "doing": "retired: NOS-2a #791 merged (914607c7) 2026-11-13T03:22Z, session archived; over cap (\u00a72.65)"
-      },
-      {
-        "slot": 21,
-        "status": "idle",
-        "doing": "X-restart-save-lag #790 merged a930623d; session archived"
-      },
-      {
-        "slot": 22,
-        "status": "idle",
-        "doing": "X-win-upd-manual-rollback #795 merged (0db056f9) 2026-11-13T02:25Z after runner delta check; session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 23,
-        "status": "idle",
-        "doing": "M8-SEC-0 #786 merged 8d954dab; session archived"
-      },
-      {
-        "slot": 24,
-        "status": "idle",
-        "doing": "ENR-13 #793 merged (7a1216ea) 2026-11-13T02:14Z; session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 25,
-        "status": "idle",
-        "doing": "X-banner-live-region #794 merged (548b2b02) 2026-11-13T01:47Z; session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 26,
-        "status": "idle",
-        "doing": "M8-DOC-2 #785 merged 07351e82; session archived"
-      },
-      {
-        "slot": 27,
-        "status": "idle",
-        "doing": "retired: CMP-12 #799 merged (6953f9b4) 2026-11-13T04:06Z, session archived; over cap (\u00a72.65 drain)"
-      },
-      {
-        "slot": 28,
-        "status": "idle",
-        "doing": "WK-18 #797 merged (1256467d) 2026-11-13T01:08Z; session archived (\u00a72.65 drain)"
-      },
-      {
-        "slot": 30,
-        "slice": "X-import-status-lock",
-        "role": "build",
-        "agent": "session_01MMjhn9hfwMf4Ydg4La5rEh",
-        "model": "opus",
-        "since": "2026-11-15T03:28Z",
-        "doing": "import status safe beside a writer",
-        "cap": "kept build (\u00a72.64 4+4)",
-        "status": "active"
-      },
-      {
-        "slot": 32,
         "slice": "X-filter-budget-manyfile-perf",
         "role": "build",
-        "agent": "session_01MMjhn8URRT9adbFfM1zGi1",
-        "status": "active",
+        "agent": "claude",
+        "model": "opus",
         "since": "2026-11-15T04:36Z",
-        "doing": "#910 X-filter-budget-manyfile-perf (trade/spill alloc fix); review on ready",
-        "cap": "kept build (\u00a72.64 4+4)"
-      },
-      {
-        "slot": 33,
-        "slice": null,
-        "role": "build (owner-started reviewer; one build slot, one fix at a time)",
-        "agent": "session_01MMjhnBh7zpNQt1KJTfEEZk",
-        "doing": "handed back after #904",
-        "since": "2026-11-15T03:26Z",
-        "status": "idle"
+        "doing": "#910 in progress; review on ready (session_01MMjhn8URRT9adbFfM1zGi1)",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "active"
       }
-    ]
+    ],
+    "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
   },
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
   "owner_actions": [
@@ -10341,8 +10196,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T04:36Z",
-  "updated": "2026-11-15T04:36Z",
+  "heartbeat": "2026-11-15T05:18Z",
+  "updated": "2026-11-15T05:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10589,15 +10444,23 @@
     ]
   },
   "extra": {
-    "updated": "2026-11-12T21:02:06Z",
+    "updated": "2026-11-15T05:18Z",
     "max": 4,
     "items": [
-      13,
-      14,
-      15,
-      16
+      {
+        "name": "X-test-vm coordinator (owner-started)",
+        "session": "session_01MMjhnBD1KHxsn7QRHHmpeM",
+        "status": "active",
+        "doing": "cloud testing coordinator; Linode $100 + AWS $100 caps (relayed 2026-11-15)"
+      },
+      {
+        "name": "Fable slot (owner-started reviewer)",
+        "session": "session_01MMjhnBh7zpNQt1KJTfEEZk",
+        "status": "idle",
+        "doing": "handed back after #904; one fix at a time when given work"
+      }
     ],
-    "note": "Owner 2026-11-12 (\u00a72.61/\u00a72.62, and reminded 21:00Z): up to 4 extra sessions for testing-related work, shared with the Cloud Tester. Slot 13 X-test-vm lanes; 14 X-test-blockers-1112 (#778); 15 X-unraid-validate-all; 16 reserved (tester lanes, gluetun-leak fix, then X-soak-screen-calibrate after #777)."
+    "note": "Owner \u00a72.64: 4 build (slots) + 4 cloud-testing (here, shared with the X-test-vm coordinator) + the owner-approved Fable slot. Cloud-testing share 1 is lent to X-flake-detect-macos (slot 2)."
   },
   "window_1112": {
     "decided": "owner, runner chat 2026-11-12T22:05Z (\u00a72.63, to record): run up to 10 more sessions until 2026-11-12T23:30Z (end time confirmed by the owner)",
