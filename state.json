@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T09:03Z",
+  "updated_at": "2026-11-15T09:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T09:03Z",
+  "last_heartbeat": "2026-11-15T09:34Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9887,6 +9887,12 @@
       "slice": "X-flake-rejudge-panic-time",
       "sha": "1cfbfb54",
       "at": "2026-11-15T09:03Z"
+    },
+    {
+      "pr": 921,
+      "slice": "X-store-load-busy-map",
+      "sha": "07741322",
+      "at": "2026-11-15T09:34Z"
     }
   ],
   "active_sessions": {
@@ -10125,7 +10131,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T09:03Z",
+    "updated": "2026-11-15T09:34Z",
     "items": [
       {
         "slot": 1,
@@ -10156,7 +10162,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T07:21Z",
-        "doing": "session_01MMjhn9hfwMf4Ydg4La5rEh: #908 merged; X-store-load-busy-map (busy/locked mapped apart from Corrupt in Store::load/codec_has; not schema.rs migrate), then X-import-progress-visible",
+        "doing": "#921 merged (07741322); #922 X-import-progress-visible green-wait at c789e923; next X-first-run-search-gate (U1 /search setup gate + A1 + settings save lead)",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10260,8 +10266,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T09:03Z",
-  "updated": "2026-11-15T09:03Z",
+  "heartbeat": "2026-11-15T09:34Z",
+  "updated": "2026-11-15T09:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
