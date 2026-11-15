@@ -288,6 +288,8 @@ pub struct Stats {
     pub spoofed: AtomicU64,
     /// Gauge: nodes across routing tables.
     pub routing_nodes: AtomicU64,
+    /// Gauge: those of them that are good (answered within 15 minutes).
+    pub routing_good_nodes: AtomicU64,
     /// Gauge: queries awaiting an answer.
     pub outstanding: AtomicU64,
     pub harvested_sample: AtomicU64,
@@ -415,6 +417,7 @@ impl Stats {
             send_errors: g(&self.send_errors),
             spoofed: g(&self.spoofed),
             routing_nodes: g(&self.routing_nodes),
+            routing_good_nodes: g(&self.routing_good_nodes),
             outstanding: g(&self.outstanding),
             harvested_sample: g(&self.harvested_sample),
             harvested_get_peers: g(&self.harvested_get_peers),
@@ -731,6 +734,7 @@ pub struct StatsSnapshot {
     pub send_errors: u64,
     pub spoofed: u64,
     pub routing_nodes: u64,
+    pub routing_good_nodes: u64,
     pub outstanding: u64,
     pub harvested_sample: u64,
     pub harvested_get_peers: u64,

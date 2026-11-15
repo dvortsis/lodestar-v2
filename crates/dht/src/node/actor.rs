@@ -2744,6 +2744,10 @@ impl Actor {
         self.stats
             .routing_nodes
             .store(nodes as u64, Ordering::Relaxed);
+        let good: usize = self.families.iter().map(|f| f.table.good(now)).sum();
+        self.stats
+            .routing_good_nodes
+            .store(good as u64, Ordering::Relaxed);
         self.stats
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
@@ -3054,6 +3058,54 @@ mod tests {
         assert!(a.stalled.is_empty());
         assert!(a.peer_requests.is_empty());
         assert_eq!(a.active_get_peers, 0);
+    }
+
+    /// The routing-table gauges follow the table on each maintenance tick:
+    /// inserts raise both, a node gone bad stays in `routing_nodes` but
+    /// leaves `routing_good_nodes`, and removing every node takes both
+    /// back to 0 (X-routing-table-metric).
+    #[test]
+    fn routing_gauges_follow_the_table_on_each_tick() {
+        let (mut a, sockets) = fixture();
+        let gauges = |a: &Actor| {
+            let s = a.stats.snapshot();
+            (s.routing_nodes, s.routing_good_nodes)
+        };
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (0, 0), "an empty table");
+
+        let now = a.now_secs();
+        let nodes: Vec<NodeInfo> = (1..=3u8)
+            .map(|i| NodeInfo {
+                id: NodeId([0x80 >> i; 20]),
+                addr: SocketAddr::from(([127, 0, 0, 1 + i], UNBOUND)),
+            })
+            .collect();
+        for n in &nodes {
+            assert_eq!(
+                a.families[0].table.insert(*n, Contact::Response, now),
+                Inserted::Added
+            );
+        }
+        assert_eq!(gauges(&a), (0, 0), "published on the tick, not on insert");
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (3, 3));
+
+        for _ in 0..crate::routing::MAX_FAILURES {
+            a.families[0].table.failed(&nodes[0].id, now);
+        }
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (3, 2), "bad keeps its slot, but isn't good");
+
+        a.families[0].table.remove(&nodes[1].id);
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (2, 1));
+
+        for n in &nodes {
+            a.families[0].table.remove(&n.id);
+        }
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (0, 0), "the table emptied");
     }
 
     #[test]
