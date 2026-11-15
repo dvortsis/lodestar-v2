@@ -665,6 +665,8 @@ These Prometheus series are aggregate, without endpoint/hash labels. Gauges refl
 
 | Series | Meaning |
 |---|---|
+| `dht_routing_nodes` | Gauge, nodes: the routing-table size, IPv4 and IPv6 tables together (the status page's and `/crawler`'s routing nodes). A node that stops answering keeps its slot until a verified node replaces it, so this doesn't fall when the network goes away. 0 before the first node answers, and absent with the DHT off. |
+| `dht_routing_good_nodes` | Gauge, nodes: those of them good by BEP 5: answered us within 15 minutes, or answered before and queried us within 15 minutes. Falls to 0 within 15 minutes of the node no longer hearing from its peers (a VPN restart, a lost route) and climbs back as they're heard again, so it tells a table that collapsed or never filled from a slow start. A peer that answered once and still queries us keeps counting, so it can stay above 0 while only our outbound queries are lost. Never above `dht_routing_nodes`. Absent with the DHT off. ([X-routing-table-metric](decisions/2026-11-15-X-routing-table-metric.md)) |
 | `dht_sample_cooling`, `dht_sample_inflight` | Cooldown obligations (also indexed expiry entries) and reserved transactions; their sum stays at most 200,000. |
 | `dht_sample_frontier` | Queued sample candidates, at most 20,000. |
 | `dht_sample_suppression_seconds` | Startup suppression remaining. Zero permits sampling; it does not promise spare capacity. |

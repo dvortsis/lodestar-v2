@@ -818,6 +818,7 @@ placement:
   - X-import-status-lock
   - X-store-load-busy-map
   - X-store-busy-nits
+  - X-routing-table-metric
   - X-first-run-search-gate
   - D-docker-guide-1115
 unplaced_workstream: ws-small
