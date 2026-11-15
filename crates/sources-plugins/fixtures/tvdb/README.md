@@ -2,7 +2,7 @@
 
 Written by hand in the shape of TheTVDB's API v4 (`POST /v4/login`, `GET /v4/search`), as its published OpenAPI document (`thetvdb/v4-api`, `docs/swagger.yml`, version 4.9.0) describes it. They were **not recorded from the live service**: a recording needs an API key, and none may be committed. Replace them with recordings (key, PIN and token stripped) when a session holds a key. If a real answer differs from this shape, add it here and fix `sources-feeds`' parser in that PR.
 
-The API key `00000000-fake-0000-0000-000000000000`, the PIN `FAKEPIN1` and the tokens `fake.token.one` and `fake.token.two` are obviously fake. Breaking Bad's TVDB (`81189`), IMDb (`tt0903747`) and TMDB (`1396`) ids are public facts; every other id (`9000…`) is made up, and so are the people. `SENTINEL-…` text (overviews, networks, people, images, error messages) must never reach a result or an error.
+The API key `00000000-fake-0000-0000-00000000fake`, the PIN `FAKEPIN1` and the tokens `fake.token.one` and `fake.token.two` are obviously fake. Breaking Bad's TVDB (`81189`), IMDb (`tt0903747`) and TMDB (`1396`) ids are public facts; every other id (`9000…`) is made up, and so are the people. `SENTINEL-…` text (overviews, networks, people, images, error messages) must never reach a result or an error.
 
 The `.http` files list the headers the request must carry: `Accept`, `Content-Type` on the login, and the `Authorization` bearer token on a search. The login's body is in its `.req.body`.
 

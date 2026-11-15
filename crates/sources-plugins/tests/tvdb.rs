@@ -49,7 +49,7 @@ use harness::{core_with, n, until};
 const BB: &str = "Breaking Bad";
 const T: i64 = 1_700_000_000;
 /// Obviously fake, and the same in the fixtures' login bodies.
-const KEY: &str = "00000000-fake-0000-0000-000000000000";
+const KEY: &str = "00000000-fake-0000-0000-00000000fake";
 const PIN: &str = "FAKEPIN1";
 
 fn fixture(case: &str) -> PathBuf {

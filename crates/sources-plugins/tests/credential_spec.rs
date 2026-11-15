@@ -318,7 +318,7 @@ async fn tvdb_reads_exactly_what_it_declares() {
     );
     let stored = Arc::new(StaticCredentials::new([(
         "api_key",
-        "00000000-fake-0000-0000-000000000000",
+        "00000000-fake-0000-0000-00000000fake",
     )]));
     let with = once(&tvdb::Tvdb::new(stored)).await;
     assert_eq!(with, tvdb::FAILED, "past the key, to the refused request");
