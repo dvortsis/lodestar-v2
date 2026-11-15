@@ -917,7 +917,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | Series | Type | Meaning |
 | --- | --- | --- |
 | `cluster_allowed` | gauge | 1 when Allow workers is on. |
-| `cluster_listening` | gauge | 1 while the cluster port is bound and served. 0 with `cluster_allowed 1` means it couldn't open: see `cluster_start_failures_total` and the `cluster.start_failed` log line. |
+| `cluster_listening` | gauge | 1 while the cluster port is bound and served. 0 with `cluster_allowed 1` means it couldn't open and is tried again (2 s, doubling to 5 minutes): see `cluster_start_failures_total` and the `cluster.start_failed` log line. |
 | `cluster_workers_connected` | gauge | Remote workers with a live session. |
 | `cluster_handshaking` | gauge | Connections still in their pre-authentication handshake (TLS, then the WebSocket upgrade or a join request). |
 | `cluster_leases_held` | gauge | Leases remote workers hold now. `leases_outstanding` counts every lease, local and remote, plus keys waiting for a re-grant. |
@@ -937,7 +937,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | `cluster_version_refused_total` | counter | Workers refused for a protocol major version mismatch. |
 | `cluster_skew_flags_total` | counter | Times a worker's clock was flagged as more than `max_skew_ms` off. |
 | `cluster_pki_errors_total` | counter | Heartbeat ticks whose PKI reload or hourly upkeep failed; the previous state stays in force. |
-| `cluster_start_failures_total` | counter | Times turning the port on failed (binding it or opening the PKI). |
+| `cluster_start_failures_total` | counter | Times turning the port on failed (binding it or opening the PKI), each retry included. |
 | `cluster_store_check_errors_total` | counter | Store reads that failed in the check before a grant, and checks that died or came back short. The check fails closed: a claim is denied (a short or failed check denies its whole batch as busy), and a re-grant leaves the key waiting for the next one (WK-10d). |
 
 ### The cluster tick (WK-10a, 2026-11-07)

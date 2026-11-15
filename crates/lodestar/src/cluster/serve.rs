@@ -2177,24 +2177,37 @@ impl Inner {
         lodestar_log::log_event!(events::CLUSTER_CLOSED, reason = reason);
     }
 
-    /// Opens the port, logging and counting a failure.
-    async fn try_open(&self) -> Option<Running> {
+    /// Opens the port. A failure is counted, and the next try is set in
+    /// `retry` (X-cluster-start-retry); a success clears it.
+    async fn try_open(&self, retry: &mut Option<StartRetry>) -> Option<Running> {
         match self.open().await {
-            Ok(r) => Some(r),
+            Ok(r) => {
+                *retry = None;
+                Some(r)
+            }
             Err(e) => {
-                self.failed(&e);
+                let next = StartRetry::after(retry.take(), &e);
+                self.counted(&e, next.said);
+                *retry = Some(next);
                 None
             }
         }
     }
 
     fn failed(&self, e: &StartError) {
+        self.counted(e, true);
+    }
+
+    /// Counts a failed start, and logs it if `say`.
+    fn counted(&self, e: &StartError, say: bool) {
         self.start_failures.fetch_add(1, Ordering::Relaxed);
-        lodestar_log::log_event!(
-            events::CLUSTER_START_FAILED,
-            step = e.step,
-            error = lodestar_log::Error::kind(e.kind)
-        );
+        if say {
+            lodestar_log::log_event!(
+                events::CLUSTER_START_FAILED,
+                step = e.step,
+                error = lodestar_log::Error::kind(e.kind)
+            );
+        }
     }
 }
 
@@ -2444,7 +2457,7 @@ impl ClusterHandle {
             ),
             (
                 "cluster_start_failures_total",
-                "Times turning the cluster port on failed (bind or PKI).",
+                "Times turning the cluster port on failed (bind or PKI), each retry included.",
                 inner.start_failures.load(Ordering::Relaxed),
             ),
             (
@@ -2719,6 +2732,38 @@ impl FloorWriter {
     }
 }
 
+/// The first wait before a failed start is tried again.
+const START_RETRY_FIRST: Duration = Duration::from_secs(2);
+/// The longest wait between tries.
+const START_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// The next try after a failed start, while "Allow workers" stays on: 2 s,
+/// doubling to 5 minutes (X-cluster-start-retry). A run of failures logs
+/// its first, and then only a failure of another step or kind; every try
+/// is counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartRetry {
+    at: tokio::time::Instant,
+    wait: Duration,
+    /// The step and kind last logged.
+    seen: (&'static str, &'static str),
+    /// Whether this failure was logged.
+    said: bool,
+}
+
+impl StartRetry {
+    fn after(last: Option<StartRetry>, e: &StartError) -> StartRetry {
+        let wait = last.map_or(START_RETRY_FIRST, |r| (r.wait * 2).min(START_RETRY_MAX));
+        let seen = (e.step, e.kind);
+        StartRetry {
+            at: tokio::time::Instant::now() + wait,
+            wait,
+            seen,
+            said: last.is_none_or(|r| r.seen != seen),
+        }
+    }
+}
+
 /// Follows "Allow workers" and reseal requests until `stopped`.
 async fn run(
     inner: Arc<Inner>,
@@ -2727,7 +2772,10 @@ async fn run(
     mut stopped: watch::Receiver<bool>,
     mut running: Option<Running>,
 ) {
+    // Set only while workers are allowed and the port isn't open.
+    let mut retry: Option<StartRetry> = None;
     loop {
+        let due = retry.map(|r| r.at);
         tokio::select! {
             _ = stopped.changed() => break,
             changed = allowed.changed() => {
@@ -2735,11 +2783,17 @@ async fn run(
                     break;
                 }
                 let want = *allowed.borrow_and_update();
+                if !want {
+                    retry = None;
+                }
                 match (want, running.take()) {
                     (false, Some(r)) => inner.close(r, "workers_off").await,
-                    (true, None) => running = inner.try_open().await,
+                    (true, None) => running = inner.try_open(&mut retry).await,
                     (_, r) => running = r,
                 }
+            }
+            () = tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now)), if due.is_some() => {
+                running = inner.try_open(&mut retry).await;
             }
             Some(reply) = reseals.recv() => {
                 if let Some(r) = running.take() {
@@ -2750,7 +2804,9 @@ async fn run(
                     .await
                     .unwrap_or(Err(ClusterError::Corrupt("the reseal task failed")));
                 if *allowed.borrow_and_update() {
-                    running = inner.try_open().await;
+                    running = inner.try_open(&mut retry).await;
+                } else {
+                    retry = None;
                 }
                 let _ = reply.send(resealed);
             }
@@ -3049,7 +3105,49 @@ mod tests {
         })
         .await;
         assert_eq!(h.local_addr(), None);
+        // It's tried again with workers still allowed, nothing toggled
+        // (X-cluster-start-retry)...
+        until("a second try", || {
+            let n = series(&metrics(&h), "lodestar_cluster_start_failures_total");
+            (n >= 2, n)
+        })
+        .await;
+        assert_eq!(h.local_addr(), None);
+        assert_eq!(series(&metrics(&h), "lodestar_cluster_listening"), 0);
+        // ...and opens once the port is free.
+        drop(taken);
+        until("listening once the port is free", || {
+            (h.local_addr() == Some(addr), h.local_addr())
+        })
+        .await;
+        assert_eq!(series(&metrics(&h), "lodestar_cluster_listening"), 1);
         cluster.shutdown().await;
+    }
+
+    /// A failed start waits 2 s, then twice as long each time, up to 5
+    /// minutes. A run of failures logs its first, and then only a failure
+    /// of another step or kind.
+    #[tokio::test]
+    async fn a_failed_start_backs_off_and_logs_a_new_cause_only() {
+        let bind = StartError::bind(any_port(), &std::io::ErrorKind::AddrInUse.into());
+        let store = StartError::pki("store", &ClusterError::Corrupt("unreadable"));
+        let first = StartRetry::after(None, &bind);
+        assert_eq!(first.wait, START_RETRY_FIRST);
+        assert!(first.said, "a run's first failure is logged");
+        let mut r = first;
+        let mut waits = vec![r.wait.as_secs()];
+        for _ in 0..10 {
+            r = StartRetry::after(Some(r), &bind);
+            assert!(!r.said, "the same cause isn't logged again");
+            waits.push(r.wait.as_secs());
+        }
+        assert_eq!(waits, [2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300]);
+        let other = StartRetry::after(Some(r), &store);
+        assert!(other.said, "another step is logged");
+        assert_eq!(other.wait, START_RETRY_MAX, "and the wait keeps growing");
+        assert!(!StartRetry::after(Some(other), &store).said);
+        assert!(StartRetry::after(Some(other), &bind).said, "and back again");
+        assert!(r.at <= tokio::time::Instant::now() + START_RETRY_MAX);
     }
 
     #[tokio::test]
