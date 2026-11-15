@@ -3,15 +3,16 @@
 //! nothing here ships in the product binary).
 //!
 //! `DIR` is a data folder's `index` (this build's `v{schema}-t{tokenizer}`
-//! inside it is read) or a Tantivy index directory itself. It's read
-//! without a writer or lock; stop the server first, or read a copy, so the
-//! files don't change underneath it.
+//! inside it is read) or a Tantivy index directory itself. It opens no
+//! writer, but takes Tantivy's meta lock briefly, so the folder must be
+//! writable. Stop the server first, or read a copy, so files don't change
+//! underneath it.
 //!
-//! It tells a real overrun from a measurement artefact: `du` counts
-//! segment files a merge replaced but garbage collection hasn't removed
-//! yet (stale), deleted documents still in live segments, and the file
-//! index's subdirectory. The budget figure is the live segments' bytes
-//! per torrent, after the final commit and merge.
+//! It tells a real overrun from a measurement artefact: `du` also counts
+//! segment files the live segments don't use (stale: merged away and not
+//! yet collected) and the file index's subdirectory. The budget figure is
+//! the live segments' bytes per torrent. Those include deleted documents
+//! until a merge drops them, so measure after the final commit and merge.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -45,7 +46,10 @@ fn run(args: Vec<String>) -> Result<String, Box<dyn std::error::Error>> {
         match a.as_str() {
             "--torrents" => {
                 let n: u64 = it.next().ok_or("--torrents needs a value")?.parse()?;
-                torrents = Some(n.max(1));
+                if n == 0 {
+                    return Err("--torrents must be positive".into());
+                }
+                torrents = Some(n);
             }
             "-h" | "--help" => return Ok(format!("{USAGE}\n")),
             _ if dir.is_none() => dir = Some(PathBuf::from(a)),
@@ -78,8 +82,10 @@ fn report(dir: &Path, torrents: Option<u64>) -> Result<String, Box<dyn std::erro
     writeln!(out, "  segments              {}", s.segments)?;
     writeln!(
         out,
-        "  docs                  {} ({} deleted, awaiting a merge)",
-        s.docs, s.deleted
+        "  docs                  {} ({} deleted = {:.1}%, still in the live bytes until a merge)",
+        s.docs,
+        s.deleted,
+        100.0 * s.deleted as f64 / (s.docs + s.deleted).max(1) as f64
     )?;
     let rows = [
         ("live segments", s.live_bytes, "the budget figure"),
@@ -91,7 +97,7 @@ fn report(dir: &Path, torrents: Option<u64>) -> Result<String, Box<dyn std::erro
         (
             "stale segment files",
             s.stale_bytes,
-            "merged away, not yet collected",
+            "not used by live segments",
         ),
         ("everything (du)", s.recursive_bytes, "incl. the file index"),
     ];
@@ -140,6 +146,9 @@ mod tests {
         w.commit().unwrap();
         w.finish().unwrap();
         drop(index);
+        // A segment file no live segment uses: reported, by name, as stale.
+        let orphan = "0123456789abcdef0123456789abcdef.idx";
+        std::fs::write(index_dir.join(orphan), [0u8; 100]).unwrap();
 
         assert_eq!(resolve(tmp.path()), index_dir);
         assert_eq!(resolve(&index_dir), index_dir);
@@ -159,7 +168,14 @@ mod tests {
         ] {
             assert!(text.contains(want), "{want} missing from\n{text}");
         }
+        assert!(text.contains(&format!("stale files: {orphan}")), "{text}");
         assert!(run(vec![]).is_err());
+        let zero = run(vec![
+            tmp.path().display().to_string(),
+            "--torrents".into(),
+            "0".into(),
+        ]);
+        assert!(zero.is_err());
         assert!(run(vec!["a".into(), "b".into()]).is_err());
     }
 }

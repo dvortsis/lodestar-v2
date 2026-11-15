@@ -22,20 +22,23 @@ X-test-vm's 1M Magnetico import reported the torrent index at 652 B/torrent, aga
 - **The 652 B figure isn't reproduced here.** The 1M Magnetico corpus and the X-test-vm host's index aren't available to this slice.
 
 ## How to measure an index (new tooling, dev only)
-- **`lodestar_search::DiskStats`** reads an index folder read-only (a reader, no writer, no lock). It reports:
+- **`lodestar_search::DiskStats`** reads an index folder with no writer. Like any Tantivy reader it briefly takes the meta lock (`.tantivy-meta.lock`), so the folder must be writable; that lock keeps it safe beside a running writer's garbage collection. A commit landing mid-read can still show its new files as stale, so stop the server, or read a writable copy, for exact figures. It reports:
   - live segments, docs and deleted docs;
   - the bytes the live segments use, by Tantivy's accounting;
   - top-level and recursive bytes on disk;
-  - stale segment files: files named for a segment that isn't live.
+  - stale segment files: files the live segments don't use (another segment's, a live segment's superseded `.{opstamp}.del`, a leftover `.store.temp`).
 
   `space_by_field_at` gives the per-part table for any folder.
 - **`index-stats DIR [--torrents N]`** (bench bin) prints both for a data folder's `index` or a Tantivy folder. Stop the server first, or read a copy.
-- **The budget figure is "live segments" per torrent.** Stale bytes and deleted docs are temporary, and the file index has its own budget.
+- **The budget figure is "live segments" per torrent.**
+  - Stale bytes are temporary, and the file index has its own budget.
+  - Live bytes include deleted documents until a merge drops them. Their count is shown beside the figure, so measure after the final merge.
+- **CI's gate is stricter than that, on purpose.** `size-report --gate` still checks the top-level files (`dir_size`), which adds stale files and `meta.json` to the live segments, so it can only read higher.
 - **`size-report`** now prints the same line under its own torrent-index figure.
 - **Nothing ships in the product binary.** `DiskStats` is a small read-only API in `lodestar-search`; only the bench calls it.
 
 ## The pilot script now reports live segments (runner, 2026-11-15)
-- **`smoke.py`'s `torrent_index` and `file_index` are now the budget figures.** They count the live segment files of the newest `v{schema}-t{tokenizer}` folder and of its `files/`, read from `meta.json` (`index_live`). That's the same count `DiskStats` makes: on a 25,000-torrent index both give 505 B/torrent.
+- **`smoke.py`'s `torrent_index` and `file_index` are now the budget figures.** They count the live segment files of the newest `v{schema}-t{tokenizer}` folder and of its `files/`, read from `meta.json` (`index_live`). It sums the live segments' file sizes, where `DiskStats` uses Tantivy's own accounting; on a 25,000-torrent index both give 505 B/torrent. `test_smoke.py` covers it on a fake data folder.
 - **The old figures stay, labelled as on disk.** `torrent_index_on_disk` and `file_index_on_disk` are the old `du` figures, so earlier pilot reports stay comparable: in reports from before this change, `torrent_index` and `file_index` are those on-disk figures.
 - **The extra bytes are shown beside them, not counted:** `index_stale` (segment files no live segment owns) and `index_other_versions` (other `v*-t*` folders), both per record. `sizes.index_live` holds the raw bytes, plus deleted docs and the segment count.
 

@@ -4,10 +4,16 @@
 //! merge has replaced but garbage collection hasn't removed yet, and
 //! deleted documents still waiting for a merge; this tells them apart.
 //!
-//! It opens the index read-only (a reader, no writer, no lock), so it can
-//! read a copy of a served index, or one a stopped server left.
+//! It opens no writer. Like any Tantivy reader it briefly takes the meta
+//! lock (`.tantivy-meta.lock`), so the folder must be writable; that lock
+//! keeps it safe beside a running writer's garbage collection. A commit
+//! landing mid-read can still show its new files as stale, so stop the
+//! server (or read a copy) for exact figures.
+//!
+//! Live segment bytes include deleted documents until a merge drops them;
+//! their count is reported beside it, so measure after the final merge.
 
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::Path;
 
 use tantivy::{Index, IndexReader, ReloadPolicy};
@@ -31,8 +37,9 @@ pub struct DiskStats {
     /// Bytes of every file under the directory, subdirectories included:
     /// what `du` counts.
     pub recursive_bytes: u64,
-    /// Bytes of top-level segment files no live segment owns: merged away
-    /// and not yet garbage-collected.
+    /// Bytes of top-level segment files the live segments don't use:
+    /// segments merged away and not yet garbage-collected, a live
+    /// segment's superseded delete files, and leftover temporary stores.
     pub stale_bytes: u64,
     /// The stale files' names, for the report.
     pub stale_files: Vec<String>,
@@ -44,10 +51,11 @@ impl DiskStats {
     pub fn read(dir: &Path) -> Result<DiskStats> {
         let reader = open_reader(dir)?;
         let searcher = reader.searcher();
-        let mut live = BTreeSet::new();
+        // Each live segment and the opstamp of its current delete file.
+        let mut live = HashMap::new();
         let (mut docs, mut deleted, mut live_bytes) = (0u64, 0u64, 0u64);
         for seg in searcher.segment_readers() {
-            live.insert(seg.segment_id().uuid_string());
+            live.insert(seg.segment_id().uuid_string(), seg.delete_opstamp());
             docs += u64::from(seg.num_docs());
             deleted += u64::from(seg.num_deleted_docs());
             live_bytes += seg.space_usage().map_err(Error::Io)?.total().get_bytes();
@@ -61,9 +69,7 @@ impl DiskStats {
             }
             top_level_bytes += meta.len();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(id) = segment_id(&name)
-                && !live.contains(id)
-            {
+            if is_stale(&name, &live) {
                 stale_bytes += meta.len();
                 stale_files.push(name);
             }
@@ -105,6 +111,26 @@ fn open_reader(dir: &Path) -> Result<IndexReader> {
 fn segment_id(name: &str) -> Option<&str> {
     let (id, _) = name.split_once('.')?;
     (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+}
+
+/// Whether a top-level file is a segment file the live segments don't
+/// use: another segment's, or a live one's superseded `.{opstamp}.del` or
+/// leftover `.store.temp`.
+fn is_stale(name: &str, live: &HashMap<String, Option<u64>>) -> bool {
+    let Some(id) = segment_id(name) else {
+        return false;
+    };
+    let Some(&current) = live.get(id) else {
+        return true;
+    };
+    let rest = &name[id.len() + 1..];
+    if rest == "store.temp" {
+        return true;
+    }
+    match rest.strip_suffix(".del") {
+        Some(opstamp) => opstamp.parse::<u64>().ok() != current,
+        None => false,
+    }
 }
 
 fn recursive_size(dir: &Path) -> Result<u64> {
@@ -163,7 +189,9 @@ mod tests {
         );
         std::fs::remove_file(dir.join(orphan)).unwrap();
 
-        // Merged into one, the delete is gone with the old segments.
+        // Merged into one, the delete is gone with the old segments, and
+        // garbage collection removed their files. The no-op delete makes
+        // the commit that publishes the merge.
         let (raw, _) = index.raw();
         let mut w: tantivy::IndexWriter = raw.writer_with_num_threads(1, 15 << 20).unwrap();
         let ids = raw.searchable_segment_ids().unwrap();
@@ -173,6 +201,33 @@ mod tests {
         w.wait_merging_threads().unwrap();
         let s = DiskStats::read(&dir).unwrap();
         assert_eq!((s.segments, s.docs, s.deleted), (1, 19, 0), "{s:?}");
+        assert_eq!(s.stale_bytes, 0, "{s:?}");
+    }
+
+    #[test]
+    fn only_files_the_live_segments_use_are_live() {
+        let (a, b) = (
+            "0123456789abcdef0123456789abcdef",
+            "fedcba9876543210fedcba9876543210",
+        );
+        let live = HashMap::from([(a.to_owned(), Some(7)), (b.to_owned(), None)]);
+        for name in [
+            format!("{a}.idx"),
+            format!("{a}.7.del"),
+            format!("{b}.store"),
+            "meta.json".into(),
+        ] {
+            assert!(!is_stale(&name, &live), "{name}");
+        }
+        let other = "00000000000000000000000000000000";
+        for name in [
+            format!("{a}.5.del"),
+            format!("{b}.3.del"),
+            format!("{a}.store.temp"),
+            format!("{other}.idx"),
+        ] {
+            assert!(is_stale(&name, &live), "{name}");
+        }
     }
 
     #[test]

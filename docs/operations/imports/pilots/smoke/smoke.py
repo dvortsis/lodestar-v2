@@ -268,32 +268,42 @@ HEX = set("0123456789abcdef")
 
 
 def segment_files(folder):
-    """A Tantivy folder's segment-file bytes, split by whether a live segment
-    (one in meta.json) owns them, plus its deleted docs and live segments.
-    Files are named {segment id, 32 hex digits}.{component}; meta.json, the
-    managed list and locks are no segment's."""
+    """A Tantivy folder's segment-file bytes, split by whether the live
+    segments (those in meta.json) use them, plus its deleted docs and live
+    segments. Files are named {segment id, 32 hex digits}.{component}, deletes
+    {id}.{opstamp}.del; meta.json, the managed list and locks are no
+    segment's. Stale: another segment's files, a live segment's superseded
+    .del, or a leftover .store.temp. Live bytes include deleted docs until a
+    merge drops them."""
     try:
         with open(os.path.join(folder, "meta.json")) as f:
             segments = json.load(f)["segments"]
     except FileNotFoundError:
         return {"live": 0, "stale": 0, "deleted": 0, "segments": 0}
-    ids = {s["segment_id"].replace("-", "").lower() for s in segments}
+    # Each live segment and the opstamp of its current delete file.
+    ids = {s["segment_id"].replace("-", "").lower(): (s.get("deletes") or {}).get("opstamp")
+           for s in segments}
     out = {"live": 0, "stale": 0, "segments": len(ids),
            "deleted": sum((s.get("deletes") or {}).get("num_deleted_docs", 0) for s in segments)}
     for name in os.listdir(folder):
         path = os.path.join(folder, name)
         head = name.split(".", 1)[0].lower()
         if os.path.isfile(path) and len(head) == 32 and set(head) <= HEX:
-            out["live" if head in ids else "stale"] += os.lstat(path).st_size
+            rest = name[33:]
+            stale = (head not in ids or rest == "store.temp"
+                     or rest.endswith(".del") and rest[:-4] != str(ids[head]))
+            out["stale" if stale else "live"] += os.lstat(path).st_size
     return out
 
 
 def index_live(index):
     """The search indexes as the size budget counts them (X-index-bytes-1m):
     the live segment files of the newest v{schema}-t{tokenizer} folder (the
-    torrent index) and of its files/ (the file index). Stale segment files
-    (merged away, not yet collected), deleted docs and older version folders
-    are reported beside them, not counted."""
+    torrent index) and of its files/ (the file index). Stale segment files and
+    older version folders are reported beside them, not counted. Deleted docs
+    stay in the live bytes until a merge; their count is reported. The newest
+    version folder is taken as the current one, as it is unless a build was
+    downgraded."""
     versions = []
     for name in os.listdir(index) if os.path.isdir(index) else []:
         m = re.fullmatch(r"v(\d+)-t(\d+)", name)

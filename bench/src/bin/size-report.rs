@@ -431,7 +431,7 @@ fn measure(
     // What a `du` of the same folder would add (index-stats explains it).
     let disk = lodestar_search::DiskStats::read(index_path)?;
     println!(
-        "    live segments     {:.0} B per torrent; {} deleted docs; {:.0} B stale; {:.0} B with subfolders (du)",
+        "    live segments     {:.0} B/torrent; {} deleted docs; {:.0} B/torrent stale; {:.0} B/torrent with subfolders (du)",
         disk.live_bytes as f64 / n,
         group(disk.deleted),
         disk.stale_bytes as f64 / n,
