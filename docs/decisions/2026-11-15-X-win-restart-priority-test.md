@@ -9,7 +9,7 @@ A follow-up from #924's review (`2026-11-15-X-win-portable-restart-load.md`).
     - where `hook` returns before `startup`: an ordinary `lodestar worker` run, or a command line `service_command` doesn't take;
     - where the config doesn't load;
     - where `apply` itself fails, which logs `WINDOWS_PRIORITY_FAILED`.
-  - Before #924, those cases inherited the old copy's below-normal class.
+  - Before #924, they inherited the old copy's class: below normal where it had lowered itself.
 - **The test that lowers the test binary puts back the class it found.** It used to restore a hard-coded `Normal`. Restoring takes only Windows' own class names (`priority::set_class`, test-only).
 
 ## Tests

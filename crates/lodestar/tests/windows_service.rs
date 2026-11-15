@@ -662,6 +662,9 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
         .arg("--config")
         .arg(&config)
+        // Lodestar's default priority, whatever the developer's environment
+        // says: the new copy is checked below normal below.
+        .env_remove("LODESTAR_PRIORITY")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -749,6 +752,9 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     // (X-win-portable-restart-load), then lowers itself as any start does:
     // serving, it's the one copy left on this config, below normal.
     let config = config.display().to_string().replace('\'', "''");
+    // What the last poll saw, for the failure message.
+    let mut last: Vec<String> = Vec::new();
+    let mut last_err = String::new();
     let priority = wait_for(Duration::from_secs(30), || {
         let out = Command::new("powershell.exe")
             .env_remove("PSModulePath")
@@ -765,11 +771,23 @@ fn portable_restart(bind: &str) -> (u16, u16) {
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
             .collect();
+        last = classes.clone();
+        last_err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         (classes == ["BelowNormal"]).then_some(classes)
     });
     assert!(
         priority.is_some(),
-        "the new copy isn't below normal\n{}",
+        "the new copy isn't below normal (saw {last:?}; PowerShell said {last_err:?})\n{}",
+        dump(&console, &jsonl, &seen)
+    );
+    // And each copy logged lowering itself.
+    let lowered = wait_for(Duration::from_secs(30), || {
+        let log = std::fs::read_to_string(&jsonl).unwrap_or_default();
+        (log.matches("windows.priority_lowered").count() >= 2).then_some(())
+    });
+    assert!(
+        lowered.is_some(),
+        "not every copy logged lowering its priority\n{}",
         dump(&console, &jsonl, &seen)
     );
     (first, second)
