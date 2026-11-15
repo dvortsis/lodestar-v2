@@ -148,6 +148,9 @@ Docker Compose runs Lodestar from one file, `docker-compose.yml`. The file maps 
 | **[Named volume](glossary.md#named-volume-and-bind-mount) (recommended)** | The default in the file. Docker manages the volume and keeps it across updates. |
 | Bind mount | You want the data in a folder you pick, such as `./data`. |
 
+> [!IMPORTANT]
+> **Using a VPN? Do [section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn) first.** Lodestar starts crawling as soon as the container starts, and the steps below give it your normal network. To keep your home IP away from DHT peers, use the [gluetun Compose file](03-keep-lodestar-safe.md#run-lodestar-through-gluetun-with-docker-compose) in place of these steps.
+
 To install with the named volume:
 
 1. In a terminal on your Docker host, make a folder and move into it:
@@ -178,7 +181,7 @@ To install with the named volume:
    **Result:** The command prints `healthy` after about 30 seconds. `healthy` means only that the Lodestar process is alive. It doesn't mean Lodestar is finding torrents. The status pill on the **Search** screen and **Insights** show that ([section 5.3](05-use-lodestar.md#53-browse-discover-and-insights)).
 
 > [!WARNING]
-> Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there.
+> Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there. Lodestar will refuse to start if its data folder is on a share where the database can't work properly **(planned)**.
 
 To keep the data in a folder you own instead:
 
@@ -230,10 +233,13 @@ To create the admin password:
 4. Enter the token, then select **Continue**.
 5. Read the **Legal Notice**. It says what Lodestar does on your network, what it finds, and what is yours to decide. Scroll the box to read all of it. Select **I have read the Legal Notice**, then **Continue**.
 6. Choose a password from your password manager, enter it twice, and select **Create password and sign in**.
-   **Result:** Lodestar signs you in. It prints no token again.
+   **Result:** Lodestar signs you in and shows **Setup complete**. It prints no token again.
+7. Select **Go to Search** to start, or **Review settings** to check your settings first.
 
 ![Lodestar v0.5.1 setup token step before the Legal Notice and password](images/setup-v051-illustration.svg)
 *Figure 2.3: The v0.5.1 setup token step comes first. Illustration, not a live screenshot.*
+
+**(Planned)** The next release asks for the Legal Notice first, then the setup token and the password. It then opens **Finish setting up**, a short wizard of optional steps, in place of **Setup complete**.
 
 In v0.5.1, setup does not gate all crawler network activity. Claim the instance promptly. The library fills slowly while the DHT routing table warms up.
 

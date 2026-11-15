@@ -370,7 +370,7 @@
 	"settings_logging_ev_cluster_closed_n": "Cluster port closed",
 	"settings_logging_ev_cluster_closed_h": "The port remote workers connect to closed: Allow workers was turned off, the keys were resealed, or Lodestar stopped.",
 	"settings_logging_ev_cluster_start_failed_n": "Cluster port didn't open",
-	"settings_logging_ev_cluster_start_failed_h": "The port remote workers connect to couldn't open, so workers can't connect. The port may be in use.",
+	"settings_logging_ev_cluster_start_failed_h": "The port remote workers connect to couldn't open, so workers can't connect. The port may be in use. While workers stay allowed, it tries again after a wait that grows to 5 minutes, and says so again only if the cause changes.",
 	"settings_logging_ev_cluster_have_at_cap_n": "Workers' have-filter full",
 	"settings_logging_ev_cluster_have_at_cap_h": "The filter that tells workers what's already stored is at its largest size and full. Workers claim more keys that are already stored; the coordinator answers those itself.",
 	"settings_logging_ev_cluster_snapshot_failed_n": "Worker filter snapshot not built",

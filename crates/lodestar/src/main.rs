@@ -130,7 +130,16 @@ fn run() -> ExitCode {
         }
         None => privdrop::Report::default(),
     };
-    let load = |path: Option<PathBuf>| Config::load(path.as_deref(), |k| std::env::var(k).ok());
+    // Hand-run `serve` and `healthcheck`: the service's folder only once
+    // it's found private, as for every other command (S8-07).
+    let load = |path: Option<PathBuf>| {
+        cli::load_serve_config(
+            path.as_deref(),
+            &cli::Install::here(),
+            |k| std::env::var(k).ok(),
+            cli::check_this_service_dir,
+        )
+    };
     match command {
         Command::Lists => {
             for e in subscriptions::CATALOG {
@@ -153,10 +162,7 @@ fn run() -> ExitCode {
                     ExitCode::FAILURE
                 }
             },
-            Err(e) => {
-                eprintln!("config: {e}");
-                ExitCode::FAILURE
-            }
+            Err(e) => cli::report(&e),
         },
         Command::Serve {
             fixture: Some(dir), ..
@@ -167,11 +173,12 @@ fn run() -> ExitCode {
         } => {
             let config = match load(config_path.clone()) {
                 Ok(c) => c,
-                Err(e) => {
-                    eprintln!("config: {e}");
-                    return ExitCode::FAILURE;
-                }
+                Err(e) => return cli::report(&e),
             };
+            // The start-up checks the hook left here, once the service's
+            // folder passed: run once either way.
+            #[cfg(windows)]
+            windows::STARTUP.run_deferred(|| windows::startup(&config));
             // On Unix, `serve` is the supervisor (§12.2), still
             // single-threaded here; the work runs in its `--child`.
             #[cfg(unix)]
@@ -422,7 +429,7 @@ fn command_failed(command: &'static str, e: &(dyn std::error::Error + 'static)) 
     lodestar_log::log_event!(
         logging::events::APP_COMMAND_FAILED,
         command = command,
-        error = lodestar_log::Error::kind("failed")
+        error = lodestar_log::Error::kind(failure_kind(e, "failed"))
     );
     eprintln!(
         "{command}: {}",
@@ -431,9 +438,64 @@ fn command_failed(command: &'static str, e: &(dyn std::error::Error + 'static)) 
     ExitCode::FAILURE
 }
 
+/// A fixed label for why a command or the service failed, for the log
+/// line, which gets no message because a message can name a path. The
+/// store's refusal of a folder without WAL is named, as its fix is the
+/// user's (X-store-wal-nits); anything else is `default`.
+pub(crate) fn failure_kind(
+    e: &(dyn std::error::Error + 'static),
+    default: &'static str,
+) -> &'static str {
+    // Bounded, in case a chain loops back on itself.
+    let wal = std::iter::successors(Some(e), |e| e.source())
+        .take(16)
+        .any(|e| {
+            matches!(
+                e.downcast_ref::<lodestar_store::Error>(),
+                Some(lodestar_store::Error::WalUnavailable)
+            )
+        });
+    if wal {
+        "store_wal_unavailable"
+    } else {
+        default
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The WAL refusal is named wherever it sits in the chain; any other
+    /// failure keeps the caller's label.
+    #[test]
+    fn a_store_without_wal_is_named_in_the_failure_kind() {
+        #[derive(Debug)]
+        struct Wrapped(lodestar_store::Error);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "opening the store")
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let bare: BoxError = Box::new(lodestar_store::Error::WalUnavailable);
+        assert_eq!(failure_kind(&*bare, "failed"), "store_wal_unavailable");
+        let wrapped: BoxError = Box::new(Wrapped(lodestar_store::Error::WalUnavailable));
+        assert_eq!(failure_kind(&*wrapped, "serve"), "store_wal_unavailable");
+        let other: BoxError = Box::new(lodestar_store::Error::Corrupt("x"));
+        assert_eq!(failure_kind(&*other, "serve"), "serve");
+        // What the console and `docker logs` show: the plain fix.
+        assert!(
+            bare.to_string().starts_with(
+                "the data folder can't use SQLite's WAL journal: keep it on a local disk"
+            ),
+            "{bare}"
+        );
+    }
 
     #[test]
     fn healthcheck_needs_a_200() {

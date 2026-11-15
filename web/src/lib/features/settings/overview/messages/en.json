@@ -23,5 +23,15 @@
 	"settings_overview_source_env_unnamed": "Set by the environment",
 	"settings_overview_go_logs": "Open the logs",
 	"settings_overview_retry_reload": "Reload",
-	"settings_overview_changed_unavailable": "The changed settings couldn't be loaded."
+	"settings_overview_changed_unavailable": "The changed settings couldn't be loaded.",
+	"settings_overview_workers_start_failing": "Workers can't start yet: {reason}. Trying again {when}.",
+	"settings_overview_workers_soon": "shortly",
+	"settings_overview_workers_reason_port_in_use": "another program is using the cluster port. Close that program, or set another port under [cluster] in config.toml",
+	"settings_overview_workers_reason_address": "the cluster address isn't one of this computer's. Set another one under [cluster] in config.toml",
+	"settings_overview_workers_reason_permission": "Lodestar isn't allowed to use the cluster port. Choose a port above 1024 under [cluster] in config.toml",
+	"settings_overview_workers_reason_port": "the cluster port couldn't be opened. The logs say why",
+	"settings_overview_workers_reason_database": "the database couldn't be opened. The logs say why",
+	"settings_overview_workers_reason_secrets": "the secrets key couldn't be opened. The logs say why",
+	"settings_overview_workers_reason_certificates": "the workers' certificates couldn't be loaded. The logs say why",
+	"settings_overview_workers_reason_server": "the workers' server couldn't start. The logs say why"
 }

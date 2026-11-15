@@ -59,6 +59,27 @@ pub fn get(pid: u32) -> Result<String, String> {
     run(&format!("(Get-Process -Id {pid}).PriorityClass")).map(|s| s.trim().to_string())
 }
 
+/// Sets process `pid` to `class`, a name [`get`] reports, for a test to
+/// put back what it changed. Only Windows' own class names are taken.
+#[cfg(all(windows, test))]
+pub fn set_class(pid: u32, class: &str) -> Result<(), String> {
+    const CLASSES: [&str; 6] = [
+        "Idle",
+        "BelowNormal",
+        "Normal",
+        "AboveNormal",
+        "High",
+        "RealTime",
+    ];
+    if !CLASSES.contains(&class) {
+        return Err(format!("not a priority class: {class:?}"));
+    }
+    run(&format!(
+        "(Get-Process -Id {pid}).PriorityClass = '{class}'"
+    ))
+    .map(drop)
+}
+
 #[cfg(windows)]
 fn run(script: &str) -> Result<String, String> {
     let mut cmd = super::powershell_command().ok_or("SystemRoot isn't set")?;

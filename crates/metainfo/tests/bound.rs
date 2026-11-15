@@ -6,16 +6,25 @@
 //! parse where Linux allows it. Measuring the process needs no allocator
 //! hook and no new dependency for this crate. The peak is absolute (the
 //! test binary and the input included), so it can only overstate the parse.
-//! Other platforms check time and results only. This binary holds only
-//! these tests and runs them one at a time, so their peaks don't mix.
+//! Other platforms check time and results only.
+//!
+//! Each measured test runs in a process of its own ([`in_own_process`]):
+//! the test binary runs itself again for just that test. A peak can only
+//! be reset down to what the process holds, and heap an earlier test freed
+//! isn't always returned to the system, so in a shared process it counted
+//! toward the next test's peak (X-flake-metainfo-bound-rss).
 
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use lodestar_metainfo::{Error, Info, Limits, ParseOptions};
 
-/// One test at a time, so peaks don't mix.
+/// One measured process at a time, so they don't compete for memory.
 static SERIAL: Mutex<()> = Mutex::new(());
+
+/// Set, to its name, in the process a test runs itself in.
+const CHILD: &str = "LODESTAR_METAINFO_BOUND_CHILD";
 
 const MIB: usize = 1 << 20;
 
@@ -45,14 +54,42 @@ fn reset_peak_rss() {
     }
 }
 
-/// Held for a whole test, input building included: the peak is the
-/// process's, so nothing else may allocate while one is measured.
 fn serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Runs `body`, test `name`'s checks, in a process of its own: this test
+/// binary run again for that test alone (on every platform), so the peaks
+/// it measures are its own. In that process, `body` runs directly. The
+/// child's output is passed on, and its failure fails the test.
+fn in_own_process(name: &str, body: impl FnOnce()) {
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        body();
+        return;
+    }
+    let _serial = serial();
+    let exe = std::env::current_exe().expect("this test binary's path");
+    let out = Command::new(exe)
+        .args([name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD, name)
+        .output()
+        .expect("this test binary runs again");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    eprint!("{stderr}");
+    assert!(
+        out.status.success(),
+        "{name} failed in its own process ({}):\n{stdout}\n{stderr}",
+        out.status
+    );
+    // A name that matched nothing would pass with no test run.
+    assert!(
+        stdout.contains("test result: ok. 1 passed"),
+        "{name} didn't run in its own process:\n{stdout}\n{stderr}"
+    );
+}
+
 /// Parses `raw` and returns the result with the peak resident set and time.
-/// The caller holds [`serial`].
 fn measure(raw: &[u8], opts: &ParseOptions) -> (Result<Info, Error>, Option<usize>, Duration) {
     reset_peak_rss();
     let start = Instant::now();
@@ -198,88 +235,103 @@ fn check(what: &str, raw: &[u8], opts: &ParseOptions, files: usize, want: Option
 
 #[test]
 fn small_v2_trees_parse_or_are_refused_by_the_first_budget_out() {
-    let _serial = serial();
-    // Small trees under budgets a hundredth of the defaults: each parses
-    // whole or is refused with the budget it ran out of first, and both
-    // refusals are reached. A refusal stops at the budget, so the trees at
-    // the full budget bound its cost at the defaults.
-    let limits = Limits {
-        max_files: Limits::DEFAULT.max_files / 100,
-        max_total_path_segments: Limits::DEFAULT.max_total_path_segments / 100,
-        max_total_path_bytes: Limits::DEFAULT.max_total_path_bytes / 100,
-        ..Limits::DEFAULT
-    };
-    let opts = ParseOptions {
-        limits,
-        encoding_hint: None,
-    };
-    let files = limits.max_files;
-    let mut seen = Vec::new();
-    for depth in [0, 1, 8, limits.max_path_depth - 1] {
-        for dir_len in [1, 16, 63] {
-            let raw = shaped_tree(depth, &vec![b'a'; dir_len], files);
-            let want = expected(&limits, files, depth + 1, depth * dir_len + 6);
-            let what = format!("v2 depth {depth}, names {dir_len}");
-            check(&what, &raw, &opts, files, want);
-            seen.push(want);
-        }
-    }
-    for want in [None, Some("total path segments"), Some("total path bytes")] {
-        assert!(seen.contains(&want), "the sweep never gave {want:?}");
-    }
+    in_own_process(
+        "small_v2_trees_parse_or_are_refused_by_the_first_budget_out",
+        || {
+            // Small trees under budgets a hundredth of the defaults: each parses
+            // whole or is refused with the budget it ran out of first, and both
+            // refusals are reached. A refusal stops at the budget, so the trees at
+            // the full budget bound its cost at the defaults.
+            let limits = Limits {
+                max_files: Limits::DEFAULT.max_files / 100,
+                max_total_path_segments: Limits::DEFAULT.max_total_path_segments / 100,
+                max_total_path_bytes: Limits::DEFAULT.max_total_path_bytes / 100,
+                ..Limits::DEFAULT
+            };
+            let opts = ParseOptions {
+                limits,
+                encoding_hint: None,
+            };
+            let files = limits.max_files;
+            let mut seen = Vec::new();
+            for depth in [0, 1, 8, limits.max_path_depth - 1] {
+                for dir_len in [1, 16, 63] {
+                    let raw = shaped_tree(depth, &vec![b'a'; dir_len], files);
+                    let want = expected(&limits, files, depth + 1, depth * dir_len + 6);
+                    let what = format!("v2 depth {depth}, names {dir_len}");
+                    check(&what, &raw, &opts, files, want);
+                    seen.push(want);
+                }
+            }
+            for want in [None, Some("total path segments"), Some("total path bytes")] {
+                assert!(seen.contains(&want), "the sweep never gave {want:?}");
+            }
+        },
+    );
 }
 
 #[test]
 fn v1_lists_at_the_per_path_limits_stay_within_bounds() {
-    let _serial = serial();
-    // As many paths of each depth as the bencode item budget lets through.
-    for segments in [1, 8, Limits::DEFAULT.max_path_depth] {
-        let files = (Limits::DEFAULT.max_items - 16) / (segments + 5);
-        let files = files.min(Limits::DEFAULT.max_files);
-        let raw = v1_deep_paths(files, segments);
-        let want = expected(&Limits::DEFAULT, files, segments, segments);
-        let opts = ParseOptions::default();
-        check(&format!("v1 depth {segments}"), &raw, &opts, files, want);
-    }
+    in_own_process("v1_lists_at_the_per_path_limits_stay_within_bounds", || {
+        // As many paths of each depth as the bencode item budget lets through.
+        for segments in [1, 8, Limits::DEFAULT.max_path_depth] {
+            let files = (Limits::DEFAULT.max_items - 16) / (segments + 5);
+            let files = files.min(Limits::DEFAULT.max_files);
+            let raw = v1_deep_paths(files, segments);
+            let want = expected(&Limits::DEFAULT, files, segments, segments);
+            let opts = ParseOptions::default();
+            check(&format!("v1 depth {segments}"), &raw, &opts, files, want);
+        }
 
-    // Over a smaller budget the same list is refused, not cut short.
-    let raw = v1_deep_paths(28_900, 64);
-    let opts = ParseOptions {
-        limits: Limits {
-            max_total_path_segments: 64 * 10_000,
-            ..Limits::DEFAULT
-        },
-        encoding_hint: None,
-    };
-    let (parsed, peak, took) = measure(&raw, &opts);
-    expect_limit(parsed, "total path segments");
-    within_ceilings("v1 over a smaller budget", peak, took);
+        // Over a smaller budget the same list is refused, not cut short.
+        let raw = v1_deep_paths(28_900, 64);
+        let opts = ParseOptions {
+            limits: Limits {
+                max_total_path_segments: 64 * 10_000,
+                ..Limits::DEFAULT
+            },
+            encoding_hint: None,
+        };
+        let (parsed, peak, took) = measure(&raw, &opts);
+        expect_limit(parsed, "total path segments");
+        within_ceilings("v1 over a smaller budget", peak, took);
+    });
 }
 
 #[test]
 fn large_realistic_torrent_parses_within_bounds() {
-    let _serial = serial();
-    let raw = realistic_large();
-    assert!(raw.len() <= Limits::DEFAULT.max_info_bytes);
-    let (parsed, peak, took) = measure(&raw, &ParseOptions::default());
-    let info = parsed.expect("a large real-world shape parses");
-    assert_eq!(info.files.len(), 200_000);
-    assert!(info.files.iter().all(|f| f.path.len() == 8));
-    assert_eq!(info.path_string(&info.files[0]).len(), 100 + 7);
-    within_ceilings("realistic", peak, took);
+    in_own_process("large_realistic_torrent_parses_within_bounds", || {
+        let raw = realistic_large();
+        assert!(raw.len() <= Limits::DEFAULT.max_info_bytes);
+        let (parsed, peak, took) = measure(&raw, &ParseOptions::default());
+        let info = parsed.expect("a large real-world shape parses");
+        assert_eq!(info.files.len(), 200_000);
+        assert!(info.files.iter().all(|f| f.path.len() == 8));
+        assert_eq!(info.path_string(&info.files[0]).len(), 100 + 7);
+        within_ceilings("realistic", peak, took);
+    });
 }
 
 #[test]
 fn tree_at_the_full_budget_parses_within_bounds() {
-    let _serial = serial();
-    let raw = full_budget();
-    assert!(raw.len() <= Limits::DEFAULT.max_info_bytes);
-    let (parsed, peak, took) = measure(&raw, &ParseOptions::default());
-    let info = parsed.expect("a tree just inside the budget parses");
-    let segments: usize = info.files.iter().map(|f| f.path.len()).sum();
-    let bytes: usize = info.files.iter().flat_map(|f| &f.path).map(Vec::len).sum();
-    assert_eq!(segments, Limits::DEFAULT.max_total_path_segments);
-    assert!(bytes <= Limits::DEFAULT.max_total_path_bytes);
-    assert_eq!(bytes, 32_000_000);
-    within_ceilings("full budget", peak, took);
+    in_own_process("tree_at_the_full_budget_parses_within_bounds", || {
+        let raw = full_budget();
+        assert!(raw.len() <= Limits::DEFAULT.max_info_bytes);
+        let (parsed, peak, took) = measure(&raw, &ParseOptions::default());
+        let info = parsed.expect("a tree just inside the budget parses");
+        let segments: usize = info.files.iter().map(|f| f.path.len()).sum();
+        let bytes: usize = info.files.iter().flat_map(|f| &f.path).map(Vec::len).sum();
+        assert_eq!(segments, Limits::DEFAULT.max_total_path_segments);
+        assert!(bytes <= Limits::DEFAULT.max_total_path_bytes);
+        assert_eq!(bytes, 32_000_000);
+        within_ceilings("full budget", peak, took);
+    });
+}
+
+/// The peak is read where the platform reports it (Linux's `VmHWM`), and
+/// only time and results are checked elsewhere: pinned, so a platform
+/// that starts or stops reporting it is noticed.
+#[test]
+fn the_peak_is_read_where_the_platform_reports_it() {
+    assert_eq!(peak_rss().is_some(), cfg!(target_os = "linux"));
 }

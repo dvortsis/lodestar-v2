@@ -104,10 +104,10 @@ The installer shows a welcome page, the licence, one **Options** page, then **Re
 
 3. Finish the installer and accept the Windows administrator prompt for this verified installer.
    **Result:** The **Lodestar** service starts. Its files are in `C:\Program Files\Lodestar`, and its data is in `C:\ProgramData\Lodestar`.
-4. From Start, open **PowerShell** with **Run as administrator**, then read the [setup token](glossary.md#setup-token):
+4. From Start, open **PowerShell** with **Run as administrator**, then read the [setup token](glossary.md#setup-token). The log gets a new token line each time Lodestar starts, and only the newest token works, so this prints only the last one:
 
     ```powershell
-    Get-Content -LiteralPath 'C:\ProgramData\Lodestar\logs\lodestar.log' | Select-String 'setup token'
+    Get-Content -LiteralPath 'C:\ProgramData\Lodestar\logs\lodestar.log' | Select-String 'setup token' | Select-Object -Last 1
     ```
 
 5. Open `http://localhost:8090/` and complete [first-run setup](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password).
