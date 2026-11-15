@@ -6,6 +6,8 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
 - "We can't make people wait 6-hours before seeing progress. That's a terrible UX choice."
 - "I'm less concerned about politeness. If there are no repercussions for re-asks, I'm not worried about it."
 - "Yes, let's honor interval during runs. I think we can prefer a safer restart so we're being efficient, which means keeping that part in. Just removing the wait time if it wasn't safe. I'd still like to implement the UX improvements."
+- Asked whether "prefer a safer restart" means safe restart on by default: "Correct".
+- Asked whether to unhold the bitmagnet import (`B-import-server-2`): "I can't run tests on the unraid machine yet". The session reads this as: the import stays held for now, and no step in these slices may depend on a run on the owner's Unraid machine until the owner says it's available.
 
 ## What it supersedes
 - `2026-10-25-CR-0.md`, "Restart safety": suppress sampling for six hours plus the query timeout after every production start.
@@ -19,13 +21,12 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
 - **`interval` is still honoured within a run, unchanged:** the 60 s floor and 6 h cap, and our own 6 h backoffs for timeouts and nodes without BEP 51 (`crates/dht/src/node/sampler.rs:31-33`).
   - **Why:** asking a node early mostly returns the same samples, so honouring it is an efficiency rule as well as a courtesy.
 - **Safe restart (CR-0d) stays, now for efficiency.** After a proven clean restart, the restored restrictions are honoured, so the node doesn't spend its first hours re-asking nodes whose samples it already has.
-  - **On by default** (`crates/lodestar/src/config.rs:221` becomes `true`). This is the session's reading of "prefer a safer restart"; the runner confirms it with the owner when it records the decision.
+  - **On by default** (`crates/lodestar/src/config.rs:221` becomes `true`; owner confirmed, above).
   - **When the proof fails, the node samples at once with no restored restrictions.** The reason (`first_start`, `dirty`, `no_witness` …) stays as a diagnostic.
 - **The Docker restart record stays inside the container** (`packaging/docker/README.md:150-156`). An image update now loses one run's restored restrictions, a small efficiency cost, instead of six hours of sampling. No packaging change.
 - **The UX work from the session goes ahead** (proposed slices 3–5 below).
 
 ## Refinements for the runner to confirm and flag (§2.19)
-- **Safe restart on by default** (above).
 - **A failed proof restores nothing,** rather than a best-effort restore from an intact but unproven snapshot. It's simpler and needs no new trust rule. A best-effort restore can come later as an optimisation.
 - **`invalidate_failed` and `locked` no longer wait for the restart record.** The run samples at once and doesn't leave a resumable marker. The exact rule is for CR-0w's Opus design review, since the marker protocol (`2026-10-30-CR-0d.md` §3) assumes those cases wait.
 
@@ -39,7 +40,8 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
 2. **CR-0w-soak: measurement follows** (runner, then owner).
    - `docs/soak/tools/analyze_cr0.py` and the Linux collector: the measured window no longer starts after a suppression.
    - Also: the Windows soak baseline rule (`2026-11-12-M8-WIN-1.md`), the CR-SPEC windows (`2026-11-02-CR-SPEC.md`) and `docs/build-plan.md`'s soak text.
-   - The next soak confirms the memory gate (hours 12–24) with sampling from minute one. r5 passed with the wait in place, and the sampler's 200,000 states now fill about six hours sooner.
+   - A soak confirms the memory gate (hours 12–24) with sampling from minute one. r5 passed with the wait in place, and the sampler's 200,000 states now fill about six hours sooner.
+   - The owner can't run tests on the Unraid machine yet (above). Until then the runner decides whether a cloud run (`docs/plan/2026-11-08-cloud-test-plan.md`) screens the change and which release the Unraid confirmation gates.
 3. **UX-start: the first hour shows progress** (helper, Sonnet, after CR-0w).
    - `web/src/lib/shell/progress.ts:14`: drop the six-hour uptime fallback (`STARTUP_SUPPRESSION_S`). The status pill says "Starting" only while bootstrapping, then shows warming up with live counts (found, stored). Words go through `docs/ui-glossary.md`.
    - Overview: in the first hour, show the pipeline (routing nodes, samples, metadata fetched, stored) instead of empty charts.
@@ -50,7 +52,7 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
    - `docs/operations.md:43` and `:205`;
    - `docs/ui-glossary.md:61`;
    - the README.
-5. **Import up front.** The fastest way to a full index on day one is the bitmagnet import. Its wizard step is a hidden slot until `B-import-server-2`, which is held on `ext:owner-import-server-surface` (`runner/slices.yaml:65`). That is the owner's call: whether to unhold it now. Until then the wizard links the import guide (X-first-run).
+5. **Import up front.** The fastest way to a full index on day one is the bitmagnet import. Its wizard step is a hidden slot until `B-import-server-2`, which is held on `ext:owner-import-server-surface` (`runner/slices.yaml:65`). The owner keeps it held for now (above). Until it's unheld, the wizard links the import guide (X-first-run).
 
 ## Follow-ups that aren't required
 - **WK-10c's one-minute linger** (`2026-11-08-WK-10c.md`) was justified by the six-hour wait. It still works without it, but a simpler rule is now possible.
