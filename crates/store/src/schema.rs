@@ -936,7 +936,7 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
         conn.pragma_update(None, "page_size", 16384)?;
         conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
     }
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    use_wal(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.pragma_update(None, "mmap_size", mmap_size as i64)?;
@@ -945,6 +945,42 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     // folder (which also holds seal.key) mustn't yield purged quarantine
     // names or deleted torrents (owner, 2026-10-22).
     conn.pragma_update(None, "secure_delete", true)?;
+    Ok(())
+}
+
+/// Switches the file to WAL, honouring the busy timeout
+/// (X-flake-store-migrate-race).
+///
+/// `PRAGMA journal_mode=WAL` reads the file's header, then needs the
+/// exclusive lock to change it: a read upgraded to a write, which SQLite
+/// refuses at once with `SQLITE_BUSY` rather than call the busy handler. So
+/// a connection opening a new store while another switches or migrates it
+/// failed with "database is locked" though its busy timeout was set. Here a
+/// file already in WAL is left alone (the mode lives in the file), and a
+/// busy switch first waits for the lock as a write transaction from scratch
+/// does, through the busy timeout, then looks again. A lock still held when
+/// the timeout runs out is that busy error, as before.
+fn use_wal(conn: &Connection) -> Result<()> {
+    let wal = |mode: String| mode.eq_ignore_ascii_case("wal");
+    for _ in 0..3 {
+        if wal(conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?) {
+            return Ok(());
+        }
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => return Ok(()),
+            Err(e)
+                if matches!(
+                    e.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) =>
+            {
+                // Waits up to the busy timeout for whoever holds the lock.
+                conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    conn.pragma_update(None, "journal_mode", "WAL")?;
     Ok(())
 }
 
@@ -2022,5 +2058,48 @@ mod tests {
         assert_eq!(version(&holder), 1, "nothing migrated");
         migrate_with(&mut waiter, Some(&path), FAKE).unwrap();
         assert_eq!(version(&waiter), 2);
+    }
+
+    /// X-flake-store-migrate-race: switching to WAL waits for another
+    /// connection's lock through the busy timeout, where the bare pragma
+    /// failed at once (a read upgraded to a write), and says busy only once
+    /// the timeout has run out. A store already in WAL isn't switched
+    /// again, so a writer elsewhere doesn't hold it up.
+    #[test]
+    fn switching_to_wal_honours_the_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let holder = Connection::open(&path).unwrap();
+        holder
+            .execute_batch("CREATE TABLE t (x INTEGER); BEGIN IMMEDIATE;")
+            .unwrap();
+        let waiter = Connection::open(&path).unwrap();
+        let timeout = std::time::Duration::from_millis(200);
+        waiter.busy_timeout(timeout).unwrap();
+        let started = std::time::Instant::now();
+        let e = use_wal(&waiter).unwrap_err();
+        assert!(e.is_busy(), "{e}");
+        assert!(
+            started.elapsed() >= timeout,
+            "waited {:?}",
+            started.elapsed()
+        );
+
+        holder.execute_batch("ROLLBACK").unwrap();
+        use_wal(&waiter).unwrap();
+        let mode = |c: &Connection| -> String {
+            c.pragma_query_value(None, "journal_mode", |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(mode(&waiter), "wal");
+
+        // In WAL now: a write transaction elsewhere doesn't stop a new
+        // connection's switch, which has nothing left to do.
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let late = Connection::open(&path).unwrap();
+        late.busy_timeout(timeout).unwrap();
+        use_wal(&late).unwrap();
+        assert_eq!(mode(&late), "wal");
+        holder.execute_batch("ROLLBACK").unwrap();
     }
 }
