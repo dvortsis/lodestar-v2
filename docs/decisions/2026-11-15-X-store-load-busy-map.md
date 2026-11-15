@@ -6,7 +6,7 @@ A follow-up the runner logged from #908's review (2026-11-15): `Store::load` rea
 
 - **A failed read stays its own error.** `Store::load` now calls `active_dict_present`, which returns `Corrupt` only when the read answered and the dictionary isn't there. Any read error, busy or locked included, comes back as the `Sqlite` error it is.
 - **`Error::is_busy()`** says whether another connection's lock refused the call (SQLite busy or locked). Nothing is wrong with the store then, and the same call can be retried.
-- **A busy store says so in words.** `Display` for a busy or locked `Sqlite` error reads "the store is busy: another process holds it (…). Nothing is wrong with the store; try again once that process has finished" instead of "sqlite: database is locked". Every caller that shows the store's error (the server at start, the CLI) shows that sentence. No other error's text changed.
+- **A busy store says so in words.** `Display` for a busy or locked `Sqlite` error reads "the store is busy (…): another connection or program is using it. Nothing is wrong with the store; try again shortly. If this keeps happening, check that the data folder isn't on a network share or under /mnt/user." instead of "sqlite: database is locked". Every caller that shows the store's error (the server at start, the CLI) shows that sentence. No other error's text changed.
 - **Not touched:** the migration code in `crates/store/src/schema.rs`, which slot 2's X-store-migrate-race owns.
 
 ## Tests

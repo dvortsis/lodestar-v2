@@ -162,8 +162,9 @@ impl fmt::Display for Error {
         match self {
             Error::Sqlite(e) if self.is_busy() => write!(
                 f,
-                "the store is busy: another process holds it ({e}). Nothing is wrong with the \
-                 store; try again once that process has finished"
+                "the store is busy ({e}): another connection or program is using it. Nothing is \
+                 wrong with the store; try again shortly. If this keeps happening, check that \
+                 the data folder isn't on a network share or under /mnt/user."
             ),
             Error::Sqlite(e) => write!(f, "sqlite: {e}"),
             Error::Codec(e) => e.fmt(f),
@@ -1819,6 +1820,8 @@ fn get_u64(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// A store with an active file dictionary, on disk, and a second
     /// connection holding it exclusively (as an import does).
     fn store_with_dict(dir: &std::path::Path) -> std::path::PathBuf {
@@ -1826,7 +1829,11 @@ mod tests {
         let store = Store::open(&db, StoreConfig::default()).unwrap();
         store
             .conn
-            .execute("INSERT INTO zstd_dicts (id, kind, created_at, samples, data) VALUES (7, 'file', 1, 1, x'00')", [])
+            .execute(
+                "INSERT INTO zstd_dicts (id, kind, created_at, samples, data) \
+                 VALUES (7, 'file', 1, 1, x'00')",
+                [],
+            )
             .unwrap();
         store
             .conn
@@ -1905,8 +1912,6 @@ mod tests {
         let e = Store::open_reader(&db, StoreConfig::default()).unwrap_err();
         assert!(matches!(e, Error::Corrupt(_)), "{e}");
     }
-
-    use super::*;
 
     #[test]
     fn hash_lookup_uses_indexes() {
