@@ -233,10 +233,13 @@ To create the admin password:
 4. Enter the token, then select **Continue**.
 5. Read the **Legal Notice**. It says what Lodestar does on your network, what it finds, and what is yours to decide. Scroll the box to read all of it. Select **I have read the Legal Notice**, then **Continue**.
 6. Choose a password from your password manager, enter it twice, and select **Create password and sign in**.
-   **Result:** Lodestar signs you in. It prints no token again.
+   **Result:** Lodestar signs you in and shows **Setup complete**. It prints no token again.
+7. Select **Go to Search** to start, or **Review settings** to check your settings first.
 
 ![Lodestar v0.5.1 setup token step before the Legal Notice and password](images/setup-v051-illustration.svg)
 *Figure 2.3: The v0.5.1 setup token step comes first. Illustration, not a live screenshot.*
+
+**(Planned)** The next release asks for the Legal Notice first, then the setup token and the password. It then opens **Finish setting up**, a short wizard of optional steps, in place of **Setup complete**.
 
 In v0.5.1, setup does not gate all crawler network activity. Claim the instance promptly. The library fills slowly while the DHT routing table warms up.
 

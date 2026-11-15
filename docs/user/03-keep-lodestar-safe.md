@@ -76,6 +76,95 @@ To use it:
 5. Open the web UI at your server address and the port you published on gluetun.
 6. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
 
+### Run Lodestar through gluetun with Docker Compose
+<!-- index: gluetun Compose; network_mode service; WireGuard -->
+
+This one Compose file runs gluetun and Lodestar together. Lodestar uses gluetun's network (`network_mode: "service:gluetun"`) and starts only once gluetun reports healthy, so it never crawls on your normal network. Use it in place of the steps in [section 2.4](02-install-lodestar-on-unraid-and-docker.md#24-install-with-docker-compose). The example uses WireGuard, as Lodestar's post-rules do.
+
+To run it:
+
+1. In a terminal on your Docker host, make a folder and move into it:
+
+    ```bash
+    mkdir lodestar && cd lodestar
+    ```
+
+2. Download Lodestar's post-rules file and check it:
+
+    ```bash
+    curl -fsSL -o post-rules.txt https://raw.githubusercontent.com/dvortsis/lodestar-v2/1118f82d27de39d8d616eb822544beb7e6af093c/packaging/companions/gluetun-post-rules.txt
+    sha256sum post-rules.txt
+    ```
+
+   **Result:** The line starts with `26a485e39989b300dab8135ae80635d4d25a4a5ba0eaabe0eab7ea74f08830ea`. If it doesn't, delete the file and download it again. gluetun runs these lines as root, so use only this exact file.
+3. Make a file named `docker-compose.yml` in the same folder with this content:
+
+    ```yaml
+    services:
+      gluetun:
+        image: qmcgaw/gluetun:v3.41.3
+        container_name: gluetun
+        restart: unless-stopped
+        cap_add:
+          - NET_ADMIN
+        devices:
+          - /dev/net/tun:/dev/net/tun
+        environment:
+          TZ: Etc/UTC
+          # Fill these in from your VPN provider. Lodestar never sees them.
+          VPN_SERVICE_PROVIDER: "FILL_IN_YOURSELF"
+          VPN_TYPE: wireguard
+          VPN_INTERFACE: wg0
+          WIREGUARD_PRIVATE_KEY: "FILL_IN_YOURSELF"
+          WIREGUARD_ADDRESSES: "FILL_IN_YOURSELF"
+        volumes:
+          # Lodestar's post-rules: they close the gap when the VPN drops.
+          - ./post-rules.txt:/iptables/post-rules.txt:ro
+        ports:
+          # Lodestar's web UI. Lodestar shares gluetun's network,
+          # so its ports are published here.
+          - "8090:8090/tcp"
+
+      lodestar:
+        image: ghcr.io/dvortsis/lodestar-v2:0.5.1
+        container_name: lodestar
+        restart: unless-stopped
+        stop_grace_period: 60s
+        # All of Lodestar's traffic goes through gluetun.
+        network_mode: "service:gluetun"
+        depends_on:
+          gluetun:
+            condition: service_healthy
+        environment:
+          TZ: Etc/UTC
+        volumes:
+          - lodestar-data:/data
+
+    volumes:
+      lodestar-data:
+    ```
+
+4. Replace each `FILL_IN_YOURSELF` with the values from your VPN provider's WireGuard setup page. gluetun's own documentation lists the provider names it accepts. Keep `VPN_INTERFACE: wg0`: the post-rules name the tunnel `wg0`.
+5. Check the file, then start both containers:
+
+    ```bash
+    docker compose config -q && docker compose up -d
+    ```
+
+   **Result:** `docker compose config -q` prints nothing when the file is valid. Docker then starts gluetun, waits until it reports healthy, and starts Lodestar. If gluetun can't connect, Lodestar doesn't start: run `docker compose logs gluetun` to see why.
+6. Check that gluetun loaded the post-rules:
+
+    ```bash
+    docker compose exec gluetun iptables -S OUTPUT | head -4
+    ```
+
+   **Result:** After the first line (`-P OUTPUT DROP`), the next three lines name `wg0`: one ends in `CONNMARK --set-xmark 0x800000/0x800000` and two end in `-j DROP`.
+7. Create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password). Open the web UI at `http://<server-ip>:8090`, the port published on gluetun.
+
+When gluetun restarts, restart Lodestar too: run `docker compose restart lodestar`. A container that shares a network stays attached to the old one.
+
+To back up, restore or rebuild the index, use the Compose commands in [section 3.7](#37-back-up-and-restore). They work the same with this file.
+
 ### Close gluetun's gap when the VPN drops
 
 gluetun's firewall is its kill switch. When the VPN drops, it blocks every new connection. On its own, though, it lets packets of connections that were already open leave through your normal network, with your home IP. Lodestar's post-rules file closes that gap.
@@ -83,7 +172,7 @@ gluetun's firewall is its kill switch. When the VPN drops, it blocks every new c
 > [!IMPORTANT]
 > Add the post-rules file to gluetun before you start Lodestar. Without it, a few packets can leave outside the VPN each time the tunnel drops.
 
-If Lodestar generated your gluetun from its [companion](glossary.md#companion) templates, most of this is done:
+The Compose file above already has the post-rules, and its step 6 is the check. **(Newer than v0.5.1)** Lodestar can generate gluetun from its [companion](glossary.md#companion) templates ([chapter 8](08-add-companions.md)). In v0.5.1 there are no companion templates, so use the Compose file above or the steps below. If Lodestar generated your gluetun, most of this is done:
 
 | Template | What it already has | What you do |
 |---|---|---|
