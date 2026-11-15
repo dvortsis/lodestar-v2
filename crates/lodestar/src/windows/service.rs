@@ -360,24 +360,37 @@ fn object(_: &Path) -> Option<std::convert::Infallible> {
 }
 
 /// Whether two paths are the same file or folder by [`object`]; `None` when
-/// either can't be opened, and always off Windows.
+/// either can't be opened.
+#[cfg(windows)]
 fn same_object(a: &Path, b: &Path) -> Option<bool> {
     Some(object(a)? == object(b)?)
+}
+
+/// Off Windows nothing is compared by file identity.
+#[cfg(not(windows))]
+fn same_object(_: &Path, _: &Path) -> Option<bool> {
+    None
 }
 
 /// The text compared when [`object`] can't decide. The part of the path
 /// that exists is the system's own real path, compared as it is: only the
 /// verbatim prefix goes, and case. The rest, not created yet, is read as
-/// Win32 reads it ([`tidy`]). A path whose nearest folder can't be resolved
-/// is read the same way, unless it's verbatim (`\\?\`), which Win32 takes
-/// literally.
+/// Win32 reads it ([`tidy`]), unless the path was given verbatim (`\\?\`):
+/// Win32 takes a verbatim path literally, so no part of it is tidied.
 fn norm(p: &Path) -> String {
     let p = full(p);
+    let literal = p.to_string_lossy().replace('/', "\\").starts_with(r"\\?\");
     let s = match real(&p) {
         Some((canonical, rest)) => {
             let head = verbatim(&canonical);
             if rest.is_empty() {
                 head
+            } else if literal {
+                let tail: Vec<String> = rest
+                    .iter()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .collect();
+                format!("{head}\\{}", tail.join("\\"))
             } else {
                 let protect = head.split('\\').filter(|c| !c.is_empty()).count();
                 let tail: Vec<String> = rest
@@ -387,14 +400,8 @@ fn norm(p: &Path) -> String {
                 tidy(&format!("{head}\\{}", tail.join("\\")), protect)
             }
         }
-        None => {
-            let s = p.to_string_lossy().replace('/', "\\");
-            if s.starts_with(r"\\?\") {
-                verbatim(&p)
-            } else {
-                tidy(&s, 0)
-            }
-        }
+        None if literal => verbatim(&p),
+        None => tidy(&p.to_string_lossy().replace('/', "\\"), 0),
     };
     s.to_lowercase()
 }
@@ -1384,8 +1391,18 @@ mod tests {
         let refuse = || Err::<(), _>("isn't private".to_string());
         let refused = |r: Result<(Result<Config, String>, PathBuf), String>| matches!(r, Err(ref why) if why == "isn't private");
 
-        // Nothing set: its config.toml is read, so checked first.
+        // Nothing set: its config.toml is read, so checked first, even when
+        // that file moves the data elsewhere (read first, the folder would
+        // never be checked).
         assert!(refused(load_guarded(&svc, None, env_of(vec![]), refuse)));
+        let away_data = root.path().join("F").join("Lodestar");
+        std::fs::write(
+            svc.join("config.toml"),
+            format!("data_dir = \"{}\"\n", toml(&away_data)),
+        )
+        .unwrap();
+        assert!(refused(load_guarded(&svc, None, env_of(vec![]), refuse)));
+        std::fs::write(svc.join("config.toml"), "not toml [").unwrap();
         // LODESTAR_DATA_DIR naming it, or a folder inside it: the check runs
         // before its config.toml is read. The check here makes the broken
         // file valid, so the config loads only if it was read after.

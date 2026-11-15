@@ -579,8 +579,18 @@ pub(crate) fn load_config(
             crate::windows::service::config_path(config_path.map(Path::to_path_buf), dir, env)
         }
     };
+    // The guard sees the file the loader would look for whether it exists
+    // yet or not, so one created after the check is still covered by it.
+    let candidate = match &msi {
+        None => Some(config_candidate(
+            config_path,
+            env,
+            install.working.as_deref(),
+        )),
+        Some(_) => file.clone(),
+    };
     guard.before(
-        file.as_deref(),
+        candidate.as_deref(),
         env("LODESTAR_DATA_DIR").as_deref(),
         msi.is_some() && config_path.is_none(),
     )?;
@@ -699,15 +709,25 @@ fn config_file(
     env: impl Fn(&str) -> Option<String>,
     working: Option<&Path>,
 ) -> Option<PathBuf> {
+    let p = config_candidate(explicit, &env, working);
+    (explicit.is_some() || p.exists()).then_some(p)
+}
+
+/// The `config.toml` [`config_file`] looks for, whether it exists or not.
+fn config_candidate(
+    explicit: Option<&Path>,
+    env: impl Fn(&str) -> Option<String>,
+    working: Option<&Path>,
+) -> PathBuf {
     match explicit {
-        Some(p) => Some(p.to_path_buf()),
+        Some(p) => p.to_path_buf(),
         None => {
             let dir = env("LODESTAR_DATA_DIR").map_or_else(|| PathBuf::from("data"), PathBuf::from);
             let dir = match working {
                 Some(w) if dir.is_relative() => w.join(dir),
                 _ => dir,
             };
-            Some(dir.join("config.toml")).filter(|p| p.exists())
+            dir.join("config.toml")
         }
     }
 }
@@ -1171,6 +1191,13 @@ mod tests {
                 "{install:?}"
             );
         }
+        // No `data\config.toml` there yet: still checked, so one created
+        // after the check is covered by it.
+        std::fs::remove_file(svc.join("data").join("config.toml")).unwrap();
+        let mut install = msi(root.path());
+        install.working = Some(svc.clone());
+        let r = load_serve_config(None, &install, env_of(&[]), refuse);
+        assert!(matches!(r, Err(LoadError::Folder(Failure::Refused(_)))));
         // A working folder elsewhere: its own `data\config.toml` is read,
         // unchecked.
         let mut install = msi(root.path());

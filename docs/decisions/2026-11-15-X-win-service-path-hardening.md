@@ -18,6 +18,7 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
 - **What the guard sees** is the config file that will actually be read (`cli::config_file`, or the MSI branch's file), implicit ones included, not only an explicit `--config`.
 - **So:** a working folder that is the service's folder or inside it is checked before its `data\config.toml` is read, whatever that file says.
 - **Relative paths** start from the working folder, as the config loader resolves them. Tests set that folder (`Install::working`) without changing the process's.
+- **The file the loader would look for counts whether it exists yet or not,** so a file created between the check and the load is still covered by the check.
 
 ## A data folder inside the service's folder
 - **The guard covers it,** in the CLI and the service: a data folder inside the service's folder is checked as the folder itself is.
@@ -39,7 +40,7 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
   - then the text itself, case-insensitively and without a `\\?\` prefix.
 - **Only text the system hasn't resolved is tidied (from the review).**
   - **Tidied:** a name not created yet, or a path whose folders can't be resolved. Here `.`, `..`, doubled and trailing separators, and trailing dots and spaces are handled as Win32 handles them. `..` never climbs above the drive, or above a UNC server and share.
-  - **Not tidied:** the system's own real path, and a verbatim path, which Win32 takes literally. So a real folder named `Lodestar.` is never matched to `Lodestar`.
+  - **Not tidied:** the system's own real path, and any part of a path given verbatim (`\\?\`), which Win32 takes literally. So a real folder named `Lodestar.` is never matched to `Lodestar`.
   - **Why it matters:** besides the guard, the update check treats a match as "the folder the service checked". The fallback mustn't match a different folder.
 - **The fallback's limits:**
   - It lowercases with Unicode's rules, not NTFS's own case table.
@@ -65,12 +66,12 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
 - **`windows::service::tests::the_service_secures_its_folder_before_reading_from_it`** (d and b) runs on every platform. Each case tells the two orders apart, and each fails with the check moved after the read (checked by reverting the change):
   - **`LODESTAR_DATA_DIR` naming the folder, or a folder inside it:** its `config.toml` is broken and the check repairs it, so the config loads only if the check ran first.
   - **`--config` inside the folder, moving the data elsewhere:** refused. Read first, the data would be elsewhere and the folder never checked.
-  - **Nothing set:** checked before its `config.toml` is read.
+  - **Nothing set, with a valid `config.toml` in the folder that moves the data elsewhere:** refused. Read first, the folder would never be checked. (Its other "nothing set" case, a broken file, is refused either way, by the check after loading.)
   - **Checked after loading:** `--config` elsewhere naming a data folder inside it.
   - **Never checked:** a sibling with a similar name, or another folder.
   - **A private folder** is checked once, then read.
 - **`cli::tests::a_data_folder_inside_the_services_folder_is_checked`** (b): the same for the CLI, with the `Lodestar2` sibling unchecked.
-- **`cli::tests::the_implicit_config_file_is_checked_too`:** a working folder inside the service's folder, with a `data\config.toml` there that moves the data elsewhere, is refused. That holds for a portable executable, and for the MSI's running `serve` or a maintenance command. A working folder elsewhere is read unchecked. The test fails when the guard sees only `--config`.
+- **`cli::tests::the_implicit_config_file_is_checked_too`:** a working folder inside the service's folder, with a `data\config.toml` there that moves the data elsewhere, is refused. That holds for a portable executable, and for the MSI's running `serve` or a maintenance command. A working folder elsewhere is read unchecked. The test fails when the guard sees only `--config`. With no `data\config.toml` there yet, the folder is still checked. The race this closes can't be timed in a test, so that case shows only that the check runs.
 - **`windows::service::tests::a_real_folder_with_a_trailing_dot_is_its_own`:** on every platform, a real folder named `Lodestar.` isn't `Lodestar` or inside it. On Windows it's also told apart by file identity. The test fails when the real path is tidied.
 - **`windows::service::tests::a_folder_is_compared_by_what_it_is`** (c, Windows only):
   - a junction to the folder, and paths under it, including one not created yet;
