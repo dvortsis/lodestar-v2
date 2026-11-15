@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T07:52Z",
+  "updated_at": "2026-11-15T08:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T07:52Z",
+  "last_heartbeat": "2026-11-15T08:35Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9863,6 +9863,12 @@
       "slice": "X-rejudge-stall-nits",
       "sha": "4062b10f",
       "at": "2026-11-15T07:52Z"
+    },
+    {
+      "pr": 917,
+      "slice": "X-filter-split-reuse",
+      "sha": "dd9f3917",
+      "at": "2026-11-15T08:35Z"
     }
   ],
   "active_sessions": {
@@ -10101,7 +10107,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T07:52Z",
+    "updated": "2026-11-15T08:35Z",
     "items": [
       {
         "slot": 1,
@@ -10138,12 +10144,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-filter-split-reuse",
+        "slice": "X-fuzz-peer-fetch",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T06:55Z",
-        "doing": "session_01MMjhn8URRT9adbFfM1zGi1: #917 X-filter-split-reuse and #918 X-fuzz-peer-fetch open; await ready",
+        "since": "2026-11-15T08:35Z",
+        "doing": "#918 under fresh Opus review (ready 3d72ce25); #917 merged dd9f3917",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       }
@@ -10236,8 +10242,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T07:21Z",
-  "updated": "2026-11-15T07:52Z",
+  "heartbeat": "2026-11-15T08:35Z",
+  "updated": "2026-11-15T08:35Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
