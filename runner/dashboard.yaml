@@ -804,6 +804,7 @@ placement:
   - X-import-progress-visible
   - X-import-status-lock
   - X-store-load-busy-map
+  - X-first-run-search-gate
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small

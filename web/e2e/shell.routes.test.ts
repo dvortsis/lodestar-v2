@@ -452,6 +452,8 @@ test.describe('401 hand-off', () => {
 		go,
 		mock
 	}) => {
+		// Signed out, so each screen stays where it is (signed in, /login would go on to /search).
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: false });
 		const events = await liveEvents(page);
 		for (const path of ['/login', '/setup', '/welcome']) {
 			await go(path);

@@ -37,6 +37,16 @@
 		};
 	});
 
+	// A fresh instance, a signed-out visitor or a pending Legal Notice can't search yet: one check
+	// after mount sends the browser to setup or sign-in (X-first-run-search-gate). Lazy, so the
+	// bare first load stays as it was.
+	onMount(() => {
+		void import('$lib/features/auth/first-run').then(
+			(m) => m.gateFirstRun(),
+			() => {}
+		);
+	});
+
 	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs
 	// them at once; otherwise the empty state comes with the first interaction, or after 30 s, as the
 	// shell's chrome does (§10.1: the bare page is Lighthouse's). Their sheets come with them.

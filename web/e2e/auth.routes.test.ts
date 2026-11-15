@@ -176,8 +176,13 @@ for (const evil of [
 		go,
 		mock
 	}) => {
-		mock.on('getAuthStatus', signedOut);
-		mock.on('login', { ok: true });
+		// Signed in once the password is taken, so the search page it lands on stays.
+		let signedIn = false;
+		mock.on('getAuthStatus', () => ({ status: 200, body: { ...signedOut, logged_in: signedIn } }));
+		mock.on('login', () => {
+			signedIn = true;
+			return { status: 200, body: { ok: true } };
+		});
 		await go(`/login?next=${encodeURIComponent(evil)}`);
 		await page.getByLabel('Password').fill('correct horse battery');
 		await page.getByRole('button', { name: 'Sign in' }).click();
