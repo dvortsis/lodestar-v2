@@ -386,6 +386,7 @@ placement:
   - X-flake-rejudge-panic-time
   - X-fuzz-cache-1105
   - X-fuzz-peer-fetch
+  - X-fuzz-tpdb-harness
   - X-claim-trackers
   - X-claim-store
   - X-claim-store-polish

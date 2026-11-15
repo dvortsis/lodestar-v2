@@ -45,13 +45,34 @@ fn second_reader(body: &[u8]) -> Option<serde_json::Value> {
     }
 }
 
-/// An id as `serde_json` reads it: a string, or a number's digits.
-fn id_of(v: &serde_json::Value) -> Option<String> {
+/// An id as the second reader sees it: a string's text, or a number's own
+/// digits. A number is taken as its raw JSON text, as the plugin keeps it:
+/// `Value` reads one past `u64::MAX` (20 digits) as an `f64`, whose digits
+/// differ (X-fuzz-tpdb-harness).
+fn id_of(v: &serde_json::Value, body: &[u8]) -> Option<String> {
     match v {
         serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Number(_) => raw_id(body),
         _ => None,
     }
+}
+
+/// The top item's `id` as its raw JSON text, read through `RawValue` the way
+/// `Value` reads the rest (the last of a repeated key wins).
+fn raw_id(body: &[u8]) -> Option<String> {
+    use serde_json::value::RawValue;
+    use std::collections::HashMap;
+    type Fields = HashMap<String, Box<RawValue>>;
+    let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
+    let top: Fields = serde_json::from_slice(root).ok()?;
+    let data = top.get("data")?.get();
+    let item = match data.as_bytes().first()? {
+        b'[' => serde_json::from_str::<Vec<Box<RawValue>>>(data).ok()?.into_iter().next()?,
+        b'{' => serde_json::from_str::<Box<RawValue>>(data).ok()?,
+        _ => return None,
+    };
+    let fields: Fields = serde_json::from_str(item.get()).ok()?;
+    Some(fields.get("id")?.get().to_owned())
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -122,7 +143,7 @@ fuzz_target!(|data: &[u8]| {
                 other => panic!("accepted a `data` of {other}"),
             };
             if let Ok(Lookup::Match(s)) = plugin::parse_answer(body) {
-                assert_eq!(top.and_then(|t| id_of(&t["id"])), Some(s.scene_id));
+                assert_eq!(top.and_then(|t| id_of(&t["id"], body)), Some(s.scene_id));
             }
         }
     }
