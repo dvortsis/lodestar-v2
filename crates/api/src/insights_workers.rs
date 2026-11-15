@@ -204,6 +204,7 @@ mod tests {
     fn an_empty_fleet_is_null() {
         let list = WorkerList {
             allowed: true,
+            start_failure: None,
             workers: Vec::new(),
         };
         assert_eq!(summarize(&list, Some(5)), FleetSummary { fleet: None });
@@ -215,6 +216,7 @@ mod tests {
     fn workers_are_counted_by_state() {
         let list = WorkerList {
             allowed: true,
+            start_failure: None,
             workers: vec![
                 worker(1, WorkerStatus::Online),
                 worker(2, WorkerStatus::Online),

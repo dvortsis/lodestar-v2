@@ -370,7 +370,7 @@
 	"settings_logging_ev_cluster_closed_n": "集群端口已关闭",
 	"settings_logging_ev_cluster_closed_h": "远程工作节点连接的端口已关闭：“允许工作节点”已关闭、密钥已重新封装，或 Lodestar 已停止。",
 	"settings_logging_ev_cluster_start_failed_n": "集群端口未能打开",
-	"settings_logging_ev_cluster_start_failed_h": "远程工作节点连接的端口无法打开，工作节点无法连接。该端口可能已被占用。",
+	"settings_logging_ev_cluster_start_failed_h": "远程工作节点连接的端口无法打开，工作节点无法连接。该端口可能已被占用。只要仍允许工作节点，它会在逐渐延长、最长 5 分钟的等待后重试，仅在原因改变时再次记录。",
 	"settings_logging_ev_cluster_have_at_cap_n": "工作节点的已有过滤器已满",
 	"settings_logging_ev_cluster_have_at_cap_h": "告诉工作节点哪些内容已存储的过滤器已达到最大大小并已满。工作节点会认领更多已存储的键；协调节点会自行答复这些请求。",
 	"settings_logging_ev_cluster_snapshot_failed_n": "未能生成工作节点的过滤器快照",
