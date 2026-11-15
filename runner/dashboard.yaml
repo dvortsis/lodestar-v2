@@ -473,6 +473,11 @@ placement:
   - X-flake-companions-loopback
   - X-flake-dht-bootstrap
   - X-dht-reply-ratio-resolved
+  - X-ci-no-fail-fast
+  - X-flake-dataset-macos
+  - X-flake-detect-macos
+  - X-operator-unattended-wake
+  - X-operator-check8-compare
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
@@ -785,6 +790,7 @@ placement:
   - X-store02-pipe02-fix
   - X-cmp01-fix
   - X-sec-S6-02-03
+  - X-floor-renew-metrics-nits
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -1717,8 +1723,8 @@ owner_queue:
   when: Any time
 - n: 24
   type: action
-  action: Set the repository variables `OWNER_USER_ID` (your numeric GitHub ID) and `OPERATOR_STOP=false` so operator-apply can run (§2.67)
-  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
+  action: Run operator-apply.yml again from the Actions tab on main. `OWNER_USER_ID` and `OPERATOR_STOP` are set, so it can go ahead now (§2.67)
+  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25; after it passes, the runner posts check 5
   when: Any time
 - n: 25
   type: review

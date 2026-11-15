@@ -23,31 +23,8 @@ fn the_same_key_builds_the_same_bytes() {
     let key = Key::new(7, N);
     let (da, db) = (build(a.path(), key), build(b.path(), key));
     assert!(da.built_now && db.built_now);
-    assert_eq!(
-        dataset::digest(&da.db()).unwrap(),
-        dataset::digest(&db.db()).unwrap()
-    );
-    // SQLite's header counts checkpoints in two fields (the file change
-    // counter, bytes 24..28, and version-valid-for, 92..96), and when a
-    // checkpoint runs depends on timing; every other byte must match.
-    let masked = |p: PathBuf| {
-        let mut b = std::fs::read(p).unwrap();
-        b[24..28].fill(0);
-        b[92..96].fill(0);
-        b
-    };
-    let (x, y) = (masked(da.db()), masked(db.db()));
-    let differ: Vec<usize> = (0..x.len().min(y.len()))
-        .filter(|&i| x[i] != y[i])
-        .collect();
-    assert!(
-        x.len() == y.len() && differ.is_empty(),
-        "two builds of one key differ: {} and {} bytes, {} bytes differ, first at {:?}",
-        x.len(),
-        y.len(),
-        differ.len(),
-        &differ[..differ.len().min(20)]
-    );
+    same_content(&da, &db, "two builds of one key");
+    same_bytes(&da.db(), &db.db(), "two builds of one key");
     assert_eq!(da.totals.files, db.totals.files);
     assert!(da.totals.files > N, "about 30 files a torrent");
     for d in [&da, &db] {
@@ -56,6 +33,25 @@ fn the_same_key_builds_the_same_bytes() {
                 .unwrap();
         assert_eq!(index.num_docs(), N);
     }
+    // A changed row is named, by table, row and column.
+    let copy = tempfile::tempdir().unwrap();
+    let changed = copy.path().join("changed.db");
+    std::fs::copy(da.db(), &changed).unwrap();
+    lodestar_store::rusqlite::Connection::open(&changed)
+        .unwrap()
+        .execute(
+            "UPDATE swarm SET leechers = leechers + 1 WHERE torrent_id = 5",
+            [],
+        )
+        .unwrap();
+    let why = dataset::explain_difference(&da.db(), &changed)
+        .unwrap()
+        .expect("they differ");
+    assert!(why.starts_with("swarm (") && why.contains("(5, "), "{why}");
+    assert_eq!(
+        dataset::explain_difference(&da.db(), &db.db()).unwrap(),
+        None
+    );
     // Reused, not rebuilt.
     let again = build(a.path(), key);
     assert!(!again.built_now);
@@ -65,13 +61,164 @@ fn the_same_key_builds_the_same_bytes() {
     );
 }
 
-/// The store's bytes but for SQLite's two checkpoint counters (see
-/// `the_same_key_builds_the_same_bytes`).
-fn store_bytes(ds: &dataset::Dataset) -> Vec<u8> {
-    let mut b = std::fs::read(ds.db()).unwrap();
+/// Fails, naming where they differ, unless two datasets hold the same
+/// content.
+fn same_content(a: &dataset::Dataset, b: &dataset::Dataset, what: &str) {
+    if dataset::digest(&a.db()).unwrap() != dataset::digest(&b.db()).unwrap() {
+        let why = dataset::explain_difference(&a.db(), &b.db()).unwrap();
+        panic!(
+            "{what}: the content differs: {why:?}; file trees: {}",
+            file_trees(&a.db(), &b.db())
+        );
+    }
+}
+
+/// A `torrent_files` row: torrent, codec, dictionary id, blob.
+type Blob = (i64, i64, Option<i64>, Vec<u8>);
+
+/// A store's file-tree blobs in torrent order, and a codec holding its
+/// dictionaries.
+fn blobs(p: &Path) -> (Vec<Blob>, lodestar_store::BlobCodec) {
+    use lodestar_store::rusqlite::{Connection, OpenFlags};
+    let c = Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let blobs = c
+        .prepare("SELECT torrent_id, codec, dict_id, data FROM torrent_files ORDER BY 1")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut codec = lodestar_store::BlobCodec::new(0);
+    let mut dicts = c.prepare("SELECT id, data FROM zstd_dicts").unwrap();
+    for d in dicts.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap() {
+        let (id, data) = d.unwrap();
+        codec.add_dict(id, data);
+    }
+    (blobs, codec)
+}
+
+/// The tree a blob holds, `None` when it won't decode.
+fn tree(codec: &mut lodestar_store::BlobCodec, (_, kind, dict, data): &Blob) -> Option<Vec<u8>> {
+    let kind = lodestar_store::Codec::from_id(*kind)?;
+    codec.decompress(kind, *dict, data).ok()
+}
+
+/// Whether two stores' file-tree blobs differ, and only in how they
+/// encode the same trees: the same torrents, and every blob that differs
+/// has the same codec and dictionary id and decodes, with its own store's
+/// dictionaries, to the same tree.
+fn only_encodings_differ(a: &Path, b: &Path) -> bool {
+    let ((ba, mut ca), (bb, mut cb)) = (blobs(a), blobs(b));
+    if ba.len() != bb.len() {
+        return false;
+    }
+    let mut differ = false;
+    for (x, y) in ba.iter().zip(&bb) {
+        if x == y {
+            continue;
+        }
+        differ = true;
+        if (x.0, x.1, x.2) != (y.0, y.1, y.2) {
+            return false;
+        }
+        match (tree(&mut ca, x), tree(&mut cb, y)) {
+            (Some(t), Some(u)) if t == u => {}
+            _ => return false,
+        }
+    }
+    differ
+}
+
+/// Whether two stores' file-tree blobs that differ hold the same trees:
+/// each is decompressed with its own store's dictionary.
+fn file_trees(a: &Path, b: &Path) -> String {
+    let ((ba, mut ca), (bb, mut cb)) = (blobs(a), blobs(b));
+    let (mut blobs, mut trees) = (0, 0);
+    let mut first = None;
+    for (x, y) in ba.iter().zip(&bb) {
+        if x == y {
+            continue;
+        }
+        blobs += 1;
+        let same = (x.0, x.1, x.2) == (y.0, y.1, y.2) && {
+            let t = tree(&mut ca, x);
+            t.is_some() && t == tree(&mut cb, y)
+        };
+        if !same {
+            trees += 1;
+        }
+        first.get_or_insert((x.0, x.3.len(), y.3.len(), same));
+    }
+    format!(
+        "{blobs} blobs differ, {trees} of them in the tree itself; first: {first:?} \
+         (torrent, sizes, same tree)"
+    )
+}
+
+/// The store's bytes but for SQLite's header fields that count
+/// checkpoints (the file change counter, bytes 24..28, and
+/// version-valid-for, 92..96): when a checkpoint runs depends on timing.
+fn masked(db: &Path) -> Vec<u8> {
+    let mut b = std::fs::read(db).unwrap();
     b[24..28].fill(0);
     b[92..96].fill(0);
     b
+}
+
+/// A copy of the store with every file-tree blob replaced by the tree it
+/// holds, rebuilt from its content (`VACUUM INTO`), as [`masked`] bytes.
+fn trees_only(db: &Path) -> Vec<u8> {
+    use lodestar_store::rusqlite::{Connection, params};
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("copy.db");
+    std::fs::copy(db, &copy).unwrap();
+    let (rows, mut codec) = blobs(&copy);
+    let c = Connection::open(&copy).unwrap();
+    for row in rows {
+        let tree = tree(&mut codec, &row)
+            .unwrap_or_else(|| panic!("torrent {}'s file tree won't decode", row.0));
+        c.execute(
+            "UPDATE torrent_files SET data = ?2 WHERE torrent_id = ?1",
+            params![row.0, tree],
+        )
+        .unwrap();
+    }
+    let out = dir.path().join("trees.db");
+    c.execute("VACUUM INTO ?1", [out.to_str().unwrap()])
+        .unwrap();
+    masked(&out)
+}
+
+/// Fails unless two stores are the same bytes, but for the checkpoint
+/// counters ([`masked`]) and how their file-tree blobs are encoded. zstd
+/// has encoded one tree two ways on macOS arm64
+/// (`docs/decisions/2026-11-14-X-flake-dataset-macos.md`). Only when
+/// file-tree blobs differ, and every one that does encodes the same tree
+/// ([`only_encodings_differ`]), are both stores compared rebuilt with
+/// their blobs replaced by the trees they hold ([`trees_only`]), since a
+/// blob of another length moves the pages after it. Any other difference,
+/// page layout included, fails on the bytes.
+fn same_bytes(a: &Path, b: &Path, what: &str) {
+    let (x, y) = (masked(a), masked(b));
+    if x == y {
+        return;
+    }
+    assert!(
+        only_encodings_differ(a, b),
+        "{what}: the store's bytes differ ({} and {} bytes), and not only in how \
+         file trees are encoded; file trees: {}",
+        x.len(),
+        y.len(),
+        file_trees(a, b)
+    );
+    assert!(
+        trees_only(a) == trees_only(b),
+        "{what}: the store's bytes differ beyond how file trees are encoded \
+         ({} and {} bytes); file trees: {}",
+        x.len(),
+        y.len(),
+        file_trees(a, b)
+    );
 }
 
 fn set_phase(dir: &Path, phase: &str) {
@@ -86,16 +233,13 @@ fn an_interrupted_build_resumes_to_the_same_dataset() {
     let key = Key::new(7, N);
     let clean = tempfile::tempdir().unwrap();
     let clean = build(clean.path(), key);
-    let (bytes, digest) = (store_bytes(&clean), dataset::digest(&clean.db()).unwrap());
     // Resumed at a phase boundary: the same bytes. Resumed inside one
     // (work done, not recorded): the same content; a redone phase may
     // leave SQLite's pages laid out differently.
-    let same_content = |d: &dataset::Dataset, what: &str| {
-        assert_eq!(dataset::digest(&d.db()).unwrap(), digest, "{what}");
-    };
+    let same_content = |d: &dataset::Dataset, what: &str| same_content(d, &clean, what);
     let same = |d: &dataset::Dataset, what: &str| {
         same_content(d, what);
-        assert!(store_bytes(d) == bytes, "{what}: the store's bytes differ");
+        same_bytes(&d.db(), &clean.db(), what);
     };
     // Stopped after each phase, then finished.
     for phase in ["stored", "enriched", "scraped", "rollups", "indexed"] {
@@ -426,4 +570,111 @@ fn a_scratch_copy_is_the_dataset_and_goes_away() {
     assert!(!dataset::scratch_dir(dir.path()).exists());
     // The dataset still opens as built.
     assert!(!build(dir.path(), Key::new(7, N)).built_now);
+}
+
+/// A file tree counts by the tree it holds, not by how it's encoded: one
+/// blob encoded another way (another zstd level, the same dictionary)
+/// leaves the digest and the store's bytes the same, and a different tree
+/// changes both.
+#[test]
+fn a_file_tree_counts_by_its_tree_not_its_encoding() {
+    use lodestar_store::rusqlite::{Connection, params};
+    let dir = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let edit = |name: &str, change: &dyn Fn(&mut Vec<u8>), level: i32| -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::copy(ds.db(), &path).unwrap();
+        let c = Connection::open(&path).unwrap();
+        let (dict_id, dict): (i64, Vec<u8>) = c
+            .query_row("SELECT id, data FROM zstd_dicts", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        let (id, data): (i64, Vec<u8>) = c
+            .query_row(
+                "SELECT torrent_id, data FROM torrent_files WHERE codec = 1 ORDER BY torrent_id LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let mut codec = lodestar_store::BlobCodec::new(level);
+        codec.add_dict(dict_id, dict);
+        codec.set_active(Some(dict_id));
+        let mut tree = codec
+            .decompress(lodestar_store::Codec::Zstd, Some(dict_id), &data)
+            .unwrap();
+        change(&mut tree);
+        let z = codec.compress(&tree).unwrap();
+        assert_eq!(
+            (z.codec, z.dict_id),
+            (lodestar_store::Codec::Zstd, Some(dict_id))
+        );
+        assert_ne!(z.data, data, "encoded another way");
+        c.execute(
+            "UPDATE torrent_files SET data = ?2 WHERE torrent_id = ?1",
+            params![id, z.data],
+        )
+        .unwrap();
+        path
+    };
+    let digest = |p: &Path| dataset::digest(p).unwrap();
+    let reencoded = edit("reencoded.db", &|_| {}, 3);
+    assert_eq!(digest(&reencoded), digest(&ds.db()));
+    same_bytes(&ds.db(), &reencoded, "the same tree encoded another way");
+    let changed = edit("changed.db", &|t| *t.last_mut().unwrap() ^= 1, 19);
+    assert_ne!(digest(&changed), digest(&ds.db()));
+    assert!(trees_only(&changed) != trees_only(&ds.db()));
+    let why = dataset::explain_difference(&ds.db(), &changed)
+        .unwrap()
+        .expect("they differ");
+    assert!(why.starts_with("torrent_files ("), "{why}");
+}
+
+/// A store whose content is the same but whose pages are laid out
+/// differently (a row written to another table and deleted again) isn't
+/// the same bytes: the rebuild that excuses file-tree encodings is only
+/// for them.
+#[test]
+#[should_panic(expected = "not only in how file trees are encoded")]
+fn a_layout_change_is_not_the_same_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let moved = dir.path().join("moved.db");
+    std::fs::copy(ds.db(), &moved).unwrap();
+    let c = lodestar_store::rusqlite::Connection::open(&moved).unwrap();
+    c.execute(
+        "INSERT INTO settings (key, value) VALUES ('bench.layout', ?1)",
+        [vec![7u8; 64 << 10]],
+    )
+    .unwrap();
+    c.execute("DELETE FROM settings WHERE key = 'bench.layout'", [])
+        .unwrap();
+    drop(c);
+    assert_eq!(
+        dataset::explain_difference(&ds.db(), &moved).unwrap(),
+        None,
+        "the same content"
+    );
+    assert!(masked(&ds.db()) != masked(&moved), "laid out differently");
+    same_bytes(&ds.db(), &moved, "a layout change");
+}
+
+/// A file-tree blob that won't decode fails the digest, naming its
+/// torrent, rather than counting as its bytes.
+#[test]
+fn a_file_tree_that_wont_decode_fails_the_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let broken = dir.path().join("broken.db");
+    std::fs::copy(ds.db(), &broken).unwrap();
+    lodestar_store::rusqlite::Connection::open(&broken)
+        .unwrap()
+        .execute(
+            "UPDATE torrent_files SET data = x'00010203' WHERE torrent_id = 5",
+            [],
+        )
+        .unwrap();
+    let e = dataset::digest(&broken).unwrap_err().to_string();
+    assert!(e.contains("torrent 5's file tree won't decode"), "{e}");
+    assert!(dataset::digest(&ds.db()).is_ok());
 }

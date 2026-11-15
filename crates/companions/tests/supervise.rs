@@ -846,7 +846,11 @@ fn no_companion_survives_a_killed_work_child() {
 /// something reaches the companion only once the run that's up has been
 /// found ready on 127.0.0.1. When the child dies, such requests are held
 /// at once, and stay held through its restart until the new run is found
-/// ready, though the new child answers.
+/// ready, though the new child answers. Linux and Windows only: elsewhere
+/// the listener's owner can't be told, so by design no run is ever found
+/// ready (`supervise::listener`), as in
+/// `only_the_childs_own_listener_counts`.
+#[cfg(any(target_os = "linux", windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn credentialed_requests_follow_the_run_found_ready() {
     use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
@@ -956,6 +960,93 @@ async fn credentialed_requests_follow_the_run_found_ready() {
     );
     sup.shutdown().await;
     assert!(!bindings.ready(port));
+}
+
+/// The counterpart of `credentialed_requests_follow_the_run_found_ready`
+/// where the listener's owner can't be told (`supervise::listener`): a run
+/// that's up, listening and passing its health check is never found
+/// ready, its refusal says the listener is unverified, and a request that
+/// carries something is held, never sent (the child answers anything with
+/// 200, so a held request is the only way it fails).
+#[cfg(not(any(target_os = "linux", windows)))]
+#[tokio::test(flavor = "multi_thread")]
+async fn credentialed_requests_stay_held_where_the_listener_cant_be_told() {
+    use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
+    use lodestar_companions::detect::CompanionHttp;
+    use lodestar_companions::supervise::bind::Bindings;
+
+    let port = {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+        l.local_addr().unwrap_or_else(|e| panic!("{e}")).port()
+    };
+    let port_s = port.to_string();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let bindings = Arc::new(Bindings::new());
+    assert!(bindings.claim(port));
+    sup.add(companion(
+        data.path(),
+        "prowlarr",
+        "serve",
+        &[("FAKE_PORT", &port_s)],
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    bindings.attach(port, rx.clone());
+    let client = CompanionHttp::new()
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .with_bindings(bindings.clone());
+    let target = Target::Loopback(PortNumber::new(port).unwrap_or_else(|e| panic!("{e:?}")));
+    let limits =
+        || ProbeLimits::new(Duration::from_secs(15), 1024).unwrap_or_else(|e| panic!("{e:?}"));
+    let at = |p: &str| RequestPath::parse(p).unwrap_or_else(|e| panic!("{e:?}"));
+    let health = lodestar_companions::detect::health(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no prowlarr health check"));
+    wait_status(&mut rx, "the first run", |s| s.up && s.run == 1).await;
+    // Readiness attempts, as Supervised makes them, until one's health
+    // check passes and the listener is found unverified.
+    let until = Instant::now() + DEADLINE;
+    loop {
+        let check = || async { health.check(&client, &target).await == HealthStatus::Healthy };
+        assert!(
+            !bindings.try_ready(port, check).await,
+            "found ready, though the listener can't be told"
+        );
+        if bindings.refusal(port) == Some("listener_unverified") {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "never refused as unverified: {:?}",
+            bindings.refusal(port)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!bindings.ready(port));
+    assert_eq!(bindings.ready_run(port), None);
+    // The child answers a bare probe, and a request that carries something
+    // is held all the same.
+    assert_eq!(
+        client
+            .send(ProbeRequest::new(&target, at("/"), limits()))
+            .await
+            .map(|r| r.status())
+            .ok(),
+        Some(200)
+    );
+    let got = client
+        .send(ProbeRequest::new(&target, at("/api"), limits()).post(b"key=x".to_vec()))
+        .await;
+    assert!(
+        matches!(got, Err(AdapterError::Unreachable)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    sup.shutdown().await;
 }
 
 /// The supervisor's timings with a stop that takes its whole deadline for a

@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lodestar_companions::adapter::{
@@ -20,7 +21,7 @@ use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::Resolve;
 use lodestar_integrations::secret::Secret;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpListener, TcpStream};
 
 // ─── A local server ─────────────────────────────────────────────────────
 
@@ -385,55 +386,58 @@ fn in_use(e: &io::Error) -> bool {
     )
 }
 
-/// A loopback port that nothing listens on, held closed for as long as
-/// this lives: bound on 127.0.0.1, and on ::1 where the runner has it,
-/// but never listening. A connection to it is refused, and no other
-/// socket (another test in this binary, say) can take the port meanwhile.
-/// Dropping a listener and probing its port instead leaves a window in
-/// which another test's listener can be handed the same port.
+/// The lowest ephemeral port on any target: Linux hands out 32768 and up
+/// by default, macOS and Windows 49152 and up.
+const EPHEMERAL_FLOOR: u16 = 32768;
+
+/// A loopback port that belongs to this binary's tests: free on 127.0.0.1
+/// when it's picked, and on ::1 too where `v6` is set (the runner has IPv6
+/// loopback).
+struct OwnPort {
+    port: u16,
+    v6: bool,
+}
+
+/// Picks a port no other socket in this binary can be handed. It comes from
+/// below every target's ephemeral range, so `bind(.., 0)` never returns it,
+/// and each one is handed out once. So a test can leave it unbound and it
+/// stays the test's: a closed port is an unbound one. A port that's bound
+/// but not listening won't do for one: macOS (as the BSDs) drops a
+/// connection to it instead of refusing it, so the connection times out.
+/// The range starts at a place set by the process id, so two test runs on
+/// one machine rarely meet; a port another program holds is skipped.
+fn own_port() -> OwnPort {
+    static NEXT: OnceLock<AtomicU16> = OnceLock::new();
+    let next = NEXT.get_or_init(|| AtomicU16::new(20_000 + (std::process::id() % 40) as u16 * 250));
+    loop {
+        let port = next.fetch_add(1, Ordering::Relaxed);
+        assert!(port < EPHEMERAL_FLOOR, "out of this binary's own ports");
+        match std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+            Ok(_) => {}
+            Err(e) if in_use(&e) => continue,
+            Err(e) => panic!("binding 127.0.0.1:{port}: {e}"),
+        }
+        match std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)) {
+            Ok(_) => return OwnPort { port, v6: true },
+            Err(e) if in_use(&e) => continue,
+            Err(e) if no_ipv6(&e) => return OwnPort { port, v6: false },
+            Err(e) => panic!("binding [::1]:{port}: {e}"),
+        }
+    }
+}
+
+/// A loopback port that nothing listens on, on 127.0.0.1 or ::1, and that
+/// nothing in this binary can be handed while the test uses it
+/// ([`own_port`]). A connection to it is refused on every target.
 struct ClosedPort {
     port: u16,
-    _v4: TcpSocket,
-    _v6: Option<TcpSocket>,
 }
 
 impl ClosedPort {
     fn new() -> ClosedPort {
-        // A port free on 127.0.0.1 may be taken on ::1 (the loopback
-        // probe falls back to it): then another pair is chosen. Both are
-        // held from the moment they're bound, so nothing is left to race.
-        for _ in 0..64 {
-            let v4 = TcpSocket::new_v4().unwrap();
-            v4.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-            let port = v4.local_addr().unwrap().port();
-            let v6 = TcpSocket::new_v6().and_then(|s| {
-                s.bind((Ipv6Addr::LOCALHOST, port).into())?;
-                Ok(s)
-            });
-            match v6 {
-                Ok(v6) => {
-                    return ClosedPort {
-                        port,
-                        _v4: v4,
-                        _v6: Some(v6),
-                    };
-                }
-                // Taken, or on Windows in an excluded port range (Hyper-V,
-                // WinNAT: WSAEACCES): another pair. Nothing is left unheld.
-                Err(e) if in_use(&e) => continue,
-                // No IPv6 loopback here: the probe can't fall back to it.
-                Err(e) if no_ipv6(&e) => {
-                    return ClosedPort {
-                        port,
-                        _v4: v4,
-                        _v6: None,
-                    };
-                }
-                // Anything else would leave ::1 unheld: say so.
-                Err(e) => panic!("holding [::1]:{port}: {e}"),
-            }
+        ClosedPort {
+            port: own_port().port,
         }
-        panic!("no loopback port free on both 127.0.0.1 and ::1");
     }
 
     fn v4(&self) -> SocketAddr {
@@ -441,10 +445,10 @@ impl ClosedPort {
     }
 }
 
-/// What the two tests below rely on: a held port refuses connections, and
-/// no listener can be bound on it while it's held.
+/// What the tests below rely on: a closed port refuses connections, on
+/// ::1 too where the runner has it, and isn't one the system hands out.
 #[tokio::test]
-async fn a_closed_port_refuses_and_cant_be_taken() {
+async fn a_closed_port_refuses_and_is_never_handed_out() {
     let closed = ClosedPort::new();
     let refused = TcpStream::connect(closed.v4()).await.unwrap_err();
     assert_eq!(
@@ -452,11 +456,19 @@ async fn a_closed_port_refuses_and_cant_be_taken() {
         io::ErrorKind::ConnectionRefused,
         "{refused}"
     );
-    // Taken: the held socket doesn't set `SO_REUSEADDR`, so this is
-    // `AddrInUse` on every target. An excluded-range `PermissionDenied`
-    // can't arise for a port the system just handed out.
-    let taken = TcpListener::bind(closed.v4()).await.unwrap_err();
-    assert_eq!(taken.kind(), io::ErrorKind::AddrInUse, "{taken}");
+    if let Err(e) = TcpStream::connect((Ipv6Addr::LOCALHOST, closed.port)).await {
+        assert!(
+            e.kind() == io::ErrorKind::ConnectionRefused || no_ipv6(&e),
+            "[::1]:{}: {e}",
+            closed.port
+        );
+    }
+    assert!(closed.port < EPHEMERAL_FLOOR, "{}", closed.port);
+    assert_ne!(
+        ClosedPort::new().port,
+        closed.port,
+        "each is handed out once"
+    );
 }
 
 #[tokio::test]
@@ -507,7 +519,7 @@ async fn loopback_falls_back_to_ipv6() {
     let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
     let limits = |secs| Limits::new(Duration::from_secs(secs), 1024).unwrap();
     let version_path = || RequestPath::parse("/api/v2/app/version").unwrap();
-    let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
+    let Some((server, _)) = ipv6_with_ipv4_closed(version).await else {
         // CI runners have IPv6 loopback: there (`CI` set to any value), this
         // is a failure, never a pass of the fallback.
         assert!(
@@ -551,7 +563,7 @@ async fn only_a_bare_probe_looks_on_ipv6_loopback() {
     let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
     let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
     let path = || RequestPath::parse("/api/v2/app/version").unwrap();
-    let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
+    let Some((server, _)) = ipv6_with_ipv4_closed(version).await else {
         assert!(
             std::env::var_os("CI").is_none(),
             "::1 can't be bound here, so the loopback rule is untested"
@@ -602,27 +614,21 @@ async fn only_a_bare_probe_looks_on_ipv6_loopback() {
     assert_eq!(server.seen().len(), 5);
 }
 
-/// Both loopback addresses of one port, each held from the moment it's
-/// bound: `::1` served by `other`, 127.0.0.1 listening and handed back for
-/// the test to serve. `None` where ::1 can't be bound.
+/// Both loopback addresses of one of this binary's ports ([`own_port`]):
+/// `::1` served by `other`, 127.0.0.1 listening and handed back for the
+/// test to serve. `None` where ::1 can't be bound.
 async fn both_loopbacks(other: Handler) -> Option<(TcpListener, Server)> {
-    for _ in 0..64 {
-        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-        let port = v4.local_addr().unwrap().port();
-        let v6 = TcpSocket::new_v6().and_then(|s| {
-            s.bind((Ipv6Addr::LOCALHOST, port).into())?;
-            s.listen(16)
-        });
-        match v6 {
-            Ok(listener) => {
-                return Some((v4, Server::serve(listener, Arc::clone(&other)).unwrap()));
-            }
-            Err(e) if in_use(&e) => continue,
-            Err(e) if no_ipv6(&e) => return None,
-            Err(e) => panic!("listening on [::1]:{port}: {e}"),
-        }
+    let OwnPort { port, v6 } = own_port();
+    if !v6 {
+        return None;
     }
-    panic!("no port free on both 127.0.0.1 and ::1");
+    let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    Some((v4, Server::serve(v6, other).unwrap()))
 }
 
 /// Once 127.0.0.1 has answered on a port, nothing for that port goes to
@@ -657,8 +663,8 @@ async fn ipv4_loopback_keeps_the_port_once_it_has_answered() {
         .unwrap();
     assert_eq!(got.body(), b"first");
     served.await.unwrap();
-    // The port is held closed from here, so nothing else can be handed it.
-    let _held = hold_closed(port).await;
+    // Closed from here, and nothing else can be handed it ([`own_port`]).
+    wait_closed(port).await;
     for req in [
         ProbeRequest::new(&target, path(), limits()),
         ProbeRequest::new(&target, path(), limits()).post(b"password=x".to_vec()),
@@ -677,30 +683,17 @@ fn target_port(server: &Server) -> u16 {
     server.addr.port()
 }
 
-/// Holds 127.0.0.1:`port` bound and not listening, once the listener that
-/// had it is gone: connections to it are refused, and no other program
-/// can be handed the port. Waits for both.
-async fn hold_closed(port: u16) -> TcpSocket {
+/// Waits until connections to 127.0.0.1:`port` are refused, once the
+/// listener that had it is gone. The port is one of this binary's own
+/// ([`own_port`]), so nothing else is handed it meanwhile; it isn't bound
+/// to hold it, because a port bound and not listening drops connections on
+/// macOS instead of refusing them.
+async fn wait_closed(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(20);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let held = loop {
-        let s = TcpSocket::new_v4().unwrap();
-        // A connection just closed on the port mustn't keep it from being
-        // bound again (Unix; Windows needs no option for that, and there
-        // the option would let the port be shared).
-        #[cfg(unix)]
-        s.set_reuseaddr(true).unwrap();
-        match s.bind(addr) {
-            Ok(()) => break s,
-            Err(e) if in_use(&e) && Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            Err(e) => panic!("holding 127.0.0.1:{port}: {e}"),
-        }
-    };
     loop {
         match TcpStream::connect(addr).await {
-            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => return held,
+            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => return,
             other => {
                 assert!(
                     Instant::now() < deadline,
@@ -713,12 +706,14 @@ async fn hold_closed(port: u16) -> TcpSocket {
     }
 }
 
-/// The port is held closed on a machine with no IPv6 too: the helper the
-/// test above rests on, run everywhere.
+/// A port is closed once its listener is gone, on a machine with no IPv6
+/// too: the helper the test above rests on, run everywhere.
 #[tokio::test]
-async fn a_port_is_held_closed_once_its_listener_is_gone() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+async fn a_port_is_closed_once_its_listener_is_gone() {
+    let port = own_port().port;
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut conn = TcpStream::connect(addr).await.unwrap();
     let (mut sock, _) = listener.accept().await.unwrap();
@@ -728,7 +723,7 @@ async fn a_port_is_held_closed_once_its_listener_is_gone() {
     let mut got = Vec::new();
     conn.read_to_end(&mut got).await.unwrap();
     drop(conn);
-    let _held = hold_closed(port).await;
+    wait_closed(port).await;
     let again = TcpStream::connect(addr).await;
     assert_eq!(
         again.err().map(|e| e.kind()),
@@ -744,7 +739,7 @@ async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
     let limits = || Limits::new(Duration::from_secs(15), 1024).unwrap();
     let path = || RequestPath::parse("/api/v2/app/version").unwrap();
     let other: Handler = Arc::new(|_: &str| reply(200, b"other"));
-    let Some((v6, v4)) = ipv6_with_ipv4_closed(other).await else {
+    let Some((v6, port)) = ipv6_with_ipv4_closed(other).await else {
         assert!(
             std::env::var_os("CI").is_none(),
             "::1 can't be bound here, so the loopback rule is untested"
@@ -764,10 +759,14 @@ async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
     assert_eq!(got.body(), b"other");
     assert_eq!(client.send(carrying()).await.unwrap().body(), b"other");
     assert_eq!(v6.seen().len(), 2);
-    // 127.0.0.1 starts listening, on the socket that held the port all
-    // along. The very next request finds it, though it carries something.
+    // 127.0.0.1 starts listening on the port, which was this test's all
+    // along ([`own_port`]). The very next request finds it, though it
+    // carries something.
     let first: Handler = Arc::new(|_: &str| reply(200, b"first"));
-    let v4 = Server::serve(v4.listen(16).unwrap(), first).unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    let v4 = Server::serve(listener, first).unwrap();
     assert_eq!(client.send(carrying()).await.unwrap().body(), b"first");
     // From here everything goes to 127.0.0.1.
     let got = client
@@ -779,30 +778,19 @@ async fn ipv4_loopback_takes_a_port_found_on_ipv6() {
     assert_eq!((v6.seen().len(), v4.seen().len()), (2, 3));
 }
 
-/// A server on ::1, with 127.0.0.1 held closed on its port, so the probe's
-/// IPv4 attempt is always refused and never answered by another program.
-/// The port is picked on IPv4 first, as `ClosedPort` does. `None` where
-/// ::1 can't be bound.
-async fn ipv6_with_ipv4_closed(handler: Handler) -> Option<(Server, TcpSocket)> {
-    for _ in 0..64 {
-        let v4 = TcpSocket::new_v4().unwrap();
-        v4.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-        let port = v4.local_addr().unwrap().port();
-        let v6 = TcpSocket::new_v6().and_then(|s| {
-            s.bind((Ipv6Addr::LOCALHOST, port).into())?;
-            s.listen(16)
-        });
-        match v6 {
-            Ok(listener) => {
-                let server = Server::serve(listener, Arc::clone(&handler)).unwrap();
-                return Some((server, v4));
-            }
-            Err(e) if in_use(&e) => continue,
-            Err(e) if no_ipv6(&e) => return None,
-            Err(e) => panic!("listening on [::1]:{port}: {e}"),
-        }
+/// A server on ::1, with 127.0.0.1 closed on its port, so the probe's IPv4
+/// attempt is always refused and never answered by another program: the
+/// port is one of this binary's own ([`own_port`]). Returns the port too.
+/// `None` where ::1 can't be bound.
+async fn ipv6_with_ipv4_closed(handler: Handler) -> Option<(Server, u16)> {
+    let OwnPort { port, v6 } = own_port();
+    if !v6 {
+        return None;
     }
-    panic!("no port free on both 127.0.0.1 and ::1");
+    let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    Some((Server::serve(listener, handler).unwrap(), port))
 }
 
 #[tokio::test]
@@ -1339,7 +1327,7 @@ mod bound {
     #[tokio::test]
     async fn a_managed_port_is_never_asked_on_ipv6() {
         let v6: Handler = Arc::new(|_: &str| reply(200, b"v6"));
-        let Some((server, _v4)) = ipv6_with_ipv4_closed(v6).await else {
+        let Some((server, _)) = ipv6_with_ipv4_closed(v6).await else {
             assert!(
                 std::env::var_os("CI").is_none(),
                 "::1 can't be bound here, so the managed-port rule is untested"
@@ -1438,7 +1426,7 @@ mod bound {
     #[tokio::test]
     async fn a_hand_run_companion_is_reached_as_before() {
         let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
-        let Some((server, _v4)) = ipv6_with_ipv4_closed(version).await else {
+        let Some((server, _)) = ipv6_with_ipv4_closed(version).await else {
             assert!(
                 std::env::var_os("CI").is_none(),
                 "::1 can't be bound here, so the loopback rule is untested"
