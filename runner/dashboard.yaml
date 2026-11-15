@@ -432,6 +432,7 @@ placement:
   - X-fleet-polish
   - X-win-log-held-open
   - X-cli-win-data-dir
+  - X-win-service-path-hardening
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
@@ -499,6 +500,7 @@ placement:
   - X-store-wal-nits
   - X-cluster-start-retry
   - X-worker-oversize-handback
+  - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
@@ -821,6 +823,7 @@ placement:
   - X-store-load-busy-map
   - X-store-busy-nits
   - X-routing-table-metric
+  - X-filter-split-nits
   - X-first-run-search-gate
   - D-docker-guide-1115
 unplaced_workstream: ws-small
