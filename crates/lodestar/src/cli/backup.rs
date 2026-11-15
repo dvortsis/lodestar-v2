@@ -180,9 +180,9 @@ fn write_readme(dir: &Path, files: &[(String, u64)], now: i64) -> Outcome {
          4. Run `lodestar reindex`. The old search index doesn't match the restored store\n\
             and would show the wrong torrents; this rebuilds it at the next start.\n\
          5. Start Lodestar.\n\
-         6. Sign out all sessions and create new API keys: auth.json brings back the\n\
-            sessions and keys that existed when this backup was taken, including any\n\
-            you have revoked since.\n\n\
+         6. In the web UI, open Settings, then Security. Select \"Sign out other sessions\"\n\
+            and replace your API keys: auth.json brings back the sessions and keys that\n\
+            existed when this backup was taken, including any you have revoked since.\n\n\
          seal.key and auth.json are secrets: keep this folder private.\n",
     );
     let mut f = create_new_private(&path).map_err(failed(format!("writing {}", path.display())))?;

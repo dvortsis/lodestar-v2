@@ -258,7 +258,7 @@ To undo it, remove the Path and the Variable from gluetun, select **Apply**, and
 
 With the file, a connection that used the VPN never leaves any other way. Nothing Lodestar or gluetun sends to the internet goes around the VPN either. The rules never let anything new through. One side effect: gluetun no longer answers pings from your network.
 
-**When gluetun stops or restarts,** the VPN server can keep sending packets for the old connection for a short while. They now reach your server itself, not gluetun. Your server may answer them with an ICMP message, "port unreachable". ICMP is the kind of network message `ping` uses. These answers leave your home connection directly, outside the VPN.
+**When gluetun stops or restarts,** the VPN server can keep sending packets for the old connection for a short while. They now reach your server itself, not gluetun. Your server may answer them with an ICMP message, "host unreachable" or "port unreachable". ICMP is the kind of network message `ping` uses. These answers leave your home connection directly, outside the VPN.
 - **What they reveal:** that your server is on and that the old connection has gone. They go to the VPN server, which already knows your home address because the tunnel came from it. Your internet provider sees only traffic to the VPN server, which it already sees. Nothing readable is in them: only the start of the VPN server's own encrypted packet, sent back to it.
 - **The safe choice is to leave this alone.** You don't need extra firewall rules on your server for it. Many NAS and desktop firewalls already drop such packets. Unraid has no host firewall by default, and the advice is the same there. A wrong rule on the server's own firewall can cut you off from it.
 
@@ -395,7 +395,7 @@ To restore on Unraid:
    Use the same image as your container's **Repository** field. If you changed **PUID** and **PGID**, use your numbers. **Result:** After a few log lines, it prints `The search index is marked for rebuild.` If it says `refused` and asks you to stop Lodestar, stop it on the Docker tab. Then run the command again.
 5. On the Docker tab, select the **Lodestar** icon, then **Start**.
    **Result:** Lodestar rebuilds the search index from the database. Results fill in while it runs.
-6. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
+6. Sign out the other sessions and replace your API keys. A restored `auth.json` brings back the sessions and keys that existed when the backup was taken, including any you revoked since. Open the web UI, go to **Settings**, then **Security**, and select **Sign out other sessions…**. Revoke each API key you use and create a new one, then paste the new keys into the apps that use them. Changing the admin password on the same page also signs out every other browser.
 
 You can also copy the whole data folder while Lodestar is stopped. That copy includes a matching index, so step 4 doesn't apply when you restore it.
 
@@ -460,7 +460,7 @@ To restore, with the backup folder in the current folder:
     docker compose start lodestar
     ```
 
-   **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
+   **Result:** Lodestar rebuilds the search index from the database. Then sign out the other sessions and replace your API keys, as in step 6 of the Unraid restore.
 
 ### Back up and restore on Windows
 <!-- index: backup on Windows; restore on Windows; ProgramData -->
@@ -533,7 +533,7 @@ To restore an installed Lodestar:
     Start-Service Lodestar
     ```
 
-   **Result:** Lodestar rebuilds the search index from the database. Then change the admin password, as in step 6 of the Unraid restore.
+   **Result:** Lodestar rebuilds the search index from the database. Then sign out the other sessions and replace your API keys, as in step 6 of the Unraid restore.
 
 A portable copy works the same way from its own folder. Open PowerShell in the folder that holds `lodestar.exe` and run `.\lodestar.exe backup`; the backup goes under `data\backups`. To restore, stop Lodestar (**Ctrl+C** in its window) and delete `data\lodestar.db-wal` and `data\lodestar.db-shm`. Copy the files from the backup into `data`, run `.\lodestar.exe reindex`, then run **Start Lodestar.cmd** again.
 
