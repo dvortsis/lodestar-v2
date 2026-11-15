@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T18:42Z",
+  "updated_at": "2026-11-15T18:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T18:42Z",
+  "last_heartbeat": "2026-11-15T18:53Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -9989,6 +9989,12 @@
       "slice": "owner-no-start-wait",
       "sha": "b983950f",
       "at": "2026-11-15T18:21Z"
+    },
+    {
+      "pr": 941,
+      "slice": "X-fuzz-nits-1115",
+      "sha": "fa71eacb",
+      "at": "2026-11-15T18:53Z"
     }
   ],
   "active_sessions": {
@@ -10227,7 +10233,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T18:42Z",
+    "updated": "2026-11-15T18:53Z",
     "items": [
       {
         "slot": 1,
@@ -10253,12 +10259,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-fuzz-nits-1115",
+        "slice": "X-cleanup-fits-quota",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T17:02Z",
-        "doing": "fuzz nits from #918 and #935 reviews (peer_fetch docs, mse.rs fmt/clippy, README PROPTEST_CASES exceptions); session_01MMjhn9hfwMf4Ydg4La5rEh",
+        "since": "2026-11-15T18:53Z",
+        "doing": "cleanup stack without reserved concurrency (lease keeps one-run bound) + fleet docs refresh; session_01MMjhn9HYMkBnrBoP6KypLy",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10362,8 +10368,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T18:42Z",
-  "updated": "2026-11-15T18:42Z",
+  "heartbeat": "2026-11-15T18:53Z",
+  "updated": "2026-11-15T18:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
