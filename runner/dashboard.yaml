@@ -409,6 +409,7 @@ placement:
   - X-win-upd-1920
   - X-win-upd-reoffer
   - X-win-upd-window
+  - X-win-portable-restart-load
   - X-win-upd-stop-wait
   - X-upd-stop-races
   - X-upd-stop-early
@@ -801,6 +802,7 @@ placement:
   - X-cmp01-fix
   - X-sec-S6-02-03
   - X-floor-renew-metrics-nits
+  - X-import-progress-visible
   - X-import-status-lock
   - X-store-load-busy-map
 unplaced_workstream: ws-small

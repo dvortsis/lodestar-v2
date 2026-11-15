@@ -93,14 +93,37 @@ fn wait_for_subscriber() {
     }
 }
 
+/// `CREATE_NO_WINDOW`: a console tool started with it opens no window.
+#[cfg_attr(not(windows), allow(dead_code))]
+const NO_WINDOW: u32 = 0x0800_0000;
+
+/// `NORMAL_PRIORITY_CLASS` (X-win-portable-restart-load). Lodestar lowers
+/// itself to below normal ([`priority`]), and Windows starts a
+/// below-normal process's children below normal too unless they're given
+/// a class. Restart now's processes are given this one, so a busy PC
+/// can't starve the hand-over: under load at normal priority, a
+/// below-normal PowerShell couldn't even start its watch within a minute.
+#[cfg_attr(not(windows), allow(dead_code))]
+const NORMAL_PRIORITY: u32 = 0x0000_0020;
+
+/// The creation flags of the copy Restart now starts: normal priority,
+/// sharing this process's console. It lowers itself as any start does
+/// ([`startup`]), which comes after its wait for this process.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SUCCESSOR_FLAGS: u32 = NORMAL_PRIORITY;
+
+/// The creation flags of that copy's watch on this process
+/// ([`crate::system::restart::predecessor_script`]): no window, and normal
+/// priority whatever the copy's own.
+#[cfg_attr(not(windows), allow(dead_code))]
+const WATCH_FLAGS: u32 = NO_WINDOW | NORMAL_PRIORITY;
+
 /// A command for a tool in `%SystemRoot%\System32`, by absolute path (a
 /// tool found through the search path could be anyone's), that opens no
 /// console window.
 #[cfg(windows)]
 fn system32_command(relative: &str) -> Option<std::process::Command> {
     use std::os::windows::process::CommandExt;
-    /// `CREATE_NO_WINDOW`.
-    const NO_WINDOW: u32 = 0x0800_0000;
     let root = std::env::var_os("SystemRoot")?;
     let mut cmd =
         std::process::Command::new(std::path::Path::new(&root).join("System32").join(relative));
@@ -280,7 +303,7 @@ pub mod relaunch {
     pub use os::{hand_over, start_successor, wait_if_successor};
 
     #[cfg(windows)]
-    mod os {
+    pub(super) mod os {
         use std::io::{IsTerminal, Write};
         use std::process::{Child, ExitCode};
         use std::sync::Mutex;
@@ -349,18 +372,28 @@ pub mod relaunch {
         /// has exited, printing its status on a pipe
         /// ([`restart::watch_command`]). `None` if the token names none or
         /// it can't start.
-        fn watch_predecessor(token: &str) -> Option<Child> {
+        ///
+        /// It runs at normal priority ([`super::super::WATCH_FLAGS`]), so a
+        /// busy PC can't starve it while this copy waits.
+        pub(in super::super) fn watch_predecessor(token: &str) -> Option<Child> {
+            use std::os::windows::process::CommandExt;
             let old = restart::predecessor_pid(token)?;
             let shell = super::super::powershell_command()?;
             restart::watch_command(shell, old, std::process::id())
+                .creation_flags(super::super::WATCH_FLAGS)
                 .spawn()
                 .ok()
         }
 
+        /// The new copy, at normal priority ([`super::super::SUCCESSOR_FLAGS`])
+        /// through the hand-over; it lowers itself once past it.
         fn spawn() -> std::io::Result<(Child, String)> {
+            use std::os::windows::process::CommandExt;
             let exe = super::program()?;
             let token = super::token();
-            let child = super::command(&exe, std::env::args_os().skip(1), &token).spawn()?;
+            let child = super::command(&exe, std::env::args_os().skip(1), &token)
+                .creation_flags(super::super::SUCCESSOR_FLAGS)
+                .spawn()?;
             Ok((child, token))
         }
 
@@ -524,6 +557,50 @@ mod tests {
         };
         assert!(removed(super::system32_command("whoami.exe").unwrap()));
         assert!(removed(super::powershell_command().unwrap()));
+    }
+
+    /// Restart now's processes are started at normal priority, the watch
+    /// with no window: the flags Windows reads, pinned on every platform
+    /// (the Windows test below checks what they do).
+    #[test]
+    fn restart_now_starts_its_processes_at_normal_priority() {
+        assert_eq!(super::NORMAL_PRIORITY, 0x0000_0020);
+        assert_eq!(super::SUCCESSOR_FLAGS, 0x0000_0020);
+        assert_eq!(super::WATCH_FLAGS, 0x0800_0020);
+        // No other class bit: below normal is 0x4000, above normal 0x8000,
+        // high 0x80, idle 0x40, realtime 0x100.
+        for other in [0x4000, 0x8000, 0x80, 0x40, 0x100] {
+            assert_eq!(super::SUCCESSOR_FLAGS & other, 0);
+            assert_eq!(super::WATCH_FLAGS & other, 0);
+        }
+    }
+
+    /// A copy that Lodestar's below-normal priority was passed down to
+    /// still runs its watch at normal priority, so normal-priority load
+    /// can't starve it (X-win-portable-restart-load).
+    #[cfg(windows)]
+    #[test]
+    fn the_predecessor_watch_runs_at_normal_priority_from_a_below_normal_copy() {
+        use super::priority::{self, Priority};
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = priority::set(std::process::id(), Priority::Normal);
+            }
+        }
+        priority::set(std::process::id(), Priority::BelowNormal).expect("lowered");
+        let _restore = Restore;
+        assert_eq!(
+            priority::get(std::process::id()).as_deref(),
+            Ok("BelowNormal")
+        );
+        // A token naming this process: the watch waits on it until killed.
+        let token = format!("lodestar-{}-1", std::process::id());
+        let mut watch = super::relaunch::os::watch_predecessor(&token).expect("the watch starts");
+        let class = priority::get(watch.id());
+        let _ = watch.kill();
+        let _ = watch.wait();
+        assert_eq!(class.as_deref(), Ok("Normal"));
     }
 
     #[test]

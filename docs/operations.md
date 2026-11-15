@@ -398,7 +398,7 @@ lodestar import start --source magnetico --path /import/database.sqlite3 --limit
 lodestar import status
 lodestar import resume 1 --source magnetico --path /import/database.sqlite3
 ```
-- **`status` only reads, and works while Lodestar runs.** While an import runs it can't read Lodestar's database, because the import keeps it to itself. `status` waits a few seconds, then says so and tells you to run it again once the import pauses or finishes. The import reports what it did when it stops.
+- **`status` only reads, and works while Lodestar runs.** While an import runs, it waits a few seconds, then shows that import's progress, and how long ago it was updated, for that job only. Other jobs and the full status show once the import pauses or finishes. If another lodestar command is using the database instead, `status` says so and asks you to run it again later. After an import stops, however it stopped, `status` shows the full status again.
 - **Ctrl-C pauses the job at the last saved batch.** A second Ctrl-C quits at once. Either way, `resume` carries on from the last saved batch, with the same source flags. Nothing is imported twice.
 - **`resume` checks the source is the same database** the job started on. If it changed, the job is blocked and says why. Start a new job for the new database.
 - **Start Lodestar again afterwards.** It indexes the imported torrents and re-fetches incomplete file lists.
