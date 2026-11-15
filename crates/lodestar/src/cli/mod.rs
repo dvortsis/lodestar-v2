@@ -1304,8 +1304,11 @@ mod tests {
         ));
         let mut guard = ServiceGuard::new(&install, refuse);
         assert!(guard.before(None, Some(""), false).is_err());
+        // A folder outside the working folder isn't. (A relative one is inside
+        // it, as Windows resolves it.)
+        let elsewhere = tempfile::tempdir().unwrap();
         let mut guard = ServiceGuard::new(&install, unasked);
-        assert!(guard.after(Path::new("elsewhere")).is_ok());
+        assert!(guard.after(elsewhere.path()).is_ok());
     }
 
     /// The MSI's executable is matched as Windows compares paths: by case.
