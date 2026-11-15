@@ -780,14 +780,17 @@ fn portable_restart(bind: &str) -> (u16, u16) {
         "the new copy isn't below normal (saw {last:?}; PowerShell said {last_err:?})\n{}",
         dump(&console, &jsonl, &seen)
     );
-    // And each copy logged lowering itself.
+    // And the new copy logged lowering itself, after the hand-over. The old
+    // copy may not have: Restart now is asked for soon after it serves,
+    // and it can exit before its startup thread's PowerShell finishes.
     let lowered = wait_for(Duration::from_secs(30), || {
         let log = std::fs::read_to_string(&jsonl).unwrap_or_default();
-        (log.matches("windows.priority_lowered").count() >= 2).then_some(())
+        let after = &log[log.find("app.relaunch")?..];
+        after.contains("windows.priority_lowered").then_some(())
     });
     assert!(
         lowered.is_some(),
-        "not every copy logged lowering its priority\n{}",
+        "the new copy didn't log lowering its priority\n{}",
         dump(&console, &jsonl, &seen)
     );
     (first, second)
