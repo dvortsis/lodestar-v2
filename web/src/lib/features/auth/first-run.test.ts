@@ -67,20 +67,27 @@ describe('leaveForFirstRun', () => {
 });
 
 describe('checkFirstRun', () => {
+	it('stays when the visitor has moved on by the time the answer comes', async () => {
+		answer(status(false, false, true));
+		await checkFirstRun(() => false);
+		expect(toSetup).not.toHaveBeenCalled();
+		expect(goto).not.toHaveBeenCalled();
+	});
+
 	it('asks GET /auth once and leaves when it must', async () => {
 		answer(status(false, false, true));
-		await checkFirstRun();
+		await checkFirstRun(() => true);
 		expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/api/v1/auth', expect.any(Object));
 		expect(toSetup).toHaveBeenCalledOnce();
 	});
 
 	it('stays when signed in, when the answer is not OK, and when the request fails', async () => {
 		answer(status(true, false, false));
-		await checkFirstRun();
+		await checkFirstRun(() => true);
 		answer({}, false);
-		await checkFirstRun();
+		await checkFirstRun(() => true);
 		fetchMock.mockRejectedValueOnce(new Error('offline'));
-		await checkFirstRun();
+		await checkFirstRun(() => true);
 		expect(goto).not.toHaveBeenCalled();
 		expect(toSetup).not.toHaveBeenCalled();
 		expect(setSession).not.toHaveBeenCalled();

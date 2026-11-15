@@ -41,7 +41,11 @@
 	// A fresh instance, a signed-out visitor or a pending Legal Notice can't search yet: one check
 	// after mount sends the browser to setup or sign-in (X-first-run-search-gate). The check has no
 	// imports, so the bare first load gains one small response; navigation loads only to leave.
-	onMount(() => void checkFirstRun());
+	onMount(() => {
+		let mounted = true;
+		void checkFirstRun(() => mounted && location.pathname === '/search');
+		return () => (mounted = false);
+	});
 
 	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs
 	// them at once; otherwise the empty state comes with the first interaction, or after 30 s, as the

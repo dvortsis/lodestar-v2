@@ -49,10 +49,7 @@ test('a signed-out visitor at /search lands on sign-in', async ({ page, mock }) 
 	await expect(page.getByLabel('Password')).toBeVisible();
 });
 
-test('a signed-in visitor stays on the bare search page after one check', async ({
-	page,
-	mock
-}) => {
+test('a signed-in visitor gets the search page, checked once', async ({ page, mock }) => {
 	mock.on('getAuthStatus', status(true, false, false));
 	await page.goto('/search');
 	await expect.poll(() => mock.calls('getAuthStatus').length).toBe(1);

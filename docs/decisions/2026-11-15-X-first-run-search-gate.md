@@ -8,6 +8,7 @@ From the tester's run on `main` (2026-11-15): U1, A1 and a lead on two saves. Th
 - **One `GET /auth` after mount** (`web/src/lib/features/auth/first-check.ts`). The check has no imports: a signed-in visitor's load gains one small JSON response and about 0.15 kB of route JS (size-limit passes). The module that navigates (`first-run.ts`) loads only when the browser has to leave.
   - Setup required: go to `/setup`, as the client's 401 path does.
   - Signed out, or the notice pending: go to `/login?next=<this page>`. The sign-in page shows the notice when it's pending, and returns to the page afterwards.
+  - Only while the page is still mounted on /search when the answer comes (the runner's call): a visitor who has already moved on is never pulled back.
   - Signed in with the notice accepted, or the check fails: stay put. A failed check isn't treated as signed out; the page's own requests still meet the client's handler.
 - **The redirect replaces the history entry** (a UX refinement for the runner to flag, §2.19). Back from setup or sign-in doesn't return to a search page that would redirect again. The client's mid-use 401 path still pushes, as before.
 - **Signed-out visitors are redirected too,** not only setup and the notice. It's the same check, and a signed-out search page could do nothing anyway.
