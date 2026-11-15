@@ -330,12 +330,12 @@ pub fn idle_during_rollback(
 
 /// Whether `inner` is `outer` or inside it, compared as [`same_dir`] does,
 /// by whole path parts: `inner` or one of its folders is `outer` by what
-/// the system says it is ([`same_object`]), or by its text.
+/// the system says it is ([`object`]), or by its text.
 pub fn within(inner: &Path, outer: &Path) -> bool {
-    let full_inner = full(inner);
-    if full_inner
-        .ancestors()
-        .any(|a| same_object(a, outer) == Some(true))
+    if let Some(o) = object(outer)
+        && full(inner)
+            .ancestors()
+            .any(|a| object(a).as_ref() == Some(&o))
     {
         return true;
     }
@@ -343,30 +343,65 @@ pub fn within(inner: &Path, outer: &Path) -> bool {
     i == o || i.starts_with(&format!("{o}\\"))
 }
 
-/// Whether two existing paths are the same file or folder by what the
-/// system says it is: the volume serial number and file index, each
-/// opened with `FILE_FLAG_BACKUP_SEMANTICS` (`same_file::Handle`), after
-/// links and junctions. `None` when either can't be opened (missing, or
-/// not readable by this account), and always off Windows: the caller
-/// then compares the text.
-fn same_object(a: &Path, b: &Path) -> Option<bool> {
-    #[cfg(windows)]
-    {
-        let a = same_file::Handle::from_path(full(a)).ok()?;
-        let b = same_file::Handle::from_path(full(b)).ok()?;
-        Some(a == b)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (a, b);
-        None
-    }
+/// What the system says an existing file or folder is: its volume serial
+/// number and file index, opened with `FILE_FLAG_BACKUP_SEMANTICS`
+/// (`same_file::Handle`), after links and junctions. `None` when it can't
+/// be opened (missing, or not readable by this account), and always off
+/// Windows: the caller then compares the text.
+#[cfg(windows)]
+fn object(p: &Path) -> Option<same_file::Handle> {
+    same_file::Handle::from_path(full(p)).ok()
 }
 
-/// A real path is verbatim (`\\?\C:\…`), so the prefix goes before
-/// comparing.
+/// Off Windows nothing is compared by file identity.
+#[cfg(not(windows))]
+fn object(_: &Path) -> Option<std::convert::Infallible> {
+    None
+}
+
+/// Whether two paths are the same file or folder by [`object`]; `None` when
+/// either can't be opened, and always off Windows.
+fn same_object(a: &Path, b: &Path) -> Option<bool> {
+    Some(object(a)? == object(b)?)
+}
+
+/// The text compared when [`object`] can't decide. The part of the path
+/// that exists is the system's own real path, compared as it is: only the
+/// verbatim prefix goes, and case. The rest, not created yet, is read as
+/// Win32 reads it ([`tidy`]). A path whose nearest folder can't be resolved
+/// is read the same way, unless it's verbatim (`\\?\`), which Win32 takes
+/// literally.
 fn norm(p: &Path) -> String {
-    let p = real(&full(p));
+    let p = full(p);
+    let s = match real(&p) {
+        Some((canonical, rest)) => {
+            let head = verbatim(&canonical);
+            if rest.is_empty() {
+                head
+            } else {
+                let protect = head.split('\\').filter(|c| !c.is_empty()).count();
+                let tail: Vec<String> = rest
+                    .iter()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .collect();
+                tidy(&format!("{head}\\{}", tail.join("\\")), protect)
+            }
+        }
+        None => {
+            let s = p.to_string_lossy().replace('/', "\\");
+            if s.starts_with(r"\\?\") {
+                verbatim(&p)
+            } else {
+                tidy(&s, 0)
+            }
+        }
+    };
+    s.to_lowercase()
+}
+
+/// A path's text as given, `/` as `\`, without a verbatim `\\?\` prefix
+/// (`\\?\UNC\` back to `\\`) or a trailing separator: nothing else changes.
+fn verbatim(p: &Path) -> String {
     let s = p.to_string_lossy().replace('/', "\\");
     let s = match s.strip_prefix(r"\\?\") {
         Some(rest) => match rest.strip_prefix(r"UNC\") {
@@ -375,7 +410,7 @@ fn norm(p: &Path) -> String {
         },
         None => s,
     };
-    tidy(&s).to_lowercase()
+    s.trim_end_matches('\\').to_string()
 }
 
 /// The full path as Win32 makes it before opening anything
@@ -393,12 +428,12 @@ fn full(p: &Path) -> PathBuf {
     }
 }
 
-/// The same rules on a path's text (`\` separators), for what Windows
-/// didn't resolve: a verbatim `\\?\` path, or any path off Windows. `.`
-/// and empty components go, `..` takes the one before it (never the drive
-/// or a UNC server and share), and trailing dots and spaces go from each
-/// name, as Win32 drops them.
-fn tidy(s: &str) -> String {
+/// A path's text (`\` separators) read as Win32 reads one it resolves:
+/// `.` and empty components go, `..` takes the one before it (never the
+/// drive or a UNC server and share), and trailing dots and spaces go from
+/// each name. The first `protect` names are the system's own and stay as
+/// they are, though `..` may still take them.
+fn tidy(s: &str, protect: usize) -> String {
     let (lead, body) = match s.strip_prefix(r"\\") {
         Some(b) => (r"\\", b),
         None => match s.strip_prefix('\\') {
@@ -407,7 +442,11 @@ fn tidy(s: &str) -> String {
         },
     };
     let mut out: Vec<&str> = Vec::new();
-    for c in body.split('\\') {
+    for (i, c) in body.split('\\').filter(|c| !c.is_empty()).enumerate() {
+        if i < protect {
+            out.push(c);
+            continue;
+        }
         if c == ".." {
             let keep = match (lead, out.first()) {
                 (r"\\", _) => 2,
@@ -427,23 +466,24 @@ fn tidy(s: &str) -> String {
     format!("{lead}{}", out.join("\\"))
 }
 
-/// `p` through its nearest existing folder's real path, with the rest
-/// appended: a folder not created yet (the witness) then compares with one
-/// that exists (the data folder), whatever 8.3 names or links lead there.
-fn real(p: &Path) -> PathBuf {
+/// `p`'s nearest existing folder's real path, and the names after it not
+/// created yet (outermost first): a folder not created yet (the witness)
+/// then compares with one that exists (the data folder), whatever 8.3
+/// names or links lead there. `None` when no folder on the way resolves.
+fn real(p: &Path) -> Option<(PathBuf, Vec<std::ffi::OsString>)> {
     let mut rest = Vec::new();
     let mut at = p;
     loop {
-        if let Ok(mut r) = std::fs::canonicalize(at) {
-            r.extend(rest.iter().rev());
-            return r;
+        if let Ok(r) = std::fs::canonicalize(at) {
+            rest.reverse();
+            return Some((r, rest));
         }
         match (at.parent(), at.file_name()) {
             (Some(parent), Some(name)) => {
-                rest.push(name);
+                rest.push(name.to_os_string());
                 at = parent;
             }
-            _ => return p.to_path_buf(),
+            _ => return None,
         }
     }
 }
@@ -1328,8 +1368,9 @@ mod tests {
 
     /// X-win-service-path-hardening (d): the service makes its own folder
     /// private before it reads any config from there, however the folder
-    /// is named, and checks a data folder inside it too (b). A broken
-    /// `config.toml` proves the order: a refusal, not a config error.
+    /// is named, and checks a data folder inside it too (b). Each case
+    /// tells the two orders apart: a check that repairs the file before
+    /// it's read, or a file inside the folder that moves the data away.
     #[test]
     fn the_service_secures_its_folder_before_reading_from_it() {
         let root = tempfile::tempdir().unwrap();
@@ -1345,18 +1386,30 @@ mod tests {
 
         // Nothing set: its config.toml is read, so checked first.
         assert!(refused(load_guarded(&svc, None, env_of(vec![]), refuse)));
-        // LODESTAR_DATA_DIR naming it, or a folder inside it.
+        // LODESTAR_DATA_DIR naming it, or a folder inside it: the check runs
+        // before its config.toml is read. The check here makes the broken
+        // file valid, so the config loads only if it was read after.
         for d in [svc.clone(), svc.join("data")] {
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("config.toml"), "not toml [").unwrap();
             let env = env_of(vec![(
                 "LODESTAR_DATA_DIR",
                 d.to_string_lossy().into_owned(),
             )]);
-            assert!(refused(load_guarded(&svc, None, env, refuse)), "{d:?}");
+            let repair = || std::fs::write(d.join("config.toml"), "").map_err(|e| e.to_string());
+            let (c, _) = load_guarded(&svc, None, env, repair).unwrap();
+            assert!(c.is_ok(), "{d:?}: read before the check: {c:?}");
         }
-        // `--config` inside it.
+        std::fs::write(svc.join("config.toml"), "not toml [").unwrap();
+        // `--config` inside it, moving the data elsewhere: refused before
+        // it's read. Read first, the data would be elsewhere and the folder
+        // never checked.
+        let elsewhere = root.path().join("E").join("Lodestar");
+        let moving = svc.join("moving.toml");
+        std::fs::write(&moving, format!("data_dir = \"{}\"\n", toml(&elsewhere))).unwrap();
         assert!(refused(load_guarded(
             &svc,
-            Some(svc.join("config.toml")),
+            Some(moving),
             env_of(vec![]),
             refuse
         )));
@@ -1865,8 +1918,11 @@ mod tests {
         assert!(within(Path::new(r"C:\ProgramData\Lodestar.\data"), svc));
         assert!(within(Path::new(r"C:\ProgramData\x\..\Lodestar\d"), svc));
         assert!(!within(Path::new(r"C:\ProgramData\Lodestar\..\Other"), svc));
+        // A verbatim path is taken literally: a folder named `Lodestar.`
+        // isn't the service's.
+        assert!(!same_dir(Path::new(r"\\?\C:\ProgramData\Lodestar."), svc));
         // UNC: `..` never climbs above the share.
-        assert_eq!(tidy(r"\\srv\share\..\..\x"), r"\\srv\share\x");
+        assert_eq!(tidy(r"\\srv\share\..\..\x", 0), r"\\srv\share\x");
     }
 
     /// X-win-service-path-hardening (c), on Windows: a folder is the
@@ -1910,6 +1966,7 @@ mod tests {
             .env("LODESTAR_P", &svc)
             .output()
             .unwrap();
+        assert!(out.status.success(), "{out:?}");
         let short = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !short.is_empty() && !short.eq_ignore_ascii_case(&shown) {
             assert!(same_dir(Path::new(&short), &svc), "{short}");
@@ -1922,6 +1979,33 @@ mod tests {
         assert!(!within(&sibling, &svc));
         assert_eq!(same_object(&sibling, &svc), Some(false));
         assert_eq!(same_object(&link, &svc), Some(true));
+    }
+
+    /// The system's own real path isn't tidied: an existing folder named
+    /// `Lodestar.` is not `Lodestar` (`update` treats a match as the folder
+    /// the service checked).
+    #[test]
+    fn a_real_folder_with_a_trailing_dot_is_its_own() {
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        #[cfg(windows)]
+        let dotted = {
+            let p = std::path::PathBuf::from(format!(r"\\?\{}.", svc.display()));
+            std::fs::create_dir(&p).unwrap();
+            p
+        };
+        #[cfg(not(windows))]
+        let dotted = {
+            let p = root.path().join("Lodestar.");
+            std::fs::create_dir(&p).unwrap();
+            p
+        };
+        assert!(!same_dir(&dotted, &svc));
+        assert!(!within(&dotted, &svc));
+        assert!(!within(&dotted.join("data"), &svc));
+        #[cfg(windows)]
+        assert_eq!(same_object(&dotted, &svc), Some(false));
     }
 
     /// Off Windows nothing is compared by file identity: the text decides.
