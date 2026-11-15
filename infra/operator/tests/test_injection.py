@@ -1041,6 +1041,91 @@ class Hardening(unittest.TestCase):
                 self.assertNotIn("/v1/sessions", d["anthropic"].paths("POST"))
                 self.assertIsNone(d["store"].get(LOCK_KEY))
 
+    def test_the_agent_as_the_api_returns_it_passes(self):
+        # The resolved form of main's toolset: each config's `type` filled in,
+        # the configs in another order, an inherited value spelled out, and a
+        # tool listed at the toolset's defaults.
+        agent, _, _ = bridge.render(ENV)
+        [declared] = agent["tools"]
+        resolved = {
+            "type": declared["type"],
+            "default_config": dict(declared["default_config"]),
+            "configs": [dict(c, type=c["name"]) for c in reversed(declared["configs"])]
+            + [{"name": "read", "type": "read", "enabled": True,
+                "permission_policy": declared["default_config"]["permission_policy"]}],
+        }
+        bash = next(c for c in resolved["configs"] if c["name"] == "bash")
+        self.assertNotIn("enabled", bash)
+        bash["enabled"] = True
+        lock = {"agent_id": "agent_REAL", "agent_version": 3}
+        cur = {"id": "agent_REAL", "version": 3, "system": agent["system"], "tools": [resolved]}
+        harness.check_deployed(lambda *_: cur, lock, agent)
+        self.assertTrue(harness.tools_match(agent["tools"], [resolved]))
+        # And through a whole run.
+        api = FakeAPI()
+        api.deployed = dict(api.deployed, tools=[resolved])
+        rc, _, d = run(api=api)
+        self.assertIn("/v1/sessions", d["anthropic"].paths("POST"))
+
+    def test_every_other_difference_in_tools_refuses(self):
+        agent, _, _ = bridge.render(ENV)
+        declared = agent["tools"]
+
+        def changed(edit):
+            tools = json.loads(json.dumps(declared))
+            edit(tools)
+            return tools
+
+        def config(tools, name):
+            return next(c for c in tools[0]["configs"] if c["name"] == name)
+
+        cases = {
+            "an added tool": lambda t: t.append({"type": "custom", "name": "extra", "input_schema": {}}),
+            "a removed tool": lambda t: t.clear(),
+            "a changed permission": lambda t: config(t, "bash").update(permission_policy={"type": "always_ask"}),
+            "a tool turned on": lambda t: config(t, "web_fetch").update(enabled=True),
+            "a removed config": lambda t: t[0]["configs"].remove(config(t, "web_search")),
+            "a changed default policy": lambda t: t[0]["default_config"].update(permission_policy={"type": "always_allow"}),
+            "a default turned off": lambda t: t[0]["default_config"].update(enabled=False),
+            "an extra config off the defaults": lambda t: t[0]["configs"].append(
+                {"name": "read", "permission_policy": {"type": "always_ask"}}),
+            "a type that isn't the name": lambda t: config(t, "bash").update(type="read"),
+            "a duplicate config": lambda t: t[0]["configs"].append(dict(config(t, "bash"))),
+            "an unknown toolset field": lambda t: t[0].update(mcp_server_name="x"),
+            "a web setting main doesn't declare": lambda t: config(t, "web_fetch").update(allowed_domains=["example.com"]),
+            "a config with no name": lambda t: t[0]["configs"].append({"enabled": True}),
+            "another toolset type": lambda t: t[0].update(type="agent_toolset_20990101"),
+            "no default_config": lambda t: t[0].pop("default_config"),
+            "no default permission policy": lambda t: t[0]["default_config"].pop("permission_policy"),
+            "a config that isn't an object": lambda t: t[0]["configs"].append(["bash"]),
+            "a default_config that isn't an object": lambda t: t[0].update(default_config=[]),
+            "configs that aren't a list": lambda t: t[0].update(configs={"bash": {}}),
+            "a custom tool in the toolset's place": lambda t: t.__setitem__(
+                0, {"type": "custom", "name": "bash", "input_schema": {}}),
+            "a number for a boolean": lambda t: config(t, "web_fetch").update(enabled=0),
+            "a float for a boolean": lambda t: t[0]["default_config"].update(enabled=1.0),
+        }
+        # A tool of another kind must equal its declaration exactly.
+        custom = {"type": "custom", "name": "probe", "input_schema": {"type": "object"}}
+        self.assertTrue(harness.tools_match([custom], [dict(custom)]))
+        for what, other in (("a renamed custom tool", dict(custom, name="other")),
+                            ("a custom tool with an extra field", dict(custom, extra=True))):
+            with self.subTest(what):
+                self.assertFalse(harness.tools_match([custom], [other]))
+        lock = {"agent_id": "agent_REAL", "agent_version": 3}
+        for what, edit in cases.items():
+            tools = changed(edit)
+            with self.subTest(what):
+                self.assertFalse(harness.tools_match(declared, tools))
+                cur = {"version": 3, "system": agent["system"], "tools": tools}
+                with self.assertRaisesRegex(Refusal, "differs from main"):
+                    harness.check_deployed(lambda *_: cur, lock, agent)
+        for what, cur in (("a changed system prompt", {"version": 3, "system": "other", "tools": declared}),
+                          ("another version", {"version": 4, "system": agent["system"], "tools": declared}),
+                          ("tools that aren't a list", {"version": 3, "system": agent["system"], "tools": {}})):
+            with self.subTest(what), self.assertRaisesRegex(Refusal, "differs from main"):
+                harness.check_deployed(lambda *_: cur, lock, agent)
+
     def test_a_lost_create_reply_is_still_archived(self):
         class Lost(FakeAPI):
             def __call__(self, method, path, body):
