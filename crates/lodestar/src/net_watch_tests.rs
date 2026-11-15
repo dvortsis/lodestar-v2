@@ -254,7 +254,6 @@ async fn off_never_resolves() {
 #[cfg(target_os = "linux")]
 #[test]
 fn reads_this_namespace_on_linux() {
-    assert!(SUPPORTED);
     assert!(read().is_some(), "/proc/self/net/dev is readable");
 }
 
@@ -263,6 +262,5 @@ fn reads_this_namespace_on_linux() {
 #[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn elsewhere_it_is_ignored() {
-    assert!(!SUPPORTED);
     assert!(pending_after_first_poll(true).await);
 }

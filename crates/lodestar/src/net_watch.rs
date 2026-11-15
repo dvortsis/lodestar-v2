@@ -183,9 +183,6 @@ fn read() -> Option<Sample> {
     )
 }
 
-/// Whether the watch can run here.
-pub const SUPPORTED: bool = cfg!(target_os = "linux");
-
 /// Resolves once the network has been lost for [`HOLD`], after logging
 /// it; never resolves when `enabled` is false or off Linux (where an
 /// enabled setting is logged once and ignored).
