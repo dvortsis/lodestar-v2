@@ -497,10 +497,11 @@ fn real(p: &Path) -> Option<(PathBuf, Vec<std::ffi::OsString>)> {
 
 /// Whether two paths name the same folder, as Windows compares them: by
 /// what the system says each is when both can be opened ([`same_object`]),
-/// and by the real paths when both exist (so case, 8.3 names, links and `..` don't
-/// matter), else by their text as Win32 reads it ([`full`], [`tidy`]):
-/// case-insensitively, with `/` as `\`, no `\\?\` prefix, `.` and `..`
-/// resolved, and no trailing separator, dot or space.
+/// else by their text ([`norm`]): the real path of what exists, as it is
+/// (so case, 8.3 names, links and `..` don't matter), and the rest as Win32
+/// reads it ([`full`], [`tidy`]), case-insensitively, without a `\\?\`
+/// prefix or a trailing separator. A path given verbatim (`\\?\`) is never
+/// tidied: Win32 takes it literally.
 pub fn same_dir(a: &Path, b: &Path) -> bool {
     same_object(a, b) == Some(true) || norm(a) == norm(b)
 }

@@ -1191,13 +1191,27 @@ mod tests {
                 "{install:?}"
             );
         }
-        // No `data\config.toml` there yet: still checked, so one created
-        // after the check is covered by it.
+        // No `data\config.toml` there yet: the folder is checked before the
+        // loader looks for that file, so one created in between is covered.
+        // The order is recorded: whether the check had run when the loader
+        // first asked for a key only it reads (LODESTAR_LOG).
         std::fs::remove_file(svc.join("data").join("config.toml")).unwrap();
         let mut install = msi(root.path());
         install.working = Some(svc.clone());
-        let r = load_serve_config(None, &install, env_of(&[]), refuse);
-        assert!(matches!(r, Err(LoadError::Folder(Failure::Refused(_)))));
+        let checked = std::cell::Cell::new(false);
+        let seen_at_load = std::cell::Cell::new(None::<bool>);
+        let env = |k: &str| {
+            if k == "LODESTAR_LOG" && seen_at_load.get().is_none() {
+                seen_at_load.set(Some(checked.get()));
+            }
+            None
+        };
+        let check = |_: &Path| {
+            checked.set(true);
+            Ok(())
+        };
+        load_serve_config(None, &install, env, check).unwrap();
+        assert_eq!(seen_at_load.get(), Some(true), "loaded before the check");
         // A working folder elsewhere: its own `data\config.toml` is read,
         // unchecked.
         let mut install = msi(root.path());
