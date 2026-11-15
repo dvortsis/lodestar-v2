@@ -16,6 +16,7 @@ An operator on the X-test-vm runs couldn't tell from `/metrics` whether the DHT 
 
 ## Tests
 - `routing::tests::good_counts_only_nodes_that_answered_recently`: good drops for a bad node and after 15 minutes of silence, comes back with a reply, and never counts a node that only queried us (it's in the replacement cache).
-- `node::actor::tests::routing_gauges_follow_the_table_on_each_tick`: both gauges change on the tick, not on insert; a bad node leaves good but not the size; removing every node takes both to 0.
+- `node::actor::tests::routing_gauges_follow_the_table_on_each_tick`: both gauges change on the tick, not on insert; a bad node leaves good but not the size; on a controlled clock (`publish_routing(now)`, not real time) good falls to 0 after 15 minutes with no reply and comes back when a node answers; removing every node takes both to 0 (runner, 2026-11-15).
+- **The tick's pass allocates nothing** (runner): `publish_routing` sums `len()` and `good(now)` per family in one loop.
 - `metrics::tests::the_routing_gauges_render_and_are_documented`: both lines render, 0 is rendered rather than left out, and each has its `docs/metrics.md` row.
 - The collector tests: a snapshot keeps `lodestar_dht_routing_nodes`, drops a labelled variant, and doesn't require it.
