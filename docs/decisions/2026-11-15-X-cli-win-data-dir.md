@@ -16,9 +16,14 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
   - Docker, Linux and macOS, where no executable is ever the MSI's (`Install::here` names none off Windows).
 - **`worker` never defaults to the service's folder (runner's call).** A worker's folder is the installer's to set up (`join-worker.ps1` gives its files to the worker's service account), so `worker` keeps `data` unless `--data` or `LODESTAR_DATA_DIR` names one. The worker's own folder creation is never reached for the service's folder.
 
-## The folder must be private first (S8-07, from the runner's review)
-- **The CLI checks the service's folder is private, as the service does,** before it reads anything there (`cli::check_service_dir`). It's the read-only half of the service's `acl::secure_dir`: the same inspection and the same verdict (`acl::verdict`), with the service's SID. It never creates the folder and changes no permission.
-- **Not private, or its permissions can't be read:** the command refuses with exit status 3 and the service's own words (`acl::refusal`): what's wrong and the fix, the installer's Repair or `icacls`. Nothing in the folder is read.
+## The folder must be private first (S8-07, from the runner's reviews)
+- **The CLI checks the service's folder is private, as the service does,** before it uses it (`cli::check_service_dir`). It's the read-only half of the service's `acl::secure_dir`: the same inspection and the same verdict (`acl::verdict`), with the service's SID. It never creates the folder and changes no permission.
+- **When it's checked:** whenever the service's folder is the one in use, from any executable (the MSI's or a portable one) and however it was named, mirroring the service's own rule (`windows::service` `load()`):
+  - before anything is read: when `LODESTAR_DATA_DIR` or `worker --data` names it (compared as Windows compares paths), when the `--config` file is inside it, or when the MSI's executable reads `config.toml` there;
+  - after loading, before any command opens the store: when the config's data folder is the service's, such as a `--config` from anywhere whose `data_dir` names it.
+- **When it isn't:** a folder that isn't used isn't checked. `--config` or `LODESTAR_DATA_DIR` naming another data folder works from the MSI's executable whatever state the service's folder is in, as "What still wins" says, so `no store`'s advice to pass `--config` leads somewhere.
+- **Not private:** the command refuses with exit status 3 and the service's own words (`acl::refusal`): what's wrong and the fix, the installer's Repair or `icacls`. Nothing in the folder is read.
+- **Its permissions can't be read:** refused the same way, with a hint to run the command from an administrator's PowerShell.
 - **Missing:** `no store at`, naming the folder; nothing is created.
 - **Commands that write there:** `backup` (its `backups` folder, unless `--to`), `vacuum`, `reindex`, `rollback`, `rollup`, `import`, `settings` and `companion` add or change files in the service's folder. New files inherit the folder's permissions and belong to the administrator's default owner (normally Administrators), which the service's verdict accepts. `stats` and `import status` only read. The tester confirms on a VM that the service still starts after a `backup`.
 - An administrator's PowerShell can open the folder, as before with `LODESTAR_DATA_DIR`; a standard one is refused by the folder's own permissions.
@@ -35,6 +40,7 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
   - restoring as the Unraid and Compose steps now do: `Stop-Service`, removing the write-ahead files, copying the files back, `lodestar.exe reindex`, and `Start-Service`;
   - the same for a portable copy from its folder, and how to set `LODESTAR_DATA_DIR` in PowerShell.
 - **"Rebuild the search index"** gets a Windows row: `reindex` from the MSI's executable needs no variable either.
+- **`docs/operations.md` §2, "Commands from §10 on Windows":** the MSI needs no variable, and a command refuses a folder that isn't private; the variable stays for the portable ZIP run from elsewhere.
 - **`docs/user/04-install-on-windows-and-linux.md`, "Install the MSI", step 4:** the log has a token line per start and only the newest works, so the command ends in `Select-Object -Last 1`.
 
 ## Tests
@@ -45,6 +51,7 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
   - `LODESTAR_DATA_DIR` wins and the service's `config.toml` isn't read;
   - `worker --data` wins, and `worker` without it keeps `data`.
 - **`cli::tests::the_services_folder_is_used_only_when_private`** (S8-07), with an injected `acl::Ops`: a folder a standard user made, and a private folder holding another user's file, are refused before its `config.toml` is read; a missing folder is `no store at` with nothing created; a private one is used.
+- **`cli::tests::the_services_folder_is_checked_however_its_named`** (S8-07): `LODESTAR_DATA_DIR` naming it, from the MSI's and a portable executable; `worker --data` naming it; a `--config` from elsewhere whose `data_dir` names it, from either; and a config file inside it are all checked. `--config` or `LODESTAR_DATA_DIR` naming another folder is never checked.
 - **`cli::tests::other_executables_keep_data_in_the_working_folder`:** a portable executable, one elsewhere in Program Files, no `%ProgramFiles%`, and no install at all keep `data`. The test binary itself is never the MSI's, on any platform.
 - **`cli::tests::the_msi_executable_matches_whatever_its_case`** runs on every platform.
 - **`cli::tests::no_store_says_where_it_looked`** checks the message.
