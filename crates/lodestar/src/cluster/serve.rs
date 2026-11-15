@@ -356,6 +356,10 @@ pub(crate) struct FloorReports {
     pub lapsed_refused: AtomicU64,
     /// Lapsed keys forgotten because the map was at [`LAPSED_CAP`].
     pub lapsed_evicted: AtomicU64,
+    /// Expiry ticks the writer has finished, skipped ones included (for
+    /// tests to wait on).
+    #[cfg(test)]
+    expiries: AtomicU64,
 }
 
 /// One pending report: who reported it, and when.
@@ -546,6 +550,8 @@ impl FloorReports {
             turned_away: AtomicU64::new(0),
             lapsed_refused: AtomicU64::new(0),
             lapsed_evicted: AtomicU64::new(0),
+            #[cfg(test)]
+            expiries: AtomicU64::new(0),
         }
     }
 
@@ -967,12 +973,19 @@ async fn write_floor(
             () = floor.wake.notified() => false,
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = expire.tick() => {
-                let (f, db, config) = (floor.clone(), db.clone(), config.clone());
-                // The clock that stamps the reports (`Sink::outcomes`).
-                let now = clock.now_secs();
-                // A failure is tried again at the next tick; holds only
-                // last longer meanwhile.
-                let _ = tokio::task::spawn_blocking(move || f.expire(&db, config, now)).await;
+                // No database yet: no server has opened, so no report was
+                // written, and opening one would create it (with workers
+                // off, nothing is created; X-store-migrate-race).
+                if db.exists() {
+                    let (f, db, config) = (floor.clone(), db.clone(), config.clone());
+                    // The clock that stamps the reports (`Sink::outcomes`).
+                    let now = clock.now_secs();
+                    // A failure is tried again at the next tick; holds only
+                    // last longer meanwhile.
+                    let _ = tokio::task::spawn_blocking(move || f.expire(&db, config, now)).await;
+                }
+                #[cfg(test)]
+                floor.expiries.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             _ = stopped.changed() => true,
@@ -2864,6 +2877,14 @@ mod tests {
         // Not even the database or the secrets key is touched.
         assert!(!dir.path().join("lodestar.db").exists());
         assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
+        // Still nothing once the floor writer's first expiry (at start)
+        // is done: it finds no database and leaves it uncreated.
+        until("the first expiry", || {
+            let n = h.0.floor.expiries.load(Ordering::Relaxed);
+            (n >= 1, n)
+        })
+        .await;
+        assert!(!dir.path().join("lodestar.db").exists());
         let off = metrics(&h);
         assert_eq!(series(&off, "lodestar_cluster_allowed"), 0);
         assert_eq!(series(&off, "lodestar_cluster_listening"), 0);

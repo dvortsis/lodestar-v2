@@ -483,6 +483,7 @@ placement:
   - X-flake-detect-macos-nits
   - X-operator-unattended-wake
   - X-operator-check8-compare
+  - X-store-migrate-race
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
