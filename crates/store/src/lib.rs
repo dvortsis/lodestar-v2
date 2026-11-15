@@ -1363,15 +1363,20 @@ impl Store {
     ///   between batches, so each lookup and insert doesn't read them
     ///   again once the file outgrows `mmap_size`.
     /// - **WAL auto-checkpoint:** every [`BULK_CHECKPOINT_PAGES`] pages
-    ///   (64 MiB at the store's 16 KiB pages) instead of SQLite's 1,000
-    ///   (16 MiB): about one checkpoint, with its `fsync`, every few
+    ///   (256 MiB at the store's 16 KiB pages) instead of SQLite's 1,000
+    ///   (16 MiB): one checkpoint, with its `fsync`, every few dozen
     ///   batches instead of one every batch. The WAL stays bounded by it.
+    /// - **Prepared-statement cache:** [`BULK_STATEMENTS`] statements
+    ///   instead of rusqlite's 16. An import batch's commit runs more
+    ///   distinct statements than 16 for each record, so with the default
+    ///   they evicted each other and were compiled again record by record.
     pub fn set_bulk_writes(&self, on: bool) -> Result<()> {
-        let (cache_kib, checkpoint) = if on {
-            (BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES)
+        let (cache_kib, checkpoint, statements) = if on {
+            (BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES, BULK_STATEMENTS)
         } else {
-            (DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES)
+            (DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES, DEFAULT_STATEMENTS)
         };
+        self.conn.set_prepared_statement_cache_capacity(statements);
         self.conn.pragma_update(None, "cache_size", -cache_kib)?;
         self.conn
             .query_row(&format!("PRAGMA wal_autocheckpoint = {checkpoint}"), [], |_| Ok(()))?;
@@ -1383,7 +1388,11 @@ impl Store {
 /// the server stopped, so this is memory the server would otherwise hold.
 pub const BULK_CACHE_MIB: i64 = 256;
 /// [`Store::set_bulk_writes`]'s WAL auto-checkpoint, in pages.
-pub const BULK_CHECKPOINT_PAGES: i64 = 4096;
+pub const BULK_CHECKPOINT_PAGES: i64 = 16_384;
+/// [`Store::set_bulk_writes`]'s prepared-statement cache.
+pub const BULK_STATEMENTS: usize = 128;
+/// rusqlite's default prepared-statement cache.
+const DEFAULT_STATEMENTS: usize = 16;
 /// SQLite's default page cache (`-2000`: 2,000 KiB).
 const DEFAULT_CACHE_KIB: i64 = 2000;
 /// SQLite's default WAL auto-checkpoint, in pages.
