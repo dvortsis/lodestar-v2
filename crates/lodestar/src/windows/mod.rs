@@ -94,7 +94,6 @@ fn wait_for_subscriber() {
 }
 
 /// `CREATE_NO_WINDOW`: a console tool started with it opens no window.
-#[cfg_attr(not(windows), allow(dead_code))]
 const NO_WINDOW: u32 = 0x0800_0000;
 
 /// `NORMAL_PRIORITY_CLASS` (X-win-portable-restart-load). Lodestar lowers
@@ -103,19 +102,16 @@ const NO_WINDOW: u32 = 0x0800_0000;
 /// a class. Restart now's processes are given this one, so a busy PC
 /// can't starve the hand-over: under load at normal priority, a
 /// below-normal PowerShell couldn't even start its watch within a minute.
-#[cfg_attr(not(windows), allow(dead_code))]
 const NORMAL_PRIORITY: u32 = 0x0000_0020;
 
 /// The creation flags of the copy Restart now starts: normal priority,
 /// sharing this process's console. It lowers itself as any start does
 /// ([`startup`]), which comes after its wait for this process.
-#[cfg_attr(not(windows), allow(dead_code))]
 const SUCCESSOR_FLAGS: u32 = NORMAL_PRIORITY;
 
 /// The creation flags of that copy's watch on this process
 /// ([`crate::system::restart::predecessor_script`]): no window, and normal
 /// priority whatever the copy's own.
-#[cfg_attr(not(windows), allow(dead_code))]
 const WATCH_FLAGS: u32 = NO_WINDOW | NORMAL_PRIORITY;
 
 /// A command for a tool in `%SystemRoot%\System32`, by absolute path (a
@@ -582,14 +578,16 @@ mod tests {
     #[test]
     fn the_predecessor_watch_runs_at_normal_priority_from_a_below_normal_copy() {
         use super::priority::{self, Priority};
-        struct Restore;
+        // The test binary's own class, put back afterwards whatever it was.
+        let before = priority::get(std::process::id()).expect("the test's priority");
+        struct Restore(String);
         impl Drop for Restore {
             fn drop(&mut self) {
-                let _ = priority::set(std::process::id(), Priority::Normal);
+                let _ = priority::set_class(std::process::id(), &self.0);
             }
         }
         priority::set(std::process::id(), Priority::BelowNormal).expect("lowered");
-        let _restore = Restore;
+        let _restore = Restore(before);
         assert_eq!(
             priority::get(std::process::id()).as_deref(),
             Ok("BelowNormal")

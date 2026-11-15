@@ -410,6 +410,7 @@ placement:
   - X-win-upd-reoffer
   - X-win-upd-window
   - X-win-portable-restart-load
+  - X-win-restart-priority-test
   - X-win-upd-stop-wait
   - X-upd-stop-races
   - X-upd-stop-early
@@ -486,6 +487,7 @@ placement:
   - X-operator-check8-compare
   - X-store-migrate-race
   - X-flake-store-migrate-race
+  - X-store-wal-nits
   - X-cluster-start-retry
   - X-pia-vm-helper
   - X-fleet-sudo-narrow

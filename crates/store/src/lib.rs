@@ -155,6 +155,10 @@ pub enum Error {
     /// A usenet item met a promote or verify path: nothing verifies one
     /// (UN-0, `unverified::Network::Usenet`).
     NeverVerified,
+    /// SQLite kept another journal mode when asked for WAL: its VFS has no
+    /// shared memory (X-store-wal-nits). The store refuses to open rather
+    /// than run without it.
+    WalUnavailable,
 }
 
 impl fmt::Display for Error {
@@ -179,6 +183,10 @@ impl fmt::Display for Error {
             Error::NotFound(what) => write!(f, "not found: {what}"),
             Error::ImportNotRunning => write!(f, "the import job isn't taking batches"),
             Error::NeverVerified => write!(f, "a usenet item is never verified"),
+            Error::WalUnavailable => write!(
+                f,
+                "the data folder can't use SQLite's WAL journal: keep it on a local disk, not a network share"
+            ),
         }
     }
 }
