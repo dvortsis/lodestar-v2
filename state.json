@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-15T19:21Z",
+  "updated_at": "2026-11-15T19:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-15T19:21Z",
+  "last_heartbeat": "2026-11-15T19:54Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10001,6 +10001,12 @@
       "slice": "X-store-busy-nits",
       "sha": "8b596aa9b8afc1de53d8dd7c9ec6d02ebd529e17",
       "at": "2026-11-15T19:04Z"
+    },
+    {
+      "pr": 946,
+      "slice": "X-leak-test-capture-kill",
+      "sha": "27deb6f42fa49b149f455ffc82791596270c0341",
+      "at": "2026-11-15T19:54Z"
     }
   ],
   "active_sessions": {
@@ -10239,7 +10245,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-15T19:21Z",
+    "updated": "2026-11-15T19:54Z",
     "items": [
       {
         "slot": 1,
@@ -10248,7 +10254,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T15:59Z",
-        "doing": "#936 r4 awaits one infra re-run (main flake, reproduced) then merge; building X-leak-test-capture-kill (flake fix first); session_01MMjhn8LCZuDPeXwdBzodLH",
+        "doing": "#946 (leak-test flake fix) merged 27deb6f4; #936 awaits one infra re-run then merge; X-leak-test-capture-kill parts 2-3 on slice/X-leak-test-capture-kill-2; session_01MMjhn8LCZuDPeXwdBzodLH",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10259,7 +10265,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T19:04Z",
-        "doing": "routing-table size gauge on /metrics + metrics.md row (after #937 merged 8b596aa9); session_01MMjhn9j5mWvNehxxWyykLf",
+        "doing": "#945 review MERGE; fix round 47ef019a self-checked; CI watch then merge; session_01MMjhn9j5mWvNehxxWyykLf",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10270,7 +10276,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T18:53Z",
-        "doing": "#944 open (ef53fcb2): CI + own /security-review; then runner Opus + security review; session_01MMjhn9HYMkBnrBoP6KypLy",
+        "doing": "#944 review MERGE (security pass clean); optional fix round requested, then self-check + merge; session_01MMjhn9HYMkBnrBoP6KypLy",
         "cap": "build (\u00a72.64 4+4)",
         "status": "active"
       },
@@ -10374,8 +10380,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-15T19:21Z",
-  "updated": "2026-11-15T19:21Z",
+  "heartbeat": "2026-11-15T19:54Z",
+  "updated": "2026-11-15T19:54Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
