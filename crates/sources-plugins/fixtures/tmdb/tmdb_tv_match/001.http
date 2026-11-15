@@ -1,0 +1,6 @@
+GET https://api.themoviedb.org/3/search/tv?query=Money+Heist&include_adult=false&language=en-US&page=1&first_air_date_year=2017
+Accept: application/json
+Authorization: Bearer fake-tmdb-token.0000
+
+HTTP 200
+Content-Type: application/json;charset=utf-8

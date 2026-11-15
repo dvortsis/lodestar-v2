@@ -12,6 +12,7 @@ pub mod lemmy;
 pub mod nostr;
 pub mod rss;
 pub mod stashdb;
+pub mod tmdb;
 pub mod torznab;
 pub mod tpdb;
 pub mod wikidata;

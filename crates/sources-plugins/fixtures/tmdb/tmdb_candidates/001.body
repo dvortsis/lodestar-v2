@@ -1,0 +1,64 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "backdrop_path": "/SENTINEL-IMAGE.jpg",
+   "genre_ids": [
+    28,
+    878,
+    12
+   ],
+   "id": 841,
+   "original_language": "en",
+   "original_title": "Dune",
+   "overview": "SENTINEL-OVERVIEW",
+   "popularity": 12.5,
+   "poster_path": "/SENTINEL-POSTER.jpg",
+   "release_date": "1984-12-14",
+   "title": "Dune",
+   "video": false,
+   "vote_average": 8.7,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/SENTINEL-IMAGE.jpg",
+   "genre_ids": [
+    878,
+    12
+   ],
+   "id": 438631,
+   "original_language": "en",
+   "original_title": "Dune",
+   "overview": "SENTINEL-OVERVIEW",
+   "popularity": 12.5,
+   "poster_path": "/SENTINEL-POSTER.jpg",
+   "release_date": "2021-09-15",
+   "title": "Dune",
+   "video": false,
+   "vote_average": 8.7,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/SENTINEL-IMAGE.jpg",
+   "genre_ids": [
+    878
+   ],
+   "id": 900002,
+   "original_language": "en",
+   "original_title": "Dune Drifter",
+   "overview": "SENTINEL-OVERVIEW",
+   "popularity": 12.5,
+   "poster_path": "/SENTINEL-POSTER.jpg",
+   "release_date": "2020-10-08",
+   "title": "Dune Drifter",
+   "video": false,
+   "vote_average": 8.7,
+   "vote_count": 1000
+  }
+ ],
+ "total_pages": 1,
+ "total_results": 3
+}

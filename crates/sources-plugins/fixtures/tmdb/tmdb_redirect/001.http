@@ -1,0 +1,7 @@
+GET https://api.themoviedb.org/3/search/movie?query=The+Shawshank+Redemption&include_adult=false&language=en-US&page=1&primary_release_year=1994
+Accept: application/json
+Authorization: Bearer fake-tmdb-token.0000
+
+HTTP 302
+Location: https://elsewhere.example/SENTINEL
+Content-Type: application/json;charset=utf-8

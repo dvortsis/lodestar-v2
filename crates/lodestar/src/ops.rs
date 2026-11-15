@@ -905,7 +905,7 @@ mod spec_tests {
     use lodestar_sources_plugins::full_scrape::{LookupError, PrivateTrackers, SystemClock};
     use lodestar_sources_plugins::{
         StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa,
-        prowlarr, stashdb, torrent_cache, tpdb, wikidata,
+        prowlarr, stashdb, tmdb, torrent_cache, tpdb, wikidata,
     };
     use serde_json::{Value, json};
 
@@ -946,6 +946,10 @@ mod spec_tests {
             (
                 stashdb::ID,
                 *AdultEnricher::policy(&stashdb::StashDb::new(creds())),
+            ),
+            (
+                tmdb::ID,
+                *lodestar_sources::identify::Identifier::policy(&tmdb::Tmdb::new(creds())),
             ),
             (torrent_cache::ID, *cache.policy()),
             (tpdb::ID, *AdultEnricher::policy(&tpdb::Tpdb::new(creds()))),
@@ -995,6 +999,9 @@ mod spec_tests {
             let listed = serde_json::to_value(credential_spec(p.credentials)).unwrap();
             let want = if [prowlarr::ID, stashdb::ID, tpdb::ID].contains(&id) {
                 json!([{ "kind": "secret", "label": "API key", "name": "api_key", "required": true }])
+            } else if id == tmdb::ID {
+                json!([{ "kind": "secret", "label": "API read access token",
+                         "name": "read_access_token", "required": true }])
             } else {
                 json!([])
             };

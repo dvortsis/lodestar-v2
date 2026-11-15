@@ -68,6 +68,10 @@ fn each_entry_is_its_plugins_own_manifest() {
         nyaa::Sukebei::new().manifest().clone(),
         prowlarr::Prowlarr::unconfigured(creds()).manifest().clone(),
         AdultEnricher::manifest(&stashdb).clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::tmdb::Tmdb::new(creds()),
+        )
+        .clone(),
         cache.manifest().clone(),
         AdultEnricher::manifest(&tpdb).clone(),
         lodestar_sources::identify::Identifier::manifest(

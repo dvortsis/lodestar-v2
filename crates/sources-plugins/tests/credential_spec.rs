@@ -217,6 +217,29 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     let s = stashdb::StashDb::new(rec.clone());
     lookup_once(&s).await;
     check(AdultEnricher::manifest(&s), AdultEnricher::policy(&s), &rec);
+
+    // TMDB (ENR-tmdb), an identifier with an Account credential.
+    let rec = Arc::new(Recording::default());
+    let t = lodestar_sources_plugins::tmdb::Tmdb::new(rec.clone());
+    identify_once(&t).await;
+    use lodestar_sources::identify::Identifier;
+    check(Identifier::manifest(&t), Identifier::policy(&t), &rec);
+}
+
+async fn identify_once<I: lodestar_sources::identify::Identifier>(i: &I) -> String {
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        i.policy(),
+        &UserLimits::default(),
+    );
+    let q = lodestar_sources::identify::Query::new(
+        "Synthetic Title",
+        Some(2001),
+        lodestar_sources::identify::MediaKind::Movie,
+    )
+    .unwrap();
+    i.lookup(&kit, &q).await.unwrap_err().0
 }
 
 /// The rest are built without a credential store, so they can't read
@@ -271,6 +294,7 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
+        lodestar_sources_plugins::tmdb::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
     assert_eq!(listed, BTreeSet::from(checked));
@@ -289,4 +313,14 @@ async fn the_declared_names_are_the_ones_it_uses() {
     let with = lookup_once(&stashdb::StashDb::new(stored())).await;
     let without = lookup_once(&stashdb::StashDb::new(none())).await;
     assert_ne!(with, without, "stashdb: {with}");
+    let token = || {
+        Arc::new(StaticCredentials::new([(
+            lodestar_sources_plugins::tmdb::TOKEN,
+            "fake-tmdb-token.0000",
+        )]))
+    };
+    let with = identify_once(&lodestar_sources_plugins::tmdb::Tmdb::new(token())).await;
+    let without = identify_once(&lodestar_sources_plugins::tmdb::Tmdb::new(none())).await;
+    assert_ne!(with, without, "tmdb: {with}");
+    assert!(!with.contains("fake-tmdb-token"), "{with}");
 }
