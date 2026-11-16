@@ -10499,7 +10499,7 @@
     }
   ],
   "heartbeat": "2026-11-16T05:50Z",
-  "updated": "2026-11-16T05:50Z",
+  "updated": "2026-11-16T07:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -11280,7 +11280,8 @@
   "paused": {
     "since": "2026-11-16T05:50Z",
     "by": "owner, in chat 2026-11-16 (usage at 96%)",
-    "scope": "all build work, reviews and API-lane reviews; cloud testing continues",
-    "resume": "owner says so; then re-enable heartbeat + watchdog triggers, resume GS-3, review lane PRs, launch X-sampler-cooldown-split"
+    "scope": "all build work, reviews and API-lane reviews; cloud testing also stopped (AWS lane torn down 07:06Z, 0 instances)",
+    "resume": "owner says so; then re-enable heartbeat + watchdog triggers, resume GS-3, review lane PRs, launch X-sampler-cooldown-split",
+    "updated": "2026-11-16T07:48Z"
   }
 }
