@@ -17,6 +17,7 @@ mod manifest;
 mod plugin;
 pub mod pool;
 pub mod state;
+pub mod terms;
 pub mod testing;
 
 pub use claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};

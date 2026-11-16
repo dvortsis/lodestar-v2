@@ -124,22 +124,68 @@ pub fn apply_witness_default(
 /// - after loading, before anything else: when the data folder is that
 ///   folder or inside it.
 ///
-/// `secure` runs at most once. An error says why the folder is used and
-/// isn't private. A config that failed to load has `default_dir` as its
-/// data folder, for the log.
+/// `secure` runs at most once. An error is the Event Log's [`Refusal`]
+/// and the full reason: why the folder is used and isn't private, or which
+/// setting isn't a full path. A config that failed to load has
+/// `default_dir` as its data folder, for the log.
+///
+/// No path setting is resolved against the working folder, which is the
+/// system folder under the SCM (X-win-service-relative-paths and -2): an
+/// empty or relative `LODESTAR_DATA_DIR`, a relative `--config`, a relative
+/// `default_dir` (from `%ProgramData%`), and a relative `data_dir`,
+/// restart witness folder (`dht.restart_witness_dir` or
+/// `LODESTAR_DHT_WITNESS_DIR`) or
+/// `blocklist.files` entry is refused, naming the setting. The first three
+/// are refused before anything is read, the rest once the config is loaded
+/// and before any of them is used. The CLI keeps relative paths, which a
+/// portable install uses.
 pub fn load_guarded(
     default_dir: &Path,
     explicit: Option<PathBuf>,
     env: impl Fn(&str) -> Option<String>,
     secure: impl FnOnce() -> Result<(), String>,
-) -> Result<(Result<Config, String>, PathBuf), String> {
+) -> Result<(Result<Config, String>, PathBuf), (Refusal, String)> {
     use crate::cli::util::Failure;
     use crate::cli::{LoadError, ServiceGuard};
     let why = |e: LoadError| match e {
-        LoadError::Folder(Failure::Refused(m) | Failure::Failed(m)) => m,
-        LoadError::Config(e) => format!("config: {e}"),
+        LoadError::Folder(Failure::Refused(m) | Failure::Failed(m)) => (Refusal::NotPrivate, m),
+        LoadError::Config(e) => (Refusal::NotPrivate, format!("config: {e}")),
     };
+    if !default_dir.is_absolute() {
+        return Err(not_full(
+            &format!(
+                "the service's default data folder is {:?}, from %ProgramData%, which isn't a \
+                 full path",
+                default_dir.display().to_string()
+            ),
+            "set the system's ProgramData variable back to a full path, such as C:\\ProgramData",
+        ));
+    }
     let data_env = env("LODESTAR_DATA_DIR");
+    match data_env.as_deref() {
+        Some("") => {
+            return Err(not_full(
+                "LODESTAR_DATA_DIR is set for the service but empty",
+                "set it to a full path, such as D:\\Lodestar, or remove it",
+            ));
+        }
+        Some(d) if !Path::new(d).is_absolute() => {
+            return Err(not_full(
+                &format!("LODESTAR_DATA_DIR for the service is {d:?}, which isn't a full path"),
+                "set it to a full path, such as D:\\Lodestar",
+            ));
+        }
+        _ => {}
+    }
+    if let Some(p) = explicit.as_deref().filter(|p| !p.is_absolute()) {
+        return Err(not_full(
+            &format!(
+                "--config in the service's command line is {:?}, which isn't a full path",
+                p.display().to_string()
+            ),
+            "give --config a full path, such as D:\\Lodestar\\config.toml",
+        ));
+    }
     let elsewhere = explicit.is_some() || data_env.is_some();
     let mut guard = ServiceGuard::for_dir(default_dir.to_path_buf(), |_: &Path| {
         secure().map_err(Failure::Refused)
@@ -173,8 +219,92 @@ pub fn load_guarded(
     let data_dir = config
         .as_ref()
         .map_or(default_dir.to_path_buf(), |c| c.data_dir.clone());
+    // Only the file can still name a relative folder: LODESTAR_DATA_DIR was
+    // checked above, and the default is `default_dir`.
+    if !data_dir.is_absolute() {
+        let file = path
+            .as_deref()
+            .map_or_else(String::new, |p| p.display().to_string());
+        return Err(not_full(
+            &format!(
+                "data_dir in the service's config file {file:?} is {:?}, which isn't a full path",
+                data_dir.display().to_string()
+            ),
+            "set data_dir to a full path, such as D:/Lodestar",
+        ));
+    }
+    if let Some(refused) = config
+        .as_ref()
+        .ok()
+        .and_then(|c| relative_path_setting(c, path.as_deref(), &env))
+    {
+        return Err(refused);
+    }
     guard.after(&data_dir).map_err(why)?;
     Ok((config, data_dir))
+}
+
+/// The service's refusal of the config's other path settings when one
+/// isn't a full path (X-win-service-relative-paths-2): the restart witness
+/// folder, whichever way it was chosen, and each blocklist file. Checked
+/// after loading, before any of them is created, opened or made private.
+fn relative_path_setting(
+    c: &Config,
+    file: Option<&Path>,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Option<(Refusal, String)> {
+    let file = file.map_or_else(String::new, |p| p.display().to_string());
+    let shown = |p: &Path| p.display().to_string();
+    // Config::load: the variable over the file. Chosen neither way, the
+    // service never uses the loader's native default: with the restart
+    // proof on, [`apply_witness_default`] replaces it.
+    let chosen = if env("LODESTAR_DHT_WITNESS_DIR").is_some_and(|v| !v.is_empty()) {
+        Some("LODESTAR_DHT_WITNESS_DIR for the service is".to_owned())
+    } else if c.layers.in_file("dht.restart_witness_dir") {
+        Some(format!(
+            "dht.restart_witness_dir in the service's config file {file:?} is"
+        ))
+    } else {
+        None
+    };
+    let relative = c
+        .dht
+        .restart_witness_dir
+        .as_deref()
+        .filter(|w| !w.is_absolute());
+    if let (Some(what), Some(w)) = (chosen, relative) {
+        return Some(not_full(
+            &format!("{what} {:?}, which isn't a full path", shown(w)),
+            "set it to a full path, such as D:/Lodestar-witness, or remove it",
+        ));
+    }
+    c.blocklist
+        .files
+        .iter()
+        .position(|f| !f.is_absolute())
+        .map(|i| {
+            not_full(
+                &format!(
+                    "blocklist.files entry {} in the service's config file {file:?} is {:?}, \
+                     which isn't a full path",
+                    i + 1,
+                    shown(&c.blocklist.files[i])
+                ),
+                "give every blocklist file a full path, such as D:/lists/hashes.txt",
+            )
+        })
+}
+
+/// A refusal of a setting that isn't a full path: what's wrong, why, and
+/// the fix, for the temp log.
+fn not_full(what: &str, fix: &str) -> (Refusal, String) {
+    (
+        Refusal::NotFullPath,
+        format!(
+            "{what}. The service never resolves a path against its working folder, which is \
+             the system folder when Windows starts it, so it didn't start: {fix}."
+        ),
+    )
 }
 
 /// Why the service won't open the store: an update rollback is in
@@ -203,6 +333,10 @@ pub enum Refusal {
     NotPrivate,
     /// An update rollback holds the store: the service waits, idle.
     RollingBack,
+    /// A path setting isn't a full path: `LODESTAR_DATA_DIR`, `--config`,
+    /// `%ProgramData%`, `data_dir`, the restart witness folder or a
+    /// `blocklist.files` entry ([`load_guarded`]): the start is refused.
+    NotFullPath,
 }
 
 impl Refusal {
@@ -213,6 +347,7 @@ impl Refusal {
         match self {
             Refusal::NotPrivate => ("ERROR", 3),
             Refusal::RollingBack => ("WARNING", 4),
+            Refusal::NotFullPath => ("ERROR", 5),
         }
     }
 }
@@ -248,6 +383,14 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
              and nothing may open the store until that finishes. The service carries on by itself \
              once it has. If it keeps waiting, the reason and what to do are in \
              %SystemRoot%\\Temp\\{log}."
+        ),
+        Refusal::NotFullPath => format!(
+            "Lodestar's service didn't start: a path setting, such as LODESTAR_DATA_DIR, \
+             --config or a folder or file in its config file, isn't a full path, and the service never uses a path relative to the \
+             system folder. Its default data folder is {dir}. To fix it, an administrator sets \
+             that setting to a full path, such as D:\\Lodestar, or removes it. The temp log, \
+             %SystemRoot%\\Temp\\{log}, names the setting; see Fix Windows service error 3 in the user \
+             guide."
         ),
     }
 }
@@ -1031,10 +1174,10 @@ mod scm {
                 // Refused before anything was read or written in the default
                 // folder, so the reason goes outside it, beside the
                 // installer's log; the exit code (3) says it was refused.
-                Err(why) => {
+                Err((refusal, why)) => {
                     log_refusal(&why);
                     event_log(
-                        super::Refusal::NotPrivate,
+                        refusal,
                         &super::default_data_dir(std::env::var("ProgramData").ok()),
                     );
                     REFUSED
@@ -1121,8 +1264,8 @@ mod scm {
 
     /// The config and the data folder, with `%ProgramData%\Lodestar` made
     /// private ([`acl`]) before anything in it is read, whenever it's used
-    /// ([`super::load_guarded`]). An error says why it's used and isn't
-    /// private. The third part is the restart witness folder when it can't
+    /// ([`super::load_guarded`]). An error is the Event Log's refusal and
+    /// the full reason. The third part is the restart witness folder when it can't
     /// be used, and why.
     #[allow(clippy::type_complexity)]
     fn load(
@@ -1133,7 +1276,7 @@ mod scm {
             PathBuf,
             Option<(PathBuf, &'static str)>,
         ),
-        String,
+        (super::Refusal, String),
     > {
         let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
         let env = |k: &str| std::env::var(k).ok();
@@ -1150,8 +1293,9 @@ mod scm {
     /// Appends a refusal's reason to `%SystemRoot%\Temp\lodestar-service.log`,
     /// where the installer logs too, never through a planted link
     /// ([`super::super::temp_log`]). Only [`acl::secure_dir`]'s refusals
-    /// (paths, SIDs, account names and the fix) and the update helper's
-    /// rollback marker come here; the SCM records the exit code ([`REFUSED`])
+    /// (paths, SIDs, account names and the fix), a setting that isn't a full
+    /// path (its name, value and the fix) and the update helper's rollback
+    /// marker come here; the SCM records the exit code ([`REFUSED`])
     /// in the System event log, and [`event_log`] a summary without the
     /// accounts in the Application event log.
     fn log_refusal(why: &str) {
@@ -1406,7 +1550,7 @@ mod tests {
             move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone())
         };
         let refuse = || Err::<(), _>("isn't private".to_string());
-        let refused = |r: Result<(Result<Config, String>, PathBuf), String>| matches!(r, Err(ref why) if why == "isn't private");
+        let refused = |r: Result<(Result<Config, String>, PathBuf), (Refusal, String)>| matches!(r, Err((Refusal::NotPrivate, ref why)) if why == "isn't private");
 
         // Nothing set: its config.toml is read, so checked first, even when
         // that file moves the data elsewhere (read first, the folder would
@@ -1491,6 +1635,180 @@ mod tests {
         assert_eq!((c.unwrap().data_dir, d, calls.get()), (svc.clone(), svc, 1));
     }
 
+    /// X-win-service-relative-paths: an empty or relative
+    /// `LODESTAR_DATA_DIR`, a relative `--config` and a relative `data_dir`
+    /// in the config file are refused, naming the setting, and the first
+    /// two before anything is read or checked. Full paths load as before.
+    #[test]
+    fn the_service_refuses_a_setting_that_isnt_a_full_path() {
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        let env_of =
+            |v: &'static str| move |k: &str| (k == "LODESTAR_DATA_DIR").then(|| v.to_owned());
+        let unasked = || -> Result<(), String> { panic!("checked before refusing") };
+        let refused = |r: Result<(Result<Config, String>, PathBuf), (Refusal, String)>,
+                       name: &str| match r {
+            Err((Refusal::NotFullPath, why)) => {
+                assert!(why.contains(name) && why.contains("full path"), "{why}");
+                why
+            }
+            other => panic!("{name}: not refused: {other:?}"),
+        };
+
+        let why = refused(
+            load_guarded(&svc, None, env_of(""), unasked),
+            "LODESTAR_DATA_DIR",
+        );
+        assert!(why.contains("empty"), "{why}");
+        let mut relative = vec!["data", "./data", "../Lodestar"];
+        // Relative on Windows only: to the current drive's root, or to a
+        // drive's own working folder.
+        if cfg!(windows) {
+            relative.extend([r"\Lodestar", "D:Lodestar", "C:"]);
+        }
+        for d in relative {
+            let env = move |k: &str| (k == "LODESTAR_DATA_DIR").then(|| d.to_owned());
+            let why = refused(load_guarded(&svc, None, env, unasked), "LODESTAR_DATA_DIR");
+            assert!(why.contains(d), "{why}");
+            let why = refused(
+                load_guarded(
+                    &svc,
+                    Some(PathBuf::from(d).join("config.toml")),
+                    |_| None,
+                    unasked,
+                ),
+                "--config",
+            );
+            assert!(why.contains("config.toml"), "{why}");
+        }
+
+        // A config file with a relative data_dir: refused once it's read,
+        // naming the file.
+        let file = root.path().join("relative.toml");
+        std::fs::write(&file, "data_dir = \"data\"\n").unwrap();
+        let why = refused(
+            load_guarded(&svc, Some(file.clone()), |_| None, || Ok(())),
+            "data_dir",
+        );
+        assert!(why.contains("relative.toml"), "{why}");
+        std::fs::write(svc.join("config.toml"), "data_dir = \"\"\n").unwrap();
+        refused(load_guarded(&svc, None, |_| None, || Ok(())), "data_dir");
+        std::fs::remove_file(svc.join("config.toml")).unwrap();
+
+        // A relative service folder (an empty or relative %ProgramData%):
+        // refused, naming it.
+        refused(
+            load_guarded(Path::new("Lodestar"), None, |_| None, unasked),
+            "ProgramData",
+        );
+
+        // Full paths load as before.
+        let away = root.path().join("away");
+        let shown = away.to_string_lossy().into_owned();
+        let env = move |k: &str| (k == "LODESTAR_DATA_DIR").then(|| shown.clone());
+        let (c, d) = load_guarded(&svc, None, env, || Ok(())).unwrap();
+        assert_eq!((c.unwrap().data_dir, d), (away.clone(), away.clone()));
+        std::fs::write(&file, format!("data_dir = {:?}\n", away.to_string_lossy())).unwrap();
+        let (c, d) = load_guarded(&svc, Some(file), |_| None, || Ok(())).unwrap();
+        assert_eq!((c.unwrap().data_dir, d), (away.clone(), away));
+        let (c, d) = load_guarded(&svc, None, |_| None, || Ok(())).unwrap();
+        assert_eq!((c.unwrap().data_dir, d), (svc.clone(), svc));
+    }
+
+    /// X-win-service-relative-paths-2: a relative restart witness folder
+    /// (from the file or `LODESTAR_DHT_WITNESS_DIR`) or `blocklist.files`
+    /// entry is refused, naming the setting, before anything uses it; full
+    /// paths load as before.
+    #[test]
+    fn the_service_refuses_other_relative_path_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        let file = root.path().join("service.toml");
+        let toml = |p: &Path| p.to_string_lossy().replace('\\', "/");
+        let data = format!("data_dir = \"{}\"\n", toml(&root.path().join("data")));
+        let full = toml(&root.path().join("full"));
+        let refused = |r: Result<(Result<Config, String>, PathBuf), (Refusal, String)>,
+                       name: &str,
+                       value: &str| match r {
+            Err((Refusal::NotFullPath, why)) => {
+                assert!(why.contains(name), "{name}: {why}");
+                assert!(why.contains(value), "{value}: {why}");
+                assert!(why.contains("full path"), "{why}");
+            }
+            other => panic!("{name}={value}: not refused: {other:?}"),
+        };
+        let mut relative = vec!["w", "./w", "../w"];
+        // Relative on Windows only: to the current drive's root, or to a
+        // drive's own working folder. Off Windows these are plain names.
+        if cfg!(windows) {
+            relative.extend([r"\w", "C:w"]);
+        }
+        for v in relative {
+            let q = v.replace('\\', "\\\\");
+            // In the file.
+            std::fs::write(
+                &file,
+                format!("{data}[dht]\nrestart_witness_dir = \"{q}\"\n"),
+            )
+            .unwrap();
+            refused(
+                load_guarded(&svc, Some(file.clone()), |_| None, || Ok(())),
+                "dht.restart_witness_dir",
+                &q,
+            );
+            // From the environment, over a full path in the file.
+            std::fs::write(
+                &file,
+                format!("{data}[dht]\nrestart_witness_dir = \"{full}\"\n"),
+            )
+            .unwrap();
+            let env = move |k: &str| (k == "LODESTAR_DHT_WITNESS_DIR").then(|| v.to_owned());
+            refused(
+                load_guarded(&svc, Some(file.clone()), env, || Ok(())),
+                "LODESTAR_DHT_WITNESS_DIR",
+                &q,
+            );
+            // A blocklist file, after a full one: named by its place.
+            std::fs::write(
+                &file,
+                format!("{data}[blocklist]\nfiles = [\"{full}\", \"{q}\"]\n"),
+            )
+            .unwrap();
+            refused(
+                load_guarded(&svc, Some(file.clone()), |_| None, || Ok(())),
+                "blocklist.files entry 2",
+                &q,
+            );
+        }
+
+        // Full paths load as before, and an empty variable chooses nothing.
+        std::fs::write(
+            &file,
+            format!(
+                "{data}[dht]\nrestart_witness_dir = \"{full}\"\n[blocklist]\nfiles = [\"{full}/a.txt\"]\n"
+            ),
+        )
+        .unwrap();
+        let empty = |k: &str| (k == "LODESTAR_DHT_WITNESS_DIR").then(String::new);
+        let (c, _) = load_guarded(&svc, Some(file.clone()), empty, || Ok(())).unwrap();
+        let c = c.unwrap();
+        assert_eq!(c.dht.restart_witness_dir, Some(PathBuf::from(&full)));
+        assert_eq!(
+            c.blocklist.files,
+            vec![PathBuf::from(format!("{full}/a.txt"))]
+        );
+        let shown = full.clone();
+        let env = move |k: &str| (k == "LODESTAR_DHT_WITNESS_DIR").then(|| shown.clone());
+        std::fs::write(&file, &data).unwrap();
+        let (c, _) = load_guarded(&svc, Some(file), env, || Ok(())).unwrap();
+        assert_eq!(
+            c.unwrap().dht.restart_witness_dir,
+            Some(PathBuf::from(&full))
+        );
+    }
+
     /// X-win-service-cwd-fallback: with no config.toml in its folder and
     /// nothing set, the service never reads `data\config.toml` from its
     /// working folder (the system folder under the SCM). The working folder is
@@ -1537,7 +1855,7 @@ mod tests {
         );
         assert!(out.status.success(), "{stdout}{stderr}");
         assert!(
-            stdout.contains("1 passed"),
+            stdout.contains("test result: ok. 1 passed;"),
             "the child didn't run the test: {stdout}"
         );
     }
@@ -2118,7 +2436,11 @@ mod tests {
     #[test]
     fn the_event_log_text_names_only_the_folder_and_the_fix() {
         let dir = Path::new(r"C:\ProgramData\Lodestar");
-        for refusal in [Refusal::NotPrivate, Refusal::RollingBack] {
+        for refusal in [
+            Refusal::NotPrivate,
+            Refusal::RollingBack,
+            Refusal::NotFullPath,
+        ] {
             let text = event_log_text(refusal, dir);
             assert!(text.contains(r"C:\ProgramData\Lodestar"), "{text}");
             assert!(
@@ -2148,6 +2470,12 @@ mod tests {
         }
         assert!(event_log_text(Refusal::NotPrivate, dir).contains("Repair"));
         assert_ne!(Refusal::NotPrivate.event(), Refusal::RollingBack.event());
+        let path = event_log_text(Refusal::NotFullPath, dir);
+        assert!(
+            path.contains("full path") && path.contains("--config"),
+            "{path}"
+        );
+        assert_eq!(Refusal::NotFullPath.event(), ("ERROR", 5));
     }
 
     /// A long configured folder is cut, so the message stays short.
