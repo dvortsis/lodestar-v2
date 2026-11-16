@@ -391,10 +391,14 @@ impl TitleIdentityParts {
     /// words and each span set in turn, so it's the same in every build.
     /// A collision only over-matches; the parts decide.
     ///
-    /// Changing what this hashes, or how, changes every indexed term:
-    /// bump `population::GENERATIONS["title_identity"]` in the same
-    /// change, so indexes backfill and Siblings use the window meanwhile
-    /// instead of narrowing by stale terms (B13b). The pinned values in
+    /// Changing what this hashes, or how, changes every indexed term and
+    /// every `group_key` value (GS-2b writes the same hash to both, in
+    /// `TorrentDoc::to_document`): bump both
+    /// `population::GENERATIONS["title_identity"]` **and**
+    /// `["group_key"]` in the same change, so indexes backfill both,
+    /// Siblings use the window meanwhile instead of narrowing by stale
+    /// terms (B13b), and collapse answers ungrouped instead of mixing old
+    /// and new keys (GS-3). The pinned values in
     /// `title_identity_follows_b13s_rule` catch such a change.
     pub fn key(&self) -> u64 {
         let mut key = self.title_words.join(" ");
@@ -558,6 +562,9 @@ mod tests {
     /// season pack and absolute numbering each stay apart; no title, or
     /// one without words, has none. The value is fixed across builds.
     #[test]
+    /// Pins the identity's hash. A change here must bump both
+    /// `GENERATIONS["title_identity"]` and `["group_key"]`: `to_document`
+    /// writes this one value to both fields (see [`TitleIdentityParts::key`]).
     fn title_identity_follows_b13s_rule() {
         let id = |r: &[(&str, &str)]| title_identity(&record(r));
         let base = id(&[("title", "Spider-Man"), ("year", "2002")]);

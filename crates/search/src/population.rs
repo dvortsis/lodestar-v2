@@ -69,7 +69,9 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     // GS-0: `lodestar_classify::payload::payload_sig`, the hash CS-8a reads.
     ("payload_sig", 1),
     // GS-2b: `doc::title_identity` in a fast column only (schema v8),
-    // ~8 B per torrent, for collapse-by-group (GS-3).
+    // ~8 B per torrent, for collapse-by-group (GS-3). It holds the same
+    // hash as `title_identity`: a change to that hash bumps both entries
+    // in the same change (`TitleIdentityParts::key`).
     ("group_key", 1),
     // GS-2: `lodestar_classify::group::band_terms` (plan Q9, Q10 (a)).
     ("group_minhash", 1),
@@ -83,6 +85,8 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     // Generation 2 (X-search-files-6): finer codes, with decimal floors.
     ("file_bucket", 2),
     ("file_ext_bucket", 2),
+    // B13b: `doc::title_identity`. A change to its hash bumps this and
+    // `group_key`, which holds the same value (GS-2b).
     ("title_identity", 1),
 ];
 
