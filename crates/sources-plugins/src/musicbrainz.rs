@@ -32,7 +32,9 @@ use std::time::Duration;
 
 use lodestar_sources::claims::ExternalId;
 use lodestar_sources::http::parse_retry_after;
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Attribution, Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -166,9 +168,34 @@ pub fn wanted(title: &str) -> Option<Wanted<'_>> {
     })
 }
 
+/// MusicBrainz's terms (ENR-terms; `docs/decisions/2026-11-15-ENR-mb.md`).
+/// The plugin keeps only core data, which is CC0 ("About / Data License"),
+/// so its answers may be passed on. Its "Rate Limiting" page allows
+/// background work spread through the day within one request a second,
+/// which the runtime's capped walk is. CC0 needs no credit; the line is a
+/// courtesy, as for Wikidata. Claims are still refreshed within 180 days.
+pub const TERMS: Terms = Terms {
+    background_walk: true,
+    redistribute: true,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: "MusicBrainz (CC0)",
+        link: "https://musicbrainz.org",
+        logo: None,
+    }),
+    // MusicBrainz has no adult marker on a release group to read. The
+    // runtime's gate never asks about an Adult item, and its kind is Music
+    // only.
+    adult_marker_required: false,
+};
+
 impl Identifier for MusicBrainz {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -421,5 +448,28 @@ fn identification(query: &Query, artist: bool, h: &Hit) -> Identification {
         genres: Vec::new(),
         year: query.year().or(h.year),
         confidence,
+        // MusicBrainz doesn't mark adult works; `TERMS` opts out.
+        adult: None,
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// CC0 core data: walked in the background within the rate and passed
+    /// on, credited as a courtesy, no marker to read, claims refreshed
+    /// within 180 days.
+    #[test]
+    fn musicbrainz_terms() {
+        let t = MusicBrainz::new();
+        let t = Identifier::terms(&t);
+        assert!(t.background_walk && t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(
+            t.attribution.map(|a| a.link),
+            Some("https://musicbrainz.org")
+        );
+        assert!(t.accepts(None) && !t.accepts(Some(true)));
     }
 }

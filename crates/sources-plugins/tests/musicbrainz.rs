@@ -97,6 +97,10 @@ async fn a_recorded_match_maps_to_an_identification() {
         (i.year, i.confidence),
         (Some(2004), musicbrainz::CONFIDENCE_ARTIST_YEAR)
     );
+    // MusicBrainz has no adult marker, so none is claimed, and its terms
+    // take an unmarked answer (ENR-terms); one marked adult never is.
+    assert_eq!(i.adult, None);
+    assert!(musicbrainz::TERMS.accepts(i.adult) && !musicbrainz::TERMS.accepts(Some(true)));
     // Nothing of the tags, comments, sort names or aliases.
     let claims = i.clone().into_claims();
     assert!(!format!("{claims:?}{:?}", i.canonical_title).contains("SENTINEL"));
