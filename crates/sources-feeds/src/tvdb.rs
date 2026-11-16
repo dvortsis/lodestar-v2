@@ -267,6 +267,9 @@ pub struct Search {
 /// A login answer's token.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Login {
+    /// Only when the answer is [`whole`](Page::whole): a token read from
+    /// an answer that isn't (no `success`, trailing bytes, a cap hit) is
+    /// dropped, so no caller can use one by mistake.
     pub token: Option<Token>,
     pub page: Page,
 }
@@ -312,6 +315,9 @@ pub fn parse_login(body: &[u8], limits: &Limits) -> Login {
         }
         Ok(())
     });
+    if !page.whole() {
+        token = None;
+    }
     Login { token, page }
 }
 

@@ -156,6 +156,50 @@ fn only_the_asked_shape_is_whole() {
     }
 }
 
+/// CI's `fuzz (tvdb)` found a login answer that yielded a token without
+/// being whole: no `status`, and bytes after the root object. The
+/// parser now drops any token from an answer that isn't whole. The
+/// input is the fuzz seed `login-trailing.bin`: its first byte picks the
+/// login parser with tight caps, as the fuzz target reads it.
+#[test]
+fn a_login_answer_that_is_not_whole_yields_no_token() {
+    let input: &[u8] = include_bytes!("../../../fuzz/seeds/tvdb/login-trailing.bin");
+    let (&pick, body) = input.split_first().unwrap();
+    assert_eq!(pick & 3, 3, "login parser, tight caps");
+    let tight = Limits {
+        max_bytes: 64 + usize::from(pick >> 2) * 64,
+        max_depth: 2 + usize::from(pick >> 5),
+        max_values: 4 + usize::from(pick >> 2) * 8,
+        max_array: 1 + usize::from(pick >> 4),
+        max_text: 1 + usize::from(pick >> 3),
+        max_items: usize::from(pick >> 6),
+        max_texts: usize::from(pick >> 5),
+        max_ids: usize::from(pick >> 5),
+        max_genres: usize::from(pick >> 6),
+    };
+    for l in [tight, LOGIN_LIMITS] {
+        let got = parse_login(body, &l);
+        assert!(!got.page.whole(), "{:?}", got.page);
+        assert!(got.token.is_none());
+    }
+    // Each fault alone is enough.
+    for body in [
+        r#"{"data":{"token":"abc"}}"#,
+        r#"{"status":"success","data":{"token":"abc"}} x"#,
+        r#"{"status":"success","data":{"token":"abc"}}""#,
+        r#"{"status":"success","data":{"token":"abc"},"status":"success"}"#,
+        r#"{"status":"failure","data":{"token":"abc"}}"#,
+    ] {
+        let got = parse_login(body.as_bytes(), &LOGIN_LIMITS);
+        assert!(!got.page.whole() && got.token.is_none(), "{body}");
+    }
+    let ok = parse_login(
+        br#"{"status":"success","data":{"token":"abc"}}"#,
+        &LOGIN_LIMITS,
+    );
+    assert!(ok.page.whole() && ok.token.is_some());
+}
+
 #[test]
 fn results_outside_the_shape_are_skipped() {
     for (r, bad_id) in [
