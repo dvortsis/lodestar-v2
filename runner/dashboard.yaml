@@ -628,6 +628,7 @@ placement:
   match:
   - GS-2
   - X-gs2-nits
+  - GS-2b
   - ENR-14
   - UN-1
   - UN-2
