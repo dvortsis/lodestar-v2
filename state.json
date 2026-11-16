@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T02:26Z",
+  "updated_at": "2026-11-16T03:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T02:26Z",
+  "last_heartbeat": "2026-11-16T03:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8908,6 +8908,11 @@
       "id": "X-filter-budget-manyfile-perf",
       "owner": "slot 32",
       "note": "Replaces X-filter-budget-model-skew (withdrawn: a per-model skew could pass a slower engine). #895 roughly doubled raw time on many-file/long-folder shapes on every runner model; win back per-file cost with no charge changes; bars, BUDGET and scaling unchanged; after #907."
+    },
+    {
+      "id": "X-sampler-cooldown-split",
+      "note": "Track C crawler lead 2026-11-16: BEP 51 sampler table fills with 6 h (x fleet scale) cooldowns ~35 min after suppression; sampling idles. Decouple cooldown memory from admission capacity, never shorten a cooldown. Launch on next free build slot after X-test-vm's resume check.",
+      "at": "2026-11-16T03:38Z"
     }
   ],
   "main_health": [
@@ -10336,7 +10341,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-16T02:26Z",
+    "updated": "2026-11-16T03:38Z",
     "items": [
       {
         "slot": 1,
@@ -10465,8 +10470,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-16T02:26Z",
-  "updated": "2026-11-16T02:26Z",
+  "heartbeat": "2026-11-16T03:38Z",
+  "updated": "2026-11-16T03:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
