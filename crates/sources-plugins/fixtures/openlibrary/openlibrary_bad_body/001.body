@@ -1,0 +1,25 @@
+{
+ "numFound": 3,
+ "start": 0,
+ "numFoundExact": true,
+ "docs": [
+  {
+   "key": "/works/OL900001W",
+   "title": "Frankenstein",
+   "alternative_title": [
+    "Frankenstein; or, The Modern Prometheus",
+    "Frankenstein",
+    "Frankenstein, ou le Prométhée moderne"
+   ],
+   "first_publish_year": 1818,
+   "publish_year": [
+    1818,
+    1831,
+    1999,
+    2003
+   ],
+   "author_name": [
+    "SENTINEL Author Name"
+   ],
+   "subject": [
+    "SENTINEL
