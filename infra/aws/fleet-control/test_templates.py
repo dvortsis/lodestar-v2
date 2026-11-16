@@ -393,5 +393,22 @@ class Terraform(unittest.TestCase):
         self.assertRegex(text, r'required_version\s*=\s*">=\s*1\.1[0-9]\.')
 
 
+class CompactSource(unittest.TestCase):
+    """The inline-code compaction that keeps cleanup.json under 51,200 bytes."""
+
+    def test_reindents_blocks_and_continuations_and_keeps_strings(self):
+        source = ('def f(a,\n        b):\n    if a:\n        x = "plain"\n        y = "it\'s"\n'
+                  '        z = f"{a}"\n        return [x,\n                y, z, """keep\n    this"""]\n    return b\n')
+        out = bt.compact_indent(source)
+        self.assertEqual(out, ("def f(a,\n b):\n if a:\n  x = 'plain'\n  y = \"it's\"\n"
+                               "  z = f\"{a}\"\n  return [x,\n   y, z, \"\"\"keep\n    this\"\"\"]\n return b\n"))
+        self.assertEqual(bt.compact_indent(out), out)
+
+    def test_packaged_cleanup_code_is_compact_and_valid(self):
+        code = bt.cleanup_code()
+        compile(code, "index.py", "exec")
+        self.assertLessEqual(max(len(line) - len(line.lstrip()) for line in code.splitlines()), 8)  # one space per level
+
+
 if __name__ == "__main__":
     unittest.main()

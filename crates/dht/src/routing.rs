@@ -153,6 +153,20 @@ impl RoutingTable {
         self.len() == 0
     }
 
+    /// Number of nodes in the main buckets that are good at `now`, by
+    /// BEP 5: answered us within [`GOOD_FOR_SECS`], or answered before and
+    /// queried us within it. A node that stops answering keeps its slot,
+    /// as bad, until a verified replacement takes it, so
+    /// [`len`](Self::len) alone can't show a table whose network has
+    /// gone; this count falls to 0 within [`GOOD_FOR_SECS`] of the node
+    /// last hearing from its peers. A node that keeps querying us counts
+    /// even if our own queries are lost.
+    pub fn good(&self, now: u64) -> usize {
+        self.entries()
+            .filter(|e| e.status(now) == Status::Good)
+            .count()
+    }
+
     pub fn bucket_count(&self) -> usize {
         self.buckets.len()
     }
@@ -508,6 +522,48 @@ mod tests {
         let mut last = [0u8; 20];
         last[19] = 1;
         assert_eq!(prefix_len(&a, &NodeId(last)), 159);
+    }
+
+    #[test]
+    fn good_counts_only_nodes_that_answered_recently() {
+        let mut t = RoutingTable::new(NodeId([0; 20]), false);
+        let (a, b, c) = (id(0x80, 1), id(0x40, 1), id(0x20, 1));
+        assert_eq!(t.good(0), 0, "an empty table has none");
+        assert_eq!(
+            t.insert(node(a, "1.1.1.1"), Contact::Response, 0),
+            Inserted::Added
+        );
+        assert_eq!(
+            t.insert(node(b, "2.2.2.2"), Contact::Response, 0),
+            Inserted::Added
+        );
+        assert_eq!(
+            t.insert(node(c, "3.3.3.3"), Contact::Response, 0),
+            Inserted::Added
+        );
+        // A node that only queried us waits in the replacement cache: in
+        // neither count.
+        let d = id(0x10, 1);
+        assert_eq!(
+            t.insert(node(d, "4.4.4.4"), Contact::Query, 0),
+            Inserted::Cached
+        );
+        assert_eq!((t.len(), t.good(0)), (3, 3));
+
+        // Bad keeps its slot (no replacement waits) but isn't good.
+        for _ in 0..MAX_FAILURES {
+            t.failed(&NodeId(b), 1);
+        }
+        assert_eq!((t.len(), t.good(1)), (3, 2));
+
+        // Silence for the good window: still in the table, none good.
+        assert_eq!((t.len(), t.good(GOOD_FOR_SECS)), (3, 0));
+        // A reply brings it back.
+        assert_eq!(
+            t.insert(node(a, "1.1.1.1"), Contact::Response, GOOD_FOR_SECS),
+            Inserted::Updated
+        );
+        assert_eq!(t.good(GOOD_FOR_SECS), 1);
     }
 
     #[test]

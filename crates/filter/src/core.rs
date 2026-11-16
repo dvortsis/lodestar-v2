@@ -507,7 +507,6 @@ impl ReadBufs {
     /// Lets go of a large torrent's buffers, so a thread doesn't keep
     /// them for good.
     fn trim(&mut self) {
-        const KEEP: usize = 1 << 16;
         if self.tokens.capacity() > KEEP {
             self.tokens = Vec::new();
         }
@@ -526,6 +525,39 @@ struct Scratch {
     /// [`Core::signals`]' table.
     at: Vec<u16>,
     folders: Vec<Folder>,
+}
+
+/// The most entries a per-thread buffer keeps between torrents
+/// ([`ReadBufs::trim`], [`Scratch::trim`]): past it, it's let go of after
+/// use. Typical torrents' texts stay well under it, so they reuse theirs.
+const KEEP: usize = 1 << 16;
+
+thread_local! {
+    /// The joined reading's buffers ([`Core::pattern_signals`]), kept per
+    /// thread so they carry over between torrents, and trimmed after each
+    /// ([`Scratch::trim`]).
+    static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
+}
+
+impl Scratch {
+    /// Lets go of a large torrent's buffers, as [`ReadBufs::trim`] does,
+    /// so a thread doesn't keep them for good (X-filter-scratch-trim). A
+    /// buffer within [`KEEP`] entries is kept, so typical torrents reuse
+    /// theirs.
+    fn trim(&mut self) {
+        fn trim<T>(v: &mut Vec<T>) {
+            if v.capacity() > KEEP {
+                *v = Vec::new();
+            }
+        }
+        trim(&mut self.tokens);
+        trim(&mut self.flags);
+        trim(&mut self.at);
+        for f in &mut self.folders {
+            trim(&mut f.tokens);
+            trim(&mut f.flags);
+        }
+    }
 }
 
 /// Texts whose positions fit this many, or four per token, get a flag
@@ -1281,7 +1313,6 @@ impl Core {
     ) -> PatternSignals {
         thread_local! {
             // Kept per thread: its buffers carry over between torrents.
-            static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
             static READ: std::cell::RefCell<ReadBufs> = Default::default();
         }
         // The thread's tokenizer, whose word plans keyword entries' pass
@@ -1299,7 +1330,9 @@ impl Core {
             let mut s = normalize::with_tokenizer(|tok| {
                 SCRATCH.with(|s| match s.try_borrow_mut() {
                     Ok(mut scratch) => {
-                        self.patterns_with(tok, &mut scratch, item, neutral, Some(read))
+                        let s = self.patterns_with(tok, &mut scratch, item, neutral, Some(read));
+                        scratch.trim();
+                        s
                     }
                     Err(_) => {
                         self.patterns_with(tok, &mut Scratch::default(), item, neutral, Some(read))
@@ -1710,6 +1743,85 @@ mod tests {
             c.patterns(&item, &none, Some(forced)).0,
             c.patterns(&item, &none, None).0
         );
+    }
+
+    /// The joined reading's per-thread buffers are back within [`KEEP`]
+    /// after judging a torrent whose name is as long as the budget allows,
+    /// and a typical torrent's are kept for the next one
+    /// (X-filter-scratch-trim).
+    #[test]
+    fn the_joined_readings_buffers_are_trimmed_after_a_long_text() {
+        let c = core();
+        let none = TermSet::default();
+        let judge = |name: &str| {
+            let item = Item {
+                hashes: &[],
+                name,
+                files: &[],
+                content_type: ContentType::Video,
+            };
+            let s = c.pattern_signals(&item, &none, None);
+            // Judged within the budget, so the buffers were used.
+            assert!(!s.over, "{} bytes over the budget", name.len());
+        };
+        let held = || {
+            SCRATCH.with(|s| {
+                let s = s.borrow();
+                let folders = s.folders.iter();
+                [s.tokens.capacity(), s.flags.capacity(), s.at.capacity()]
+                    .into_iter()
+                    .chain(folders.flat_map(|f| [f.tokens.capacity(), f.flags.capacity()]))
+                    .max()
+                    .unwrap_or(0)
+            })
+        };
+
+        judge("Show Name Season 1 1080p WEB-DL");
+        let typical = held();
+        assert!(typical > 0 && typical <= KEEP, "{typical}");
+
+        // About 300,000 tokens: within the budget, far past the bound.
+        judge(&"a ".repeat(300_000));
+        assert!(held() <= KEEP, "{} entries kept", held());
+    }
+
+    /// End to end through the core: an earlier reading that reaches the
+    /// token cap, metered with `CUT_ONLY` on the thread's splitting
+    /// tokenizer, leaves it unmetered, so `read_whole_by_v1`'s unmetered
+    /// earlier reading after it on the same thread still reads its text
+    /// whole. A meter left running would read that text as nothing, and
+    /// a text past version 1's limits in the earlier reading would pass
+    /// for whole (X-filter-split-nits).
+    #[test]
+    fn a_cut_earlier_reading_leaves_the_next_one_whole() {
+        let c = core();
+        let none = TermSet::default();
+        let item = |name| Item {
+            hashes: &[],
+            name,
+            files: &[],
+            content_type: ContentType::Video,
+        };
+        // Within version 1's limit joined, past it apart: `a` and `b` are
+        // one word joined and two apart.
+        let small = "a\u{0600}b ".repeat(V1_TOKENS / 2 + 8);
+        let mut joined = Vec::new();
+        normalize::tokens(&small, &mut joined);
+        let mut apart = Vec::new();
+        normalize::with_splitting(|t| t.text(&small, &mut apart));
+        assert!(joined.len() <= V1_TOKENS, "{} joined", joined.len());
+        assert!(apart.len() > V1_TOKENS, "{} apart", apart.len());
+        assert!(!read_whole_by_v1(&item(&small)), "before");
+
+        // An earlier reading past the token cap: held as too large.
+        let huge = "a\u{0600}".repeat(normalize::MAX_TOKENS + 1);
+        let hits = c.pattern_hits_split(&item(&huge), &none, true);
+        assert_eq!(hits, Some(vec![c.too_large_hit()]));
+
+        assert!(!read_whole_by_v1(&item(&small)), "after the cut");
+        // And the next earlier reading through the core reads whole too.
+        let hits = c.pattern_hits_split(&item(&small), &none, true).unwrap();
+        assert!(!hits.contains(&c.too_large_hit()), "{hits:?}");
     }
 
     proptest! {
