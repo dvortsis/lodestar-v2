@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T00:38Z",
+  "updated_at": "2026-11-16T00:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T00:38Z",
+  "last_heartbeat": "2026-11-16T00:41Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10073,6 +10073,12 @@
       "slice": "ENR-ol",
       "sha": "790b7a23",
       "at": "2026-11-16T00:38Z"
+    },
+    {
+      "pr": 957,
+      "slice": "X-filter-scratch-trim",
+      "sha": "a6ffdae4",
+      "at": "2026-11-16T00:41Z"
     }
   ],
   "active_sessions": {
@@ -10311,7 +10317,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-16T00:38Z",
+    "updated": "2026-11-16T00:41Z",
     "items": [
       {
         "slot": 1,
@@ -10326,12 +10332,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-filter-scratch-trim",
+        "slice": "ENR-terms",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T23:00Z",
-        "doing": "X-filter-scratch-trim: trim per-thread Scratch like ReadBufs (#953 merged)",
+        "since": "2026-11-16T00:41Z",
+        "doing": "session_01MMjhnBf6xYkVAg5NsDSUML: ENR-terms (identify harness enforces each lookup service's terms)",
         "cap": "cloud-testing share used for build (\u00a72.64 4+4)"
       },
       {
@@ -10443,8 +10449,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-16T00:38Z",
-  "updated": "2026-11-16T00:38Z",
+  "heartbeat": "2026-11-16T00:41Z",
+  "updated": "2026-11-16T00:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
