@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T00:41Z",
+  "updated_at": "2026-11-16T00:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T00:41Z",
+  "last_heartbeat": "2026-11-16T00:57Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10079,6 +10079,12 @@
       "slice": "X-filter-scratch-trim",
       "sha": "a6ffdae4",
       "at": "2026-11-16T00:41Z"
+    },
+    {
+      "pr": 958,
+      "slice": "X-index-bytes-1m",
+      "sha": "5523583d",
+      "at": "2026-11-16T00:57Z"
     }
   ],
   "active_sessions": {
@@ -10317,7 +10323,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-16T00:41Z",
+    "updated": "2026-11-16T00:57Z",
     "items": [
       {
         "slot": 1,
@@ -10342,13 +10348,14 @@
       },
       {
         "slot": 3,
-        "slice": "X-index-bytes-1m",
-        "role": "build",
-        "agent": "claude",
+        "slice": null,
+        "role": null,
+        "agent": null,
         "model": "opus",
         "since": "2026-11-15T22:31Z",
-        "doing": "X-index-bytes-1m: verify 1M torrent index 652 B vs 512 budget; space_usage stats tool; fix within budget (#952 merged)",
-        "cap": "build (\u00a72.64 4+4)"
+        "doing": "free; next launch pending",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "idle"
       },
       {
         "slot": 4,
@@ -10449,8 +10456,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-16T00:41Z",
-  "updated": "2026-11-16T00:41Z",
+  "heartbeat": "2026-11-16T00:57Z",
+  "updated": "2026-11-16T00:57Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
