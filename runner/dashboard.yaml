@@ -433,6 +433,7 @@ placement:
   - X-win-log-held-open
   - X-cli-win-data-dir
   - X-win-service-path-hardening
+  - X-win-service-cwd-fallback
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
@@ -494,6 +495,7 @@ placement:
   - X-operator-check8-compare
   - X-cleanup-fits-quota
   - X-release-dead-code
+  - X-index-bytes-1m
   - X-store-migrate-race
   - X-flake-store-migrate-race
   - X-store-wal-nits
@@ -703,6 +705,7 @@ placement:
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
+  - X-gluetun-restart-recover
   - X-ci-filter-fleet
   - X-ci-filter-rust-inputs
   - X-ci-filter-docs-user
@@ -823,6 +826,7 @@ placement:
   - X-store-busy-nits
   - X-routing-table-metric
   - X-filter-split-nits
+  - X-filter-scratch-trim
   - X-first-run-search-gate
   - D-docker-guide-1115
 unplaced_workstream: ws-small

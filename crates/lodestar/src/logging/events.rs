@@ -323,6 +323,27 @@ lodestar_log::catalogue! {
         message: "The companion-files folder was left as it is: save gluetun's post-rules yourself",
         fields: { path: Path, error: Error },
     }
+    /// `LODESTAR_EXIT_ON_NETWORK_LOSS` (X-gluetun-restart-recover): only
+    /// `lo` and no default route for `seconds`, as when the container whose
+    /// network Lodestar shares (gluetun) restarted. Lodestar stops and
+    /// exits 75 so its restart policy starts it again inside that
+    /// container's current network.
+    SYSTEM_NETWORK_LOST {
+        id: "system.network_lost",
+        component: System,
+        level: Error,
+        message: "Network lost: only the loopback interface has been left for this many seconds, as happens when the container whose network Lodestar shares (such as gluetun) restarts. Lodestar is stopping so its restart policy can start it again inside that container's network",
+        fields: { seconds: Label },
+    }
+    /// `LODESTAR_EXIT_ON_NETWORK_LOSS` is set off Linux, where it does
+    /// nothing.
+    SYSTEM_NETWORK_WATCH_UNSUPPORTED {
+        id: "system.network_watch_unsupported",
+        component: System,
+        level: Warn,
+        message: "LODESTAR_EXIT_ON_NETWORK_LOSS works on Linux only and is ignored here",
+        fields: {},
+    }
     /// Started as root and allowed to stay root.
     SYSTEM_ROOT {
         id: "system.running_as_root",

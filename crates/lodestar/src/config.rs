@@ -40,6 +40,12 @@ pub struct Config {
     pub subscriptions: Subscriptions,
     pub updates: Updates,
     pub cluster: Cluster,
+    /// `LODESTAR_EXIT_ON_NETWORK_LOSS` (X-gluetun-restart-recover): exit
+    /// when only `lo` is left for 30 s, so a restart policy reattaches a
+    /// container that shares another's network. Environment only, off by
+    /// default, Linux only (`net_watch`).
+    #[serde(skip)]
+    pub exit_on_network_loss: bool,
 }
 
 impl Default for Config {
@@ -60,6 +66,7 @@ impl Default for Config {
             subscriptions: Subscriptions::default(),
             updates: Updates::default(),
             cluster: Cluster::default(),
+            exit_on_network_loss: false,
         }
     }
 }
@@ -767,6 +774,11 @@ impl Config {
         if let Some(v) = env("LODESTAR_DHT_ENABLED") {
             config.dht.enabled = v.parse().map_err(|_| parse("LODESTAR_DHT_ENABLED", &v))?;
         }
+        if let Some(v) = env("LODESTAR_EXIT_ON_NETWORK_LOSS") {
+            config.exit_on_network_loss = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_EXIT_ON_NETWORK_LOSS", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_SAFE_RESTART") {
             config.dht.safe_restart = v
                 .parse()
@@ -1315,6 +1327,26 @@ mod tests {
             let field = bad.split(' ').next().unwrap();
             assert!(e.0.contains(&format!("ranking.{field}")), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn exit_on_network_loss_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.exit_on_network_loss, "never on in a native default");
+        let c = Config::load(None, |k: &str| {
+            (k == "LODESTAR_EXIT_ON_NETWORK_LOSS").then(|| "true".to_string())
+        })
+        .unwrap();
+        assert!(c.exit_on_network_loss);
+        let e = Config::load(None, |k: &str| {
+            (k == "LODESTAR_EXIT_ON_NETWORK_LOSS").then(|| "yes".to_string())
+        });
+        assert!(e.is_err(), "only true or false");
+        // Not a config.toml key: the file can't turn it on.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "exit_on_network_loss = true\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
     }
 
     #[test]
