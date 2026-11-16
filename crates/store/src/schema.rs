@@ -25,7 +25,20 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (12, V12),
     (13, V13),
     (14, V14),
+    (15, V15),
 ];
+
+/// ENR-terms (`docs/decisions/2026-11-16-ENR-terms.md`): when each
+/// source's claims on a torrent were last written (Unix seconds), so a
+/// lookup plugin's claims can be refreshed and dropped within its terms'
+/// retention. Rows written before this get 0: no identify plugin has run
+/// on any store yet, and every other source's claims are never dropped by
+/// age. The index serves the identify runtime's sweep, which deletes one
+/// source's oldest rows a bounded batch at a time. Additive only.
+const V15: &str = "
+ALTER TABLE torrent_claims ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX torrent_claims_stored ON torrent_claims (source_id, stored_at);
+";
 
 /// Sources (SRC-1, `docs/decisions/2026-11-02-SRC-1.md`, architecture
 /// §18.5): keys sources found that have claims but no metadata yet, the
@@ -1674,12 +1687,12 @@ mod tests {
 
     /// Older builds opening this build's store refuse it as newer and
     /// change nothing: no migration, no snapshot, the file as it was. The
-    /// v0.5.1 code path (migrations through V12) and a V13 build both
-    /// refuse a V14 store, and so do their read-only connections.
+    /// v0.5.1 code path (migrations through V12), a V13 and a V14 build
+    /// all refuse a V15 store, and so do their read-only connections.
     #[test]
     fn older_builds_refuse_a_newer_store_untouched() {
         let latest = latest_schema_version();
-        assert_eq!(latest, 14);
+        assert_eq!(latest, 15);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lodestar.db");
         drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
@@ -1693,7 +1706,7 @@ mod tests {
         };
         let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
 
-        for older in [12, 13] {
+        for older in [12, 13, 14] {
             let mut conn = Connection::open(&path).unwrap();
             configure(&conn, 0).unwrap();
             let err =
@@ -1723,6 +1736,73 @@ mod tests {
         }
     }
 
+    /// V15 on a V14 store with claims from an identify source and two
+    /// others: it runs once, every row is kept and stamped 0, the pre-V15
+    /// snapshot is taken, and the retention sweep then deletes only the
+    /// rows of the source it's given (ENR-terms).
+    #[test]
+    fn v15_stamps_claims_and_the_sweep_takes_only_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..14]).unwrap();
+        let blob = "01000000000000";
+        conn.execute_batch(&format!(
+            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES
+                 (0, 'dht', '1', 0, 0), (1, 'wikidata', '1', 0, 0), (2, 'feed', '1', 0, 0);
+             INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
+                 info_size, flags, discovered_at, metadata_at, last_seen_at, sources, first_source)
+                 VALUES (7, x'{a}', 'a', 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0),
+                        (8, x'{b}', 'b', 1, 1, 1, 1, 1, 0, 0, 0, 0, 5, 0);
+             UPDATE id_seq SET next = 9;
+             INSERT INTO torrent_claims (torrent_id, source_id, flags, data) VALUES
+                 (7, 0, 0, x'{blob}'), (7, 1, 0, x'{blob}'), (7, 2, 0, x'{blob}'),
+                 (8, 1, 0, x'{blob}'), (8, 2, 1, x'{blob}');",
+            a = "11".repeat(20),
+            b = "33".repeat(20),
+        ))
+        .unwrap();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 15);
+        assert!(dir.path().join("lodestar.pre-v15.db").exists());
+        let count = |conn: &Connection, sql: &str| -> i64 {
+            conn.query_row(sql, [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn, "SELECT count(*) FROM torrent_claims"), 5);
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT count(*) FROM torrent_claims WHERE stored_at = 0"
+            ),
+            5
+        );
+        // Once only: a second open finds it current and takes no snapshot.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 15);
+        assert!(!dir.path().join("lodestar.pre-v15.1.db").exists());
+        drop(conn);
+
+        let mut store = crate::Store::open(&path, crate::StoreConfig::default()).unwrap();
+        let wikidata = crate::SourceId::new(1).unwrap();
+        let mut gone = store
+            .drop_claims_outside(wikidata, 1, i64::MAX, 100)
+            .unwrap();
+        gone.sort_unstable();
+        assert_eq!(gone, vec![7, 8]);
+        assert_eq!(store.claims_stored_at(7, wikidata).unwrap(), None);
+        for (t, s) in [(7, 0), (7, 2), (8, 2)] {
+            let s = crate::SourceId::new(s).unwrap();
+            assert_eq!(store.claims_stored_at(t, s).unwrap(), Some(0), "{t}/{s:?}");
+        }
+        assert!(
+            store
+                .drop_claims_outside(wikidata, 1, i64::MAX, 100)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// V14 on a V13 store with data: every V13 row is kept, the pre-V14
     /// snapshot is taken, the new tables start empty, the id sequence is
     /// untouched, and V13's triggers still work beside V14's.
@@ -1749,7 +1829,7 @@ mod tests {
             c = "22".repeat(20),
         ))
         .unwrap();
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..14]).unwrap();
         assert_eq!(version(&conn), 14);
         assert!(
             dir.path().join("lodestar.pre-v14.db").exists(),
@@ -1809,10 +1889,10 @@ mod tests {
                 .unwrap()
         };
         let mut fresh = Connection::open_in_memory().unwrap();
-        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        migrate_with(&mut fresh, None, &MIGRATIONS[..14]).unwrap();
         let mut upgraded = Connection::open_in_memory().unwrap();
         migrate_with(&mut upgraded, None, &MIGRATIONS[..13]).unwrap();
-        migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
+        migrate_with(&mut upgraded, None, &MIGRATIONS[..14]).unwrap();
         assert_eq!(version(&fresh), 14);
         assert_eq!(schema(&fresh), schema(&upgraded));
         let names: Vec<String> = schema(&fresh).into_iter().map(|(n, _)| n).collect();

@@ -36,7 +36,9 @@ use std::time::Duration;
 
 use lodestar_sources::claims::{AltTitle, ExternalId};
 use lodestar_sources::http::parse_retry_after;
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -165,9 +167,26 @@ impl Wikidata {
     }
 }
 
+/// Wikidata's terms (ENR-terms; the runner's decision of 2026-11-16):
+/// its data is CC0, so bulk use and redistribution are allowed and no
+/// attribution is required. Claims are still refreshed within 180 days.
+pub const TERMS: Terms = Terms {
+    background_walk: true,
+    redistribute: true,
+    retention: Retention::DEFAULT,
+    attribution: None,
+    // Wikidata has no adult marker to send or read. The runtime's gate
+    // never asks about an Adult item, and its kinds are Movie and TV only.
+    adult_marker_required: false,
+};
+
 impl Identifier for Wikidata {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -429,6 +448,10 @@ fn identification(query: &Query, e: &Entity) -> Identification {
         } else {
             CONFIDENCE_WITHOUT_YEAR
         },
+        // Wikidata doesn't mark adult works; `TERMS` opts out of the
+        // marker, and the runtime's own gate keeps Adult from ever being
+        // asked.
+        adult: None,
     }
 }
 
@@ -446,5 +469,22 @@ fn id(scheme: &str, value: String) -> ExternalId {
     ExternalId {
         scheme: scheme.into(),
         value,
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// CC0: walked in the background and passed on, no marker to read,
+    /// claims refreshed within 180 days.
+    #[test]
+    fn wikidata_terms() {
+        let t = Wikidata::default();
+        let t = Identifier::terms(&t);
+        assert!(t.background_walk && t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(t.attribution, None);
+        assert!(t.accepts(None) && !t.accepts(Some(true)));
     }
 }

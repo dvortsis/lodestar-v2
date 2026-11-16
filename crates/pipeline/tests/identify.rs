@@ -12,7 +12,12 @@
 //!   backfill, and a restart going on where it stopped;
 //! - an answer is judged by the core before storage, stricter only, and a
 //!   held one is never stored;
-//! - the refile's judged-bytes budget in its Items phase.
+//! - the refile's judged-bytes budget in its Items phase;
+//! - each plugin's terms (ENR-terms): no background walk unless allowed,
+//!   the adult marker, a stale claim refreshed and dropped on a miss, the
+//!   retention sweep (bounded, only its own source, a clock stepping back
+//!   included, and a property test over random terms, claims and clocks),
+//!   and only a redistributable answer renaming the record.
 //!
 //! No fixed sleeps: every wait is for a condition, with a 10 s deadline.
 
@@ -34,7 +39,9 @@ use lodestar_pipeline::identify::{
 use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::unverified::{self, Ctx, Phase, REFILE_JUDGED_BYTES, UnverifiedStats};
 use lodestar_sources::claims::{self, AltTitle, ExternalId};
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     BoxFuture, Consent, Discovery, Emitter, Fetch, Found, HostLimiter, HttpError, Kind, Kit,
     Manifest, MemoryState, Network, PluginError, PluginState as _, Policy, Priority, Request,
@@ -146,6 +153,9 @@ fn store() -> (Store, SourceId, SourceId) {
         Some(SourceState::Enabled),
     )
     .unwrap();
+    // As the runtime records them when it starts, for `stored_title`.
+    s.set_plugin_state(src, identify::TERMS_KEY, Some(&OPEN.record()))
+        .unwrap();
     (s, dht, src)
 }
 
@@ -207,7 +217,18 @@ struct Recorder {
     fail: AtomicBool,
     /// Never answers the first lookup.
     hang_first: AtomicBool,
+    terms: Terms,
 }
+
+/// The loosest terms: these tests are about ENR-10's runtime, and
+/// `identify_terms.rs` tests each rule of ENR-terms.
+const OPEN: Terms = Terms {
+    background_walk: true,
+    redistribute: true,
+    retention: Retention::DEFAULT,
+    attribution: None,
+    adult_marker_required: false,
+};
 
 impl Recorder {
     fn new(answer: Option<Identification>) -> Arc<Recorder> {
@@ -217,7 +238,14 @@ impl Recorder {
             kinds: MediaKind::ALL.to_vec(),
             fail: AtomicBool::new(false),
             hang_first: AtomicBool::new(false),
+            terms: OPEN,
         })
+    }
+
+    fn with_terms(answer: Option<Identification>, terms: Terms) -> Arc<Recorder> {
+        let mut r = Arc::try_unwrap(Recorder::new(answer)).ok().unwrap();
+        r.terms = terms;
+        Arc::new(r)
     }
 
     fn titles(&self) -> Vec<String> {
@@ -233,6 +261,10 @@ impl Recorder {
 impl Identifier for Recorder {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &self.terms
     }
 
     fn kinds(&self) -> &[MediaKind] {
@@ -424,6 +456,7 @@ fn answer(canonical: &str) -> Identification {
         genres: vec!["Drama".into()],
         year: Some(1994),
         confidence: 92,
+        adult: Some(false),
     }
 }
 
@@ -1443,4 +1476,366 @@ async fn a_hung_lookup_times_out() {
     // Both charged to the day's count.
     let v = state.get(identify::BUDGET_KEY).await.unwrap().unwrap();
     assert_eq!(u32::from_be_bytes(v[8..12].try_into().unwrap()), 2);
+}
+
+/// A claim stamped `at` from `source` on torrent `id`.
+fn claim_at(s: &mut Store, id: i64, source: SourceId, at: i64) {
+    let c = lodestar_store::claims::Claims {
+        details: Some(Box::new(lodestar_store::claims::Details {
+            canonical_title: Some("The Film".into()),
+            match_confidence: Some(92),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    assert!(s.put_claims_at(id, source, &c, false, at).unwrap());
+}
+
+const DAY: i64 = 86_400;
+
+/// A plugin whose terms don't allow bulk use is never walked in the
+/// background, whatever the host asks: only what you open is looked up.
+#[tokio::test]
+async fn only_bulk_terms_walk_the_index() {
+    let (mut s, dht, src) = store();
+    let ids: Vec<i64> = (0..3)
+        .map(|i| put(&mut s, &movie(i, "Plain"), dht, 0, false).0)
+        .collect();
+    let store = Arc::new(Mutex::new(s));
+    let strict = Recorder::with_terms(None, Terms::STRICT);
+    let (src_strict, _) = IdentifySource::new(
+        strict.clone(),
+        store.clone(),
+        stand_in(),
+        AdultSources::default(),
+        Arc::new(Flags::default()),
+        background(),
+    )
+    .unwrap();
+    assert!(!src_strict.config().background, "forced off");
+    drop(src_strict);
+    let r = run(
+        strict.clone(),
+        store.clone(),
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        background(),
+        Arc::new(MemoryState::new()),
+        &[ids[1]],
+    );
+    until("the opened item", || n(&r.stats.done) == 1).await;
+    r.stop().await;
+    assert_eq!(strict.titles(), vec!["Item1 Plain Film"]);
+    // The control: terms that allow it walk every item.
+    let open = Recorder::with_terms(None, OPEN);
+    let r = run(
+        open.clone(),
+        store,
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        background(),
+        Arc::new(MemoryState::new()),
+        &[],
+    );
+    until("the walk", || n(&r.stats.missed) == 3).await;
+    r.stop().await;
+}
+
+/// An answer marked adult is always refused; an unmarked one is refused
+/// unless the terms opt out. A refused answer is a miss and emits nothing.
+#[tokio::test]
+async fn the_adult_marker_decides() {
+    let cases = [
+        (Terms::STRICT, None, false),
+        (Terms::STRICT, Some(true), false),
+        (Terms::STRICT, Some(false), true),
+        (OPEN, Some(true), false),
+        (OPEN, None, true),
+    ];
+    for (i, (terms, marker, kept)) in cases.into_iter().enumerate() {
+        let (mut s, dht, src) = store();
+        let (id, _) = put(&mut s, &movie(i, "Plain"), dht, 0, false);
+        let a = Identification {
+            adult: marker,
+            ..answer("The Film")
+        };
+        let mut r = run(
+            Recorder::with_terms(Some(a), terms),
+            Arc::new(Mutex::new(s)),
+            stand_in(),
+            AdultSources::default(),
+            Arc::default(),
+            src,
+            interest_only(),
+            Arc::new(MemoryState::new()),
+            &[id],
+        );
+        until("the lookup", || n(&r.stats.done) == 1).await;
+        let refused = n(&r.stats.refused_adult);
+        let (matched, missed) = (n(&r.stats.matched), n(&r.stats.missed));
+        let found = r.found.try_recv().is_ok();
+        r.stop().await;
+        assert_eq!(
+            (refused, missed),
+            (u64::from(!kept), u64::from(!kept)),
+            "{i}"
+        );
+        assert_eq!((matched == 1, found), (kept, kept), "{i}");
+    }
+}
+
+/// A claim past its refresh age is asked again on the next user interest,
+/// though the cache holds a hit, and a miss drops it (and marks the
+/// torrent for the backfill), leaving every other source's claim. A young
+/// claim stays cached.
+#[tokio::test]
+async fn a_stale_claim_is_refreshed_and_a_miss_drops_it() {
+    let (mut s, dht, src) = store();
+    let (id, _) = put(&mut s, &movie(0, "Plain"), dht, 0, false);
+    claim_at(&mut s, id, dht, noon() - 900 * DAY);
+    let store = Arc::new(Mutex::new(s));
+    let plugin = Recorder::new(Some(answer("The Film")));
+    let r = run(
+        plugin.clone(),
+        store.clone(),
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        interest_only(),
+        Arc::new(MemoryState::new()),
+        &[id],
+    );
+    until("the hit", || n(&r.stats.matched) == 1).await;
+    // The writer would store it; stamped now, it's young and cached.
+    claim_at(&mut store.lock().unwrap(), id, src, noon());
+    assert!(r.interest.opened(id));
+    until("the cache", || n(&r.stats.cached) == 1).await;
+    // 160 days old: past the 150-day refresh age.
+    claim_at(&mut store.lock().unwrap(), id, src, noon() - 160 * DAY);
+    *plugin.answer.lock().unwrap() = None;
+    assert!(r.interest.opened(id));
+    until("the refresh", || n(&r.stats.refresh_dropped) == 1).await;
+    r.stop().await;
+    assert_eq!(plugin.titles().len(), 2);
+    let s = store.lock().unwrap();
+    assert_eq!(s.claims_stored_at(id, src).unwrap(), None);
+    assert_eq!(
+        s.claims_stored_at(id, dht).unwrap(),
+        Some(noon() - 900 * DAY),
+        "another source's claim is never touched"
+    );
+    assert!(
+        s.enrichment(id)
+            .unwrap()
+            .is_none_or(|e| e.version != lodestar_classify::ENRICHMENT_VERSION),
+        "marked for the backfill"
+    );
+}
+
+/// The running runtime sweeps its own expired claims, nobody opening
+/// anything, and only its own.
+#[tokio::test]
+async fn the_runtime_sweeps_its_expired_claims() {
+    let (mut s, dht, src) = store();
+    let (old, _) = put(&mut s, &movie(0, "Plain"), dht, 0, false);
+    let (young, _) = put(&mut s, &movie(1, "Plain"), dht, 0, false);
+    claim_at(&mut s, old, src, noon() - 179 * DAY);
+    claim_at(&mut s, young, src, noon() - 178 * DAY);
+    claim_at(&mut s, old, dht, noon() - 900 * DAY);
+    let store = Arc::new(Mutex::new(s));
+    let r = run(
+        Recorder::new(None),
+        store.clone(),
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        interest_only(),
+        Arc::new(MemoryState::new()),
+        &[],
+    );
+    until("the sweep", || n(&r.stats.expired) == 1).await;
+    r.stop().await;
+    let s = store.lock().unwrap();
+    assert_eq!(s.claims_stored_at(old, src).unwrap(), None);
+    assert_eq!(
+        s.claims_stored_at(young, src).unwrap(),
+        Some(noon() - 178 * DAY)
+    );
+    assert_eq!(
+        s.claims_stored_at(old, dht).unwrap(),
+        Some(noon() - 900 * DAY)
+    );
+}
+
+/// One step deletes at most a batch, the next goes on, and a clock that
+/// steps back keeps the high-water mark, so nothing outlives its limit.
+/// A claim stamped beyond the slack has no age to trust and goes.
+#[test]
+fn the_sweep_is_bounded_resumable_and_never_steps_back() {
+    let (mut s, dht, src) = store();
+    let keep = Retention::DEFAULT;
+    let now = noon();
+    let ids: Vec<i64> = (0..identify::SWEEP_BATCH + 5)
+        .map(|i| {
+            let id = put(&mut s, &movie(i, "Plain"), dht, 0, false).0;
+            claim_at(&mut s, id, src, now - 400 * DAY);
+            id
+        })
+        .collect();
+    let a = identify::sweep_expired(&mut s, src, &keep, now).unwrap();
+    assert_eq!(a.dropped.len(), identify::SWEEP_BATCH);
+    let b = identify::sweep_expired(&mut s, src, &keep, now).unwrap();
+    assert_eq!(b.dropped.len(), 5);
+    assert!(
+        identify::sweep_expired(&mut s, src, &keep, now)
+            .unwrap()
+            .dropped
+            .is_empty()
+    );
+    let mut all: Vec<i64> = a.dropped.into_iter().chain(b.dropped).collect();
+    all.sort_unstable();
+    assert_eq!(all, ids);
+
+    let id = ids[0];
+    claim_at(&mut s, id, src, now);
+    // 178 days on, then the clock steps back 200 days: the mark holds.
+    let later = now + 178 * DAY;
+    assert_eq!(
+        identify::sweep_expired(&mut s, src, &keep, later)
+            .unwrap()
+            .now,
+        later
+    );
+    let back = identify::sweep_expired(&mut s, src, &keep, later - 200 * DAY).unwrap();
+    assert_eq!(back.now, later);
+    assert!(back.dropped.is_empty(), "178 days: kept");
+    assert!(
+        identify::sweep_expired(&mut s, src, &keep, now)
+            .unwrap()
+            .dropped
+            .is_empty()
+    );
+    // A day on (by the mark), it's 179 days old: dropped.
+    let next = identify::sweep_expired(&mut s, src, &keep, later + DAY).unwrap();
+    assert_eq!(next.dropped, vec![id]);
+    // Stamped more than the slack ahead of the mark: dropped.
+    claim_at(
+        &mut s,
+        id,
+        src,
+        later + DAY + identify::FUTURE_SLACK_SECS + 1,
+    );
+    let ahead = identify::sweep_expired(&mut s, src, &keep, now).unwrap();
+    assert_eq!(ahead.dropped, vec![id]);
+    // Refreshing follows the same clock.
+    assert!(identify::needs_refresh(&keep, now, now + 150 * DAY));
+    assert!(!identify::needs_refresh(&keep, now, now + 149 * DAY));
+    assert!(identify::needs_refresh(&keep, now + 2 * DAY, now));
+}
+
+/// The record that search, Torznab and export serve is renamed only by
+/// a plugin whose recorded terms allow redistribution; one with no record
+/// reads as not allowed.
+#[test]
+fn only_a_redistributable_answer_renames_the_record() {
+    let (mut s, dht, src) = store();
+    let (id, _) = put(&mut s, "New Folder", dht, 0, false);
+    claim_at(&mut s, id, src, noon());
+    let finders = s.torrent(id).unwrap().unwrap().sources;
+    let title = |s: &Store| identify::stored_title(s, id, finders).unwrap().map(|t| t.0);
+    assert_eq!(title(&s).as_deref(), Some("The Film"));
+    assert!(identify::may_redistribute(&s, src).unwrap());
+    let no = Terms {
+        redistribute: false,
+        ..OPEN
+    };
+    s.set_plugin_state(src, identify::TERMS_KEY, Some(&no.record()))
+        .unwrap();
+    assert_eq!(title(&s), None);
+    s.set_plugin_state(src, identify::TERMS_KEY, None).unwrap();
+    assert_eq!(title(&s), None, "no record: strict");
+    s.set_plugin_state(src, identify::TERMS_KEY, Some(b"garbage"))
+        .unwrap();
+    assert_eq!(title(&s), None, "an unreadable record: strict");
+}
+
+/// The runtime records its plugin's terms where `stored_title` reads them.
+#[tokio::test]
+async fn the_runtime_records_its_terms() {
+    let (s, _, src) = store();
+    let state = Arc::new(MemoryState::new());
+    let r = run(
+        Recorder::with_terms(None, Terms::STRICT),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        interest_only(),
+        state.clone(),
+        &[],
+    );
+    let mut got = None;
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    while got.is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "no terms record");
+        got = state.get(identify::TERMS_KEY).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    r.stop().await;
+    assert_eq!(Terms::from_record(&got.unwrap()), Some(Terms::STRICT));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+
+    /// Whatever the terms, claims and clock (stepping back included), after
+    /// each sweep no claim of the plugin is older than its drop age by the
+    /// high-water clock, none is stamped beyond the slack, every younger
+    /// one is kept, and no other source's claim is touched.
+    #[test]
+    fn retention_holds_for_any_terms_claims_and_clocks(
+        days in 0u64..400,
+        claims in proptest::collection::vec((any::<bool>(), -500i64..5), 1..12),
+        steps in proptest::collection::vec(-200i64..200, 1..8),
+    ) {
+        let (mut s, dht, src) = store();
+        let keep = Retention::days(days);
+        let start = noon();
+        let mut rows = Vec::new();
+        for (i, (own, offset)) in claims.iter().enumerate() {
+            let id = put(&mut s, &movie(i, "Plain"), dht, 0, false).0;
+            let source = if *own { src } else { dht };
+            let at = start + offset * DAY;
+            claim_at(&mut s, id, source, at);
+            rows.push((id, source, at));
+        }
+        let mut clock = start;
+        let mut high = i64::MIN;
+        // Rows that were due under some mark so far: only those may be gone.
+        let mut due = vec![false; rows.len()];
+        for step in steps {
+            clock += step * DAY;
+            high = high.max(clock);
+            let swept = identify::sweep_expired(&mut s, src, &keep, clock).unwrap();
+            prop_assert_eq!(swept.now, high);
+            prop_assert!(swept.dropped.len() < identify::SWEEP_BATCH);
+            for (n, &(id, source, at)) in rows.iter().enumerate() {
+                let got = s.claims_stored_at(id, source).unwrap();
+                if source == dht {
+                    prop_assert_eq!(got, Some(at));
+                    continue;
+                }
+                due[n] |= at <= high - keep.drop_after()
+                    || at > high + identify::FUTURE_SLACK_SECS;
+                prop_assert_eq!(got, (!due[n]).then_some(at));
+            }
+        }
+    }
 }
