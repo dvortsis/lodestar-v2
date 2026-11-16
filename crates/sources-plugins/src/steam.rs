@@ -45,10 +45,14 @@ pub const API: &str = "/IStoreService/GetAppList/v1/";
 pub const API_KEY: &str = "api_key";
 /// Apps asked for per page.
 pub const PAGE: u32 = 10_000;
-/// Pages fetched in one refresh at most: 1.5 million apps.
-pub const MAX_PAGES: usize = 150;
+/// Pages fetched in one refresh at most: 600,000 apps.
+pub const MAX_PAGES: usize = 60;
 /// Apps kept in the index at most.
-pub const MAX_APPS: usize = 1_000_000;
+pub const MAX_APPS: usize = 500_000;
+/// Body bytes read in one refresh at most, so the index (names kept
+/// twice: folded and as written) stays under about 200 MiB even when
+/// every name is at its cap.
+pub const MAX_LIST_BYTES: usize = 96 << 20;
 /// How long a fetched list is used before it's fetched again.
 pub const REFRESH: Duration = Duration::from_secs(24 * 3600);
 /// The wait after a failed fetch before the next try.
@@ -187,7 +191,7 @@ impl Steam {
             return Err(fail(BAD_CREDENTIALS));
         }
         let mut names: HashMap<String, Vec<(u32, String)>> = HashMap::new();
-        let (mut after, mut kept) = (None, 0usize);
+        let (mut after, mut kept, mut bytes) = (None, 0usize, 0usize);
         for _ in 0..MAX_PAGES {
             let res = match kit.http.send(&list_request(after, &key)).await {
                 Ok(r) => r,
@@ -199,6 +203,10 @@ impl Steam {
                 401 | 403 => return Err(fail(REFUSED)),
                 429 => return Err(fail(RATE_LIMITED)),
                 _ => return Err(fail(FAILED)),
+            }
+            bytes = bytes.saturating_add(res.body.len());
+            if bytes > MAX_LIST_BYTES {
+                return Err(fail(TOO_LONG));
             }
             let body = res.body;
             let page = tokio::task::spawn_blocking(move || steam::parse_page(&body, &LIMITS))
