@@ -149,9 +149,14 @@ fn root(p: &mut P<'_>) -> R<()> {
     })
 }
 
-/// `true` or `false`; anything else is passed over as false.
+/// `true` or `false`; anything else is malformed, so a page whose paging
+/// flag isn't a boolean is never read as the last one.
 fn boolean(r: &mut Reader<'_>) -> R<bool> {
-    let t = r.peek() == Some(b't');
+    let t = match r.peek() {
+        Some(b't') => true,
+        Some(b'f') => false,
+        _ => return Err(Stop::Malformed),
+    };
     r.skip()?;
     Ok(t)
 }

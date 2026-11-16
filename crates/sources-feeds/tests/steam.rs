@@ -83,3 +83,18 @@ proptest! {
         bounded(&parse_page(&b, &l), &l);
     }
 }
+
+#[test]
+fn a_paging_flag_that_isnt_a_boolean_is_malformed() {
+    for v in [r#""true""#, "1", "null", r#""false""#] {
+        let body = format!(r#"{{"response":{{"apps":[],"have_more_results":{v}}}}}"#);
+        let p = parse_page(body.as_bytes(), &LIMITS);
+        assert_eq!(p.stop, Some(Stop::Malformed), "{v}");
+        assert!(!p.whole());
+    }
+    let p = parse_page(
+        br#"{"response":{"apps":[],"have_more_results":false}}"#,
+        &LIMITS,
+    );
+    assert!(p.whole() && !p.more);
+}

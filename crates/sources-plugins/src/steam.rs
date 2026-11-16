@@ -7,7 +7,8 @@
 //! page, then answers every [`Query`] from that index. A request carries
 //! the paging cursor and fixed parameters only, never anything from an
 //! item. The list is fetched again at most once per [`REFRESH`]; a failed
-//! fetch keeps the old index and waits [`RETRY`] before trying again.
+//! fetch keeps the old index and waits [`RETRY`] before trying again (a
+//! cancelled one waits [`CANCELLED`]).
 //!
 //! **Account class, off by default.** The list needs a Steam Web API key,
 //! read from the per-source store on each refresh and sent in the
@@ -47,16 +48,22 @@ pub const API_KEY: &str = "api_key";
 pub const PAGE: u32 = 10_000;
 /// Pages fetched in one refresh at most: 600,000 apps.
 pub const MAX_PAGES: usize = 60;
-/// Apps kept in the index at most.
-pub const MAX_APPS: usize = 500_000;
-/// Body bytes read in one refresh at most, so the index (names kept
-/// twice: folded and as written) stays under about 200 MiB even when
-/// every name is at its cap.
-pub const MAX_LIST_BYTES: usize = 96 << 20;
+/// Apps kept in the index at most: about 1.5 times today's games, and
+/// about what [`MAX_LIST_BYTES`] holds at ~100 bytes of JSON an app.
+pub const MAX_APPS: usize = 300_000;
+/// Body bytes read in one refresh at most. Each name is kept twice
+/// (folded, which can be up to 1.5 times longer, and as written) plus
+/// about 100 B of map overhead per app, so one index is at most about
+/// 110 MiB; during a refresh the old index and the partial one coexist,
+/// so the peak is about 250 MiB, inside the §3 RSS budget.
+pub const MAX_LIST_BYTES: usize = 32 << 20;
 /// How long a fetched list is used before it's fetched again.
 pub const REFRESH: Duration = Duration::from_secs(24 * 3600);
 /// The wait after a failed fetch before the next try.
 pub const RETRY: Duration = Duration::from_secs(3600);
+/// The wait after a refresh cancelled mid-request (its lookup timed out):
+/// short, since nothing failed and the partial list resumes at its cursor.
+pub const CANCELLED: Duration = Duration::from_secs(60);
 /// How sure a match is: one game has the title. The list has no years.
 pub const CONFIDENCE: u8 = 70;
 /// What leaves the install: no title, no item data.
@@ -112,8 +119,9 @@ const POLICY: Policy = Policy {
 pub const MIN_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Valve's terms (not re-read live; see the decisions file): the data is used inside
-/// Lodestar, credited, and not passed on. The list has no adult marker;
-/// the runtime never asks about an Adult item.
+/// Lodestar, credited, and not passed on. The list has no adult marker
+/// and does include adult-only games, so an unmarked item can match one;
+/// the runtime never asks about an Adult item. Flagged to the owner.
 pub const TERMS: Terms = Terms {
     background_walk: true,
     redistribute: false,
@@ -167,9 +175,10 @@ impl Limits {
 
 /// A refresh under way: what has been folded so far and where the next
 /// page starts. Kept between lookups, so a refresh the runtime cancels
-/// (its lookup timed out) picks up at the cursor rather than at page 1.
-#[derive(Default)]
+/// (its lookup timed out) picks up at the cursor rather than at page 1,
+/// unless it was started more than [`REFRESH`] ago.
 struct Partial {
+    started: Instant,
     names: Names,
     after: Option<u32>,
     pages: usize,
@@ -186,7 +195,34 @@ struct Index {
     partial: Option<Partial>,
 }
 
+impl Partial {
+    fn new() -> Partial {
+        Partial {
+            started: Instant::now(),
+            names: Names::default(),
+            after: None,
+            pages: 0,
+            apps: 0,
+            bytes: 0,
+        }
+    }
+}
+
 impl Index {
+    /// The refresh under way, started afresh when none is or the one kept
+    /// is older than [`REFRESH`].
+    fn partial(&mut self) -> &mut Partial {
+        let now = Instant::now();
+        if self
+            .partial
+            .as_ref()
+            .is_none_or(|p| now >= p.started + REFRESH)
+        {
+            self.partial = Some(Partial::new());
+        }
+        self.partial.get_or_insert_with(Partial::new)
+    }
+
     fn stale(&self, now: Instant) -> bool {
         self.fetched.is_none_or(|t| now >= t + REFRESH)
     }
@@ -249,9 +285,19 @@ impl Steam {
     /// Runs (or resumes) a refresh. The caller holds `refreshing`. The
     /// old index answers lookups until the new list is complete; on an
     /// error it stays, the partial list is dropped and the next try
-    /// waits [`RETRY`].
+    /// waits [`RETRY`]. A missing or bad key fails at once and sets no
+    /// wait: nothing was sent, and a key stored a moment later is used on
+    /// the next lookup.
     async fn refresh(&self, kit: &Kit) -> Result<(), PluginError> {
-        let r = self.fetch(kit).await;
+        let key = match self.credentials.get(ID, API_KEY).await {
+            Ok(Some(k)) => k,
+            Ok(None) => return Err(fail(NO_CREDENTIALS)),
+            Err(_) => return Err(fail(UNREADABLE)),
+        };
+        if !valid_key(key.expose()) {
+            return Err(fail(BAD_CREDENTIALS));
+        }
+        let r = self.fetch(kit, &key).await;
         let mut index = self.index();
         match r {
             Ok(names) => {
@@ -270,30 +316,23 @@ impl Steam {
 
     /// Fetches the rest of the list, from the saved cursor on, and
     /// returns the whole new index.
-    async fn fetch(&self, kit: &Kit) -> Result<Names, PluginError> {
-        let key = match self.credentials.get(ID, API_KEY).await {
-            Ok(Some(k)) => k,
-            Ok(None) => return Err(fail(NO_CREDENTIALS)),
-            Err(_) => return Err(fail(UNREADABLE)),
-        };
-        if !valid_key(key.expose()) {
-            return Err(fail(BAD_CREDENTIALS));
-        }
+    async fn fetch(&self, kit: &Kit, key: &Secret) -> Result<Names, PluginError> {
         let lim = self.limits;
         loop {
             let after = {
                 let mut index = self.index();
-                let part = index.partial.get_or_insert_with(Partial::default);
+                let part = index.partial();
                 if part.pages >= lim.pages {
                     return Err(fail(TOO_LONG));
                 }
                 let after = part.after;
                 // Set before the request: if the runtime cancels this
-                // lookup mid-request, the next try still waits.
-                index.retry_at = Some(Instant::now() + RETRY);
+                // lookup mid-request, the next try waits a short while.
+                // A real error replaces it with `RETRY` in `refresh`.
+                index.retry_at = Some(Instant::now() + CANCELLED);
                 after
             };
-            let res = match kit.http.send(&list_request(after, &key)).await {
+            let res = match kit.http.send(&list_request(after, key)).await {
                 Ok(r) => r,
                 Err(HttpError::Blocked { .. }) => return Err(fail(HELD)),
                 Err(_) => return Err(fail(FAILED)),
@@ -315,7 +354,7 @@ impl Steam {
             // Fold the page into the partial list in one step, so a
             // cancel between pages loses nothing.
             let mut index = self.index();
-            let part = index.partial.get_or_insert_with(Partial::default);
+            let part = index.partial();
             part.pages += 1;
             part.bytes = part.bytes.saturating_add(size);
             if part.bytes > lim.bytes {
@@ -333,7 +372,7 @@ impl Steam {
             }
             match (page.more, page.last_appid) {
                 (false, _) => {
-                    let done = index.partial.take().unwrap_or_default();
+                    let done = index.partial.take().unwrap_or_else(Partial::new);
                     return Ok(done.names);
                 }
                 // The cursor must move forward, or the list never ends.
@@ -472,19 +511,9 @@ fn fail(msg: &str) -> PluginError {
     PluginError(msg.to_owned())
 }
 
-/// A title for comparing: lower case, letters and digits only, each run
-/// of anything else one space.
-pub fn fold(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars().flat_map(char::to_lowercase) {
-        if c.is_alphanumeric() {
-            out.push(c);
-        } else if !out.ends_with(' ') && !out.is_empty() {
-            out.push(' ');
-        }
-    }
-    out.trim_end().to_owned()
-}
+/// A title for comparing: the same fold as Wikidata's, so the two can't
+/// drift apart.
+pub use crate::wikidata::fold;
 
 #[cfg(test)]
 mod tests {
