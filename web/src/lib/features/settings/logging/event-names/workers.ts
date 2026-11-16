@@ -56,6 +56,72 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_worker_dht_start_failed_n,
 		m.settings_logging_ev_worker_dht_start_failed_h
 	],
+	'worker.connecting': [
+		m.settings_logging_ev_worker_connecting_n,
+		m.settings_logging_ev_worker_connecting_h
+	],
+	'worker.connected': [
+		m.settings_logging_ev_worker_connected_n,
+		m.settings_logging_ev_worker_connected_h
+	],
+	'worker.fresh_session': [
+		m.settings_logging_ev_worker_fresh_session_n,
+		m.settings_logging_ev_worker_fresh_session_h
+	],
+	'worker.connection_lost': [
+		m.settings_logging_ev_worker_connection_lost_n,
+		m.settings_logging_ev_worker_connection_lost_h
+	],
+	'worker.turned_away': [
+		m.settings_logging_ev_worker_turned_away_n,
+		m.settings_logging_ev_worker_turned_away_h
+	],
+	'worker.connect_failed': [
+		m.settings_logging_ev_worker_connect_failed_n,
+		m.settings_logging_ev_worker_connect_failed_h
+	],
+	'worker.retrying': [
+		m.settings_logging_ev_worker_retrying_n,
+		m.settings_logging_ev_worker_retrying_h
+	],
+	'worker.draining': [
+		m.settings_logging_ev_worker_draining_n,
+		m.settings_logging_ev_worker_draining_h
+	],
+	'worker.clock_skewed': [
+		m.settings_logging_ev_worker_clock_skewed_n,
+		m.settings_logging_ev_worker_clock_skewed_h
+	],
+	'worker.renewed': [
+		m.settings_logging_ev_worker_renewed_n,
+		m.settings_logging_ev_worker_renewed_h
+	],
+	'worker.renewal_refused': [
+		m.settings_logging_ev_worker_renewal_refused_n,
+		m.settings_logging_ev_worker_renewal_refused_h
+	],
+	'worker.renewal_unsaved': [
+		m.settings_logging_ev_worker_renewal_unsaved_n,
+		m.settings_logging_ev_worker_renewal_unsaved_h
+	],
+	'worker.handing_back': [
+		m.settings_logging_ev_worker_handing_back_n,
+		m.settings_logging_ev_worker_handing_back_h
+	],
+	'worker.handback_timed_out': [
+		m.settings_logging_ev_worker_handback_timed_out_n,
+		m.settings_logging_ev_worker_handback_timed_out_h
+	],
+	'worker.stopped': [
+		m.settings_logging_ev_worker_stopped_n,
+		m.settings_logging_ev_worker_stopped_h
+	],
+	'worker.drained': [
+		m.settings_logging_ev_worker_drained_n,
+		m.settings_logging_ev_worker_drained_h
+	],
+	'worker.exited': [m.settings_logging_ev_worker_exited_n, m.settings_logging_ev_worker_exited_h],
+	'worker.status': [m.settings_logging_ev_worker_status_n, m.settings_logging_ev_worker_status_h],
 	'workers.join_refused': [
 		m.settings_logging_ev_workers_join_refused_n,
 		m.settings_logging_ev_workers_join_refused_h
