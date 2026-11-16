@@ -1084,7 +1084,7 @@ pub fn ingest(
     // as an unverified item and never as a sighting: the source didn't
     // find the key, the runtime asked about it.
     for (d, c, id, identification) in matches {
-        let counter = match store.put_claims(id, d.source, &c, false) {
+        let counter = match store.put_claims_at(id, d.source, &c, false, now) {
             Ok(true) => {
                 let list = if identification {
                     &mut out.identified

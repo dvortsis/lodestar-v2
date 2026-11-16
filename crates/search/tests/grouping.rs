@@ -4,8 +4,9 @@
 //! (the field at generation 0, no document carrying it), then this
 //! build, with a restart mid-walk. The field doesn't read Ready until the
 //! walk is done, so no consumer takes "no term" for "no match"
-//! meanwhile. `group_key` has no producer yet (GS-2 decisions): no
-//! document carries it, and it says so.
+//! meanwhile. GS-2b writes `group_key`: each torrent's title identity in
+//! a fast column only (schema v8), the same value as its
+//! `title_identity` term.
 //!
 //! The field is read here with Tantivy itself: it isn't in the query
 //! language. It holds the band terms
@@ -222,7 +223,7 @@ fn every_torrent_carries_its_band_terms() {
     let (mut store, infos) = store(tmp.path());
     let index = complete_index(tmp.path(), &mut store);
     assert_eq!(index.availability("group_minhash"), Availability::Ready);
-    assert_eq!(index.availability("group_key"), Availability::NoProducer);
+    assert_eq!(index.availability("group_key"), Availability::Ready);
     // Band terms: families 0 and 1 have BANDS each, family 2 none.
     for i in 0..N {
         let b = bands(&infos, i);
@@ -257,13 +258,25 @@ fn every_torrent_carries_its_band_terms() {
             .group_minhash
             .is_empty()
     );
-    // `group_key` isn't written; the title identity is, as before.
+    // GS-2b: every torrent's `group_key` column is its title identity,
+    // the value of its `title_identity` term, and the column isn't
+    // indexed (v8).
     let keys = group_keys(&dir);
     assert_eq!(keys.len(), N);
-    assert!(keys.iter().all(|(_, k)| k.is_none()), "{keys:?}");
+    for (id, key) in &keys {
+        // None for a torrent without a parsed title (no identity term
+        // either).
+        assert_eq!(*key, identity(&store, *id as i64), "torrent {id}");
+    }
     let family0 = identity(&store, 1).unwrap();
-    assert_eq!(with_term(&dir, "group_key", family0), 0);
+    assert_eq!(
+        keys.iter().filter(|(_, k)| *k == Some(family0)).count(),
+        N / 3
+    );
     assert_eq!(with_term(&dir, "title_identity", family0), N / 3);
+    let schema = raw(&dir).schema();
+    let entry = schema.get_field_entry(schema.get_field("group_key").unwrap());
+    assert!(entry.is_fast() && !entry.is_indexed());
 }
 
 /// A torrent written after the index is complete carries its band terms

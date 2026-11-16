@@ -29,6 +29,7 @@ use std::time::Duration;
 use crate::claims::{AltTitle, Claims, Details, ExternalId, MAX_MATCH_CONFIDENCE, truncate};
 use crate::manifest::{Manifest, Policy};
 use crate::plugin::{BoxFuture, Kit, PluginError};
+pub use crate::terms::{Attribution, Retention, Terms};
 
 /// Lookups one plugin may make a UTC day, user interest and background
 /// together (plan Q12, the runner's number under §2.26; one cap for both is
@@ -148,6 +149,12 @@ pub struct Identification {
     /// How sure the plugin is of the match, 0–100 percent; more is read as
     /// 100.
     pub confidence: u8,
+    /// The service's own adult marker for the work: `Some(false)` when it
+    /// says not adult, `Some(true)` when it says adult, `None` when it
+    /// doesn't say. Marked adult is always refused, and unmarked is
+    /// refused unless the plugin's [`Terms`] opt out
+    /// ([`Terms::accepts`]). Never stored.
+    pub adult: Option<bool>,
 }
 
 /// Counts only: titles and genres can name what a rule holds.
@@ -160,6 +167,7 @@ impl fmt::Debug for Identification {
             .field("genres", &self.genres.len())
             .field("year", &self.year)
             .field("confidence", &self.confidence)
+            .field("adult", &self.adult)
             .finish()
     }
 }
@@ -170,7 +178,9 @@ impl Identification {
     /// match confidence, so it's never empty (ENR-9: a row with ids alone
     /// would store as version 1, with any scheme). No name, description,
     /// publisher, file or tracker: an overview or a poster could name a
-    /// person, and the answer is about a stored torrent, not a find.
+    /// person, and the answer is about a stored torrent, not a find. The
+    /// adult marker isn't stored: the runtime refused a marked answer
+    /// before this.
     pub fn into_claims(self) -> Claims {
         let details = Details {
             canonical_title: self.canonical_title,
@@ -223,6 +233,14 @@ pub trait Identifier: Send + Sync {
     /// cap); never below [`MIN_INTERVAL_FLOOR`].
     fn min_interval(&self) -> Duration {
         Duration::from_secs(1)
+    }
+
+    /// Its service's terms, which the runtime enforces: the background
+    /// walk, redistribution, retention, attribution and the adult marker.
+    /// [`Terms::STRICT`] unless the plugin loosens what its service's
+    /// terms clearly allow.
+    fn terms(&self) -> &Terms {
+        &Terms::STRICT
     }
 
     /// Looks one item up through `kit`'s client, the only way it may send
@@ -334,6 +352,7 @@ mod tests {
                     genres,
                     year,
                     confidence,
+                    adult: None,
                 }
             })
     }
