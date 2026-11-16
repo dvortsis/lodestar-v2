@@ -16,13 +16,19 @@
 //!    is about to expire, `POST https://id.twitch.tv/oauth2/token` with the
 //!    two credentials in a form body (never the URL);
 //! 2. `POST https://api.igdb.com/v4/games` with a fixed Apicalypse body,
-//!    the title its one escaped string literal;
+//!    the title its one string literal, with any `"` or `\` dropped;
 //! 3. picks the one game whose title (and year, when the query has one)
 //!    agrees ([`choose`]). None, or more than one, is no match.
 //!
-//! A 401 from IGDB drops the token; the next lookup (after the host's
-//! back-off) asks Twitch for a new one. One lookup sends at most one
-//! token request and one search, so a refused token never loops.
+//! A 401 or 403 from IGDB drops the token, and the limiter holds IGDB's
+//! host for the policy's longest back-off, 6 hours; the first lookup after
+//! that asks Twitch for a new one. So a revoked token (Twitch revokes app
+//! tokens when the secret is regenerated, and sometimes on its own) stops
+//! IGDB lookups for 6 hours. That is intended: the lookup is never retried
+//! with a new token. A 400, 401 or 403 from Twitch holds its host for the
+//! same 6 hours. One lookup sends at most one token request and one
+//! search, and only one lookup at a time asks for a token, so a refused
+//! token never loops.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -104,8 +110,9 @@ pub(crate) const MANIFEST: Manifest = Manifest {
 pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{},"additionalProperties":false}"#;
 
 /// IGDB allows 4 requests a second with 8 open; this asks at most one a
-/// second a host, with no burst. Back-off after a 401, 403, 429 or 5xx: a
-/// minute up to 6 hours.
+/// second a host, with no burst. Back-off after a 429 or 5xx: a minute up
+/// to 6 hours. A refusal (a 401 or 403, or a 400 from Twitch) holds the
+/// host for the 6 hours at once.
 const POLICY: Policy = Policy {
     caps: Caps {
         per_host: HostRate::per_second(1),
@@ -165,6 +172,8 @@ struct Held {
 pub struct Igdb {
     credentials: Arc<dyn Credentials>,
     token: Mutex<Option<Held>>,
+    /// Held across a token request, so only one lookup asks at a time.
+    fetch: tokio::sync::Mutex<()>,
 }
 
 impl fmt::Debug for Igdb {
@@ -178,6 +187,7 @@ impl Igdb {
         Igdb {
             credentials,
             token: Mutex::new(None),
+            fetch: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -217,6 +227,15 @@ impl Igdb {
         if let Some(t) = self.cached(client_id) {
             return Ok(t);
         }
+        // One token request at a time. A lookup that waited here takes the
+        // token the one before it got, or stops if Twitch refused it.
+        let _fetching = self.fetch.lock().await;
+        if let Some(t) = self.cached(client_id) {
+            return Ok(t);
+        }
+        if blocked(kit, TOKEN_HOST) {
+            return Err(fail(HELD));
+        }
         let res = kit.http.send(&token_request(client_id, secret)).await;
         let res = match res {
             Ok(r) => r,
@@ -228,12 +247,14 @@ impl Igdb {
             400 | 401 | 403 => {
                 // Twitch answers a wrong Client ID with a 400, which the
                 // limiter counts as an answer, not a refusal. Hold the
-                // token host with the policy's back-off for all three, so
-                // refused credentials aren't sent again until it ends.
-                let limiter = kit.http.limiter();
+                // token host for the policy's longest back-off for all
+                // three, as the limiter's own 401 rule does. A block only
+                // extends: a 401 or 403 the limiter already held isn't
+                // counted again.
                 let now = Instant::now();
-                let wait = limiter.failure(TOKEN_HOST, now);
-                limiter.block(TOKEN_HOST, now + wait, now);
+                kit.http
+                    .limiter()
+                    .block(TOKEN_HOST, now + POLICY.caps.backoff.max, now);
                 return Err(fail(CREDENTIALS_REFUSED));
             }
             429 => return Err(fail(RATE_LIMITED)),
@@ -322,13 +343,7 @@ impl Identifier for Igdb {
             // While IGDB's host is held (after a 401, 403 or 429), no new
             // token is asked for either: the search would be refused. While
             // Twitch's is held (refused credentials), nothing is sent.
-            let now = Instant::now();
-            if [HOST, TOKEN_HOST].into_iter().any(|h| {
-                matches!(
-                    kit.http.limiter().state(h, now),
-                    lodestar_sources::HostState::Blocked { .. }
-                )
-            }) {
+            if [HOST, TOKEN_HOST].into_iter().any(|h| blocked(kit, h)) {
                 return Err(fail(HELD));
             }
             let token = self.token(kit, &id, &secret).await?;
@@ -357,6 +372,14 @@ impl Identifier for Igdb {
             Ok(choose(query, &found.hits))
         })
     }
+}
+
+/// Whether the limiter holds `host` after a refusal.
+fn blocked(kit: &Kit, host: &str) -> bool {
+    matches!(
+        kit.http.limiter().state(host, Instant::now()),
+        lodestar_sources::HostState::Blocked { .. }
+    )
 }
 
 fn fail(msg: &str) -> PluginError {
@@ -392,7 +415,7 @@ pub fn token_request(client_id: &Secret, secret: &Secret) -> Request {
 }
 
 /// The games search for `query`: a fixed Apicalypse body whose only item
-/// data is the title, as one escaped string literal.
+/// data is the title, as one string literal ([`literal`]).
 pub fn search_request(query: &Query, client_id: &Secret, token: &Secret) -> Request {
     let body = format!(
         "search \"{}\"; fields name,first_release_date,themes,genres; limit 20;",
@@ -414,19 +437,21 @@ pub fn search_request(query: &Query, client_id: &Secret, token: &Secret) -> Requ
     }
 }
 
-/// `title` as the inside of an Apicalypse string: control characters
-/// dropped, `\` and `"` escaped, at most [`MAX_QUERY_TITLE`] bytes before
-/// escaping, cut on a character boundary.
+/// `title` as the inside of an Apicalypse string: control characters, `"`
+/// and `\` dropped, at most [`MAX_QUERY_TITLE`] bytes, cut on a character
+/// boundary. Dropping rather than escaping means the title can't leave the
+/// literal whatever Apicalypse does with an escape; [`fold`] ignores
+/// punctuation, so matching is unchanged.
 pub fn literal(title: &str) -> String {
     let mut out = String::with_capacity(title.len().min(MAX_QUERY_TITLE) + 8);
     let mut used = 0;
-    for c in title.chars().filter(|c| !c.is_control()) {
+    for c in title
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '"' | '\\'))
+    {
         used += c.len_utf8();
         if used > MAX_QUERY_TITLE {
             break;
-        }
-        if matches!(c, '"' | '\\') {
-            out.push('\\');
         }
         out.push(c);
     }
@@ -537,8 +562,9 @@ mod tests {
     }
 
     #[test]
-    fn literals_are_escaped_and_capped() {
-        assert_eq!(literal(r#"a"b\c"#), r#"a\"b\\c"#);
+    fn quotes_and_backslashes_are_dropped_and_capped() {
+        assert_eq!(literal(r#"a"b\c\"#), "abc");
+        assert_eq!(literal(&"\"".repeat(400)), "");
         assert_eq!(literal("a\n\u{0}b; fields *;"), "ab; fields *;");
         assert_eq!(literal(&"é".repeat(200)).len(), 254);
     }

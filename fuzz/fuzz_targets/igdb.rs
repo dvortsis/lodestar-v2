@@ -9,7 +9,8 @@ use libfuzzer_sys::fuzz_target;
 use lodestar_metainfo::hidden_char;
 use lodestar_sources::identify::{Lookup, MediaKind, Query};
 use lodestar_sources_feeds::igdb::{
-    LIMITS, Limits, MAX_EXPIRES_IN, MAX_TITLE, TOKEN_LIMITS, parse_games, parse_token, token_ok,
+    LIMITS, Limits, MAX_EXPIRES_IN, MAX_TITLE, THEME_EROTIC, TOKEN_LIMITS, parse_games, parse_token,
+    token_ok,
 };
 use lodestar_sources_plugins::igdb::choose;
 
@@ -32,7 +33,14 @@ fuzz_target!(|data: &[u8]| {
     assert!(s.hits.len() <= l.max_items);
     for h in &s.hits {
         assert!(h.id > 0 && h.genres.len() <= l.max_ids);
-        assert!(h.themes.as_ref().is_none_or(|t| t.len() <= l.max_ids));
+        // The Erotic theme is kept even past the cap, as the one extra.
+        if let Some(t) = &h.themes {
+            assert!(t.len() <= l.max_ids + 1);
+            if t.len() > l.max_ids {
+                assert_eq!(t.last(), Some(&THEME_EROTIC));
+                assert_eq!(t.iter().filter(|&&x| x == THEME_EROTIC).count(), 1);
+            }
+        }
         if let Some(t) = &h.title {
             assert!(!t.is_empty() && t.len() <= MAX_TITLE);
             assert!(!t.chars().any(hidden_char));

@@ -231,8 +231,9 @@ pub fn token_ok(t: &str) -> bool {
 /// Parses Twitch's `{"access_token": text, "expires_in": n, "token_type":
 /// "bearer"}`. `None` for anything else: not whole, a repeated or escaped
 /// key, a token that isn't [`token_ok`], no or a zero `expires_in`, or a
-/// `token_type` other than `bearer`. Longer lives are cut to
-/// [`MAX_EXPIRES_IN`].
+/// `token_type` other than `bearer` (one that is too long or malformed
+/// spoils the answer wherever it comes). A missing `token_type` is
+/// accepted. Longer lives are cut to [`MAX_EXPIRES_IN`].
 pub fn parse_token(body: &[u8], limits: &Limits) -> Option<Token> {
     let mut stop = None;
     let mut j = reader(body, limits, &mut stop);

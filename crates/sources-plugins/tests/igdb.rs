@@ -190,7 +190,7 @@ fn a_hostile_title_is_one_literal() {
     let body = String::from_utf8(req.body).unwrap();
     assert_eq!(
         body,
-        "search \"x\\\"; fields *; where id > 0; search \\\"y\\\\\"; \
+        "search \"x; fields *; where id > 0; search y\"; \
          fields name,first_release_date,themes,genres; limit 20;"
     );
     let req = igdb::search_request(
@@ -269,19 +269,34 @@ async fn a_refusal_drops_the_token_and_never_loops() {
 }
 
 /// A 400 from Twitch (a wrong Client ID) holds Twitch's host like a 401
-/// or 403: the next lookup sends nothing, not even a token request.
+/// or 403, for the 6 h ceiling each time: until it ends, a lookup sends
+/// nothing, not even a token request.
 #[tokio::test(start_paused = true)]
 async fn a_refused_client_id_holds_twitch() {
+    let ceiling = Duration::from_secs(6 * 3600);
     for case in ["igdb_token_bad_client", "igdb_token_refused"] {
-        let replayer = Arc::new(Replayer::load(&fixture(case)).unwrap());
+        let dir = fixture(case);
+        let read = |f: &str| std::fs::read(dir.join(f)).unwrap();
+        let http = String::from_utf8(read("001.http")).unwrap();
+        let refusal = || parse_exchange(&http, read("001.body"), read("001.req.body")).unwrap();
+        let replayer = Arc::new(Replayer::new(vec![refusal(), refusal()]));
         let k = kit(replayer.clone());
         let p = plugin();
         let q = game(QUEST, None);
-        let e = p.lookup(&k, &q).await.unwrap_err().0;
-        assert_eq!(e, igdb::CREDENTIALS_REFUSED, "{case}");
-        let again = p.lookup(&k, &q).await.unwrap_err().0;
-        assert_eq!(again, igdb::HELD, "{case}");
-        assert_eq!(replayer.requests().len(), 1, "{case}");
+        // Refused twice, each time held for the 6 h ceiling at once: a 400
+        // isn't reset by the limiter, and a 401 isn't counted twice.
+        for round in 1..=2 {
+            let e = p.lookup(&k, &q).await.unwrap_err().0;
+            assert_eq!(e, igdb::CREDENTIALS_REFUSED, "{case} {round}");
+            assert_eq!(replayer.requests().len(), round, "{case} {round}");
+            let again = p.lookup(&k, &q).await.unwrap_err().0;
+            assert_eq!(again, igdb::HELD, "{case} {round}");
+            tokio::time::advance(ceiling - Duration::from_secs(1)).await;
+            let held = p.lookup(&k, &q).await.unwrap_err().0;
+            assert_eq!(held, igdb::HELD, "{case} {round}");
+            assert_eq!(replayer.requests().len(), round, "{case} {round}");
+            tokio::time::advance(Duration::from_secs(2)).await;
+        }
         replayer.finish().unwrap();
     }
 }
