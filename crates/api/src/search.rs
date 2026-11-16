@@ -549,6 +549,7 @@ async fn run_search(
                 sort: lease.sort(),
                 served: served + page.hits.len() as u64,
                 position,
+                collapse: false,
             })
         });
         let store = reader.lock().expect("reader lock");

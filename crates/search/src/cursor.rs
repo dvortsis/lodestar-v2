@@ -15,6 +15,14 @@
 //! order is approximate, as §8 says, and it's the same on every page, so
 //! nothing is served twice or skipped.
 //!
+//! **Collapsed pages (GS-3):** a cursor of a collapsed search (one row
+//! per group, `collapse.rs`) carries the same position (the last row
+//! served) and a collapse flag. Nothing else: a later page skips every
+//! group with a member ranking at or before the position, so no set of
+//! groups seen grows with depth. Such a cursor is written as version 2;
+//! an uncollapsed one stays exactly version 1, so cursors written before
+//! GS-3 still open.
+//!
 //! [`Cursor::to_bytes`] is the payload; the API authenticates it (an
 //! HMAC) and encodes it for URLs.
 
@@ -55,12 +63,18 @@ pub struct Cursor {
     /// API compares it with the request's.
     pub fingerprint: [u8; 8],
     pub sort: Sort,
-    /// Hits served before this cursor's page: its offset.
+    /// Rows served before this cursor's page: its offset (groups, when
+    /// collapsed).
     pub served: u64,
     pub position: Position,
+    /// The search shows one row per group (GS-3).
+    pub collapse: bool,
 }
 
+/// An uncollapsed cursor's version, as before GS-3.
 const VERSION: u8 = 1;
+/// A collapsed cursor's.
+const VERSION_COLLAPSED: u8 = 2;
 
 fn sort_code(sort: Sort) -> u8 {
     match sort {
@@ -150,7 +164,11 @@ impl Cursor {
     /// At most 61 bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(61);
-        out.push(VERSION);
+        out.push(if self.collapse {
+            VERSION_COLLAPSED
+        } else {
+            VERSION
+        });
         out.extend_from_slice(&self.lease.0);
         out.extend_from_slice(&self.fingerprint);
         out.push(sort_code(self.sort));
@@ -180,9 +198,11 @@ impl Cursor {
     /// build writes.
     pub fn from_bytes(bytes: &[u8]) -> Option<Cursor> {
         let mut r = Reader(bytes);
-        if r.u8()? != VERSION {
-            return None;
-        }
+        let collapse = match r.u8()? {
+            VERSION => false,
+            VERSION_COLLAPSED => true,
+            _ => return None,
+        };
         let lease = LeaseId(r.take()?);
         let fingerprint = r.take()?;
         let sort = sort_of(r.u8()?)?;
@@ -230,6 +250,7 @@ impl Cursor {
             sort,
             served,
             position,
+            collapse,
         })
     }
 }
@@ -275,15 +296,16 @@ mod tests {
             (any::<bool>(), any::<u64>(), addr())
                 .prop_map(|(present, key, addr)| Position::Field { present, key, addr }),
         );
-        prop_oneof![relevance, field].prop_map(|((lease, fingerprint, served), sort, position)| {
-            Cursor {
+        (prop_oneof![relevance, field], any::<bool>()).prop_map(
+            |(((lease, fingerprint, served), sort, position), collapse)| Cursor {
                 lease: LeaseId(lease),
                 fingerprint,
                 sort,
                 served,
                 position,
-            }
-        })
+                collapse,
+            },
+        )
     }
 
     proptest! {
@@ -323,6 +345,7 @@ mod tests {
                 score: 1.5,
                 addr: DocAddress::new(0, 3),
             },
+            collapse: false,
         };
         let mut b = c.to_bytes();
         // Sort byte (after version, lease and fingerprint) → size desc.
@@ -340,5 +363,34 @@ mod tests {
         let mut b = c.to_bytes();
         b[25] = 1;
         assert_eq!(Cursor::from_bytes(&b), None);
+    }
+
+    /// A cursor written before GS-3 (version 1, these exact bytes) still
+    /// opens, uncollapsed; collapse only changes the version byte, and an
+    /// unknown version is refused.
+    #[test]
+    fn version_one_cursors_still_open_and_collapse_is_version_two() {
+        let mut v1 = vec![1u8];
+        v1.extend_from_slice(&[7; 16]);
+        v1.extend_from_slice(&[9; 8]);
+        v1.push(9); // seeders, descending
+        v1.extend_from_slice(&50u64.to_le_bytes());
+        v1.push(2);
+        v1.push(1);
+        v1.extend_from_slice(&123u64.to_le_bytes());
+        v1.extend_from_slice(&4u32.to_le_bytes());
+        v1.extend_from_slice(&5u32.to_le_bytes());
+        let c = Cursor::from_bytes(&v1).expect("a v1 cursor");
+        assert!(!c.collapse);
+        assert_eq!(c.sort, Sort::Seeders { desc: true });
+        assert_eq!(c.to_bytes(), v1, "uncollapsed cursors are written as before");
+        let collapsed = Cursor { collapse: true, ..c };
+        let b = collapsed.to_bytes();
+        assert_eq!(b[0], 2);
+        assert_eq!(&b[1..], &v1[1..]);
+        assert_eq!(Cursor::from_bytes(&b), Some(collapsed));
+        let mut v3 = v1.clone();
+        v3[0] = 3;
+        assert_eq!(Cursor::from_bytes(&v3), None);
     }
 }
