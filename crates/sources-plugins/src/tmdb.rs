@@ -163,7 +163,8 @@ impl Tmdb {
 pub const TERMS: Terms = Terms {
     background_walk: false,
     redistribute: false,
-    retention: Retention::DEFAULT,
+    // TMDB bars caching its data longer than six months: 180 days, set here.
+    retention: Retention::days(180),
     attribution: Some(Attribution {
         text: ATTRIBUTION,
         link: ATTRIBUTION_URL,
@@ -212,7 +213,9 @@ impl Identifier for Tmdb {
                 return Ok(Lookup::NoMatch);
             }
             // Read on each lookup, so a token removed on purge stops
-            // working at once and no copy outlives the call.
+            // working at once and none is held between lookups. The
+            // request's `Authorization` header is a plain, unzeroed copy
+            // that lives until the request is dropped.
             let token = self
                 .credentials
                 .get(ID, TOKEN)
@@ -444,7 +447,10 @@ mod terms_tests {
         let t = Tmdb::new(Arc::new(crate::StaticCredentials::default()));
         let t = Identifier::terms(&t);
         assert!(!t.background_walk && !t.redistribute && t.adult_marker_required);
-        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(
+            t.retention.max_age,
+            std::time::Duration::from_secs(180 * 86_400)
+        );
         // Six months is at least 181 days.
         assert!(t.retention.drop_after() < 181 * 86_400);
         let a = t.attribution.unwrap();
