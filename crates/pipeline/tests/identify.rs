@@ -1818,6 +1818,22 @@ fn tightened_terms_take_the_title_back() {
         redistribute: false,
         ..OPEN
     };
+    // The mark fails: the record stays redistributable, so a retry marks.
+    s.connection()
+        .execute_batch(
+            "CREATE TEMP TRIGGER no_mark BEFORE UPDATE ON torrent_parsed
+             BEGIN SELECT RAISE(ABORT, 'busy'); END;",
+        )
+        .unwrap();
+    assert!(identify::record_terms(&mut s, src, &tight, noon()).is_err());
+    assert!(!pending(&s, id));
+    assert!(
+        identify::may_redistribute(&s, src).unwrap(),
+        "record unchanged"
+    );
+    s.connection()
+        .execute_batch("DROP TRIGGER temp.no_mark;")
+        .unwrap();
     identify::record_terms(&mut s, src, &tight, noon()).unwrap();
     assert!(pending(&s, id), "marked for the backfill");
     assert!(!pending(&s, other), "another source's torrent isn't");

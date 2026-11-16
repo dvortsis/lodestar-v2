@@ -1101,14 +1101,22 @@ pub fn sweep_expired(
     retention: &Retention,
     now: i64,
 ) -> Result<Swept, lodestar_store::Error> {
-    let high = store
-        .plugin_state(source, CLOCK_KEY)?
-        .and_then(|v| i64_at(&v, 0))
+    let stored = store.plugin_state(source, CLOCK_KEY)?;
+    let high = stored
+        .as_deref()
+        .and_then(|v| i64_at(v, 0))
         .unwrap_or(i64::MIN);
     let wall = now;
     let now = now.max(high);
     if now > high {
-        let _ = store.set_plugin_state(source, CLOCK_KEY, Some(&now.to_be_bytes()));
+        // Compare-and-set: a connection that raised the mark meanwhile is
+        // never moved back by this one.
+        let _ = store.compare_and_set_plugin_state(
+            source,
+            CLOCK_KEY,
+            stored.as_deref(),
+            Some(&now.to_be_bytes()),
+        );
     }
     // Dropped at its drop age: stamped at or before `now - drop_after`.
     let before = now.saturating_sub(retention.drop_after()).saturating_add(1);
@@ -1141,13 +1149,15 @@ pub fn record_terms(
     terms: &Terms,
     now: i64,
 ) -> Result<(), lodestar_store::Error> {
-    let was = may_redistribute(store, source)?;
+    // Mark first, then write the record: if the mark fails, the old record
+    // still reads as redistributable, so the next call marks again. The
+    // mark is safe to repeat.
+    if !terms.redistribute && may_redistribute(store, source)? {
+        store.mark_claims_unenriched(source)?;
+    }
     let record = terms.record();
     if store.plugin_state(source, TERMS_KEY)?.as_deref() != Some(record.as_slice()) {
         store.set_plugin_state(source, TERMS_KEY, Some(&record))?;
-    }
-    if was && !terms.redistribute {
-        store.mark_claims_unenriched(source)?;
     }
     if store.plugin_state(source, CLOCK_KEY)?.is_none() {
         store.set_plugin_state(source, CLOCK_KEY, Some(&now.to_be_bytes()))?;
