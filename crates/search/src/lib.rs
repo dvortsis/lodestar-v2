@@ -8,6 +8,7 @@ pub mod catalogue;
 mod compile;
 mod count;
 mod cursor;
+mod disk;
 mod doc;
 mod explain;
 pub mod facets;
@@ -42,6 +43,7 @@ pub use cache::{
 pub use cancel::{CancelOnDrop, CancelToken};
 pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
+pub use disk::{DiskStats, space_by_field_at};
 pub use doc::{
     DocEnrichment, DocProvenance, TitleIdentityParts, TorrentDoc, extension, flag_names,
     title_identity_parts,

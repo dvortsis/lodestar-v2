@@ -35,6 +35,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("full_scrape", &full_scrape::MANIFEST),
     ("nyaa", &nyaa::MANIFEST),
     ("nyaa", &nyaa::SUKEBEI_MANIFEST),
+    ("openlibrary", &crate::openlibrary::MANIFEST),
     ("prowlarr", &prowlarr::MANIFEST),
     ("srrdb", &srrdb::MANIFEST),
     ("stashdb", &stashdb::MANIFEST),

@@ -26,6 +26,7 @@ pub mod catalogue;
 pub mod clients;
 pub mod full_scrape;
 pub mod nyaa;
+pub mod openlibrary;
 pub mod prowlarr;
 pub mod srrdb;
 pub mod stashdb;

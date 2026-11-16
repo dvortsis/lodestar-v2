@@ -1,0 +1,32 @@
+{
+ "numFound": 3,
+ "start": 0,
+ "docs": [
+  {
+   "key": "/works/OL900011W",
+   "title": "Dune",
+   "first_publish_year": 1965,
+   "publish_year": [
+    1965,
+    1990,
+    2005
+   ]
+  },
+  {
+   "key": "/works/OL900012W",
+   "title": "Dune",
+   "first_publish_year": 1984,
+   "publish_year": [
+    1984
+   ]
+  },
+  {
+   "key": "/works/OL900013W",
+   "title": "Dune Messiah",
+   "first_publish_year": 1969,
+   "publish_year": [
+    1969
+   ]
+  }
+ ]
+}
