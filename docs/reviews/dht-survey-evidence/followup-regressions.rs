@@ -194,4 +194,89 @@ mod followup_review {
             "endpoint was poisoned in RAM for six hours after a failed WAL reservation even though no packet was dispatched"
         );
     }
+
+    #[tokio::test]
+    async fn group_commit_single_stale_sequence_must_not_abort_unrelated_peer_reservations() {
+        let db = NamedTempFile::new().unwrap();
+        let c = clock();
+        let cfg = SchedulerConfig {
+            wal_batch_max_wait: Duration::from_millis(80),
+            ..SchedulerConfig::default()
+        };
+        let s = SamplerScheduler::open_with_config(db.path(), cfg, c).unwrap();
+        let bad_ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 31), 6881);
+        let good_ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 32), 6881);
+
+        let conn = Connection::open(db.path()).unwrap();
+        conn.execute(
+            "INSERT INTO bep51_cooldowns (ip_u32, port, next_allowed_sec, support, last_novel, op_seq)
+             VALUES (?1, ?2, 0, 0, 0, 999)",
+            params![u32::from(*bad_ep.ip()), bad_ep.port()],
+        )
+        .unwrap();
+
+        assert!(s.consider_candidate(bad_ep).unwrap());
+        assert!(s.consider_candidate(good_ep).unwrap());
+
+        let (r1, r2) = tokio::join!(s.acquire_next_dispatch(), s.acquire_next_dispatch());
+        assert!(
+            r1.is_ok() || r2.is_ok(),
+            "single stale-sequence endpoint in group-commit batch rolled back unrelated peer reservation"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_sub_threshold_restarts_must_not_accumulate_unbounded_forward_drift() {
+        let db = NamedTempFile::new().unwrap();
+        let c = clock();
+        let cfg = SchedulerConfig::default();
+        let ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 41), 6881);
+        {
+            let s =
+                SamplerScheduler::open_with_config(db.path(), cfg.clone(), c.clone()).unwrap();
+            assert!(s.consider_candidate(ep).unwrap());
+            let permit = s.acquire_next_dispatch().await.unwrap().unwrap();
+            s.complete_dispatch(
+                permit,
+                SampleOutcome::Supported {
+                    advertised_interval_sec: Some(21_600),
+                    novel_hashes_count: 0,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        for _ in 0..36 {
+            c.mono.fetch_add(1, Ordering::SeqCst);
+            c.wall.fetch_add(600, Ordering::SeqCst);
+            let reopened =
+                SamplerScheduler::open_with_config(db.path(), cfg.clone(), c.clone()).unwrap();
+            drop(reopened);
+        }
+
+        let final_sched = SamplerScheduler::open_with_config(db.path(), cfg, c).unwrap();
+        assert!(
+            !final_sched.consider_candidate(ep).unwrap(),
+            "six-hour cooldown expired after only 36 monotonic seconds via repeated 600s restart skews"
+        );
+    }
+
+    #[tokio::test]
+    async fn iana_special_purpose_as112_and_amt_ipv4_endpoints_must_be_rejected() {
+        let db = NamedTempFile::new().unwrap();
+        let s =
+            SamplerScheduler::open_with_config(db.path(), SchedulerConfig::default(), clock())
+                .unwrap();
+        for addr in [
+            SocketAddrV4::new(Ipv4Addr::new(192, 31, 196, 1), 6881),
+            SocketAddrV4::new(Ipv4Addr::new(192, 52, 193, 1), 6881),
+            SocketAddrV4::new(Ipv4Addr::new(192, 175, 48, 1), 6881),
+        ] {
+            assert!(
+                !s.consider_candidate(addr).unwrap(),
+                "scheduler admitted IANA special-purpose AS112/AMT IPv4 endpoints rejected by lodestar_network_policy"
+            );
+        }
+    }
 }

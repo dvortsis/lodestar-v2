@@ -65,6 +65,21 @@ function Scrub-LogText([string]$Text) {
             if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<USER_HOME>') }
         }
     }
+    $cargoHome = $env:CARGO_HOME
+    if ($cargoHome) {
+        $chNorm = $cargoHome.TrimEnd('\', '/')
+        $chSlash = $chNorm.Replace('\', '/')
+        foreach ($variant in @($chNorm, $chSlash)) {
+            if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<CARGO_HOME>') }
+        }
+    }
+    $sysTemp = [IO.Path]::GetTempPath().TrimEnd('\', '/')
+    if ($sysTemp) {
+        $stSlash = $sysTemp.Replace('\', '/')
+        foreach ($variant in @("\\?\$sysTemp", $sysTemp, $stSlash)) {
+            if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<TEMP_ROOT>') }
+        }
+    }
     return $scrubbed
 }
 function Run-Check([string]$Log, [string[]]$Arguments) {
@@ -113,13 +128,16 @@ if ($regressionLog -notmatch 'test result: FAILED\. 0 passed; 2 failed;' -or
 $code = Run-Check '06-followup-regressions.log' @('test','--manifest-path',$manifest,'--locked','--offline','--lib','followup_review','--','--nocapture')
 if ($code[-1] -eq 0) { throw 'Expected follow-up invariant counterexamples did not reproduce.' }
 $followupLog = Get-Content -LiteralPath (Join-Path $OutputDirectory '06-followup-regressions.log') -Raw
-if ($followupLog -notmatch 'test result: FAILED\. 0 passed; 5 failed;' -or
+if ($followupLog -notmatch 'test result: FAILED\. 0 passed; 8 failed;' -or
     $followupLog -notmatch 'redispatched ten seconds before the received interval expired after a failed completion commit' -or
     $followupLog -notmatch 'scheduler B accepted a permit owned by scheduler A with a different database' -or
     $followupLog -notmatch 'ledger remained permanently wedged by an expired hot_heap entry that reclaim_expired_locked never inspects' -or
     $followupLog -notmatch 'explicitly unsupported node was re-queued onto hot_heap with stale Supported novelty and prioritized ahead of ready candidates after failed completion commit' -or
-    $followupLog -notmatch 'endpoint was poisoned in RAM for six hours after a failed WAL reservation even though no packet was dispatched') {
-    throw 'The five follow-up invariant failures were not all established; inspect the log.'
+    $followupLog -notmatch 'endpoint was poisoned in RAM for six hours after a failed WAL reservation even though no packet was dispatched' -or
+    $followupLog -notmatch 'single stale-sequence endpoint in group-commit batch rolled back unrelated peer reservation' -or
+    $followupLog -notmatch 'six-hour cooldown expired after only 36 monotonic seconds via repeated 600s restart skews' -or
+    $followupLog -notmatch 'scheduler admitted IANA special-purpose AS112/AMT IPv4 endpoints rejected by lodestar_network_policy') {
+    throw 'The eight follow-up invariant failures were not all established; inspect the log.'
 }
 if ($SyncEvidence) {
     $copyMap = @{

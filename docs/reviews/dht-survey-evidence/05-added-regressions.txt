@@ -1,15 +1,15 @@
    Compiling scheduler-review-harness v0.1.0 (<TEMP_VERIFY_DIR>)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.37s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
      Running unittests src\lib.rs (<TEMP_VERIFY_DIR>\target\debug\deps\scheduler_review_harness-087278b1f880f47c.exe)
 
 running 2 tests
 
-thread 'scheduler::review_regressions::forward_jump_then_wal_commit_then_restart_must_preserve_a' (16544) panicked at src\scheduler.rs:2296:9:
+thread 'scheduler::review_regressions::forward_jump_then_wal_commit_then_restart_must_preserve_a' (24444) panicked at src\scheduler.rs:2296:9:
 A lost its six-hour cooldown after only ten monotonic seconds
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 test scheduler::review_regressions::forward_jump_then_wal_commit_then_restart_must_preserve_a ... FAILED
 
-thread 'scheduler::review_regressions::second_scheduler_must_not_bypass_active_cooldown' (27696) panicked at src\scheduler.rs:2325:9:
+thread 'scheduler::review_regressions::second_scheduler_must_not_bypass_active_cooldown' (30220) panicked at src\scheduler.rs:2325:9:
 second scheduler dispatched X during first scheduler's six-hour cooldown
 test scheduler::review_regressions::second_scheduler_must_not_bypass_active_cooldown ... FAILED
 
@@ -19,6 +19,6 @@ failures:
     scheduler::review_regressions::forward_jump_then_wal_commit_then_restart_must_preserve_a
     scheduler::review_regressions::second_scheduler_must_not_bypass_active_cooldown
 
-test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.13s
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.29s
 
 error: test failed, to rerun pass `--lib`
