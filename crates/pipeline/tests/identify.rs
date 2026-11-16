@@ -1647,6 +1647,12 @@ async fn the_runtime_sweeps_its_expired_claims() {
     claim_at(&mut s, old, src, noon() - 179 * DAY);
     claim_at(&mut s, young, src, noon() - 178 * DAY);
     claim_at(&mut s, old, dht, noon() - 900 * DAY);
+    // More than one step's worth: a full step sweeps again at once.
+    for i in 2..identify::SWEEP_BATCH + 4 {
+        let id = put(&mut s, &movie(i, "Plain"), dht, 0, false).0;
+        claim_at(&mut s, id, src, noon() - 400 * DAY);
+    }
+    let due = identify::SWEEP_BATCH as u64 + 3;
     let store = Arc::new(Mutex::new(s));
     let r = run(
         Recorder::new(None),
@@ -1659,7 +1665,7 @@ async fn the_runtime_sweeps_its_expired_claims() {
         Arc::new(MemoryState::new()),
         &[],
     );
-    until("the sweep", || n(&r.stats.expired) == 1).await;
+    until("the sweeps", || n(&r.stats.expired) == due).await;
     r.stop().await;
     let s = store.lock().unwrap();
     assert_eq!(s.claims_stored_at(old, src).unwrap(), None);
@@ -1765,31 +1771,85 @@ fn only_a_redistributable_answer_renames_the_record() {
     assert_eq!(title(&s), None, "an unreadable record: strict");
 }
 
-/// The runtime records its plugin's terms where `stored_title` reads them.
+/// The runtime records its plugin's terms where `stored_title` reads
+/// them, and creates the retention mark before the plugin runs.
 #[tokio::test]
 async fn the_runtime_records_its_terms() {
-    let (s, _, src) = store();
-    let state = Arc::new(MemoryState::new());
+    let (mut s, _, src) = store();
+    s.set_plugin_state(src, identify::TERMS_KEY, None).unwrap();
+    let store = Arc::new(Mutex::new(s));
     let r = run(
         Recorder::with_terms(None, Terms::STRICT),
-        Arc::new(Mutex::new(s)),
+        store.clone(),
         stand_in(),
         AdultSources::default(),
         Arc::default(),
         src,
         interest_only(),
-        state.clone(),
+        Arc::new(MemoryState::new()),
         &[],
     );
-    let mut got = None;
-    let deadline = tokio::time::Instant::now() + DEADLINE;
-    while got.is_none() {
-        assert!(tokio::time::Instant::now() < deadline, "no terms record");
-        got = state.get(identify::TERMS_KEY).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    let read = |key| store.lock().unwrap().plugin_state(src, key).unwrap();
+    until("the terms record", || read(identify::TERMS_KEY).is_some()).await;
+    until("the mark", || read(identify::CLOCK_KEY).is_some()).await;
     r.stop().await;
-    assert_eq!(Terms::from_record(&got.unwrap()), Some(Terms::STRICT));
+    let got = read(identify::TERMS_KEY).unwrap();
+    assert_eq!(Terms::from_record(&got), Some(Terms::STRICT));
+}
+
+/// A build that stops a plugin's answers from being passed on marks every
+/// torrent holding them for the backfill, so the title they resolved
+/// leaves the served record; recording the same terms again marks nothing.
+#[test]
+fn tightened_terms_take_the_title_back() {
+    let (mut s, dht, src) = store();
+    let (id, _) = put(&mut s, "New Folder", dht, 0, false);
+    let (other, _) = put(&mut s, &movie(0, "Plain"), dht, 0, false);
+    claim_at(&mut s, id, src, noon());
+    claim_at(&mut s, other, dht, noon());
+    let pending = |s: &Store, id| {
+        s.enrichment(id)
+            .unwrap()
+            .is_none_or(|e| e.version != lodestar_classify::ENRICHMENT_VERSION)
+    };
+    identify::record_terms(&mut s, src, &OPEN, noon()).unwrap();
+    assert!(!pending(&s, id), "unchanged terms mark nothing");
+    let tight = Terms {
+        redistribute: false,
+        ..OPEN
+    };
+    identify::record_terms(&mut s, src, &tight, noon()).unwrap();
+    assert!(pending(&s, id), "marked for the backfill");
+    assert!(!pending(&s, other), "another source's torrent isn't");
+    assert!(!identify::may_redistribute(&s, src).unwrap());
+}
+
+/// The host's sweep covers every source with a terms record, running or
+/// not, with the retention the record holds, and no other source.
+#[test]
+fn the_host_sweeps_sources_that_are_not_running() {
+    let (mut s, dht, src) = store();
+    let short = Terms {
+        retention: Retention::days(30),
+        ..OPEN
+    };
+    identify::record_terms(&mut s, src, &short, noon()).unwrap();
+    let (id, _) = put(&mut s, &movie(0, "Plain"), dht, 0, false);
+    claim_at(&mut s, id, src, noon() - 29 * DAY);
+    claim_at(&mut s, id, dht, noon() - 900 * DAY);
+    s.set_source_state(src, SourceState::Disabled).unwrap();
+    let swept = identify::sweep_recorded(&mut s, noon()).unwrap();
+    assert_eq!(swept.len(), 1, "only the source with a record");
+    assert_eq!((swept[0].0, swept[0].1.dropped.clone()), (src, vec![id]));
+    assert!(!swept[0].1.clock_ahead);
+    assert_eq!(s.claims_stored_at(id, src).unwrap(), None);
+    assert_eq!(
+        s.claims_stored_at(id, dht).unwrap(),
+        Some(noon() - 900 * DAY)
+    );
+    // A clock behind the mark is reported.
+    let back = identify::sweep_recorded(&mut s, noon() - 10 * DAY).unwrap();
+    assert!(back[0].1.clock_ahead);
 }
 
 proptest! {
@@ -1835,6 +1895,10 @@ proptest! {
                 due[n] |= at <= high - keep.drop_after()
                     || at > high + identify::FUTURE_SLACK_SECS;
                 prop_assert_eq!(got, (!due[n]).then_some(at));
+                // Independently of the formula: nothing kept is as old as
+                // the (floored) limit.
+                let limit = (days as i64).max(2) * DAY;
+                prop_assert!(got.is_none() || high - at < limit);
             }
         }
     }

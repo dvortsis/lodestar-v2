@@ -542,7 +542,10 @@ impl Store {
     /// only that source's: the identify runtime's retention sweep
     /// (ENR-terms). Each torrent that lost a row is marked for the
     /// backfill, so a title it resolved goes too, in the same transaction.
-    /// Returns those torrents; fewer than `limit` means none is left.
+    /// Returns those torrents; fewer than `limit` means none is left. A
+    /// deleted row no longer matches, so repeated calls go on where the
+    /// last stopped, with no cursor. It doesn't check the source's state: a
+    /// disabled source's claims expire too.
     pub fn drop_claims_outside(
         &mut self,
         source: SourceId,
@@ -571,6 +574,18 @@ impl Store {
         }
         tx.commit()?;
         Ok(ids)
+    }
+
+    /// Marks every torrent holding `source`'s claims for the backfill, in
+    /// one statement through the `(source_id, …)` index: the plugin's terms
+    /// stopped allowing its answers to rename the record (ENR-terms).
+    /// Returns how many were marked.
+    pub fn mark_claims_unenriched(&mut self, source: SourceId) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id IN
+                 (SELECT torrent_id FROM torrent_claims WHERE source_id = ?1)",
+            [source.get()],
+        )?)
     }
 
     /// Deletes `source`'s claims on torrent `torrent_id`, marking it for

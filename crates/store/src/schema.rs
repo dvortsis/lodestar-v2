@@ -1872,6 +1872,36 @@ mod tests {
         assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
     }
 
+    /// A fresh install of this build ends with the same schema as an
+    /// upgrade from V14, the claims stamp and its index included.
+    #[test]
+    fn the_latest_schema_on_a_fresh_store_matches_an_upgraded_one() {
+        let schema = |conn: &Connection| -> Vec<(String, String)> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name, sql FROM sqlite_schema WHERE sql IS NOT NULL
+                     AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let mut fresh = Connection::open_in_memory().unwrap();
+        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        let mut upgraded = Connection::open_in_memory().unwrap();
+        migrate_with(&mut upgraded, None, &MIGRATIONS[..14]).unwrap();
+        migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
+        assert_eq!(version(&fresh), latest_schema_version());
+        assert_eq!(schema(&fresh), schema(&upgraded));
+        assert!(
+            schema(&fresh)
+                .iter()
+                .any(|(n, _)| n == "torrent_claims_stored")
+        );
+    }
+
     /// A fresh install runs V1–V14 in order and ends with the same schema
     /// as an upgrade from V13.
     #[test]
