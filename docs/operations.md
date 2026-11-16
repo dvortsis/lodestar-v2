@@ -40,6 +40,7 @@ Common environment variables (the update settings have their own `LODESTAR_UPDAT
 | `LODESTAR_SCRAPE_ENABLED` | Tracker and DHT scrapes (§9): `true` or `false` | `true` |
 | `LODESTAR_SECURE_COOKIES` | `true` when Lodestar sits behind a TLS reverse proxy (same as `http.secure_cookies`) | `false` |
 | `LODESTAR_LOG` | `error`, `warn`, `info`, `debug` or a `tracing` filter. While it's set, **Settings → Logging** is read-only; leave it unset to change logging in the app | `info` |
+| `LODESTAR_EXIT_ON_NETWORK_LOSS` | Newer than v0.5.1; Linux only, ignored elsewhere with one log line. `true` makes Lodestar stop and exit with status 75 when only the loopback interface and no default route have been left for 30 seconds, so a restart policy starts it again inside the network of the container it shares, such as gluetun after gluetun restarts. Lodestar's gluetun templates set it; never set it on a native install | `false` |
 | `LODESTAR_DHT_SAFE_RESTART` | Development only; unavailable in v0.5.1. `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
 | `LODESTAR_DHT_WITNESS_DIR` | Development only; unavailable in v0.5.1. The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
 

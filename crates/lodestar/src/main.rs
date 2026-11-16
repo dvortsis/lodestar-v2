@@ -18,6 +18,7 @@ mod insights;
 mod logging;
 mod memstats;
 mod metrics;
+mod net_watch;
 mod ops;
 mod percolator;
 mod privdrop;
@@ -266,7 +267,9 @@ type Supervised = Option<&'static update::probation::Child>;
 #[cfg(not(unix))]
 type Supervised = Option<std::convert::Infallible>;
 
-/// An unsupervised run (`serve --fixture`, Windows).
+/// An unsupervised run: `serve --fixture`, its only caller, so release
+/// builds without the `fixture` feature leave it out.
+#[cfg(feature = "fixture")]
 async fn serve(config: Config) -> Result<(), BoxError> {
     serve_as(config, None, None).await.map(|_| ())
 }
@@ -298,10 +301,18 @@ async fn serve_as(
         let _ = signalled.send(true);
     });
     let mut signal = stopped.clone();
+    // `LODESTAR_EXIT_ON_NETWORK_LOSS`: the network this container shares
+    // has gone (`net_watch`), so stop and exit for the restart policy.
+    let network_lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lost_flag = network_lost.clone();
+    let watch = config.exit_on_network_loss;
     let stop = async move {
         tokio::select! {
             _ = signal.changed() => {}
             () = restart.requested() => {}
+            () = net_watch::lost(watch) => {
+                lost_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     };
     let services = match Services::start(&config).await {
@@ -343,6 +354,10 @@ async fn serve_as(
         if update::probation::failed() {
             return Err("the self-test failed".into());
         }
+    }
+    // A signal during the stop still wins: then it's a plain stop.
+    if network_lost.load(std::sync::atomic::Ordering::SeqCst) && !*stopped.borrow_and_update() {
+        return Ok(Some(net_watch::EXIT_CODE));
     }
     if restart.was_requested() && !*stopped.borrow_and_update() {
         // Under the supervisor: the request, then its reserved code.

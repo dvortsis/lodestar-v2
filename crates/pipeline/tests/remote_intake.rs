@@ -1821,6 +1821,208 @@ impl StoredKeys for Gate {
     }
 }
 
+/// Keys a remote worker found too large go to the built-in worker's pool
+/// as parked keys do: keeping their privacy, ended as blocked if it refuses
+/// them, and left for the server to end (`Full`) when the pool is full.
+#[test]
+fn keys_handed_back_go_to_the_built_in_worker() {
+    use lodestar_cluster::{HandBack, LocalIntake};
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(2);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let (private, public, blocked, extra) = (
+        InfoHash([3; 20]),
+        InfoHash([1; 20]),
+        InfoHash([9; 20]),
+        InfoHash([4; 20]),
+    );
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 1 << 3,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(filter_blocking(&[])),
+        }),
+    });
+    held.insert(blocked.0);
+    let mut taken = HashMap::new();
+    for (key, s) in [(private, 3), (public, 1), (blocked, 1), (extra, 1)] {
+        let c = Claim {
+            key,
+            source: src(s),
+            strategy: 0,
+            at: now(),
+        };
+        let Claimed::Granted(t) = authority.claim(WorkerId(8), c, now()) else {
+            panic!("granted")
+        };
+        let HandBack::Handed(local, lease) = authority.hand_to_local(WorkerId(8), &key, t, now())
+        else {
+            panic!("handed")
+        };
+        taken.insert(key, intake.take_handed(key, local, lease));
+    }
+    // The pool takes two; the refused key ends as blocked; the last finds
+    // it full and is left for the server to end.
+    assert_eq!(
+        taken,
+        HashMap::from([
+            (private, LocalIntake::Fetching),
+            (public, LocalIntake::Fetching),
+            (blocked, LocalIntake::Refused),
+            (extra, LocalIntake::Full)
+        ])
+    );
+    let mut handed = HashMap::new();
+    while let Ok(d) = to_pool.try_recv() {
+        assert!(!d.reply);
+        handed.insert(d.found.key, d.found.private_source);
+    }
+    assert_eq!(handed, HashMap::from([(private, true), (public, false)]));
+    assert!(!authority.in_flight(&blocked), "its lease ended as blocked");
+    assert_eq!(
+        authority.get(&extra).map(|l| l.holder),
+        Some(WorkerId::LOCAL),
+        "still leased to it, for the server to end"
+    );
+}
+
+/// A key whose hold changes after the server's check, so the intake
+/// refuses it only once handed over, ends as the server's own refusal
+/// does: remembered as blocked, so a remote claim whose store check ran
+/// before the refusal is answered as committed, never granted.
+#[test]
+fn a_refusal_in_the_race_window_is_remembered_as_blocked() {
+    use lodestar_cluster::{HandBack, LocalIntake};
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    authority.serve_remote();
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(2);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let key = InfoHash([7; 20]);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(filter_blocking(&[])),
+        }),
+    });
+    let claim = Claim {
+        key,
+        source: src(1),
+        strategy: 0,
+        at: now(),
+    };
+    let Claimed::Granted(t) = authority.claim(WorkerId(8), claim, now()) else {
+        panic!("granted")
+    };
+    assert!(!intake.refuses_local(&key), "free when the server asked");
+    let HandBack::Handed(local, lease) = authority.hand_to_local(WorkerId(8), &key, t, now())
+    else {
+        panic!("handed")
+    };
+    // Another worker's claim: its store check runs now, before the hold.
+    let checked_at = authority.commit_seq();
+    held.insert(key.0);
+    assert_eq!(intake.take_handed(key, local, lease), LocalIntake::Refused);
+    assert!(to_pool.try_recv().is_err(), "never fetched");
+    assert!(!authority.in_flight(&key));
+    assert_eq!(
+        authority.claim_batch(WorkerId(9), &[claim], now(), None, Some(checked_at)),
+        vec![BatchAnswer::Committed]
+    );
+}
+
+/// A worker that says any key is too large lends the coordinator nothing
+/// from its report: a key handed back reaches the built-in worker's pool
+/// as a bare key built from the coordinator's own lease (its source and
+/// strategy, privacy from its own sources), with no peers, claims or
+/// provenance. The pool fetches it under the built-in worker's own bound,
+/// as any other key. A key the built-in worker refuses is reported as
+/// refused (`refuses_local`), so the server never grants it.
+#[test]
+fn a_key_handed_back_carries_nothing_from_the_report() {
+    use lodestar_cluster::{HandBack, LocalIntake};
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(2);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let (key, refused) = (InfoHash([5; 20]), InfoHash([6; 20]));
+    held.insert(refused.0);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(filter_blocking(&[])),
+        }),
+    });
+    assert!(intake.refuses_local(&refused));
+    assert!(!intake.refuses_local(&key));
+    let c = Claim {
+        key,
+        source: src(2),
+        strategy: 7,
+        at: now(),
+    };
+    let Claimed::Granted(t) = authority.claim(WorkerId(8), c, now()) else {
+        panic!("granted")
+    };
+    let HandBack::Handed(local, lease) = authority.hand_to_local(WorkerId(8), &key, t, now())
+    else {
+        panic!("handed")
+    };
+    assert_eq!(
+        (lease.source, lease.strategy),
+        (src(2), 7),
+        "the lease's own"
+    );
+    assert_eq!(intake.take_handed(key, local, lease), LocalIntake::Fetching);
+    let d = to_pool.try_recv().expect("in the pool");
+    assert_eq!(d.found, lodestar_sources::Found::key(key, 7));
+    assert_eq!(d.source, src(2));
+    assert!(!d.reply);
+    assert!(to_pool.try_recv().is_err());
+}
+
 /// Parked keys handed to the built-in worker keep their privacy (§18.7,
 /// BEP 27: a key every source of which is private never reaches public
 /// peer finding), and one it refuses (held, or on the filter's hash

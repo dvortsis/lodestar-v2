@@ -223,7 +223,9 @@ impl Restart {
         }
     }
 
-    /// This run can't restart itself, for `why` (shown as the hint).
+    /// This run can't restart itself, for `why` (shown as the hint). Its
+    /// callers: a temporary fixture, and a paused Windows service.
+    #[cfg(any(test, windows, feature = "fixture"))]
     pub fn refuse(&self, why: impl Into<String>) {
         let _ = self.refused.set(why.into());
     }

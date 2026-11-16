@@ -2,6 +2,7 @@
 import copy
 import json
 import unittest
+from unittest import mock
 import importlib.util
 import tempfile
 from pathlib import Path
@@ -13,7 +14,10 @@ TYPES = {"CleanupToken": "AWS::SecretsManager::Secret", "Executor": "AWS::IAM::R
          "ExpirationLog": "AWS::Logs::LogGroup", "Expiration": "AWS::Lambda::Function", "ExpirationErrors": "AWS::CloudWatch::Alarm",
          "EmergencyLog": "AWS::Logs::LogGroup", "Emergency": "AWS::Lambda::Function", "EmergencyErrors": "AWS::CloudWatch::Alarm",
          "ExpirationSchedule": "AWS::Events::Rule", "SchedulePermission": "AWS::Lambda::Permission",
-         "LodestarFleetCleanupInvoker": "AWS::IAM::Role", "HeartbeatMetric": "AWS::Logs::MetricFilter", "HeartbeatAlarm": "AWS::CloudWatch::Alarm"}
+         "LodestarFleetCleanupInvoker": "AWS::IAM::Role", "HeartbeatMetric": "AWS::Logs::MetricFilter", "HeartbeatAlarm": "AWS::CloudWatch::Alarm",
+         "ExpirationBusy": "AWS::Logs::MetricFilter", "EmergencyBusy": "AWS::Logs::MetricFilter", "BusyAlarm": "AWS::CloudWatch::Alarm"}
+TOPIC = {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}
+LEASE_KEYS = ["locks/cleanup-expiration.json", "locks/cleanup-emergency.json"]
 
 
 def object_arn(bucket, key):
@@ -41,6 +45,9 @@ def audit(t):
         "Policies": [{"PolicyName": "ScopedCleanup", "PolicyDocument": {"Version": "2012-10-17", "Statement": [
             {"Effect": "Allow", "Action": "s3:GetObject", "Resource": object_arn("StateBucketName", "fleet/cleanup-authorization.json"), "Condition": same_owner},
             {"Effect": "Allow", "Action": "s3:PutObject", "Resource": object_arn("ControlBucketName", "locks/fleet-mismatch.json"), "Condition": same_owner},
+            # The per-mode leases: exactly these two keys, read and conditional write, never delete.
+            {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Condition": same_owner,
+             "Resource": [object_arn("ControlBucketName", key) for key in LEASE_KEYS]},
             {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": {"Ref": "CleanupToken"}},
             {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": [
                 {"Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-expiration:*"},
@@ -64,12 +71,22 @@ def audit(t):
         if (props["Environment"]["Variables"] != {"AWS_ACCOUNT_ID": {"Ref": "AWS::AccountId"}, "STATE_BUCKET": {"Ref": "StateBucketName"},
                 "CONTROL_BUCKET": {"Ref": "ControlBucketName"}, "CLEANUP_SECRET_ARN": {"Ref": "CleanupToken"},
                 "LINODE_ACCOUNT_EUUID": {"Ref": "LinodeAccountEuuid"}, "MIN_CREATED_UTC": {"Ref": "MinCreatedUtc"}, "CLEANUP_MODE": mode}
-                or props["Role"] != {"Fn::GetAtt": ["Executor", "Arn"]} or props["Timeout"] != 300 or props["ReservedConcurrentExecutions"] != 1
+                or props["Role"] != {"Fn::GetAtt": ["Executor", "Arn"]} or props["Timeout"] != 300 or "ReservedConcurrentExecutions" in props
                 or props["Code"] != {"ZipFile": build_templates.cleanup_code()}):
             errors.append("function mode/source/account boundary differs")
         if (r[name + "Errors"]["Properties"]["AlarmActions"] != [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]
                 or r[name + "Log"]["Properties"]["RetentionInDays"] != 14):
             errors.append("failure notification/retention missing")
+        if r[name + "Busy"]["Properties"] != {"LogGroupName": {"Ref": name + "Log"}, "FilterPattern": '"cleanup_busy"',
+                "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "MetricValue": "1"}]}:
+            errors.append("busy run is not counted")
+    if r["BusyAlarm"]["Properties"] != {"Namespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "Statistic": "Sum",
+            "Period": 300, "EvaluationPeriods": 1, "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "TreatMissingData": "notBreaching", "AlarmActions": [TOPIC]}:
+        errors.append("busy run does not notify")
+    # Term patterns match Lambda's text-format lines, where the JSON follows a level/time/request-id prefix.
+    if r["HeartbeatMetric"]["Properties"]["FilterPattern"] != '"cleanup_complete"' or r["HeartbeatMetric"]["Properties"]["LogGroupName"] != {"Ref": "ExpirationLog"}:
+        errors.append("heartbeat does not count successful expiration runs")
     if (r["HeartbeatAlarm"]["Properties"]["TreatMissingData"] != "breaching"
             or r["HeartbeatAlarm"]["Properties"]["AlarmActions"] != [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]):
         errors.append("missing cleanup heartbeat does not notify")
@@ -96,6 +113,14 @@ MUTATIONS = {
     "no error alert": lambda t: t["Resources"]["EmergencyErrors"]["Properties"].update(AlarmActions=[]),
     "no heartbeat alert": lambda t: t["Resources"]["HeartbeatAlarm"]["Properties"].update(TreatMissingData="notBreaching"),
     "public function URL": lambda t: t["Resources"].update(PublicURL={"Type": "AWS::Lambda::Url", "Properties": {}}),
+    "lease wildcard key": lambda t: t["Resources"]["Executor"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"][2].update(Resource=[object_arn("ControlBucketName", "locks/*")]),
+    "lease extra key": lambda t: t["Resources"]["Executor"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"][2]["Resource"].append(object_arn("ControlBucketName", "locks/fleet.json")),
+    "lease delete": lambda t: t["Resources"]["Executor"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"][2]["Action"].append("s3:DeleteObject"),
+    "lease other owner": lambda t: t["Resources"]["Executor"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"][2].pop("Condition"),
+    "lease state bucket": lambda t: t["Resources"]["Executor"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"][2].update(Resource=[object_arn("StateBucketName", k) for k in LEASE_KEYS]),
+    "reservation reintroduced": lambda t: t["Resources"]["Expiration"]["Properties"].update(ReservedConcurrentExecutions=1),
+    "busy not alerted": lambda t: t["Resources"]["BusyAlarm"]["Properties"].update(AlarmActions=[]),
+    "busy filter wrong group": lambda t: t["Resources"]["EmergencyBusy"]["Properties"].update(LogGroupName={"Ref": "ExpirationLog"}),
 }
 
 
@@ -115,9 +140,35 @@ class CleanupPolicy(unittest.TestCase):
             with self.assertRaises(module.Refused):
                 module.cleanup(auth(), "EUUID-FLEET", START, "emergency", START, api, lambda: None, lambda: None)
             self.assertFalse(any(m == "DELETE" for m, _ in api.calls))
+            from test_cleanup import SCENARIOS
+            for scenario in SCENARIOS:  # the packaged lease keeps every precondition
+                self.assertTrue(scenario(module), scenario.__name__)
 
     def test_exact_cleanup_authority(self):
         self.assertEqual(audit(TEMPLATE), [])
+
+    def test_no_reserved_concurrency_and_leases_match_the_handler(self):
+        # An account with a concurrency limit of 10 cannot reserve any (AWS keeps 10 unreserved).
+        self.assertNotIn("ReservedConcurrentExecutions", json.dumps(TEMPLATE))
+        from test_cleanup import ch as cleanup_handler
+        self.assertEqual(sorted(cleanup_handler.LEASE_KEYS.values()), sorted(LEASE_KEYS))
+        self.assertEqual(list(build_templates.CLEANUP_LEASE_KEYS), LEASE_KEYS)
+        for name in ("Expiration", "Emergency"):
+            self.assertGreater(cleanup_handler.LEASE_SECONDS, TEMPLATE["Resources"][name]["Properties"]["Timeout"])
+        lease = TEMPLATE["Resources"]["Executor"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"][2]
+        self.assertNotIn("*", json.dumps(lease["Resource"]))
+
+    def test_packaged_source_is_the_same_program(self):
+        import ast
+        handler = (HERE / "cleanup_handler.py").read_text(encoding="utf-8")
+        packaged = TEMPLATE["Resources"]["Emergency"]["Properties"]["Code"]["ZipFile"]
+        self.assertEqual(packaged, TEMPLATE["Resources"]["Expiration"]["Properties"]["Code"]["ZipFile"])
+        names = {n.name for n in ast.parse(packaged).body if isinstance(n, ast.FunctionDef)}
+        self.assertLessEqual({"acquire_lease", "release_lease", "handler", "broker", "cleanup"}, names)
+        self.assertIn('IfNoneMatch="*"', handler)
+        self.assertIn("IfNoneMatch='*'", packaged)
+        with mock.patch.object(build_templates.ast, "dump", side_effect=["before", "after"]), self.assertRaises(ValueError):
+            build_templates.compact_indent("x = 1\n")  # compaction refuses to change the program
 
     def test_all_authority_widening_mutations_fail(self):
         for name, mutate in MUTATIONS.items():

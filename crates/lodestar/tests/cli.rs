@@ -142,7 +142,7 @@ fn backup_while_the_store_is_in_use() {
     // A restore's steps: rebuild the index, retire old sessions and keys.
     let readme = std::fs::read_to_string(folder.join("README.txt")).unwrap();
     assert!(readme.contains("lodestar reindex"), "{readme}");
-    assert!(readme.contains("Sign out all sessions"), "{readme}");
+    assert!(readme.contains("Sign out other sessions"), "{readme}");
     assert!(says.contains("lodestar reindex"), "{says}");
     assert_eq!(std::fs::read(folder.join("seal.key")).unwrap(), [7u8; 32]);
     #[cfg(unix)]
