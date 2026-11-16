@@ -937,6 +937,12 @@ mod spec_tests {
             (arr::ID, *arr::ArrWebhooks::new().policy()),
             (clients::ID, *clients::Clients::unconfigured().policy()),
             (full_scrape::ID, *scrape.policy()),
+            (
+                lodestar_sources_plugins::igdb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::igdb::Igdb::new(creds()),
+                ),
+            ),
             (nyaa::ID, *nyaa::Nyaa::new().policy()),
             (nyaa::SUKEBEI_ID, *nyaa::Sukebei::new().policy()),
             (
@@ -1001,6 +1007,11 @@ mod spec_tests {
             let listed = serde_json::to_value(credential_spec(p.credentials)).unwrap();
             let want = if [prowlarr::ID, stashdb::ID, tpdb::ID].contains(&id) {
                 json!([{ "kind": "secret", "label": "API key", "name": "api_key", "required": true }])
+            } else if id == lodestar_sources_plugins::igdb::ID {
+                json!([
+                    { "kind": "secret", "label": "Twitch Client ID", "name": "client_id", "required": true },
+                    { "kind": "secret", "label": "Twitch Client secret", "name": "client_secret", "required": true }
+                ])
             } else {
                 json!([])
             };

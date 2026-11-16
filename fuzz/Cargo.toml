@@ -369,3 +369,10 @@ path = "fuzz_targets/mse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "igdb"
+path = "fuzz_targets/igdb.rs"
+test = false
+doc = false
+bench = false
