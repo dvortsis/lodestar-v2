@@ -68,10 +68,11 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     ("network", 1),
     // GS-0: `lodestar_classify::payload::payload_sig`, the hash CS-8a reads.
     ("payload_sig", 1),
-    // No producer: as declared (INDEXED | FAST) it would copy
-    // `title_identity`'s terms and cost ~30 B per torrent, over §3's
-    // budget (GS-2 decisions); GS-3 settles its shape.
-    ("group_key", 0),
+    // GS-2b: `doc::title_identity` in a fast column only (schema v8),
+    // ~8 B per torrent, for collapse-by-group (GS-3). It holds the same
+    // hash as `title_identity`: a change to that hash bumps both entries
+    // in the same change (`TitleIdentityParts::key`).
+    ("group_key", 1),
     // GS-2: `lodestar_classify::group::band_terms` (plan Q9, Q10 (a)).
     ("group_minhash", 1),
     ("name_trigram", 0),
@@ -84,6 +85,8 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     // Generation 2 (X-search-files-6): finer codes, with decimal floors.
     ("file_bucket", 2),
     ("file_ext_bucket", 2),
+    // B13b: `doc::title_identity`. A change to its hash bumps this and
+    // `group_key`, which holds the same value (GS-2b).
     ("title_identity", 1),
 ];
 
@@ -428,11 +431,12 @@ mod tests {
         assert_eq!(reopened.pending(), None);
     }
 
-    /// GS-2 ships `group_minhash`, and `group_key` stays without a
-    /// producer: an index from GS-0's build walks for the one, and it
-    /// isn't Ready until that walk is done.
+    /// GS-2 ships `group_minhash`, and a field without a producer
+    /// (`name_trigram`; `group_key` was this stand-in until GS-2b) stays
+    /// so: an index from GS-0's build walks for the one, and it isn't
+    /// Ready until that walk is done.
     #[test]
-    fn the_minhash_producer_starts_a_walk_and_group_key_has_none() {
+    fn the_minhash_producer_starts_a_walk_and_a_field_without_one_stays_so() {
         let before = gens().with("group_minhash", 0);
         let mut s = PopState::fresh(&before, Side::Torrents);
         assert_eq!(
@@ -444,12 +448,35 @@ mod tests {
             s.availability("group_minhash"),
             Some(Availability::Backfilling { done: 0, upto: 300 })
         );
-        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
+        assert_eq!(
+            s.availability("name_trigram"),
+            Some(Availability::NoProducer)
+        );
         assert_eq!(s.availability("payload_sig"), Some(Availability::Ready));
         assert_eq!(s.pending(), Some((0, 300)));
         s.advance(300);
         assert_eq!(s.availability("group_minhash"), Some(Availability::Ready));
+        assert_eq!(
+            s.availability("name_trigram"),
+            Some(Availability::NoProducer)
+        );
+    }
+
+    /// GS-2b ships `group_key`: an index from GS-2's build walks for it
+    /// (in practice v8's schema bump rebuilds instead, which writes it
+    /// for every torrent), and it's Ready once the walk is done.
+    #[test]
+    fn the_group_key_producer_starts_a_walk() {
+        let before = gens().with("group_key", 0);
+        let mut s = PopState::fresh(&before, Side::Torrents);
         assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
+        s.reconcile(&gens(), Side::Torrents, 50);
+        assert_eq!(
+            s.availability("group_key"),
+            Some(Availability::Backfilling { done: 0, upto: 50 })
+        );
+        s.advance(50);
+        assert_eq!(s.availability("group_key"), Some(Availability::Ready));
     }
 
     #[test]

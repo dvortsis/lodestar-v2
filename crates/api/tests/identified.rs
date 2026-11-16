@@ -441,6 +441,13 @@ fn fixture_with(interest: bool) -> Fixture {
             )
             .unwrap()
     );
+    // Wikidata's answers may rename the record (CC0); TMDB's may not, so it
+    // has no record and reads as strict (ENR-terms).
+    let cc0 = lodestar_sources::terms::Terms {
+        redistribute: true,
+        ..lodestar_sources::terms::Terms::STRICT
+    };
+    lodestar_pipeline::identify::record_terms(&mut store, wikidata, &cc0, 1_700_000_000).unwrap();
     // The backfill resolves the ambiguous name with the surest answer, as
     // ENR-10 does.
     {
