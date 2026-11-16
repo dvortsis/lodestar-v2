@@ -31,7 +31,7 @@ use lodestar_store::import::{
     BatchCommitted, Control, Decision, ImportBatch, ImportCandidate, ImportCounters, ImportJob,
     ImportRecord, ImportTorrent, Phase, Reason,
 };
-use lodestar_store::{Error, Filtered, Held, Prepared, SHADOW, SourceId, Store, flags};
+use lodestar_store::{Error, Filtered, Held, Prepared, Preparer, SHADOW, SourceId, Store, flags};
 
 use crate::{bitmagnet, magnetico};
 
@@ -219,6 +219,10 @@ pub struct Options<'a> {
     pub now: fn() -> i64,
     /// Called after each committed batch with the job's counters.
     pub progress: Option<&'a dyn Fn(&ImportCounters)>,
+    /// Threads that prepare and judge a batch's records, at most
+    /// [`MAX_PREPARE_THREADS`]; `0` takes the machine's cores. The rows and
+    /// counters are the same whatever the number (X-import-rate-1m).
+    pub threads: usize,
 }
 
 impl std::fmt::Debug for Options<'_> {
@@ -357,6 +361,10 @@ struct Judged {
 
 /// Runs the job until its source is exhausted, it's stopped, or a refusal
 /// or store error ends it. The job must be running (`resume` it first).
+///
+/// An offline caller, with the server stopped, may tune the store's
+/// connection for it first ([`Store::set_bulk_writes`]): the store's own
+/// connection settings are left as they are here.
 pub async fn run(
     store: &mut Store,
     job_id: i64,
@@ -395,7 +403,11 @@ pub async fn run(
             job = store.set_import_phase(job.id, job.revision, phase, (opts.now)())?;
         }
     }
-    let mut preparer = store.preparer();
+    let threads = match opts.threads {
+        0 => prepare_threads(),
+        n => n.min(MAX_PREPARE_THREADS),
+    };
+    let mut preparers: Vec<Preparer> = (0..threads).map(|_| store.preparer()).collect();
     let mut seq = job.seq;
     let mut position = job.position.clone();
     loop {
@@ -453,37 +465,51 @@ pub async fn run(
         };
         let n = report.batches + 1;
         crash(Fault::AfterRead, n)?;
-        let mut prepared: Vec<Option<Prepared>> = Vec::with_capacity(batch.records.len());
-        let mut judged: Vec<Judged> = Vec::with_capacity(batch.records.len());
+        // Preparing (the file tree's encoding and compression) and judging
+        // are most of a record's cost and need no store: they run on
+        // several threads, each record on its own. The store's reads (the
+        // always-adult claims) and the commit stay on this thread, and
+        // every result keeps the batch's order.
+        let ready = prepare_all(&mut preparers, &batch.records);
+        let mut work = Vec::with_capacity(ready.len());
         let mut prepare_rejected = 0;
-        for (i, rec) in batch.records.iter().enumerate() {
+        for (i, ready) in ready.into_iter().enumerate() {
             if i == batch.records.len() / 2 {
                 crash(Fault::MidBatch, n)?;
             }
-            let (p, j) = match rec.info() {
-                Some(info) => match preparer.prepare(&info, None) {
-                    Ok(mut p) => {
-                        // Claimed by an always-adult source (an unverified
-                        // item under its hash): judged and stored as adult
-                        // (X-source-adult-2). A read error counts as adult;
-                        // the commit's own reads fail the same way.
-                        let hashes: Vec<_> = p.swarm_hashes().collect();
-                        let adult = store.adult_finders(&hashes).map_or(true, |b| b != 0);
-                        let j = judge_torrent(&opts.filter, &mut p, &info, rec, adult, now);
-                        (Some(p), j)
-                    }
-                    // A record the store can't prepare is committed as
-                    // invalid (IMP-2).
-                    Err(_) => {
-                        prepare_rejected += 1;
-                        (None, Judged::default())
-                    }
-                },
-                None => (None, judge_candidate(&opts.filter, rec, now)),
+            let job = match ready {
+                Some((info, Ok(p))) => {
+                    // Claimed by an always-adult source (an unverified item
+                    // under its hash): judged and stored as adult
+                    // (X-source-adult-2). A read error counts as adult; the
+                    // commit's own reads fail the same way.
+                    let hashes: Vec<_> = p.swarm_hashes().collect();
+                    let adult = store.adult_finders(&hashes).map_or(true, |b| b != 0);
+                    Judge::Torrent(Box::new((p, info, adult)))
+                }
+                // A record the store can't prepare is committed as invalid
+                // (IMP-2).
+                Some((_, Err(_))) => {
+                    prepare_rejected += 1;
+                    Judge::Invalid
+                }
+                None => Judge::Candidate,
             };
-            prepared.push(p);
-            judged.push(j);
+            work.push((&batch.records[i], job));
         }
+        let filter = &opts.filter;
+        let (prepared, judged): (Vec<Option<Prepared>>, Vec<Judged>) =
+            par_map(work, preparers.len(), |(rec, job)| match job {
+                Judge::Torrent(t) => {
+                    let (mut p, info, adult) = *t;
+                    let j = judge_torrent(filter, &mut p, &info, rec, adult, now);
+                    (Some(p), j)
+                }
+                Judge::Invalid => (None, Judged::default()),
+                Judge::Candidate => (None, judge_candidate(filter, rec, now)),
+            })
+            .into_iter()
+            .unzip();
         let quarantine_until = now.saturating_add(opts.filter.quarantine_secs);
         let filtered: Vec<Vec<Filtered<'_>>> = judged
             .iter()
@@ -574,6 +600,95 @@ pub async fn run(
     }
     report.counters = job.counters;
     Ok(report)
+}
+
+/// Threads that prepare a batch's records: the machine's cores, at most
+/// [`MAX_PREPARE_THREADS`]. The writer (this thread) judges and commits.
+fn prepare_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .clamp(1, MAX_PREPARE_THREADS)
+}
+
+/// The most threads [`prepare_all`] uses. Past four, the single writer is
+/// the limit (X-import-rate-1m).
+const MAX_PREPARE_THREADS: usize = 4;
+
+/// One record's judging, once it's prepared and its claims are read.
+enum Judge {
+    /// A prepared torrent, its info dict, and whether an always-adult
+    /// source claims it.
+    Torrent(Box<(Prepared, lodestar_metainfo::Info, bool)>),
+    /// No info dict: judged as a candidate.
+    Candidate,
+    /// The store refused to prepare it: committed as invalid.
+    Invalid,
+}
+
+/// `f` over `items` on up to `threads` threads, one contiguous run each,
+/// with the results in the items' order. Few items run on this thread.
+fn par_map<T: Send, R: Send>(items: Vec<T>, threads: usize, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    if threads < 2 || items.len() < MIN_PARALLEL_RECORDS {
+        return items.into_iter().map(f).collect();
+    }
+    let per = items.len().div_ceil(threads);
+    let mut runs = Vec::with_capacity(threads);
+    let mut rest = items.into_iter();
+    loop {
+        let run: Vec<T> = rest.by_ref().take(per).collect();
+        if run.is_empty() {
+            break;
+        }
+        runs.push(run);
+    }
+    let f = &f;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = runs
+            .into_iter()
+            .map(|run| s.spawn(move || run.into_iter().map(f).collect::<Vec<R>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
+}
+
+/// Batches smaller than this are prepared and judged on this thread alone.
+const MIN_PARALLEL_RECORDS: usize = 64;
+
+/// Each record's info dict and its prepared rows (`None` for a record with
+/// no info dict, which is judged as a candidate), in the records' order.
+/// The records are split into one contiguous run per preparer; a preparer
+/// gives the same rows whichever thread it runs on.
+fn prepare_all(
+    preparers: &mut [Preparer],
+    records: &[Rec],
+) -> Vec<Option<(lodestar_metainfo::Info, Result<Prepared, Error>)>> {
+    let one = |preparer: &mut Preparer, recs: &[Rec]| {
+        recs.iter()
+            .map(|rec| {
+                rec.info().map(|info| {
+                    let p = preparer.prepare(&info, None);
+                    (info, p)
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    if preparers.len() < 2 || records.len() < MIN_PARALLEL_RECORDS {
+        return one(&mut preparers[0], records);
+    }
+    let per = records.len().div_ceil(preparers.len());
+    std::thread::scope(|s| {
+        let runs: Vec<_> = records
+            .chunks(per)
+            .zip(preparers.iter_mut())
+            .map(|(recs, preparer)| s.spawn(move || one(preparer, recs)))
+            .collect();
+        runs.into_iter()
+            .flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
 }
 
 fn load(store: &Store, id: i64) -> Result<ImportJob, DriverError> {

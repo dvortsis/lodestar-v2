@@ -18,6 +18,13 @@
 //! edges; and `title_identity` (B13's key, for B13b). The rebuild fills
 //! them; their population is tracked too.
 //!
+//! v8 (GS-2b): `group_key` becomes a fast column only, no longer indexed.
+//! Indexed, it would copy `title_identity`'s whole term dictionary (~30 B
+//! per torrent, GS-2 decisions); collapse-by-group (GS-3) needs only each
+//! document's value, and finds a group's members by `title_identity`'s
+//! term, which holds the same value. A field's options can't change in
+//! place, so this is a version bump and a rebuild.
+//!
 //! Only `id` and `name` are stored; everything shown comes from SQLite.
 
 use lodestar_classify::Category;
@@ -42,7 +49,7 @@ pub fn trigram_analyzer() -> tantivy::tokenizer::TextAnalyzer {
 
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
@@ -119,8 +126,9 @@ pub struct Fields {
     /// non-padding file sizes), indexed for `sig:` and fast for the
     /// "Identical clones" panel.
     pub payload_sig: Field,
-    /// v6. The grouping key (normalized title, year, S/E), indexed and
-    /// fast, for "N other versions of this".
+    /// v6. The grouping key: [`doc::title_identity`](crate::doc::title_identity),
+    /// the same value as `title_identity`'s term (plan Q8). A fast column
+    /// only since v8 (GS-2b), for collapse-by-group's "+N others".
     pub group_key: Field,
     /// v6. The MinHash bands over the major file sizes (several), in the
     /// inverted index, for near-duplicate candidates.
@@ -236,7 +244,7 @@ pub fn build() -> (Schema, Fields) {
         source: b.add_text_field("source", keyword.clone()),
         network: b.add_text_field("network", keyword.clone()),
         payload_sig: b.add_u64_field("payload_sig", INDEXED | FAST),
-        group_key: b.add_u64_field("group_key", INDEXED | FAST),
+        group_key: b.add_u64_field("group_key", num()),
         group_minhash: b.add_u64_field("group_minhash", multi()),
         name_trigram: b.add_text_field(
             "name_trigram",
@@ -286,6 +294,9 @@ mod tests {
         }
         let sig = schema.get_field_entry(f.payload_sig);
         assert!(sig.is_indexed() && sig.is_fast());
+        // v8: a column only; its members are found by `title_identity`.
+        let key = schema.get_field_entry(f.group_key);
+        assert!(key.is_fast() && !key.is_indexed());
     }
 
     #[test]
