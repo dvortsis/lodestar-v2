@@ -1,5 +1,5 @@
    Compiling scheduler-review-harness v0.1.0 (<TEMP_VERIFY_DIR>)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.50s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.21s
      Running unittests src\lib.rs (<TEMP_VERIFY_DIR>\target\debug\deps\scheduler_review_harness-087278b1f880f47c.exe)
 
 running 10 tests
@@ -7,13 +7,13 @@ running 10 tests
 running 1 test
 test scheduler::tests::test_rg4_empty_scheduler_polls_do_not_consume_global_tokens ... ok
 test scheduler::tests::test_rg5_repeated_single_ip_requests_keep_reclaim_heap_bounded ... ok
+test scheduler::tests::test_rg9_concurrent_completions_same_permit_admits_exactly_one ... ok
 test scheduler::tests::test_rg7_real_sqlite_abort_trigger_fails_closed_without_permit ... ok
 test scheduler::tests::test_rg2_zero_rows_affected_upsert_fails_closed ... ok
-test scheduler::tests::test_rg9_concurrent_completions_same_permit_admits_exactly_one ... ok
 test scheduler::tests::test_rg6_restart_after_forward_wall_clock_jump_protects_cooldowns ... ok
 test scheduler::tests::test_rg8_startup_reclaims_expired_rows_before_overflow_check ... ok
 test scheduler::tests::test_rg3_early_error_or_cancel_in_complete_dispatch_reconciles_in_flight ... ok
 test scheduler::tests::test_rg1_dropped_delete_then_rediscovery_persists_reservation ... ok
 test scheduler::tests::test_rg10_subprocess_abrupt_abort_preserves_6h_reservation ... ok
 
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
