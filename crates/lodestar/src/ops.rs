@@ -953,6 +953,12 @@ mod spec_tests {
                 stashdb::ID,
                 *AdultEnricher::policy(&stashdb::StashDb::new(creds())),
             ),
+            (
+                lodestar_sources_plugins::steam::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::steam::Steam::new(creds()),
+                ),
+            ),
             (torrent_cache::ID, *cache.policy()),
             (tpdb::ID, *AdultEnricher::policy(&tpdb::Tpdb::new(creds()))),
             (
@@ -1001,6 +1007,8 @@ mod spec_tests {
             let listed = serde_json::to_value(credential_spec(p.credentials)).unwrap();
             let want = if [prowlarr::ID, stashdb::ID, tpdb::ID].contains(&id) {
                 json!([{ "kind": "secret", "label": "API key", "name": "api_key", "required": true }])
+            } else if id == lodestar_sources_plugins::steam::ID {
+                json!([{ "kind": "secret", "label": "Steam Web API key", "name": "api_key", "required": true }])
             } else {
                 json!([])
             };

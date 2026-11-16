@@ -13,6 +13,7 @@ pub mod nostr;
 pub mod openlibrary;
 pub mod rss;
 pub mod stashdb;
+pub mod steam;
 pub mod torznab;
 pub mod tpdb;
 pub mod wikidata;

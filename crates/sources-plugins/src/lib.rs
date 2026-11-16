@@ -29,6 +29,7 @@ pub mod nyaa;
 pub mod openlibrary;
 pub mod prowlarr;
 pub mod stashdb;
+pub mod steam;
 pub mod torrent_cache;
 pub mod tpdb;
 pub mod wikidata;

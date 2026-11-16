@@ -219,6 +219,23 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     check(AdultEnricher::manifest(&s), AdultEnricher::policy(&s), &rec);
 }
 
+/// Steam (ENR-steam) reads its one declared key on a refresh.
+#[tokio::test(start_paused = true)]
+async fn steam_reads_exactly_what_it_declares() {
+    use lodestar_sources::identify::{Identifier, MediaKind};
+    let rec = Arc::new(Recording::default());
+    let s = lodestar_sources_plugins::steam::Steam::new(rec.clone());
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        Identifier::policy(&s),
+        &UserLimits::default(),
+    );
+    let q = lodestar_sources::identify::Query::new("Example Quest", None, MediaKind::Game).unwrap();
+    assert!(s.lookup(&kit, &q).await.is_err());
+    check(Identifier::manifest(&s), Identifier::policy(&s), &rec);
+}
+
 /// The rest are built without a credential store, so they can't read
 /// one: each declares none. The download clients' credentials are
 /// Settings → Integrations' and reach the plugin in its `ClientConfig`.
@@ -278,6 +295,7 @@ fn every_catalogued_plugin_is_checked() {
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
         lodestar_sources_plugins::openlibrary::ID,
+        lodestar_sources_plugins::steam::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
     assert_eq!(listed, BTreeSet::from(checked));

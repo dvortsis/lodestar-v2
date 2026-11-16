@@ -369,3 +369,10 @@ path = "fuzz_targets/mse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "steam"
+path = "fuzz_targets/steam.rs"
+test = false
+doc = false
+bench = false
