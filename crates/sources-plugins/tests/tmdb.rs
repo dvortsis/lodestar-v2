@@ -174,29 +174,31 @@ async fn an_adult_result_is_never_chosen() {
     assert_eq!(got.unwrap(), Lookup::NoMatch);
 }
 
-/// A result with no `adult` key is chosen as before, but the answer
-/// carries no marker, and TMDB's terms refuse it (ENR-terms): the runtime
-/// stores nothing from it. One marked adult is never chosen.
+/// A result with no `adult` key is never chosen: `choose` fails closed by
+/// itself, and TMDB's terms would refuse the unmarked answer anyway
+/// (ENR-terms). One marked adult is never chosen either.
 #[test]
 fn an_unmarked_answer_is_refused_by_the_terms() {
     let body = br#"{"page":1,"results":[{"id":7,"title":"Film","original_title":"Film","original_language":"en","release_date":"2001-02-03","genre_ids":[18]}],"total_results":1}"#;
     let s = parse_search(body, Form::Movie, &LIMITS);
     assert!(s.page.whole(), "{:?}", s.page);
-    let Lookup::Match(i) = tmdb::choose(&movie("Film", Some(2001)), &s.hits) else {
-        panic!("a match")
-    };
-    assert_eq!(i.adult, None);
-    assert!(!tmdb::TERMS.accepts(i.adult));
-    assert!(Identifier::terms(&plugin()).adult_marker_required);
-    let marked = String::from_utf8(body.to_vec())
-        .unwrap()
-        .replace(r#""genre_ids":[18]"#, r#""genre_ids":[18],"adult":true"#);
-    let s = parse_search(marked.as_bytes(), Form::Movie, &LIMITS);
-    assert_eq!(s.hits[0].adult, Some(true));
+    assert_eq!(s.hits[0].adult, None);
     assert_eq!(
         tmdb::choose(&movie("Film", Some(2001)), &s.hits),
         Lookup::NoMatch
     );
+    assert!(!tmdb::TERMS.accepts(None));
+    assert!(Identifier::terms(&plugin()).adult_marker_required);
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    for (marker, chosen) in [(r#""adult":true"#, false), (r#""adult":false"#, true)] {
+        let marked = text.replace(
+            r#""genre_ids":[18]"#,
+            &format!(r#""genre_ids":[18],{marker}"#),
+        );
+        let s = parse_search(marked.as_bytes(), Form::Movie, &LIMITS);
+        let got = tmdb::choose(&movie("Film", Some(2001)), &s.hits);
+        assert_eq!(matches!(got, Lookup::Match(_)), chosen, "{marker}");
+    }
 }
 
 #[test]

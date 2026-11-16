@@ -179,7 +179,9 @@ fn the_caps_hold() {
     assert_eq!(movie(&deep).page.stop, Some(Stop::Depth));
 }
 
-/// Hundreds of thousands of unknown keys are read whole, in linear time.
+/// Hundreds of thousands of unknown keys are read whole. Each costs
+/// constant work (`repeat_detection_is_constant_work_a_key` in the
+/// parser's unit tests); a quadratic reader wouldn't finish here at all.
 #[test]
 fn many_unknown_keys_are_read_in_linear_time() {
     let wide = Limits {
@@ -189,12 +191,9 @@ fn many_unknown_keys_are_read_in_linear_time() {
     };
     let keys: String = (0..300_000).map(|i| format!(r#","k{i}":0"#)).collect();
     let body = one(&keys);
-    let start = std::time::Instant::now();
     let s = parse_search(body.as_bytes(), Form::Movie, &wide);
     assert!(s.page.whole(), "{:?}", s.page);
     assert_eq!(s.hits.len(), 1);
-    // Generous for the slowest CI runner in debug; quadratic is minutes.
-    assert!(start.elapsed() < std::time::Duration::from_secs(20));
 }
 
 fn kept_ok(s: &Search, l: &Limits) -> Result<(), TestCaseError> {

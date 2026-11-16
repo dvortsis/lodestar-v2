@@ -462,8 +462,9 @@ fn language(l: &str) -> bool {
     (2..=MAX_LANGUAGE).contains(&l.len()) && l.bytes().all(|b| b.is_ascii_lowercase()) && l != "xx"
 }
 
-/// The year of `YYYY-MM-DD`: `Ok(None)` for an empty date, `Err` for
-/// anything else that isn't a date of years 1–9999.
+/// The year of a `YYYY-MM-DD` shape (year 1–9999, month 1–12, day 1–31;
+/// days per month aren't checked, since only the year is kept):
+/// `Ok(None)` for an empty date, `Err` for anything else.
 fn date_year(d: &str) -> Result<Option<u16>, ()> {
     if d.is_empty() {
         return Ok(None);
@@ -496,6 +497,8 @@ mod tests {
     fn dates_are_strict() {
         assert_eq!(date_year(""), Ok(None));
         assert_eq!(date_year("1994-09-23"), Ok(Some(1994)));
+        // The shape, not the calendar: only the year is kept.
+        assert_eq!(date_year("2001-02-31"), Ok(Some(2001)));
         for bad in [
             "1994",
             "0000-01-01",
@@ -503,9 +506,26 @@ mod tests {
             "1994-01-00",
             "+1994-01-01",
             "1994-1-01",
+            "1994-01-32",
         ] {
             assert_eq!(date_year(bad), Err(()), "{bad}");
         }
+    }
+
+    #[test]
+    fn repeat_detection_is_constant_work_a_key() {
+        // The state is one bitmask over the known keys, whatever the
+        // object holds: unknown keys never touch it, so each key costs one
+        // scan of `known` and the whole object is linear.
+        assert_eq!(std::mem::size_of::<Keys>(), std::mem::size_of::<u32>());
+        let known = ["id", "title"];
+        let mut k = Keys::default();
+        for i in 0..300_000 {
+            assert!(!k.repeat(&format!("k{i}"), &known));
+        }
+        assert_eq!(k.0, 0);
+        assert!(!k.repeat("id", &known) && k.repeat("id", &known));
+        assert_eq!(k.0, 1);
     }
 
     #[test]

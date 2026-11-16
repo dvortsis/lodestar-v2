@@ -50,8 +50,8 @@ pub const MAX_TOKEN: usize = 2048;
 
 /// What a lookup sends, for its Sources row (UI review 02 §5.5).
 pub const SENDS: &str = "The parsed title, its year and whether it's a film or a TV series, \
-     with your TMDB read access token, to api.themoviedb.org. Never the info hash, the \
-     torrent's name or its files.";
+     with your TMDB read access token and fixed settings (English results, first page), to \
+     api.themoviedb.org. Never the info hash, the torrent's name or its files.";
 /// TMDB's terms of use require this notice wherever TMDB data is shown,
 /// with TMDB's logo (`docs/decisions/2026-11-15-ENR-tmdb.md`).
 pub const ATTRIBUTION: &str = "Lodestar uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.";
@@ -300,7 +300,9 @@ fn answer(res: Result<Response, HttpError>) -> Result<Response, PluginError> {
     }
 }
 
-/// The one result that agrees with the query: not marked adult, its title
+/// The one result that agrees with the query: marked not adult by TMDB
+/// (a result with no marker is never chosen, so the plugin fails closed
+/// on its own, not only through the runtime's terms check), its title
 /// or original title equal to the query's (compared by [`fold`]), and,
 /// when the query has a year, that year. None, or more than one, is no
 /// match.
@@ -310,7 +312,7 @@ pub fn choose(query: &Query, hits: &[Hit]) -> Lookup {
         return Lookup::NoMatch;
     }
     let mut agree = hits.iter().filter(|h| {
-        h.adult != Some(true)
+        h.adult == Some(false)
             && [&h.title, &h.original_title]
                 .into_iter()
                 .flatten()
