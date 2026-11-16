@@ -11,6 +11,10 @@
 #     depends_on:
 #       gluetun:
 #         condition: service_healthy
+#         restart: true  # restarted with gluetun (Compose 2.17 or later)
+#     # Exits when gluetun's network has gone (only lo left for 30 s).
+#     environment:
+#       - LODESTAR_EXIT_ON_NETWORK_LOSS=true
 #     profiles:
 #       - crawler
 #     # Only what the image needs to hand /data over and drop root, as in the
@@ -28,5 +32,5 @@
 #
 # Never set network_mode: bridge or host for the crawler.
 # Never mount /var/run/docker.sock into the crawler.
-# Keep depends_on at service_healthy, never service_started.
+# Keep depends_on at service_healthy, never service_started, with restart: true.
 # For worker deployments, confirm the crawler stays below 256 MiB under load.

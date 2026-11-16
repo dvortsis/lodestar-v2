@@ -100,6 +100,12 @@ windows-service = "0.8.1"
 # safe call, since the workspace forbids `unsafe`. Already in the lock through
 # tantivy.
 fs4 = { version = "0.13.1", default-features = false, features = ["sync"] }
+# Whether two paths are the same folder by what the system says it is
+# (volume serial and file index, opened with FILE_FLAG_BACKUP_SEMANTICS),
+# not by spelling (`windows::service::same_dir`, X-win-service-path-hardening):
+# a safe call, since the workspace forbids `unsafe`. Already in the lock
+# through walkdir.
+same-file = "1.0.6"
 
 # One allocator for Rust and C in the static musl release build: `override`
 # makes mimalloc define `malloc`, `free`, `calloc`, `realloc` and the rest, so

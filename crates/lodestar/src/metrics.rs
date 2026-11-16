@@ -461,12 +461,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     );
 
     if let Some(d) = dht {
-        o.one(
-            "dht_routing_nodes",
-            "gauge",
-            "Nodes in the routing tables.",
-            d.routing_nodes,
-        );
+        render_routing(&mut o, d);
         o.one(
             "dht_outstanding",
             "gauge",
@@ -1202,6 +1197,24 @@ fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
     );
 }
 
+/// The routing tables' size, and how much of it is good: a node that
+/// stops answering keeps its slot, so only the second shows a network
+/// that has gone (X-routing-table-metric).
+fn render_routing(o: &mut Out, d: &StatsSnapshot) {
+    o.one(
+        "dht_routing_nodes",
+        "gauge",
+        "Nodes in the routing tables.",
+        d.routing_nodes,
+    );
+    o.one(
+        "dht_routing_good_nodes",
+        "gauge",
+        "Routing-table nodes good by BEP 5: answered us within 15 minutes, or answered before and queried us within 15 minutes.",
+        d.routing_good_nodes,
+    );
+}
+
 /// `dht_reply_ratio`, left out until a query has resolved: unknown, not 0.
 fn render_reply_ratio(o: &mut Out, d: &StatsSnapshot) {
     if let Some(ratio) = d.reply_ratio() {
@@ -1872,6 +1885,34 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
+
+    #[test]
+    fn the_routing_gauges_render_and_are_documented() {
+        let d = StatsSnapshot {
+            routing_nodes: 143,
+            routing_good_nodes: 0,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_routing(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_routing_nodes gauge\n",
+            "lodestar_dht_routing_nodes 143\n",
+            "# TYPE lodestar_dht_routing_good_nodes gauge\n",
+            // 0 is a value, not left out: a full table with none good.
+            "lodestar_dht_routing_good_nodes 0\n",
+        ] {
+            assert!(o.0.contains(line), "{line:?} in {}", o.0);
+        }
+        let doc = include_str!("../../../docs/metrics.md");
+        for family in ["dht_routing_nodes", "dht_routing_good_nodes"] {
+            let row = format!("| `{family}`");
+            assert!(
+                doc.lines().any(|l| l.starts_with(&row)),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
     }
 
     /// No series until a query has resolved; then the answered share.

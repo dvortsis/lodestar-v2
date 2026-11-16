@@ -616,7 +616,9 @@ struct AuthorityState {
     /// worker, oldest first: each is handed back once.
     handed: (HashSet<InfoHash>, VecDeque<InfoHash>),
     /// Each remote worker's hand-backs in the current window: when it
-    /// began, and how many.
+    /// began, and how many. Only workers that handed back within the last
+    /// [`HAND_BACK_WINDOW_SECS`] stay: a lapsed entry is dropped when any
+    /// worker starts a new window ([`LeaseAuthority::hand_to_local`]).
     hand_backs: HashMap<WorkerId, (i64, usize)>,
     /// [`HAND_BACK_ALLOWANCE`], lifted only by tests.
     hand_back_allowance: usize,
@@ -1288,10 +1290,18 @@ impl LeaseAuthority {
             return HandBack::Stale;
         };
         let local = s.table.regrant(WorkerId::LOCAL, *key, lease, now);
-        let window = s.hand_backs.entry(worker).or_insert((now, 0));
-        if now.saturating_sub(window.0) >= HAND_BACK_WINDOW_SECS {
-            *window = (now, 0);
+        let lapsed = |since: i64| now.saturating_sub(since) >= HAND_BACK_WINDOW_SECS;
+        // A worker's first hand-back in a window drops every lapsed entry
+        // (a lapsed window counts from zero anyway), so the map holds only
+        // workers that handed back within the last window, forgotten or
+        // not.
+        if s.hand_backs
+            .get(&worker)
+            .is_none_or(|&(since, _)| lapsed(since))
+        {
+            s.hand_backs.retain(|_, &mut (since, _)| !lapsed(since));
         }
+        let window = s.hand_backs.entry(worker).or_insert((now, 0));
         window.1 += 1;
         let (set, order) = &mut s.handed;
         set.insert(*key);
@@ -2042,6 +2052,10 @@ mod tests {
             assert!(matches!(hand(A, key(3, n), next), HandBack::Handed(..)));
         }
         assert!(matches!(hand(A, key(3, u32::MAX), next), HandBack::Lost(_)));
+        // B's window lapsed with no hand-back since: its entry went when A
+        // started a new one, so the map holds only recent hand-backers.
+        let held: Vec<WorkerId> = a.lock().hand_backs.keys().copied().collect();
+        assert_eq!(held, vec![A]);
     }
 
     #[test]

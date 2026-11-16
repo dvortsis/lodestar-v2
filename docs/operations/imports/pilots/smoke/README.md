@@ -143,10 +143,12 @@ Run 3. Bytes per record are the size minus the empty store's, divided by the tor
 | SQLite indexes | 30 | 36 | | mostly the unique hash index (31) |
 | Provenance | 42 | 44 | | `import_quality` 23, `import_membership` 11, `import_membership_job` 10 |
 | **SQLite file** | **607** | **623** | ≤ 1,000 | the three above (no free pages, no WAL after a clean stop) |
-| **Torrent index** | **360** | **306** | ≤ 500 | |
-| **File index** (smart mode) | **231** | **211** | ≤ 800 | |
+| **Torrent index**¹ | **360** | **306** | ≤ 500 | |
+| **File index** (smart mode)¹ | **231** | **211** | ≤ 800 | |
 | Hot columns | 0 | 0 | | swarm columns; empty without scraping |
 | **All in** (data folder) | **1,198** | **1,141** | ≈ 2,300 | |
+
+¹ **These are the old on-disk figures.** These runs measured `torrent_index` and `file_index` with `du` over `data/index`, which also counts stale segment files and other version folders. From #958 on (X-index-bytes-1m), `smoke.py` reports those keys from the current index's live segments, the size budget's figure. The old measure is now `torrent_index_on_disk` and `file_index_on_disk`, so new runs compare with this table through those keys.
 
 | Other sizes | 10k | 100k |
 |---|---|---|

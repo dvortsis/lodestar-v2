@@ -944,6 +944,12 @@ mod spec_tests {
             (nyaa::ID, *nyaa::Nyaa::new().policy()),
             (nyaa::SUKEBEI_ID, *nyaa::Sukebei::new().policy()),
             (
+                lodestar_sources_plugins::openlibrary::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::openlibrary::OpenLibrary::new(),
+                ),
+            ),
+            (
                 prowlarr::ID,
                 *prowlarr::Prowlarr::unconfigured(creds()).policy(),
             ),
