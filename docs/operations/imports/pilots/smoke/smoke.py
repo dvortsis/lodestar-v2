@@ -274,17 +274,20 @@ def segment_files(folder):
     {id}.{opstamp}.del; meta.json, the managed list and locks are no
     segment's. Stale: another segment's files, a live segment's superseded
     .del, or a leftover .store.temp. Live bytes include deleted docs until a
-    merge drops them."""
+    merge drops them. An unreadable meta.json makes every figure None
+    (unknown) rather than stopping the report."""
     try:
         with open(os.path.join(folder, "meta.json")) as f:
             segments = json.load(f)["segments"]
+        # Each live segment and the opstamp of its current delete file.
+        ids = {s["segment_id"].replace("-", "").lower(): (s.get("deletes") or {}).get("opstamp")
+               for s in segments}
+        deleted = sum((s.get("deletes") or {}).get("num_deleted_docs", 0) for s in segments)
     except FileNotFoundError:
         return {"live": 0, "stale": 0, "deleted": 0, "segments": 0}
-    # Each live segment and the opstamp of its current delete file.
-    ids = {s["segment_id"].replace("-", "").lower(): (s.get("deletes") or {}).get("opstamp")
-           for s in segments}
-    out = {"live": 0, "stale": 0, "segments": len(ids),
-           "deleted": sum((s.get("deletes") or {}).get("num_deleted_docs", 0) for s in segments)}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return {"live": None, "stale": None, "deleted": None, "segments": None}
+    out = {"live": 0, "stale": 0, "segments": len(ids), "deleted": deleted}
     for name in os.listdir(folder):
         path = os.path.join(folder, name)
         head = name.split(".", 1)[0].lower()
@@ -313,9 +316,32 @@ def index_live(index):
         return {"torrent": 0, "files": 0, "stale": 0, "deleted": 0, "segments": 0, "other_versions": 0}
     current = os.path.join(index, max(versions)[1])
     t, f = segment_files(current), segment_files(os.path.join(current, "files"))
-    return {"torrent": t["live"], "files": f["live"], "stale": t["stale"] + f["stale"],
+    stale = None if None in (t["stale"], f["stale"]) else t["stale"] + f["stale"]
+    return {"torrent": t["live"], "files": f["live"], "stale": stale,
             "deleted": t["deleted"], "segments": t["segments"],
             "other_versions": du(index) - du(current)}
+
+
+def per_record(now, before, stored):
+    """(now - before) / stored, rounded; None if either is unknown."""
+    return None if now is None or before is None else round((now - before) / stored, 1)
+
+
+def index_figures(sizes, empty, stored):
+    """The index keys of bytes_per_record. Since X-index-bytes-1m,
+    torrent_index and file_index are live segments (the §3 budget figures);
+    *_on_disk are every file under index/, as earlier reports measured those
+    two keys, stale segments and other version folders included."""
+    live, base = sizes["index_live"], empty["index_live"]
+    return {
+        "torrent_index": per_record(live["torrent"], base["torrent"], stored),
+        "file_index": per_record(live["files"], base["files"], stored),
+        "torrent_index_on_disk": round((sizes["index"] - sizes["file_index"]
+                                        - empty["index"] + empty["file_index"]) / stored, 1),
+        "file_index_on_disk": round((sizes["file_index"] - empty["file_index"]) / stored, 1),
+        "index_stale": per_record(live["stale"], 0, stored),
+        "index_other_versions": per_record(live["other_versions"], 0, stored),
+    }
 
 
 def data_sizes(data):
@@ -565,18 +591,7 @@ def main():
         "provenance": round((store["provenance"] - empty_store["provenance"]) / stored, 1),
         "sqlite_file": round((sizes["db"] - e["db"]) / stored, 1),
         "search_index": round((sizes["index"] - e["index"]) / stored, 1),
-        # The budget figures (§3): live segments only (X-index-bytes-1m).
-        "torrent_index": round((sizes["index_live"]["torrent"]
-                                - e["index_live"]["torrent"]) / stored, 1),
-        "file_index": round((sizes["index_live"]["files"] - e["index_live"]["files"]) / stored, 1),
-        # On disk, as reports before X-index-bytes-1m measured them (there,
-        # "torrent_index" and "file_index" are these): every file under
-        # index/, stale segments and other version folders included.
-        "torrent_index_on_disk": round((sizes["index"] - sizes["file_index"]
-                                        - e["index"] + e["file_index"]) / stored, 1),
-        "file_index_on_disk": round((sizes["file_index"] - e["file_index"]) / stored, 1),
-        "index_stale": round(sizes["index_live"]["stale"] / stored, 1),
-        "index_other_versions": round(sizes["index_live"]["other_versions"] / stored, 1),
+        **index_figures(sizes, e, stored),
         "hot": round((sizes["hot"] - e["hot"]) / stored, 1),
         "all_in": round((sizes["total"] - e["total"]) / stored, 1),
     }

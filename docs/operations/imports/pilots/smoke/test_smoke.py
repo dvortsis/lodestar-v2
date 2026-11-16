@@ -75,6 +75,31 @@ class IndexLive(unittest.TestCase):
         self.assertEqual(empty, {"torrent": 0, "files": 0, "stale": 0, "deleted": 0,
                                  "segments": 0, "other_versions": 0})
 
+    def test_unreadable_meta_is_unknown_not_fatal(self):
+        for bad in ["{not json", '{"no_segments": []}', '{"segments": [{"max_doc": 1}]}']:
+            with self.subTest(meta=bad):
+                (self.current / "meta.json").write_text(bad)
+                got = smoke.index_live(str(self.index))
+                self.assertEqual((got["torrent"], got["stale"], got["deleted"]), (None, None, None))
+                self.assertEqual(got["files"], 200)  # the file index still reads
+
+    def test_report_keys_mean_live_and_on_disk(self):
+        live = smoke.index_live(str(self.index))
+        empty = {"index": 0, "file_index": 0, "index_live": {
+            "torrent": 0, "files": 0, "stale": 0, "other_versions": 0}}
+        sizes = {"index": smoke.du(str(self.index)),
+                 "file_index": smoke.du(str(self.current / "files")), "index_live": live}
+        got = smoke.index_figures(sizes, empty, stored=1)
+        self.assertEqual(got["torrent_index"], 153.0)                       # live segments
+        self.assertEqual(got["file_index"], 200.0)
+        self.assertEqual(got["torrent_index_on_disk"], sizes["index"] - sizes["file_index"])
+        self.assertEqual(got["file_index_on_disk"], sizes["file_index"])    # du, as before
+        self.assertEqual(got["index_stale"], 75.0)
+        self.assertGreater(got["torrent_index_on_disk"], got["torrent_index"])
+        sizes["index_live"] = dict(live, torrent=None, stale=None)
+        unknown = smoke.index_figures(sizes, empty, stored=1)
+        self.assertEqual((unknown["torrent_index"], unknown["index_stale"]), (None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

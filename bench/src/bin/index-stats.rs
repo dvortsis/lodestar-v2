@@ -88,7 +88,12 @@ fn report(dir: &Path, torrents: Option<u64>) -> Result<String, Box<dyn std::erro
         100.0 * s.deleted as f64 / (s.docs + s.deleted).max(1) as f64
     )?;
     let rows = [
-        ("live segments", s.live_bytes, "the budget figure"),
+        ("live segment files", s.live_file_bytes, "the budget figure"),
+        (
+            "  by Tantivy's count",
+            s.space_usage_bytes,
+            "the parts below; no file headers",
+        ),
         (
             "top-level files",
             s.top_level_bytes,
@@ -115,8 +120,8 @@ fn report(dir: &Path, torrents: Option<u64>) -> Result<String, Box<dyn std::erro
         writeln!(
             out,
             "  file index (live)     {:>9.1} MB = {:>6.1} B per torrent  ({} files, {} segments)",
-            mb(f.live_bytes),
-            per(f.live_bytes),
+            mb(f.live_file_bytes),
+            per(f.live_file_bytes),
             f.docs,
             f.segments
         )?;
@@ -160,7 +165,7 @@ mod tests {
         .unwrap();
         for want in [
             "segments",
-            "live segments",
+            "live segment files",
             "top-level files",
             "stale segment files",
             "everything (du)",

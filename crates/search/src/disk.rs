@@ -29,8 +29,13 @@ pub struct DiskStats {
     pub docs: u64,
     /// Deleted documents still in live segments, until a merge drops them.
     pub deleted: u64,
-    /// Bytes the live segments use, by Tantivy's own accounting.
-    pub live_bytes: u64,
+    /// Bytes of the files the live segments use, as on disk: the budget
+    /// figure (§3), and what `smoke.py` counts.
+    pub live_file_bytes: u64,
+    /// The live segments' bytes by Tantivy's own accounting, which the
+    /// per-part table splits. It leaves out per-file headers and footers,
+    /// so it reads a little under [`DiskStats::live_file_bytes`].
+    pub space_usage_bytes: u64,
     /// Bytes of the files directly in the directory: what `size-report`
     /// counts.
     pub top_level_bytes: u64,
@@ -53,14 +58,15 @@ impl DiskStats {
         let searcher = reader.searcher();
         // Each live segment and the opstamp of its current delete file.
         let mut live = HashMap::new();
-        let (mut docs, mut deleted, mut live_bytes) = (0u64, 0u64, 0u64);
+        let (mut docs, mut deleted, mut space_usage_bytes) = (0u64, 0u64, 0u64);
         for seg in searcher.segment_readers() {
             live.insert(seg.segment_id().uuid_string(), seg.delete_opstamp());
             docs += u64::from(seg.num_docs());
             deleted += u64::from(seg.num_deleted_docs());
-            live_bytes += seg.space_usage().map_err(Error::Io)?.total().get_bytes();
+            space_usage_bytes += seg.space_usage().map_err(Error::Io)?.total().get_bytes();
         }
-        let (mut top_level_bytes, mut stale_bytes, mut stale_files) = (0, 0, Vec::new());
+        let (mut top_level_bytes, mut live_file_bytes) = (0, 0);
+        let (mut stale_bytes, mut stale_files) = (0, Vec::new());
         for entry in std::fs::read_dir(dir).map_err(Error::Io)? {
             let entry = entry.map_err(Error::Io)?;
             let meta = entry.metadata().map_err(Error::Io)?;
@@ -72,6 +78,8 @@ impl DiskStats {
             if is_stale(&name, &live) {
                 stale_bytes += meta.len();
                 stale_files.push(name);
+            } else if segment_id(&name).is_some() {
+                live_file_bytes += meta.len();
             }
         }
         stale_files.sort();
@@ -79,7 +87,8 @@ impl DiskStats {
             segments: searcher.segment_readers().len(),
             docs,
             deleted,
-            live_bytes,
+            live_file_bytes,
+            space_usage_bytes,
             top_level_bytes,
             recursive_bytes: recursive_size(dir)?,
             stale_bytes,
@@ -165,8 +174,12 @@ mod tests {
 
         let s = DiskStats::read(&dir).unwrap();
         assert_eq!((s.segments, s.docs, s.deleted), (2, 19, 1));
+        // The files on disk are the budget figure: Tantivy's accounting
+        // leaves out per-file headers and footers, so it's never more.
         assert!(
-            0 < s.live_bytes && s.live_bytes <= s.top_level_bytes,
+            0 < s.space_usage_bytes
+                && s.space_usage_bytes <= s.live_file_bytes
+                && s.live_file_bytes <= s.top_level_bytes,
             "{s:?}"
         );
         // The file index lives in a subdirectory: `du` counts it, the

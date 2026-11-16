@@ -432,7 +432,7 @@ fn measure(
     let disk = lodestar_search::DiskStats::read(index_path)?;
     println!(
         "    live segments     {:.0} B/torrent; {} deleted docs; {:.0} B/torrent stale; {:.0} B/torrent with subfolders (du)",
-        disk.live_bytes as f64 / n,
+        disk.live_file_bytes as f64 / n,
         group(disk.deleted),
         disk.stale_bytes as f64 / n,
         disk.recursive_bytes as f64 / n
