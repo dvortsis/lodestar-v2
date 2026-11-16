@@ -10,7 +10,7 @@ Every case starts with the token exchange (`001`), then the search (`002`). The 
 | `igdb_no_match` | An empty array: no match |
 | `igdb_adult` | The only game has the Erotic theme (42): marked adult, refused by the terms |
 | `igdb_two_lookups` | One token for two searches, paced at the host rate |
-| `igdb_refused` | 401 from IGDB: the token is dropped and the host backs off |
+| `igdb_refused` | 401 from IGDB: the token is dropped and the host backs off; after the hold, a new token and a search |
 | `igdb_rate_limited` | 429 with `Retry-After`: back off |
 | `igdb_server_error` | 503 |
 | `igdb_error_200` | A 200 whose body is IGDB's error array: an error, never a miss |

@@ -16,7 +16,8 @@
 //!    is about to expire, `POST https://id.twitch.tv/oauth2/token` with the
 //!    two credentials in a form body (never the URL);
 //! 2. `POST https://api.igdb.com/v4/games` with a fixed Apicalypse body,
-//!    the title its one string literal, with any `"` or `\` dropped;
+//!    the title its one string literal, with any `"`, `\` or control
+//!    character dropped;
 //! 3. picks the one game whose title (and year, when the query has one)
 //!    agrees ([`choose`]). None, or more than one, is no match.
 //!
@@ -275,8 +276,17 @@ impl Igdb {
         Ok(token)
     }
 
-    fn drop_token(&self) {
-        *self.held() = None;
+    /// Drops the held token, but only if it is still `sent`: a lookup
+    /// refused with an old token mustn't throw away a newer one another
+    /// lookup stored meanwhile (after a Client ID change, say).
+    fn drop_token(&self, sent: &Secret) {
+        let mut held = self.held();
+        if held
+            .as_ref()
+            .is_some_and(|h| h.token.expose() == sent.expose())
+        {
+            *held = None;
+        }
     }
 }
 
@@ -349,7 +359,7 @@ impl Identifier for Igdb {
             let token = self.token(kit, &id, &secret).await?;
             drop(secret);
             let request = search_request(query, &id, &token);
-            drop(token);
+            let sent = token;
             let res = match kit.http.send(&request).await {
                 Ok(r) => r,
                 Err(HttpError::Blocked { .. }) => return Err(fail(HELD)),
@@ -359,7 +369,7 @@ impl Identifier for Igdb {
                 200 => {}
                 401 | 403 => {
                     // The next lookup asks for a new token, once.
-                    self.drop_token();
+                    self.drop_token(&sent);
                     return Err(fail(REFUSED));
                 }
                 429 => return Err(fail(RATE_LIMITED)),
@@ -517,6 +527,9 @@ fn identification(query: &Query, h: &Hit) -> Identification {
     }
 }
 
+// TODO(ENR-igdb switch-on): check this table against a live
+// `/v4/genres` answer before the slice that turns the plugin on ships, and
+// replace this line with "checked against /v4/genres on <date>".
 /// IGDB's fixed genre ids (`/v4/genres`), by name. An id not listed is
 /// dropped, so no text from the answer is used.
 pub fn genre(id: u32) -> Option<&'static str> {
@@ -559,6 +572,22 @@ mod tests {
             assert!(!valid_credential(bad), "{bad:?}");
         }
         assert!(!valid_credential(&"a".repeat(MAX_CREDENTIAL + 1)));
+    }
+
+    /// A refusal for an old token leaves a newer one alone.
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_drops_only_the_token_it_sent() {
+        let p = Igdb::new(Arc::new(crate::StaticCredentials::default()));
+        let hold = |t: &str| Held {
+            client_id: Secret::new("id"),
+            token: Secret::new(t),
+            renew_at: Instant::now() + Duration::from_secs(60),
+        };
+        *p.held() = Some(hold("newer"));
+        p.drop_token(&Secret::new("older"));
+        assert_eq!(p.held().as_ref().map(|h| h.token.expose()), Some("newer"));
+        p.drop_token(&Secret::new("newer"));
+        assert!(p.held().is_none());
     }
 
     #[test]

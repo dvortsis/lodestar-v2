@@ -264,8 +264,52 @@ async fn a_refusal_drops_the_token_and_never_loops() {
         let again = p.lookup(&k, &q).await.unwrap_err().0;
         assert_eq!(again, igdb::HELD, "{case}");
         assert_eq!(replayer.requests().len(), 2, "{case}");
+        if case == "igdb_refused" {
+            // After the 6 h hold: a new token (the old one would still be
+            // fresh, so this proves it was dropped), then the search.
+            tokio::time::advance(Duration::from_secs(6 * 3600 + 1)).await;
+            let after = p.lookup(&k, &game(QUEST, Some(2015))).await;
+            assert!(matches!(after, Ok(Lookup::Match(_))), "{after:?}");
+            let hosts: Vec<String> = replayer
+                .requests()
+                .iter()
+                .map(|(_, r)| r.host().unwrap())
+                .collect();
+            assert_eq!(
+                hosts,
+                [igdb::TOKEN_HOST, igdb::HOST, igdb::TOKEN_HOST, igdb::HOST]
+            );
+        }
         replayer.finish().unwrap();
     }
+}
+
+/// Two lookups at once with no token held: only one asks Twitch, and the
+/// other waits for and reuses that token.
+#[tokio::test(start_paused = true)]
+async fn concurrent_lookups_ask_for_one_token() {
+    let dir = fixture("igdb_two_lookups");
+    let read = |f: &str| std::fs::read(dir.join(f)).unwrap();
+    let text = |f: &str| String::from_utf8(read(f)).unwrap();
+    let search =
+        || parse_exchange(&text("002.http"), read("002.body"), read("002.req.body")).unwrap();
+    let r = Arc::new(Replayer::new(vec![
+        parse_exchange(&text("001.http"), read("001.body"), read("001.req.body")).unwrap(),
+        search(),
+        search(),
+    ]));
+    let (k, p) = (kit(r.clone()), plugin());
+    let q = game(QUEST, Some(2015));
+    let (a, b) = tokio::join!(p.lookup(&k, &q), p.lookup(&k, &q));
+    assert!(matches!(a, Ok(Lookup::Match(_))), "{a:?}");
+    assert!(matches!(b, Ok(Lookup::Match(_))), "{b:?}");
+    r.finish().unwrap();
+    let hosts: Vec<String> = r
+        .requests()
+        .iter()
+        .map(|(_, q)| q.host().unwrap())
+        .collect();
+    assert_eq!(hosts, [igdb::TOKEN_HOST, igdb::HOST, igdb::HOST]);
 }
 
 /// A 400 from Twitch (a wrong Client ID) holds Twitch's host like a 401
