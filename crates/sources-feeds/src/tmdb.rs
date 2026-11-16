@@ -117,8 +117,9 @@ pub struct Hit {
     pub year: Option<u16>,
     /// At most [`Limits::max_genres`].
     pub genre_ids: Vec<u32>,
-    /// TMDB marks it adult.
-    pub adult: bool,
+    /// TMDB's adult marker: `Some(true)` marked adult, `Some(false)`
+    /// marked not adult, `None` when the result has no `adult` key.
+    pub adult: Option<bool>,
     /// Genre ids past the cap were passed over.
     pub truncated: bool,
 }
@@ -375,7 +376,7 @@ impl<'a> Parser<'a, '_> {
             original_language: None,
             year: None,
             genre_ids: Vec::new(),
-            adult: false,
+            adult: None,
             truncated: false,
         };
         self.object(|p, k| {
@@ -401,10 +402,13 @@ impl<'a> Parser<'a, '_> {
                 Some(5) => p.genres(&mut s, &mut hit)?,
                 Some(6) => match p.j.peek() {
                     Some(b't') => {
-                        hit.adult = true;
+                        hit.adult = Some(true);
                         p.skip_in(&mut s)?;
                     }
-                    Some(b'f') => p.skip_in(&mut s)?,
+                    Some(b'f') => {
+                        hit.adult = Some(false);
+                        p.skip_in(&mut s)?;
+                    }
                     _ => {
                         s.set(Bad::Malformed);
                         p.skip_in(&mut s)?;

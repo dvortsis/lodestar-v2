@@ -28,7 +28,9 @@ use std::sync::Arc;
 use lodestar_integrations::secret::Secret;
 use lodestar_sources::claims::{AltTitle, ExternalId};
 use lodestar_sources::consent::{CredentialKind, CredentialSpec, Need};
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Attribution, Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -53,6 +55,8 @@ pub const SENDS: &str = "The parsed title, its year and whether it's a film or a
 /// TMDB's terms of use require this notice wherever TMDB data is shown,
 /// with TMDB's logo (`docs/decisions/2026-11-15-ENR-tmdb.md`).
 pub const ATTRIBUTION: &str = "Lodestar uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.";
+/// Where the attribution links.
+pub const ATTRIBUTION_URL: &str = "https://www.themoviedb.org";
 
 /// How sure a match is: the title and the year agree.
 pub const CONFIDENCE_WITH_YEAR: u8 = 90;
@@ -149,9 +153,36 @@ impl Tmdb {
     }
 }
 
+/// TMDB's terms (ENR-terms; `docs/decisions/2026-11-15-ENR-tmdb.md`), its
+/// API Terms of Use of 2023-10-20. The licence is non-sublicensable and
+/// bars excessive bandwidth and building data sets, so: no whole-index
+/// walk, only the items you open, and its answers stay in Lodestar's own
+/// UI. It bars caching anything for longer than six months, which the
+/// default 180 days meets. Its notice is required wherever its data is
+/// shown, in its own words.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: ATTRIBUTION,
+        link: ATTRIBUTION_URL,
+        // TMDB's logo is required too; no bundled asset exists yet (see
+        // the decisions file, "Before it can be switched on").
+        logo: None,
+    }),
+    // TMDB marks every result `adult` true or false: an answer without the
+    // marker is refused.
+    adult_marker_required: true,
+};
+
 impl Identifier for Tmdb {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -276,7 +307,7 @@ pub fn choose(query: &Query, hits: &[Hit]) -> Lookup {
         return Lookup::NoMatch;
     }
     let mut agree = hits.iter().filter(|h| {
-        !h.adult
+        h.adult != Some(true)
             && [&h.title, &h.original_title]
                 .into_iter()
                 .flatten()
@@ -335,6 +366,9 @@ fn identification(query: &Query, h: &Hit) -> Identification {
         } else {
             CONFIDENCE_WITHOUT_YEAR
         },
+        // TMDB's own marker, passed on: the runtime refuses an answer
+        // without one (`TERMS`).
+        adult: h.adult,
     }
 }
 
@@ -396,5 +430,29 @@ mod tests {
         assert_eq!(genre(MediaKind::Tv, 10765), Some("Sci-Fi & Fantasy"));
         assert_eq!(genre(MediaKind::Movie, 18), Some("Drama"));
         assert_eq!(genre(MediaKind::Movie, 1), None);
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// Opened items only, kept in Lodestar's own UI, its required notice,
+    /// claims dropped before six months, and its marker required.
+    #[test]
+    fn tmdb_terms() {
+        let t = Tmdb::new(Arc::new(crate::StaticCredentials::default()));
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        // Six months is at least 181 days.
+        assert!(t.retention.drop_after() < 181 * 86_400);
+        let a = t.attribution.unwrap();
+        assert_eq!((a.text, a.link), (ATTRIBUTION, ATTRIBUTION_URL));
+        assert!(
+            a.text
+                .ends_with("but is not endorsed, certified, or otherwise approved by TMDB.")
+        );
+        assert!(t.accepts(Some(false)) && !t.accepts(None) && !t.accepts(Some(true)));
     }
 }

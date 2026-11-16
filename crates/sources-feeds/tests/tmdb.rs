@@ -49,7 +49,7 @@ fn a_film_answer_is_read() {
     assert_eq!(h.original_language.as_deref(), Some("en"));
     assert_eq!(
         (h.year, h.genre_ids.as_slice(), h.adult),
-        (Some(1994), &[18, 80][..], false)
+        (Some(1994), &[18, 80][..], Some(false))
     );
     assert!(
         !format!("{s:?}").contains("SENTINEL"),
@@ -96,6 +96,17 @@ fn an_error_object_and_other_shapes_are_not_whole() {
     // An empty list is a whole answer: a miss.
     let s = movie(r#"{"page":1,"results":[],"total_pages":0}"#);
     assert!(s.page.whole() && s.hits.is_empty());
+}
+
+#[test]
+fn the_adult_marker_is_read_as_given() {
+    let without = one("").replace(r#","adult":false"#, "");
+    let s = movie(&without);
+    assert!(s.page.whole(), "{:?}", s.page);
+    assert_eq!(s.hits[0].adult, None, "no key, no marker");
+    assert_eq!(movie(&one("")).hits[0].adult, Some(false));
+    let marked = one("").replace(r#""adult":false"#, r#""adult":true"#);
+    assert_eq!(movie(&marked).hits[0].adult, Some(true));
 }
 
 #[test]

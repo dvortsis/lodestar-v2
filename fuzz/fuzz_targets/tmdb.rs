@@ -54,7 +54,11 @@ fuzz_target!(|data: &[u8]| {
         };
         if let Lookup::Match(i) = choose(&q, &s.hits) {
             let id = i.ids[0].value.parse::<u64>().unwrap();
-            assert!(s.hits.iter().any(|x| x.id == id && !x.adult));
+            assert!(
+                s.hits
+                    .iter()
+                    .any(|x| x.id == id && x.adult != Some(true) && x.adult == i.adult)
+            );
             assert_eq!(i.ids.len(), 1);
         }
     }
