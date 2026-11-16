@@ -288,6 +288,9 @@ pub struct Stats {
     pub spoofed: AtomicU64,
     /// Gauge: nodes across routing tables.
     pub routing_nodes: AtomicU64,
+    /// Gauge: those of them that are good by BEP 5 (answered us within 15
+    /// minutes, or answered before and queried us within 15 minutes).
+    pub routing_good_nodes: AtomicU64,
     /// Gauge: queries awaiting an answer.
     pub outstanding: AtomicU64,
     pub harvested_sample: AtomicU64,
@@ -399,6 +402,7 @@ impl Stats {
 
     pub fn snapshot(&self) -> StatsSnapshot {
         let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let routing_nodes = g(&self.routing_nodes);
         StatsSnapshot {
             packets_in: g(&self.packets_in),
             packets_out: g(&self.packets_out),
@@ -414,7 +418,11 @@ impl Stats {
             replies_dropped: g(&self.replies_dropped),
             send_errors: g(&self.send_errors),
             spoofed: g(&self.spoofed),
-            routing_nodes: g(&self.routing_nodes),
+            routing_nodes,
+            // Two atomics, stored one after the other on the tick: a
+            // snapshot taken between them could pair one tick's good
+            // count with another's size. Good is a subset of the size.
+            routing_good_nodes: g(&self.routing_good_nodes).min(routing_nodes),
             outstanding: g(&self.outstanding),
             harvested_sample: g(&self.harvested_sample),
             harvested_get_peers: g(&self.harvested_get_peers),
@@ -731,6 +739,7 @@ pub struct StatsSnapshot {
     pub send_errors: u64,
     pub spoofed: u64,
     pub routing_nodes: u64,
+    pub routing_good_nodes: u64,
     pub outstanding: u64,
     pub harvested_sample: u64,
     pub harvested_get_peers: u64,
@@ -1236,5 +1245,25 @@ mod reply_ratio_tests {
         s.responses_in += 50;
         s.errors_in += 50;
         assert_eq!(s.reply_ratio(), Some(0.25));
+    }
+}
+
+#[cfg(test)]
+mod routing_gauge_tests {
+    use super::Stats;
+    use std::sync::atomic::Ordering;
+
+    /// A snapshot between the tick's two stores can't show more good
+    /// nodes than nodes, whichever way the table moved.
+    #[test]
+    fn good_never_reads_above_the_size() {
+        let s = Stats::default();
+        s.routing_good_nodes.store(5, Ordering::Relaxed);
+        s.routing_nodes.store(3, Ordering::Relaxed);
+        let snap = s.snapshot();
+        assert_eq!((snap.routing_nodes, snap.routing_good_nodes), (3, 3));
+        s.routing_nodes.store(9, Ordering::Relaxed);
+        let snap = s.snapshot();
+        assert_eq!((snap.routing_nodes, snap.routing_good_nodes), (9, 5));
     }
 }

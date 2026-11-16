@@ -14,7 +14,10 @@ REQUIRED = ["Name", "Repository", "Network", "Support", "Project",
 CONFIG_ATTRS = ["Name", "Target", "Default", "Mode", "Description", "Type", "Display", "Required"]
 TEMPLATES = {
     "lodestar.xml": {"webui": True, "ports": {"8090", "6881"}, "paths": {"/data"}},
-    "lodestar-gluetun.xml": {"webui": True, "extra": "--network=container:gluetun", "paths": {"/data"}},
+    # LODESTAR_EXIT_ON_NETWORK_LOSS: without it, Lodestar stays in a dead network after gluetun
+    # restarts (X-gluetun-restart-recover).
+    "lodestar-gluetun.xml": {"webui": True, "extra": "--network=container:gluetun", "paths": {"/data"},
+                             "vars": {"LODESTAR_EXIT_ON_NETWORK_LOSS"}},
     "lodestar-worker.xml": {"webui": False, "vars": {"LODESTAR_JOIN", "LODESTAR_TOKEN"}, "requires": "v0.6"},
 }
 NETWORK_CONTAINER = re.compile(r"--net(?:work)?[= ]container:(\S+)")
@@ -59,6 +62,10 @@ def check(path: Path, rules: dict) -> list[str]:
         errors.append(f"<Requires> must name Lodestar {rules['requires']} or newer")
     # The dependency can also come from the Network type ("container:NAME").
     network = (root.findtext("Network") or "").strip()
+    # The network-loss exit needs a restart policy to come back: Unraid adds none of its own.
+    targets_all = {c.get("Target") for c in root.iter("Config")}
+    if "LODESTAR_EXIT_ON_NETWORK_LOSS" in targets_all and "--restart=unless-stopped" not in extra.split():
+        errors.append("ExtraParams must contain --restart=unless-stopped with LODESTAR_EXIT_ON_NETWORK_LOSS")
     names = NETWORK_CONTAINER.findall(extra)
     if network.startswith("container:"):
         names.append(network[len("container:"):])

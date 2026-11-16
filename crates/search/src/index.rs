@@ -423,7 +423,7 @@ fn population_of(p: &Payload, gens: &Generations, side: population::Side) -> Pop
 
 /// Bytes by (component, field) across an index's live segments, largest
 /// first.
-fn space_by_field(reader: &IndexReader) -> Result<Vec<(String, u64)>> {
+pub(crate) fn space_by_field(reader: &IndexReader) -> Result<Vec<(String, u64)>> {
     let mut totals: std::collections::BTreeMap<String, u64> = Default::default();
     let searcher = reader.searcher();
     for seg in searcher.segment_readers() {

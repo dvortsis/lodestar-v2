@@ -1900,6 +1900,65 @@ fn keys_handed_back_go_to_the_built_in_worker() {
     );
 }
 
+/// A key whose hold changes after the server's check, so the intake
+/// refuses it only once handed over, ends as the server's own refusal
+/// does: remembered as blocked, so a remote claim whose store check ran
+/// before the refusal is answered as committed, never granted.
+#[test]
+fn a_refusal_in_the_race_window_is_remembered_as_blocked() {
+    use lodestar_cluster::{HandBack, LocalIntake};
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    authority.serve_remote();
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(2);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let key = InfoHash([7; 20]);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(filter_blocking(&[])),
+        }),
+    });
+    let claim = Claim {
+        key,
+        source: src(1),
+        strategy: 0,
+        at: now(),
+    };
+    let Claimed::Granted(t) = authority.claim(WorkerId(8), claim, now()) else {
+        panic!("granted")
+    };
+    assert!(!intake.refuses_local(&key), "free when the server asked");
+    let HandBack::Handed(local, lease) = authority.hand_to_local(WorkerId(8), &key, t, now())
+    else {
+        panic!("handed")
+    };
+    // Another worker's claim: its store check runs now, before the hold.
+    let checked_at = authority.commit_seq();
+    held.insert(key.0);
+    assert_eq!(intake.take_handed(key, local, lease), LocalIntake::Refused);
+    assert!(to_pool.try_recv().is_err(), "never fetched");
+    assert!(!authority.in_flight(&key));
+    assert_eq!(
+        authority.claim_batch(WorkerId(9), &[claim], now(), None, Some(checked_at)),
+        vec![BatchAnswer::Committed]
+    );
+}
+
 /// A worker that says any key is too large lends the coordinator nothing
 /// from its report: a key handed back reaches the built-in worker's pool
 /// as a bare key built from the coordinator's own lease (its source and

@@ -1670,28 +1670,61 @@ mod tests {
     /// A read costs the same, and reads the same, on a tokenizer that
     /// earlier reads left in any state as on a new one: its caches and
     /// what it keeps between reads change how fast it reads, never what a
-    /// read is charged.
+    /// read is charged. Both readings' tokenizers, the joined one and the
+    /// earlier one ([`Tokenizer::splitting`], kept per thread by
+    /// [`with_splitting`]), on texts with marks and without
+    /// (X-filter-split-nits).
     #[test]
     fn a_read_costs_the_same_whatever_came_before() {
-        for case in 0..48u64 {
-            let (name, paths) = colliding(case * 7 + 1);
-            let fresh = metered(&mut Tokenizer::default(), &name, &paths);
-            let mut used = Tokenizer::default();
-            for earlier in 0..(1 + case % 4) {
-                let (n, p) = colliding(case * 131 + earlier * 17 + 3);
-                metered(&mut used, &n, &p);
-                // An unmetered read between them, too.
-                let mut out = Vec::new();
-                used.text(&n, &mut out);
+        // A mark after every `a`: the earlier reading ends a word there,
+        // the joined one reads on and pays for it.
+        let mark = |s: &str| s.replace('a', "a\u{0600}");
+        let new = |earlier: bool| {
+            if earlier {
+                Tokenizer::splitting()
+            } else {
+                Tokenizer::default()
             }
-            assert_eq!(metered(&mut used, &name, &paths), fresh, "case {case}");
-            // And again, right after the same read.
-            assert_eq!(
-                metered(&mut used, &name, &paths),
-                fresh,
-                "case {case} again"
-            );
+        };
+        let mut apart = 0;
+        for (reading, earlier) in [("joined", false), ("earlier", true)] {
+            for marks in [false, true] {
+                let text = |seed: u64| {
+                    let (name, paths) = colliding(seed);
+                    if !marks {
+                        return (name, paths);
+                    }
+                    let paths = paths
+                        .iter()
+                        .map(|p| p.iter().map(|s| mark(s)).collect())
+                        .collect();
+                    (mark(&name), paths)
+                };
+                for case in 0..48u64 {
+                    let (name, paths) = text(case * 7 + 1);
+                    let fresh = metered(&mut new(earlier), &name, &paths);
+                    if marks && earlier {
+                        let joined = metered(&mut Tokenizer::default(), &name, &paths);
+                        apart += usize::from(joined.2 != fresh.2);
+                    }
+                    let mut used = new(earlier);
+                    for earlier in 0..(1 + case % 4) {
+                        let (n, p) = text(case * 131 + earlier * 17 + 3);
+                        metered(&mut used, &n, &p);
+                        // An unmetered read between them, too.
+                        let mut out = Vec::new();
+                        used.text(&n, &mut out);
+                    }
+                    let at = format!("{reading} reading, marks {marks}, case {case}");
+                    assert_eq!(metered(&mut used, &name, &paths), fresh, "{at}");
+                    // And again, right after the same read.
+                    assert_eq!(metered(&mut used, &name, &paths), fresh, "{at}, again");
+                }
+            }
         }
+        // The marks make the two readings differ, so the earlier one's own
+        // state is what's tested.
+        assert_eq!(apart, 48, "the readings differed in {apart} of 48 cases");
     }
 
     /// A metered read, whose words trade places through
