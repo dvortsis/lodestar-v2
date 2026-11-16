@@ -1372,14 +1372,25 @@ impl Store {
     ///   they evicted each other and were compiled again record by record.
     pub fn set_bulk_writes(&self, on: bool) -> Result<()> {
         let (cache_kib, checkpoint, statements) = if on {
-            (BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES, BULK_STATEMENTS)
+            (
+                BULK_CACHE_MIB * 1024,
+                BULK_CHECKPOINT_PAGES,
+                BULK_STATEMENTS,
+            )
         } else {
-            (DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES, DEFAULT_STATEMENTS)
+            (
+                DEFAULT_CACHE_KIB,
+                DEFAULT_CHECKPOINT_PAGES,
+                DEFAULT_STATEMENTS,
+            )
         };
         self.conn.set_prepared_statement_cache_capacity(statements);
         self.conn.pragma_update(None, "cache_size", -cache_kib)?;
-        self.conn
-            .query_row(&format!("PRAGMA wal_autocheckpoint = {checkpoint}"), [], |_| Ok(()))?;
+        self.conn.query_row(
+            &format!("PRAGMA wal_autocheckpoint = {checkpoint}"),
+            [],
+            |_| Ok(()),
+        )?;
         Ok(())
     }
 }
@@ -1898,7 +1909,10 @@ mod tests {
         let defaults = (-DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES);
         assert_eq!(read(&store), defaults, "SQLite's own defaults");
         store.set_bulk_writes(true).unwrap();
-        assert_eq!(read(&store), (-BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES));
+        assert_eq!(
+            read(&store),
+            (-BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES)
+        );
         assert_eq!(read(&other), defaults);
         store.set_bulk_writes(false).unwrap();
         assert_eq!(read(&store), defaults);

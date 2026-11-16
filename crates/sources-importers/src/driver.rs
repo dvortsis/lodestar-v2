@@ -477,7 +477,7 @@ pub async fn run(
                     // commit's own reads fail the same way.
                     let hashes: Vec<_> = p.swarm_hashes().collect();
                     let adult = store.adult_finders(&hashes).map_or(true, |b| b != 0);
-                    Judge::Torrent(p, info, adult)
+                    Judge::Torrent(Box::new((p, info, adult)))
                 }
                 // A record the store can't prepare is committed as invalid
                 // (IMP-2).
@@ -492,7 +492,8 @@ pub async fn run(
         let filter = &opts.filter;
         let (prepared, judged): (Vec<Option<Prepared>>, Vec<Judged>) =
             par_map(work, preparers.len(), |(rec, job)| match job {
-                Judge::Torrent(mut p, info, adult) => {
+                Judge::Torrent(t) => {
+                    let (mut p, info, adult) = *t;
                     let j = judge_torrent(filter, &mut p, &info, rec, adult, now);
                     (Some(p), j)
                 }
@@ -609,7 +610,7 @@ const MAX_PREPARE_THREADS: usize = 4;
 enum Judge {
     /// A prepared torrent, its info dict, and whether an always-adult
     /// source claims it.
-    Torrent(Prepared, lodestar_metainfo::Info, bool),
+    Torrent(Box<(Prepared, lodestar_metainfo::Info, bool)>),
     /// No info dict: judged as a candidate.
     Candidate,
     /// The store refused to prepare it: committed as invalid.

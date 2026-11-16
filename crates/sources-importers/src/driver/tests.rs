@@ -626,7 +626,11 @@ fn preparing_on_several_threads_matches_one() {
     let path = fixture(dir.path(), "p.sqlite3", &rows);
     let mut a = adapter(&path);
     let batch = block_on(a.read(&[], NOW)).unwrap().unwrap();
-    assert!(batch.records.len() >= MIN_PARALLEL_RECORDS, "{}", batch.records.len());
+    assert!(
+        batch.records.len() >= MIN_PARALLEL_RECORDS,
+        "{}",
+        batch.records.len()
+    );
     let (store, _) = mem();
     let shown = |v: Vec<Option<(lodestar_metainfo::Info, Result<Prepared, Error>)>>| {
         v.into_iter()
