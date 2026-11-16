@@ -132,6 +132,10 @@ async fn a_recorded_match_maps_to_an_identification() {
         (i.year, i.confidence),
         (Some(2008), tvdb::CONFIDENCE_WITH_YEAR)
     );
+    // TheTVDB has no adult marker, so none is claimed, and its terms take
+    // an unmarked answer (ENR-terms); one marked adult never is.
+    assert_eq!(i.adult, None);
+    assert!(tvdb::TERMS.accepts(i.adult) && !tvdb::TERMS.accepts(Some(true)));
     let claims = i.clone().into_claims();
     no_secret(&format!(
         "{claims:?}{:?}{:?}",

@@ -45,7 +45,9 @@ use lodestar_integrations::secret::Secret;
 use lodestar_sources::claims::{AltTitle, ExternalId};
 use lodestar_sources::consent::{CredentialKind, CredentialSpec, Need};
 use lodestar_sources::http::{Method, parse_retry_after};
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Attribution, Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -242,9 +244,35 @@ impl Tvdb {
     }
 }
 
+/// TheTVDB's terms (ENR-terms; `docs/decisions/2026-11-15-ENR-tvdb.md`).
+/// Its API is licensed per product, solely for that product's use, and
+/// its terms forbid "excessive calls" and distributing "the API or the
+/// Data", so: no whole-index walk, only the items you open, and its
+/// answers stay in Lodestar's own UI. They ask for no shorter keeping than
+/// the default. The API page requires the attribution with a link to
+/// TheTVDB wherever its data is shown.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: ATTRIBUTION,
+        link: ATTRIBUTION_URL,
+        logo: None,
+    }),
+    // TheTVDB's search results carry no adult marker (its v4 API has no
+    // such field and no filter for one). The runtime's gate never asks
+    // about an Adult item, and the plugin's kind is TV only.
+    adult_marker_required: false,
+};
+
 impl Identifier for Tvdb {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -588,6 +616,8 @@ fn identification(query: &Query, s: &Series) -> Identification {
         } else {
             CONFIDENCE_WITHOUT_YEAR
         },
+        // TheTVDB doesn't mark adult series; `TERMS` opts out.
+        adult: None,
     }
 }
 
@@ -642,5 +672,25 @@ mod tests {
         for (three, two) in LANGUAGES {
             assert!(lodestar_sources::claims::language_ok(two), "{three}");
         }
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// Licensed for the product only: opened items only, kept in
+    /// Lodestar's own UI, with the attribution its API page requires, no
+    /// marker to read.
+    #[test]
+    fn tvdb_terms() {
+        let t = Tvdb::new(Arc::new(crate::StaticCredentials::default()));
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        let a = t.attribution.unwrap();
+        assert_eq!((a.text, a.link), (ATTRIBUTION, ATTRIBUTION_URL));
+        assert!(a.text.starts_with("Metadata provided by TheTVDB"));
+        assert!(t.accepts(None) && !t.accepts(Some(true)));
     }
 }
