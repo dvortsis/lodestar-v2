@@ -1,0 +1,24 @@
+   Compiling scheduler-review-harness v0.1.0 (C:\Users\dvort\AppData\Local\Temp\lodestar-scheduler-review-753340343e2b4a86980eb189d81ce73f)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.36s
+     Running unittests src\lib.rs (C:\Users\dvort\AppData\Local\Temp\lodestar-scheduler-review-753340343e2b4a86980eb189d81ce73f\target\debug\deps\scheduler_review_harness-087278b1f880f47c.exe)
+
+running 2 tests
+
+thread 'scheduler::followup_review::foreign_permit_must_be_rejected' (11956) panicked at src\scheduler.rs:2421:9:
+scheduler B accepted a permit owned by scheduler A with a different database
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test scheduler::followup_review::foreign_permit_must_be_rejected ... FAILED
+
+thread 'scheduler::followup_review::failed_completion_must_preserve_received_interval' (21772) panicked at src\scheduler.rs:2400:9:
+redispatched ten seconds before the received interval expired after a failed completion commit
+test scheduler::followup_review::failed_completion_must_preserve_received_interval ... FAILED
+
+failures:
+
+failures:
+    scheduler::followup_review::failed_completion_must_preserve_received_interval
+    scheduler::followup_review::foreign_permit_must_be_rejected
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `--lib`
