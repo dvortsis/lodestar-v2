@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use lodestar_sources::claims::{AltTitle, ExternalId};
 use lodestar_sources::http::{Method, parse_retry_after};
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Attribution, Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -127,9 +129,34 @@ impl AniList {
     }
 }
 
+/// AniList's terms (ENR-terms; `docs/decisions/2026-11-15-ENR-anilist.md`).
+/// Its terms of use forbid hoarding, mass collection and using the API as
+/// a data store, and grant no licence to pass its data on, so: no
+/// whole-index walk, only the items you open, and its answers stay in
+/// Lodestar's own UI. Claims are refreshed and dropped within 180 days,
+/// so nothing is kept as a store. It asks for no credit; the line is a
+/// courtesy.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: "AniList",
+        link: "https://anilist.co",
+        logo: None,
+    }),
+    // AniList marks every media `isAdult`: an answer without the marker
+    // is refused (the plugin never chooses one anyway).
+    adult_marker_required: true,
+};
+
 impl Identifier for AniList {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -367,5 +394,26 @@ fn identification(query: &Query, m: &Media) -> Identification {
         } else {
             CONFIDENCE_WITHOUT_YEAR
         },
+        // AniList's own `isAdult`, passed on: always `Some(false)` here,
+        // since [`choose`] takes nothing else.
+        adult: m.adult,
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// No mass collection: opened items only, kept in Lodestar's own UI,
+    /// refreshed within 180 days, credited as a courtesy, its marker
+    /// required.
+    #[test]
+    fn anilist_terms() {
+        let t = AniList::new();
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(t.attribution.map(|a| a.link), Some("https://anilist.co"));
+        assert!(t.accepts(Some(false)) && !t.accepts(None) && !t.accepts(Some(true)));
     }
 }

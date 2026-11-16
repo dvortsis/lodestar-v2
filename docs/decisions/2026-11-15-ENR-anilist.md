@@ -13,6 +13,15 @@ Slice ENR-anilist (`runner/slices.yaml`, API lane brief, 2026-11-15). Spec: arch
   - **Rate limit.** 90 requests a minute, currently degraded to 30, plus a burst limiter. Over it: a 429 with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`, a one-minute timeout, and a GraphQL error body. **The plugin keeps to the plan's cap, 30 a minute: one request every 2 s, no burst** (`HostRate::every(2 s)`, §2.26), which also stays under the degraded limit. The host limiter backs off from 60 s to 6 h after a 429 or 5xx. The `X-RateLimit-*` headers aren't read: at a fixed 30 a minute with no burst they'd never change what's sent.
 - **No API key, no account:** reading public media needs none. No user token is ever sent.
 
+## Terms (ENR-terms), checked 2026-11-16
+ENR-terms (#962) gives every plugin a `Terms` and an adult marker on each answer (`crates/sources/src/terms.rs`). AniList's `anilist::TERMS`, from its terms of use as read on 2026-11-15 (above; on 2026-11-16 the page refused an automated fetch, so that reading stands):
+- **`background_walk: false`.** The terms forbid hoarding and mass collection. A walk over the whole index reads as that, so it looks up only the items you open, within its 30-a-minute cap. This answers the bulk-use question above the strict way.
+- **`redistribute: false`.** The terms grant no licence to pass AniList's data on. Its answers stay in Lodestar's own UI and never rename the record that search, Torznab and export serve.
+- **`retention: Retention::DEFAULT`** (180 days). The terms forbid using the API as a backup or data store. The runtime refreshes a claim on the next interest after 150 days and drops it at 179 days whether anyone opens the item or not, so nothing is kept without expiry. This answers the storage question above.
+- **`attribution`: "AniList", linking `https://anilist.co`.** The terms ask for no credit; it's a courtesy.
+- **`adult_marker_required: true`, `adult` from AniList's own `isAdult`.** Every media carries it. `anilist::choose` already takes only media marked not adult, so a match always says `Some(false)`; the runtime would refuse a marked or unmarked one too (`an_adult_or_unmarked_media_is_never_chosen`, `anilist_terms`).
+- **Non-commercial:** unchanged from above. Lodestar charges nothing, and AniList data must never sit behind a paid feature.
+
 ## Off by default, External class
 - **The manifest:** `anilist`, an Enrichment source, Consent `External`, endpoint `https://graphql.anilist.co` only, `enabled_by_default: false`, never always-adult, never finds private.
 - **Kinds: Movie and TV only.** AniList's anime is a film (`MOVIE`) or a series (`TV`, `TV_SHORT`, `OVA`, `ONA`, `SPECIAL`); `MUSIC` and formats the parser doesn't know never match. There is no anime kind in `MediaKind`, so every film or series the runtime finds eligible is asked about; for non-anime titles it's a miss (cached 7 days by ENR-10).
@@ -53,5 +62,5 @@ Slice ENR-anilist (`runner/slices.yaml`, API lane brief, 2026-11-15). Spec: arch
 
 ## Before it can be switched on
 - **Real recordings:** the slice that lifts the External consent gate re-records these fixtures from the live service and fixes the parser for any shape they differ in.
-- **The owner's answer** to the bulk-use and storage question above.
+- **The owner's answer** to the bulk-use and storage question above, if the owner wants more than ENR-terms' strict reading (no background walk, claims dropped within 180 days).
 - **The Legal Notice** gains AniList's line then, by the owner (§2.33); it isn't changed here.

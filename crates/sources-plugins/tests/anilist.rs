@@ -116,6 +116,9 @@ async fn a_recorded_match_maps_to_an_identification() {
         (Some(1997), anilist::CONFIDENCE_WITH_YEAR)
     );
     assert!(i.genres.is_empty());
+    // AniList's own marker, not adult, so its terms take it (ENR-terms).
+    assert_eq!(i.adult, Some(false));
+    assert!(anilist::TERMS.accepts(i.adult));
     // Nothing of the description, the staff or the adult media.
     let claims = i.clone().into_claims();
     let all = format!("{claims:?}{:?}{:?}", i.canonical_title, i.alt_titles);
@@ -156,6 +159,9 @@ fn an_adult_or_unmarked_media_is_never_chosen() {
     ));
     assert_eq!(anilist::choose(&q, &[&adult]), Lookup::NoMatch);
     assert_eq!(anilist::choose(&q, &[&unmarked]), Lookup::NoMatch);
+    // Nor would the runtime take either (ENR-terms): AniList's terms need
+    // the marker.
+    assert!(!anilist::TERMS.accepts(adult.adult) && !anilist::TERMS.accepts(unmarked.adult));
 }
 
 #[tokio::test(start_paused = true)]
