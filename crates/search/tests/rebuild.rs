@@ -623,11 +623,13 @@ fn build_v5(dir: &Path, store: &mut Store) {
         .collect();
     let v5 = v5_schema(&schema, &newer);
     let v5_files = v5_schema(&file_schema, &lodestar_search::files::V6_FIELDS);
-    build_old(dir, store, v5, v5_files, &[]);
+    build_old(dir, store, v5, v5_files, &[], None);
 }
 
 /// The schema a v7 build wrote: this one with `group_key` indexed and
-/// fast, as v6 declared it (GS-2b made it a column only in v8).
+/// fast, as v6 declared it (GS-2b made it a column only in v8). v6
+/// declared it `INDEXED | FAST` and nothing else (not stored, no other
+/// options), which is the entry built here.
 fn v7_schema(current: &tantivy::schema::Schema) -> tantivy::schema::Schema {
     use tantivy::schema::{FAST, FieldEntry, INDEXED};
     let mut b = tantivy::schema::Schema::builder();
@@ -647,23 +649,24 @@ fn v7_schema(current: &tantivy::schema::Schema) -> tantivy::schema::Schema {
 /// An index of everything in `store` at `dir` under older schemas, as
 /// that build left it: documents with only the fields it has, less
 /// `unwritten` (fields it had but didn't produce), and a commit payload
-/// without a population part.
+/// with the population it recorded at `gens` (`None`: none, as before
+/// SB-6's contract).
 fn build_old(
     dir: &Path,
     store: &mut Store,
     old: tantivy::schema::Schema,
     old_files: tantivy::schema::Schema,
     unwritten: &[&str],
+    gens: Option<&lodestar_search::Generations>,
 ) {
     use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
     use tantivy::TantivyDocument;
     let (schema, fields) = lodestar_search::schema::build();
     let (file_schema, file_fields) = lodestar_search::files::schema();
-    let (v5, v5_files) = (old, old_files);
     std::fs::create_dir_all(dir.join("files")).unwrap();
-    let index = tantivy::Index::create_in_dir(dir, v5.clone()).unwrap();
+    let index = tantivy::Index::create_in_dir(dir, old.clone()).unwrap();
     let files = tantivy::Index::builder()
-        .schema(v5_files.clone())
+        .schema(old_files.clone())
         .settings(lodestar_search::files::settings())
         .create_in_dir(dir.join("files"))
         .unwrap();
@@ -697,9 +700,9 @@ fn build_old(
         let row = store.torrent(id).unwrap().unwrap();
         let tree = store.files(id).unwrap().unwrap();
         let doc = lodestar_search::TorrentDoc::new(&row, &tree).to_document(&fields);
-        w.add_document(map(&schema, &v5, doc)).unwrap();
+        w.add_document(map(&schema, &old, doc)).unwrap();
         for d in lodestar_search::files::file_docs(id as u64, &tree) {
-            fw.add_document(map(&file_schema, &v5_files, d.to_document(&file_fields)))
+            fw.add_document(map(&file_schema, &old_files, d.to_document(&file_fields)))
                 .unwrap();
         }
     }
@@ -708,9 +711,15 @@ fn build_old(
         ids.last().unwrap(),
         store.reindex_head().unwrap()
     );
-    for w in [&mut fw, &mut w] {
+    use lodestar_search::population::{PopState, Side};
+    let pop = |side| {
+        gens.map_or(String::new(), |g| {
+            format!(";pop:{}", PopState::fresh(g, side).encode())
+        })
+    };
+    for (w, side) in [(&mut fw, Side::Files), (&mut w, Side::Torrents)] {
         let mut prepared = w.prepare_commit().unwrap();
-        prepared.set_payload(&payload);
+        prepared.set_payload(&format!("{payload}{}", pop(side)));
         prepared.commit().unwrap();
     }
 }
@@ -719,7 +728,7 @@ fn build_old(
 /// Straight from v5 to this build's version, three bumps on (v6, SB-6;
 /// v7, X-search-files-5; v8, GS-2b): the rebuild builds the current schema from the
 /// store, so no version between is ever built (runner, 2026-11-05).
-fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
+fn a_v5_index_serves_while_current_is_built_resumed_and_swapped_in() {
     use lodestar_search::{
         Availability,
         files::V6_FIELDS as FILE_V6,
@@ -934,6 +943,8 @@ fn a_v7_index_rebuilds_to_v8_and_group_key_reads_ready() {
         v7_schema(&schema),
         file_schema,
         &["group_key"],
+        // GS-2's generations: `group_key` without a producer.
+        Some(&lodestar_search::Generations::current().with("group_key", 0)),
     );
     let old = group_keys(&root.join(v7.dir_name()));
     assert_eq!(old.len(), n);
@@ -943,8 +954,14 @@ fn a_v7_index_rebuilds_to_v8_and_group_key_reads_ready() {
     let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
     let p = serving.progress().unwrap();
     assert_eq!((p.from, p.to), (v7, IndexVersion::CURRENT));
-    // The v7 index serves meanwhile.
+    // The v7 index serves meanwhile, read-only for population: it isn't
+    // walked, and says `group_key` has no producer, so collapse (GS-3)
+    // answers ungrouped from it.
     assert_eq!(total(&serving.index(), "common movie"), n);
+    assert_eq!(
+        serving.index().availability("group_key"),
+        Availability::NoProducer
+    );
     hold.store(false, Ordering::Relaxed);
     finished(&serving);
     let index = serving.index();
