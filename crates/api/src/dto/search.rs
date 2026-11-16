@@ -102,7 +102,11 @@ pub struct SearchRequest {
     /// While group data isn't ready the results come ungrouped and
     /// `collapse_unavailable` says why; never an error. Send the same
     /// value with a `cursor`.
-    #[schema(example = "group")]
+    ///
+    /// Left out of the body's schema, as `explain` is: a new field would
+    /// become required in the generated client types for every caller.
+    /// `GET` lists it as a parameter; `POST` accepts it the same way.
+    #[schema(ignore)]
     pub collapse: Option<String>,
     /// Count every match exactly, even above 100,000 (within a time
     /// budget; `total_approx` says whether it made it). `1` or `true`.

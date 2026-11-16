@@ -106,7 +106,11 @@ fn stored_versions_collapse_to_one_row_per_work_across_pages_and_commits() {
     let index = Arc::new(SearchIndex::open(&index_dir(tmp.path())).unwrap());
     catch_up(&index, &mut store);
     let cancel = CancelToken::new();
-    for sort in [Sort::Relevance, Sort::Size { desc: true }, Sort::Discovered { desc: false }] {
+    for sort in [
+        Sort::Relevance,
+        Sort::Size { desc: true },
+        Sort::Discovered { desc: false },
+    ] {
         let node = parse("film").unwrap();
         let lease = Lease::new(index.clone(), &node, NOW, sort, &cancel).unwrap();
         collapse::available(&lease).expect("GS-2b's producer wrote group data");
@@ -151,8 +155,14 @@ fn an_index_without_group_data_reports_it() {
         .unwrap();
     let index = Arc::new(index);
     catch_up(&index, &mut store);
-    let lease = Lease::new(index, &parse("film").unwrap(), NOW, Sort::Relevance, &CancelToken::new())
-        .unwrap();
+    let lease = Lease::new(
+        index,
+        &parse("film").unwrap(),
+        NOW,
+        Sort::Relevance,
+        &CancelToken::new(),
+    )
+    .unwrap();
     assert_eq!(
         collapse::available(&lease),
         Err(Unavailable::GroupKeyNotReady)

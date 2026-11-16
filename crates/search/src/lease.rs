@@ -473,7 +473,10 @@ impl Lease {
                         &self.searcher,
                         self.compiled.boosts.as_deref(),
                         priors.as_ref(),
-                        inside.iter().map(|&i| (scored[i].score, scored[i].addr)).collect(),
+                        inside
+                            .iter()
+                            .map(|&i| (scored[i].score, scored[i].addr))
+                            .collect(),
                     )?;
                     let at: HashMap<DocAddress, usize> =
                         inside.iter().map(|&i| (addrs[i], i)).collect();
@@ -500,15 +503,11 @@ impl Lease {
     /// The last phase-1 candidate of the two-phase window after `start`:
     /// the window's lower bound (`None`: no window there).
     fn window_bound(&self, start: Option<Scored>, cancel: &CancelToken) -> Result<Option<Scored>> {
-        Ok(score_top(
-            &self.searcher,
-            &self.compiled,
-            start,
-            RERANK_WINDOW,
-            cancel,
-        )?
-        .last()
-        .copied())
+        Ok(
+            score_top(&self.searcher, &self.compiled, start, RERANK_WINDOW, cancel)?
+                .last()
+                .copied(),
+        )
     }
 
     /// Each of `addrs`' phase-1 score under this lease's query, as

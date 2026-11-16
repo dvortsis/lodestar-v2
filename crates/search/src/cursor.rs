@@ -383,8 +383,15 @@ mod tests {
         let c = Cursor::from_bytes(&v1).expect("a v1 cursor");
         assert!(!c.collapse);
         assert_eq!(c.sort, Sort::Seeders { desc: true });
-        assert_eq!(c.to_bytes(), v1, "uncollapsed cursors are written as before");
-        let collapsed = Cursor { collapse: true, ..c };
+        assert_eq!(
+            c.to_bytes(),
+            v1,
+            "uncollapsed cursors are written as before"
+        );
+        let collapsed = Cursor {
+            collapse: true,
+            ..c
+        };
         let b = collapsed.to_bytes();
         assert_eq!(b[0], 2);
         assert_eq!(&b[1..], &v1[1..]);

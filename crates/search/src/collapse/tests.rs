@@ -2,14 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use proptest::prelude::*;
-use tantivy::indexer::NoMergePolicy;
 use tantivy::TantivyDocument;
+use tantivy::indexer::NoMergePolicy;
 
 use super::*;
+use crate::SearchIndex;
 use crate::index::Sort;
 use crate::lease::Page;
 use crate::population::Generations;
-use crate::SearchIndex;
 
 const NOW: i64 = 1_700_000_100;
 
@@ -29,7 +29,10 @@ fn group_of(id: u64, groups: u64) -> Option<u64> {
 /// Torrent `id`'s name: every one has `Common` and its group's word;
 /// some carry more words, so relevance scores differ within a group.
 fn name_of(id: u64, groups: u64) -> String {
-    let mut words = vec![format!("Show{}", group_of(id, groups).map_or(0, |g| g & 0xffff))];
+    let mut words = vec![format!(
+        "Show{}",
+        group_of(id, groups).map_or(0, |g| g & 0xffff)
+    )];
     words.push("Common".into());
     for extra in 0..(id % 4) {
         words.push(format!("Pad{extra}"));
@@ -128,7 +131,10 @@ fn scroll(l: &Lease, size: usize, mut between: impl FnMut()) -> Vec<(u64, u64)> 
         out.extend(page.rows.iter().map(|r| (r.hit.id, r.others)));
         between();
         let Some(next) = page.next else { return out };
-        assert!(l.fits(&next), "a collapsed cursor is a position of the lease");
+        assert!(
+            l.fits(&next),
+            "a collapsed cursor is a position of the lease"
+        );
         page = super::page(l, Start::After(next), size, &cancel).unwrap();
         n += 1;
         assert!(n < 10_000, "paging doesn't end");
@@ -203,7 +209,10 @@ fn the_best_version_follows_the_sort_with_a_stable_tie_break() {
     }
     // The same rows every time.
     for _ in 0..3 {
-        assert_eq!(super::page(&l, Start::Offset(0), 200, &cancel).unwrap(), page);
+        assert_eq!(
+            super::page(&l, Start::Offset(0), 200, &cancel).unwrap(),
+            page
+        );
     }
 }
 
@@ -253,7 +262,9 @@ fn collapsed_and_uncollapsed_pages_share_positions() {
         let page = super::page(&l, Start::Offset(0), 10, &cancel).unwrap();
         let last = page.rows.last().unwrap().hit.id;
         let at = all.iter().position(|id| *id == last).unwrap();
-        let rest = l.page(Start::After(page.next.unwrap()), 5, &cancel).unwrap();
+        let rest = l
+            .page(Start::After(page.next.unwrap()), 5, &cancel)
+            .unwrap();
         let ids: Vec<u64> = rest.hits.iter().map(|h| h.id).collect();
         assert_eq!(ids, all[at + 1..at + 6], "{sort:?}");
     }
@@ -292,7 +303,14 @@ fn groups_are_counted_exactly_below_the_threshold() {
         let l = lease(&index, q, Sort::Relevance);
         let want = expected(&uncollapsed(&l), groups).len();
         let t = super::groups(&l, false, &cancel).unwrap();
-        assert_eq!(t, Total { value: want, approx: false }, "{q}");
+        assert_eq!(
+            t,
+            Total {
+                value: want,
+                approx: false
+            },
+            "{q}"
+        );
         // Kept on the lease.
         assert_eq!(l.kept_groups(), Some(t));
     }
@@ -324,7 +342,10 @@ fn the_groups_estimate_is_within_its_stated_error() {
             let est = estimate(&l, torrents.value, sample_above, &cancel).unwrap();
             assert!(est.approx);
             let e = (est.value as f64 - exact.value as f64).abs() / exact.value as f64;
-            eprintln!("{q} ({sample_above}): ≈{} vs {} ({e:.4})", est.value, exact.value);
+            eprintln!(
+                "{q} ({sample_above}): ≈{} vs {} ({e:.4})",
+                est.value, exact.value
+            );
             e
         };
         drawn = drawn.max(err(u32::MAX));

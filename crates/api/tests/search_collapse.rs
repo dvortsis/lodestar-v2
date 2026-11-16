@@ -43,8 +43,9 @@ fn raw(name: &str) -> Vec<u8> {
 
 /// Torrent `k`: a version of work `k % WORKS`, in one of a few releases.
 fn name(k: usize) -> String {
-    let work = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India"]
-        [k % WORKS];
+    let work = [
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
+    ][k % WORKS];
     let res = ["720p", "1080p", "2160p"][(k / WORKS) % 3];
     format!("{work}.Movie.2010.{res}.BluRay.x264-GRP{k}")
 }
@@ -61,7 +62,9 @@ struct Fixture {
 impl Fixture {
     /// Stores, classifies and indexes `n` more torrents.
     fn add(&mut self, n: usize) {
-        let raws: Vec<Vec<u8>> = (self.added..self.added + n).map(|k| raw(&name(k))).collect();
+        let raws: Vec<Vec<u8>> = (self.added..self.added + n)
+            .map(|k| raw(&name(k)))
+            .collect();
         let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
         let batch: Vec<NewTorrent<'_>> = infos
             .iter()
@@ -208,7 +211,13 @@ fn encode(s: &str) -> String {
 
 /// The work a hit's name is a version of.
 fn work(hit: &Value) -> String {
-    hit["name"].as_str().unwrap().split('.').next().unwrap().to_owned()
+    hit["name"]
+        .as_str()
+        .unwrap()
+        .split('.')
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 #[tokio::test]
@@ -246,7 +255,11 @@ async fn collapsed_pages_serve_each_group_once_with_its_others_and_counts() {
         }
         let works: Vec<String> = rows.iter().map(work).collect();
         let distinct: HashSet<&String> = works.iter().collect();
-        assert_eq!(distinct.len(), works.len(), "{sort}: a group twice: {works:?}");
+        assert_eq!(
+            distinct.len(),
+            works.len(),
+            "{sort}: a group twice: {works:?}"
+        );
         assert_eq!(works.len(), WORKS, "{sort}: a group missing");
         // `others` + 1 over the rows is the torrent count, and each row's
         // is its work's versions in the snapshot, less itself.
@@ -255,7 +268,9 @@ async fn collapsed_pages_serve_each_group_once_with_its_others_and_counts() {
             .map(|r| r["others"].as_u64().unwrap() as usize + 1)
             .sum();
         assert_eq!(summed, n);
-        let works = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India"];
+        let works = [
+            "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
+        ];
         for r in &rows {
             let w = works.iter().position(|x| *x == work(r)).unwrap();
             let versions = (0..n).filter(|k| k % WORKS == w).count();
@@ -268,14 +283,21 @@ async fn collapsed_pages_serve_each_group_once_with_its_others_and_counts() {
 async fn the_row_is_the_best_version_under_the_sort() {
     let f = fixture(45);
     let c = session(&f).await;
-    let (_, _, all) = call(&f.app, get("/api/v1/search?q=movie&sort=%2Bdiscovered&limit=200", &c)).await;
+    let (_, _, all) = call(
+        &f.app,
+        get("/api/v1/search?q=movie&sort=%2Bdiscovered&limit=200", &c),
+    )
+    .await;
     let mut first: HashMap<String, i64> = HashMap::new();
     for h in hits(&all) {
         first.entry(work(h)).or_insert(h["id"].as_i64().unwrap());
     }
     let (_, _, grouped) = call(
         &f.app,
-        get("/api/v1/search?q=movie&sort=%2Bdiscovered&limit=200&collapse=group", &c),
+        get(
+            "/api/v1/search?q=movie&sort=%2Bdiscovered&limit=200&collapse=group",
+            &c,
+        ),
     )
     .await;
     assert_eq!(hits(&grouped).len(), WORKS);
@@ -284,7 +306,12 @@ async fn the_row_is_the_best_version_under_the_sort() {
     }
     // Ungrouped hits carry no `others`, and the response no group fields.
     assert!(hits(&all).iter().all(|h| h.get("others").is_none()));
-    for k in ["collapsed", "groups", "groups_approx", "collapse_unavailable"] {
+    for k in [
+        "collapsed",
+        "groups",
+        "groups_approx",
+        "collapse_unavailable",
+    ] {
         assert!(all.get(k).is_none(), "{k}");
     }
 }
@@ -295,7 +322,11 @@ async fn post_takes_collapse_too_and_rejects_unknown_values() {
     let c = session(&f).await;
     let (status, _, body) = call(
         &f.app,
-        post("/api/v1/search", Some(&c), json!({ "q": "movie", "collapse": "group" })),
+        post(
+            "/api/v1/search",
+            Some(&c),
+            json!({ "q": "movie", "collapse": "group" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -304,8 +335,11 @@ async fn post_takes_collapse_too_and_rejects_unknown_values() {
     let (status, _, body) = call(&f.app, get("/api/v1/search?q=movie&collapse=title", &c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "unknown_collapse", "{body}");
-    let (status, _, body) =
-        call(&f.app, get("/api/v1/search?q=movie&collapse=group&explain=1", &c)).await;
+    let (status, _, body) = call(
+        &f.app,
+        get("/api/v1/search?q=movie&collapse=group&explain=1", &c),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "explain_collapse", "{body}");
     // `none` is today's search.
@@ -328,8 +362,11 @@ async fn cursors_stay_with_their_own_kind_of_request() {
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(hits(&page).len(), 5);
     // But not a collapsed one while group data is ready, nor the reverse.
-    let (status, _, body) =
-        call(&f.app, get(&format!("{base}&collapse=group&cursor={plain}"), &c)).await;
+    let (status, _, body) = call(
+        &f.app,
+        get(&format!("{base}&collapse=group&cursor={plain}"), &c),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "bad_cursor");
     let grouped = "/api/v1/search?q=movie&limit=2&collapse=group";

@@ -65,6 +65,34 @@ pub const HT_SAMPLE: usize = 1_024;
 /// estimate stands.
 pub const GROUPS_EXACT_CAP: usize = 1 << 20;
 
+/// Group keys are already hashes (FNV-1a of the title identity), so sets
+/// and maps of them hash with the key itself, not SipHash: the exact
+/// groups count inserts every match's key.
+#[derive(Default, Clone, Copy)]
+struct KeyHasher(u64);
+
+impl std::hash::Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn write_u64(&mut self, k: u64) {
+        // A final mix, so keys that differ only in high bits still spread
+        // over a table's low bits.
+        self.0 = (k ^ (k >> 29)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    }
+}
+
+type Keyed = std::hash::BuildHasherDefault<KeyHasher>;
+type KeySet = HashSet<u64, Keyed>;
+type KeyMap<V> = HashMap<u64, V, Keyed>;
+
 /// Hits read from the ranked order per step of a page.
 const CHUNK_MIN: usize = 64;
 const CHUNK_MAX: usize = 1_024;
@@ -118,7 +146,12 @@ pub struct CollapsedPage {
 
 /// Up to `limit` groups of `lease`'s results from `start` (`Offset`
 /// counts groups). The caller has checked [`available`].
-pub fn page(lease: &Lease, start: Start, limit: usize, cancel: &CancelToken) -> Result<CollapsedPage> {
+pub fn page(
+    lease: &Lease,
+    start: Start,
+    limit: usize,
+    cancel: &CancelToken,
+) -> Result<CollapsedPage> {
     let limit = limit.max(1);
     let (after, mut skip) = match start {
         Start::After(p) => (Some(p), 0),
@@ -127,7 +160,7 @@ pub fn page(lease: &Lease, start: Start, limit: usize, cancel: &CancelToken) -> 
     let cap = MAX_SCAN_GROUPS.max(skip + limit);
     let mut keys = Keys::new(lease.searcher());
     // Groups decided on this page: served, or skipped as served before.
-    let mut seen: HashSet<u64> = HashSet::new();
+    let mut seen = KeySet::default();
     let mut rows = Vec::with_capacity(limit);
     // An offset counts groups: the walk starts from the top.
     let mut from = match start {
@@ -139,13 +172,10 @@ pub fn page(lease: &Lease, start: Start, limit: usize, cancel: &CancelToken) -> 
         let need = skip + limit - rows.len();
         let chunk = (need * 2).clamp(CHUNK_MIN, CHUNK_MAX);
         let (pg, addrs, positions) = lease.page_ranked(from, chunk, cancel)?;
-        let found: Vec<Option<u64>> = addrs
-            .iter()
-            .map(|a| keys.get(*a))
-            .collect::<Result<_>>()?;
+        let found: Vec<Option<u64>> = addrs.iter().map(|a| keys.get(*a)).collect::<Result<_>>()?;
         // This chunk's groups not yet decided, in order.
         let mut fresh = Vec::new();
-        let mut listed = HashSet::new();
+        let mut listed = KeySet::default();
         for k in found.iter().flatten() {
             if !seen.contains(k) && listed.insert(*k) {
                 fresh.push(*k);
@@ -154,7 +184,7 @@ pub fn page(lease: &Lease, start: Start, limit: usize, cancel: &CancelToken) -> 
         let members = members(lease, &fresh, after.is_some(), cancel)?;
         let served_before = match &after {
             Some(p) => served_before(lease, &members, p, cancel)?,
-            None => HashSet::new(),
+            None => KeySet::default(),
         };
         for (i, hit) in pg.hits.iter().enumerate() {
             let others = match found[i] {
@@ -163,7 +193,12 @@ pub fn page(lease: &Lease, start: Start, limit: usize, cancel: &CancelToken) -> 
                     if !seen.insert(k) || served_before.contains(&k) {
                         continue;
                     }
-                    members.count.get(&k).copied().unwrap_or(1).saturating_sub(1)
+                    members
+                        .count
+                        .get(&k)
+                        .copied()
+                        .unwrap_or(1)
+                        .saturating_sub(1)
                 }
             };
             if skip > 0 {
@@ -255,7 +290,7 @@ fn exact_groups(lease: &Lease, cancel: &CancelToken) -> Result<Option<usize>> {
     let weight = compiled
         .query
         .weight(EnableScoring::disabled_from_searcher(searcher))?;
-    let mut distinct: HashSet<u64> = HashSet::new();
+    let mut distinct = KeySet::default();
     let mut alone = 0usize;
     for reader in searcher.segment_readers() {
         cancel.check()?;
@@ -439,7 +474,7 @@ impl<'a> Keys<'a> {
 
 /// Groups' members among the query's matches.
 struct Members {
-    count: HashMap<u64, u64>,
+    count: KeyMap<u64>,
     /// Their addresses, when asked for, at most [`MAX_MEMBERS`] in all.
     addrs: Vec<(u64, DocAddress)>,
 }
@@ -448,7 +483,7 @@ struct Members {
 /// postings, checked against the query in doc order, segment by segment.
 fn members(lease: &Lease, keys: &[u64], keep: bool, cancel: &CancelToken) -> Result<Members> {
     let mut out = Members {
-        count: HashMap::with_capacity(keys.len()),
+        count: KeyMap::with_capacity_and_hasher(keys.len(), Keyed::default()),
         addrs: Vec::new(),
     };
     if keys.is_empty() {
@@ -506,7 +541,7 @@ fn served_before(
     members: &Members,
     p: &Position,
     cancel: &CancelToken,
-) -> Result<HashSet<u64>> {
+) -> Result<KeySet> {
     let addrs: Vec<DocAddress> = members.addrs.iter().map(|(_, a)| *a).collect();
     let before = lease.ranks_at_or_before(&addrs, p, cancel)?;
     Ok(members

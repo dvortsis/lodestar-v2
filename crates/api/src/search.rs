@@ -25,10 +25,10 @@ use utoipa::OpenApi;
 use crate::auth::Access;
 use crate::dto::events::RebuildPhase;
 use crate::dto::search::{
-    ClauseRemoval, CollapseUnavailable, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights,
-    IndexRebuild, NaturalChip, NaturalProposal, ParseQuery, ParseResponse, SearchExplain,
-    SearchHit, SearchIndexState, SearchNotice, SearchRecovery, SearchRequest, SearchResponse,
-    UnpopulatedField,
+    ClauseRemoval, CollapseUnavailable, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors,
+    ExplainWeights, IndexRebuild, NaturalChip, NaturalProposal, ParseQuery, ParseResponse,
+    SearchExplain, SearchHit, SearchIndexState, SearchNotice, SearchRecovery, SearchRequest,
+    SearchResponse, UnpopulatedField,
 };
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};

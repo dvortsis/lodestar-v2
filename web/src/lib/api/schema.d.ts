@@ -8879,16 +8879,6 @@ export interface components {
             /** @default null */
             ast: null | components["schemas"]["AstNode"];
             /**
-             * @description `group` to show one row per group of versions (the best version
-             *     under `sort`, with `others` on the row), or `none` (the default).
-             *     While group data isn't ready the results come ungrouped and
-             *     `collapse_unavailable` says why; never an error. Send the same
-             *     value with a `cursor`.
-             * @default null
-             * @example group
-             */
-            collapse: string | null;
-            /**
              * @description The previous page's `next_cursor`, to read the next page from the
              *     same index snapshot. Send the same `q` (or `ast`), `sort` and
              *     `hidden` with it.
@@ -8947,9 +8937,8 @@ export interface components {
             /**
              * @description The rows are groups of versions (`collapse=group` with group data
              *     ready): each hit has `others`, `offset` counts groups, and
-             *     `groups` is sent. `total` still counts torrents.
-             *     Always sent; optional in the schema so older clients and
-             *     fixtures stay valid.
+             *     `groups` is sent. `total` still counts torrents. Sent only when
+             *     true, so ungrouped responses are as before.
              */
             collapsed?: boolean;
             /** @description Present only when asked for with `explain`. */
