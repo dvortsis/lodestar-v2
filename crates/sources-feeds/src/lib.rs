@@ -10,6 +10,7 @@ mod common;
 pub mod json;
 pub mod lemmy;
 pub mod nostr;
+pub mod predb;
 pub mod rss;
 pub mod stashdb;
 pub mod torznab;

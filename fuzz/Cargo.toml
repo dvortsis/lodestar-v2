@@ -362,3 +362,10 @@ path = "fuzz_targets/mse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "predb"
+path = "fuzz_targets/predb.rs"
+test = false
+doc = false
+bench = false
