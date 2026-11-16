@@ -442,10 +442,13 @@ fn space_with(config: &Config, stored: u64, rows: Option<u64>) -> Space {
     Space {
         per_record,
         measured,
+        // Plus the WAL the import may grow before a checkpoint folds it
+        // back (X-import-rate-1m).
         needed: rows.map(|n| {
-            n.saturating_mul(per_record)
+            (n.saturating_mul(per_record)
                 .saturating_mul(100 + HEADROOM_PCT)
-                / 100
+                / 100)
+                .saturating_add(lodestar_store::BULK_WAL_BYTES)
         }),
         free: free_bytes(&config.data_dir),
     }
@@ -942,6 +945,15 @@ async fn run_job(
         .map_err(failed("reading the sources"))?
         .store_mark();
     store.set_adult_mark(mark);
+    // Offline, with the server stopped: the import's own connection takes
+    // a larger page cache (no more than the memory map the config allows
+    // the store, `store.mmap_mib`) and a wider WAL checkpoint while it
+    // writes (X-import-rate-1m), and gives them back after. Set before
+    // the live view and its heartbeat start, so a failure here leaves
+    // neither behind.
+    store
+        .set_bulk_writes(Some(config.store.mmap_mib))
+        .map_err(failed("tuning the store for the import"))?;
     // The live view `status` reads while this import holds the store;
     // removed when the run ends, however it ends.
     let at_start = load(store, id)?.counters;
@@ -1022,15 +1034,10 @@ async fn run_job(
         limit,
         now: unix_now,
         progress: Some(&progress),
+        threads: 0,
     };
-    // Offline, with the server stopped: the import's own connection takes
-    // a large page cache and a wider WAL checkpoint while it writes
-    // (X-import-rate-1m), and gives them back after.
-    store
-        .set_bulk_writes(true)
-        .map_err(failed("tuning the store for the import"))?;
     let report = driver::run(store, id, adapter, &opts).await;
-    let _ = store.set_bulk_writes(false);
+    let _ = store.set_bulk_writes(None);
     // The beat stops before the file goes, so it can't write it back;
     // then the last strong reference goes, and with it the file (the
     // Ctrl-C handler holds only a weak one).

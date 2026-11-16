@@ -219,6 +219,10 @@ pub struct Options<'a> {
     pub now: fn() -> i64,
     /// Called after each committed batch with the job's counters.
     pub progress: Option<&'a dyn Fn(&ImportCounters)>,
+    /// Threads that prepare and judge a batch's records, at most
+    /// [`MAX_PREPARE_THREADS`]; `0` takes the machine's cores. The rows and
+    /// counters are the same whatever the number (X-import-rate-1m).
+    pub threads: usize,
 }
 
 impl std::fmt::Debug for Options<'_> {
@@ -399,7 +403,11 @@ pub async fn run(
             job = store.set_import_phase(job.id, job.revision, phase, (opts.now)())?;
         }
     }
-    let mut preparers: Vec<Preparer> = (0..prepare_threads()).map(|_| store.preparer()).collect();
+    let threads = match opts.threads {
+        0 => prepare_threads(),
+        n => n.min(MAX_PREPARE_THREADS),
+    };
+    let mut preparers: Vec<Preparer> = (0..threads).map(|_| store.preparer()).collect();
     let mut seq = job.seq;
     let mut position = job.position.clone();
     loop {

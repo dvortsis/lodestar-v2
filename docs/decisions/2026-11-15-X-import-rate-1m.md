@@ -27,12 +27,18 @@ All of the drain's own work is in `crates/search` (`index.rs`'s catch-up loop an
 
 ## Calls
 - **The offline import tunes its own store connection** (`Store::set_bulk_writes`, called by `lodestar import start` and `resume` around the driver). Only that connection changes. Nothing is written to the file, and the settings go back to SQLite's and rusqlite's defaults when the driver returns.
-  - **Page cache: 256 MiB** (`BULK_CACHE_MIB`) instead of 2 MiB. A batch's dirty pages stay in memory until it commits, and the b-trees' inner pages stay cached between batches. The import runs with the server stopped (IMP-4b), so this is memory the server would otherwise hold; the server's own connections keep their settings.
+  - **Page cache: up to 256 MiB** (`BULK_CACHE_MIB`) instead of 2 MiB, and **never more than `store.mmap_mib`** (256 by default), the memory map the config already allows the store (runner, #961 review). A batch's dirty pages stay in memory until it commits, and the b-trees' inner pages stay cached between batches.
+    - The import runs with the server stopped (IMP-4b), so this is memory the server would otherwise hold. The server's own connections keep their settings.
+    - **Why the cap:** a NAS or container with a 512 MiB memory limit mustn't be killed mid-import, and again on resume. The review put the import's anonymous peak at about 350–400 MiB with the full cache. Lowering `mmap_mib` lowers both, and `docs/operations.md` says so in one line.
+    - The config has no low-resource mode yet (arch. §3 plans one). When it lands, it shrinks this cache through `mmap_mib` or beside it.
   - **WAL auto-checkpoint: 16,384 pages** (`BULK_CHECKPOINT_PAGES`, 256 MiB at 16 KiB pages) instead of 1,000. That's one checkpoint and its `fsync` every few dozen batches instead of every batch, and the WAL stays bounded by it. **This is the largest single gain at 1M:** with 4,096 pages (64 MiB) the 1M write ran at 5,189/s, and with 16,384 at 7,676/s and 7,863/s. `synchronous` stays `NORMAL`, so a committed batch survives a crash of the process as before, and IMP-1's replay from the cursor is unchanged.
+    - **On power loss** (not a process crash), WAL mode at `NORMAL` can lose the batches committed since the last checkpoint: up to about 256 MiB of WAL. The cursor commits in the same transaction as its batch, so it's lost with them, and `resume` reads and commits those batches again. Nothing is half-written or skipped (runner, #961 review).
+    - **Free space** (`lodestar import inspect`, `start`, `resume`) now also counts the WAL the import may grow before a checkpoint (`BULK_WAL_BYTES`: the checkpoint's pages plus one batch's transaction, about 288 MiB).
   - **Prepared-statement cache: 128** (`BULK_STATEMENTS`) instead of rusqlite's 16. A batch's commit runs more than 16 distinct statements for each record, so they evicted each other and were compiled again record by record. The gain is small: 7,481/s with 16, against 7,676/s and 7,863/s with 128, near run-to-run noise. It costs nothing, so it's kept.
+  - **Set before the progress file and its heartbeat start** in `run_job`, so a failure to set it leaves neither behind (runner, #961 review).
   - **Why the CLI and not the driver:** a later online import through the server's writer (IMP-1, F16's 1,000/s line) may reuse `driver::run`. A 256 MiB cache there would count against the server's memory budget, so the driver leaves the connection's settings alone, and only the offline caller sets them.
 - **Each batch is prepared and judged on several threads** (`driver.rs`: `prepare_all`, `par_map`).
-  - **Threads:** the machine's cores, at most four (`MAX_PREPARE_THREADS`). Past four, the single writer is the limit.
+  - **Threads:** the machine's cores, at most four (`MAX_PREPARE_THREADS`). Past four, the single writer is the limit. `Options::threads` sets it (`0`, the default every caller passes, takes the cores), so a test can compare one thread with four.
   - **Prepare:** each thread has its own `Preparer` (`Store::preparer`, the same dictionaries and level), so the rows are byte for byte what one preparer gives. A test checks that, record for record and in order.
   - **Judge:** the same filter (`Engine`, the sealer) on every thread, reading only.
   - **What stays on the writer thread, in the batch's order:**
@@ -43,6 +49,7 @@ All of the drain's own work is in `crates/search` (`index.rs`'s catch-up loop an
 
     Every IMP decision holds: refusal and filter behaviour, private candidates, conservation of the counters, resumability and cancellation (the stop flag is still checked between batches).
   - **Small batches** (under 64 records) run on the writer alone.
+  - **The threads are scoped to each batch,** started and joined per batch. A pool kept for the whole run would save their start-up (microseconds a batch, against milliseconds of work) and is a possible follow-up, for performance only (runner, #961 review).
 - **A duplicate write is gone.** `commit_torrent` wrote a new torrent's enrichment after `insert_new` had already written it: one `UPDATE` and one upsert per torrent, twice. It's written once now.
 
 ## Measured
@@ -67,5 +74,8 @@ For X-index-bytes-1m, or a slice after it in `crates/search`, which this slice d
 
 ## Tests
 - **`lodestar-store`:** `bulk_writes_tune_only_this_connection_and_go_back`. The page cache and auto-checkpoint change on this connection only, another connection keeps the defaults, and setting them back restores them.
-- **`lodestar-sources-importers`:** `preparing_on_several_threads_matches_one`. 300 records with varied file lists, prepared by four preparers and by one, give the same rows in the same order. Preparers keep no state between batches.
+- **`lodestar-sources-importers`:**
+  - `preparing_on_several_threads_matches_one`: 300 records with varied file lists, prepared by four preparers and by one, give the same rows in the same order. Preparers keep no state between batches.
+  - `one_thread_and_four_import_the_same` (runner, #961 review): the 1,200-record fixture with your drop, quarantine and flag rules (with a sealer), a floor hash, and records an always-adult source claims, some held only on the adult reading. Imported at one thread and at four, it leaves the same rows, file trees, enrichment, filter hits, tombstones, quarantine (less the sealed bytes, whose nonces are random), provenance and counters. With the threads' results put out of order, it fails.
+- **`lodestar-store`:** the bulk-writes test also checks the cache cap: 1,024 MiB is held to 256, 64 stays 64, and 0 is held to SQLite's own 2 MiB.
 - **Every existing driver, store and CLI import test passes unchanged,** including the crash-point, pause, refusal, conservation and resumability tests, and the parity test (`cli::import::tests::the_cli_and_the_server_build_the_same_filter`).

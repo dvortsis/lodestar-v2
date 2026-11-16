@@ -1353,10 +1353,13 @@ impl Store {
     }
 
     /// Tunes this connection for a long run of large write transactions
-    /// (an offline import, X-import-rate-1m), or back to SQLite's defaults.
-    /// Only this connection changes; nothing is written to the file.
+    /// (an offline import, X-import-rate-1m) with a page cache of
+    /// `Some(cache_mib)`, or back to SQLite's defaults with `None`. Only
+    /// this connection changes; nothing is written to the file.
     ///
-    /// - **Page cache:** [`BULK_CACHE_MIB`] instead of SQLite's 2 MiB. A
+    /// - **Page cache:** `cache_mib`, at most [`BULK_CACHE_MIB`] and at
+    ///   least SQLite's 2 MiB, instead of SQLite's 2 MiB. The caller sizes
+    ///   it to the memory it may use (the CLI: `store.mmap_mib`). A
     ///   batch's dirty pages then stay in memory until it commits instead
     ///   of spilling into the WAL mid-transaction (and being rewritten
     ///   there), and the hash and id b-trees' inner pages stay cached
@@ -1370,19 +1373,18 @@ impl Store {
     ///   instead of rusqlite's 16. An import batch's commit runs more
     ///   distinct statements than 16 for each record, so with the default
     ///   they evicted each other and were compiled again record by record.
-    pub fn set_bulk_writes(&self, on: bool) -> Result<()> {
-        let (cache_kib, checkpoint, statements) = if on {
-            (
-                BULK_CACHE_MIB * 1024,
+    pub fn set_bulk_writes(&self, cache_mib: Option<u64>) -> Result<()> {
+        let (cache_kib, checkpoint, statements) = match cache_mib {
+            Some(mib) => (
+                (mib.min(BULK_CACHE_MIB) as i64 * 1024).max(DEFAULT_CACHE_KIB),
                 BULK_CHECKPOINT_PAGES,
                 BULK_STATEMENTS,
-            )
-        } else {
-            (
+            ),
+            None => (
                 DEFAULT_CACHE_KIB,
                 DEFAULT_CHECKPOINT_PAGES,
                 DEFAULT_STATEMENTS,
-            )
+            ),
         };
         self.conn.set_prepared_statement_cache_capacity(statements);
         self.conn.pragma_update(None, "cache_size", -cache_kib)?;
@@ -1395,11 +1397,18 @@ impl Store {
     }
 }
 
-/// [`Store::set_bulk_writes`]'s page cache. An offline import runs with
-/// the server stopped, so this is memory the server would otherwise hold.
-pub const BULK_CACHE_MIB: i64 = 256;
+/// [`Store::set_bulk_writes`]'s largest page cache. An offline import runs
+/// with the server stopped, so this is memory the server would otherwise
+/// hold; the CLI takes less when `store.mmap_mib` is smaller.
+pub const BULK_CACHE_MIB: u64 = 256;
 /// [`Store::set_bulk_writes`]'s WAL auto-checkpoint, in pages.
 pub const BULK_CHECKPOINT_PAGES: i64 = 16_384;
+/// The most the WAL grows under [`Store::set_bulk_writes`] before a
+/// checkpoint: [`BULK_CHECKPOINT_PAGES`] of the store's 16 KiB pages
+/// (`schema::configure` sets the page size), plus one batch's
+/// transaction on top, which the auto-checkpoint waits for. Free space
+/// for an import counts it.
+pub const BULK_WAL_BYTES: u64 = BULK_CHECKPOINT_PAGES as u64 * 16_384 + (32 << 20);
 /// [`Store::set_bulk_writes`]'s prepared-statement cache.
 pub const BULK_STATEMENTS: usize = 128;
 /// rusqlite's default prepared-statement cache.
@@ -1908,13 +1917,22 @@ mod tests {
         };
         let defaults = (-DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES);
         assert_eq!(read(&store), defaults, "SQLite's own defaults");
-        store.set_bulk_writes(true).unwrap();
+        store.set_bulk_writes(Some(1024)).unwrap();
         assert_eq!(
             read(&store),
-            (-BULK_CACHE_MIB * 1024, BULK_CHECKPOINT_PAGES)
+            (-(BULK_CACHE_MIB as i64) * 1024, BULK_CHECKPOINT_PAGES),
+            "held to the most"
         );
         assert_eq!(read(&other), defaults);
-        store.set_bulk_writes(false).unwrap();
+        store.set_bulk_writes(Some(64)).unwrap();
+        assert_eq!(read(&store).0, -64 * 1024, "the caller's size below it");
+        store.set_bulk_writes(Some(0)).unwrap();
+        assert_eq!(
+            read(&store).0,
+            -DEFAULT_CACHE_KIB,
+            "never below SQLite's own"
+        );
+        store.set_bulk_writes(None).unwrap();
         assert_eq!(read(&store), defaults);
     }
 
