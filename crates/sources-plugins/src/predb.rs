@@ -40,6 +40,7 @@ use std::time::Duration;
 
 use lodestar_sources::http::parse_retry_after;
 use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::terms::{Attribution, Retention, Terms};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -168,9 +169,36 @@ impl PreDb {
     }
 }
 
+/// PreDB's terms (ENR-terms; `docs/decisions/2026-11-15-ENR-predb.md`,
+/// "Terms (ENR-terms)"): predb.net's API page says "Don't use the API to
+/// create your own DB", and the owner's Q4 answer is user interest first,
+/// so no whole-index walk. It publishes no licence for its data, so
+/// answers stay in Lodestar's own UI. It asks for no credit; a link back
+/// is a courtesy.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: "PreDB.net",
+        link: "https://predb.net/",
+        logo: None,
+    }),
+    // PreDB's marker is the scene section: an agreeing release in an
+    // `XXX` section (or named with the `XXX` tag) is marked adult and
+    // refused. Any other section isn't a "not adult" statement, so the
+    // rest are unmarked; requiring a marker would refuse every answer,
+    // and the runtime never asks about an Adult item.
+    adult_marker_required: false,
+};
+
 impl Identifier for PreDb {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -332,6 +360,7 @@ pub fn choose(query: &Query, releases: &[&PreRelease]) -> Lookup {
     let mut years: Vec<u16> = Vec::new();
     let mut genres: Vec<String> = Vec::new();
     let mut any = false;
+    let mut adult = false;
     for r in releases {
         let ok = match after_title(&r.name, &want) {
             Some(After::Year(y)) => {
@@ -351,6 +380,7 @@ pub fn choose(query: &Query, releases: &[&PreRelease]) -> Lookup {
             continue;
         }
         any = true;
+        adult |= marked_adult(r);
         if let Some(g) = &r.genre
             && genres.len() < MAX_GENRES
             && !genres.iter().any(|h| h.eq_ignore_ascii_case(g))
@@ -373,7 +403,22 @@ pub fn choose(query: &Query, releases: &[&PreRelease]) -> Lookup {
         } else {
             CONFIDENCE_WITHOUT_YEAR
         },
+        // An agreeing release in an adult section marks the whole answer
+        // adult, so the runtime refuses it. No such section isn't a "not
+        // adult" mark: unmarked, which `TERMS` accepts.
+        adult: adult.then_some(true),
     })
+}
+
+/// Whether a pre record is marked adult: its section is the scene's `XXX`
+/// section or one of its parts (`XXX`, `XXX-0DAY`, `XXX-IMGSET`, any
+/// case), or its name carries the `XXX` tag as a whole word.
+pub fn marked_adult(r: &PreRelease) -> bool {
+    let xxx = |s: &str, seps: &[char]| s.split(seps).any(|t| t.eq_ignore_ascii_case("xxx"));
+    r.section
+        .as_deref()
+        .is_some_and(|s| xxx(s, &['-', '_', '.', '/']))
+        || xxx(&r.name, &['.', '_', '-'])
 }
 
 /// The pre claim for one torrent: what PreDB (and IRC-3's live feed)
@@ -411,4 +456,52 @@ pub fn pre_for(name: &str, releases: &[PreRelease]) -> Option<PreClaim> {
         nuke: first.nuke,
         reason: first.reason.clone(),
     })
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// Opened items only, kept in Lodestar's own UI, a courtesy link, and
+    /// marked adult is refused while unmarked is accepted.
+    #[test]
+    fn predb_terms() {
+        let t = PreDb::new();
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(t.attribution.map(|a| a.link), Some("https://predb.net/"));
+        assert!(t.accepts(None) && !t.accepts(Some(true)));
+    }
+
+    fn pre(name: &str, section: Option<&str>) -> PreRelease {
+        PreRelease {
+            name: name.to_owned(),
+            pretime: None,
+            section: section.map(str::to_owned),
+            nuke: Nuke::Clean,
+            reason: None,
+            genre: None,
+        }
+    }
+
+    #[test]
+    fn the_xxx_section_or_tag_marks_adult() {
+        for (name, section) in [
+            ("Some.Film.2019.1080p.WEB.x264-GRP", Some("XXX")),
+            ("Some.Film.2019.1080p.WEB.x264-GRP", Some("xxx-0day")),
+            ("Some.Film.2019.1080p.WEB.x264-GRP", Some("XXX-IMGSET")),
+            ("Some.Film.2019.XXX.1080p.WEB.x264-GRP", Some("X264-HD")),
+            ("Some.Film.2019.XXX.1080p.WEB.x264-GRP", None),
+        ] {
+            assert!(marked_adult(&pre(name, section)), "{name} {section:?}");
+        }
+        for (name, section) in [
+            ("Some.Film.2019.1080p.WEB.x264-GRP", Some("X264-HD")),
+            ("XXXY.2019.1080p-GRP", Some("TV-X264")),
+            ("Film.2019.1080p-XXXGRP", None),
+        ] {
+            assert!(!marked_adult(&pre(name, section)), "{name} {section:?}");
+        }
+    }
 }

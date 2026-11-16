@@ -113,6 +113,31 @@ async fn a_recorded_match_maps_to_an_identification() {
     assert_eq!(d.year, Some(2021));
 }
 
+/// A film whose agreeing release is in the scene's `XXX` section is
+/// marked adult, so the runtime refuses it; any other section is unmarked.
+#[test]
+fn an_xxx_section_is_marked_adult_and_refused() {
+    use lodestar_sources_feeds::predb::{Nuke, PreRelease};
+    let pre = |section: &str| PreRelease {
+        name: "Velvet.Hours.2015.1080p.WEB.x264-GRP".to_owned(),
+        pretime: None,
+        section: Some(section.to_owned()),
+        nuke: Nuke::Clean,
+        reason: None,
+        genre: None,
+    };
+    let terms = *Identifier::terms(&PreDb::new());
+    let q = movie("Velvet Hours", Some(2015));
+    for (section, adult) in [("XXX", Some(true)), ("X264-HD", None)] {
+        let r = pre(section);
+        let Lookup::Match(i) = choose(&q, &[&r]) else {
+            panic!("expected a match for {section}");
+        };
+        assert_eq!(i.adult, adult, "{section}");
+        assert_eq!(terms.accepts(i.adult), adult.is_none(), "{section}");
+    }
+}
+
 #[test]
 fn the_year_must_agree_and_two_years_are_no_match() {
     // A year none of the releases has.
