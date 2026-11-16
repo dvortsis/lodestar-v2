@@ -147,6 +147,31 @@ fn the_title_and_year_must_agree() {
     assert_eq!(srrdb::choose(&tv, &s.hits), Lookup::NoMatch);
 }
 
+/// A film whose agreeing release carries the scene's `XXX` tag is marked
+/// adult, so the runtime refuses it; an untagged one is unmarked.
+#[test]
+fn an_xxx_tagged_release_is_marked_adult_and_refused() {
+    use lodestar_sources_feeds::srrdb::{Hit, ImdbId};
+    let hit = |release: &str| Hit {
+        release: release.to_owned(),
+        imdb: ImdbId::parse("0888802"),
+        size: None,
+    };
+    let terms = *Identifier::terms(&Srrdb::new());
+    let tagged = [hit("Velvet.Hours.2015.XXX.1080p.WEB.x264-GRP")];
+    let Lookup::Match(i) = srrdb::choose(&film("Velvet Hours", Some(2015)), &tagged) else {
+        panic!("expected a match");
+    };
+    assert_eq!(i.adult, Some(true));
+    assert!(!terms.accepts(i.adult));
+    let plain = [hit("Velvet.Hours.2015.1080p.WEB.x264-GRP")];
+    let Lookup::Match(i) = srrdb::choose(&film("Velvet Hours", Some(2015)), &plain) else {
+        panic!("expected a match");
+    };
+    assert_eq!(i.adult, None);
+    assert!(terms.accepts(i.adult));
+}
+
 #[test]
 fn candidates_never_guess() {
     let s = seed("candidates.json");

@@ -31,6 +31,7 @@ use std::time::Duration;
 use lodestar_sources::claims::ExternalId;
 use lodestar_sources::http::parse_retry_after;
 use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::terms::{Attribution, Retention, Terms};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -135,9 +136,34 @@ impl Srrdb {
     }
 }
 
+/// srrDB's terms (ENR-terms; `docs/decisions/2026-11-15-ENR-srrdb.md`,
+/// "Terms (ENR-terms)"): no whole-index walk, since the owner's Q4 answer
+/// is user interest first and its `robots.txt` asks for 10 s between
+/// requests. It publishes no licence for its data, so answers stay in
+/// Lodestar's own UI. It asks for no credit; a link back is a courtesy.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: "srrDB",
+        link: "https://www.srrdb.com/",
+        logo: None,
+    }),
+    // srrDB's search answer has no adult field. A release named with the
+    // scene's `XXX` tag reads as marked adult (`Some(true)`, refused);
+    // anything else is unmarked. Movie only, and the runtime never asks
+    // about an Adult item, so requiring a marker would refuse every answer.
+    adult_marker_required: false,
+};
+
 impl Identifier for Srrdb {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -343,6 +369,7 @@ pub fn choose(query: &Query, hits: &[Hit]) -> Lookup {
         return Lookup::NoMatch;
     }
     let (mut id, mut year): (Option<&ImdbId>, Option<u16>) = (None, None);
+    let mut adult = false;
     for h in hits {
         let Some((title, y)) = scene_title(&h.release) else {
             continue;
@@ -350,6 +377,7 @@ pub fn choose(query: &Query, hits: &[Hit]) -> Lookup {
         if title != want || query.year().is_some_and(|q| q != y) {
             continue;
         }
+        adult |= xxx_tagged(&h.release);
         if year.replace(y).is_some_and(|seen| seen != y) {
             return Lookup::NoMatch;
         }
@@ -376,7 +404,19 @@ pub fn choose(query: &Query, hits: &[Hit]) -> Lookup {
         } else {
             CONFIDENCE_TITLE
         },
+        // srrDB has no adult field; an agreeing release tagged `XXX` is
+        // the scene's own adult mark, so the answer is refused. No tag
+        // isn't a "not adult" mark: unmarked, which `TERMS` accepts.
+        adult: adult.then_some(true),
     })
+}
+
+/// Whether a scene release name carries the scene's adult tag: a word
+/// `XXX` (any case) between its separators (`.`, `_`, space or `-`).
+pub fn xxx_tagged(release: &str) -> bool {
+    release
+        .split(['.', '_', ' ', '-'])
+        .any(|t| t.eq_ignore_ascii_case("xxx"))
 }
 
 /// A title for comparing and sending: lower case, letters and digits
@@ -391,4 +431,33 @@ pub fn fold(s: &str) -> String {
         }
     }
     out.trim_end().to_owned()
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// Opened items only, kept in Lodestar's own UI, a courtesy link, and
+    /// marked adult is refused while unmarked is accepted.
+    #[test]
+    fn srrdb_terms() {
+        let t = Srrdb::new();
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(
+            t.attribution.map(|a| a.link),
+            Some("https://www.srrdb.com/")
+        );
+        assert!(t.accepts(None) && !t.accepts(Some(true)));
+    }
+
+    #[test]
+    fn the_xxx_tag_is_a_whole_word() {
+        assert!(xxx_tagged("Some.Film.2019.XXX.1080p.WEB.x264-GRP"));
+        assert!(xxx_tagged("Some_Film_2019_xxx_DVDRip-GRP"));
+        assert!(!xxx_tagged("XXXY.2019.1080p-GRP"));
+        assert!(!xxx_tagged("Triple.X.2002.1080p-GRP"));
+        assert!(!xxx_tagged("Film.2019.1080p-XXXGRP"));
+    }
 }
