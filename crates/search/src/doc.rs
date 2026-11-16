@@ -324,6 +324,9 @@ impl TorrentDoc {
         }
         if let Some(id) = e.title_identity {
             d.add_u64(f.title_identity, id);
+            // GS-2b: the same value in the column collapse reads (plan
+            // Q8: one identity rule).
+            d.add_u64(f.group_key, id);
         }
         // `years` is sorted.
         if let Some(y) = e.years.first() {

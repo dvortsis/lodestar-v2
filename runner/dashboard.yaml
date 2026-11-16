@@ -434,6 +434,7 @@ placement:
   - X-cli-win-data-dir
   - X-win-service-path-hardening
   - X-win-service-cwd-fallback
+  - X-win-service-relative-paths
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
@@ -626,6 +627,7 @@ placement:
   match:
   - GS-2
   - X-gs2-nits
+  - GS-2b
   - ENR-14
   - UN-1
   - UN-2

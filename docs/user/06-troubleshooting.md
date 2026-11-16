@@ -25,13 +25,17 @@ This chapter lists common problems with fixes, then says how to get help.
 | The wizard, Settings or Insights warns about the data folder, or about ports on Windows | The data folder is on a [FUSE](glossary.md#fuse) or network filesystem, or Windows has too few outgoing ports left | See [section 4.6](04-install-on-windows-and-linux.md#46-fix-a-data-folder-warning) and [section 4.7](04-install-on-windows-and-linux.md#47-fix-the-windows-port-warning). |
 
 ## 6.2 Fix Windows service error 3
-<!-- index: error 3; error 536870915; 0x20000003; event 7024; Windows service; icacls; Repair; folder_shared; service-specific error 3 -->
+<!-- index: error 3; error 536870915; 0x20000003; event 7024; event ID 5; full path; Windows service; icacls; Repair; folder_shared; service-specific error 3 -->
 
 At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows "service-specific error 536870915" (`0x20000003`). Event Viewer has event 7024 in the **System** log, which may show only the raw code, such as `%%536870915`. Older versions show "error 3" instead.
 
 **(Newer than v0.5.1)** Lodestar also writes a short note to the Application log. Open **Event Viewer**, then **Windows Logs → Application**, and look for an **Error** from the source **Lodestar**, event ID 3.
 
 It names the data folder and says to run the installer's **Repair** as an administrator. It holds only the folder's path and that fix, so anyone who can open Event Viewer can read it. The exact reason is still in the file below.
+
+**(Newer than v0.5.1)** Event ID **5** means a setting isn't a full path: `LODESTAR_DATA_DIR`, `--config`, `data_dir` in the config file, or `%ProgramData%`. A full path starts with a drive letter, a colon and a backslash, such as `D:\Lodestar`. The file below names the setting. Set it to a full path or remove it, then run `Start-Service Lodestar`.
+
+In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lodestar"`. `"D:\Lodestar"` in double quotes is an error.
 
 Windows doesn't know why. Lodestar writes the reason to `C:\Windows\Temp\lodestar-service.log`, which only administrators can read. It names the folder and the extra account. When the one problem is a single extra user account, it also gives the exact command that removes it.
 
