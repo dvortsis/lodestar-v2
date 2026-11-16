@@ -211,7 +211,9 @@ pub struct SearchResponse {
     pub total_approx: bool,
     /// The rows are groups of versions (`collapse=group` with group data
     /// ready): each hit has `others`, `offset` counts groups, and
-    /// `groups` is sent. `total` still counts torrents. Sent only when
+    /// `groups` is sent. `total` still counts torrents. A collapsed page
+    /// can come back short, even empty, with a `next_cursor`: it stopped
+    /// at its scan bound, and the next page carries on. Sent only when
     /// true, so ungrouped responses are as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub collapsed: bool,

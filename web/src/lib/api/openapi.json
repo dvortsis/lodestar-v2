@@ -22677,7 +22677,7 @@
           },
           "collapsed": {
             "type": "boolean",
-            "description": "The rows are groups of versions (`collapse=group` with group data\nready): each hit has `others`, `offset` counts groups, and\n`groups` is sent. `total` still counts torrents. Sent only when\ntrue, so ungrouped responses are as before."
+            "description": "The rows are groups of versions (`collapse=group` with group data\nready): each hit has `others`, `offset` counts groups, and\n`groups` is sent. `total` still counts torrents. A collapsed page\ncan come back short, even empty, with a `next_cursor`: it stopped\nat its scan bound, and the next page carries on. Sent only when\ntrue, so ungrouped responses are as before."
           },
           "explain": {
             "$ref": "#/components/schemas/SearchExplain",

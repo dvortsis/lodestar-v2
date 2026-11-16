@@ -57,7 +57,12 @@ use crate::population::Availability;
 /// Groups decided per page at most (served, or skipped as served
 /// before): bounds a page's work and memory whatever the query.
 pub const MAX_SCAN_GROUPS: usize = 4_096;
-/// Member addresses held per batch at most, for the served-before check.
+/// Hits walked per page at most: groups already decided (repeats of
+/// one, or served before) don't count against [`MAX_SCAN_GROUPS`], so
+/// this bounds the walk through them.
+pub const MAX_SCAN_HITS: usize = 16_384;
+/// Member addresses held at once for the served-before check: past it
+/// they're checked and let go a batch at a time.
 pub const MAX_MEMBERS: usize = 1 << 18;
 /// Matches drawn for the groups estimate.
 pub const HT_SAMPLE: usize = 1_024;
@@ -138,10 +143,19 @@ pub struct Row {
 }
 
 /// A collapsed page, and where the next starts (`None`: the last).
+///
+/// A page can be short, or empty, and still have a next: it ended at a
+/// bound ([`MAX_SCAN_GROUPS`], [`MAX_SCAN_HITS`]), and the next page
+/// carries on after the last hit it decided.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollapsedPage {
     pub rows: Vec<Row>,
     pub next: Option<Position>,
+    /// Groups an `Offset` start passed over before the first row: the
+    /// offset itself, or fewer when the page ended at a bound first
+    /// (its next page then starts at that many groups in). 0 after a
+    /// cursor.
+    pub skipped: usize,
 }
 
 /// Up to `limit` groups of `lease`'s results from `start` (`Offset`
@@ -152,26 +166,60 @@ pub fn page(
     limit: usize,
     cancel: &CancelToken,
 ) -> Result<CollapsedPage> {
+    page_with(lease, start, limit, Bounds::default(), cancel)
+}
+
+/// What one page may decide and walk before it ends short.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Bounds {
+    pub groups: usize,
+    pub hits: usize,
+}
+
+impl Default for Bounds {
+    fn default() -> Self {
+        Bounds {
+            groups: MAX_SCAN_GROUPS,
+            hits: MAX_SCAN_HITS,
+        }
+    }
+}
+
+pub(crate) fn page_with(
+    lease: &Lease,
+    start: Start,
+    limit: usize,
+    bounds: Bounds,
+    cancel: &CancelToken,
+) -> Result<CollapsedPage> {
     let limit = limit.max(1);
-    let (after, mut skip) = match start {
+    let (after, offset) = match start {
         Start::After(p) => (Some(p), 0),
         Start::Offset(o) => (None, o),
     };
-    let cap = MAX_SCAN_GROUPS.max(skip + limit);
+    let mut skip = offset;
+    let cap = bounds.groups.max(skip + limit);
     let mut keys = Keys::new(lease.searcher());
     // Groups decided on this page: served, or skipped as served before.
     let mut seen = KeySet::default();
     let mut rows = Vec::with_capacity(limit);
+    let mut walked = 0usize;
     // An offset counts groups: the walk starts from the top.
     let mut from = match start {
         Start::After(p) => Start::After(p),
         Start::Offset(_) => Start::Offset(0),
+    };
+    let short = |rows: Vec<Row>, skip: usize, next: Position| CollapsedPage {
+        rows,
+        next: Some(next),
+        skipped: offset - skip,
     };
     loop {
         cancel.check()?;
         let need = skip + limit - rows.len();
         let chunk = (need * 2).clamp(CHUNK_MIN, CHUNK_MAX);
         let (pg, addrs, positions) = lease.page_ranked(from, chunk, cancel)?;
+        walked += pg.hits.len();
         let found: Vec<Option<u64>> = addrs.iter().map(|a| keys.get(*a)).collect::<Result<_>>()?;
         // This chunk's groups not yet decided, in order.
         let mut fresh = Vec::new();
@@ -181,26 +229,28 @@ pub fn page(
                 fresh.push(*k);
             }
         }
-        let members = members(lease, &fresh, after.is_some(), cancel)?;
-        let served_before = match &after {
-            Some(p) => served_before(lease, &members, p, cancel)?,
-            None => KeySet::default(),
-        };
+        let members = members(lease, &fresh, after.as_ref(), cancel)?;
         for (i, hit) in pg.hits.iter().enumerate() {
-            let others = match found[i] {
-                None => 0,
-                Some(k) => {
-                    if !seen.insert(k) || served_before.contains(&k) {
-                        continue;
-                    }
-                    members
-                        .count
-                        .get(&k)
-                        .copied()
-                        .unwrap_or(1)
-                        .saturating_sub(1)
-                }
+            // Whether this hit starts a row: keyless, or its group's first
+            // hit here and not served before.
+            let fresh_row = match found[i] {
+                None => true,
+                Some(k) => !seen.contains(&k) && !members.served.contains(&k),
             };
+            if let Some(k) = found[i] {
+                seen.insert(k);
+            }
+            if !fresh_row {
+                continue;
+            }
+            let others = found[i].map_or(0, |k| {
+                members
+                    .count
+                    .get(&k)
+                    .copied()
+                    .unwrap_or(1)
+                    .saturating_sub(1)
+            });
             if skip > 0 {
                 skip -= 1;
                 continue;
@@ -210,50 +260,71 @@ pub fn page(
                 others,
             });
             if rows.len() == limit {
-                let more = i + 1 < pg.hits.len() || pg.next.is_some();
+                // More only if a later hit here starts a row, or more
+                // hits follow (which may all be groups already served).
+                let mut ahead = KeySet::default();
+                let more = (i + 1..pg.hits.len()).any(|j| match found[j] {
+                    None => true,
+                    Some(k) => {
+                        !seen.contains(&k) && !members.served.contains(&k) && ahead.insert(k)
+                    }
+                }) || pg.next.is_some();
                 return Ok(CollapsedPage {
                     rows,
                     next: more.then_some(positions[i]),
+                    skipped: offset,
                 });
             }
         }
         let Some(next) = pg.next else {
-            return Ok(CollapsedPage { rows, next: None });
-        };
-        if seen.len() >= cap {
-            // A short page: the next carries on after the last hit decided.
             return Ok(CollapsedPage {
                 rows,
-                next: Some(next),
+                next: None,
+                skipped: offset - skip,
             });
+        };
+        if seen.len() >= cap || walked >= bounds.hits {
+            // A short page: the next carries on after the last hit
+            // decided, so nothing is skipped.
+            return Ok(short(rows, skip, next));
         }
         from = Start::After(next);
     }
 }
 
 /// The groups count for `lease`, kept on it for later pages. `exact`
-/// asks for the exact count on demand (under [`EXACT_BUDGET`]; out of
-/// time, the estimate stands, as for torrents).
+/// asks for the exact count on demand: the torrents and the groups are
+/// counted under one [`EXACT_BUDGET`], and out of time the estimate
+/// stands, as for torrents.
 pub fn groups(lease: &Lease, exact: bool, cancel: &CancelToken) -> Result<Total> {
     if let Some(t) = lease.kept_groups()
         && (!t.approx || !exact)
     {
         return Ok(t);
     }
-    let torrents = if exact {
-        lease.exact_total(cancel)?
-    } else {
-        lease.total()
+    let budget = exact.then(|| cancel.with_budget(EXACT_BUDGET));
+    let torrents = match &budget {
+        Some(b) => lease.exact_total_within(b, EXACT_BUDGET)?,
+        None => lease.total(),
     };
-    let t = groups_with(lease, torrents, exact, count::SAMPLE_ABOVE, cancel)?;
+    let t = groups_with(
+        lease,
+        torrents,
+        budget.as_ref(),
+        count::SAMPLE_ABOVE,
+        cancel,
+    )?;
     lease.keep_groups(t);
     Ok(t)
 }
 
+/// The groups count once the torrents count is `torrents`: exact while
+/// that is (under `budget` for a count on demand, which may run out),
+/// else the estimate, which runs under `cancel` alone.
 pub(crate) fn groups_with(
     lease: &Lease,
     torrents: Total,
-    exact: bool,
+    budget: Option<&CancelToken>,
     sample_above: u32,
     cancel: &CancelToken,
 ) -> Result<Total> {
@@ -264,13 +335,12 @@ pub(crate) fn groups_with(
         });
     }
     if !torrents.approx {
-        let counted = if exact {
-            match exact_groups(lease, &cancel.with_budget(EXACT_BUDGET)) {
+        let counted = match budget {
+            Some(b) => match exact_groups(lease, b) {
                 Err(Error::OutOfTime) => None,
                 r => r?,
-            }
-        } else {
-            exact_groups(lease, cancel)?
+            },
+            None => exact_groups(lease, cancel)?,
         };
         if let Some(value) = counted {
             return Ok(Total {
@@ -285,6 +355,14 @@ pub(crate) fn groups_with(
 /// Every match's group counted, or `None` past [`GROUPS_EXACT_CAP`]
 /// distinct keys.
 fn exact_groups(lease: &Lease, cancel: &CancelToken) -> Result<Option<usize>> {
+    exact_groups_capped(lease, GROUPS_EXACT_CAP, cancel)
+}
+
+pub(crate) fn exact_groups_capped(
+    lease: &Lease,
+    cap: usize,
+    cancel: &CancelToken,
+) -> Result<Option<usize>> {
     let searcher = lease.searcher();
     let compiled = lease.compiled();
     let weight = compiled
@@ -298,6 +376,9 @@ fn exact_groups(lease: &Lease, cancel: &CancelToken) -> Result<Option<usize>> {
         let mut m = Matcher::new(weight.as_ref(), reader, compiled, cancel)?;
         let mut over = false;
         m.visit_until(TERMINATED, &mut |docs: &[DocId]| {
+            if over {
+                return;
+            }
             for &d in docs {
                 match col.as_ref().and_then(|c| c.first(d)) {
                     Some(k) => {
@@ -306,7 +387,9 @@ fn exact_groups(lease: &Lease, cancel: &CancelToken) -> Result<Option<usize>> {
                     None => alone += 1,
                 }
             }
-            over |= distinct.len() > GROUPS_EXACT_CAP;
+            // Past the cap nothing more is held: the rest of the segment
+            // is only walked (a visit can't stop partway).
+            over |= distinct.len() > cap;
         })
         .map_err(|e| cancel::stopped_or(cancel, e))?;
         if over {
@@ -374,8 +457,10 @@ fn estimate(
         run.map_err(|e| cancel::stopped_or(cancel, e))?;
     }
     if visited == 0.0 {
+        // No match fell in the slices: at least one group, since there
+        // are matches.
         return Ok(Total {
-            value: 0,
+            value: torrents.min(1),
             approx: true,
         });
     }
@@ -386,7 +471,7 @@ fn estimate(
         let mut keys: Vec<u64> = drawn.iter().map(|d| d.group).collect();
         keys.sort_unstable();
         keys.dedup();
-        let sizes = members(lease, &keys, false, cancel)?.count;
+        let sizes = members(lease, &keys, None, cancel)?.count;
         mean = drawn
             .iter()
             .map(|d| 1.0 / sizes.get(&d.group).copied().unwrap_or(1).max(1) as f64)
@@ -475,16 +560,25 @@ impl<'a> Keys<'a> {
 /// Groups' members among the query's matches.
 struct Members {
     count: KeyMap<u64>,
-    /// Their addresses, when asked for, at most [`MAX_MEMBERS`] in all.
-    addrs: Vec<(u64, DocAddress)>,
+    /// The groups with a member at or before the cursor position asked
+    /// about: served on an earlier page.
+    served: KeySet,
 }
 
 /// The matches in each of `keys`' groups: the `title_identity` term's
 /// postings, checked against the query in doc order, segment by segment.
-fn members(lease: &Lease, keys: &[u64], keep: bool, cancel: &CancelToken) -> Result<Members> {
+/// With `after`, also which groups have a member ranking at or before it
+/// (checked [`MAX_MEMBERS`] addresses at a time, so memory stays bounded
+/// however large a group).
+fn members(
+    lease: &Lease,
+    keys: &[u64],
+    after: Option<&Position>,
+    cancel: &CancelToken,
+) -> Result<Members> {
     let mut out = Members {
         count: KeyMap::with_capacity_and_hasher(keys.len(), Keyed::default()),
-        addrs: Vec::new(),
+        served: KeySet::default(),
     };
     if keys.is_empty() {
         return Ok(out);
@@ -495,6 +589,24 @@ fn members(lease: &Lease, keys: &[u64], keep: bool, cancel: &CancelToken) -> Res
     let weight = compiled
         .query
         .weight(EnableScoring::disabled_from_searcher(searcher))?;
+    let mut pending: Vec<(u64, DocAddress)> = Vec::new();
+    let flush = |pending: &mut Vec<(u64, DocAddress)>, served: &mut KeySet| -> Result<()> {
+        let Some(p) = after else {
+            pending.clear();
+            return Ok(());
+        };
+        // Groups already known served need no more checking.
+        pending.retain(|(k, _)| !served.contains(k));
+        let addrs: Vec<DocAddress> = pending.iter().map(|(_, a)| *a).collect();
+        let before = lease.ranks_at_or_before(&addrs, p, cancel)?;
+        for ((k, _), b) in pending.iter().zip(before) {
+            if b {
+                served.insert(*k);
+            }
+        }
+        pending.clear();
+        Ok(())
+    };
     let mut since = 0u32;
     for (ord, reader) in searcher.segment_readers().iter().enumerate() {
         cancel.check()?;
@@ -526,31 +638,17 @@ fn members(lease: &Lease, keys: &[u64], keep: bool, cancel: &CancelToken) -> Res
         for (d, k) in targets {
             if m.contains(d).map_err(|e| cancel::stopped_or(cancel, e))? {
                 *out.count.entry(k).or_default() += 1;
-                if keep && out.addrs.len() < MAX_MEMBERS {
-                    out.addrs.push((k, DocAddress::new(ord as u32, d)));
+                if after.is_some() {
+                    pending.push((k, DocAddress::new(ord as u32, d)));
+                    if pending.len() >= MAX_MEMBERS {
+                        flush(&mut pending, &mut out.served)?;
+                    }
                 }
             }
         }
     }
+    flush(&mut pending, &mut out.served)?;
     Ok(out)
-}
-
-/// The groups among `members` with a member at or before `p`.
-fn served_before(
-    lease: &Lease,
-    members: &Members,
-    p: &Position,
-    cancel: &CancelToken,
-) -> Result<KeySet> {
-    let addrs: Vec<DocAddress> = members.addrs.iter().map(|(_, a)| *a).collect();
-    let before = lease.ranks_at_or_before(&addrs, p, cancel)?;
-    Ok(members
-        .addrs
-        .iter()
-        .zip(before)
-        .filter(|(_, b)| *b)
-        .map(|((k, _), _)| *k)
-        .collect())
 }
 
 #[cfg(test)]

@@ -57,8 +57,11 @@ fn append(index: &SearchIndex, ids: std::ops::Range<u64>, groups: u64) {
         d.add_u64(f.id, id);
         d.add_text(f.name, &name);
         d.add_text(f.text, &name);
-        // Sizes repeat, so the field sorts have ties to break.
-        d.add_u64(f.size, 1000 + id % 97);
+        // Sizes repeat, so the field sorts have ties to break; every
+        // 13th has none (sorted after every one with a value).
+        if !id.is_multiple_of(13) {
+            d.add_u64(f.size, 1000 + id % 97);
+        }
         d.add_u64(f.files, 1 + id % 7);
         d.add_i64(f.discovered, 1_700_000_000 + id as i64);
         if let Some(g) = group_of(id, groups) {
@@ -82,6 +85,27 @@ fn fixture(n: u64, segments: u64, groups: u64) -> Arc<SearchIndex> {
         from = to;
     }
     Arc::new(index)
+}
+
+/// [`fixture`] with swarm values for every torrent but each 5th (a hot
+/// sort's missing values).
+fn fixture_hot(n: u64, segments: u64, groups: u64) -> Arc<SearchIndex> {
+    let index = Arc::try_unwrap(fixture(n, segments, groups)).expect("one owner");
+    let hot = Arc::new(lodestar_store::HotColumns::new());
+    for id in 1..=n {
+        if id % 5 != 0 {
+            hot.set_swarm(
+                id,
+                lodestar_store::SwarmHot {
+                    seeders: (id * 37 % 23) as u32,
+                    leechers: (id % 7) as u32,
+                    trackers: (id % 4) as u32,
+                    dht: lodestar_store::NEVER,
+                },
+            );
+        }
+    }
+    Arc::new(index.with_hot(hot))
 }
 
 fn lease(index: &Arc<SearchIndex>, q: &str, sort: Sort) -> Lease {
@@ -141,6 +165,26 @@ fn scroll(l: &Lease, size: usize, mut between: impl FnMut()) -> Vec<(u64, u64)> 
     }
 }
 
+/// Every row, a cursor page at a time under `bounds`; how many pages
+/// came back short with a next.
+fn scroll_bounded(l: &Lease, size: usize, bounds: Bounds) -> (Vec<(u64, u64)>, usize) {
+    let cancel = CancelToken::new();
+    let mut out = Vec::new();
+    let mut short = 0;
+    let mut page = page_with(l, Start::Offset(0), size, bounds, &cancel).unwrap();
+    loop {
+        out.extend(page.rows.iter().map(|r| (r.hit.id, r.others)));
+        let Some(next) = page.next else {
+            return (out, short);
+        };
+        if page.rows.len() < size {
+            short += 1;
+        }
+        page = page_with(l, Start::After(next), size, bounds, &cancel).unwrap();
+        assert!(out.len() + short < 100_000, "paging doesn't end");
+    }
+}
+
 /// Every row, an offset page at a time.
 fn by_offset(l: &Lease, size: usize) -> Vec<(u64, u64)> {
     let cancel = CancelToken::new();
@@ -154,20 +198,31 @@ fn by_offset(l: &Lease, size: usize) -> Vec<(u64, u64)> {
     }
 }
 
-const SORTS: [Sort; 5] = [
+const SORTS: [Sort; 7] = [
     Sort::Relevance,
     Sort::Size { desc: true },
     Sort::Size { desc: false },
     Sort::Discovered { desc: true },
     Sort::Files { desc: false },
+    // Hot columns; every 5th torrent has no value (fixture_hot).
+    Sort::Seeders { desc: true },
+    Sort::Leechers { desc: false },
 ];
 
 #[test]
 fn every_group_once_in_order_with_its_others_whatever_the_page_size() {
     let groups = 40;
-    let index = fixture(1_500, 3, groups);
-    // "common": two-phase relevance; "": phase-1 order; the field sorts.
-    for q in ["common", "", "pad0 OR pad2", "-pad1 common"] {
+    let index = fixture_hot(1_500, 3, groups);
+    // "common": two-phase relevance; "": phase-1 order (or priors, with
+    // hot columns); the field and hot sorts; a union of several words
+    // across fields, whose scores a seek may round differently.
+    for q in [
+        "common",
+        "",
+        "pad0 OR pad2",
+        "-pad1 common",
+        "pad0 OR pad1 OR pad2 OR v7 OR name:common",
+    ] {
         for sort in SORTS {
             let l = lease(&index, q, sort);
             available(&l).expect("ready");
@@ -238,15 +293,69 @@ fn pages_across_an_nrt_commit_under_one_lease_have_no_duplicates_or_gaps() {
 }
 
 #[test]
-fn a_page_is_bounded_by_the_groups_it_decides_and_resumes_after_them() {
-    // One big group first in the order, then others: a page from a cursor
-    // checks groups served before, and a page that decides more than
-    // MAX_SCAN_GROUPS groups ends short with a cursor, never skipping.
+fn a_page_ends_short_at_its_bounds_and_the_next_carries_on() {
+    // Tight bounds on groups decided and hits walked: pages come back
+    // short (some empty) with a next, and the walk still serves every
+    // group once, in order.
+    let groups = 12;
+    let index = fixture(900, 2, groups);
+    for sort in [Sort::Relevance, Sort::Size { desc: true }] {
+        let l = lease(&index, "common", sort);
+        let want = expected(&uncollapsed(&l), groups);
+        for (g, h) in [(2, usize::MAX), (5, usize::MAX), (usize::MAX, 64), (3, 64)] {
+            let bounds = Bounds { groups: g, hits: h };
+            let (got, short) = scroll_bounded(&l, 10, bounds);
+            assert_eq!(got, want, "{sort:?} groups {g} hits {h}");
+            // The groups bound is never under a page's own size (it
+            // bites on groups served before); 64 hits always bites here.
+            if h == 64 {
+                assert!(short > 0, "{sort:?} groups {g} hits {h}: the bound bit");
+            }
+        }
+    }
+    // An offset page that reaches a bound first says how many groups it
+    // passed; its next page carries on from there.
+    let l = lease(&index, "common", Sort::Relevance);
+    let want = expected(&uncollapsed(&l), groups);
+    let cancel = CancelToken::new();
+    let bounds = Bounds {
+        groups: 1,
+        hits: 64,
+    };
+    let page = page_with(&l, Start::Offset(10), 5, bounds, &cancel).unwrap();
+    if page.rows.is_empty() {
+        let passed = page.skipped;
+        assert!(passed < 10);
+        let rest = page_with(
+            &l,
+            Start::After(page.next.unwrap()),
+            5,
+            Bounds::default(),
+            &cancel,
+        )
+        .unwrap();
+        let ids: Vec<(u64, u64)> = rest.rows.iter().map(|r| (r.hit.id, r.others)).collect();
+        assert_eq!(ids, want[passed..passed + 5]);
+    } else {
+        assert_eq!(page.skipped, 10);
+    }
+}
+
+#[test]
+fn a_last_page_has_no_next_when_only_served_groups_follow() {
+    // The last group's row ends a page; the hits after it are all its own
+    // or served groups', so there's no next to an empty page.
     let groups = 3;
-    let index = fixture(400, 1, groups);
+    let index = fixture(300, 1, groups);
     let l = lease(&index, "", Sort::Discovered { desc: false });
     let want = expected(&uncollapsed(&l), groups);
-    assert_eq!(scroll(&l, 1, || {}), want);
+    let cancel = CancelToken::new();
+    let page = super::page(&l, Start::Offset(0), want.len(), &cancel).unwrap();
+    assert_eq!(page.rows.len(), want.len());
+    // Every group appears within the first chunk here, so the walk knows.
+    if want.iter().all(|(id, _)| *id <= 64) {
+        assert_eq!(page.next, None);
+    }
 }
 
 #[test]
@@ -336,7 +445,7 @@ fn the_groups_estimate_is_within_its_stated_error() {
     for q in ["common", "pad1", "-pad0", "pad2 OR pad3", "pad0 OR pad1"] {
         let l = lease(&index, q, Sort::Relevance);
         let torrents = l.total();
-        let exact = groups_with(&l, torrents, false, u32::MAX, &cancel).unwrap();
+        let exact = groups_with(&l, torrents, None, u32::MAX, &cancel).unwrap();
         assert!(!exact.approx);
         let err = |sample_above| {
             let est = estimate(&l, torrents.value, sample_above, &cancel).unwrap();
@@ -357,6 +466,57 @@ fn the_groups_estimate_is_within_its_stated_error() {
 }
 
 #[test]
+fn exact_on_demand_replaces_a_kept_estimate_and_never_the_reverse() {
+    let groups = 40;
+    let index = fixture(2_000, 2, groups);
+    let cancel = CancelToken::new();
+    let l = lease(&index, "common", Sort::Relevance);
+    let want = expected(&uncollapsed(&l), groups).len();
+    // An estimate kept from an earlier page: a plain page keeps it, a
+    // request for the exact count replaces it.
+    let est = Total {
+        value: want + 7,
+        approx: true,
+    };
+    l.keep_groups(est);
+    assert_eq!(super::groups(&l, false, &cancel).unwrap(), est);
+    let exact = super::groups(&l, true, &cancel).unwrap();
+    assert_eq!(
+        exact,
+        Total {
+            value: want,
+            approx: false
+        }
+    );
+    assert_eq!(l.kept_groups(), Some(exact));
+    // An exact count kept answers both.
+    assert_eq!(super::groups(&l, false, &cancel).unwrap(), exact);
+    assert_eq!(super::groups(&l, true, &cancel).unwrap(), exact);
+}
+
+#[test]
+fn out_of_budget_or_past_the_cap_the_estimate_stands() {
+    let index = fixture(5_000, 1, 50);
+    let cancel = CancelToken::new();
+    let l = lease(&index, "common", Sort::Relevance);
+    let torrents = l.total();
+    assert!(!torrents.approx);
+    // A budget already spent: the exact count is out of time, and the
+    // estimate (under the request's own token) stands.
+    let spent = cancel.with_budget(std::time::Duration::ZERO);
+    let t = groups_with(&l, torrents, Some(&spent), 1_024, &cancel).unwrap();
+    assert!(t.approx, "{t:?}");
+    assert!(t.value > 0 && t.value <= torrents.value);
+    // More distinct keys than the cap: no exact count.
+    assert_eq!(exact_groups_capped(&l, 3, &cancel).unwrap(), None);
+    assert!(
+        exact_groups_capped(&l, usize::MAX, &cancel)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn an_approximate_torrent_count_gives_an_approximate_groups_count() {
     let index = fixture(5_000, 1, 50);
     let l = lease(&index, "common", Sort::Relevance);
@@ -365,7 +525,7 @@ fn an_approximate_torrent_count_gives_an_approximate_groups_count() {
         value: l.total().value,
         approx: true,
     };
-    let g = groups_with(&l, t, false, 1_024, &cancel).unwrap();
+    let g = groups_with(&l, t, None, 1_024, &cancel).unwrap();
     assert!(g.approx);
     assert!(g.value > 0 && g.value <= t.value);
 }
@@ -401,7 +561,7 @@ fn a_cancelled_collapse_stops() {
         Err(Error::Cancelled)
     ));
     assert!(matches!(
-        groups_with(&l, l.total(), false, 1_024, &cancel),
+        groups_with(&l, l.total(), None, 1_024, &cancel),
         Err(Error::Cancelled)
     ));
     assert!(matches!(
@@ -423,11 +583,11 @@ proptest! {
         groups in 1u64..30,
         size in 1usize..40,
         sort in 0usize..SORTS.len(),
-        q in 0usize..3,
+        q in 0usize..4,
         commit_after in 0usize..5,
     ) {
-        let index = fixture(n, segments, groups);
-        let q = ["common", "", "pad1 OR v7"][q];
+        let index = fixture_hot(n, segments, groups);
+        let q = ["common", "", "pad1 OR v7", "pad0 OR pad1 OR pad2 OR common"][q];
         let l = lease(&index, q, SORTS[sort]);
         let want = expected(&uncollapsed(&l), groups);
         let mut pages = 0;

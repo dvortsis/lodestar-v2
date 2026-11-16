@@ -405,3 +405,19 @@ async fn without_group_data_the_search_answers_ungrouped_and_says_why() {
     assert_eq!(page["collapse_unavailable"], "group_key_not_ready");
     assert_eq!(page["offset"], 4);
 }
+
+#[tokio::test]
+async fn exact_counts_both_on_demand() {
+    let f = fixture(36);
+    let c = session(&f).await;
+    let (status, _, body) = call(
+        &f.app,
+        get("/api/v1/search?q=movie&collapse=group&exact=1", &c),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 36);
+    assert_eq!(body["total_approx"], false);
+    assert_eq!(body["groups"], WORKS);
+    assert_eq!(body["groups_approx"], false);
+}

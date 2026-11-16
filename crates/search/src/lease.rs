@@ -379,39 +379,28 @@ impl Lease {
                     cancel,
                 )?;
                 let ranks = field_ranks(s, &self.compiled, order, &addrs)?;
+                positions = field_positions(&ranks, limit);
                 cut_field(ranks, limit)
             }
             (Mode::Field(order), Start::After(Position::Field { present, key, addr })) => {
                 let after = FieldRank { present, key, addr };
                 let top = field_top(s, &self.compiled, order, Some(after), limit + 1, cancel)?;
+                positions = field_positions(&top, limit);
                 cut_field(top, limit)
             }
             _ => return Err(Error::Corrupt("the cursor doesn't fit its lease")),
         };
         let addrs: Vec<DocAddress> = ranked.iter().map(|r| r.addr).collect();
-        // Two-phase pages named their positions as they went; the others
-        // follow from the hit.
-        match self.mode() {
-            Mode::Plain => {
-                positions = ranked
-                    .iter()
-                    .map(|r| Position::Score {
-                        score: r.score,
-                        addr: r.addr,
-                    })
-                    .collect();
-            }
-            Mode::Field(order) => {
-                positions = field_ranks(s, &self.compiled, order, &addrs)?
-                    .into_iter()
-                    .map(|r| Position::Field {
-                        present: r.present,
-                        key: r.key,
-                        addr: r.addr,
-                    })
-                    .collect();
-            }
-            Mode::TwoPhase => {}
+        // Two-phase and field pages named their positions as they went
+        // (from the ranks they served by); phase-1 ones are the hit.
+        if let Mode::Plain = self.mode() {
+            positions = ranked
+                .iter()
+                .map(|r| Position::Score {
+                    score: r.score,
+                    addr: r.addr,
+                })
+                .collect();
         }
         debug_assert_eq!(positions.len(), addrs.len());
         let page = Page {
@@ -449,7 +438,13 @@ impl Lease {
             (Mode::Plain, Position::Score { score, addr }) => {
                 let at = Scored { score, addr };
                 let scored = self.phase1_scores(addrs, cancel)?;
-                Ok(scored.iter().map(|m| !at.before(m)).collect())
+                // By address too: a score recomputed by seeking can differ
+                // from the one ranked by a rounding step (a union sums in
+                // another order), and the cursor's own row was served.
+                Ok(scored
+                    .iter()
+                    .map(|m| !at.before(m) || m.addr == at.addr)
+                    .collect())
             }
             (Mode::TwoPhase, Position::Window { start, last }) => {
                 let start = start.map(|(score, addr)| Scored { score, addr });
@@ -459,10 +454,11 @@ impl Lease {
                 let mut out = vec![false; addrs.len()];
                 let mut inside = Vec::new();
                 for (i, m) in scored.iter().enumerate() {
-                    if start.is_some_and(|s| !s.before(m)) {
+                    // The bounds' own documents by address too (see Plain).
+                    if start.is_some_and(|s| !s.before(m) || s.addr == m.addr) {
                         // An earlier window: all served.
                         out[i] = true;
-                    } else if bound.is_some_and(|b| !b.before(m)) {
+                    } else if bound.is_some_and(|b| !b.before(m) || b.addr == m.addr) {
                         // This window, which the page served down to `last`.
                         inside.push(i);
                     }
@@ -989,6 +985,19 @@ fn field_ranks(
         out.push(v.rank(a));
     }
     Ok(out)
+}
+
+/// The positions of the first `limit` of `ranks`.
+fn field_positions(ranks: &[FieldRank], limit: usize) -> Vec<Position> {
+    ranks
+        .iter()
+        .take(limit)
+        .map(|r| Position::Field {
+            present: r.present,
+            key: r.key,
+            addr: r.addr,
+        })
+        .collect()
 }
 
 fn cut_field(mut top: Vec<FieldRank>, limit: usize) -> (Vec<Scored>, Option<Position>) {

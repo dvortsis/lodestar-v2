@@ -487,7 +487,7 @@ async fn run_search(
         // A first page comes from the result cache (§8) unless it's
         // explained, which bypasses it.
         let mut cached = None;
-        let (lease, start, served, id) = match cursor {
+        let (lease, start, mut served, id) = match cursor {
             Some(c) => {
                 let lease = search
                     .leases()
@@ -557,6 +557,11 @@ async fn run_search(
             }
             None if collapsed => collapse::page(&lease, start, limit, &cancel).map(|c| {
                 others = c.rows.iter().map(|r| r.others).collect();
+                // An offset page that ended at a bound passed fewer groups
+                // than asked: offsets count the groups actually before.
+                if let Start::Offset(_) = start {
+                    served = c.skipped as u64;
+                }
                 let page = lodestar_search::Page {
                     hits: c.rows.into_iter().map(|r| r.hit).collect(),
                     next: c.next,
