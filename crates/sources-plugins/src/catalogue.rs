@@ -28,6 +28,7 @@ use crate::{
 /// may hold more than one plugin (`nyaa` holds Nyaa and Sukebei).
 const PLUGINS: &[(&str, &Manifest)] = &[
     ("academic", &academic::MANIFEST),
+    ("anidb", &crate::anidb::MANIFEST),
     ("archive_org", &archive_org::MANIFEST),
     ("arr", &arr::MANIFEST),
     ("clients", &clients::MANIFEST),

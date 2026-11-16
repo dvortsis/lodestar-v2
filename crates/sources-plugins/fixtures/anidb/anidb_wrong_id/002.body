@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<anime id="9002" restricted="false">
+  <type>Movie</type>
+  <episodecount>12</episodecount>
+  <startdate>2010-07-17</startdate>
+  <enddate>2010-07-17</enddate>
+  <titles>
+    <title xml:lang="x-jat" type="main">Umi to Sora</title>
+    <title xml:lang="en" type="official">Sea and Sky</title>
+  </titles>
+  <creators>
+    <name id="77" type="Direction">SENTINEL Person Name</name>
+  </creators>
+  <description>SENTINEL description text</description>
+  <tags><tag id="5" weight="600"><name>SENTINEL tag</name></tag></tags>
+  <characters><character id="6" type="main character in"><name>SENTINEL Character</name></character></characters>
+  <episodes>
+    <episode id="8"><epno type="1">1</epno><title xml:lang="en">SENTINEL episode title</title></episode>
+  </episodes>
+</anime>

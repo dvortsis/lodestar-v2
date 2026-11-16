@@ -217,6 +217,28 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     let s = stashdb::StashDb::new(rec.clone());
     lookup_once(&s).await;
     check(AdultEnricher::manifest(&s), AdultEnricher::policy(&s), &rec);
+
+    // AniDB (ENR-anidb), an identifier with a client name and version.
+    let rec = Arc::new(Recording::default());
+    let a = lodestar_sources_plugins::anidb::AniDb::new(rec.clone());
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        lodestar_sources::identify::Identifier::policy(&a),
+        &UserLimits::default(),
+    );
+    let q = lodestar_sources::identify::Query::new(
+        "Synthetic Title",
+        None,
+        lodestar_sources::identify::MediaKind::Tv,
+    )
+    .unwrap();
+    let _ = lodestar_sources::identify::Identifier::lookup(&a, &kit, &q).await;
+    check(
+        lodestar_sources::identify::Identifier::manifest(&a),
+        lodestar_sources::identify::Identifier::policy(&a),
+        &rec,
+    );
 }
 
 /// The rest are built without a credential store, so they can't read
@@ -277,6 +299,7 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
+        lodestar_sources_plugins::anidb::ID,
         lodestar_sources_plugins::openlibrary::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();

@@ -933,6 +933,12 @@ mod spec_tests {
         );
         vec![
             (academic::ID, *academic::Academic::new().policy()),
+            (
+                lodestar_sources_plugins::anidb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::anidb::AniDb::new(creds()),
+                ),
+            ),
             (archive_org::ID, *archive_org::ArchiveOrg::new().policy()),
             (arr::ID, *arr::ArrWebhooks::new().policy()),
             (clients::ID, *clients::Clients::unconfigured().policy()),
@@ -1001,6 +1007,11 @@ mod spec_tests {
             let listed = serde_json::to_value(credential_spec(p.credentials)).unwrap();
             let want = if [prowlarr::ID, stashdb::ID, tpdb::ID].contains(&id) {
                 json!([{ "kind": "secret", "label": "API key", "name": "api_key", "required": true }])
+            } else if id == lodestar_sources_plugins::anidb::ID {
+                json!([
+                    { "kind": "username", "label": "Registered AniDB client name", "name": "client", "required": true },
+                    { "kind": "username", "label": "Registered AniDB client version", "name": "clientver", "required": true }
+                ])
             } else {
                 json!([])
             };
