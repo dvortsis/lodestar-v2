@@ -2,8 +2,8 @@
 //! more than the caps allow, and the plugin's choice never names a master
 //! the answer didn't hold. The first byte picks tight caps (bit 1), so
 //! fuzzed answers reach every cap; the rest is the body.
-//! `crates/sources-feeds/tests/discogs.rs` runs the same checks over a
-//! mutated corpus.
+//! `crates/sources-feeds/tests/discogs.rs` runs the parser checks (not
+//! the plugin's choice) over a mutated corpus.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -44,9 +44,16 @@ fuzz_target!(|data: &[u8]| {
             assert_eq!(i.ids[0].scheme, "discogs");
             let id = i.ids[0].value.strip_prefix('m').unwrap();
             let id = id.parse::<u64>().unwrap();
-            let m = s.hits.iter().find(|x| x.id == id).unwrap();
+            // An answer may repeat an id, and `choose` skips a hit whose
+            // title or year disagrees, so the chosen title need only
+            // belong to some hit with that id (seeds/discogs/repeated_id.json).
             let t = i.canonical_title.unwrap();
-            assert!(!fold(&t).is_empty() && m.title.contains(t.as_str()));
+            assert!(!fold(&t).is_empty());
+            assert!(
+                s.hits
+                    .iter()
+                    .any(|x| x.id == id && x.title.contains(t.as_str()))
+            );
         }
     }
 });

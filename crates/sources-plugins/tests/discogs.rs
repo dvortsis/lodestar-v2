@@ -179,6 +179,20 @@ async fn a_tie_is_no_match_and_the_year_picks_one() {
 }
 
 #[test]
+fn a_repeated_id_names_the_hit_that_agreed() {
+    // The parser keeps a repeated id; the choice skips the hit whose
+    // title disagrees and takes its title from the one that agreed.
+    let body = br#"{"results":[{"id":5,"type":"master","title":"X - Foo","year":"2000"},{"id":5,"type":"master","title":"A - B","year":"2001"}]}"#;
+    let hits = parse_search(body, &LIMITS).hits;
+    assert_eq!(hits.len(), 2);
+    let Lookup::Match(i) = discogs::choose(&music("B", Some(2001)), &hits) else {
+        panic!("no match");
+    };
+    assert_eq!(i.ids[0].value, "m5");
+    assert_eq!(i.canonical_title.as_deref(), Some("B"));
+}
+
+#[test]
 fn titles_split_and_compare_as_musicbrainz_does() {
     assert_eq!(
         discogs::wanted("Synthetic Orchestra - Paper Lanterns"),
