@@ -111,7 +111,7 @@ const POLICY: Policy = Policy {
 /// Lookups are local; the pacing is the host limiter's.
 pub const MIN_INTERVAL: Duration = Duration::from_millis(10);
 
-/// Valve's terms (checked 2026-11-16): the data is used inside
+/// Valve's terms (not re-read live; see the decisions file): the data is used inside
 /// Lodestar, credited, and not passed on. The list has no adult marker;
 /// the runtime never asks about an Adult item.
 pub const TERMS: Terms = Terms {
