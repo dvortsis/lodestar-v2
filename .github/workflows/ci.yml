@@ -65,6 +65,9 @@ jobs:
       # The merge-guard hook runs before every Bash call in every session; a
       # syntax error there would exit 2 and block them all.
       - run: bash -n .claude/hooks/merge-guard.sh
+      # The import pilot's size figures (X-index-bytes-1m); stdlib only and
+      # instant, so here, where every PR runs, rather than behind a filter.
+      - run: python3 -m unittest discover -s docs/operations/imports/pilots/smoke -p 'test_*.py'
       # main's history was rewritten on 2026-10-30 (docs/owner-decisions.md
       # §2.25). A head that still contains the old root or the old main tip
       # would merge the removed history back in, so it fails here.
