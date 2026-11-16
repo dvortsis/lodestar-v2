@@ -15,7 +15,7 @@ use lodestar_search::query::TagKey;
 use lodestar_search::recovery::{self, RECOVERY_BUDGET};
 use lodestar_search::{
     CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
-    RebuildProgress, SearchSpec, Sort, Start, WEIGHTS, parse,
+    RebuildProgress, SearchSpec, Sort, Start, Unavailable, WEIGHTS, collapse, parse,
 };
 use lodestar_store::{Enriched, RollupBy, Store};
 use rand::RngExt;
@@ -25,7 +25,7 @@ use utoipa::OpenApi;
 use crate::auth::Access;
 use crate::dto::events::RebuildPhase;
 use crate::dto::search::{
-    ClauseRemoval, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights,
+    ClauseRemoval, CollapseUnavailable, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights,
     IndexRebuild, NaturalChip, NaturalProposal, ParseQuery, ParseResponse, SearchExplain,
     SearchHit, SearchIndexState, SearchNotice, SearchRecovery, SearchRequest, SearchResponse,
     UnpopulatedField,
@@ -271,6 +271,19 @@ pub(crate) async fn parse_query(
     }))
 }
 
+/// `collapse`: `group` or `none` (the default).
+fn collapse_param(s: Option<&str>) -> ApiResult<bool> {
+    match s.unwrap_or("none") {
+        "none" => Ok(false),
+        "group" => Ok(true),
+        other => Err(ApiError::bad_request(
+            "unknown_collapse",
+            format!("Unknown collapse {other:?}: use group or none."),
+        )
+        .field("collapse")),
+    }
+}
+
 pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     Ok(match s.unwrap_or("relevance") {
         "relevance" => Sort::Relevance,
@@ -314,6 +327,7 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
         ("tz" = Option<i32>, Query, description = "The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default."),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`."),
+        ("collapse" = Option<String>, Query, description = "`group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`."),
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
         ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
     ),
@@ -393,7 +407,15 @@ async fn run_search(
     let sort = sort_param(p.sort.as_deref())?;
     let tz = tz_param(p.tz)?;
     let explain = p.explain.unwrap_or(false);
+    let collapse = collapse_param(p.collapse.as_deref())?;
     let mut limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
+    if explain && collapse {
+        return Err(ApiError::bad_request(
+            "explain_collapse",
+            "Explain covers ungrouped results: send it without collapse.",
+        )
+        .field("explain"));
+    }
     if explain {
         if p.cursor.is_some() || p.offset.is_some_and(|o| o > 0) {
             return Err(ApiError::bad_request(
@@ -434,6 +456,12 @@ async fn run_search(
         .as_deref()
         .map(|c| open_cursor(c, &fingerprint))
         .transpose()?;
+    // A collapsed cursor continues only a collapsed request. (An
+    // ungrouped one may continue `collapse=group` when group data wasn't
+    // ready in its lease: checked against the lease below.)
+    if cursor.is_some_and(|c| c.collapse && !collapse) {
+        return Err(bad_cursor());
+    }
     let exact = p.exact.unwrap_or(false);
     let reader = s.reader.clone();
     // Provenance only for a caller it's for: Discover Newest (no viewer)
@@ -470,7 +498,8 @@ async fn run_search(
                 }
                 (lease, Start::After(c.position), c.served, Some(c.lease))
             }
-            None if offset == 0 && !explain => {
+            // The result cache keeps ungrouped first pages only.
+            None if offset == 0 && !explain && !collapse => {
                 // The index serving now, once for this request; the
                 // cached lease reads the snapshot the page came from.
                 let spec = SearchSpec {
@@ -498,16 +527,43 @@ async fn run_search(
                 (Arc::new(lease), Start::Offset(offset), offset as u64, None)
             }
         };
+        // Collapse-by-group (GS-3) when asked for and the lease's
+        // snapshot has group data; otherwise ungrouped, saying why.
+        let unavailable = if collapse {
+            collapse::available(&lease).err()
+        } else {
+            None
+        };
+        let collapsed = collapse && unavailable.is_none();
+        if cursor.is_some_and(|c| c.collapse != collapsed) {
+            return Err(bad_cursor());
+        }
         let total = if exact {
             lease.exact_total(&cancel).map_err(failed)?
         } else {
             lease.total()
         };
+        let groups = if collapsed {
+            Some(collapse::groups(&lease, exact, &cancel).map_err(failed)?)
+        } else {
+            None
+        };
+        // Each row's other versions, when collapsed.
+        let mut others: Vec<u64> = Vec::new();
         let paged = match &cached {
             Some(c) => Ok((c.page.clone(), None)),
             None if explain => {
                 lodestar_search::explain(&lease, limit, &cancel).map(|e| (e.page.clone(), Some(e)))
             }
+            None if collapsed => collapse::page(&lease, start, limit, &cancel).map(|c| {
+                others = c.rows.iter().map(|r| r.others).collect();
+                let page = lodestar_search::Page {
+                    hits: c.rows.into_iter().map(|r| r.hit).collect(),
+                    next: c.next,
+                    explain: Vec::new(),
+                };
+                (page, None)
+            }),
             None => lease.page(start, limit, &cancel).map(|p| (p, None)),
         };
         let (page, explained) = paged.map_err(failed)?;
@@ -549,7 +605,7 @@ async fn run_search(
                 sort: lease.sort(),
                 served: served + page.hits.len() as u64,
                 position,
-                collapse: false,
+                collapse: collapsed,
             })
         });
         let store = reader.lock().expect("reader lock");
@@ -558,7 +614,7 @@ async fn run_search(
             .transpose()
             .map_err(internal)?;
         let mut hits: Vec<SearchHit> = Vec::with_capacity(page.hits.len());
-        for h in page.hits.iter() {
+        for (i, h) in page.hits.iter().enumerate() {
             // A torrent deleted since indexing just drops out of the page.
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
                 let enrichment = store.enrichment(row.id).map_err(internal)?;
@@ -581,6 +637,7 @@ async fn run_search(
                 };
                 let swarm = swarm::summary(&store, hot.as_deref(), &row).map_err(internal)?;
                 let mut hit = torrents::hit(&row, h.score, matched_files, swarm);
+                hit.others = others.get(i).copied();
                 enrich(&mut hit, enrichment);
                 if let Some((viewer, catalogue)) = &provenance {
                     // `torrents` holds verified metadata only (§18.5).
@@ -611,6 +668,12 @@ async fn run_search(
             took_ms: started.elapsed().as_secs_f64() * 1000.0,
             total: total.value,
             total_approx: total.approx,
+            collapsed,
+            collapse_unavailable: unavailable.map(|u| match u {
+                Unavailable::GroupKeyNotReady => CollapseUnavailable::GroupKeyNotReady,
+            }),
+            groups: groups.map(|g| g.value),
+            groups_approx: groups.map(|g| g.approx),
         }))
     })
     .await

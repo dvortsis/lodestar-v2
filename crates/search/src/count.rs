@@ -307,6 +307,14 @@ impl<'a> Matcher<'a> {
 }
 
 impl Matcher<'_> {
+    /// Whether `doc` is a match (alive and in the ranges). Documents must
+    /// be asked in ascending order: the walk only moves forward.
+    pub(crate) fn contains(&mut self, doc: DocId) -> tantivy::Result<bool> {
+        self.seek(doc);
+        self.tick(1)?;
+        Ok(self.docs.doc() == doc && self.passes(doc))
+    }
+
     /// Hands the matches from the current document up to (not including)
     /// `end` to `f`, a block of up to [`COLLECT_BLOCK_BUFFER_LEN`] at a
     /// time, and returns how many there were.

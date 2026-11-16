@@ -50,6 +50,8 @@ pub struct Lease {
     stemmed: bool,
     sort: Sort,
     total: Mutex<Total>,
+    /// The groups count once collapse-by-group computed it (GS-3).
+    groups: Mutex<Option<Total>>,
     /// The time relative dates were resolved against.
     now: i64,
     /// The offset `time:` clauses were resolved in (seconds east of UTC).
@@ -157,6 +159,7 @@ impl Lease {
             stemmed,
             sort,
             total: Mutex::new(total),
+            groups: Mutex::new(None),
             now,
             utc_offset,
         })
@@ -174,6 +177,7 @@ impl Lease {
             stemmed: false,
             sort: Sort::Relevance,
             total: Mutex::new(total),
+            groups: Mutex::new(None),
             now: 0,
             utc_offset: 0,
         }
@@ -223,6 +227,15 @@ impl Lease {
     /// unless an exact count was asked for.
     pub fn total(&self) -> Total {
         *lock(&self.total)
+    }
+
+    /// The groups count kept for later pages (`collapse.rs`).
+    pub(crate) fn kept_groups(&self) -> Option<Total> {
+        *lock(&self.groups)
+    }
+
+    pub(crate) fn keep_groups(&self, t: Total) {
+        *lock(&self.groups) = Some(t);
     }
 
     /// Counts every match, under `cancel` and [`EXACT_BUDGET`], and keeps
@@ -304,10 +317,24 @@ impl Lease {
         limit: usize,
         cancel: &CancelToken,
     ) -> Result<(Page, Vec<DocAddress>)> {
+        let (page, addrs, _) = self.page_ranked(start, limit, cancel)?;
+        Ok((page, addrs))
+    }
+
+    /// [`Lease::page_at`], with each hit's own position: a cursor at it
+    /// resumes right after that hit (collapse-by-group, GS-3, stops a
+    /// page partway through what it read).
+    pub(crate) fn page_ranked(
+        &self,
+        start: Start,
+        limit: usize,
+        cancel: &CancelToken,
+    ) -> Result<(Page, Vec<DocAddress>, Vec<Position>)> {
         cancel.check()?;
         let limit = limit.max(1);
         let s = &self.searcher;
         let mut explain = Vec::new();
+        let mut positions = Vec::new();
         let (ranked, next) = match (self.mode(), start) {
             (Mode::Plain, Start::Offset(o)) => {
                 let top = score_top(s, &self.compiled, None, o + limit + 1, cancel)?;
@@ -321,15 +348,22 @@ impl Lease {
                 )
             }
             (Mode::TwoPhase, Start::Offset(o)) => {
-                let (ranked, parts, next) = self.windows_from_offset(o, limit, cancel)?;
+                let (ranked, parts, next) =
+                    self.windows_from_offset(o, limit, &mut positions, cancel)?;
                 explain = parts;
                 (ranked, next)
             }
             (Mode::TwoPhase, Start::After(Position::Window { start, last })) => {
                 let start = start.map(|(score, addr)| Scored { score, addr });
                 let last = last.map(|(score, addr)| Scored { score, addr });
-                let (ranked, parts, next) =
-                    self.windows(Windows::Live, start, From::After(last), limit, cancel)?;
+                let (ranked, parts, next) = self.windows(
+                    Windows::Live,
+                    start,
+                    From::After(last),
+                    limit,
+                    &mut positions,
+                    cancel,
+                )?;
                 explain = parts;
                 (ranked, next)
             }
@@ -354,12 +388,166 @@ impl Lease {
             }
             _ => return Err(Error::Corrupt("the cursor doesn't fit its lease")),
         };
+        let addrs: Vec<DocAddress> = ranked.iter().map(|r| r.addr).collect();
+        // Two-phase pages named their positions as they went; the others
+        // follow from the hit.
+        match self.mode() {
+            Mode::Plain => {
+                positions = ranked
+                    .iter()
+                    .map(|r| Position::Score {
+                        score: r.score,
+                        addr: r.addr,
+                    })
+                    .collect();
+            }
+            Mode::Field(order) => {
+                positions = field_ranks(s, &self.compiled, order, &addrs)?
+                    .into_iter()
+                    .map(|r| Position::Field {
+                        present: r.present,
+                        key: r.key,
+                        addr: r.addr,
+                    })
+                    .collect();
+            }
+            Mode::TwoPhase => {}
+        }
+        debug_assert_eq!(positions.len(), addrs.len());
         let page = Page {
             hits: hits(s, &ranked)?,
             next,
             explain,
         };
-        Ok((page, ranked.iter().map(|r| r.addr).collect()))
+        Ok((page, addrs, positions))
+    }
+
+    /// For each of `addrs` (matches of this lease's query), whether it
+    /// ranks at or before `p` in this lease's order: whether a page that
+    /// ended at `p` has already passed it (collapse-by-group, GS-3, asks
+    /// this of a group's members to tell whether the group was served).
+    /// Checks `cancel` between segments and every
+    /// [`CHECK_EVERY`] documents.
+    pub(crate) fn ranks_at_or_before(
+        &self,
+        addrs: &[DocAddress],
+        p: &Position,
+        cancel: &CancelToken,
+    ) -> Result<Vec<bool>> {
+        cancel.check()?;
+        if !self.fits(p) {
+            return Err(Error::Corrupt("the cursor doesn't fit its lease"));
+        }
+        match (self.mode(), *p) {
+            (Mode::Field(order), Position::Field { present, key, addr }) => {
+                let at = FieldRank { present, key, addr };
+                Ok(field_ranks(&self.searcher, &self.compiled, order, addrs)?
+                    .into_iter()
+                    .map(|r| r >= at)
+                    .collect())
+            }
+            (Mode::Plain, Position::Score { score, addr }) => {
+                let at = Scored { score, addr };
+                let scored = self.phase1_scores(addrs, cancel)?;
+                Ok(scored.iter().map(|m| !at.before(m)).collect())
+            }
+            (Mode::TwoPhase, Position::Window { start, last }) => {
+                let start = start.map(|(score, addr)| Scored { score, addr });
+                let last = last.map(|(score, addr)| Scored { score, addr });
+                let scored = self.phase1_scores(addrs, cancel)?;
+                let bound = self.window_bound(start, cancel)?;
+                let mut out = vec![false; addrs.len()];
+                let mut inside = Vec::new();
+                for (i, m) in scored.iter().enumerate() {
+                    if start.is_some_and(|s| !s.before(m)) {
+                        // An earlier window: all served.
+                        out[i] = true;
+                    } else if bound.is_some_and(|b| !b.before(m)) {
+                        // This window, which the page served down to `last`.
+                        inside.push(i);
+                    }
+                }
+                if let (Some(last), false) = (last, inside.is_empty()) {
+                    let priors = self.index.priors(self.compiled.now);
+                    let reranked = index::rerank(
+                        &self.searcher,
+                        self.compiled.boosts.as_deref(),
+                        priors.as_ref(),
+                        inside.iter().map(|&i| (scored[i].score, scored[i].addr)).collect(),
+                    )?;
+                    let at: HashMap<DocAddress, usize> =
+                        inside.iter().map(|&i| (addrs[i], i)).collect();
+                    for (addr, parts) in reranked {
+                        let m = Scored {
+                            score: parts.score,
+                            addr,
+                        };
+                        // Served down to and including `last` (by address:
+                        // its priors may have moved since).
+                        if (m.before(&last) || addr == last.addr)
+                            && let Some(&i) = at.get(&addr)
+                        {
+                            out[i] = true;
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            _ => Err(Error::Corrupt("the cursor doesn't fit its lease")),
+        }
+    }
+
+    /// The last phase-1 candidate of the two-phase window after `start`:
+    /// the window's lower bound (`None`: no window there).
+    fn window_bound(&self, start: Option<Scored>, cancel: &CancelToken) -> Result<Option<Scored>> {
+        Ok(score_top(
+            &self.searcher,
+            &self.compiled,
+            start,
+            RERANK_WINDOW,
+            cancel,
+        )?
+        .last()
+        .copied())
+    }
+
+    /// Each of `addrs`' phase-1 score under this lease's query, as
+    /// [`score_top`] scores it (0 for a document it doesn't match).
+    fn phase1_scores(&self, addrs: &[DocAddress], cancel: &CancelToken) -> Result<Vec<Scored>> {
+        let weight = self
+            .compiled
+            .query
+            .weight(EnableScoring::enabled_from_searcher(&self.searcher))?;
+        let mut order: Vec<usize> = (0..addrs.len()).collect();
+        order.sort_unstable_by_key(|&i| addrs[i]);
+        let mut out: Vec<Scored> = addrs
+            .iter()
+            .map(|&addr| Scored { score: 0.0, addr })
+            .collect();
+        let mut i = 0;
+        let mut since = 0u32;
+        while i < order.len() {
+            cancel.check()?;
+            let seg = addrs[order[i]].segment_ord;
+            let reader = self.searcher.segment_reader(seg);
+            let mut scorer = weight.scorer(reader, 1.0)?;
+            while let Some(&j) = order.get(i).filter(|&&j| addrs[j].segment_ord == seg) {
+                let doc = addrs[j].doc_id;
+                if scorer.doc() < doc {
+                    scorer.seek(doc);
+                }
+                if scorer.doc() == doc {
+                    out[j].score = scorer.score();
+                }
+                i += 1;
+                since += 1;
+                if since >= CHECK_EVERY {
+                    since = 0;
+                    cancel.check()?;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The windows covering hits `o..o + limit`, from one phase-1 pass.
@@ -367,6 +555,7 @@ impl Lease {
         &self,
         o: usize,
         limit: usize,
+        positions: &mut Vec<Position>,
         cancel: &CancelToken,
     ) -> Result<Windowed> {
         let w = RERANK_WINDOW;
@@ -385,7 +574,14 @@ impl Lease {
             .and_then(|p| cands.get(p * w + w - 1))
             .copied();
         let src = Windows::Fixed { cands, at: first };
-        self.windows(src, start, From::Skip(o - first * w), limit, cancel)
+        self.windows(
+            src,
+            start,
+            From::Skip(o - first * w),
+            limit,
+            positions,
+            cancel,
+        )
     }
 
     /// Serves `limit` hits window by window, from the window after the
@@ -396,6 +592,7 @@ impl Lease {
         mut start: Option<Scored>,
         mut from: From,
         limit: usize,
+        positions: &mut Vec<Position>,
         cancel: &CancelToken,
     ) -> Result<Windowed> {
         let boosts = self.compiled.boosts.as_deref();
@@ -454,6 +651,10 @@ impl Lease {
             for (i, e) in ranked.iter().enumerate().skip(begin) {
                 out.push(*e);
                 parts.push(reranked[i].1);
+                positions.push(Position::Window {
+                    start: start.map(Scored::pair),
+                    last: Some(e.pair()),
+                });
                 if out.len() == limit {
                     let next = if i + 1 < ranked.len() {
                         Some(Position::Window {

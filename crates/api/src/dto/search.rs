@@ -97,6 +97,13 @@ pub struct SearchRequest {
     /// same index snapshot. Send the same `q` (or `ast`), `sort` and
     /// `hidden` with it.
     pub cursor: Option<String>,
+    /// `group` to show one row per group of versions (the best version
+    /// under `sort`, with `others` on the row), or `none` (the default).
+    /// While group data isn't ready the results come ungrouped and
+    /// `collapse_unavailable` says why; never an error. Send the same
+    /// value with a `cursor`.
+    #[schema(example = "group")]
+    pub collapse: Option<String>,
     /// Count every match exactly, even above 100,000 (within a time
     /// budget; `total_approx` says whether it made it). `1` or `true`.
     #[serde(deserialize_with = "flag")]
@@ -198,6 +205,34 @@ pub struct SearchResponse {
     /// `total` is an estimate (above 100,000 matches; shown with "≈");
     /// ask with `exact` for the exact count.
     pub total_approx: bool,
+    /// The rows are groups of versions (`collapse=group` with group data
+    /// ready): each hit has `others`, `offset` counts groups, and
+    /// `groups` is sent. `total` still counts torrents. Sent only when
+    /// true, so ungrouped responses are as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+    /// Why `collapse=group` came back ungrouped; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub collapse_unavailable: Option<CollapseUnavailable>,
+    /// Groups among all the matches, when `collapsed`: exact while
+    /// `total` is, else an estimate (`groups_approx`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub groups: Option<usize>,
+    /// `groups` is an estimate (shown with "≈"); sent with `groups`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub groups_approx: Option<bool>,
+}
+
+/// Why a search asked to collapse came back ungrouped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CollapseUnavailable {
+    /// Group data (`group_key`) is still being written, after an upgrade
+    /// or during a rebuild.
+    GroupKeyNotReady,
 }
 
 /// Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the
@@ -425,6 +460,11 @@ pub struct SearchHit {
     /// Null = never scraped.
     #[schema(required = true)]
     pub leechers: Option<u32>,
+    /// Other matches in this hit's group of versions; present only on a
+    /// collapsed search's hits (`collapsed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub others: Option<u64>,
     /// Positions in the torrent's file list; present only when the query
     /// has a file clause.
     #[serde(default, skip_serializing_if = "Option::is_none")]
