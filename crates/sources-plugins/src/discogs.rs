@@ -36,6 +36,7 @@ use lodestar_integrations::secret::Secret;
 use lodestar_sources::claims::ExternalId;
 use lodestar_sources::consent::{CredentialKind, CredentialSpec, Need};
 use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::terms::{Attribution, Retention, Terms};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -76,7 +77,7 @@ pub const SENDS: &str = "The parsed album title and, when the name has one, its 
      torrent's name, its year or its files.";
 /// Discogs' API terms ask applications to credit the data so, linked to
 /// Discogs, wherever it's shown (`docs/decisions/2026-11-15-ENR-discogs.md`).
-pub const ATTRIBUTION: &str = "Data provided by Discogs.";
+pub const ATTRIBUTION: &str = "Data provided by Discogs";
 /// Where [`ATTRIBUTION`] links.
 pub const ATTRIBUTION_URL: &str = "https://www.discogs.com/";
 
@@ -216,9 +217,34 @@ pub fn wanted(title: &str) -> Option<Wanted<'_>> {
     })
 }
 
+/// Discogs' terms (ENR-terms; `docs/decisions/2026-11-15-ENR-discogs.md`,
+/// "Terms (ENR-terms)"): no whole-index walk, since its API is for
+/// lookups within a per-minute limit and bulk use is its monthly data
+/// dumps, not the API. Answers stay in Lodestar's own UI: the fields kept
+/// are its CC0 core data, but its API terms couldn't be re-read
+/// (2026-11-15/16), so the strict reading holds until the runner's
+/// re-read. Its API terms ask for "Data provided by Discogs", linked.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: ATTRIBUTION,
+        link: ATTRIBUTION_URL,
+        logo: None,
+    }),
+    // Discogs' release data has no adult marker to read. The plugin
+    // answers Music only, and the runtime never asks about an Adult item.
+    adult_marker_required: false,
+};
+
 impl Identifier for Discogs {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -440,6 +466,8 @@ fn identification(query: &Query, artist: bool, h: &Hit, album: &str) -> Identifi
         genres: Vec::new(),
         year: query.year().or(h.year),
         confidence,
+        // Discogs doesn't mark adult releases; `TERMS` opts out.
+        adult: None,
     }
 }
 
@@ -464,5 +492,25 @@ mod tests {
         assert_eq!(artist_name("Band (Live)"), "Band (Live)");
         assert_eq!(artist_name("()"), "()");
         assert_eq!(artist_name(" (3)"), "(3)");
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// Opened items only, kept in Lodestar's own UI, credited in Discogs'
+    /// words with a link, no marker to read; marked adult is still refused.
+    #[test]
+    fn discogs_terms() {
+        let t = Discogs::new(Arc::new(crate::StaticCredentials::default()));
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(
+            t.attribution.map(|a| (a.text, a.link)),
+            Some(("Data provided by Discogs", "https://www.discogs.com/"))
+        );
+        assert!(t.accepts(None) && !t.accepts(Some(true)) && t.accepts(Some(false)));
     }
 }

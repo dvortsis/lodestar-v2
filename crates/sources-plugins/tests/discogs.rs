@@ -487,7 +487,7 @@ fn what_is_sent_and_the_attribution() {
         assert!(discogs::SENDS.contains(word), "{word}");
     }
     assert!(discogs::SENDS.contains("Never the info hash"));
-    assert_eq!(discogs::ATTRIBUTION, "Data provided by Discogs.");
+    assert_eq!(discogs::ATTRIBUTION, "Data provided by Discogs");
     assert_eq!(discogs::ATTRIBUTION_URL, "https://www.discogs.com/");
 }
 

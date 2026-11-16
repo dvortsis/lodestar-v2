@@ -56,3 +56,11 @@ Slice ENR-discogs (`runner/slices.yaml`; no brief). Spec: architecture §18.2 an
 ## Before it can be switched on
 - **Real recordings:** the fixtures are hand-written to the documented shape (`fixtures/discogs/README.md`). The slice that lifts the Account consent gate records them with a token (stripped) and fixes the parser for any shape they differ in. To confirm then: that `year` is a string, that an unknown year is `"0"` or absent, and that every master result has `type: "master"`.
 - **Terms re-read** (above) and the Legal Notice's line and logo, the owner's (§2.33).
+
+## Terms (ENR-terms)
+ENR-terms (#962) gave every identify plugin a `Terms` and an adult marker on its answers. Discogs' choices (`discogs::TERMS`), from its API Terms of Use and its API documentation (`discogs.com/developers`) as recorded above; both pages still answered 403 to an automated fetch on 2026-11-16, so the runner's re-read stands:
+- **`background_walk: false`.** The API is for lookups within its per-minute limit; Discogs offers bulk access through its monthly data dumps, not the API. Lookups stay on the items you open, at the plan's 25 a minute.
+- **`redistribute: false`.** The three fields kept (id, title, year) are CC0 core data, which would allow it, but the API terms couldn't be re-read to confirm nothing in them limits API-sourced data further. The strict reading holds until the runner's re-read; if it confirms CC0 covers API answers, this can become `true`.
+- **`retention: Retention::DEFAULT`** (180 days). The terms' storage limits apply to Restricted Data, which isn't kept.
+- **`attribution`:** "Data provided by Discogs", linked to `https://www.discogs.com/`, the wording the API terms ask for (`discogs::ATTRIBUTION`, now without the trailing full stop, so it's the exact phrase). No logo: the logo is the owner's call with the Legal Notice (§2.33).
+- **Adult marker: `adult: None`, `adult_marker_required: false`.** Discogs' release data has no adult field. The plugin answers Music only and the runtime never looks up an Adult item, so requiring a marker would refuse every answer for nothing. A marked-adult answer is still refused by the runtime (`terms_tests::discogs_terms`).
