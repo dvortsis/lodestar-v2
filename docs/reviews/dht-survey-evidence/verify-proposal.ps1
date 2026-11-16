@@ -57,14 +57,6 @@ function Scrub-LogText([string]$Text) {
     foreach ($variant in @("\\?\$repoRoot", $repoRoot, $repoSlash)) {
         if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<REPO_ROOT>') }
     }
-    $userProfile = $env:USERPROFILE
-    if ($userProfile) {
-        $upNorm = $userProfile.TrimEnd('\', '/')
-        $upSlash = $upNorm.Replace('\', '/')
-        foreach ($variant in @($upNorm, $upSlash)) {
-            if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<USER_HOME>') }
-        }
-    }
     $cargoHome = $env:CARGO_HOME
     if ($cargoHome) {
         $chNorm = $cargoHome.TrimEnd('\', '/')
@@ -78,6 +70,14 @@ function Scrub-LogText([string]$Text) {
         $stSlash = $sysTemp.Replace('\', '/')
         foreach ($variant in @("\\?\$sysTemp", $sysTemp, $stSlash)) {
             if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<TEMP_ROOT>') }
+        }
+    }
+    $userProfile = $env:USERPROFILE
+    if ($userProfile) {
+        $upNorm = $userProfile.TrimEnd('\', '/')
+        $upSlash = $upNorm.Replace('\', '/')
+        foreach ($variant in @($upNorm, $upSlash)) {
+            if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<USER_HOME>') }
         }
     }
     return $scrubbed

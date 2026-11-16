@@ -200,7 +200,7 @@ mod followup_review {
         let db = NamedTempFile::new().unwrap();
         let c = clock();
         let cfg = SchedulerConfig {
-            wal_batch_max_wait: Duration::from_millis(80),
+            wal_batch_max_wait: Duration::from_millis(250),
             ..SchedulerConfig::default()
         };
         let s = SamplerScheduler::open_with_config(db.path(), cfg, c).unwrap();
