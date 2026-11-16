@@ -268,6 +268,53 @@ async fn a_refusal_drops_the_token_and_never_loops() {
     }
 }
 
+/// A 400 from Twitch (a wrong Client ID) holds Twitch's host like a 401
+/// or 403: the next lookup sends nothing, not even a token request.
+#[tokio::test(start_paused = true)]
+async fn a_refused_client_id_holds_twitch() {
+    for case in ["igdb_token_bad_client", "igdb_token_refused"] {
+        let replayer = Arc::new(Replayer::load(&fixture(case)).unwrap());
+        let k = kit(replayer.clone());
+        let p = plugin();
+        let q = game(QUEST, None);
+        let e = p.lookup(&k, &q).await.unwrap_err().0;
+        assert_eq!(e, igdb::CREDENTIALS_REFUSED, "{case}");
+        let again = p.lookup(&k, &q).await.unwrap_err().0;
+        assert_eq!(again, igdb::HELD, "{case}");
+        assert_eq!(replayer.requests().len(), 1, "{case}");
+        replayer.finish().unwrap();
+    }
+}
+
+/// A short-lived token (60 s) is still reused: renewal waits at least
+/// half its life.
+#[tokio::test(start_paused = true)]
+async fn a_short_lived_token_is_reused() {
+    let dir = fixture("igdb_two_lookups");
+    let read = |f: &str| std::fs::read(dir.join(f)).unwrap();
+    let text = |f: &str| String::from_utf8(read(f)).unwrap();
+    let token = text("001.body").replace("5000000", "60").into_bytes();
+    let r = Arc::new(Replayer::new(vec![
+        parse_exchange(&text("001.http"), token, read("001.req.body")).unwrap(),
+        parse_exchange(&text("002.http"), read("002.body"), read("002.req.body")).unwrap(),
+        parse_exchange(&text("003.http"), read("003.body"), read("003.req.body")).unwrap(),
+    ]));
+    let (k, p) = (kit(r.clone()), plugin());
+    assert!(matches!(
+        p.lookup(&k, &game(QUEST, Some(2015))).await,
+        Ok(Lookup::Match(_))
+    ));
+    let second = p.lookup(&k, &game("Nothing Like This", None)).await;
+    assert_eq!(second.unwrap(), Lookup::NoMatch);
+    r.finish().unwrap();
+    let hosts: Vec<String> = r
+        .requests()
+        .iter()
+        .map(|(_, q)| q.host().unwrap())
+        .collect();
+    assert_eq!(hosts, [igdb::TOKEN_HOST, igdb::HOST, igdb::HOST]);
+}
+
 #[tokio::test(start_paused = true)]
 async fn errors_are_never_a_miss_and_hold_no_secret_or_service_text() {
     let q = game(QUEST, None);
@@ -278,6 +325,7 @@ async fn errors_are_never_a_miss_and_hold_no_secret_or_service_text() {
         ("igdb_timeout", "IGDB's request failed"),
         ("igdb_redirect", "IGDB's request failed"),
         ("igdb_token_refused", igdb::CREDENTIALS_REFUSED),
+        ("igdb_token_bad_client", igdb::CREDENTIALS_REFUSED),
         ("igdb_token_bad", "Twitch's token answer wasn't understood"),
     ] {
         let (got, replayer) = lookup(case, &q).await;

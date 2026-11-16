@@ -225,13 +225,26 @@ impl Igdb {
         };
         match res.status {
             200 => {}
-            400 | 401 | 403 => return Err(fail(CREDENTIALS_REFUSED)),
+            400 | 401 | 403 => {
+                // Twitch answers a wrong Client ID with a 400, which the
+                // limiter counts as an answer, not a refusal. Hold the
+                // token host with the policy's back-off for all three, so
+                // refused credentials aren't sent again until it ends.
+                let limiter = kit.http.limiter();
+                let now = Instant::now();
+                let wait = limiter.failure(TOKEN_HOST, now);
+                limiter.block(TOKEN_HOST, now + wait, now);
+                return Err(fail(CREDENTIALS_REFUSED));
+            }
             429 => return Err(fail(RATE_LIMITED)),
             _ => return Err(fail(TOKEN_FAILED)),
         }
         let t =
             igdb::parse_token(&res.body, &TOKEN_LIMITS).ok_or_else(|| fail(BAD_TOKEN_ANSWER))?;
-        let life = Duration::from_secs(t.expires_in).saturating_sub(RENEW_EARLY);
+        // Renew early, but never sooner than half the token's life, so a
+        // short-lived token is still reused.
+        let full = Duration::from_secs(t.expires_in);
+        let life = full.saturating_sub(RENEW_EARLY).max(full / 2);
         let token = Secret::new(t.access_token);
         *self.held() = Some(Held {
             client_id: Secret::new(client_id.expose()),
@@ -307,11 +320,15 @@ impl Identifier for Igdb {
                 return Err(fail(BAD_CREDENTIALS));
             }
             // While IGDB's host is held (after a 401, 403 or 429), no new
-            // token is asked for either: the search would be refused.
-            if matches!(
-                kit.http.limiter().state(HOST, Instant::now()),
-                lodestar_sources::HostState::Blocked { .. }
-            ) {
+            // token is asked for either: the search would be refused. While
+            // Twitch's is held (refused credentials), nothing is sent.
+            let now = Instant::now();
+            if [HOST, TOKEN_HOST].into_iter().any(|h| {
+                matches!(
+                    kit.http.limiter().state(h, now),
+                    lodestar_sources::HostState::Blocked { .. }
+                )
+            }) {
                 return Err(fail(HELD));
             }
             let token = self.token(kit, &id, &secret).await?;

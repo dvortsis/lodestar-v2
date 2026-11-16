@@ -74,8 +74,10 @@ pub struct Hit {
     pub title: Option<String>,
     /// The UTC year of `first_release_date`, 1–9999.
     pub year: Option<u16>,
-    /// Theme ids, at most [`Limits::max_ids`]. `None` when the result has
-    /// no `themes` key (IGDB leaves out empty lists).
+    /// Theme ids, at most [`Limits::max_ids`], plus [`THEME_EROTIC`] when
+    /// it's past the cap, so the adult check never depends on the cap.
+    /// `None` when the result has no `themes` key (IGDB leaves out empty
+    /// lists).
     pub themes: Option<Vec<u32>>,
     /// Genre ids, at most [`Limits::max_ids`].
     pub genres: Vec<u32>,
@@ -474,12 +476,12 @@ impl<'a> Parser<'a, '_> {
                 }
                 Some(3) => {
                     let mut themes = Vec::new();
-                    p.ids(&mut s, &mut themes, &mut hit.truncated)?;
+                    p.ids(&mut s, &mut themes, &mut hit.truncated, Some(THEME_EROTIC))?;
                     hit.themes = Some(themes);
                 }
                 Some(4) => {
                     let mut genres = Vec::new();
-                    p.ids(&mut s, &mut genres, &mut hit.truncated)?;
+                    p.ids(&mut s, &mut genres, &mut hit.truncated, None)?;
                     hit.genres = genres;
                 }
                 _ => p.skip_in(&mut s)?,
@@ -500,8 +502,14 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// An array of integers that fit a `u32`, the first
-    /// [`Limits::max_ids`] kept.
-    fn ids(&mut self, s: &mut Spoil, out: &mut Vec<u32>, truncated: &mut bool) -> R<()> {
+    /// [`Limits::max_ids`] kept, and `always` kept wherever it is (once).
+    fn ids(
+        &mut self,
+        s: &mut Spoil,
+        out: &mut Vec<u32>,
+        truncated: &mut bool,
+        always: Option<u32>,
+    ) -> R<()> {
         if self.j.peek() != Some(b'[') {
             s.set(Bad::Malformed);
             return self.skip_in(s);
@@ -515,7 +523,12 @@ impl<'a> Parser<'a, '_> {
             let g = p.integer(s)?;
             match g.map(u32::try_from) {
                 Some(Ok(g)) if out.len() < max_ids => out.push(g),
-                Some(Ok(_)) => *truncated = true,
+                Some(Ok(g)) => {
+                    *truncated = true;
+                    if always == Some(g) && !out.contains(&g) {
+                        out.push(g);
+                    }
+                }
                 Some(Err(_)) => s.set(Bad::Malformed),
                 None => {}
             }

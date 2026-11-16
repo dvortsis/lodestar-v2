@@ -63,6 +63,24 @@ fn errors_and_wrong_shapes_are_not_whole() {
     assert!(parse_games(b"[]", &LIMITS).page.whole());
 }
 
+/// The Erotic theme makes a game adult wherever it is in the array, past
+/// the id cap too: the adult check fails closed.
+#[test]
+fn the_erotic_theme_past_the_cap_still_marks_adult() {
+    // 42 is the 34th id (position 33), after 33 others.
+    let ids: String = (100..133)
+        .chain([42, 42, 7])
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let body = format!(r#"[{{"id":1,"themes":[{ids}]}}]"#);
+    let s = parse_games(body.as_bytes(), &LIMITS);
+    let h = &s.hits[0];
+    assert!(h.truncated);
+    assert_eq!(h.adult(), Some(true));
+    assert_eq!(h.themes.as_ref().unwrap().len(), LIMITS.max_ids + 1);
+}
+
 #[test]
 fn caps_hold() {
     let many: String = format!(
@@ -135,7 +153,7 @@ proptest! {
             for h in &s.hits {
                 prop_assert!(h.id > 0);
                 prop_assert!(h.genres.len() <= l.max_ids);
-                prop_assert!(h.themes.as_ref().is_none_or(|t| t.len() <= l.max_ids));
+                prop_assert!(h.themes.as_ref().is_none_or(|t| t.len() <= l.max_ids + 1));
                 prop_assert!(h.year.is_none_or(|y| (1..=9999).contains(&y)));
                 if let Some(t) = &h.title {
                     prop_assert!(!t.is_empty() && t.len() <= MAX_TITLE);

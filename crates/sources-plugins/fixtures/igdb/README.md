@@ -18,4 +18,5 @@ Every case starts with the token exchange (`001`), then the search (`002`). The 
 | `igdb_timeout` | A transport failure (timed out) |
 | `igdb_redirect` | A 302 to another host: not followed, a plain failure |
 | `igdb_token_refused` | 403 from Twitch: the Client ID or secret was refused; no search is sent |
+| `igdb_token_bad_client` | 400 from Twitch (its answer to a wrong Client ID): no search is sent, and Twitch is held so the next lookup sends nothing |
 | `igdb_token_bad` | A token answer whose token isn't header-safe: refused; no search is sent |
