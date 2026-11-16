@@ -1129,6 +1129,9 @@ pub fn sweep_expired(
 /// whatever its source's state, so a build that tightens a plugin's terms
 /// applies them to a source that isn't running too.
 ///
+/// Inert until called: nothing in this crate calls it but the runtime,
+/// and no host registers a plugin yet.
+///
 /// When the record goes from redistributable to not, every torrent holding
 /// the source's claims is marked for the backfill, so a title they
 /// resolved leaves the record that search, Torznab and export serve.
@@ -1157,6 +1160,8 @@ pub fn record_terms(
 /// what a host runs once at start and then on a timer, so claims never
 /// outlive their terms while a source is disabled, paused or its plugin is
 /// gone from the build. A source whose step comes back full needs another.
+///
+/// Inert until a host calls it: no host wires identify plugins in yet.
 pub fn sweep_recorded(
     store: &mut Store,
     now: i64,
