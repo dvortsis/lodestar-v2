@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -851,7 +852,7 @@ class SpendCaps(unittest.TestCase):
         s = lambda c, kind=None: {"usage": {"list_cost": {"amount": c, "currency": "USD"}}, "metadata": {"kind": kind}}
         self.assertEqual(harness.totals([s("100"), s("250", "injection"), s("50", "query")]), (400, 250))
 
-    def test_the_50_dollar_cap_counts_holds_in_flight(self):
+    def test_the_harness_cap_counts_holds_in_flight(self):
         sp = harness.Spend(total=0, harness=harness.HARNESS_CAP_CENTS - 2 * harness.HOLD_CENTS)
         self.assertTrue(sp.reserve())
         self.assertTrue(sp.reserve())
@@ -863,33 +864,45 @@ class SpendCaps(unittest.TestCase):
         self.assertEqual(sp.harness, harness.HARNESS_CAP_CENTS - 2 * harness.HOLD_CENTS + harness.HOLD_CENTS)
         self.assertEqual(sp.held, harness.HOLD_CENTS)
 
-    def test_the_200_dollar_total_also_binds(self):
+    def test_the_workspace_total_also_binds(self):
         sp = harness.Spend(total=harness.TOTAL_CAP_CENTS - harness.HOLD_CENTS + 1, harness=0)
         self.assertFalse(sp.reserve())
         sp = harness.Spend(total=harness.TOTAL_CAP_CENTS - harness.HOLD_CENTS, harness=0)
         self.assertTrue(sp.reserve())
 
     def test_the_arithmetic(self):
-        self.assertEqual((harness.HARNESS_CAP_CENTS, harness.SESSION_BUDGET_CENTS, harness.HOLD_CENTS), (5000, 100, 150))
-        self.assertEqual(harness.TOTAL_CAP_CENTS, 20000)
+        self.assertEqual((harness.HARNESS_CAP_CENTS, harness.SESSION_BUDGET_CENTS, harness.HOLD_CENTS), (3000, 100, 150))
+        self.assertEqual(harness.TOTAL_CAP_CENTS, 6000)
         self.assertEqual(harness.RUNS, 5)
 
     def test_a_spent_harness_starts_nothing(self):
-        ledger = [{"id": "sesn_old", "archived_at": "x", "usage": {"list_cost": {"amount": "4900", "currency": "USD"}},
+        spent = str(harness.HARNESS_CAP_CENTS - 100)
+        ledger = [{"id": "sesn_old", "archived_at": "x", "usage": {"list_cost": {"amount": spent, "currency": "USD"}},
                    "metadata": {"kind": "injection"}}]
         rc, _, d = run(api=FakeAPI(ledger=ledger))
-        self.assertIn("of its $50", str(rc))
+        self.assertIn("the injection test has spent $29.00 of its $30; no session starts", str(rc))
         self.assertEqual(d["anthropic"].paths("POST"), [])
         self.assertIsNone(d["store"].get(LOCK_KEY))
 
+    def test_the_messages_name_the_cap_from_its_constant(self):
+        for cap, figure in ((3000, "$30"), (5000, "$50"), (1250, "$12.50")):
+            with self.subTest(cap=cap), mock.patch.object(harness, "HARNESS_CAP_CENTS", cap):
+                spent = [{"id": "sesn_old", "archived_at": "x", "metadata": {"kind": "injection"},
+                          "usage": {"list_cost": {"amount": str(cap - 100), "currency": "USD"}}}]
+                rc, _, _ = run(api=FakeAPI(ledger=spent))
+                self.assertIn(f"of its {figure}; no session starts", str(rc))
+                _, out, _ = run()
+                self.assertRegex(out, rf"the test has spent \$\d+\.\d\d of its {re.escape(figure)}\n")
+
     def test_the_cap_stops_new_sessions_midway(self):
-        # $41.50 spent; each session holds $1.50 and then costs its full $1.
-        ledger = [{"id": "sesn_old", "archived_at": "x", "usage": {"list_cost": {"amount": "4150", "currency": "USD"}},
+        # $8.50 short of the cap; each session holds $1.50 and then costs its full $1.
+        spent = str(harness.HARNESS_CAP_CENTS - 850)
+        ledger = [{"id": "sesn_old", "archived_at": "x", "usage": {"list_cost": {"amount": spent, "currency": "USD"}},
                    "metadata": {"kind": "injection"}}]
         rc, out, d = run(api=FakeAPI(ledger=ledger, cost="100"))
         self.assertEqual(rc, 4)  # INCOMPLETE
         started = d["anthropic"].paths("POST").count("/v1/sessions")
-        # Session k starts while 4150 + 100k + a 150 hold <= 5000: k = 0..7, so 8 run and $49.50 is spent.
+        # Session k starts while (cap - 850) + 100k + a 150 hold <= cap: k = 0..7, so 8 run, $0.50 short of it.
         self.assertEqual(started, 8)
         self.assertIn("(cap)", out)
         self.assertIn("level 1: INCOMPLETE", out)
@@ -968,11 +981,12 @@ class FullRun(unittest.TestCase):
         self.assertIn("archived earlier injection sessions", out)
 
     def test_concurrent_workers_keep_within_the_cap(self):
-        ledger = [{"id": "sesn_old", "archived_at": "x", "usage": {"list_cost": {"amount": "4150", "currency": "USD"}},
+        cap = harness.HARNESS_CAP_CENTS
+        ledger = [{"id": "sesn_old", "archived_at": "x", "usage": {"list_cost": {"amount": str(cap - 850), "currency": "USD"}},
                    "metadata": {"kind": "injection"}}]
         rc, _, d = run(api=FakeAPI(ledger=ledger, cost="100"), workers=5)
         started = d["anthropic"].paths("POST").count("/v1/sessions")
-        self.assertLessEqual(4150 + started * 100, 5000)
+        self.assertLessEqual(cap - 850 + started * 100, cap)
         self.assertEqual(rc, 4)
 
     def test_the_time_limit_stops_new_sessions(self):

@@ -11,8 +11,8 @@
 3. claude-lock.json for the agent, environment, vault and credential.
 4. The ledger, from every session in the workspace (archived included): the
    instruction's id is new, at most 6 wakes an hour and 60 a day, and the
-   $200 total plus this session's budget isn't passed. Any unreadable entry
-   refuses.
+   total cap (TOTAL_CAP_CENTS, $60) plus this session's budget isn't passed.
+   Any unreadable entry refuses.
 5. The helper files (thread.py, reader.py) from this job's own checkout,
    uploaded, to be mounted read-only into the session. The operator runs
    these copies; it downloads no code. A failed upload starts no session.
@@ -63,7 +63,7 @@ from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
 from reader import CONTROL_PLANE_USER_ID  # noqa: E402
 
-TOTAL_CAP_CENTS = 20000  # the owner's $200 of API credits, in total (Q2)
+TOTAL_CAP_CENTS = 6000  # the workspace's $60 limit, in total (owner, 2026-11-15; was $200, Q2)
 BUDGET_CENTS = {"routine": 300, "triage": 1500}  # per session (plan §1)
 PER_HOUR, PER_DAY = 6, 60
 SESSION_MINUTES = 30
@@ -102,6 +102,11 @@ HELPERS = {"thread.py": HERE / "thread.py", "reader.py": HERE.parent / "fleet" /
 WAKE_SETTINGS = ("ANTHROPIC_API_KEY", "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "AWS_BRIDGE_ROLE_ARN",
                  "CONTROL_BUCKET", "FLEET_BUCKET_OWNER", "GITHUB_TOKEN", "GITHUB_REPOSITORY",
                  "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+
+
+def dollars(cents: int) -> str:
+    """A cap for a message: "$60", or "$12.50" when it isn't whole dollars."""
+    return f"${cents // 100}" if cents % 100 == 0 else f"${cents / 100:.2f}"
 
 
 class Gated(Exception):
@@ -255,7 +260,7 @@ def ledger_refusal(sessions: list[dict], now: datetime, mode: str, inst_id: str,
         if (s.get("metadata") or {}).get("instruction_id") == inst_id:
             return "this instruction id was already used"
     if total + BUDGET_CENTS[mode] > TOTAL_CAP_CENTS:
-        return "the $200 total would be passed"
+        return f"the {dollars(TOTAL_CAP_CENTS)} total would be passed"
     if hour >= PER_HOUR:
         return "the rate limit (6 wakes an hour) is reached"
     if day >= PER_DAY:

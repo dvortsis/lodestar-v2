@@ -2,6 +2,7 @@ import io
 import json
 import secrets
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 
@@ -85,13 +86,24 @@ class Gate(unittest.TestCase):
 
 class Ledger(unittest.TestCase):
     def test_fine(self):
-        self.assertIsNone(wake.ledger_refusal([session("19700")], T0, "routine", "ping-1"))
+        self.assertIsNone(wake.ledger_refusal([session("5700")], T0, "routine", "ping-1"))
+
+    def test_the_cap_is_the_owners_60_dollars(self):
+        self.assertEqual(wake.TOTAL_CAP_CENTS, 6000)  # owner, 2026-11-15
+        self.assertEqual(wake.BUDGET_CENTS, {"routine": 300, "triage": 1500})
+
+    def test_the_refusal_names_the_cap_from_its_constant(self):
+        for cap, figure in ((6000, "$60"), (20000, "$200"), (1250, "$12.50")):
+            with self.subTest(cap=cap), mock.patch.object(wake, "TOTAL_CAP_CENTS", cap):
+                over = str(cap - wake.BUDGET_CENTS["routine"] + 1)
+                self.assertEqual(wake.ledger_refusal([session(over)], T0, "routine", "ping-1"),
+                                 f"the {figure} total would be passed")
 
     def test_refusals(self):
         recent = lambda m: session("0", T0 - timedelta(minutes=m))  # noqa: E731
         cases = [
-            ([session("19701")], "routine", "the $200 total would be passed"),
-            ([session("18501")], "triage", "the $200 total would be passed"),
+            ([session("5701")], "routine", "the $60 total would be passed"),
+            ([session("4501")], "triage", "the $60 total would be passed"),
             ([recent(5)] * 6, "routine", "the rate limit (6 wakes an hour) is reached"),
             ([recent(70)] * 60, "routine", "the rate limit (60 wakes a day) is reached"),
             ([session(instruction_id="ping-1")], "routine", "this instruction id was already used"),
@@ -707,11 +719,11 @@ class Wake(unittest.TestCase):
 
     def test_ledger_refusal_mints_no_token(self):
         env, _ = wake_env()
-        api = FakeAnthropic(sessions=[session("19800")])
+        api = FakeAnthropic(sessions=[session("5800")])
         self.go(env, api)
         self.assertEqual(self.gh.calls, [])
         self.assertNotIn("/v1/sessions", api.paths("POST"))
-        self.assertIn("no session started: the $200 total would be passed", self.post.bodies()[0])
+        self.assertIn("no session started: the $60 total would be passed", self.post.bodies()[0])
         self.assertNotIn(LOCK_KEY, self.store.objects)
 
     def test_unapplied_agent_escalates(self):

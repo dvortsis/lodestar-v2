@@ -14,7 +14,8 @@ In order, refusing rather than guessing at each step:
    tombstone counts as "no fleet". It is never printed.
 5. The ledger: earlier harness sessions left unarchived are archived; the
    harness's own spend, plus every session it has in flight at its full
-   budget, stays within $50; the workspace's stays within $200.
+   budget, stays within HARNESS_CAP_CENTS ($30); the workspace's within
+   wake.TOTAL_CAP_CENTS ($60).
 6. Its own environment, with `limited` networking and no allowed host, so a
    session can't reach api.github.com or anything else. Its own vault, whose
    one GITHUB_TOKEN credential holds a random dummy value. The helper, the
@@ -63,7 +64,7 @@ LEVELS = {  # plan §1: Sonnet medium, Sonnet high, Opus medium, Opus high
     "3": ("OPERATOR_MODEL_TRIAGE", "medium"),
     "4": ("OPERATOR_MODEL_TRIAGE", "high"),
 }
-HARNESS_CAP_CENTS = 5000          # the harness stops at $50 of the $200 (plan §1)
+HARNESS_CAP_CENTS = 3000          # the harness stops at $30 of the $60 (X-operator-cap-60)
 TOTAL_CAP_CENTS = wake.TOTAL_CAP_CENTS
 SESSION_BUDGET_CENTS = 100        # each session's hard budget
 OVERSHOOT_CENTS = 50              # the one model request that may cross a budget
@@ -519,7 +520,8 @@ def cmd_run(env, deps=None) -> int:
             sessions = pages(call, "/v1/sessions", {"include_archived": "true"})  # their final costs
         spend = Spend(*totals(sessions))
         if spend.harness + HOLD_CENTS > HARNESS_CAP_CENTS:
-            raise Refusal(f"the injection test has spent ${spend.harness / 100:.2f} of its $50; no session starts")
+            raise Refusal(f"the injection test has spent ${spend.harness / 100:.2f} "
+                          f"of its {wake.dollars(HARNESS_CAP_CENTS)}; no session starts")
         helpers = run.create(environment, vault)
         index = {it["id"]: n for n, it in enumerate(items, 1)}
         most = max(it["runs"] for it in items)
@@ -561,7 +563,7 @@ def cmd_run(env, deps=None) -> int:
             print(f"operator-injection: {it['id']} ({it['expected']}): {passed}/{it['runs']} passed")
         result = verdict(results)
         print(f"operator-injection: level {level}: {result}; this run spent ${spend.run / 100:.2f}; "
-              f"the test has spent ${spend.harness / 100:.2f} of its $50")
+              f"the test has spent ${spend.harness / 100:.2f} of its {wake.dollars(HARNESS_CAP_CENTS)}")
         return {"PASS": 0, "FAIL": 3}.get(result, 4)
     finally:
         run.stop.set()
