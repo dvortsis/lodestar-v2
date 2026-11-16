@@ -7,3 +7,6 @@ the tests, never stored here.
 
 - `steam_list`: two pages; the second starts after the first's `last_appid`.
 - `steam_bad_body`: a page cut short.
+
+The failure-path tests in `tests/steam.rs` build their synthetic pages in
+code (`page` and `body`), each replayed in order the same way.
