@@ -32,7 +32,7 @@ param(
     [string]$PiaRegion = 'us_new_york_city',
     [string]$SessionName = 'claude-dev test VM',
     [string]$FirstMessage = "You're a test session on this VM for the X-test-vm coordinator. Wait for the coordinator's brief before doing anything.",
-    [string]$Branch = 'claude/dreamy-edison-xlmtoy'
+    [string]$Branch = 'main'
 )
 $ErrorActionPreference = 'Stop'
 

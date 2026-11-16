@@ -15,6 +15,11 @@
       "AllowedPattern": "^[A-Za-z0-9+=,.@_-]{1,64}$",
       "Description": "The IAM role inside the instance profile named by LODESTAR_AWS_INSTANCE_PROFILE (often the same name)."
     },
+    "UbuntuImageOwnerId": {
+      "Type": "String",
+      "AllowedPattern": "^[0-9]{12}$",
+      "Description": "Canonical's public AMI publisher account, which owns the official Ubuntu images. Type the value given in infra/dev-vm/linux-aws.md (Deploy). It is not one of your accounts."
+    },
     "UserName": {
       "Type": "String",
       "Default": "lodestar-claude-testvm",
@@ -100,7 +105,8 @@
                   "ec2:MetadataHttpTokens": "required",
                   "aws:RequestTag/Project": "Lodestar",
                   "aws:RequestTag/Environment": "Test",
-                  "aws:RequestTag/ManagedBy": "Terraform"
+                  "aws:RequestTag/ManagedBy": "Terraform",
+                  "aws:RequestTag/Purpose": "X-test-vm"
                 },
                 "Null": {
                   "aws:RequestTag/ExpiresAt": "false"
@@ -110,6 +116,7 @@
                     "Project",
                     "Environment",
                     "ManagedBy",
+                    "Purpose",
                     "ExpiresAt",
                     "Name"
                   ]
@@ -175,7 +182,9 @@
                 "StringEquals": {
                   "ec2:Owner": [
                     "amazon",
-                    "099720109477"
+                    {
+                      "Ref": "UbuntuImageOwnerId"
+                    }
                   ]
                 }
               }
@@ -235,7 +244,8 @@
                 "StringEquals": {
                   "ec2:ResourceTag/Project": "Lodestar",
                   "ec2:ResourceTag/Environment": "Test",
-                  "ec2:InstanceType": "c6a.xlarge"
+                  "ec2:InstanceType": "c6a.xlarge",
+                  "ec2:ResourceTag/Purpose": "X-test-vm"
                 }
               }
             },
@@ -249,7 +259,8 @@
               "Condition": {
                 "StringEquals": {
                   "ssm:resourceTag/Project": "Lodestar",
-                  "ssm:resourceTag/Environment": "Test"
+                  "ssm:resourceTag/Environment": "Test",
+                  "ssm:resourceTag/Purpose": "X-test-vm"
                 }
               }
             },

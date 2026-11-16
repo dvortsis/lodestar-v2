@@ -170,7 +170,7 @@ The IAM policy `LodestarRestrictedEC2` on `LodestarProvisioner` allows only:
 - subnet `<SUBNET_ID>` and security group `<SECURITY_GROUP_ID>`;
 - instance type `c6a.xlarge`;
 - an encrypted root volume of at most 100 GiB;
-- the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `ExpiresAt=<ISO8601>`;
+- the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<ISO8601>` (the policy's stop, delete and run-command rights need `Purpose=X-test-vm`, which the owner's own instances don't carry);
 - the instance role `arn:aws:iam::<AWS_ACCOUNT_ID>:role/<INSTANCE_ROLE_NAME>`.
 
 ### 🔒 Terminate (human-run only, never by an agent)

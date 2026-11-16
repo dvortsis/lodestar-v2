@@ -6,7 +6,9 @@ Once the instance is bootstrapped, `linux-lane.md` applies unchanged: numbers on
 
 ## One-time setup (the owner)
 
-1. **Update the stack.** In CloudFormation → `lodestar-claude-testvm` → Update → Replace existing template, use `infra/dev-vm/aws-claude-testvm.json` at the commit Claude names. Keep the parameters, tick the IAM acknowledgement, and submit.
+1. **Update the stack.** In CloudFormation → `lodestar-claude-testvm` → Update → Replace existing template, use `infra/dev-vm/aws-claude-testvm.json` at the commit Claude names. Keep the other parameters, tick the IAM acknowledgement, and submit.
+   - **`UbuntuImageOwnerId`:** type `099720109477`. That is Canonical's public publisher account, which owns the official Ubuntu images, not one of yours. It's a parameter so the template holds no account numbers.
+   - The managed policy's description still says "the Windows test instance only". Leave it: changing it makes CloudFormation replace the policy, and the replacement fails because the name is fixed. The policy's statements are what count.
 2. **Enter the PIA login.** In Secrets Manager → `lodestar-claude-testvm/pia-login` → Retrieve secret value → Edit, set `username` and `password`, and save.
    - Only the Linux instance role can read it. Claude's own user is denied all of Secrets Manager.
 
@@ -22,7 +24,7 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1}`, so containers can't reach the metadata service;
    - `/dev/sda1` with `VolumeSize=100`, `VolumeType=gp3`, `Encrypted=true`. A block with `ROLE=main` needs 50 GiB free for its collector after the image build, and the test user can't grow a volume later (`ec2:ModifyVolume` is denied);
    - the network interface with a public IPv4, exactly as `windows.md` Phase 2 step 2 says (the subnet has no NAT; the security group allows no inbound traffic);
-   - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume.
+   - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume. The policy lets Claude stop, delete or run commands only on instances tagged `Purpose=X-test-vm`, so the owner's own fleet instances, which share the other tags, stay out of reach.
 3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
 4. **Bootstrap** with `AWS-RunShellScript` (`executionTimeout` 3600):
 
@@ -67,3 +69,5 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
 - **Timings on `c6a.xlarge`:** the bootstrap takes 2–4 min, and building Lodestar's image from `main` about 10–12 min.
 - **A lane that needs the VPN can't start until the secret is filled in.** Check with one `pia-login.sh --aws-secret` run before the image build, and say so at once if it exits 5. Then run it again just before the block (step 5).
 - **`ExpiresAt` is a backstop, not the plan.** The session deletes its own instance.
+- **A 6 h observation:** `SEGMENT_HOURS` takes only 2 or 3, so restart the collector with `--baseline-hours 6`.
+- **Routing-table size** is only in the authenticated `/api/status`, not in `/metrics`.

@@ -22,6 +22,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 export DEBIAN_FRONTEND=noninteractive
 
 # Metadata service: root only. The SSM agent and the AWS CLI run as root.
+# Host OUTPUT only: bridged containers are also stopped by the hop limit of 1,
+# but a root container on the host network would still reach the role. The
+# lanes run none.
 cat >/etc/systemd/system/lodestar-imds-root-only.service <<'EOF'
 [Unit]
 Description=Instance metadata reachable by root only (X-test-vm)

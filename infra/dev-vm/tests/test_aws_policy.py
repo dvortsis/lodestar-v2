@@ -5,8 +5,6 @@ import unittest
 from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "aws-claude-testvm.json"
-# Canonical's public AMI publisher account (Ubuntu images); not the owner's.
-CANONICAL = "099720109477"
 
 
 def statements():
@@ -23,7 +21,8 @@ def actions(st):
 class PolicyTests(unittest.TestCase):
     def test_no_account_or_resource_ids_in_the_public_repo(self):
         text = TEMPLATE.read_text()
-        self.assertEqual(re.findall(r"\b\d{12}\b", text), [CANONICAL])
+        # Not even a public one (Canonical's publisher ID is a parameter).
+        self.assertEqual(re.findall(r"\d{12}", text), [])
         self.assertIsNone(re.search(r"\b(subnet|sg|vpc|ami|i)-[0-9a-f]{8,17}\b", text))
 
     def test_only_the_mcp_sign_in_policy_and_our_own(self):
@@ -63,8 +62,10 @@ class PolicyTests(unittest.TestCase):
         eq = inst["Condition"]["StringEquals"]
         self.assertEqual(eq["ec2:InstanceType"], "c6a.xlarge")
         self.assertEqual(eq["ec2:MetadataHttpTokens"], "required")
-        for k, v in {"Project": "Lodestar", "Environment": "Test", "ManagedBy": "Terraform"}.items():
+        for k, v in {"Project": "Lodestar", "Environment": "Test", "ManagedBy": "Terraform",
+                     "Purpose": "X-test-vm"}.items():
             self.assertEqual(eq[f"aws:RequestTag/{k}"], v)
+        self.assertIn("Purpose", inst["Condition"]["ForAllValues:StringEquals"]["aws:TagKeys"])
         self.assertEqual(inst["Condition"]["Null"], {"aws:RequestTag/ExpiresAt": "false"})
         vol = next(s for s in sts if s["Sid"] == "RunOnlyEncryptedBoundedVolumes")
         self.assertEqual(vol["Condition"]["Bool"], {"ec2:Encrypted": "true"})
@@ -84,6 +85,15 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/Environment"], "Test")
         cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnLodestarTestInstances")
         self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/Project"], "Lodestar")
+
+    def test_owner_run_instances_with_the_same_tags_are_out_of_reach(self):
+        # The owner's fleet instances carry Project=Lodestar and Environment=Test
+        # too (Deploy-AwsWindows.ps1); only Purpose=X-test-vm marks Claude's own.
+        _, _, sts = statements()
+        mgmt = next(s for s in sts if s["Sid"] == "ManageOnlyLodestarTestInstances")
+        self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/Purpose"], "X-test-vm")
+        cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnLodestarTestInstances")
+        self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/Purpose"], "X-test-vm")
         doc = next(s for s in sts if s["Sid"] == "RunCommandsOnlyWithTheStandardScriptDocuments")
         self.assertEqual(doc["Resource"], ["arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript",
                                            "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"])
@@ -91,7 +101,11 @@ class PolicyTests(unittest.TestCase):
     def test_images_only_from_amazon_or_canonical(self):
         _, _, sts = statements()
         img = next(s for s in sts if s["Sid"] == "RunOnlyAmazonOrCanonicalImages")
-        self.assertEqual(img["Condition"], {"StringEquals": {"ec2:Owner": ["amazon", CANONICAL]}})
+        self.assertEqual(img["Condition"], {"StringEquals": {"ec2:Owner": ["amazon", {"Ref": "UbuntuImageOwnerId"}]}})
+        t, _, _ = statements()
+        param = t["Parameters"]["UbuntuImageOwnerId"]
+        self.assertEqual(param["AllowedPattern"], "^[0-9]{12}$")
+        self.assertNotIn("Default", param)
 
     def test_pass_role_names_only_the_two_test_roles(self):
         _, _, sts = statements()

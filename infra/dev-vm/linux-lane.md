@@ -15,7 +15,7 @@ You are a Claude session running **on** the Linux test VM `claude-dev-<yyyymmdd>
 - **Test `main`:** work in `~/lodestar-v2` on `main`, freshly pulled (`git pull --ff-only`). Record the commit in each result.
 - **This runbook and the VM tools live on the X-test-vm branch until it merges.** Read them from a separate worktree, so the code under test stays `main`:
   ```bash
-  git -C ~/lodestar-v2 fetch origin claude/dreamy-edison-xlmtoy && git -C ~/lodestar-v2 worktree add ~/testkit FETCH_HEAD
+  git -C ~/lodestar-v2 fetch origin main && git -C ~/lodestar-v2 worktree add ~/testkit FETCH_HEAD
   ```
 
 ## 0. Check the machine

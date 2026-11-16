@@ -53,6 +53,7 @@ STOP_USD = 90.0
 IMAGE = "linode/ubuntu24.04"
 TAGS = ["claude-dev"]
 HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[1]
 
 
 def call(method: str, path: str, body: dict | None = None, ok404: bool = False):
@@ -153,6 +154,34 @@ def check_ip(ip: str) -> str:
     return str(addr)
 
 
+def delete_firewall(fw_id: int) -> None:
+    call("DELETE", f"/networking/firewalls/{fw_id}")
+    for _ in range(12):
+        if call("GET", f"/networking/firewalls/{fw_id}", ok404=True) is None:
+            return
+        time.sleep(5)
+    sys.exit(f"firewall {fw_id} still present after deletion")
+
+
+def cleanup_after_failed_create(label: str, fw_id: int) -> None:
+    """Delete the new firewall only if no VM came of the failed create.
+
+    A client-side error (a timeout, a dropped connection) can follow a create
+    Linode accepted. Deleting the firewall then would leave that VM open to the
+    internet, so keep it and say which VM to delete.
+    """
+    try:
+        vms = [x for x in all_pages("/linode/instances") if x["label"] == label]
+    except BaseException:
+        sys.exit(f"create failed and the VM list can't be read; kept firewall {fw_id}. "
+                 f"Check for {label} before deleting it.")
+    if vms:
+        sys.exit(f"create reported an error but {label} exists (id={vms[0]['id']}); kept firewall {fw_id}. "
+                 f"Delete both with: devvm.py delete --label {label} --confirm {label}")
+    delete_firewall(fw_id)
+    print(f"VM not created; deleted firewall {fw_id}", file=sys.stderr)
+
+
 def cmd_create(a) -> None:
     admin_ip = None if a.admin_ip == "none" else check_ip(a.admin_ip)
     pubkey = Path(a.ssh_pubkey_file).read_text().strip()
@@ -168,7 +197,9 @@ def cmd_create(a) -> None:
         sys.exit(f"refusing: {label} already exists")
     if len(existing) >= MAX_VMS:
         sys.exit(f"refusing: already {len(existing)} {PREFIX}* Linodes (max {MAX_VMS})")
-    work = Path(a.workdir)
+    work = Path(a.workdir).resolve()
+    if work == REPO or REPO in work.parents:
+        sys.exit("refusing: --workdir must be outside the repository")
     work.mkdir(parents=True, exist_ok=True)
     keyfile = work / "host_ed25519"
     if keyfile.exists():
@@ -205,10 +236,7 @@ def cmd_create(a) -> None:
     try:
         vm = call("POST", "/linode/instances", body)
     except BaseException:
-        # A refused create (an account limit, say) would leave the firewall
-        # behind, and the next create would stop on it.
-        call("DELETE", f"/networking/firewalls/{fw['id']}")
-        print(f"VM not created; deleted firewall {fw['id']}", file=sys.stderr)
+        cleanup_after_failed_create(label, fw["id"])
         raise
     print(f"created {label} id={vm['id']} firewall={fw['id']} ipv4={vm['ipv4'][0]}")
     for _ in range(60):
@@ -251,8 +279,7 @@ def cmd_delete(a) -> None:
             sys.exit(f"linode {vm['id']} still present after deletion")
     for f in all_pages("/networking/firewalls"):
         if f["label"] == a.label + "-fw":
-            call("DELETE", f"/networking/firewalls/{f['id']}")
-            assert call("GET", f"/networking/firewalls/{f['id']}", ok404=True) is None
+            delete_firewall(f["id"])
             print(f"deleted firewall {f['id']}: verified 404")
     left = ours(all_pages("/linode/instances")) + ours(all_pages("/networking/firewalls"))
     print("nothing of ours left" if not left else f"STILL PRESENT: {[x['label'] for x in left]}")

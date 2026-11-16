@@ -52,7 +52,7 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - `Deploy-AwsWindows.ps1` doesn't do this yet; that's a follow-up for the runner.
    - `MetadataOptions.HttpTokens=required`;
    - `/dev/sda1` with `VolumeSize=100, Encrypted=true`;
-   - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume.
+   - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume.
    - Record the instance ID locally only.
 3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
 4. **Bootstrap with Run Command** (`executionTimeout` up to 7200 s per step):

@@ -176,6 +176,35 @@ class RefusedCreateTests(unittest.TestCase):
         self.assertEqual(api.mutations(), [("POST", "/networking/firewalls"), ("POST", "/linode/instances"),
                                            ("DELETE", "/networking/firewalls/7")])
 
+    def test_a_timed_out_create_that_linode_accepted_keeps_its_firewall(self):
+        # The POST times out client-side, but Linode made the VM: deleting the
+        # firewall would leave it open to the internet.
+        api = FakeApi()
+        real = api.call
+
+        def timeout(method, path, body=None, ok404=False):
+            if (method, path) == ("POST", "/linode/instances"):
+                api.calls.append((method, path))
+                api.linodes.append({"label": body["label"], "id": 9})
+                raise TimeoutError("timed out")
+            return real(method, path, body, ok404)
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.multiple(devvm, call=timeout, all_pages=api.all_pages), \
+                self.assertRaises(SystemExit) as stop:
+            devvm.cmd_create(CreateTests.args(None, d))
+        self.assertIn("kept firewall 7", str(stop.exception))
+        self.assertEqual(api.mutations(), [("POST", "/networking/firewalls"), ("POST", "/linode/instances")])
+
+    def test_refuses_a_workdir_inside_the_repository(self):
+        api = FakeApi()
+        with tempfile.TemporaryDirectory() as d, patched(api), self.assertRaises(SystemExit):
+            a = CreateTests.args(None, d)
+            a.workdir = str(devvm.REPO / "scratch")
+            devvm.cmd_create(a)
+        self.assertEqual(api.mutations(), [])
+        self.assertFalse((devvm.REPO / "scratch").exists())
+
 
 class DeleteTests(unittest.TestCase):
     def test_refuses_outside_prefix_or_without_exact_confirmation(self):

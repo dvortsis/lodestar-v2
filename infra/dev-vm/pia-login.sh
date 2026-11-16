@@ -54,7 +54,12 @@ if [[ $mode == rekey && -z $region && -f $store/region ]]; then region=$(<"$stor
 # A region with WireGuard servers, in the US (PIA's US servers have no port
 # forwarding, as the test plan's ground rule 1 requires), whose first server's
 # name passes the step's own check (some PIA names don't, e.g. us-brooklyn's).
-servers=$(curl --fail --silent --show-error --max-time 30 https://serverlist.piaservers.net/vpninfo/servers/v6 | head -1)
+# Read the first line from a file: with pipefail, `curl | head -1` can fail
+# with curl's exit 23 when head closes the pipe early.
+list=$(mktemp)
+curl --fail --silent --show-error --max-time 30 --max-filesize 20000000 -o "$list" \
+  https://serverlist.piaservers.net/vpninfo/servers/v6 || { rm -f -- "$list"; echo "can't fetch PIA's server list" >&2; exit 3; }
+servers=$(head -n 1 -- "$list"); rm -f -- "$list"
 mapfile -t regions < <(jq -r '.regions[] | select(.country == "US" and (.servers.wg | length) > 0 and (.offline | not) and (.port_forward | not)) | select(.servers.wg[0].cn | test("^[a-z0-9.-]{1,253}$")) | .id' <<<"$servers" | sort)
 [[ ${#regions[@]} -gt 0 ]] || { echo "no US WireGuard region found" >&2; exit 3; }
 if [[ -z $region ]]; then
@@ -66,8 +71,8 @@ echo "PIA region: $region (pass another id to change it)"
 
 if [[ $mode == rekey ]]; then
   [[ -f $store/login.json ]] || { echo "no kept login: run once with --keep" >&2; exit 6; }
-  pia_user=$(jq -j '.username' "$store/login.json")
-  pia_pass=$(jq -j '.password' "$store/login.json")
+  pia_user=$(jq -j '.username // empty' "$store/login.json")
+  pia_pass=$(jq -j '.password // empty' "$store/login.json")
 elif [[ $mode == aws ]]; then
   command -v aws >/dev/null || { echo "the AWS CLI is missing (snap install aws-cli --classic)" >&2; exit 7; }
   # The value goes from the CLI's stdout into memory; errors are summarised, never echoed.
