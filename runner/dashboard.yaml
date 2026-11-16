@@ -642,6 +642,7 @@ placement:
   - X-watch-env
   - X-watch-stall-retry
   - /^ENR-[a-z]+$/
+  - ENR-terms-api
 - ws: ws-m7-w5
   match:
   - ENR-11
