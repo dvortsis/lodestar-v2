@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T01:04Z",
+  "updated_at": "2026-11-16T01:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3767,8 +3767,9 @@
     "V12": "release/v0.5.1 (shipped in rc)",
     "V13": "imports (IMP-1), on main",
     "V14": "SRC-1 (assigned by master-plan r2; waits ext:owner-migrations-on-main)",
-    "V15": "CR-3 (after SRC-1; waits G-import-50M, owner 50M approval, owner-migrations-on-main)",
-    "V14_status": "merged #379 a4f6ebb5"
+    "V15": "ENR-terms (runner 2026-11-16T01:25Z: torrent_claims.stored_at + index; CR-3's reservation released)",
+    "V14_status": "merged #379 a4f6ebb5",
+    "queue_after_V15": "next free number in landing order: WK-12, SRC-3b, PL-8, CR-3 (build-plan r4 order; runner assigns at the migration slot)"
   },
   "decisions": [
     "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
@@ -4116,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T01:04Z",
+  "last_heartbeat": "2026-11-16T01:25Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10459,8 +10460,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-16T01:04Z",
-  "updated": "2026-11-16T01:04Z",
+  "heartbeat": "2026-11-16T01:25Z",
+  "updated": "2026-11-16T01:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
