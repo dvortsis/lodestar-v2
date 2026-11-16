@@ -1,31 +1,43 @@
    Compiling scheduler-review-harness v0.1.0 (<TEMP_VERIFY_DIR>)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.15s
      Running unittests src\lib.rs (<TEMP_VERIFY_DIR>\target\debug\deps\scheduler_review_harness-087278b1f880f47c.exe)
 
-running 5 tests
+running 8 tests
 
-thread 'scheduler::followup_review::expired_hot_nodes_must_be_reclaimable_when_ledger_is_full' (52672) panicked at src\scheduler.rs:2450:9:
-ledger remained permanently wedged by an expired hot_heap entry that reclaim_expired_locked never inspects
+thread 'scheduler::followup_review::iana_special_purpose_as112_and_amt_ipv4_endpoints_must_be_rejected' (1576) panicked at src\scheduler.rs:2607:13:
+scheduler admitted IANA special-purpose AS112/AMT IPv4 endpoints rejected by lodestar_network_policy
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test scheduler::followup_review::iana_special_purpose_as112_and_amt_ipv4_endpoints_must_be_rejected ... FAILED
+
+thread 'scheduler::followup_review::expired_hot_nodes_must_be_reclaimable_when_ledger_is_full' (32524) panicked at src\scheduler.rs:2450:9:
+ledger remained permanently wedged by an expired hot_heap entry that reclaim_expired_locked never inspects
 test scheduler::followup_review::expired_hot_nodes_must_be_reclaimable_when_ledger_is_full ... FAILED
 
-thread 'scheduler::followup_review::failed_admission_wal_write_must_not_poison_endpoint_for_six_hours' (29196) panicked at src\scheduler.rs:2523:9:
+thread 'scheduler::followup_review::failed_admission_wal_write_must_not_poison_endpoint_for_six_hours' (48328) panicked at src\scheduler.rs:2523:9:
 endpoint was poisoned in RAM for six hours after a failed WAL reservation even though no packet was dispatched
 test scheduler::followup_review::failed_admission_wal_write_must_not_poison_endpoint_for_six_hours ... FAILED
 
-thread 'scheduler::followup_review::failed_completion_must_preserve_received_interval' (44976) panicked at src\scheduler.rs:2400:9:
+thread 'scheduler::followup_review::failed_completion_must_preserve_received_interval' (3016) panicked at src\scheduler.rs:2400:9:
 redispatched ten seconds before the received interval expired after a failed completion commit
 test scheduler::followup_review::failed_completion_must_preserve_received_interval ... FAILED
 
-thread 'scheduler::followup_review::foreign_permit_must_be_rejected' (48180) panicked at src\scheduler.rs:2421:9:
+thread 'scheduler::followup_review::foreign_permit_must_be_rejected' (31480) panicked at src\scheduler.rs:2421:9:
 scheduler B accepted a permit owned by scheduler A with a different database
 test scheduler::followup_review::foreign_permit_must_be_rejected ... FAILED
 
-thread 'scheduler::followup_review::cancelled_completion_on_hot_node_must_not_reinsert_unsupported_endpoint_into_hot_heap' (55332) panicked at src\scheduler.rs:2496:9:
+thread 'scheduler::followup_review::group_commit_single_stale_sequence_must_not_abort_unrelated_peer_reservations' (30764) panicked at src\scheduler.rs:2553:9:
+single stale-sequence endpoint in group-commit batch rolled back unrelated peer reservation
+test scheduler::followup_review::group_commit_single_stale_sequence_must_not_abort_unrelated_peer_reservations ... FAILED
+
+thread 'scheduler::followup_review::cancelled_completion_on_hot_node_must_not_reinsert_unsupported_endpoint_into_hot_heap' (9016) panicked at src\scheduler.rs:2496:9:
 assertion `left != right` failed: explicitly unsupported node was re-queued onto hot_heap with stale Supported novelty and prioritized ahead of ready candidates after failed completion commit
   left: 93.184.216.11:6881
  right: 93.184.216.11:6881
 test scheduler::followup_review::cancelled_completion_on_hot_node_must_not_reinsert_unsupported_endpoint_into_hot_heap ... FAILED
+
+thread 'scheduler::followup_review::repeated_sub_threshold_restarts_must_not_accumulate_unbounded_forward_drift' (51548) panicked at src\scheduler.rs:2590:9:
+six-hour cooldown expired after only 36 monotonic seconds via repeated 600s restart skews
+test scheduler::followup_review::repeated_sub_threshold_restarts_must_not_accumulate_unbounded_forward_drift ... FAILED
 
 failures:
 
@@ -35,7 +47,10 @@ failures:
     scheduler::followup_review::failed_admission_wal_write_must_not_poison_endpoint_for_six_hours
     scheduler::followup_review::failed_completion_must_preserve_received_interval
     scheduler::followup_review::foreign_permit_must_be_rejected
+    scheduler::followup_review::group_commit_single_stale_sequence_must_not_abort_unrelated_peer_reservations
+    scheduler::followup_review::iana_special_purpose_as112_and_amt_ipv4_endpoints_must_be_rejected
+    scheduler::followup_review::repeated_sub_threshold_restarts_must_not_accumulate_unbounded_forward_drift
 
-test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.24s
+test result: FAILED. 0 passed; 8 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.74s
 
 error: test failed, to rerun pass `--lib`
