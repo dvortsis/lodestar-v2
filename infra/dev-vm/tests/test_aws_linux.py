@@ -38,7 +38,17 @@ class BootstrapTest(unittest.TestCase):
             self.assertIn('echo "ok $(date -u +%FT%TZ)" > /var/lib/devvm-bootstrap.status', script)
             self.assertIn("fallocate -l 8G /swapfile", script)
             self.assertNotIn("__", script.replace("__file__", ""))
-            self.assertEqual(o.joinpath("sudo").read_text().strip(), "ALL=(ALL) NOPASSWD:ALL")
+
+    def test_lodestar_gets_no_root_equivalent_rights_on_aws(self):
+        # The instance role reads the owner's PIA login: only root may reach it.
+        text = SCRIPT.read_text()
+        self.assertNotIn("NOPASSWD", text)
+        self.assertNotIn("-G sudo", text)
+        self.assertIn("rm -f /etc/sudoers.d/90-lodestar", text)
+        self.assertIn("gpasswd -d lodestar docker", text)
+        # The check runs after the shared bootstrap that adds the docker group.
+        self.assertLess(text.index("bash /usr/local/sbin/devvm-bootstrap.sh"),
+                        text.index("lodestar still has a root-equivalent group or sudo"))
 
     def test_metadata_service_is_root_only_and_no_key_is_installed(self):
         text = SCRIPT.read_text()

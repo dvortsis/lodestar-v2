@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, mandatory tags with ExpiresAt), and read EC2, SSM, quota and cost data. The Linux test instances get their own role, which can read only the PIA login secret this stack creates; the user itself is denied Secrets Manager. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters.",
+  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, mandatory tags with ExpiresAt), and read EC2, SSM, quota and cost data. The Linux test instances get their own role, which can read only the PIA login secret this stack creates; the user itself is denied Secrets Manager. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters. The managed policy's own Description still says \"the Windows test instance only\": it is kept as deployed because changing it would replace the policy, and the replacement fails on the fixed name. The statements are what count.",
   "Parameters": {
     "SubnetId": {
       "Type": "AWS::EC2::Subnet::Id",
@@ -107,6 +107,9 @@
                   "aws:RequestTag/Environment": "Test",
                   "aws:RequestTag/ManagedBy": "Terraform",
                   "aws:RequestTag/Purpose": "X-test-vm"
+                },
+                "NumericLessThanEquals": {
+                  "ec2:MetadataHttpPutResponseHopLimit": "1"
                 },
                 "Null": {
                   "aws:RequestTag/ExpiresAt": "false"

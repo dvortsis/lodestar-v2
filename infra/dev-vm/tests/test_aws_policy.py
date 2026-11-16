@@ -20,10 +20,15 @@ def actions(st):
 
 class PolicyTests(unittest.TestCase):
     def test_no_account_or_resource_ids_in_the_public_repo(self):
-        text = TEMPLATE.read_text()
-        # Not even a public one (Canonical's publisher ID is a parameter).
-        self.assertEqual(re.findall(r"\d{12}", text), [])
-        self.assertIsNone(re.search(r"\b(subnet|sg|vpc|ami|i)-[0-9a-f]{8,17}\b", text))
+        # Not even a public one: Canonical's publisher ID is a parameter the
+        # owner looks up at deploy. Every text file here, not just the template.
+        for f in sorted(TEMPLATE.parent.rglob("*")):
+            if f.is_dir() or "__pycache__" in f.parts:
+                continue
+            text = f.read_text()
+            with self.subTest(file=f.name):
+                self.assertEqual(re.findall(r"\d{12}", text), [])
+                self.assertIsNone(re.search(r"\b(subnet|sg|vpc|ami|i)-[0-9a-f]{8,17}\b", text))
 
     def test_only_the_mcp_sign_in_policy_and_our_own(self):
         _, user, _ = statements()
@@ -62,6 +67,8 @@ class PolicyTests(unittest.TestCase):
         eq = inst["Condition"]["StringEquals"]
         self.assertEqual(eq["ec2:InstanceType"], "c6a.xlarge")
         self.assertEqual(eq["ec2:MetadataHttpTokens"], "required")
+        # Bridged containers are kept from the role only by the hop limit.
+        self.assertEqual(inst["Condition"]["NumericLessThanEquals"], {"ec2:MetadataHttpPutResponseHopLimit": "1"})
         for k, v in {"Project": "Lodestar", "Environment": "Test", "ManagedBy": "Terraform",
                      "Purpose": "X-test-vm"}.items():
             self.assertEqual(eq[f"aws:RequestTag/{k}"], v)

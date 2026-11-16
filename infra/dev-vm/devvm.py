@@ -54,6 +54,7 @@ IMAGE = "linode/ubuntu24.04"
 TAGS = ["claude-dev"]
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
+CLEANUP_CHECKS = 6  # about a minute between the first and last look
 
 
 def call(method: str, path: str, body: dict | None = None, ok404: bool = False):
@@ -170,11 +171,19 @@ def cleanup_after_failed_create(label: str, fw_id: int) -> None:
     Linode accepted. Deleting the firewall then would leave that VM open to the
     internet, so keep it and say which VM to delete.
     """
-    try:
-        vms = [x for x in all_pages("/linode/instances") if x["label"] == label]
-    except BaseException:
-        sys.exit(f"create failed and the VM list can't be read; kept firewall {fw_id}. "
-                 f"Check for {label} before deleting it.")
+    # A create Linode is still processing may not be listed yet: look a few
+    # times over about a minute before concluding there is no VM.
+    vms = []
+    for attempt in range(CLEANUP_CHECKS):
+        try:
+            vms = [x for x in all_pages("/linode/instances") if x["label"] == label]
+        except BaseException:
+            sys.exit(f"create failed and the VM list can't be read; kept firewall {fw_id}. "
+                     f"Check for {label} before deleting it.")
+        if vms:
+            break
+        if attempt + 1 < CLEANUP_CHECKS:
+            time.sleep(10)
     if vms:
         sys.exit(f"create reported an error but {label} exists (id={vms[0]['id']}); kept firewall {fw_id}. "
                  f"Delete both with: devvm.py delete --label {label} --confirm {label}")
@@ -205,12 +214,15 @@ def cmd_create(a) -> None:
     if keyfile.exists():
         keyfile.unlink()
         (work / "host_ed25519.pub").unlink(missing_ok=True)
-    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", label, "-f", str(keyfile)], check=True)
-    host_pub = (work / "host_ed25519.pub").read_text()
-    fp = subprocess.run(["ssh-keygen", "-lf", str(keyfile) + ".pub"], check=True, capture_output=True, text=True).stdout.strip()
-    user_data = render_user_data(pubkey, keyfile.read_text(), host_pub, worker=a.role == "worker")
-    # The private host key now lives only in the user data; drop the local copy.
-    keyfile.unlink()
+    try:
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", label, "-f", str(keyfile)], check=True)
+        host_pub = (work / "host_ed25519.pub").read_text()
+        fp = subprocess.run(["ssh-keygen", "-lf", str(keyfile) + ".pub"], check=True, capture_output=True,
+                            text=True).stdout.strip()
+        user_data = render_user_data(pubkey, keyfile.read_text(), host_pub, worker=a.role == "worker")
+    finally:
+        # The private host key lives only in the user data; never leave a local copy.
+        keyfile.unlink(missing_ok=True)
 
     fw_label = label + "-fw"
     if any(f["label"] == fw_label for f in all_pages("/networking/firewalls")):

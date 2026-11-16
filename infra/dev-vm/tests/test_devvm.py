@@ -171,10 +171,45 @@ class RefusedCreateTests(unittest.TestCase):
             return real(method, path, body, ok404)
 
         with tempfile.TemporaryDirectory() as d, \
-                mock.patch.multiple(devvm, call=refuse, all_pages=api.all_pages), self.assertRaises(SystemExit):
+                mock.patch.multiple(devvm, call=refuse, all_pages=api.all_pages), \
+                mock.patch.object(devvm.time, "sleep"), self.assertRaises(SystemExit):
             devvm.cmd_create(CreateTests.args(None, d))
         self.assertEqual(api.mutations(), [("POST", "/networking/firewalls"), ("POST", "/linode/instances"),
                                            ("DELETE", "/networking/firewalls/7")])
+
+    def test_a_vm_that_shows_up_late_keeps_its_firewall(self):
+        api = FakeApi()
+        real, listed = api.call, []
+
+        def timeout(method, path, body=None, ok404=False):
+            if (method, path) == ("POST", "/linode/instances"):
+                api.calls.append((method, path))
+                raise TimeoutError("timed out")
+            return real(method, path, body, ok404)
+
+        def late_pages(path):
+            if path == "/linode/instances":
+                listed.append(1)
+                if len(listed) == 4:  # the first create check, then two empty looks
+                    api.linodes.append({"label": devvm.PREFIX + devvm.dt.datetime.now(devvm.dt.timezone.utc)
+                                        .strftime("%Y%m%d"), "id": 9})
+            return api.all_pages(path)
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.multiple(devvm, call=timeout, all_pages=late_pages), \
+                mock.patch.object(devvm.time, "sleep"), self.assertRaises(SystemExit) as stop:
+            devvm.cmd_create(CreateTests.args(None, d))
+        self.assertIn("kept firewall 7", str(stop.exception))
+        self.assertNotIn(("DELETE", "/networking/firewalls/7"), api.mutations())
+
+    def test_a_failure_before_the_create_leaves_no_host_key(self):
+        api = FakeApi()
+        with tempfile.TemporaryDirectory() as d:
+            with patched(api), mock.patch.object(devvm, "render_user_data", side_effect=ValueError("boom")), \
+                    self.assertRaises(ValueError):
+                devvm.cmd_create(CreateTests.args(None, d))
+            self.assertFalse((Path(d) / "w" / "host_ed25519").exists())
+        self.assertEqual(api.mutations(), [])
 
     def test_a_timed_out_create_that_linode_accepted_keeps_its_firewall(self):
         # The POST times out client-side, but Linode made the VM: deleting the
@@ -204,6 +239,29 @@ class RefusedCreateTests(unittest.TestCase):
             devvm.cmd_create(a)
         self.assertEqual(api.mutations(), [])
         self.assertFalse((devvm.REPO / "scratch").exists())
+
+
+class SetAdminIpTests(unittest.TestCase):
+    def test_refuses_a_label_outside_the_prefix(self):
+        api = FakeApi(firewalls=[{"label": "lodestar-main-fw", "id": 3}])
+        with patched(api), self.assertRaises(SystemExit):
+            devvm.cmd_set_admin_ip(SimpleNamespace(label="lodestar-main", admin_ip="8.8.8.8"))
+        self.assertEqual(api.mutations(), [])
+
+    def test_matches_the_exact_fw_label_and_allows_one_address(self):
+        api = FakeApi(firewalls=[{"label": "claude-dev-20261116-fw", "id": 3},
+                                 {"label": "claude-dev-20261116-worker-fw", "id": 4}])
+        with patched(api):
+            devvm.cmd_set_admin_ip(SimpleNamespace(label="claude-dev-20261116", admin_ip="8.8.8.8"))
+        self.assertEqual(api.mutations(), [("PUT", "/networking/firewalls/3/rules")])
+        body = api.bodies[("PUT", "/networking/firewalls/3/rules")]
+        self.assertEqual(body, devvm.firewall_rules("8.8.8.8"))
+        self.assertEqual([r["addresses"]["ipv4"] for r in body["inbound"]], [["8.8.8.8/32"]])
+
+    def test_refuses_a_missing_firewall(self):
+        api = FakeApi()
+        with patched(api), self.assertRaises(SystemExit):
+            devvm.cmd_set_admin_ip(SimpleNamespace(label="claude-dev-20261116", admin_ip="8.8.8.8"))
 
 
 class DeleteTests(unittest.TestCase):

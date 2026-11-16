@@ -7,7 +7,7 @@ Once the instance is bootstrapped, `linux-lane.md` applies unchanged: numbers on
 ## One-time setup (the owner)
 
 1. **Update the stack.** In CloudFormation → `lodestar-claude-testvm` → Update → Replace existing template, use `infra/dev-vm/aws-claude-testvm.json` at the commit Claude names. Keep the other parameters, tick the IAM acknowledgement, and submit.
-   - **`UbuntuImageOwnerId`:** type `099720109477`. That is Canonical's public publisher account, which owns the official Ubuntu images, not one of yours. It's a parameter so the template holds no account numbers.
+   - **`UbuntuImageOwnerId`:** Canonical's public publisher account, which owns the official Ubuntu images; it isn't one of yours. To find it, open Systems Manager → Parameter Store → Public parameters, look up `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`, then open that image in EC2 → AMIs and copy its **Owner**. It's a parameter so the repository holds no account numbers.
    - The managed policy's description still says "the Windows test instance only". Leave it: changing it makes CloudFormation replace the policy, and the replacement fails because the name is fixed. The policy's statements are what count.
 2. **Enter the PIA login.** In Secrets Manager → `lodestar-claude-testvm/pia-login` → Retrieve secret value → Edit, set `username` and `password`, and save.
    - Only the Linux instance role can read it. Claude's own user is denied all of Secrets Manager.
@@ -16,7 +16,7 @@ Once the instance is bootstrapped, `linux-lane.md` applies unchanged: numbers on
 
 All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm`. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop.
 
-1. **Count first.** At most four Linux instances and one Windows instance run at once. Refuse if four `Project=Lodestar` Linux instances are already pending, running, stopping or stopped.
+1. **Count first.** At most four Linux instances and one Windows instance run at once. Count instances with the filter `tag:Purpose=X-test-vm` (the owner's own fleet instances share `Project=Lodestar`, so never count by that), and refuse if four Linux ones are already pending, running, stopping or stopped.
 2. **Launch:**
    - the image from `ssm:GetParameter` `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`;
    - `c6a.xlarge` (4 vCPU, 8 GiB);
@@ -35,7 +35,7 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    ```
 
    - It installs what `cloud-init.yaml.tmpl` installs on a Linode, creates the `lodestar` user with `~/lodestar-v2`, and writes `ok` to `/var/lib/devvm-bootstrap.status`.
-   - It also makes the metadata service reachable by root only, so the `lodestar` user and the containers can't use the instance role.
+   - It also makes the metadata service reachable by root only, and leaves `lodestar` with no sudo and outside the `docker` group, so code running as `lodestar` (build scripts, npm packages) can't use the instance role. Run builds as `lodestar` and everything else as root through SSM.
 5. **PIA,** as root:
 
    ```bash

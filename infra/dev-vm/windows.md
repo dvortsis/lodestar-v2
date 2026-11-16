@@ -6,7 +6,7 @@ One AWS Windows Server instance that Claude creates, tests on and deletes. It ru
 |---|---|
 | Machine | `c6a.xlarge` (4 vCPU on 2 cores, 8 GiB), us-east-1, the Lodestar subnet and security group (no inbound), encrypted 100 GiB root, IMDSv2 |
 | Image | the latest `Windows_Server-2022-English-Full-Base` from AWS's public parameter `/aws/service/ami-windows-latest/` |
-| Cost | about $0.337/h with the licence: about $16.20 for 48 h, plus about $0.60 of disk. At most $50 in total for this cloud over the whole testing period (owner, 2026-11-12T16:58Z) |
+| Cost | about $0.337/h with the licence: about $16.20 for 48 h, plus about $0.60 of disk. At most $100 in total for this cloud over the whole testing period, and tell the owner at about $90 (owner, 2026-11-12T16:58Z, raised 2026-11-15) |
 | Backstop | `lodestar-expiration-guard` terminates it at `min(ExpiresAt, start + 48 h)`. Its deletion path is unproven, so Claude deletes it itself and checks |
 | Access | SSM Run Command (`AWS-RunPowerShellScript`) only. No RDP, no key pair, no inbound port |
 
@@ -43,7 +43,7 @@ The owner has signed the AWS MCP connector in as their admin. A new session star
 
 ### Phase 2: create, test, delete, as `lodestar-claude-testvm`
 A new session, started after the swap. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop.
-1. **One at a time:** refuse if any `Project=Lodestar` instance is pending, running, stopping or stopped.
+1. **One Windows instance at a time:** refuse if a Windows instance tagged `Purpose=X-test-vm` is pending, running, stopping or stopped. Count with the filters `tag:Purpose=X-test-vm` and `platform=windows`; up to four Linux test instances may run alongside it.
 2. **Launch**, matching `infra/akamai/terraform/scripts/Deploy-AwsWindows.ps1` (lines 155–164):
    - the image and instance profile;
    - **a public IPv4 address:** `NetworkInterfaces=[{DeviceIndex: 0, SubnetId, Groups: [SG], AssociatePublicIpAddress: true}]`, with no top-level `SubnetId` or `SecurityGroupIds`.

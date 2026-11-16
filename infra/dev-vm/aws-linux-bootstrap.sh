@@ -58,19 +58,28 @@ doc = yaml.safe_load(t)
 (out / "packages").write_text("\n".join(doc["packages"]) + "\n")
 [script] = [f["content"] for f in doc["write_files"] if f["path"] == "/usr/local/sbin/devvm-bootstrap.sh"]
 (out / "devvm-bootstrap.sh").write_text(script)
-[user] = [u for u in doc["users"] if isinstance(u, dict) and u.get("name") == "lodestar"]
-(out / "sudo").write_text(user["sudo"] + "\n")
 EOF
 apt-get update -y
 apt-get upgrade -y
 xargs -a "$work/packages" apt-get install -y
-id lodestar >/dev/null 2>&1 || useradd -m -s /bin/bash -c "Lodestar Test Administrator" -G sudo lodestar
+# Unlike on a Linode, lodestar gets no sudo and no docker group (both are
+# root-equivalent): the instance role can read the owner's PIA login, so only
+# root may reach it. Builds run as lodestar; everything else runs as root via SSM.
+id lodestar >/dev/null 2>&1 || useradd -m -s /bin/bash -c "Lodestar Test Builder" lodestar
 passwd -l lodestar >/dev/null
-printf 'lodestar %s' "$(cat "$work/sudo")" >/etc/sudoers.d/90-lodestar
-chmod 0440 /etc/sudoers.d/90-lodestar
-visudo -cf /etc/sudoers.d/90-lodestar >/dev/null
+rm -f /etc/sudoers.d/90-lodestar
 # The AWS CLI, for pia-login.sh --aws-secret (root only, through the instance role).
 command -v aws >/dev/null || snap install aws-cli --classic
 install -m 0700 "$work/devvm-bootstrap.sh" /usr/local/sbin/devvm-bootstrap.sh
 bash /usr/local/sbin/devvm-bootstrap.sh
+# The shared bootstrap adds lodestar to docker; take that back, and refuse to
+# finish if lodestar can still become root.
+gpasswd -d lodestar docker >/dev/null 2>&1 || true
+gpasswd -d lodestar sudo >/dev/null 2>&1 || true
+rm -f /etc/sudoers.d/90-lodestar
+if id -nG lodestar | tr ' ' '\n' | grep -qxE 'sudo|docker|adm|lxd' || sudo -l -U lodestar 2>/dev/null | grep -q '(ALL'; then
+  echo "lodestar still has a root-equivalent group or sudo" >&2
+  echo "fail $(date -u +%FT%TZ) lodestar-privileges" >/var/lib/devvm-bootstrap.status
+  exit 1
+fi
 cat /var/lib/devvm-bootstrap.status
