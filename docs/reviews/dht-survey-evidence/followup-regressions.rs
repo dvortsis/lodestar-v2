@@ -92,4 +92,106 @@ mod followup_review {
             "scheduler B accepted a permit owned by scheduler A with a different database"
         );
     }
+
+    #[tokio::test]
+    async fn expired_hot_nodes_must_be_reclaimable_when_ledger_is_full() {
+        let db = NamedTempFile::new().unwrap();
+        let c = clock();
+        let cfg = SchedulerConfig {
+            max_cooldown_entries: 1,
+            ..SchedulerConfig::default()
+        };
+        let s = SamplerScheduler::open_with_config(db.path(), cfg, c.clone()).unwrap();
+        let hot_ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 1), 6881);
+        let new_ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 2), 6881);
+        assert!(s.consider_candidate(hot_ep).unwrap());
+        let permit = s.acquire_next_dispatch().await.unwrap().unwrap();
+        s.complete_dispatch(
+            permit,
+            SampleOutcome::Supported {
+                advertised_interval_sec: Some(60),
+                novel_hashes_count: 5,
+            },
+        )
+        .await
+        .unwrap();
+        advance(&c, 120);
+        assert!(
+            s.consider_candidate(new_ep).unwrap(),
+            "ledger remained permanently wedged by an expired hot_heap entry that reclaim_expired_locked never inspects"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_completion_on_hot_node_must_not_reinsert_unsupported_endpoint_into_hot_heap() {
+        let db = NamedTempFile::new().unwrap();
+        let c = clock();
+        let s =
+            SamplerScheduler::open_with_config(db.path(), SchedulerConfig::default(), c.clone())
+                .unwrap();
+        let hot_ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 11), 6881);
+        let other_ep = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 12), 6881);
+        assert!(s.consider_candidate(hot_ep).unwrap());
+        let permit1 = s.acquire_next_dispatch().await.unwrap().unwrap();
+        s.complete_dispatch(
+            permit1,
+            SampleOutcome::Supported {
+                advertised_interval_sec: Some(60),
+                novel_hashes_count: 5,
+            },
+        )
+        .await
+        .unwrap();
+        advance(&c, 65);
+        let permit2 = s.acquire_next_dispatch().await.unwrap().unwrap();
+        assert_eq!(permit2.addr(), hot_ep);
+
+        let conn = Connection::open(db.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_hot_completion BEFORE UPDATE ON bep51_cooldowns
+             BEGIN SELECT RAISE(ABORT, 'completion failure'); END;",
+        )
+        .unwrap();
+        assert!(
+            s.complete_dispatch(permit2, SampleOutcome::ExplicitUnsupported)
+                .await
+                .is_err()
+        );
+        conn.execute_batch("DROP TRIGGER fail_hot_completion;").unwrap();
+
+        advance(&c, 21_600);
+        assert!(s.consider_candidate(other_ep).unwrap());
+        let permit3 = s.acquire_next_dispatch().await.unwrap().unwrap();
+        assert_ne!(
+            permit3.addr(),
+            hot_ep,
+            "explicitly unsupported node was re-queued onto hot_heap with stale Supported novelty and prioritized ahead of ready candidates after failed completion commit"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_admission_wal_write_must_not_poison_endpoint_for_six_hours() {
+        let db = NamedTempFile::new().unwrap();
+        let c = clock();
+        let s =
+            SamplerScheduler::open_with_config(db.path(), SchedulerConfig::default(), c.clone())
+                .unwrap();
+        let target = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 21), 6881);
+        assert!(s.consider_candidate(target).unwrap());
+
+        let conn = Connection::open(db.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_admission BEFORE INSERT ON bep51_cooldowns
+             BEGIN SELECT RAISE(ABORT, 'admission failure'); END;",
+        )
+        .unwrap();
+        assert!(s.acquire_next_dispatch().await.is_err());
+        conn.execute_batch("DROP TRIGGER fail_admission;").unwrap();
+
+        advance(&c, 60);
+        assert!(
+            s.consider_candidate(target).unwrap(),
+            "endpoint was poisoned in RAM for six hours after a failed WAL reservation even though no packet was dispatched"
+        );
+    }
 }

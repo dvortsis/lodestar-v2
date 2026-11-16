@@ -1,19 +1,19 @@
-Diff in \\?\C:\Users\dvort\AppData\Local\Temp\lodestar-scheduler-review-4ecb720cd7184469a31ffa81dbbe93dd\src\scheduler.rs:11:
+Diff in <TEMP_VERIFY_DIR>\src\scheduler.rs:11:
  use tracing::{error, info, warn};
 
  /// Protocol interval constants for BitTorrent Enhancement Proposal (BEP) 51 (in seconds).
--pub const MAX_BEP51_INTERVAL_SECS: u32 = 21_600;       // 6 hours (BEP 51 spec maximum & crash guard)
--pub const MIN_POLITE_INTERVAL_FLOOR_SECS: u32 = 60;    // Conservative local minimum floor
--pub const DEFAULT_TIMEOUT_BACKOFF_SECS: u32 = 3_600;   // 1 hour backoff on UDP timeout
--pub const UNSUPPORTED_BACKOFF_SECS: u32 = 21_600;      // 6 hours backoff on explicit non-support
--pub const MALFORMED_BACKOFF_SECS: u32 = 10_800;        // 3 hours backoff on corrupt payload
--pub const MAX_CLOCK_DRIFT_WARN_SECS: u32 = 300;        // 5 minutes wall-clock drift threshold
-+pub const MAX_BEP51_INTERVAL_SECS: u32 = 21_600; // 6 hours (BEP 51 spec maximum & crash guard)
-+pub const MIN_POLITE_INTERVAL_FLOOR_SECS: u32 = 60; // Conservative local minimum floor
-+pub const DEFAULT_TIMEOUT_BACKOFF_SECS: u32 = 3_600; // 1 hour backoff on UDP timeout
-+pub const UNSUPPORTED_BACKOFF_SECS: u32 = 21_600; // 6 hours backoff on explicit non-support
-+pub const MALFORMED_BACKOFF_SECS: u32 = 10_800; // 3 hours backoff on corrupt payload
-+pub const MAX_CLOCK_DRIFT_WARN_SECS: u32 = 300; // 5 minutes wall-clock drift threshold
-
+[31m-pub const MAX_BEP51_INTERVAL_SECS: u32 = 21_600;       // 6 hours (BEP 51 spec maximum & crash guard)
+[0m[31m-pub const MIN_POLITE_INTERVAL_FLOOR_SECS: u32 = 60;    // Conservative local minimum floor
+[0m[31m-pub const DEFAULT_TIMEOUT_BACKOFF_SECS: u32 = 3_600;   // 1 hour backoff on UDP timeout
+[0m[31m-pub const UNSUPPORTED_BACKOFF_SECS: u32 = 21_600;      // 6 hours backoff on explicit non-support
+[0m[31m-pub const MALFORMED_BACKOFF_SECS: u32 = 10_800;        // 3 hours backoff on corrupt payload
+[0m[31m-pub const MAX_CLOCK_DRIFT_WARN_SECS: u32 = 300;        // 5 minutes wall-clock drift threshold
+[0m[32m+pub const MAX_BEP51_INTERVAL_SECS: u32 = 21_600; // 6 hours (BEP 51 spec maximum & crash guard)
+[0m[32m+pub const MIN_POLITE_INTERVAL_FLOOR_SECS: u32 = 60; // Conservative local minimum floor
+[0m[32m+pub const DEFAULT_TIMEOUT_BACKOFF_SECS: u32 = 3_600; // 1 hour backoff on UDP timeout
+[0m[32m+pub const UNSUPPORTED_BACKOFF_SECS: u32 = 21_600; // 6 hours backoff on explicit non-support
+[0m[32m+pub const MALFORMED_BACKOFF_SECS: u32 = 10_800; // 3 hours backoff on corrupt payload
+[0m[32m+pub const MAX_CLOCK_DRIFT_WARN_SECS: u32 = 300; // 5 minutes wall-clock drift threshold
+[0m
  /// Millitoken scale factor (1,000 millitokens = 1 permitted request).
  pub const MILLITOKENS_PER_REQUEST: u32 = 1_000;

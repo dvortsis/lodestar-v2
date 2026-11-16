@@ -1,6 +1,7 @@
 param(
     [string]$ProposalAttachment,
-    [string]$OutputDirectory = (Join-Path ([IO.Path]::GetTempPath()) ('lodestar-scheduler-review-' + [guid]::NewGuid().ToString('N')))
+    [string]$OutputDirectory = (Join-Path ([IO.Path]::GetTempPath()) ('lodestar-scheduler-review-' + [guid]::NewGuid().ToString('N'))),
+    [switch]$SyncEvidence
 )
 $ErrorActionPreference = 'Stop'
 if ((& rustc --version) -notmatch '^rustc 1\.99\.1 ' -or
@@ -44,10 +45,37 @@ tempfile = "=3.27.0"
 '@ | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Cargo.toml')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Cargo.lock') -Destination (Join-Path $OutputDirectory 'Cargo.lock')
 $manifest = Join-Path $OutputDirectory 'Cargo.toml'
+function Scrub-LogText([string]$Text) {
+    $scrubbed = $Text
+    $tempNorm = $OutputDirectory.TrimEnd('\', '/')
+    $tempSlash = $tempNorm.Replace('\', '/')
+    foreach ($variant in @("\\?\$tempNorm", "\\?/$tempSlash", $tempNorm, $tempSlash)) {
+        if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<TEMP_VERIFY_DIR>') }
+    }
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path.TrimEnd('\', '/')
+    $repoSlash = $repoRoot.Replace('\', '/')
+    foreach ($variant in @("\\?\$repoRoot", $repoRoot, $repoSlash)) {
+        if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<REPO_ROOT>') }
+    }
+    $userProfile = $env:USERPROFILE
+    if ($userProfile) {
+        $upNorm = $userProfile.TrimEnd('\', '/')
+        $upSlash = $upNorm.Replace('\', '/')
+        foreach ($variant in @($upNorm, $upSlash)) {
+            if ($variant) { $scrubbed = $scrubbed.Replace($variant, '<USER_HOME>') }
+        }
+    }
+    return $scrubbed
+}
 function Run-Check([string]$Log, [string[]]$Arguments) {
     $output = & cargo @Arguments 2>&1
     $code = $LASTEXITCODE
-    $output | Set-Content -LiteralPath (Join-Path $OutputDirectory $Log)
+    $scrubbedLines = @($output | ForEach-Object { (Scrub-LogText ($_.ToString())).TrimEnd() })
+    while ($scrubbedLines.Count -gt 0 -and $scrubbedLines[-1] -eq '') {
+        if ($scrubbedLines.Count -eq 1) { $scrubbedLines = @(); break }
+        $scrubbedLines = $scrubbedLines[0..($scrubbedLines.Count - 2)]
+    }
+    [IO.File]::WriteAllText((Join-Path $OutputDirectory $Log), ($scrubbedLines -join "`r`n") + "`r`n")
     Write-Output "$Log exit=$code"
     return $code
 }
@@ -83,11 +111,28 @@ if ($regressionLog -notmatch 'test result: FAILED\. 0 passed; 2 failed;' -or
 }
 [IO.File]::AppendAllText((Join-Path $OutputDirectory 'src/scheduler.rs'), "`n" + (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'followup-regressions.rs') -Raw))
 $code = Run-Check '06-followup-regressions.log' @('test','--manifest-path',$manifest,'--locked','--offline','--lib','followup_review','--','--nocapture')
-if ($code[-1] -eq 0) { throw 'Expected completion and permit-owner counterexamples did not reproduce.' }
+if ($code[-1] -eq 0) { throw 'Expected follow-up invariant counterexamples did not reproduce.' }
 $followupLog = Get-Content -LiteralPath (Join-Path $OutputDirectory '06-followup-regressions.log') -Raw
-if ($followupLog -notmatch 'test result: FAILED\. 0 passed; 2 failed;' -or
+if ($followupLog -notmatch 'test result: FAILED\. 0 passed; 5 failed;' -or
     $followupLog -notmatch 'redispatched ten seconds before the received interval expired after a failed completion commit' -or
-    $followupLog -notmatch 'scheduler B accepted a permit owned by scheduler A with a different database') {
-    throw 'The two follow-up invariant failures were not both established; inspect the log.'
+    $followupLog -notmatch 'scheduler B accepted a permit owned by scheduler A with a different database' -or
+    $followupLog -notmatch 'ledger remained permanently wedged by an expired hot_heap entry that reclaim_expired_locked never inspects' -or
+    $followupLog -notmatch 'explicitly unsupported node was re-queued onto hot_heap with stale Supported novelty and prioritized ahead of ready candidates after failed completion commit' -or
+    $followupLog -notmatch 'endpoint was poisoned in RAM for six hours after a failed WAL reservation even though no packet was dispatched') {
+    throw 'The five follow-up invariant failures were not all established; inspect the log.'
+}
+if ($SyncEvidence) {
+    $copyMap = @{
+        '01-original-build.log' = '01-original-build.txt'
+        '02-supplied-tests.log' = '02-supplied-tests.txt'
+        '03-clippy-after-borrow-repair.log' = '03-clippy-after-borrow-repair.txt'
+        '05-added-regressions.log' = '05-added-regressions.txt'
+        '06-followup-regressions.log' = '06-followup-regressions.txt'
+    }
+    foreach ($kv in $copyMap.GetEnumerator()) {
+        Copy-Item -LiteralPath (Join-Path $OutputDirectory $kv.Key) -Destination (Join-Path $PSScriptRoot $kv.Value) -Force
+    }
+    $fmtLines = Get-Content -LiteralPath (Join-Path $OutputDirectory '04-format-after-borrow-repair.log') -TotalCount 19
+    $fmtLines | Set-Content -LiteralPath (Join-Path $PSScriptRoot '04-format-excerpt.txt')
 }
 Write-Output "Evidence directory: $OutputDirectory"
