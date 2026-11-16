@@ -36,6 +36,13 @@
 //! - **Caches** in the plugin's `source_state`: a hit for
 //!   [`HIT_TTL_SECS`], a miss for [`MISS_TTL_SECS`]. The cursor and the
 //!   day's counts live there too, so a restart goes on where it stopped.
+//! - **Terms** (ENR-terms, `docs/decisions/2026-11-16-ENR-terms.md`):
+//!   each plugin's [`Terms`] decide whether it may walk the index in the
+//!   background (otherwise opened items only), how long its claims are
+//!   kept ([`sweep_expired`] drops them before the limit, and an opened
+//!   item's old claim is refreshed), whether its answers may rename the
+//!   record other apps are served ([`stored_title`]), and whether an
+//!   answer without the service's adult marker is refused.
 //! - **Off by default** (§18.7): nothing runs until a host registers a
 //!   plugin, and nothing is sent until you enable it and its consent holds.
 //!
@@ -54,7 +61,7 @@ use lodestar_filter::{Action, Engine, Facts, Handle, Item};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::identify::{
     HIT_TTL_SECS, Identifier, Lookup, MIN_INTERVAL_FLOOR, MISS_TTL_SECS, MediaKind, PER_DAY, Query,
-    RUNTIME_PREFIX,
+    RUNTIME_PREFIX, Retention, Terms,
 };
 use lodestar_sources::state::MAX_VALUE;
 use lodestar_sources::{
@@ -108,6 +115,19 @@ pub const MIN_IDLE: Duration = Duration::from_millis(10);
 /// passed over until the next round, so one unreadable row can't stall the
 /// walk.
 pub const MAX_TRIES: u32 = 3;
+
+/// Claim rows one retention sweep step deletes at most ([`sweep_expired`]).
+pub const SWEEP_BATCH: usize = 256;
+
+/// How often the runtime sweeps its plugin's expired claims while the
+/// last step left none over.
+pub const SWEEP_EVERY: Duration = Duration::from_secs(600);
+
+/// A claim stamped further ahead of the retention clock than this (in
+/// seconds) has no age that can be trusted, so the sweep drops it. Well
+/// under the one-day drop margin, so even such a claim goes before its
+/// limit.
+pub const FUTURE_SLACK_SECS: i64 = 3_600;
 
 /// The pause after a background item the gate refused, so a round over a
 /// large store is a light, steady load (about 200 items a second).
@@ -388,7 +408,8 @@ pub struct Config {
     pub page: usize,
     /// The rest after a full background round, in seconds.
     pub rest_secs: i64,
-    /// Run the background backfill. Off: opened items only.
+    /// Run the background backfill. Off: opened items only. Always off for
+    /// a plugin whose [`Terms`] don't allow a background walk.
     pub background: bool,
     /// The wait before trying again when there's nothing to do, or nothing
     /// may be looked up.
@@ -426,6 +447,21 @@ pub struct IdentifyStats {
     pub missed: AtomicU64,
     /// Lookups that failed (the plugin's error).
     pub failed: AtomicU64,
+    /// Answers refused for the service's adult marker: marked adult, or
+    /// unmarked while its terms require the marker. Counted as misses too.
+    pub refused_adult: AtomicU64,
+    /// An opened item's old claim was dropped: the refresh didn't match.
+    pub refresh_dropped: AtomicU64,
+    /// Claims the retention sweep dropped.
+    pub expired: AtomicU64,
+    /// Sweeps that found the wall clock behind the retention mark by more
+    /// than [`FUTURE_SLACK_SECS`]: the clock stepped back, or once ran
+    /// ahead. Until real time catches up, the plugin's claims read as old
+    /// and are dropped (fail closed); the status page shows it.
+    pub clock_ahead: AtomicU64,
+    /// Runs where the terms record or the retention mark couldn't be
+    /// written ([`record_terms`]). Readers then take the strictest terms.
+    pub unrecorded: AtomicU64,
     /// Items the gate refused.
     pub ineligible: AtomicU64,
     /// Items passed over because a fresh hit or miss is cached.
@@ -523,6 +559,9 @@ impl IdentifySource {
             .interval
             .max(plugin.min_interval())
             .max(MIN_INTERVAL_FLOOR);
+        // Only a service whose terms clearly allow bulk use is walked in
+        // the background; every other gets opened items only.
+        let background = config.background && plugin.terms().background_walk;
         let source = IdentifySource {
             plugin,
             store,
@@ -539,6 +578,7 @@ impl IdentifySource {
                 // Never so short that a lookup can't get its host's token,
                 // never so long that a hung plugin stalls the runtime.
                 lookup_timeout: config.lookup_timeout.clamp(min_timeout, MAX_LOOKUP_TIMEOUT),
+                background,
                 ..config
             },
             stats: Arc::default(),
@@ -569,8 +609,29 @@ impl IdentifySource {
             state: Arc::new(Guarded(state.clone())),
             http: ctx.kit.http.clone(),
         };
+        // The backfill's `stored_title` has no list of the plugins: it reads
+        // the terms here, where the plugin can't write. Best effort: a
+        // reader that finds none takes the strictest.
+        let terms = *self.plugin.terms();
+        let recorded = {
+            let store = self.store.clone();
+            let (source, now) = (ctx.source, (self.config.clock)());
+            tokio::task::spawn_blocking(move || {
+                let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+                record_terms(&mut store, source, &terms, now)
+            })
+            .await
+        };
+        if !matches!(recorded, Ok(Ok(()))) {
+            bump(&self.stats.unrecorded);
+        }
         let mut background = Background::load(&*state).await;
         let mut last: Option<Instant> = None;
+        // The retention clock: the latest time the sweep used, and when on
+        // the monotonic clock, so a wall clock stepping back never holds a
+        // claim longer.
+        let mut retention: Option<(i64, Instant)> = None;
+        let mut sweep_at = Instant::now();
         // An opened item that arrived while the runtime waited.
         let mut waiting: Option<i64> = None;
         // The background item the store last failed on, and how often.
@@ -579,6 +640,31 @@ impl IdentifySource {
             if ctx.shutdown.is_requested() {
                 return Ok(());
             }
+            if Instant::now() >= sweep_at {
+                let rnow = retention_now((self.config.clock)(), retention);
+                let store = self.store.clone();
+                let (source, keep) = (ctx.source, terms.retention);
+                let swept = tokio::task::spawn_blocking(move || {
+                    let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    sweep_expired(&mut store, source, &keep, rnow)
+                })
+                .await;
+                // A full step leaves more: the next turn sweeps again. An
+                // error waits the interval and tries again.
+                sweep_at = Instant::now() + SWEEP_EVERY;
+                if let Ok(Ok(swept)) = swept {
+                    retention = Some((swept.now, Instant::now()));
+                    // `rnow` already carries the mark: compare with the wall.
+                    if swept.now > (self.config.clock)().saturating_add(FUTURE_SLACK_SECS) {
+                        bump(&self.stats.clock_ahead);
+                    }
+                    let n = swept.dropped.len();
+                    self.stats.expired.fetch_add(n as u64, Ordering::Relaxed);
+                    if n >= SWEEP_BATCH {
+                        sweep_at = Instant::now();
+                    }
+                }
+            }
             if let Some(at) = last {
                 tokio::select! {
                     biased;
@@ -586,6 +672,8 @@ impl IdentifySource {
                     _ = tokio::time::sleep_until(at + self.config.interval) => {}
                 }
             }
+            // After the sweep, so the first item already has the mark.
+            let rnow = retention_now((self.config.clock)(), retention);
             let now = (self.config.clock)();
             let next = waiting
                 .take()
@@ -603,7 +691,7 @@ impl IdentifySource {
                     },
                 },
             };
-            match self.one(&mut ctx, &kit, &*state, id).await {
+            match self.one(&mut ctx, &kit, &*state, id, rnow).await {
                 Step::Asked => last = Some(Instant::now()),
                 Step::Skipped if !user => tokio::select! {
                     biased;
@@ -700,11 +788,41 @@ impl IdentifySource {
     }
 
     /// One item: the cache, the gate, the day's count, then the plugin.
-    async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
+    /// `rnow` is the retention clock, which never steps back.
+    async fn one(
+        &self,
+        ctx: &mut SourceCtx,
+        kit: &Kit,
+        state: &dyn PluginState,
+        id: i64,
+        rnow: i64,
+    ) -> Step {
         let now = (self.config.clock)();
+        let terms = *self.plugin.terms();
+        // The plugin's own claim on the item is read only when it can change
+        // the outcome: a cache hit (a stale claim is asked again) and a miss
+        // (an old claim goes).
+        let stored_at = |this: &Self, source: SourceId| {
+            let store = this.store.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    store.claims_stored_at(id, source)
+                })
+                .await
+                .ok()
+                .and_then(Result::ok)
+            }
+        };
         if Cache::fresh(state, id, now).await {
-            bump(&self.stats.cached);
-            return Step::Skipped;
+            let Some(at) = stored_at(self, ctx.source).await else {
+                bump(&self.stats.unreadable);
+                return Step::Unreadable;
+            };
+            if !at.is_some_and(|at| needs_refresh(&terms.retention, at, rnow)) {
+                bump(&self.stats.cached);
+                return Step::Skipped;
+            }
         }
         let candidate = {
             let store = self.store.clone();
@@ -769,6 +887,14 @@ impl IdentifySource {
             bump(&self.stats.failed);
             return Step::Asked;
         };
+        // An answer its terms refuse for the adult marker is a miss.
+        let lookup = match lookup {
+            Ok(Lookup::Match(answer)) if !terms.accepts(answer.adult) => {
+                bump(&self.stats.refused_adult);
+                Ok(Lookup::NoMatch)
+            }
+            other => other,
+        };
         match lookup {
             Ok(Lookup::Match(answer)) => {
                 let found = Found::key(candidate.key, STRATEGY).with_claims(answer.into_claims());
@@ -782,6 +908,20 @@ impl IdentifySource {
             }
             Ok(Lookup::NoMatch) => {
                 bump(&self.stats.missed);
+                // The service no longer stands behind the old answer: it
+                // goes, so nothing is kept that a fresh lookup wouldn't give.
+                if !matches!(stored_at(self, ctx.source).await, Some(None)) {
+                    let store = self.store.clone();
+                    let source = ctx.source;
+                    let dropped = tokio::task::spawn_blocking(move || {
+                        let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store.drop_claims(id, source)
+                    })
+                    .await;
+                    if matches!(dropped, Ok(Ok(true))) {
+                        bump(&self.stats.refresh_dropped);
+                    }
+                }
                 Cache::remember(state, id, now.saturating_add(MISS_TTL_SECS), now).await;
             }
             Err(_) => bump(&self.stats.failed),
@@ -900,6 +1040,163 @@ impl PluginState for Guarded {
 pub const CURSOR_KEY: &str = "enr10/cursor";
 /// The key of the day's counts.
 pub const BUDGET_KEY: &str = "enr10/budget";
+/// The key of the plugin's [`Terms::record`], for readers without the
+/// plugin ([`stored_title`]).
+pub const TERMS_KEY: &str = "enr10/terms";
+/// The key of the retention clock's high-water mark ([`sweep_expired`]).
+pub const CLOCK_KEY: &str = "enr10/clock";
+
+/// The retention clock: the wall clock `now`, but never behind the last
+/// time the sweep used plus the monotonic time since.
+fn retention_now(now: i64, last: Option<(i64, Instant)>) -> i64 {
+    match last {
+        Some((at, when)) => {
+            let since = i64::try_from(when.elapsed().as_secs()).unwrap_or(i64::MAX);
+            now.max(at.saturating_add(since))
+        }
+        None => now,
+    }
+}
+
+/// A claim stored at `stored_at` is old enough to be refreshed on the
+/// next user interest. One stamped in the future has no age to trust, so
+/// it's refreshed too.
+pub fn needs_refresh(retention: &Retention, stored_at: i64, now: i64) -> bool {
+    stored_at > now.saturating_add(FUTURE_SLACK_SECS)
+        || now.saturating_sub(stored_at) >= retention.refresh_after()
+}
+
+/// What one [`sweep_expired`] step did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Swept {
+    /// The torrents that lost the plugin's claims, marked for the backfill.
+    pub dropped: Vec<i64>,
+    /// The retention clock the step used: `now`, or the high-water mark
+    /// when the clock has stepped back.
+    pub now: i64,
+    /// The mark was ahead of `now` by more than [`FUTURE_SLACK_SECS`].
+    pub clock_ahead: bool,
+}
+
+/// One bounded step of the retention sweep for the plugin running as
+/// `source`: deletes at most [`SWEEP_BATCH`] of its claim rows that are
+/// [`Retention::drop_after`] old, or stamped more than
+/// [`FUTURE_SLACK_SECS`] ahead, and never another source's. Fewer than
+/// [`SWEEP_BATCH`] dropped means none is left. Resumable without a cursor:
+/// a deleted row no longer matches, so each step takes rows still due.
+///
+/// The clock is `now`, but never behind the high-water mark kept in the
+/// plugin's `source_state` ([`CLOCK_KEY`]), so a clock that steps back
+/// can't keep a claim past its limit. [`record_terms`] creates the mark
+/// before the plugin first runs, so later writes never need a new state
+/// key; a write that fails anyway is ignored, and the step still deletes.
+///
+/// The runtime sweeps while it runs. **A host also calls
+/// [`sweep_recorded`]**, once at start and then on a timer, so a source
+/// that isn't running (disabled, paused, or its plugin gone from the
+/// build) never keeps claims past its terms.
+pub fn sweep_expired(
+    store: &mut Store,
+    source: SourceId,
+    retention: &Retention,
+    now: i64,
+) -> Result<Swept, lodestar_store::Error> {
+    let stored = store.plugin_state(source, CLOCK_KEY)?;
+    let high = stored
+        .as_deref()
+        .and_then(|v| i64_at(v, 0))
+        .unwrap_or(i64::MIN);
+    let wall = now;
+    let now = now.max(high);
+    if now > high {
+        // Compare-and-set: a connection that raised the mark meanwhile is
+        // never moved back by this one.
+        let _ = store.compare_and_set_plugin_state(
+            source,
+            CLOCK_KEY,
+            stored.as_deref(),
+            Some(&now.to_be_bytes()),
+        );
+    }
+    // Dropped at its drop age: stamped at or before `now - drop_after`.
+    let before = now.saturating_sub(retention.drop_after()).saturating_add(1);
+    let after = now.saturating_add(FUTURE_SLACK_SECS);
+    let dropped = store.drop_claims_outside(source, before, after, SWEEP_BATCH)?;
+    Ok(Swept {
+        dropped,
+        now,
+        clock_ahead: high > wall.saturating_add(FUTURE_SLACK_SECS),
+    })
+}
+
+/// Records `terms` for the plugin running as `source` ([`TERMS_KEY`]),
+/// where readers without the plugin find them ([`stored_title`],
+/// [`sweep_recorded`]) and the plugin can't write, and creates the
+/// retention mark ([`CLOCK_KEY`]) if it has none. The runtime calls it
+/// when it starts; **a host calls it when it registers the plugin**,
+/// whatever its source's state, so a build that tightens a plugin's terms
+/// applies them to a source that isn't running too.
+///
+/// Inert until called: nothing in this crate calls it but the runtime,
+/// and no host registers a plugin yet.
+///
+/// When the record goes from redistributable to not, every torrent holding
+/// the source's claims is marked for the backfill, so a title they
+/// resolved leaves the record that search, Torznab and export serve.
+pub fn record_terms(
+    store: &mut Store,
+    source: SourceId,
+    terms: &Terms,
+    now: i64,
+) -> Result<(), lodestar_store::Error> {
+    // Mark first, then write the record: if the mark fails, the old record
+    // still reads as redistributable, so the next call marks again. The
+    // mark is safe to repeat.
+    if !terms.redistribute && may_redistribute(store, source)? {
+        store.mark_claims_unenriched(source)?;
+    }
+    let record = terms.record();
+    if store.plugin_state(source, TERMS_KEY)?.as_deref() != Some(record.as_slice()) {
+        store.set_plugin_state(source, TERMS_KEY, Some(&record))?;
+    }
+    if store.plugin_state(source, CLOCK_KEY)?.is_none() {
+        store.set_plugin_state(source, CLOCK_KEY, Some(&now.to_be_bytes()))?;
+    }
+    Ok(())
+}
+
+/// One [`sweep_expired`] step for every source with a terms record, with
+/// the retention the record holds (an unreadable record: the default):
+/// what a host runs once at start and then on a timer, so claims never
+/// outlive their terms while a source is disabled, paused or its plugin is
+/// gone from the build. A source whose step comes back full needs another.
+///
+/// Inert until a host calls it: no host wires identify plugins in yet.
+pub fn sweep_recorded(
+    store: &mut Store,
+    now: i64,
+) -> Result<Vec<(SourceId, Swept)>, lodestar_store::Error> {
+    let mut out = Vec::new();
+    for row in store.sources()? {
+        let Some(record) = store.plugin_state(row.id, TERMS_KEY)? else {
+            continue;
+        };
+        let keep = Terms::from_record(&record).map_or(Retention::DEFAULT, |t| t.retention);
+        out.push((row.id, sweep_expired(store, row.id, &keep, now)?));
+    }
+    Ok(out)
+}
+
+/// Whether a stored identification from `source` may rename the record
+/// that search, Torznab and export serve: its plugin's terms, as the
+/// runtime recorded them, allow redistribution. A source with no record
+/// (its runtime never ran, or the record doesn't read) doesn't.
+pub fn may_redistribute(store: &Store, source: SourceId) -> Result<bool, lodestar_store::Error> {
+    Ok(store
+        .plugin_state(source, TERMS_KEY)?
+        .and_then(|v| Terms::from_record(&v))
+        .is_some_and(|t| t.redistribute))
+}
 
 fn i64_at(b: &[u8], at: usize) -> Option<i64> {
     Some(i64::from_be_bytes(b.get(at..at + 8)?.try_into().ok()?))
@@ -1079,6 +1376,11 @@ impl Cache {
 /// rename it. Private claims never count. Each plugin's answer is its own
 /// row, so the others are kept as alternatives; only this one names the
 /// title.
+///
+/// **Only from a plugin whose terms allow redistribution**
+/// ([`may_redistribute`], ENR-terms): the record is what search, Torznab
+/// and export serve to other apps, so an answer that must stay in
+/// Lodestar's own UI never names it.
 pub fn stored_title(
     store: &Store,
     id: i64,
@@ -1096,9 +1398,10 @@ pub fn stored_title(
         let (Some(title), Some(conf)) = (&d.canonical_title, d.match_confidence) else {
             continue;
         };
-        if best.as_ref().is_none_or(|b| conf > b.2) {
-            best = Some((title.clone(), d.year, conf));
+        if best.as_ref().is_some_and(|b| conf <= b.2) || !may_redistribute(store, c.source)? {
+            continue;
         }
+        best = Some((title.clone(), d.year, conf));
     }
     Ok(best)
 }

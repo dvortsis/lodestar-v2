@@ -306,7 +306,7 @@ pub(crate) struct Plan {
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 14;
+    pub(crate) const KNOWN_THROUGH: i64 = 15;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -316,7 +316,7 @@ impl Plan {
     /// | 4–9 | purged | purged | absent |
     /// | 10–12 | purged | purged | purged |
     /// | 13 | purged, and import candidates | purged | purged |
-    /// | 14 | purged, with candidates and unverified items | purged | purged |
+    /// | 14–15 | purged, with candidates and unverified items | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -380,7 +380,8 @@ impl Plan {
             // V14 adds Sources (SRC-1). Unverified items hold keys and
             // claim names that aren't torrents, so they go by hash, as
             // candidates do. Torrent claims cascade from torrents; plugin
-            // state holds no names.
+            // state holds no names. V15 (ENR-terms) only stamps claims
+            // with when they were written.
             14..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,

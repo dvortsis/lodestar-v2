@@ -30,7 +30,9 @@ use std::time::Duration;
 
 use lodestar_sources::claims::{AltTitle, ExternalId};
 use lodestar_sources::http::parse_retry_after;
-use lodestar_sources::identify::{Identification, Identifier, Lookup, MediaKind, Query};
+use lodestar_sources::identify::{
+    Attribution, Identification, Identifier, Lookup, MediaKind, Query, Retention, Terms,
+};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Response, Risk,
@@ -138,9 +140,32 @@ impl OpenLibrary {
     }
 }
 
+/// Open Library's terms (ENR-terms; the runner's decision of 2026-11-16
+/// on #938): no whole-index walk, only the items you open, within its
+/// rate cap. Its API terms don't clearly allow passing answers on, so
+/// they stay in Lodestar's own UI. It asks for a link back, so the link is
+/// its attribution.
+pub const TERMS: Terms = Terms {
+    background_walk: false,
+    redistribute: false,
+    retention: Retention::DEFAULT,
+    attribution: Some(Attribution {
+        text: "Open Library",
+        link: "https://openlibrary.org",
+        logo: None,
+    }),
+    // Open Library has no adult marker to read. The runtime's gate never
+    // asks about an Adult item, and its kinds are Ebook and Audiobook only.
+    adult_marker_required: false,
+};
+
 impl Identifier for OpenLibrary {
     fn manifest(&self) -> &Manifest {
         &MANIFEST
+    }
+
+    fn terms(&self) -> &Terms {
+        &TERMS
     }
 
     fn policy(&self) -> &Policy {
@@ -320,5 +345,27 @@ fn identification(query: &Query, w: &Work) -> Identification {
         } else {
             CONFIDENCE_WITHOUT_YEAR
         },
+        // Open Library doesn't mark adult works; `TERMS` opts out.
+        adult: None,
+    }
+}
+
+#[cfg(test)]
+mod terms_tests {
+    use super::*;
+
+    /// Opened items only, kept in Lodestar's own UI, credited with a link,
+    /// no marker to read.
+    #[test]
+    fn open_library_terms() {
+        let t = OpenLibrary::new();
+        let t = Identifier::terms(&t);
+        assert!(!t.background_walk && !t.redistribute && !t.adult_marker_required);
+        assert_eq!(t.retention, Retention::DEFAULT);
+        assert_eq!(
+            t.attribution.map(|a| a.link),
+            Some("https://openlibrary.org")
+        );
+        assert!(t.accepts(None) && !t.accepts(Some(true)));
     }
 }
