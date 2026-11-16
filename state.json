@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T03:38Z",
+  "updated_at": "2026-11-16T05:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T03:38Z",
+  "last_heartbeat": "2026-11-16T05:50Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10103,6 +10103,30 @@
       "slice": "X-win-service-relative-paths",
       "sha": "2207706a",
       "at": "2026-11-16T02:26Z"
+    },
+    {
+      "pr": 962,
+      "slice": "ENR-terms",
+      "sha": "2f64d661",
+      "at": "2026-11-16T05:50Z"
+    },
+    {
+      "pr": 961,
+      "slice": "X-import-rate-1m",
+      "sha": "608e85eb",
+      "at": "2026-11-16T05:50Z"
+    },
+    {
+      "pr": 964,
+      "slice": "X-win-service-relative-paths-2",
+      "sha": "09668877",
+      "at": "2026-11-16T05:50Z"
+    },
+    {
+      "pr": 963,
+      "slice": "GS-2b",
+      "sha": "a3f8b6a9",
+      "at": "2026-11-16T05:50Z"
     }
   ],
   "active_sessions": {
@@ -10341,7 +10365,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-16T03:38Z",
+    "updated": "2026-11-16T05:50Z",
     "items": [
       {
         "slot": 1,
@@ -10350,8 +10374,9 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-16T02:26Z",
-        "doing": "service refuses relative witness dir and blocklist files",
-        "cap": "build (\u00a72.64 4+4)"
+        "doing": "idle: runner paused (owner, 2026-11-16, usage limit)",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "idle"
       },
       {
         "slot": 2,
@@ -10360,16 +10385,18 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-16T00:41Z",
-        "doing": "session_01MMjhnBf6xYkVAg5NsDSUML: ENR-terms (identify harness enforces each lookup service's terms)",
-        "cap": "cloud-testing share used for build (\u00a72.64 4+4)"
+        "doing": "idle: runner paused (owner, 2026-11-16, usage limit)",
+        "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
+        "status": "idle"
       },
       {
         "slot": 3,
         "slice": "GS-3",
         "role": "build",
         "agent": "claude",
-        "doing": "collapse-by-group: search, counts, cursor, API",
-        "since": "2026-11-16T01:00Z"
+        "doing": "session_01MMjhn8PjQcwZmfBCR7E6zK: GS-3 paused, work on slice/GS-3 (b0592458), no PR yet; resume when owner lifts pause",
+        "since": "2026-11-16T01:00Z",
+        "status": "idle"
       },
       {
         "slot": 4,
@@ -10378,8 +10405,9 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-15T22:40Z",
-        "doing": "X-import-rate-1m: 1M import 990/s vs IMP-4b 2,000/s; profile and fix (#951 merged)",
-        "cap": "build (\u00a72.64 4+4)"
+        "doing": "idle: runner paused (owner, 2026-11-16, usage limit)",
+        "cap": "build (\u00a72.64 4+4)",
+        "status": "idle"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10470,8 +10498,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-16T03:38Z",
-  "updated": "2026-11-16T03:38Z",
+  "heartbeat": "2026-11-16T05:50Z",
+  "updated": "2026-11-16T05:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -11248,5 +11276,11 @@
     "ENR-steam",
     "ENR-debrid",
     "M8-PERF-1"
-  ]
+  ],
+  "paused": {
+    "since": "2026-11-16T05:50Z",
+    "by": "owner, in chat 2026-11-16 (usage at 96%)",
+    "scope": "all build work, reviews and API-lane reviews; cloud testing continues",
+    "resume": "owner says so; then re-enable heartbeat + watchdog triggers, resume GS-3, review lane PRs, launch X-sampler-cooldown-split"
+  }
 }
