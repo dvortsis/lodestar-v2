@@ -33,7 +33,7 @@ At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is pri
 
 It names the data folder and says to run the installer's **Repair** as an administrator. It holds only the folder's path and that fix, so anyone who can open Event Viewer can read it. The exact reason is still in the file below.
 
-**(Newer than v0.5.1)** Event ID **5** means a setting isn't a full path: `LODESTAR_DATA_DIR`, `--config`, `data_dir` in the config file, or `%ProgramData%`. A full path starts with a drive letter, a colon and a backslash, such as `D:\Lodestar`. The file below names the setting. Set it to a full path or remove it, then run `Start-Service Lodestar`.
+**(Newer than v0.5.1)** Event ID **5** means a path setting isn't a full path. It's one of `LODESTAR_DATA_DIR`, `LODESTAR_DHT_WITNESS_DIR`, `--config` or `%ProgramData%`. In the config file, it's `data_dir`, `restart_witness_dir` or a `blocklist` file. A full path starts with a drive letter, a colon and a backslash, such as `D:\Lodestar`. The file below names the setting. Set it to a full path or remove it, then run `Start-Service Lodestar`.
 
 In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lodestar"`. `"D:\Lodestar"` in double quotes is an error.
 

@@ -435,6 +435,7 @@ placement:
   - X-win-service-path-hardening
   - X-win-service-cwd-fallback
   - X-win-service-relative-paths
+  - X-win-service-relative-paths-2
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
