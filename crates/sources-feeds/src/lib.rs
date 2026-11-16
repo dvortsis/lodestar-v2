@@ -11,6 +11,7 @@ pub mod json;
 pub mod lemmy;
 pub mod musicbrainz;
 pub mod nostr;
+pub mod openlibrary;
 pub mod rss;
 pub mod stashdb;
 pub mod torznab;

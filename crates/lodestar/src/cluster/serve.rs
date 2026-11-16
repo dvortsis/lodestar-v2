@@ -976,16 +976,21 @@ async fn write_floor(
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = expire.tick() => {
                 // No database yet: no server has opened, so no report was
-                // written, and opening one would create it (with workers
-                // off, nothing is created; X-store-migrate-race).
-                if db.exists() {
-                    let (f, db, config) = (floor.clone(), db.clone(), config.clone());
-                    // The clock that stamps the reports (`Sink::outcomes`).
-                    let now = clock.now_secs();
-                    // A failure is tried again at the next tick; holds only
-                    // last longer meanwhile.
-                    let _ = tokio::task::spawn_blocking(move || f.expire(&db, config, now)).await;
-                }
+                // written, and opening one would create it (with workers off,
+                // nothing is created; X-store-migrate-race). The check is file
+                // I/O, so it runs off the async threads with the expiry it
+                // guards (X-store-busy-nits).
+                let (f, db, config) = (floor.clone(), db.clone(), config.clone());
+                // The clock that stamps the reports (`Sink::outcomes`).
+                let now = clock.now_secs();
+                // A failure is tried again at the next tick; holds only last
+                // longer meanwhile.
+                let _ = tokio::task::spawn_blocking(move || {
+                    if db.exists() {
+                        let _ = f.expire(&db, config, now);
+                    }
+                })
+                .await;
                 #[cfg(test)]
                 floor.expiries.fetch_add(1, Ordering::Relaxed);
                 continue;
@@ -1462,6 +1467,23 @@ impl InboundSink for Sink {
         }
     }
 
+    fn handed_back(
+        &self,
+        key: InfoHash,
+        token: lodestar_cluster::Token,
+        lease: Lease,
+    ) -> lodestar_cluster::LocalIntake {
+        self.remote
+            .as_ref()
+            .map_or(lodestar_cluster::LocalIntake::Full, |r| {
+                r.handed_back(key, token, lease)
+            })
+    }
+
+    fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.remote.as_ref().is_some_and(|r| r.refuses_local(key))
+    }
+
     fn snapshot_ack(&self, worker: WorkerId, ack: SnapshotAck) {
         if ack.kind == SnapshotKind::HaveFilter {
             if let Some(server) = self.server.get().and_then(Weak::upgrade) {
@@ -1912,6 +1934,7 @@ struct Totals {
     regrants: u64,
     busy: u64,
     stale_reports: u64,
+    handed_back: u64,
     revoked: u64,
     protocol_errors: u64,
     version_refused: u64,
@@ -1939,6 +1962,7 @@ impl Totals {
             regrants: s.regrants,
             busy: s.busy,
             stale_reports: s.stale_reports,
+            handed_back: s.handed_back,
             revoked: s.revoked,
             protocol_errors: s.protocol_errors,
             version_refused: s.version_refused,
@@ -1966,6 +1990,7 @@ impl Totals {
             regrants: self.regrants + o.regrants,
             busy: self.busy + o.busy,
             stale_reports: self.stale_reports + o.stale_reports,
+            handed_back: self.handed_back + o.handed_back,
             revoked: self.revoked + o.revoked,
             protocol_errors: self.protocol_errors + o.protocol_errors,
             version_refused: self.version_refused + o.version_refused,
@@ -2459,6 +2484,11 @@ impl ClusterHandle {
                 "cluster_busy_total",
                 "Claimed keys denied because grants were held back.",
                 totals.busy,
+            ),
+            (
+                "cluster_handed_back_total",
+                "Keys a remote worker found too large, handed to the built-in worker.",
+                totals.handed_back,
             ),
             (
                 "cluster_stale_reports_total",
@@ -3359,7 +3389,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 40, "{text}");
+        assert_eq!(families.len(), 41, "{text}");
         // The lapsed-key series render, each as one series, at 0 here.
         for name in [
             "lodestar_cluster_claims_denied_excluded_total",

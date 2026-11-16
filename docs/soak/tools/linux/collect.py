@@ -145,6 +145,9 @@ PLAIN = frozenset((
     "fetch_admission_holds_total", "fetch_admission_waiters", "fetch_admission_permits_in_use",
     "dht_utp_in_total", "utp_retransmits_total", "utp_connection_timeouts_total",
     "dht_sample_sent_total", "dht_throttled_total",
+    # X-routing-table-metric: routing-table size and its good nodes. Only the second falls
+    # when the network goes (a VPN restart). Both absent with the DHT off.
+    "dht_routing_nodes", "dht_routing_good_nodes",
 ))
 MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 250
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN

@@ -2740,13 +2740,27 @@ impl Actor {
         self.stats
             .sample_suppression_seconds
             .store(self.proof.suppression_seconds(now_i), Ordering::Relaxed);
-        let nodes: usize = self.families.iter().map(|f| f.table.len()).sum();
+        self.publish_routing(now);
+        self.stats
+            .outstanding
+            .store(self.pending.len() as u64, Ordering::Relaxed);
+    }
+
+    /// The routing-table gauges at `now` (secs since the actor's epoch):
+    /// the size, and the good nodes among it. One pass over the main
+    /// buckets per family, allocating nothing.
+    fn publish_routing(&self, now: u64) {
+        let (mut nodes, mut good) = (0, 0);
+        for f in &self.families {
+            nodes += f.table.len();
+            good += f.table.good(now);
+        }
         self.stats
             .routing_nodes
             .store(nodes as u64, Ordering::Relaxed);
         self.stats
-            .outstanding
-            .store(self.pending.len() as u64, Ordering::Relaxed);
+            .routing_good_nodes
+            .store(good as u64, Ordering::Relaxed);
     }
 
     /// One tick of BEP 33 scraping: resume lookups that ran short of
@@ -3054,6 +3068,69 @@ mod tests {
         assert!(a.stalled.is_empty());
         assert!(a.peer_requests.is_empty());
         assert_eq!(a.active_get_peers, 0);
+    }
+
+    /// The routing-table gauges follow the table on each maintenance tick:
+    /// inserts raise both, a node gone bad or silent for 15 minutes stays
+    /// in `routing_nodes` but leaves `routing_good_nodes` until it answers
+    /// again, and removing every node takes both back to 0
+    /// (X-routing-table-metric).
+    #[test]
+    fn routing_gauges_follow_the_table_on_each_tick() {
+        let (mut a, sockets) = fixture();
+        let gauges = |a: &Actor| {
+            let s = a.stats.snapshot();
+            (s.routing_nodes, s.routing_good_nodes)
+        };
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (0, 0), "an empty table");
+
+        let now = a.now_secs();
+        let nodes: Vec<NodeInfo> = (1..=3u8)
+            .map(|i| NodeInfo {
+                id: NodeId([0x80 >> i; 20]),
+                addr: SocketAddr::from(([127, 0, 0, 1 + i], UNBOUND)),
+            })
+            .collect();
+        for n in &nodes {
+            assert_eq!(
+                a.families[0].table.insert(*n, Contact::Response, now),
+                Inserted::Added
+            );
+        }
+        assert_eq!(gauges(&a), (0, 0), "published on the tick, not on insert");
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (3, 3));
+
+        for _ in 0..crate::routing::MAX_FAILURES {
+            a.families[0].table.failed(&nodes[0].id, now);
+        }
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (3, 2), "bad keeps its slot, but isn't good");
+
+        // A controlled clock: 15 minutes with no reply, then one answers.
+        a.publish_routing(now + crate::routing::GOOD_FOR_SECS);
+        assert_eq!(gauges(&a), (3, 0), "silent for the good window");
+        assert_eq!(
+            a.families[0].table.insert(
+                nodes[2],
+                Contact::Response,
+                now + crate::routing::GOOD_FOR_SECS
+            ),
+            Inserted::Updated
+        );
+        a.publish_routing(now + crate::routing::GOOD_FOR_SECS);
+        assert_eq!(gauges(&a), (3, 1), "a reply brings it back");
+
+        a.families[0].table.remove(&nodes[1].id);
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (2, 1));
+
+        for n in &nodes {
+            a.families[0].table.remove(&n.id);
+        }
+        a.maintain(&sockets);
+        assert_eq!(gauges(&a), (0, 0), "the table emptied");
     }
 
     #[test]

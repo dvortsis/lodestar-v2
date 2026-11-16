@@ -1,0 +1,49 @@
+{
+ "numFound": 3,
+ "start": 0,
+ "numFoundExact": true,
+ "docs": [
+  {
+   "key": "/works/OL900001W",
+   "title": "Frankenstein",
+   "alternative_title": [
+    "Frankenstein; or, The Modern Prometheus",
+    "Frankenstein",
+    "Frankenstein, ou le Prométhée moderne"
+   ],
+   "first_publish_year": 1818,
+   "publish_year": [
+    1818,
+    1831,
+    1999,
+    2003
+   ],
+   "author_name": [
+    "SENTINEL Author Name"
+   ],
+   "subject": [
+    "SENTINEL subject"
+   ]
+  },
+  {
+   "key": "/works/OL900002W",
+   "title": "Frankenstein Study Guide",
+   "first_publish_year": 2004,
+   "publish_year": [
+    2004
+   ]
+  },
+  {
+   "key": "/works/OL900003W",
+   "title": "The Making of Frankenstein",
+   "alternative_title": [
+    "Making Frankenstein"
+   ],
+   "first_publish_year": 1990
+  }
+ ],
+ "num_found": 3,
+ "q": "",
+ "offset": null,
+ "documentation_url": "https://openlibrary.org/dev/docs/api/search"
+}

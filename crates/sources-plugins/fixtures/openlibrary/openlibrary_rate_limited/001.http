@@ -1,0 +1,6 @@
+GET https://openlibrary.org/search.json?title=frankenstein&fields=key%2Ctitle%2Calternative_title%2Cfirst_publish_year%2Cpublish_year&limit=10
+Accept: application/json
+
+HTTP 429
+Retry-After: 120
+Content-Type: application/json

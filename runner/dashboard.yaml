@@ -432,6 +432,9 @@ placement:
   - X-fleet-polish
   - X-win-log-held-open
   - X-cli-win-data-dir
+  - X-win-service-path-hardening
+  - X-win-service-cwd-fallback
+  - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
@@ -486,12 +489,19 @@ placement:
   - X-flake-address-port
   - X-flake-detect-macos-nits
   - X-flake-supervise-restarts
+  - X-fuzz-slow-targets
+  - X-fuzz-nits-1115
   - X-operator-unattended-wake
   - X-operator-check8-compare
+  - X-cleanup-fits-quota
+  - X-release-dead-code
+  - X-index-bytes-1m
   - X-store-migrate-race
   - X-flake-store-migrate-race
   - X-store-wal-nits
   - X-cluster-start-retry
+  - X-worker-oversize-handback
+  - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
@@ -695,6 +705,7 @@ placement:
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
+  - X-gluetun-restart-recover
   - X-ci-filter-fleet
   - X-ci-filter-rust-inputs
   - X-ci-filter-docs-user
@@ -812,6 +823,10 @@ placement:
   - X-import-progress-visible
   - X-import-status-lock
   - X-store-load-busy-map
+  - X-store-busy-nits
+  - X-routing-table-metric
+  - X-filter-split-nits
+  - X-filter-scratch-trim
   - X-first-run-search-gate
   - D-docker-guide-1115
 unplaced_workstream: ws-small

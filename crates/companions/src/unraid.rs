@@ -162,6 +162,7 @@ const NETWORK_NOTE: &str = "Create the Docker network first: Unraid starts a con
 const POST_RULES_NOTE: &str = "Before you start it, save Lodestar's post-rules file at the Post-rules path, as the Lodestar user guide shows (chapter 3, \"Close gluetun's gap when the VPN drops\"). Without the file, gluetun won't start, and check it, as the guide shows: an empty or wrong file starts gluetun with no rules.";
 const SAVED_NOTE: &str = "Lodestar saved its post-rules file at the Post-rules path, in its companion-files folder. Keep that path. Without the file, gluetun won't start. After it starts, check that it loaded the rules, as the Lodestar user guide shows (chapter 3, \"Close gluetun's gap when the VPN drops\").";
 const INTERFACE_NOTE: &str = "Set by Lodestar. Keep wg0: Lodestar's post-rules name this tunnel, and with any other value they do nothing.";
+const HEALTH_NOTE: &str = "Set by Lodestar. Keep dns: gluetun's default health check pings through the VPN, and many providers don't answer pings, so gluetun would restart the VPN every few minutes.";
 /// The start-order note for a container routed through gluetun container
 /// `vpn` (a closed ContainerName, so the text stays fixed plus a name).
 fn start_note(vpn: &str) -> String {
@@ -228,6 +229,8 @@ fn render(
                 VPN_NOTE
             } else if *key == "VPN_INTERFACE" {
                 INTERFACE_NOTE
+            } else if *key == crate::compose::GLUETUN_HEALTH_CHECK.0 {
+                HEALTH_NOTE
             } else {
                 "Set by Lodestar."
             },

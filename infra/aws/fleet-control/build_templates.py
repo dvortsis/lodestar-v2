@@ -45,6 +45,8 @@ TF_STATE_KEY = "terraform/lodestar.tfstate"
 TF_LOCK_KEY = TF_STATE_KEY + ".tflock"  # Terraform >= 1.10 use_lockfile
 OPERATOR_LOCK_KEY = "locks/operator.json"  # OP-4: one operator session at a time
 CLAUDE_LOCK_KEY = "operator/claude-lock.json"
+# X-cleanup-fits-quota: one run of each cleanup broker at a time, by S3 lease.
+CLEANUP_LEASE_KEYS = ("locks/cleanup-expiration.json", "locks/cleanup-emergency.json")
 
 
 def sub(environment: str, workflow: str) -> str:
@@ -359,7 +361,43 @@ def cleanup_code():
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
         if token.type == tokenize.COMMENT:
             lines[token.start[0] - 1] = lines[token.start[0] - 1][:token.start[1]]
-    return "\n".join(line.rstrip() for i, line in enumerate(lines, 1) if i not in omit and line.strip()) + "\n"
+    text = "\n".join(line.rstrip() for i, line in enumerate(lines, 1) if i not in omit and line.strip()) + "\n"
+    return compact_indent(text)
+
+
+def compact_indent(text: str) -> str:
+    """One space per block level, and single quotes on plain strings (JSON
+    escapes every double quote), to fit both inline copies in the 51,200-byte
+    template body. Tokenize-based, so spelling stays stable across Python
+    versions (f-strings are left alone); refuses any change to the program."""
+    original = text.split("\n")[:-1]  # rows as tokenize counts them (splitlines also splits on \f)
+    lines, depth, start, assigned, verbatim, quoted = list(original), 0, True, set(), set(), []
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        row = token.start[0]
+        if (token.type == tokenize.STRING and token.start[0] == token.end[0] and token.string[0] == '"'
+                and token.string[:3] != '"""' and "'" not in token.string and "\\" not in token.string):
+            quoted.append(token)
+        verbatim.update(range(row + 1, token.end[0] + 1))  # inside a multi-line token
+        if token.type == tokenize.INDENT:
+            depth += 1
+        elif token.type == tokenize.DEDENT:
+            depth -= 1
+        elif token.type in (tokenize.NEWLINE, tokenize.NL, tokenize.ENDMARKER):
+            start = start or token.type == tokenize.NEWLINE
+        else:
+            if row not in assigned and row not in verbatim:
+                assigned.add(row)
+                lines[row - 1] = " " * (depth if start else depth + 1) + lines[row - 1].lstrip()
+            start = False
+    for token in reversed(quoted):  # right to left keeps earlier columns valid
+        row, col = token.start
+        line = lines[row - 1]
+        col += len(line) - len(original[row - 1])  # shift from re-indenting
+        lines[row - 1] = line[:col] + "'" + token.string[1:-1] + "'" + line[col + len(token.string):]
+    out = "\n".join(lines) + "\n"
+    if ast.dump(ast.parse(out)) != ast.dump(ast.parse(text)):
+        raise ValueError("indent compaction changed the program")
+    return out
 
 
 def cleanup_stack() -> dict:
@@ -383,6 +421,8 @@ def cleanup_stack() -> dict:
             "Policies": [{"PolicyName": "ScopedCleanup", "PolicyDocument": policy([
                 {"Effect": "Allow", "Action": "s3:GetObject", "Resource": obj({"Ref": "StateBucketName"}, "fleet/cleanup-authorization.json"), "Condition": same_owner},
                 {"Effect": "Allow", "Action": "s3:PutObject", "Resource": obj({"Ref": "ControlBucketName"}, MISMATCH_KEY), "Condition": same_owner},
+                {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Condition": same_owner,
+                 "Resource": [obj({"Ref": "ControlBucketName"}, key) for key in CLEANUP_LEASE_KEYS]},
                 {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": {"Ref": "CleanupToken"}},
                 {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
                  "Resource": [{"Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-expiration:*"},
@@ -391,13 +431,14 @@ def cleanup_stack() -> dict:
         }},
     }
     code = cleanup_code()
+    topic = {"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}
     for name, mode in (("Expiration", "expiration"), ("Emergency", "emergency")):
         resources[name + "Log"] = {"Type": "AWS::Logs::LogGroup", "DeletionPolicy": "Retain", "UpdateReplacePolicy": "Retain",
                                   "Properties": {"LogGroupName": {"Fn::Sub": "/aws/lambda/${AWS::StackName}-" + mode}, "RetentionInDays": 14}}
         resources[name] = {"Type": "AWS::Lambda::Function", "DependsOn": name + "Log", "Properties": {
             "FunctionName": {"Fn::Sub": "${AWS::StackName}-" + mode}, "Runtime": "python3.13", "Handler": "index.handler",
             "Role": {"Fn::GetAtt": ["Executor", "Arn"]}, "Timeout": 300, "MemorySize": 256,
-            "ReservedConcurrentExecutions": 1, "Code": {"ZipFile": code},
+            "Code": {"ZipFile": code},
             "Environment": {"Variables": {"AWS_ACCOUNT_ID": account, "STATE_BUCKET": {"Ref": "StateBucketName"},
                 "CONTROL_BUCKET": {"Ref": "ControlBucketName"}, "CLEANUP_SECRET_ARN": {"Ref": "CleanupToken"},
                 "LINODE_ACCOUNT_EUUID": {"Ref": "LinodeAccountEuuid"}, "MIN_CREATED_UTC": {"Ref": "MinCreatedUtc"}, "CLEANUP_MODE": mode}},
@@ -405,7 +446,12 @@ def cleanup_stack() -> dict:
         resources[name + "Errors"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {
             "Namespace": "AWS/Lambda", "MetricName": "Errors", "Dimensions": [{"Name": "FunctionName", "Value": {"Ref": name}}],
             "Statistic": "Sum", "Period": 300, "EvaluationPeriods": 1, "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-            "TreatMissingData": "notBreaching", "AlarmActions": [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]}}
+            "TreatMissingData": "notBreaching", "AlarmActions": [topic]}}
+        resources[name + "Busy"] = {"Type": "AWS::Logs::MetricFilter", "Properties": {"LogGroupName": {"Ref": name + "Log"},
+            "FilterPattern": '"cleanup_busy"', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "MetricValue": "1"}]}}
+    resources["BusyAlarm"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {"Namespace": "LodestarCleanup",
+        "MetricName": {"Fn::Sub": "${AWS::StackName}-busy"}, "Statistic": "Sum", "Period": 300, "EvaluationPeriods": 1,
+        "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold", "TreatMissingData": "notBreaching", "AlarmActions": [topic]}}
     resources["ExpirationSchedule"] = {"Type": "AWS::Events::Rule", "Properties": {"ScheduleExpression": "rate(15 minutes)", "State": {"Fn::If": ["ExpirationEnabled", "ENABLED", "DISABLED"]},
         "Targets": [{"Arn": {"Fn::GetAtt": ["Expiration", "Arn"]}, "Id": "expiration", "RetryPolicy": {"MaximumEventAgeInSeconds": 900, "MaximumRetryAttempts": 1}}]}}
     resources["SchedulePermission"] = {"Type": "AWS::Lambda::Permission", "Properties": {
@@ -422,10 +468,10 @@ def cleanup_stack() -> dict:
                                                                                      "Resource": {"Fn::GetAtt": ["Emergency", "Arn"]}}])}],
     }}
     resources["HeartbeatMetric"] = {"Type": "AWS::Logs::MetricFilter", "Properties": {"LogGroupName": {"Ref": "ExpirationLog"},
-        "FilterPattern": '{ $.event = "cleanup_complete" }', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "MetricValue": "1"}]}}
+        "FilterPattern": '"cleanup_complete"', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "MetricValue": "1"}]}}
     resources["HeartbeatAlarm"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {"Namespace": "LodestarCleanup",
         "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "Statistic": "Sum", "Period": 3600, "EvaluationPeriods": 1,
-        "Threshold": 1, "ComparisonOperator": "LessThanThreshold", "TreatMissingData": "breaching", "AlarmActions": [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]}}
+        "Threshold": 1, "ComparisonOperator": "LessThanThreshold", "TreatMissingData": "breaching", "AlarmActions": [topic]}}
     return {"AWSTemplateFormatVersion": "2010-09-09", "Description": "Independently authorized expiration and owner-emergency cleanup; no Terraform or Linode credentials in GitHub.",
             "Metadata": {"AWSToolsMetrics": {"AWSAgentToolkit": "aws-cloudformation@3"}, "com.aws.cloudformation.Context": {"ref": [{"at": "docs/operations/fleet-control-cleanup.md"}]}},
             "Parameters": params, "Conditions": {"ExpirationEnabled": {"Fn::Equals": [{"Ref": "EnableExpiration"}, "true"]}}, "Resources": resources, "Outputs": {
