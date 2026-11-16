@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T01:25Z",
+  "updated_at": "2026-11-16T02:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T01:25Z",
+  "last_heartbeat": "2026-11-16T02:26Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -10092,6 +10092,12 @@
       "slice": "D-guide-backup-fixes",
       "sha": "a27f5fa0",
       "at": "2026-11-16T01:04Z"
+    },
+    {
+      "pr": 959,
+      "slice": "X-win-service-relative-paths",
+      "sha": "2207706a",
+      "at": "2026-11-16T02:26Z"
     }
   ],
   "active_sessions": {
@@ -10330,18 +10336,17 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-16T01:04Z",
+    "updated": "2026-11-16T02:26Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-win-service-relative-paths",
+        "slice": "X-win-service-relative-paths-2",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T23:56Z",
-        "doing": "X-win-service-relative-paths: refuse relative/empty data dir and --config for the service; #956 optionals (#956 merged)",
-        "cap": "build (\u00a72.64 4+4)",
-        "status": "active"
+        "since": "2026-11-16T02:26Z",
+        "doing": "service refuses relative witness dir and blocklist files",
+        "cap": "build (\u00a72.64 4+4)"
       },
       {
         "slot": 2,
@@ -10460,8 +10465,8 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-16T01:25Z",
-  "updated": "2026-11-16T01:25Z",
+  "heartbeat": "2026-11-16T02:26Z",
+  "updated": "2026-11-16T02:26Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
