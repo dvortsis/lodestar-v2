@@ -129,12 +129,14 @@ pub fn apply_witness_default(
 /// setting isn't a full path. A config that failed to load has
 /// `default_dir` as its data folder, for the log.
 ///
-/// No path is resolved against the working folder, which is the system
-/// folder under the SCM (X-win-service-relative-paths): an empty or
-/// relative `LODESTAR_DATA_DIR`, a relative `--config`, a relative
-/// `data_dir` in the config file, or a relative `default_dir` (from
-/// `%ProgramData%`) is refused, naming the setting. All but `data_dir` are
-/// refused before anything is read. The CLI keeps relative paths, which a portable install uses.
+/// The data folder and the config file are never resolved against the
+/// working folder, which is the system folder under the SCM
+/// (X-win-service-relative-paths): an empty or relative
+/// `LODESTAR_DATA_DIR`, a relative `--config`, a relative `data_dir` in the
+/// config file, or a relative `default_dir` (from `%ProgramData%`) is
+/// refused, naming the setting. All but `data_dir` are refused before
+/// anything is read. Other path settings aren't covered here. The CLI keeps
+/// relative paths, which a portable install uses.
 pub fn load_guarded(
     default_dir: &Path,
     explicit: Option<PathBuf>,
@@ -271,8 +273,8 @@ pub enum Refusal {
     NotPrivate,
     /// An update rollback holds the store: the service waits, idle.
     RollingBack,
-    /// `LODESTAR_DATA_DIR`, `--config` or the config file's `data_dir`
-    /// isn't a full path ([`load_guarded`]): the start is refused.
+    /// `LODESTAR_DATA_DIR`, `--config`, the config file's `data_dir` or
+    /// `%ProgramData%` isn't a full path ([`load_guarded`]): the start is refused.
     NotFullPath,
 }
 
@@ -325,8 +327,8 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
             "Lodestar's service didn't start: LODESTAR_DATA_DIR, --config, data_dir in its \
              config file or %ProgramData% isn't a full path, and the service never uses a path relative to the \
              system folder. Its default data folder is {dir}. To fix it, an administrator sets \
-             that setting to a full path, such as D:\\Lodestar, or removes it. Which setting it \
-             is, is in %SystemRoot%\\Temp\\{log}; see Fix Windows service error 3 in the user \
+             that setting to a full path, such as D:\\Lodestar, or removes it. The temp log, \
+             %SystemRoot%\\Temp\\{log}, names the setting; see Fix Windows service error 3 in the user \
              guide."
         ),
     }
