@@ -613,10 +613,8 @@ fn v5_schema(current: &tantivy::schema::Schema, drop: &[&str]) -> tantivy::schem
 /// its own schemas, documents with only their fields, and v5's commit
 /// payload (no population part).
 fn build_v5(dir: &Path, store: &mut Store) {
-    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
-    use tantivy::TantivyDocument;
-    let (schema, fields) = lodestar_search::schema::build();
-    let (file_schema, file_fields) = lodestar_search::files::schema();
+    let schema = lodestar_search::schema::build().0;
+    let file_schema = lodestar_search::files::schema().0;
     // v5 has neither v6's fields nor v7's.
     let newer: Vec<&str> = lodestar_search::schema::V6_FIELDS
         .iter()
@@ -625,6 +623,43 @@ fn build_v5(dir: &Path, store: &mut Store) {
         .collect();
     let v5 = v5_schema(&schema, &newer);
     let v5_files = v5_schema(&file_schema, &lodestar_search::files::V6_FIELDS);
+    build_old(dir, store, v5, v5_files, &[]);
+}
+
+/// The schema a v7 build wrote: this one with `group_key` indexed and
+/// fast, as v6 declared it (GS-2b made it a column only in v8).
+fn v7_schema(current: &tantivy::schema::Schema) -> tantivy::schema::Schema {
+    use tantivy::schema::{FAST, FieldEntry, INDEXED};
+    let mut b = tantivy::schema::Schema::builder();
+    for (_, entry) in current.fields() {
+        if entry.name() == "group_key" {
+            b.add_field(FieldEntry::new_u64(
+                "group_key".into(),
+                (INDEXED | FAST).into(),
+            ));
+        } else {
+            b.add_field(entry.clone());
+        }
+    }
+    b.build()
+}
+
+/// An index of everything in `store` at `dir` under older schemas, as
+/// that build left it: documents with only the fields it has, less
+/// `unwritten` (fields it had but didn't produce), and a commit payload
+/// without a population part.
+fn build_old(
+    dir: &Path,
+    store: &mut Store,
+    old: tantivy::schema::Schema,
+    old_files: tantivy::schema::Schema,
+    unwritten: &[&str],
+) {
+    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+    use tantivy::TantivyDocument;
+    let (schema, fields) = lodestar_search::schema::build();
+    let (file_schema, file_fields) = lodestar_search::files::schema();
+    let (v5, v5_files) = (old, old_files);
     std::fs::create_dir_all(dir.join("files")).unwrap();
     let index = tantivy::Index::create_in_dir(dir, v5.clone()).unwrap();
     let files = tantivy::Index::builder()
@@ -636,7 +671,11 @@ fn build_v5(dir: &Path, store: &mut Store) {
     let map = |from: &tantivy::schema::Schema, to: &tantivy::schema::Schema, d: TantivyDocument| {
         let mut out = TantivyDocument::new();
         for (f, v) in d.field_values() {
-            if let Ok(g) = to.get_field(from.get_field_name(f)) {
+            let name = from.get_field_name(f);
+            if unwritten.contains(&name) {
+                continue;
+            }
+            if let Ok(g) = to.get_field(name) {
                 out.add_field_value(g, v);
             }
         }
@@ -645,6 +684,11 @@ fn build_v5(dir: &Path, store: &mut Store) {
     let writer = |i: &tantivy::Index| {
         i.tokenizers()
             .register(NAME_TOKENIZER, NameTokenizer::default());
+        // v6 and later declare the trigram field.
+        i.tokenizers().register(
+            lodestar_search::schema::TRIGRAM_TOKENIZER,
+            lodestar_search::schema::trigram_analyzer(),
+        );
         i.writer::<TantivyDocument>(HEAP).unwrap()
     };
     let (mut w, mut fw) = (writer(&index), writer(&files));
@@ -672,8 +716,8 @@ fn build_v5(dir: &Path, store: &mut Store) {
 }
 
 #[test]
-/// Straight from v5 to this build's version, two bumps on (v6, SB-6;
-/// v7, X-search-files-5): the rebuild builds the current schema from the
+/// Straight from v5 to this build's version, three bumps on (v6, SB-6;
+/// v7, X-search-files-5; v8, GS-2b): the rebuild builds the current schema from the
 /// store, so no version between is ever built (runner, 2026-11-05).
 fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
     use lodestar_search::{
@@ -690,7 +734,7 @@ fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
         schema: 5,
         tokenizer: 1,
     };
-    assert_eq!(IndexVersion::CURRENT.schema, 7);
+    assert_eq!(IndexVersion::CURRENT.schema, 8);
     build_v5(&root.join(v5.dir_name()), &mut writer);
     let v5_bytes = dir_bytes(&root);
 
@@ -723,7 +767,7 @@ fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
     got.sort();
     want.sort();
     assert_eq!(got, want);
-    // Only v5 and the v7 build: no v6 on the way.
+    // Only v5 and the current build: no version between on the way.
     assert_eq!(
         names_in(&root),
         vec![
@@ -777,11 +821,12 @@ fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
             "source",
             "network",
             "payload_sig",
+            "group_key",
             "group_minhash",
         ];
         let want = if produced.contains(&f) {
-            // SRC-3's, GS-0's and GS-2's: a rebuild writes them for every
-            // torrent.
+            // SRC-3's, GS-0's, GS-2's and GS-2b's: a rebuild writes them
+            // for every torrent.
             Availability::Ready
         } else {
             Availability::NoProducer
@@ -813,6 +858,112 @@ fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
         hw >= v5_bytes + dir_bytes(&root) / 2,
         "{hw} vs {v5_bytes} + v7"
     );
+    serving.shutdown().unwrap();
+}
+
+/// Classifies every torrent in `store` and stores its record, as the
+/// pipeline does, so documents carry their title identity.
+fn enrich_all(store: &mut Store) {
+    let ids = store.ids_after(0, 100_000).unwrap();
+    let enriched: Vec<(i64, lodestar_store::Enriched)> = ids
+        .iter()
+        .map(|&id| {
+            let row = store.torrent(id).unwrap().unwrap();
+            let tree = store.files(id).unwrap().unwrap();
+            let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+            let c = lodestar_classify::classify(&row.name, &files);
+            let e = lodestar_store::Enriched {
+                version: lodestar_classify::ENRICHMENT_VERSION,
+                content_type: c.content_type.code(),
+                junk_score: c.junk.score,
+                comp: c.composition.encode(),
+                data: lodestar_classify::Record::new(&c).encode(),
+            };
+            (id, e)
+        })
+        .collect();
+    store.set_enrichments(&enriched).unwrap();
+}
+
+/// The title identity the store's record of torrent `id` gives.
+fn identity(store: &Store, id: i64) -> Option<u64> {
+    let e = store.enrichment(id).unwrap()?;
+    let r = lodestar_classify::Record::decode(&e.data).unwrap();
+    lodestar_search::title_identity_parts(&r).map(|p| p.key())
+}
+
+/// Every document's `group_key` column value, by id, in the index at
+/// `dir`.
+fn group_keys(dir: &Path) -> Vec<(u64, Option<u64>)> {
+    let index = tantivy::Index::open_in_dir(dir).unwrap();
+    let searcher = index.reader().unwrap().searcher();
+    let mut out = Vec::new();
+    for seg in searcher.segment_readers() {
+        let ids = seg.fast_fields().u64("id").unwrap();
+        let keys = seg.fast_fields().u64("group_key").unwrap();
+        for doc in seg.doc_ids_alive() {
+            out.push((ids.first(doc).unwrap(), keys.first(doc)));
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+#[test]
+/// GS-2b: a v7 index (`group_key` indexed and fast, never written) serves
+/// while v8 is built, and after the swap `group_key` reads Ready, a
+/// column only, every torrent carrying its title identity.
+fn a_v7_index_rebuilds_to_v8_and_group_key_reads_ready() {
+    use lodestar_search::Availability;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let db = dir.path().join("s.db");
+    let n = 300;
+    let mut writer = store(dir.path(), n);
+    enrich_all(&mut writer);
+    let v7 = IndexVersion {
+        schema: 7,
+        tokenizer: 1,
+    };
+    assert_eq!(IndexVersion::CURRENT.schema, 8);
+    let schema = lodestar_search::schema::build().0;
+    let file_schema = lodestar_search::files::schema().0;
+    build_old(
+        &root.join(v7.dir_name()),
+        &mut writer,
+        v7_schema(&schema),
+        file_schema,
+        &["group_key"],
+    );
+    let old = group_keys(&root.join(v7.dir_name()));
+    assert_eq!(old.len(), n);
+    assert!(old.iter().all(|(_, k)| k.is_none()), "v7 never wrote it");
+
+    let (config, hold) = held(IndexVersion::CURRENT);
+    let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+    let p = serving.progress().unwrap();
+    assert_eq!((p.from, p.to), (v7, IndexVersion::CURRENT));
+    // The v7 index serves meanwhile.
+    assert_eq!(total(&serving.index(), "common movie"), n);
+    hold.store(false, Ordering::Relaxed);
+    finished(&serving);
+    let index = serving.index();
+    assert_eq!(index.availability("group_key"), Availability::Ready);
+    assert_eq!(total(&index, "common movie"), n);
+    drop(index);
+    let current = root.join(IndexVersion::CURRENT.dir_name());
+    let keys = group_keys(&current);
+    assert_eq!(keys.len(), n);
+    // Every torrent's column holds its record's title identity, and
+    // every one has one.
+    for (id, key) in &keys {
+        let want = identity(&writer, *id as i64);
+        assert!(want.is_some(), "torrent {id} has a title");
+        assert_eq!(*key, want, "torrent {id}");
+    }
+    let schema = tantivy::Index::open_in_dir(&current).unwrap().schema();
+    let entry = schema.get_field_entry(schema.get_field("group_key").unwrap());
+    assert!(entry.is_fast() && !entry.is_indexed());
     serving.shutdown().unwrap();
 }
 
