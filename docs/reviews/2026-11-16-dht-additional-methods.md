@@ -1,5 +1,7 @@
 # Additional crawler performance methods — 2026-11-16
 
+> Evidence correction: the [counter-review](2026-11-16-antigravity-throughput-assessment-review.md) distinguishes measured improvements from reference implementations and cross-system simulations. In particular, the “seven proven methods” framing below overstates the evidence for methods 5–7; the clone/sort claim and unconditional low-risk subnet recommendation are also corrected there. This document preserves the assessed proposal.
+
 Seven routing-table and lookup-execution techniques pass the screen for credible external primary-source measurements or mature reference implementations and have no prior proposal, implementation, or test found in this project's inspected records (following three initial routing-table methods plus four additional proven methods identified in the follow-up review). None establishes an end-to-end Lodestar throughput gain on its own. This extends the [strategy assessment](2026-11-16-dht-throughput-strategy-review.md) without changing production code or running network experiments.
 
 ## Primary evidence
