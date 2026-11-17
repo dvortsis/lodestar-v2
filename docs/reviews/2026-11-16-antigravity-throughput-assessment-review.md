@@ -74,6 +74,8 @@ The existing [CR-SPEC](../decisions/2026-11-02-CR-SPEC.md) acceptance gate is a 
 
 ## Revised execution plan
 
+The subsequent [path-to-100 plan](2026-11-17-path-to-100-plan.md) expands these priorities into a capacity model, implementation boundaries and experiment decision rules. It retains the corrections above and does not claim the throughput target has been demonstrated.
+
 1. Establish the effective baseline and remaining capacity in all stages. Record unique network-origin searchable output, loss stages, queue ages, full permit occupancy, packets/lookup, metadata slot-seconds and index lag. Preserve source provenance, intervals and restart proofs.
 2. Complete the already-defined CR-ADM and CR-4 isolated live comparisons in the approved order when their run prerequisites are met. This review does not start those runs. Use CR-SIM to screen local lifecycle/scheduling work first.
 3. Prioritize bounded freshness/fairness and removal of measured scheduling idle time. Keep the hint guard; drop the proposed throughput claim for a behaviorally equivalent `Skipped` state. Measure whether rejected sample evidence can be reoffered without an unbounded retry loop.
