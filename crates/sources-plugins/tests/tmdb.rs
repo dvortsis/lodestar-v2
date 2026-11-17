@@ -160,11 +160,19 @@ async fn a_tie_is_no_match_and_the_year_picks_one() {
         tmdb::choose(&movie("Dune", Some(1999)), &hits),
         Lookup::NoMatch
     );
-    // A longer title is never the title.
+    // A longer title is never the title: "Dune Drifter" (2020) is the
+    // only hit from 2020, and "Dune" in 2020 still doesn't take it.
     assert_eq!(
-        tmdb::choose(&movie("Dune Drifter", None), &hits),
-        tmdb::choose(&movie("dune: drifter!", None), &hits)
+        tmdb::choose(&movie("Dune", Some(2020)), &hits),
+        Lookup::NoMatch
     );
+    // Its own title finds it, however it's written.
+    for title in ["Dune Drifter", "dune: drifter!"] {
+        let Lookup::Match(i) = tmdb::choose(&movie(title, None), &hits) else {
+            panic!("{title}: a match")
+        };
+        assert_eq!(i.ids[0].value, "900002", "{title}");
+    }
 }
 
 #[tokio::test(start_paused = true)]
