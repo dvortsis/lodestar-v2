@@ -1,5 +1,7 @@
 # DHT throughput strategy assessment — 2026-11-16
 
+> Review status: the [counter-review](2026-11-16-antigravity-throughput-assessment-review.md) corrects the hint-state recommendation, FIFO/p95 inference, eviction attribution and tick-order claims below, and supplies the revised capacity budget and execution plan. Conflicting statements below are retained as the assessment that was reviewed, not current implementation recommendations.
+
 **Yes: improving admission, freshness and peer conversion can plausibly produce a material throughput gain. The strongest local evidence favors coordinated admission. The proposed sampling scheduler alone has a much weaker case, and 100 newly verified searchable torrents/minute remains an unproven target.** This is the strategy follow-up to the [crawler survey and scheduler review](2026-11-16-dht-crawler-survey.md). It incorporates the earlier review findings in the same review-branch commit; no production source, configuration or runtime was changed.
 
 The assessment below distinguishes recorded experiments, arithmetic and proposed experiments. The existing simulation screens and historical soak were inspected, not rerun here. The scheduler counterexamples were reproduced offline. No current process configuration or live throughput was measured.
