@@ -241,6 +241,21 @@ class RefusedCreateTests(unittest.TestCase):
         self.assertFalse((devvm.REPO / "scratch").exists())
 
 
+class StuckCreateTests(unittest.TestCase):
+    def test_a_vm_that_never_runs_is_a_failure(self):
+        api = FakeApi()
+        real = api.call
+
+        def stuck(method, path, body=None, ok404=False):
+            out = real(method, path, body, ok404)
+            return {"status": "provisioning"} if out == {"status": "running"} else out
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.multiple(devvm, call=stuck, all_pages=api.all_pages), \
+                mock.patch.object(devvm.time, "sleep"), self.assertRaises(SystemExit) as stop:
+            devvm.cmd_create(CreateTests.args(None, d))
+        self.assertIn("devvm.py delete", str(stop.exception))
+
 class SetAdminIpTests(unittest.TestCase):
     def test_refuses_a_label_outside_the_prefix(self):
         api = FakeApi(firewalls=[{"label": "lodestar-main-fw", "id": 3}])

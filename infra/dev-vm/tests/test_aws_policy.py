@@ -67,6 +67,7 @@ class PolicyTests(unittest.TestCase):
         eq = inst["Condition"]["StringEquals"]
         self.assertEqual(eq["ec2:InstanceType"], "c6a.xlarge")
         self.assertEqual(eq["ec2:MetadataHttpTokens"], "required")
+        self.assertEqual(eq["ec2:MetadataHttpProtocolIpv6"], "disabled")
         # Bridged containers are kept from the role only by the hop limit.
         self.assertEqual(inst["Condition"]["NumericLessThanEquals"], {"ec2:MetadataHttpPutResponseHopLimit": "1"})
         for k, v in {"Project": "Lodestar", "Environment": "Test", "ManagedBy": "Terraform",
@@ -155,7 +156,8 @@ class PolicyTests(unittest.TestCase):
 
     def test_region_fence(self):
         _, _, sts = statements()
-        deny = next(s for s in sts if s["Effect"] == "Deny")
+        deny = next(s for s in sts if s["Sid"] == "NothingOutsideUsEast1")
+        self.assertEqual(deny["Effect"], "Deny")
         self.assertEqual(deny["Condition"], {"StringNotEquals": {"aws:RequestedRegion": "us-east-1"}})
 
 

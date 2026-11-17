@@ -57,6 +57,15 @@ class BootstrapTest(unittest.TestCase):
 
 
 class PiaAwsModeTest(unittest.TestCase):
+    def test_aws_mode_writes_only_into_a_root_owned_run_folder(self):
+        # Root runs the stack from here; lodestar must not own any part of it.
+        text = (HERE / "pia-login.sh").read_text()
+        self.assertIn('if [[ $mode == aws ]]; then run_dir=/opt/lodestar-run;', text)
+        self.assertIn("must be a root-owned folder writable by root only", text)
+        self.assertIn('[[ $run_dir == /home/lodestar/lodestar && $mode != aws ]]', text)
+        runbook = (HERE / "linux-aws.md").read_text()
+        self.assertIn("everything root runs lives in `/opt/lodestar-run`, never under `~lodestar`", runbook)
+
     def test_aws_mode_reads_into_memory_and_keeps_nothing(self):
         text = (HERE / "pia-login.sh").read_text()
         aws = text[text.index("elif [[ $mode == aws ]]"):text.index("\nelse\n  read -r -s")]

@@ -94,7 +94,7 @@ def cmd_status(_a) -> None:
     fws = all_pages("/networking/firewalls")
     rates: dict[str, float] = {}
     now = dt.datetime.now(dt.timezone.utc)
-    print(f"account {acct['euuid']} uninvoiced ${acct['balance_uninvoiced']:.2f} balance ${acct['balance']:.2f}")
+    print(f"account …{acct['euuid'][-4:]} uninvoiced ${acct['balance_uninvoiced']:.2f} balance ${acct['balance']:.2f}")
     print(f"linodes on account: {len(linodes)} (ours: {len(ours(linodes))}); firewalls: {len(fws)} (ours: {len(ours(fws))})")
     running = 0.0
     for x in linodes:
@@ -257,6 +257,9 @@ def cmd_create(a) -> None:
             break
         time.sleep(10)
     print(f"status: {st}")
+    if st != "running":
+        sys.exit(f"{label} (id={vm['id']}) is not running after 10 min (status {st}). "
+                 f"Delete it with: devvm.py delete --label {label} --confirm {label}")
     (work / f"{label}.json").write_text(json.dumps({
         "label": label, "id": vm["id"], "firewall_id": fw["id"], "ipv4": vm["ipv4"][0],
         "ipv6": vm.get("ipv6"), "host_key_fingerprint": fp, "host_key_public": host_pub.strip(),

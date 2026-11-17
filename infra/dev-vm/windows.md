@@ -50,7 +50,7 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - **Why:** the subnet routes `0.0.0.0/0` to an internet gateway but has `MapPublicIpOnLaunch=false`, and there's no NAT gateway and no VPC endpoint. Without a public address, the instance can't reach SSM or the internet.
      - It's still unreachable from outside, because the security group allows no inbound traffic. The address costs about $0.005/h.
      - `Deploy-AwsWindows.ps1` doesn't do this yet; that's a follow-up for the runner.
-   - `MetadataOptions.HttpTokens=required`;
+   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}` (the policy refuses a launch without all three);
    - `/dev/sda1` with `VolumeSize=100, Encrypted=true`;
    - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume.
    - Record the instance ID locally only.

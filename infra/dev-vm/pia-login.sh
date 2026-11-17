@@ -21,16 +21,20 @@
 # secret the owner filled in (infra/dev-vm/aws-claude-testvm.json), straight
 # into memory. Nothing is kept on disk; run it again for a fresh key.
 #
-# Writes /home/lodestar/lodestar/secrets/wg0.conf (root:root 0600), where the
-# fleet's compose.yaml reads it from when run from /home/lodestar/lodestar.
+# Writes <run folder>/secrets/wg0.conf (root:root 0600), where the fleet's
+# compose.yaml reads it from when run from that folder. The run folder is
+# /home/lodestar/lodestar on a Linode (lodestar is an admin there anyway) and
+# /opt/lodestar-run with --aws-secret, where lodestar must not be able to touch
+# what root runs: there, the folder and every parent must be root-owned and
+# writable by root only, or the script refuses. --run-dir DIR overrides.
+#   sudo infra/dev-vm/pia-login.sh [--run-dir DIR] ...
 set -Eeuo pipefail
 umask 077
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 2; }
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 step="$repo/infra/pia-bridge/vm/pia-wireguard.sh"
 ca="$repo/infra/pia-bridge/vm/pia-ca.rsa.4096.crt"
-dest_dir=/home/lodestar/lodestar/secrets
-dest="$dest_dir/wg0.conf"
+run_dir=""
 store=/root/.lodestar-pia
 
 mode=ask
@@ -44,6 +48,9 @@ while [[ $# -gt 0 ]]; do
       mode=aws
       [[ $# -ge 2 && $2 =~ ^[A-Za-z0-9/_+=.@-]{1,512}$ ]] || { echo "--aws-secret needs a secret name" >&2; exit 2; }
       secret_id=$2; shift ;;
+    --run-dir)
+      [[ $# -ge 2 && $2 == /* ]] || { echo "--run-dir needs an absolute path" >&2; exit 2; }
+      run_dir=$2; shift ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) region=$1 ;;
   esac
@@ -89,7 +96,25 @@ fi
 
 work=""
 trap '[[ -n $work ]] && rm -rf -- "$work"; unset pia_pass' EXIT
-install -d -m 0700 -o lodestar -g lodestar /home/lodestar/lodestar
+if [[ -z $run_dir ]]; then
+  if [[ $mode == aws ]]; then run_dir=/opt/lodestar-run; else run_dir=/home/lodestar/lodestar; fi
+fi
+if [[ $run_dir == /home/lodestar/lodestar && $mode != aws ]]; then
+  install -d -m 0700 -o lodestar -g lodestar "$run_dir"
+else
+  # Root runs the stack from here: no other user may own or write any part of
+  # the path, or it could swap the scripts or the secrets folder.
+  install -d -m 0755 -o root -g root "$run_dir"
+  p=$run_dir
+  while :; do
+    [[ ! -L $p && $(stat -c '%u' -- "$p") == 0 && $(( 0$(stat -c '%a' -- "$p") & 022 )) -eq 0 ]] \
+      || { echo "refusing: $p must be a root-owned folder writable by root only" >&2; exit 2; }
+    [[ $p == / ]] && break
+    p=$(dirname -- "$p")
+  done
+fi
+dest_dir=$run_dir/secrets
+dest="$dest_dir/wg0.conf"
 install -d -m 0700 -o root -g root "$dest_dir"
 
 stage() {

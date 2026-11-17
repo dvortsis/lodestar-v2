@@ -9,6 +9,9 @@
 #     makes PostgreSQL much slower; bitmagnet-restore.md step 1) at /work;
 #   - no Docker socket, not privileged, no host network or PID, no other appdata,
 #     no credentials; a memory limit so the rest of the server keeps running;
+#   - its own Docker network, fenced off from the LAN: firewall rules drop
+#     everything it sends to private, link-local or carrier-grade addresses and
+#     to the server itself (the web UI included), so it reaches the internet only;
 #   - Claude Code inside, started with Remote Control so the coordinator can brief it.
 # It never touches parity, array settings, other containers or other shares.
 #
@@ -25,6 +28,21 @@ STATE=/root/.lodestar-import-box   # remembers the work folder for "remove"
 SESSION_NAME='lodestar-import-unraid'
 FIRST="You're the import test session in a throwaway container on the owner's Unraid server, for the X-test-vm coordinator. Wait for the coordinator's brief before doing anything."
 
+NET=lodestar-import-net
+SUBNET=172.31.250.0/24
+PRIVATE="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
+# Rules live only in memory: a reboot clears them, and the container has no
+# restart policy, so it never runs unfenced.
+fence() {  # $1 = -I (add) or -D (delete)
+  rules=("INPUT -s $SUBNET -j DROP")
+  for d in $PRIVATE; do rules+=("DOCKER-USER -s $SUBNET -d $d -j DROP"); done
+  for r in "${rules[@]}"; do
+    # shellcheck disable=SC2086
+    if [ "$1" = -I ]; then iptables -C $r 2>/dev/null || iptables -I $r
+    else while iptables -C $r 2>/dev/null; do iptables -D $r; done; fi
+  done
+}
+
 say() { printf '%s\n' "$*"; }
 die() { printf 'Stopped: %s\n' "$*" >&2; exit 1; }
 
@@ -39,6 +57,8 @@ case "${1:-setup}" in
     say "This deletes the container '$NAME'${W:+ and the work folder $W}. The dumps in $DUMPS are not touched."
     read -r -p "Type yes to continue: " a; [ "$a" = yes ] || die "nothing removed"
     docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker network rm "$NET" >/dev/null 2>&1 || true
+    fence -D
     if [ -n "$W" ] && [ -d "$W" ]; then
       case "$W" in /mnt/*/lodestar-import-work) rm -rf -- "$W" ;; *) die "unexpected work folder '$W'; delete it by hand" ;; esac
     fi
@@ -51,6 +71,8 @@ esac
 
 # --- Checks: read-only, nothing changes until you confirm. ---
 command -v docker >/dev/null || die "Docker isn't running. Start it in Settings > Docker."
+command -v iptables >/dev/null || die "iptables not found; the container can't be fenced off from your network."
+iptables -L DOCKER-USER -n >/dev/null 2>&1 || die "Docker's DOCKER-USER firewall chain is missing; the container can't be fenced off from your network."
 [ -d "$DUMPS" ] || die "dumps folder $DUMPS not found (run with DUMPS=/path bash $0)"
 if docker inspect "$NAME" >/dev/null 2>&1; then
   say "The container already exists; opening Claude."; attach; exit
@@ -94,7 +116,10 @@ read -r -p "Create it? [y/N] " a; case "$a" in [yY]*) ;; *) die "nothing changed
 
 # --- Create. ---
 mkdir -p "$W"; printf '%s\n' "$W" > "$STATE"
+docker network inspect "$NET" >/dev/null 2>&1 || docker network create --subnet "$SUBNET" "$NET" >/dev/null
+fence -I
 docker run -d --name "$NAME" --hostname lodestar-import \
+  --network "$NET" --dns 1.1.1.1 --dns 9.9.9.9 \
   --memory "${mem_gb}g" --memory-swap "${mem_gb}g" --cpu-shares 512 --pids-limit 4096 \
   --security-opt no-new-privileges \
   --mount "type=bind,src=$DUMPS,dst=/dumps,readonly" \

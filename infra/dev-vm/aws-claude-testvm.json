@@ -106,7 +106,8 @@
                   "aws:RequestTag/Project": "Lodestar",
                   "aws:RequestTag/Environment": "Test",
                   "aws:RequestTag/ManagedBy": "Terraform",
-                  "aws:RequestTag/Purpose": "X-test-vm"
+                  "aws:RequestTag/Purpose": "X-test-vm",
+                  "ec2:MetadataHttpProtocolIpv6": "disabled"
                 },
                 "NumericLessThanEquals": {
                   "ec2:MetadataHttpPutResponseHopLimit": "1"

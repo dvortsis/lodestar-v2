@@ -10,18 +10,18 @@ Once the instance is bootstrapped, `linux-lane.md` applies unchanged: numbers on
    - **`UbuntuImageOwnerId`:** Canonical's public publisher account, which owns the official Ubuntu images; it isn't one of yours. To find it, open Systems Manager → Parameter Store → Public parameters, look up `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`, then open that image in EC2 → AMIs and copy its **Owner**. It's a parameter so the repository holds no account numbers.
    - The managed policy's description still says "the Windows test instance only". Leave it: changing it makes CloudFormation replace the policy, and the replacement fails because the name is fixed. The policy's statements are what count.
 2. **Enter the PIA login.** In Secrets Manager → `lodestar-claude-testvm/pia-login` → Retrieve secret value → Edit, set `username` and `password`, and save.
-   - Only the Linux instance role can read it. Claude's own user is denied all of Secrets Manager.
+   - Only the Linux instance role can read it directly. Claude's own user is denied the Secrets Manager API, but it can still reach the secret indirectly: Run Command runs as root on a Linux test instance, and root there can use the instance role. Claude's sessions are trusted, by rule only, never to read, print or copy it.
 
 ## What each lane does
 
 All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm`. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop.
 
 1. **Count first.** At most four Linux instances and one Windows instance run at once. Count instances with the filter `tag:Purpose=X-test-vm` (the owner's own fleet instances share `Project=Lodestar`, so never count by that), and refuse if four Linux ones are already pending, running, stopping or stopped.
-2. **Launch:**
+2. **Launch:** (the count of four is a rule for the sessions; the policy doesn't enforce it, and nothing but the per-cloud spend check bounds cost)
    - the image from `ssm:GetParameter` `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`;
    - `c6a.xlarge` (4 vCPU, 8 GiB);
    - `IamInstanceProfile={Name: lodestar-claude-testvm-linux}`;
-   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1}`, so containers can't reach the metadata service;
+   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}`, so containers can't reach the metadata service (the policy requires all three);
    - `/dev/sda1` with `VolumeSize=100`, `VolumeType=gp3`, `Encrypted=true`. A block with `ROLE=main` needs 50 GiB free for its collector after the image build, and the test user can't grow a volume later (`ec2:ModifyVolume` is denied);
    - the network interface with a public IPv4, exactly as `windows.md` Phase 2 step 2 says (the subnet has no NAT; the security group allows no inbound traffic);
    - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume. The policy lets Claude stop, delete or run commands only on instances tagged `Purpose=X-test-vm`, so the owner's own fleet instances, which share the other tags, stay out of reach.
@@ -42,11 +42,15 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    /opt/lodestar-src/infra/dev-vm/pia-login.sh --aws-secret lodestar-claude-testvm/pia-login
    ```
 
-   - It reads the login into memory with the instance role and writes `/home/lodestar/lodestar/secrets/wg0.conf`. Nothing is kept on disk. Run it again for a fresh key.
+   - It reads the login into memory with the instance role and writes `/opt/lodestar-run/secrets/wg0.conf`. Nothing else is kept on disk. Run it again for a fresh key.
+   - It refuses unless `/opt/lodestar-run` and every folder above it are owned by root and writable by root only.
    - **Never print, copy or read the secret.** Check only the exit code and the script's last line.
    - **Run it again immediately before `start-block.sh` or `leak-test.sh`.** A key registered 17 min before gluetun first used it got no handshake reply; a fresh one worked at once.
    - Exit 0 means the file was written. Exit 5 ("empty username or password") means the owner hasn't filled the secret in yet, and exit 7 that it couldn't be read. Neither prints a `FAILED` line. Exits 10–16 are PIA's own stages, printed as `FAILED (<n>)`.
-6. **Run the lane** from `linux-lane.md`, as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`.
+6. **Run the lane** from `linux-lane.md`, with one change: **everything root runs lives in `/opt/lodestar-run`, never under `~lodestar`.**
+   - Copy the fleet stack (`compose.yaml`, `leak-test.sh`, `block-lib.sh`, `start-block.sh`, `watcher.sh`, `outage-watcher.sh`) as root from `/opt/lodestar-src/infra/fleet/steps/vm/` into `/opt/lodestar-run` (root:root, 0755 folders, 0644 or 0755 files), and run it from there as root.
+   - `lodestar` owns nothing root executes or reads secrets from. Otherwise any code running as `lodestar` (a build script, an npm package) could rewrite a script or `compose.yaml` (say, `network_mode: host`) before root runs it, and reach the instance role.
+   - Builds and the lane's own work run as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`. Results go to `~lodestar/results`; root only reads them.
    - `sudo -i` joins a multi-line command into one line, so put anything longer than one line in a script file and run that.
    - **Launch anything that runs `tcpdump` (the leak test, start-block, your own captures) with `systemd-run --wait --pipe --collect`.** See the AppArmor pitfall below.
    - A command over a few minutes runs in `tmux` on the instance (`sudo -iu lodestar tmux new -d -s lane '<command> > ~/results/<name>.log 2>&1'`), and the session polls the log's tail in later calls.
