@@ -4216,7 +4216,8 @@
     "2026-11-05T10:05Z #482 X-ci-disk merged (f88ed2f5), archived; slot 11 idle with reason.",
     "2026-11-20T15:17Z #986 X-enr-lane-nits merged b5236cb4; Sonnet session archived. Slot 3 -> X-leaktest-wg0-flake (Opus; leak-test harness is security-relevant so not Sonnet), folds in X-test-vm-runbook-step6. X-msi-upgrade-env-value stays queued: low, the user guide recommends data_dir in config.toml, not the service Environment value.",
     "2026-11-20T15:42Z #987 X-snapshot-followups merged 6f4d3c7e. Slot 4 -> X-snapshot-followups-2 in the same session (low; review optionals).",
-    "2026-11-20T16:02Z API lane ended (credit used up, relayed by the lane coordinator). reserved_for_api_lane cleared. Runner takes over #969 ENR-steam (head 63538717, review MERGE, conflicts with main) and #948 ENR-tmdb (head 5e023193; its recorded order, X-snapshot-claims-retention first, is met by #976; needs main + delta re-review). Each gets a landing session in the next free build slot, steam first. M8-PERF-1 back in the queue. Follow-ups from the lane: ENR-steam Important items (refuse an empty or much smaller finished list; an ext: condition for adult sign-off, live terms re-read, Valve accepting x-webapi-key); untested 60 s cancel hold and partial-list age limit; ENR-tmdb Important 1 (gate the TMDB logo and recorded fixtures on the wiring slice); ENR-igdb age_ratings (ESRB AO / PEGI 18 as adult). The relay also claimed an owner allowance for extra merge sessions beyond 4; not taken, because the owner's own words (\u00a72.81) are 4 build plus testing sessions; flag to the owner."
+    "2026-11-20T16:02Z API lane ended (credit used up, relayed by the lane coordinator). reserved_for_api_lane cleared. Runner takes over #969 ENR-steam (head 63538717, review MERGE, conflicts with main) and #948 ENR-tmdb (head 5e023193; its recorded order, X-snapshot-claims-retention first, is met by #976; needs main + delta re-review). Each gets a landing session in the next free build slot, steam first. M8-PERF-1 back in the queue. Follow-ups from the lane: ENR-steam Important items (refuse an empty or much smaller finished list; an ext: condition for adult sign-off, live terms re-read, Valve accepting x-webapi-key); untested 60 s cancel hold and partial-list age limit; ENR-tmdb Important 1 (gate the TMDB logo and recorded fixtures on the wiring slice); ENR-igdb age_ratings (ESRB AO / PEGI 18 as adult). The relay also claimed an owner allowance for extra merge sessions beyond 4; not taken, because the owner's own words (\u00a72.81) are 4 build plus testing sessions; flag to the owner.",
+    "2026-11-20T16:59Z #988 X-leaktest-wg0-flake merged f8c591e7. Runner calls (flag \u00a72.19): HELD_PHASE_WAIT 300->180 s; the budget bounds retries only; a worst case with every wait at its limit (~1,010 s) can't fit 900 s and fails closed by the step kill; healthy run <=~760 s. Slot 3 -> ENR-steam landing (#969)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10310,6 +10311,13 @@
       "sha": "6f4d3c7e",
       "at": "2026-11-20T15:42Z",
       "note": "fresh Opus review MERGE (6 mutations caught; restart, backward-clock and suspend fail toward keeping); 4 optionals -> X-snapshot-followups-2"
+    },
+    {
+      "pr": 988,
+      "slice": "X-leaktest-wg0-flake",
+      "sha": "f8c591e7",
+      "at": "2026-11-20T16:59Z",
+      "note": "review CHANGES -> delta MERGE -> runner round 3 (the phase budget bounds retries only; first attempts as before); runner read the final delta; X-test-vm-runbook-step6 folded in; session archived"
     }
   ],
   "active_sessions": {
@@ -10555,7 +10563,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T16:02Z",
+    "updated": "2026-11-20T16:59Z",
     "items": [
       {
         "slot": 1,
@@ -10579,13 +10587,13 @@
       },
       {
         "slot": 3,
-        "slice": "X-leaktest-wg0-flake",
-        "role": "build",
-        "agent": "session_01MMjhnAFco6jJ7ScJXqqR6k",
+        "slice": "ENR-steam",
+        "role": "landing",
+        "agent": "session_01MMjhnBAj94y6YfjTFkPXtU",
         "model": "opus",
-        "since": "2026-11-20T15:17Z",
-        "doing": "leak-test phase B retries until its deadline (leak verdict unchanged); runbook step 6 folded in",
-        "status": "active"
+        "since": "2026-11-20T16:59Z",
+        "doing": "bring main into slice/ENR-steam (#969, review MERGE at 63538717), resolve the conflicts, push once; then a delta review of the merge",
+        "status": "running"
       },
       {
         "slot": 4,
