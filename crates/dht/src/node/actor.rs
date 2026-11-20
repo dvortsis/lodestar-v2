@@ -70,7 +70,7 @@ const MAX_PEER_QUERIES: usize = 64;
 /// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
 const ENOUGH_VALUES: usize = 8;
 /// CR-LOOKUP-END: the distinct networks (/24, IPv6 /64) whose replies must
-/// have added values before [`ENOUGH_VALUES`] can end a request, and that a
+/// have carried values before [`ENOUGH_VALUES`] can end a request, and that a
 /// leg's closest set must span before it converges early. One responder,
 /// however many addresses it answers from in a network, can't end a lookup
 /// on its own.
@@ -1856,20 +1856,17 @@ impl Actor {
                     && !peers.is_empty()
                     && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
                 {
-                    // A network counts only for a reply that added a value
-                    // the request didn't hold yet.
-                    let mut added = false;
                     for p in &peers {
                         if r.peers.len() >= 64 {
                             break;
                         }
-                        added |= r.peers.insert(*p);
+                        r.peers.insert(*p);
                     }
+                    // A second network repeating values already held counts:
+                    // the nodes storing a hash list the same swarm, and that
+                    // agreement is the corroboration the rule asks for.
                     let net = network(from.ip());
-                    if added
-                        && r.value_nets.len() < VALUE_RESPONDERS
-                        && !r.value_nets.contains(&net)
-                    {
+                    if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
                         r.value_nets.push(net);
                     }
                 }

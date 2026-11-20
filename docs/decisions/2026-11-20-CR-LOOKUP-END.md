@@ -3,7 +3,7 @@
 CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the review's blind spot 1 (`docs/reviews/2026-11-20-path-to-100-review.md` §3). It sits behind `dht.lookup_end`, or `LODESTAR_DHT_LOOKUP_END`, and is **off by default**. With the switch off, lookups end and start exactly as before.
 
 ## What changes with the switch on
-- **End on values.** A peer request ends, and frees its slot, as soon as it holds `ENOUGH_VALUES` = **8** distinct, validated values, and replies from at least `VALUE_RESPONDERS` = **2** distinct networks have each added a value it didn't already hold.
+- **End on values.** A peer request ends, and frees its slot, as soon as it holds `ENOUGH_VALUES` = **8** distinct, validated values, and replies carrying values have come from at least `VALUE_RESPONDERS` = **2** distinct networks.
   - It ends every family leg at once. Queries still out are dropped, as they are on a cancel.
   - The caller gets the values, a final reply or a stream's `complete`, exactly as a converged lookup would give them.
   - The ledger counts it as `dht_lookup_ended_total{reason="enough_values"}`. That is a new value in the closed enum. Precedence: `cancelled`, `deadline`, `enough_values`, `query_cap`, then `values` / `no_values`.
@@ -28,7 +28,10 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
 - **`VALUE_RESPONDERS` = 2,** also accepted by the runner (§2.19), counted as distinct networks (/24, IPv6 /64, the actor's existing `network()`), not distinct addresses.
   - **The hostile-reply rule:** one responder can't end a lookup on its own, however many addresses or ports it answers from within one network.
   - **What a hostile node can do:** with values from a single network, a request runs on as it does today, to its closest set, the deadline or the query cap. That's no regression.
-  - **What it can't do:** a second network counts only when its reply adds a value the request didn't already hold, so repeating values already held can't complete the pair. Two cooperating networks can still end a request holding mostly their values. That meets the brief's rule, and it's no worse than today's final reply, which returns whatever values the lookup collected.
+  - **Repeating values counts as corroboration.** A second network counts when its reply carries any valid value, even one the request already holds. The nodes storing a hash list the same swarm, so their agreement is what the rule is for.
+    - The self-review suggested counting a network only for new values. In the calibrated screen, that rule stopped every lookup from ending on values, because every holder returns the same list.
+    - It adds no protection either. Junk from one network still can't end a request alone.
+  - **Two cooperating networks** can end a request holding mostly their values. That meets the brief's rule, and it's no worse than today's final reply, which returns whatever values the lookup collected.
   - **Which values count:** only values that pass the existing endpoint policy (no port 0, no martian, private or blocklisted address in production) and are de-duplicated. They also have to arrive in a reply matched to a query still awaiting it, from the address asked; spoofed, late and unknown-tid replies count for nothing.
   - **Memory:** the per-request state this adds is at most 2 network keys and a flag. With the switch on, the request's value set fills as replies arrive instead of at each leg's end, still bounded at 64.
   - **Mixed address families:** the network that counts is the responder's, never its values'. A reply's values count toward `ENOUGH_VALUES` whatever their family (IPv4 and IPv6 peers alike, once validated). The responder that sent them counts once, by its own address: an IPv4 address by its /24, an IPv6 address by its /64, and an IPv4-mapped IPv6 address as its IPv4 /24, so a node can't count twice by answering in both forms. A dual-stack request's two legs share one count, so an IPv4 responder and an IPv6 responder are two networks, even if one operator runs both. That's accepted: it takes two addresses in different families, and a single responder still can't end a lookup on its own.
@@ -48,7 +51,7 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
 - **Actor tests on tokio's paused clock** (`node/lookup_end_tests.rs`):
   - enough values from two networks end a request before it converges;
   - one network's values never end it;
-  - a network counts only for new values;
+  - a second network repeating the values already held counts, as corroboration;
   - the closest set ends a leg with farther queries still out;
   - one network answering for made-up close ids can't converge a leg early;
   - an admitted request starts at once under the rate and the cap;
@@ -60,10 +63,35 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
   - **Two networks with fewer than 8 distinct valid values,** duplicates and port 0 included, never end on values.
   - The deterministic end-on-values tests are the positive control.
 - **`Lookup` unit tests** for `closest_answered`: farther queries, a failed node, a hint out, and one network.
-- **Equivalence with the switch off:** the existing dht suite passes unchanged, and the CR-SIM goldens are the packet-level check. When #974 has merged, the screen run shows they still match with the switch off.
+- **Equivalence with the switch off:** the existing dht suite passes unchanged, and every CR-SIM golden is byte-identical with the switch off (the packet-level check). `lookup_end_runs_deterministically` shows a run with it on is deterministic and ends some lookups on values.
 
-## Screen (CR-SIM)
-Pending. `crates/crawler-sim/**` is X-crawler-sim-calibrate's (#974) until it merges. Then the calibrated scenario runs 8 seeds, off against on, reporting `W`, `q` and `y` beside stored per minute. The change is kept only if output per slot-second and output per query both rise. The numbers go here.
+## Screen (CR-SIM): kept
+The calibrated `live-lookup` scenario (X-crawler-sim-calibrate, #974), 8 seeds (`SCREEN_SEEDS`), switch off against on. Run it with `cargo test -p lodestar-crawler-sim --test sim lookup_end_screen -- --ignored --nocapture`. `W` is `W_little` (`L / λ`, the calibrated `W`). `q` is CR-LEDGER's `peer_lookup` and `hint` queries per ended lookup. `y` is stored per admitted lookup. Per query means stored over every DHT query sent.
+
+| 8-seed mean | Off | On | Change |
+|---|---|---|---|
+| Stored per minute | 13.13 | 18.64 | +42 % |
+| Stored per slot-second (`stored/s ÷ L`) | 0.0071 | 0.0101 | +42 % |
+| Stored per DHT query | 0.0028 | 0.0038 | +36 % |
+| `W` (`W_little`) | 23.1 s | 16.2 s | −30 % |
+| `W` (CR-LEDGER residence per end) | 23.0 s | 16.8 s | −27 % |
+| `q` (lookup queries per lookup) | 24.4 | 19.4 | −20 % |
+| `q_all` (every query per admitted lookup) | 58.0 | 43.0 | −26 % |
+| `y` | 0.164 | 0.164 | none |
+| Admitted lookups a second | 1.33 | 1.89 | +42 % |
+| `L` (slots occupied) | 30.8 | 30.7 | none |
+| Lookups ending at the deadline | 82 % | 56 % | |
+| Lookups ending on enough values | 0 % | 32 % | |
+
+- **Every seed improved:** stored per minute rose on all 8 (+3.1 to +8.1 a minute; sign test `Better`), and so did stored per slot-second and stored per DHT query. Both keep conditions hold, so the change is kept.
+- **The mechanism is the one predicted:** about a third of lookups now end on values, `W` and `q` fall, the slots stay full, so more lookups run, and `y` is unchanged.
+- **A screen never replaces a live run.** CR-AB-LC measures it on the host, with CR-1c.
+- **Goldens:** every existing golden is byte-identical with the switch off. Only `golden/live-lookup.txt` changed, and only in its ledger lines, from #974's review items:
+  - `q` and `W` residence are now read from CR-LEDGER's counters (same values on seed 1: 24.6 and 23.34 s);
+  - two labels are reworded;
+  - the `lookup_ended_total{reason}` shares are added.
+  - The edge counter (`net::Edge`) they replace is gone.
+- **#974's other review items:** the README no longer says CR-LEDGER isn't on `main`. It names what each ledger line reads and says the `sim` test takes about 26 s, not 20 s. `docs/decisions/2026-11-20-X-crawler-sim-calibrate.md` still says about 20 s; it's #974's own file, so this note is the correction.
 
 ## Files outside the brief's list
 - `crates/dht/src/node/lookup_end_tests.rs` holds the actor tests, following `hint_tests.rs` and `ledger_tests.rs`. The runner accepted it into the owns.

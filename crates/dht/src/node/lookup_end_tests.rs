@@ -373,20 +373,20 @@ async fn one_network_cannot_converge_a_leg_early() {
     assert_eq!(a.pending.len(), 2, "far[1] and far[2] still out");
 }
 
-/// A reply that adds no new value doesn't count its network: a second
-/// network repeating values already held can't complete the pair.
+/// The nodes storing a hash list the same swarm: a second network
+/// repeating values already held counts, as corroboration. Without a
+/// second network, more of the same never ends the request.
 #[tokio::test(start_paused = true)]
-async fn a_network_counts_only_for_new_values() {
+async fn a_second_network_corroborating_the_same_values_counts() {
     let (mut a, s) = actor(true);
-    let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
+    let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 0, 12), at(0x30, 1, 13));
     table(&mut a, &[n1, n2, n3]);
     let mut rx = request(&mut a, &s);
     answer(&mut a, &s, &n1, peers(0, 9), &[]);
     answer(&mut a, &s, &n2, peers(0, 9), &[]);
     assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
-    // A new value from a third network completes it.
-    answer(&mut a, &s, &n3, peers(9, 1), &[]);
-    assert_eq!(rx.try_recv().unwrap().len(), 10);
+    answer(&mut a, &s, &n3, peers(0, 9), &[]);
+    assert_eq!(rx.try_recv().unwrap().len(), 9);
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
 }
 
