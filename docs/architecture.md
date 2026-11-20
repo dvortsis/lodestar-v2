@@ -1132,11 +1132,17 @@ Rules (`application-interface-design`):
   - A size the user types now, in the query bar, a facet's typed value or natural phrasing, means what was typed. `10gb` and "over 10 GB" mean 10 GB (10 × 1000³ bytes), and `10GiB` means 10 × 1024³. This covers `size:` and `largest:`. `piece:` stays 1,024-based, because piece lengths are powers of two (`piece:16MB` is 16 MiB).
   - **Only the user's own text echoes the typed unit.** The active-filter chip and the `/search?q=` URL repeat what the user typed ("Size: 10 GB or more", `size:>=10GB`). That echo is the user's text, not a measured size, so it doesn't pass through `formatBytes`. Every measured size stays IEC (`docs/metrics.md`, "never SI").
   - **Stored query text is always canonical.** Anything the server stores is written by the printer in bytes or IEC units, which every release reads the same way: §20 filter rules and their `unless` queries, allow entries, and alerts (already stored as AST JSON in bytes). So `size:<1GB` is stored as `size:<1000000000`, and a rollback to an older release reads the same set. No content-safety rule can widen or narrow when the user changes releases. The single-letter forms (`1.5G`) follow the same rule.
+  - **Two readings, chosen by where the text comes from.**
+    - The **typed-unit reading**, where `KB/MB/GB/TB` count in 1,000s, applies only to text the user types now: the query bar, typed facet values, natural phrasing and `/search?q=` URLs.
+    - Stored query text is always parsed with the **stored-text reading**, where `KB/MB/GB/TB` stay 1,024-based, as before.
+    - Before FX-6-I9 (#350), the printer wrote `KB/MB/GB/TB` into stored filter rules, `unless` queries, classification rules, allow entries and override scopes. That text keeps its match set, with no migration.
+    - A rollback is safe too, because the new printer writes only bytes or IEC units.
   - **X-units-typed's scope:**
     - the parser accepts the typed units;
     - the printer writes canonical stored text;
     - the UI and URL echo the typed unit;
     - a test checks that a rule saved after the change matches the same set when the previous parser reads it.
+    - a test checks that a stored rule `size:<1GB` still matches under 1 GiB after the change.
 
     It owns `docs/query-language.md`'s grammar and changes the rule `docs/decisions/2026-11-01-FX-6-I9.md` states, "every parser version reads both spellings as 1024-based", for typed input only. A hand-written `/search?q=` link or API call that uses GB reads about 7% smaller after the change. That is an ordinary search, not a stored rule.
 - **Null ≠ zero:** never scraped → "—"; a real 0 → "0"; estimates → "≈"; sampled → "≈" + a note.
