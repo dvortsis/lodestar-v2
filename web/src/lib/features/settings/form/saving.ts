@@ -392,13 +392,14 @@ export async function holding<T>(
 	e.inFlight = sent;
 	if (keys) e.sending = new Set(keys);
 	// Every save, Undo, Retry or secret removal goes through here, so `settled()` sees each one.
-	const p = f();
-	e.flight = p;
+	let p: Promise<T> | undefined;
 	try {
+		p = f();
+		e.flight = p;
 		return await p;
 	} finally {
 		afterSend(e, sent);
-		if (e.flight === p) e.flight = null;
+		if (p && e.flight === p) e.flight = null;
 	}
 }
 

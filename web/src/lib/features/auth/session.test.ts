@@ -23,8 +23,10 @@ import {
 	SETTINGS_DRAFTS_PREFIX,
 	setSession,
 	SIGN_IN_KEY,
+	signedIn,
 	signInPending
 } from './session.svelte';
+import { checkAuth } from './gate';
 import * as scope from '$lib/features/settings/form/draft-scope';
 import { writeDraft } from '$lib/features/settings/form/draft-store';
 
@@ -40,6 +42,7 @@ const expired = (setup: boolean) =>
 let uninstall: () => void;
 beforeEach(() => {
 	vi.clearAllMocks();
+	sessionStorage.clear();
 	history.replaceState(null, '', '/search?q=ubuntu&sort=size');
 	setSession('signed_in');
 	uninstall = installAuthHandlers();
@@ -252,9 +255,34 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 		);
 		await expect(api.get('/filters')).rejects.toThrow();
 		expect(signInPending()).toBe('signedout');
-		setSession('signed_in');
+		// Choosing to stay re-arms the redirect, never the block.
+		rearmSignIn();
+		expect(signInPending()).toBe('signedout');
+		// Only a real sign-in lifts it.
+		signedIn();
 		expect(signInPending()).toBeNull();
 		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
+	});
+
+	it('a late success after Sign out keeps drafts blocked', async () => {
+		seed();
+		// A preview sent just before Sign out answers just after it.
+		let answer!: (r: Response) => void;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string | URL | Request) =>
+				String(url).includes('/logout')
+					? json(200, { ok: true })
+					: new Promise<Response>((r) => (answer = r))
+			)
+		);
+		const late = api.get('/filters');
+		await logout();
+		answer(json(200, []));
+		await late.catch(() => {});
+		expect(signInPending()).toBe('signedout');
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'crawler')).toBeNull();
 	});
 
 	it('drops them all when the instance needs its first-run setup again', async () => {
@@ -266,6 +294,34 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 		await expect(api.get('/filters')).rejects.toThrow();
 		expect(stored()).toEqual([null, null]);
 		expect(signInPending()).toBe('setup');
+		// A late success doesn't lift the block; the setup or a sign-in does.
+		setSession('signed_in');
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
+		signedIn();
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
+	});
+
+	it('drops them all when GET /auth finds the instance re-claimed (a reload)', async () => {
+		seed();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				json(200, { setup_required: true, logged_in: false, notice_required: false })
+			)
+		);
+		await checkAuth();
+		expect(stored()).toEqual([null, null]);
+		expect(signInPending()).toBe('setup');
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
+	});
+
+	it('drops them all whenever the status becomes setup_required, however it is learned', () => {
+		seed();
+		setSession('setup_required');
+		expect(stored()).toEqual([null, null]);
+		seed();
+		setSession('setup_required'); // already the status: still dropped
+		expect(stored()).toEqual([null, null]);
 	});
 
 	it('redirects again after the user chose to stay', async () => {

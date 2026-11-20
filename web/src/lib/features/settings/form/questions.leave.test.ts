@@ -132,7 +132,7 @@ describe('onSessionEnd (signed-out.ts)', () => {
 		expect(JSON.stringify(dialogs.asked)).toContain("they'll be lost");
 	});
 
-	it('says passwords and keys are never kept', async () => {
+	it('says passwords, keys, secret links and client entries are never kept', async () => {
 		dialogs.answer = 'keep';
 		const secret = spec('notifications.ntfy_token', { writeOnly: true });
 		await onSessionEnd(
@@ -143,7 +143,9 @@ describe('onSessionEnd (signed-out.ts)', () => {
 			vi.fn(),
 			vi.fn()
 		);
-		expect(JSON.stringify(dialogs.asked)).toContain("Passwords and keys aren't kept");
+		expect(JSON.stringify(dialogs.asked)).toContain(
+			'Passwords, keys, secret links and download-client entries'
+		);
 	});
 
 	it('names the Legal Notice when that is what is due', async () => {

@@ -44,6 +44,12 @@ function setSignIn(reason: SignInReason | null): void {
 	}
 }
 
+/** Clears an `expired` or `notice` reason; a `signedout` or `setup` block stays (see `signedIn`). */
+function clearPending(): void {
+	const v = signInPending();
+	if (v === 'expired' || v === 'notice') setSignIn(null);
+}
+
 /** Why the app is going to sign in, if it is. */
 export function signInPending(): SignInReason | null {
 	try {
@@ -77,13 +83,22 @@ export function currentSession(): SessionStatus {
 
 /** Records what a request showed about the session (the forms and the hooks below call it). */
 export function setSession(status: SessionStatus): void {
+	// However it's learned (a 401, GET /auth, a refused sign-in), an instance that needs its
+	// first-run setup again may have a new owner: nothing staged on it is kept, and drafts stay
+	// blocked until a sign-in or the setup succeeds (`signedIn`).
+	if (status === 'setup_required') {
+		clearSettingsDrafts();
+		setSignIn('setup');
+	}
 	if (session.status === status) return;
 	// The first successful request establishes this tab's existing session. It
 	// must not invalidate and repeat the very request that established it. Actual
 	// sign-out/setup transitions still clear data, and subsequent sign-in reloads.
 	const initialConfirmation = session.status === 'unknown' && status === 'signed_in';
 	session.status = status;
-	if (status === 'signed_in') setSignIn(null);
+	// Any request that worked ends a pending expiry, but never a Sign out's or a re-claim's
+	// block: a late response to a request sent before them is no sign-in.
+	if (status === 'signed_in') clearPending();
 	if (!initialConfirmation) clearDetailCaches(status === 'signed_in');
 	// Signing in: the account's language, zone and week replace the cached hint (lib/i18n/boot.ts).
 	// A normal load's first confirmation is skipped (it would add a request to the first load), but
@@ -108,13 +123,12 @@ export function setSession(status: SessionStatus): void {
 export function installAuthHandlers(): () => void {
 	handler = (next, { setupRequired, noticeRequired }) => {
 		// A pending Legal Notice keeps the session: the sign-in page shows the notice.
+		// `setSession('setup_required')` drops the drafts (X-session-draft-keep).
 		if (!noticeRequired) setSession(setupRequired ? 'setup_required' : 'signed_out');
-		// An instance that needs its first-run setup again may have a new owner: nothing staged
-		// on it is kept (X-session-draft-keep).
-		if (setupRequired) clearSettingsDrafts();
-		// After an explicit Sign out a refused request is no expiry: nothing is kept for it.
-		if (setupRequired) setSignIn('setup');
-		else if (signInPending() !== 'signedout') setSignIn(noticeRequired ? 'notice' : 'expired');
+		// After an explicit Sign out or a re-claim a refused request is no expiry: nothing is kept.
+		const pending = signInPending();
+		if (!setupRequired && pending !== 'signedout' && pending !== 'setup')
+			setSignIn(noticeRequired ? 'notice' : 'expired');
 		void (setupRequired ? toSetup() : toLoginFrom(next));
 	};
 	onLoginRequired(handler);
@@ -136,8 +150,17 @@ let handler: Parameters<typeof onLoginRequired>[0];
  * session ended redirects again (W5's handler redirects once until a request succeeds).
  */
 export function rearmSignIn(): void {
-	setSignIn(null);
+	clearPending();
 	if (handler) onLoginRequired(handler);
+}
+
+/**
+ * A sign-in or the first-run setup succeeded (the sign-in and setup forms call this): Settings
+ * drafts may be kept again, and the session is signed in.
+ */
+export function signedIn(): void {
+	setSignIn(null);
+	setSession('signed_in');
 }
 
 /** Ends the session and goes to the sign-in page. Rejects (staying put) if the server can't be reached. */

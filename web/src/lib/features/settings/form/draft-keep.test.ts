@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { components } from '$lib/api/schema';
 import { draftOf, planRestore, readDraft, writeDraft, type Draft } from './draft';
 import { KEPT_KEY, SIGN_IN_KEY } from './draft-scope';
-import { KEPT_MAX_AGE_MS, takeKept } from './kept-restore';
+import { render, screen } from '@testing-library/svelte';
+import type { Component } from 'svelte';
+import type { Engine } from './form.svelte';
+import { KEPT_MAX_AGE_MS, offerKept, takeKept } from './kept-restore';
 import { dropKept, markKept } from './signed-out';
 import { neverDrafted } from './draft-store';
 import { readSection } from './schema';
@@ -175,6 +178,24 @@ describe('the kept marker', () => {
 			expect(takeKept('crawler', '/settings/crawler', 1)).toBe(false);
 			expect(sessionStorage.getItem(KEPT_KEY)).toBeNull();
 		}
+	});
+
+	it.each([
+		[0, null],
+		[2, 'Some no longer apply and were left out: 2.']
+	])('restores at once with its note (%i left out)', (dropped, says) => {
+		markKept('crawler', location.pathname, Date.now());
+		const e = { id: 'crawler', draft: null, kept: null } as unknown as Engine & {
+			draft: { fields: number; dropped: number } | null;
+		};
+		const restore = vi.fn((x: typeof e) => (x.draft = null));
+		offerKept(e, (x) => ((x as typeof e).draft = { fields: 3, dropped }), restore as never);
+		expect(restore).toHaveBeenCalledOnce();
+		render(e.kept as Component);
+		const note = screen.getByTestId('draft-kept').textContent ?? '';
+		expect(note).toContain("they aren't saved yet");
+		if (says) expect(note).toContain(says);
+		else expect(note).not.toContain('left out');
 	});
 
 	it('is dropped when the user stays', () => {

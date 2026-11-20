@@ -3,6 +3,7 @@
 // the edit chunk carries it. The note it hands the form (`KeptNote`) says the changes aren't saved yet.
 import { KEPT_KEY, storage } from './draft-scope';
 import type { Engine } from './form.svelte';
+import type { Component } from 'svelte';
 import KeptNote from './KeptNote.svelte';
 
 /** A kept mark older than this isn't honoured (the draft is still offered as usual). */
@@ -46,6 +47,10 @@ export function offerKept(
 	const kept = takeKept(e.id, globalThis.location?.pathname ?? '', Date.now());
 	offer(e);
 	if (!kept || !e.draft) return;
+	// What the offer would have said: fields that no longer apply (now locked, or gone) are left out.
+	const dropped = e.draft.dropped;
 	restore(e);
-	e.kept = KeptNote;
+	e.kept = dropped
+		? (((internals, props) => KeptNote(internals, { ...props, dropped })) as Component)
+		: KeptNote;
 }

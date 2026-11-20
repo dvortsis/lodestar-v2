@@ -20,7 +20,7 @@
 	import { resetNoticeCache, type LegalNotice } from './notice';
 	import { toLogin, toWelcome } from './nav';
 	import { checkPassword, isBlocking, MIN_PASSWORD_CHARS } from './password';
-	import { setSession } from './session.svelte';
+	import { setSession, signedIn } from './session.svelte';
 	import { parseToken, TOKEN_HINT } from './token';
 
 	const form = createAuthForm();
@@ -127,7 +127,7 @@
 		const ok = await form.submit(() => api.post('/setup', { body }));
 		if (ok) {
 			token = password = confirm = '';
-			setSession('signed_in');
+			signedIn();
 			await toWelcome();
 			return;
 		}
