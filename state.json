@@ -8934,7 +8934,7 @@
       "id": "X-cr-col5-nits",
       "note": "#972 review optionals: collect.py comment on dht_lookup_slots_occupied (follow CR-LEDGER metrics.md row); winners [[x]] TypeError; control_switches three shapes. Next collector PR.",
       "at": "2026-11-20T06:37Z",
-      "notes": "Also add lodestar_dht_lookup_queued (CR-LEDGER #975, queue gauge split from dht_lookup_slots_occupied) to KEEP."
+      "notes": "Also add lodestar_dht_lookup_queued (CR-LEDGER #975, queue gauge split from dht_lookup_slots_occupied) to KEEP. CR-LOOKUP-END adds reason=\"enough_values\" to dht_lookup_ended_total and dht_lookup_residence_seconds_total: keep both families in KEEP."
     },
     {
       "id": "X-test-vm-fix",
@@ -8967,6 +8967,10 @@
     {
       "id": "X-snapshot-claims-retention-976",
       "notes": "2026-11-20T07:41Z #976 head c2d3cd62 opened; fresh Opus+security review running. Runner calls (\u00a72.19 flags): size ~1,232 (60% tests) accepted; extra owns crates/pipeline/tests/snapshot_terms.rs accepted; fail-closed delete of unverifiable V15+ snapshot and claims purge on newer-schema snapshots accepted subject to review."
+    },
+    {
+      "id": "CR-LOOKUP-END-calls",
+      "notes": "2026-11-20T08:07Z Runner calls (\u00a72.19 flag): ENOUGH_VALUES=8 distinct validated values; VALUE_RESPONDERS=2 distinct /24 or /64 networks; lookup_end_tests.rs joins owns; PR opens before the CR-SIM screen, merge waits for screen (delta review) after #974."
     }
   ],
   "main_health": [
@@ -10570,7 +10574,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T07:52Z",
+  "updated": "2026-11-20T08:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
