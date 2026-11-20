@@ -1005,3 +1005,67 @@ fn delete_and_rotate_while_a_download_is_open() {
     assert!(done.skipped.is_empty(), "{done:?}");
     drop(d);
 }
+
+/// A compression that finishes between any two pages (every rotated file
+/// held uncompressed until then, then all finished) loses and repeats
+/// nothing: each page's cursor finds its file under its `.gz` name.
+#[test]
+fn compression_finishing_between_any_two_pages_keeps_history_whole() {
+    let mut failures = Vec::new();
+    for release_before in 0..16usize {
+        let dir = tempfile::tempdir().unwrap();
+        let l = section(dir.path(), |l| l.file_size_mib = 1);
+        let (rt, _) = runtime(&l, Some(40), true);
+        // Every compression waits until released.
+        let hold = match &*lock(&rt.file) {
+            FileState::Open(sink) => sink.hold(),
+            _ => unreachable!(),
+        };
+        let mut hold = Some(hold);
+        for n in 0..300 {
+            line(rt, n, "x");
+            if n % 70 == 69
+                && let FileState::Open(sink) = &mut *lock(&rt.file)
+            {
+                sink.rotate().unwrap();
+            }
+        }
+        let src = logs(rt);
+        let mut got = Vec::new();
+        let mut cursor = None;
+        let mut pages = 0;
+        loop {
+            if pages == release_before {
+                drop(hold.take());
+                settle(rt);
+            }
+            let page = src.history(&query("hist-line", 23, cursor)).unwrap();
+            got.extend(page.lines.iter().map(number));
+            pages += 1;
+            if pages == 2 {
+                for n in 300..320 {
+                    line(rt, n, "x");
+                }
+                if let FileState::Open(sink) = &mut *lock(&rt.file) {
+                    sink.rotate().unwrap();
+                }
+            }
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+        drop(hold.take());
+        let want: Vec<u64> = (0..300).rev().collect();
+        if got != want {
+            let missing: Vec<u64> = want.iter().filter(|n| !got.contains(n)).copied().collect();
+            let mut seen = std::collections::HashSet::new();
+            let dups: Vec<u64> = got.iter().filter(|n| !seen.insert(**n)).copied().collect();
+            failures.push(format!(
+                "release before page {release_before}: {pages} pages, {} lines, missing {missing:?}, dups {dups:?}",
+                got.len()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
