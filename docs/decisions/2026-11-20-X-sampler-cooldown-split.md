@@ -9,12 +9,15 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
 
 ## The structure
 - **When the table is full and a node needs a place, the cooldown that ends soonest moves out** to a spill filter (`sampler.rs`, `spill::Spill`). In-flight records never move. Up to 16 of the soonest are tried, so one record that doesn't fit doesn't stop the rest.
-- **The filter is a fixed table of 2^22 32-bit slots in groups of 8.** Each slot holds a 20-bit fingerprint of the address and the minute its cooldown ends, modulo 4,096 minutes (68 h). An address may sit in either of two groups, chosen by a SipHash with a per-process random key, and goes in the emptier one.
+- **The filter is a fixed table of 2^23 32-bit slots in groups of 8.** Each slot holds a 20-bit fingerprint of the address and the minute its cooldown ends, modulo 4,096 minutes (68 h). An address may sit in either of two groups, chosen by a SipHash with a per-process random key, and goes in the emptier one.
   - **Why not a Bloom filter per time bucket (the brief's example):** a lookup has to ask every live bucket's filter, so false positives add up. With the 100-plus segments Balanced's steady state needs, most strangers would read as "maybe cooling" and sampling would stall again. Here a lookup reads two groups, about 16 in 2^20 (0.0015 %) false positives, measured below 0.1 % at 90 % fill (`the_filter_is_bounded_keeps_every_key_and_rarely_misfires`).
   - **Why minutes:** a moved cooldown ends at most 60 s late, against up to a bucket's width with coarse buckets.
-- **The bound: 16 MiB, stated and measured.** The slots are one allocation of exactly 16,777,216 bytes, made on the first spill and never grown; the structure holds nothing else on the heap. The test asserts the bytes held. Capacity is 4,194,304 cooldowns; half full takes no refusal and 90 % refuses under 1 % (each refused cooldown stays in the table).
-  - **Sizing:** Balanced samples about 100 nodes a second and a timeout cools 6 h, so about 2.16 million cooldowns are live in steady state, 1.96 million of them beyond the table. That is under half the slots. Aggressive (about 500 a second) can fill the filter; it then refuses and the table behaves as with the switch off.
-  - **The envelope (owner-decisions §1.6.3):** steady-state RSS under 1 GB at 10M torrents. The sampler's table is about 35–45 MB at its cap (`docs/decisions/2026-11-02-R-mem-triage.md`); the filter adds 16 MiB on top, only with the switch on and only once the table has filled.
+- **The bound: 32 MiB, stated and measured.** The slots are one allocation of exactly 33,554,432 bytes, made on the first spill and never grown; the structure holds nothing else on the heap. The test asserts the bytes held. Capacity is 8,388,608 cooldowns; half full takes no refusal and 90 % refuses under 1 % (each refused cooldown stays in the table). `saturated()` treats the filter as full past 15/16 of its slots.
+  - **Sizing, with WK-10e's scale:** live cooldowns ≈ sample rate × (answered share × interval × scale + unanswered share × 6 h). At Balanced (about 100 samples a second), with about a fifth answered at about 6 h:
+    - at scale 1, about 2.2 million cooldowns are live (2.0 million beyond the table, a quarter of the slots);
+    - at scale 8 (48 h cooldowns for answers), about 5.2 million (5.0 million beyond the table, about 60 % of the slots).
+    - Aggressive (about 500 a second) can fill the filter. It then refuses, and the table behaves as with the switch off: no worse than today.
+  - **The envelope (owner-decisions §1.6.3):** steady-state RSS under 1 GB at 10M torrents. The sampler's table is about 35–45 MB at its cap (`docs/decisions/2026-11-02-R-mem-triage.md`). The filter adds 32 MiB on top, only with the switch on and only once the table has filled.
 - **Ended slots are swept,** 4,096 slots a maintenance tick (a full pass about every 17 minutes), long before an ended minute could wrap round 68 h later and read as live. If one ever did, it would only skip a node.
 
 ## Never shorter
@@ -36,10 +39,15 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
   - No on-disk format change.
 - **The snapshot format doesn't change.** It lists the table, at most 200,000 entries, as today. The filter can't be listed, so on commit the proof takes the latest end the filter may hold (`Sampler::spill_end`, an upper bound on every live one), caps it at now + H as the snapshot's other entries are, and folds it into the snapshot's existing gate.
 - **The next run restores the listed cooldowns and samples no one until that gate passes.** That honours every moved cooldown at least as long as today's snapshot would have kept it. WK-10e's argument still bounds a scaled one to `MAX_INTERVAL` from the commit.
-- **The cost:** after a clean restart with spilled cooldowns, sampling waits up to about 6 h, as a run with a dirty marker does today. Today's sampler, restarted with a full table, mostly idles anyway until those cooldowns end.
+- **The cost:** with the switch on, every clean restart after the table has filled waits up to about 6 h before sampling, as a run with a dirty marker does today.
+  - In steady state the filter holds cooldowns ending across the next 6 h, so the gate is near its cap.
+  - Today's sampler, restarted with a table that isn't full, has no gate, and a restored full table frees places as its cooldowns end.
+  - This time is gated, so `dht_sample_full_seconds_total` doesn't count it. CR-AB-1 should avoid restarts inside a block, or report the gated time (`dht_sample_suppression_seconds`, `dht_sample_suppression_reason`) beside sampler-full time.
 - **With nothing spilled,** no gate is added (`a_spilled_cooldown_gates_the_next_run_until_it_ends`, both cases).
 - **CR-0d's restart tests pass unchanged with the switch off.** The proptest's restart step does what `Proof::commit` and the start do: seal in-flight samples at now + H, list, gate, and restore into a fresh sampler.
 - **A persisted filter** would let a restarted run sample at once. That's a new on-disk file under the restart proof's commit, which this slice doesn't own (`restart.rs`), so it's left as a follow-up if the live run shows restarts matter.
+
+- **Monitoring (P5):** a restored record that moves to the filter counts as honoured when it moves, since the filter keeps it to its end. Offers the filter refuses for a restored address don't add to the refused count. Both are monitoring only.
 
 ## The metric
 - **`dht_sample_full_seconds_total`,** a counter of seconds with no labels: time the sampler couldn't admit anyone while sampling was allowed (not paused, past suppression and any restart gate). It is checked once a maintenance tick (`Sampler::full_time`) and counts with the switch on or off. It's the plan's "sampler-full time" (cr-spec rule 6.4). Its row is in `docs/metrics.md`, with a render test.
@@ -60,5 +68,5 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
 - **If the runner frees `crates/crawler-sim/tests/sim/**`,** a filling scenario could be added there later. It needs a long-run knob and a large node population.
 
 ## Refinements of the plan (§2.19)
-- **The filter's form:** a two-choice fingerprint table rather than per-bucket Bloom filters, for the false-positive reason above. Its budget is 16 MiB rather than "a few MB", so Balanced's steady state fits at half load.
-- **Restart:** the snapshot's gate covers spilled cooldowns instead of a new persisted file.
+- **The filter's form:** a two-choice fingerprint table rather than per-bucket Bloom filters, for the false-positive reason above. Its budget is 32 MiB rather than "a few MB", so Balanced's steady state fits even at WK-10e's largest scale.
+- **Restart:** the snapshot's gate covers spilled cooldowns instead of a new persisted file. With the switch on, that costs up to about 6 h of sampling after each clean restart once the table has filled. A persisted filter is the follow-up if the live runs show restarts matter.

@@ -96,7 +96,7 @@ fn the_filter_is_bounded_keeps_every_key_and_rarely_misfires() {
     );
     let (used, bytes) = f.counts();
     assert_eq!(bytes, spill::BYTES, "the slots, allocated once");
-    assert_eq!(spill::BYTES, 16 << 20);
+    assert_eq!(spill::BYTES, 32 << 20);
     // Two addresses sharing a group and a fingerprint share a slot (the
     // later end): rare, and only ever a longer cooldown.
     let stored = most as usize - refused;
@@ -202,6 +202,52 @@ fn a_full_filter_leaves_the_table_full() {
     assert!(!s.reserve(wide(2), 2, now));
     assert!(!s.reserve(wide(1), 3, now + past - NS));
     assert_eq!(s.known(), 1);
+}
+
+/// An ended slot that wraps round (68 h later, with no sweep) reads as
+/// cooling, which only skips the node; one sweep pass frees it.
+#[test]
+fn a_wrapped_slot_only_skips_until_swept() {
+    let base = Instant::now();
+    let mut f = Spill::new(base);
+    let a = wide(7);
+    assert!(f.insert(&a, base + Duration::from_secs(600), base));
+    assert!(!f.contains(&a, base + Duration::from_secs(660)));
+    // 4,096 minutes on, the stored minute aliases as live.
+    let wrapped = base + Duration::from_secs(4096 * 60 + 300);
+    assert!(
+        f.contains(&a, wrapped),
+        "a false positive, never a false negative"
+    );
+    for _ in 0..spill::SLOTS / spill::SWEEP {
+        f.sweep(base + Duration::from_secs(660));
+    }
+    assert!(!f.contains(&a, wrapped), "swept");
+    assert_eq!(f.counts().0, 0);
+}
+
+/// Sampler-full time counts only while sampling is allowed, and only while
+/// the sampler is full.
+#[test]
+fn full_time_counts_only_full_and_allowed_time() {
+    let mut s = Sampler::with_capacity(1);
+    let now = Instant::now();
+    assert_eq!(s.full_time(now, true), Duration::ZERO);
+    let t = |secs| now + Duration::from_secs(secs);
+    assert_eq!(s.full_time(t(5), true), Duration::ZERO, "not full");
+    assert!(s.reserve(wide(1), 1, t(5)));
+    assert!(s.saturated());
+    assert_eq!(s.full_time(t(8), true), Duration::from_secs(3));
+    assert_eq!(s.full_time(t(20), false), Duration::from_secs(3), "gated");
+    assert_eq!(s.full_time(t(21), true), Duration::from_secs(4));
+    // The split sampler, with a cooldown it can move, isn't full.
+    let mut on = Sampler::split_with_capacity(1);
+    assert!(on.reserve(wide(1), 1, now));
+    assert!(on.saturated(), "an in-flight sample can't move");
+    assert!(on.complete(wide(1), 1, MAX_INTERVAL, now));
+    assert!(!on.saturated());
+    on.full_time(now, true);
+    assert_eq!(on.full_time(t(9), true), Duration::ZERO);
 }
 
 /// Off against on, while the table never fills, every call answers the same.

@@ -471,7 +471,10 @@ impl Sampler {
         self.known() - self.cooling()
     }
     /// Whether the sampler can't admit anyone: the table is full and,
-    /// with the split on, no cooldown can move to the filter.
+    /// with the split on, no cooldown can move to the filter. With the
+    /// split on, "likely room" is judged by the filter's fill; if all
+    /// [`SPILL_TRIES`] inserts are refused below that fill (very rare),
+    /// `next` admits no one that tick without this saying so.
     pub fn saturated(&self) -> bool {
         self.known() >= self.capacity
             && !self
@@ -532,7 +535,7 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 ///   end, never cut. There are no false negatives: a node in cooldown is
 ///   always refused. A false positive (another address with the same
 ///   fingerprint in one of its groups, about 16 in 2^20) only skips a node.
-/// - **Bounded.** [`SLOTS`] slots, 16 MiB, allocated on the first spill.
+/// - **Bounded.** [`SLOTS`] slots, 32 MiB, allocated on the first spill.
 ///   When both groups are full of live cooldowns, [`Spill::insert`]
 ///   refuses and the cooldown stays in the sampler's table: the sampler is
 ///   then no worse than with the switch off.
@@ -560,9 +563,11 @@ pub(crate) mod spill {
     /// longest cooldown (`MAX_INTERVAL` × `MAX_SCALE`, 48 h) and a minute.
     pub const HORIZON_MIN: u32 = 48 * 60 + 1;
     const GROUP: usize = 8;
-    const GROUPS: usize = 1 << 19;
-    /// 2^22 slots of 4 bytes: 16 MiB, about twice Balanced's steady
-    /// state (100 samples a second, 6 h each, less the table's 200,000).
+    const GROUPS: usize = 1 << 20;
+    /// 2^23 slots of 4 bytes: 32 MiB. Balanced (100 samples a second)
+    /// keeps about 2.2 million cooldowns live at WK-10e scale 1 and about
+    /// 5.2 million at scale 8 (a fifth answered, cooling 48 h); the usable
+    /// 15/16 of this holds either.
     pub const SLOTS: usize = GROUPS * GROUP;
     /// Slots cleared of ended cooldowns per [`Spill::sweep`]: a full pass
     /// every 1,024 sweeps (about 17 minutes at the 1 s maintenance tick).
@@ -618,8 +623,8 @@ pub(crate) mod spill {
         fn place(&self, addr: &SocketAddr) -> ([usize; 2], u32) {
             let h = self.hasher.hash_one(addr);
             let g1 = (h as usize) % GROUPS;
-            let g2 = ((h >> 19) as usize) % GROUPS;
-            let fp = ((h >> 38) & FP_MASK) as u32;
+            let g2 = ((h >> 20) as usize) % GROUPS;
+            let fp = ((h >> 40) & FP_MASK) as u32;
             ([g1, g2], fp.max(1) << MINUTE_BITS)
         }
 
@@ -634,7 +639,8 @@ pub(crate) mod spill {
             let first = self.first_live(now);
             let end =
                 u64::try_from(self.since_base(until).div_ceil(MINUTE_NANOS)).unwrap_or(u64::MAX);
-            let ahead = end - first;
+            // `end >= first` whenever `until > now >= base`; saturate anyway.
+            let ahead = end.saturating_sub(first);
             if ahead >= u64::from(HORIZON_MIN) {
                 return false;
             }
