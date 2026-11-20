@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T05:54Z",
+  "updated_at": "2026-11-20T06:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4120,7 +4120,14 @@
   "last_heartbeat": "2026-11-20T05:54Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
-  "runner_prs_open": [],
+  "runner_prs_open": [
+    {
+      "pr": 971,
+      "head": "52b3d056",
+      "what": "land #947 #955 #960 #965 #967 (union of shared lists)",
+      "at": "2026-11-20T06:18Z"
+    }
+  ],
   "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier.",
   "notes": [
     "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547.",
@@ -10369,7 +10376,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T05:54Z",
+    "updated": "2026-11-20T06:18Z",
     "items": [
       {
         "slot": 1,
@@ -10501,7 +10508,7 @@
     }
   ],
   "heartbeat": "2026-11-16T05:50Z",
-  "updated": "2026-11-20T05:54Z",
+  "updated": "2026-11-20T06:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10706,6 +10713,12 @@
       "slice": "X-upd-stop-races",
       "sha": "cd2b7eb4026abc0368f5d6c2abfe34d55db4eb0c",
       "at": "2026-11-11T23:09:03Z"
+    },
+    {
+      "pr": 970,
+      "sha": "bbd89ca5",
+      "at": "2026-11-20T06:18Z",
+      "note": "r5/r5.1 plan; fresh Opus MERGE; follow-ups in records PR"
     }
   ],
   "cloud_tester": {
