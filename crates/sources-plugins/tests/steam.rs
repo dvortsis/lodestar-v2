@@ -341,15 +341,16 @@ async fn a_cancelled_refresh_resumes_at_its_cursor() {
     });
     let p = plugin(Some(HEX_KEY));
     let k = kit(slow, &p);
-    // The runtime's lookup timeout drops the lookup during page two.
+    // The runtime's lookup timeout drops the lookup during page two,
+    // 30 s in, which is inside the `CANCELLED` hold.
     let q = game("Example Quest");
-    let cut = tokio::time::timeout(Duration::from_secs(60), p.lookup(&k, &q));
+    let cut = tokio::time::timeout(Duration::from_secs(30), p.lookup(&k, &q));
     assert!(cut.await.is_err());
     assert_eq!(replayer.requests().len(), 1);
-    // Cancelled mid-request: the next try still waits.
+    // Cancelled mid-request: the next try still waits out `CANCELLED`.
     let e = p.lookup(&k, &game("Example Quest")).await.unwrap_err();
     assert_eq!(e.0, steam::HELD);
-    tokio::time::advance(steam::RETRY).await;
+    tokio::time::advance(steam::CANCELLED).await;
     // It goes on from page two; page one's game was kept.
     let got = p.lookup(&k, &game("Example Quest")).await.unwrap();
     assert_eq!(id_of(&got), Some("70".into()));
