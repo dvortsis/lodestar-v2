@@ -125,6 +125,20 @@ class PolicyTests(unittest.TestCase):
         # IAM counts the policy without whitespace; Fn::Sub ARNs grow by the account ID.
         self.assertLess(len(json.dumps(doc, separators=(",", ":"))) + 12 * 20, 6144)
 
+    def test_template_fits_cloudformations_limits(self):
+        # CloudFormation rejects the upload, before any change set, when the
+        # template's Description is over 1,024 characters (seen 2026-11-20Z).
+        body = TEMPLATE.read_text()
+        t = json.loads(body)
+        self.assertLessEqual(len(t["Description"]), 1024)
+        self.assertLessEqual(len(body.encode()), 51200)  # a console upload's cap
+        for name, p in t["Parameters"].items():
+            self.assertLessEqual(len(p.get("Description", "")), 4000, name)
+        # IAM caps a role's and a managed policy's Description at 1,000.
+        for name, r in t["Resources"].items():
+            if r["Type"] in ("AWS::IAM::Role", "AWS::IAM::ManagedPolicy"):
+                self.assertLessEqual(len(r["Properties"].get("Description", "")), 1000, name)
+
     def test_no_wildcard_writes(self):
         _, _, sts = statements()
         for st in sts:
