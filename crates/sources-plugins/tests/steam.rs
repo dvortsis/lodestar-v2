@@ -606,31 +606,76 @@ async fn a_partial_list_at_its_age_limit_starts_again() {
 
 #[test]
 fn shrink_sightings_count_within_tolerance_and_need_a_day() {
-    use steam::{SHRINK_SPAN, Sightings};
+    use steam::{MAX_APPS, SHRINK_SPAN, Sightings};
     let day = SHRINK_SPAN.as_secs();
-    let (s1, ok) = Sightings::see(None, 500, 1_000);
+    let t = 10 * day;
+    let (s1, ok) = Sightings::see(None, 1_200, 500, t);
     assert!(!ok);
-    assert_eq!((s1.size, s1.first, s1.count), (500, 1_000, 1));
+    assert_eq!(
+        s1,
+        Sightings {
+            old: 1_200,
+            size: 500,
+            first: t,
+            count: 1
+        }
+    );
     // 5% of the first sighting either way still counts; the first stays.
-    let (s2, ok) = Sightings::see(Some(s1), 525, 2_000);
+    let (s2, ok) = Sightings::see(Some(s1), 1_200, 525, t + 1_000);
     assert!(!ok);
-    assert_eq!((s2.size, s2.first, s2.count), (500, 1_000, 2));
-    let (s3, ok) = Sightings::see(Some(s2), 475, 1_000 + day - 1);
+    assert_eq!((s2.size, s2.first, s2.count), (500, t, 2));
+    let (s3, ok) = Sightings::see(Some(s2), 1_200, 475, t + day - 1);
     assert!(!ok, "three, but a second short of a day");
     assert_eq!(s3.count, 3);
-    assert!(Sightings::see(Some(s2), 475, 1_000 + day).1);
+    assert!(Sightings::see(Some(s2), 1_200, 475, t + day).1);
     // Two sightings over two days aren't enough.
-    assert!(!Sightings::see(Some(s1), 500, 1_000 + 2 * day).1);
+    assert!(!Sightings::see(Some(s1), 1_200, 500, t + 2 * day).1);
     // Past 5% the count starts again at the new size.
-    let (r, ok) = Sightings::see(Some(s2), 526, 1_000 + day);
+    let (r, ok) = Sightings::see(Some(s2), 1_200, 526, t + day);
     assert!(!ok);
-    assert_eq!((r.size, r.first, r.count), (526, 1_000 + day, 1));
-    // A clock that went back never accepts.
-    assert!(!Sightings::see(Some(s2), 500, 0).1);
-    // Round trip; anything else starts the count again.
+    assert_eq!((r.size, r.first, r.count), (526, t + day, 1));
+    // A count kept for another list in use starts again.
+    let (r, ok) = Sightings::see(Some(s2), 1_300, 500, t + day);
+    assert!(!ok);
+    assert_eq!((r.old, r.first, r.count), (1_300, t + day, 1));
+    // A clock that went back more than a day starts the count again, so
+    // it never accepts on a span measured backwards.
+    let (r, ok) = Sightings::see(Some(s2), 1_200, 500, t - 2 * day);
+    assert!(!ok);
+    assert_eq!((r.first, r.count), (t - 2 * day, 1));
+    // A first sighting in the future, even the far future, starts again.
+    let future = Sightings {
+        first: u64::MAX,
+        ..s2
+    };
+    let (r, ok) = Sightings::see(Some(future), 1_200, 500, t);
+    assert!(!ok);
+    assert_eq!((r.first, r.count), (t, 1));
+    // An empty list is never accepted, whatever the record.
+    let many = Sightings {
+        size: 1,
+        count: 99,
+        first: 0,
+        ..s1
+    };
+    assert!(!Sightings::see(Some(many), 1_200, 0, t).1);
+    // Round trip; anything else, or no real count, is no record.
     assert_eq!(Sightings::decode(&s3.encode()), Some(s3));
-    for bad in [&b""[..], b"1 2", b"1 2 3 4", b"a b c", b"-1 2 3"] {
-        assert_eq!(Sightings::decode(bad), None);
+    let huge = MAX_APPS + 1;
+    for bad in [
+        "".to_string(),
+        "1 2 3".into(),
+        "1 2 3 4 5".into(),
+        "a b c d".into(),
+        "1200 -1 2 3".into(),
+        "1200 0 5 2".into(),
+        "0 500 5 2".into(),
+        "1200 500 5 0".into(),
+        format!("1200 {huge} 5 2"),
+        format!("{huge} 500 5 2"),
+        format!("1200 {} 0 2", usize::MAX),
+    ] {
+        assert_eq!(Sightings::decode(bad.as_bytes()), None, "{bad}");
     }
 }
 
@@ -730,4 +775,199 @@ async fn a_normal_list_starts_the_count_again() {
     let s = stored_sightings(&k).await.unwrap();
     assert_eq!((s.size, s.count), (500, 1));
     assert!(p.warning().unwrap().contains("1150"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn empty_lists_never_count_towards_accepting() {
+    // Empty answers for more than a day, an hour apart.
+    let mut steps = vec![(steam::REFRESH, 0)];
+    steps.extend(std::iter::repeat_n((HOUR, 0), 25));
+    let base = tokio::time::Instant::now();
+    let mut exchanges = vec![page(None, 200, &many(1_199, &[(70_000, "Example Quest")]))];
+    exchanges.extend(steps.iter().map(|_| page(None, 200, EMPTY)));
+    let replayer = Arc::new(Replayer::new(exchanges));
+    let p = plugin(Some(HEX_KEY)).with_clock(Arc::new(move || {
+        1_700_000_000 + (tokio::time::Instant::now() - base).as_secs()
+    }));
+    let k = kit(replayer.clone(), &p);
+    let q = game("Example Quest");
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    // A count already under way, for this list in use.
+    let before = steam::Sightings {
+        old: 1_200,
+        size: 500,
+        first: 1_700_000_000,
+        count: 2,
+    };
+    k.state
+        .set(steam::SIGHTINGS_KEY, before.encode())
+        .await
+        .unwrap();
+    for (wait, _) in &steps {
+        tokio::time::advance(*wait).await;
+        assert_eq!(
+            id_of(&p.lookup(&k, &q).await.unwrap()),
+            Some("70000".into())
+        );
+    }
+    replayer.finish().unwrap();
+    assert_eq!(replayer.requests().len(), steps.len() + 1);
+    assert!(p.warning().unwrap().contains("empty"));
+    // The count was neither moved on nor reset.
+    assert_eq!(stored_sightings(&k).await, Some(before));
+}
+
+/// A plugin and kit whose store holds `stored` under the sightings key,
+/// with a list of 1,200 games in use, then one refresh a day on against a
+/// list of `size`. Returns the id answered and the stored sightings.
+async fn one_shrink_after(stored: &[u8], size: u32) -> (String, Option<steam::Sightings>) {
+    let replayer = Arc::new(Replayer::new(vec![
+        page(None, 200, &many(1_199, &[(70_000, "Example Quest")])),
+        page(None, 200, &many(size - 1, &[(90_000, "Example Quest")])),
+    ]));
+    let base = tokio::time::Instant::now();
+    let p = plugin(Some(HEX_KEY)).with_clock(Arc::new(move || {
+        1_700_000_000 + (tokio::time::Instant::now() - base).as_secs()
+    }));
+    let k = kit(replayer.clone(), &p);
+    let q = game("Example Quest");
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    // Written after the first list: as if its clear had been lost.
+    k.state
+        .set(steam::SIGHTINGS_KEY, stored.to_vec())
+        .await
+        .unwrap();
+    tokio::time::advance(steam::REFRESH).await;
+    let id = id_of(&p.lookup(&k, &q).await.unwrap()).unwrap();
+    replayer.finish().unwrap();
+    (id, stored_sightings(&k).await)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_count_left_for_another_list_in_use_starts_again() {
+    // Ready to accept, but kept for a list of 1,000, not this one.
+    let stale = steam::Sightings {
+        old: 1_000,
+        size: 500,
+        first: 1_600_000_000,
+        count: 9,
+    };
+    let (id, s) = one_shrink_after(&stale.encode(), 500).await;
+    assert_eq!(id, "70000");
+    let s = s.unwrap();
+    assert_eq!((s.old, s.size, s.count), (1_200, 500, 1));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_corrupt_count_is_no_count() {
+    let stored = format!("1200 {} 0 2", usize::MAX);
+    let (id, s) = one_shrink_after(stored.as_bytes(), 500).await;
+    assert_eq!(id, "70000");
+    let s = s.unwrap();
+    assert_eq!((s.old, s.size, s.count), (1_200, 500, 1));
+}
+
+/// A state store that can't be read, and drops every write.
+#[derive(Debug)]
+struct Broken;
+
+impl lodestar_sources::PluginState for Broken {
+    fn get<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Vec<u8>>, lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("down".into())) })
+    }
+    fn set<'a>(
+        &'a self,
+        _: &'a str,
+        _: Vec<u8>,
+    ) -> BoxFuture<'a, Result<(), lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("down".into())) })
+    }
+    fn remove<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<(), lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("down".into())) })
+    }
+    fn compare_and_set<'a>(
+        &'a self,
+        _: &'a str,
+        _: Option<&'a [u8]>,
+        _: Option<Vec<u8>>,
+    ) -> BoxFuture<'a, Result<bool, lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("down".into())) })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_store_counts_each_shrink_as_the_first() {
+    // Three sightings spanning a day would be accepted with a store.
+    let steps = [
+        (steam::REFRESH, 500),
+        (HOUR, 500),
+        (steam::SHRINK_SPAN - HOUR, 500),
+    ];
+    let base = tokio::time::Instant::now();
+    let mut exchanges = vec![page(None, 200, &many(1_199, &[(70_000, "Example Quest")]))];
+    for (_, n) in &steps {
+        exchanges.push(page(None, 200, &many(n - 1, &[(90_000, "Example Quest")])));
+    }
+    let replayer = Arc::new(Replayer::new(exchanges));
+    let p = plugin(Some(HEX_KEY)).with_clock(Arc::new(move || {
+        1_700_000_000 + (tokio::time::Instant::now() - base).as_secs()
+    }));
+    let k = Kit::new(
+        Arc::new(Broken),
+        replayer.clone(),
+        p.policy(),
+        &UserLimits::default(),
+    );
+    let q = game("Example Quest");
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    for (wait, _) in &steps {
+        tokio::time::advance(*wait).await;
+        assert_eq!(
+            id_of(&p.lookup(&k, &q).await.unwrap()),
+            Some("70000".into())
+        );
+    }
+    replayer.finish().unwrap();
+    // The warning still reaches memory.
+    assert!(p.warning().unwrap().contains("under half"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_fetch_leaves_the_count_alone() {
+    let replayer = Arc::new(Replayer::new(vec![
+        page(None, 200, &many(1_199, &[(70_000, "Example Quest")])),
+        page(None, 200, &many(499, &[(90_000, "Example Quest")])),
+        page(None, 500, "{}"),
+    ]));
+    let base = tokio::time::Instant::now();
+    let p = plugin(Some(HEX_KEY)).with_clock(Arc::new(move || {
+        1_700_000_000 + (tokio::time::Instant::now() - base).as_secs()
+    }));
+    let k = kit(replayer.clone(), &p);
+    let q = game("Example Quest");
+    p.lookup(&k, &q).await.unwrap();
+    tokio::time::advance(steam::REFRESH).await;
+    p.lookup(&k, &q).await.unwrap();
+    let before = stored_sightings(&k).await.unwrap();
+    assert_eq!(before.count, 1);
+    tokio::time::advance(HOUR).await;
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    replayer.finish().unwrap();
+    assert_eq!(replayer.requests().len(), 3);
+    assert_eq!(stored_sightings(&k).await, Some(before));
 }

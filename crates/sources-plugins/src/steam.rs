@@ -201,43 +201,54 @@ pub fn suspicious(old: Option<usize>, new: usize) -> Option<String> {
     }
 }
 
-/// Refused smaller lists of about one size, seen on refreshes in a row:
-/// the first one's size and wall-clock time (Unix seconds), and how many.
-/// Kept in the plugin's state store, so the count survives a restart.
+/// Refused smaller lists of about one size, seen on refreshes in a row
+/// against one list in use: that list's size, the first sighting's size
+/// and wall-clock time (Unix seconds), and how many. Kept in the plugin's
+/// state store, so the count survives a restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sightings {
+    /// Apps in the list in use when the count started. A count kept for
+    /// another list (a clear that was lost) starts again.
+    pub old: usize,
     pub size: usize,
     pub first: u64,
     pub count: u32,
 }
 
 impl Sightings {
-    /// `size first count`, as decimal text.
+    /// `old size first count`, as decimal text.
     pub fn encode(&self) -> Vec<u8> {
-        format!("{} {} {}", self.size, self.first, self.count).into_bytes()
+        format!("{} {} {} {}", self.old, self.size, self.first, self.count).into_bytes()
     }
 
-    /// `None` for anything [`encode`](Sightings::encode) didn't write:
-    /// the count starts again.
+    /// `None` for anything [`encode`](Sightings::encode) didn't write, or
+    /// that no real count holds (a size of 0 or over [`MAX_APPS`], a count
+    /// of 0): the count starts again. Never fails open.
     pub fn decode(v: &[u8]) -> Option<Sightings> {
         let mut it = std::str::from_utf8(v).ok()?.split(' ');
         let s = Sightings {
+            old: it.next()?.parse().ok()?,
             size: it.next()?.parse().ok()?,
             first: it.next()?.parse().ok()?,
             count: it.next()?.parse().ok()?,
         };
-        it.next().is_none().then_some(s)
+        let real = |n: usize| (1..=MAX_APPS).contains(&n);
+        (it.next().is_none() && real(s.old) && real(s.size) && s.count > 0).then_some(s)
     }
 
-    /// Counts a refused list of `size` apps at `now`: one more sighting if
-    /// it's within [`SHRINK_TOLERANCE_PCT`] of the first, else a new
-    /// count. Returns the new sightings and whether the list is now
-    /// accepted.
-    pub fn see(prev: Option<Sightings>, size: usize, now: u64) -> (Sightings, bool) {
+    /// Counts a refused list of `size` apps at `now`, against a list in
+    /// use of `old` apps. One more sighting if the count is for the same
+    /// list in use, `size` is within [`SHRINK_TOLERANCE_PCT`] of the first
+    /// sighting, and the first isn't in the future; else a new count.
+    /// Returns the new sightings and whether the list is now accepted. An
+    /// empty list is never accepted.
+    pub fn see(prev: Option<Sightings>, old: usize, size: usize, now: u64) -> (Sightings, bool) {
         let s = match prev {
             Some(p)
-                if p.size.abs_diff(size).saturating_mul(100)
-                    <= p.size.saturating_mul(SHRINK_TOLERANCE_PCT) =>
+                if p.old == old
+                    && now >= p.first
+                    && p.size.abs_diff(size).saturating_mul(100)
+                        <= p.size.saturating_mul(SHRINK_TOLERANCE_PCT) =>
             {
                 Sightings {
                     count: p.count.saturating_add(1),
@@ -245,16 +256,16 @@ impl Sightings {
                 }
             }
             _ => Sightings {
+                old,
                 size,
                 first: now,
                 count: 1,
             },
         };
-        // A clock that went back makes the span zero: not accepted.
         let span = now.saturating_sub(s.first);
         (
             s,
-            s.count >= SHRINK_SIGHTINGS && span >= SHRINK_SPAN.as_secs(),
+            size > 0 && s.count >= SHRINK_SIGHTINGS && span >= SHRINK_SPAN.as_secs(),
         )
     }
 }
@@ -543,7 +554,7 @@ impl Steam {
             .ok()
             .flatten()
             .and_then(|v| Sightings::decode(&v));
-        let (seen, accept) = Sightings::see(prev, new, (self.clock)());
+        let (seen, accept) = Sightings::see(prev, old, new, (self.clock)());
         if accept {
             return Some(shrink_accepted(old, new));
         }

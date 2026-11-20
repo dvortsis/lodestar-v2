@@ -53,15 +53,32 @@ superseded.
     that size for a day, so the smaller list is now used"). It stays until
     the next normal list clears it.
   - Any accepted list removes the count, so a normal list in between resets
-    it. An empty list or a failed fetch leaves it as it is.
+    it. An empty list or a failed fetch leaves it as it is, and an empty
+    list never counts towards accepting.
+  - **The count is tied to the list in use (runner, review of #993).**
+    `Sightings` also holds the size of the list in use when the count
+    started (`old`), and a count for any other size starts again. The
+    removal after an accepted list is best effort, so a lost clear could
+    otherwise carry a count over to the next list, and one truncated list
+    could then be accepted at once.
+  - **A stored record never fails open.** `decode` treats a size of 0 or
+    over `MAX_APPS` (either size), a count of 0, or anything it didn't
+    write as no record: the count starts at one. Without that, a size of
+    `usize::MAX` saturated the 5% comparison and matched every list.
   - The count is kept in the plugin's state store under `SIGHTINGS_KEY`
-    (`shrink_sightings`), so it survives a restart, and it is timed by the
-    wall clock. A test seam, `Steam::with_clock`, drives that clock from
-    the paused test clock. A clock that went back gives a zero span and
-    never accepts early. If the store can't be read, the count starts at
-    one, which also never accepts early.
+    (`shrink_sightings`, `old size first count` as decimal text), so it
+    survives a restart, and it is timed by the wall clock. A test seam,
+    `Steam::with_clock`, drives that clock from the paused test clock.
+  - **A first sighting in the future starts the count again,** so neither
+    a clock that went back nor a stored `first` of `u64::MAX` can hold the
+    span at zero for good. If the store can't be read, each refused list
+    counts as the first, which never accepts.
   - Today the index itself is in memory, so after a restart the first list
     is accepted anyway. The stored count matters once the index persists.
+  - **Left as is:** a lookup cancelled during the count's store read or
+    write drops the finished list, which is downloaded again after the
+    60 s hold. That costs bandwidth, not correctness, and only when a
+    smaller list is being refused.
 
 ## Tests for behaviour #969 left untested
 - **The 60 s cancel hold** (`CANCELLED`): a lookup cancelled mid-request is
@@ -75,8 +92,12 @@ superseded.
 - **The escape hatch:** 2 sightings are refused; 3 inside a day are
   refused; 3 spanning a day are accepted, with the status line; a size
   outside 5% starts the count again; a normal list in between starts it
-  again. A unit test pins the tolerance edges, the exact 24 h boundary and
-  the stored format.
+  again; empty lists over more than a day leave a count unchanged; a count
+  left for another list in use, or a corrupt one, starts again at one; an
+  unreadable store never accepts; a failed fetch leaves the count alone. A
+  unit test pins the tolerance edges, the exact 24 h boundary, a clock
+  going back more than a day, a first sighting in the future, and the
+  stored format.
 
 ## Not here
 - The `ext:` condition for switching the plugin on (the owner's adult
