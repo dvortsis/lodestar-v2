@@ -52,7 +52,7 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - **Why:** the subnet routes `0.0.0.0/0` to an internet gateway but has `MapPublicIpOnLaunch=false`, and there's no NAT gateway and no VPC endpoint. Without a public address, the instance can't reach SSM or the internet.
      - It's still unreachable from outside, because the security group allows no inbound traffic. The address costs about $0.005/h.
      - `Deploy-AwsWindows.ps1` doesn't do this yet; that's a follow-up for the runner.
-   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}` (the policy refuses a launch without all three);
+   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}` (the policy refuses a launch without the first two; IAM has no condition key for the IPv6 endpoint, so the third is a rule for the sessions);
    - `/dev/sda1` with `VolumeSize=100, Encrypted=true`;
    - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume. The policy lets this user stop, delete or run commands only on instances whose `LaunchedBy` is its own `UserId`, and refuses a launch without it.
    - Default tenancy (leave `Placement.Tenancy` unset): the policy refuses dedicated tenancy.

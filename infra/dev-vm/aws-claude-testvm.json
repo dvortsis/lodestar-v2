@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, default tenancy, mandatory tags with ExpiresAt and LaunchedBy), and stop, delete and run commands only on the instances it launched itself, and read EC2, SSM, quota and cost data. The user may pass only the two roles this stack creates: the Windows test instance's (the SSM agent policy only) and the Linux test instances' (the SSM agent policy, plus reading only the PIA login secret this stack creates). It is itself denied Secrets Manager and instance attribute reads. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters. The managed policy's own Description still says \"the Windows test instance only\": it is kept as deployed because changing it would replace the policy, and the replacement fails on the fixed name. The statements are what count.",
+  "Description": "Lodestar X-test-vm: the IAM user Claude signs in as through the AWS MCP connector, with a customer-managed policy (an inline user policy is capped at 2,048 characters). It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge; the Lodestar subnet and security group; encrypted root of at most 100 GiB; IMDSv2; default tenancy; tags with ExpiresAt and LaunchedBy), act only on instances it launched, and read EC2, SSM, quota and cost data. It may pass only this stack's two roles: Windows (SSM agent only) and Linux (SSM agent plus reading this stack's PIA login secret). It is denied Secrets Manager and instance attribute reads. No account or resource IDs: they are parameters. The managed policy's Description is kept as deployed, since changing it replaces the policy. Owner decisions 2026-11-12Z, 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md.",
   "Parameters": {
     "SubnetId": {
       "Type": "AWS::EC2::Subnet::Id",
@@ -102,7 +102,6 @@
                   "aws:RequestTag/Environment": "Test",
                   "aws:RequestTag/ManagedBy": "Terraform",
                   "aws:RequestTag/Purpose": "X-test-vm",
-                  "ec2:MetadataHttpProtocolIpv6": "disabled",
                   "ec2:Tenancy": "default",
                   "aws:RequestTag/LaunchedBy": "${aws:userid}"
                 },
