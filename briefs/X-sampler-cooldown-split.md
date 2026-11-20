@@ -49,3 +49,9 @@ Ask the runner before touching anything else.
 - Run `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and the dht, lodestar and crawler-sim tests. CI runs the full workspace. A full `cargo test --workspace` can overflow a session's disk allowance; if it does, say so.
 - **Size:** keep it under ~1,500 changed lines. Say why if it goes over.
 - **Decisions file:** the structure and its bound, the never-shorten argument, the switch, the metric and the screen numbers. Name any refinement of the plan there (§2.19).
+
+## Owns refined (runner, 2026-11-20T08:51Z)
+- Added: `crates/dht/src/node/actor.rs`, two edits only: the `Sampler::new(cfg.sampler_cooldown_split)` construction and ~3 publish lines in `maintain()`. Shared with CR-LOOKUP-END; the second to land brings main in.
+- Added: in `crates/dht/src/node/mod.rs`, one `Stats` field and its `StatsSnapshot` line, beside the `Config` field.
+- Added: `crates/lodestar/src/metrics.rs`, to render `dht_sample_full_seconds_total` (a counter with no labels) and its render test, plus its `docs/metrics.md` row.
+- Restart: on main there is no `persist.rs` and no `tests/restart*.rs`. The proof lives in `node/proof.rs` and `restart.rs` (with `restart/tests.rs`). This slice changes `proof.rs` only and leaves the on-disk format alone. No cooldown may come back shorter after a restart than it does today; the decisions file says how. A format change needs the runner first.
