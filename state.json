@@ -8933,7 +8933,8 @@
     {
       "id": "X-cr-col5-nits",
       "note": "#972 review optionals: collect.py comment on dht_lookup_slots_occupied (follow CR-LEDGER metrics.md row); winners [[x]] TypeError; control_switches three shapes. Next collector PR.",
-      "at": "2026-11-20T06:37Z"
+      "at": "2026-11-20T06:37Z",
+      "notes": "Also add lodestar_dht_lookup_queued (CR-LEDGER #975, queue gauge split from dht_lookup_slots_occupied) to KEEP."
     }
   ],
   "main_health": [
@@ -10530,7 +10531,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T06:38Z",
+  "updated": "2026-11-20T06:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
