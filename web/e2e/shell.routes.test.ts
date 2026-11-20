@@ -3,7 +3,13 @@
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
 import type { Route } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
-import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
+import {
+	crawlerEvent,
+	engage,
+	liveEvents,
+	nudgeFor,
+	openPaletteWithKey
+} from './support/events-server';
 import { interact } from './support/interact';
 import { expect, test } from './support/test';
 import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
@@ -457,11 +463,11 @@ test.describe('401 hand-off', () => {
 		const events = await liveEvents(page);
 		for (const path of ['/login', '/setup', '/welcome']) {
 			await go(path);
-			await engage(page); // the stream starts on the first interaction: none must on these screens
+			await nudgeFor(page, 4_000); // the stream starts on the first interaction: none must here
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
-			// engage() has just interacted for four seconds; a stream the shell was going to start on an
+			// nudgeFor() has just interacted for four seconds; a stream the shell was going to start on an
 			// interaction would be in requests() by now. Its 30 s idle fallback is out of reach of any wait.
 			expect(await events.requests()).toHaveLength(0);
 		}
