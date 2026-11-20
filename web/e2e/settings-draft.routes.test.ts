@@ -55,10 +55,10 @@ test.describe('a Settings draft across sign-in', () => {
 		await bar.getByRole('button', { name: 'Save changes' }).click();
 		const dialog = page.getByRole('dialog', { name: "You've been signed out" });
 		await expect(dialog).toBeVisible(WAIT);
-		await expect(dialog).toContainText("Your changes aren't saved yet (1)");
-		await expect(dialog).toContainText('This browser tab keeps them');
+		await expect(dialog).toContainText("Your changes aren't saved yet (1)", WAIT);
+		await expect(dialog).toContainText('This browser tab keeps them', WAIT);
 		// Never the generic leave question.
-		await expect(page.getByRole('dialog', { name: 'Leave without saving?' })).toHaveCount(0);
+		await expect(page.getByRole('dialog', { name: 'Leave without saving?' })).toHaveCount(0, WAIT);
 
 		await dialog.getByRole('button', { name: 'Sign in' }).click();
 		await expect(page).toHaveURL(/\/login\?next=/, WAIT);
@@ -76,16 +76,16 @@ test.describe('a Settings draft across sign-in', () => {
 		await ready(page);
 		// Restored at once, with a line that says it isn't saved yet: no Restore question.
 		await expect(page.getByRole('radio', { name: 'aggressive' })).toBeChecked(WAIT);
-		await expect(page.getByTestId('draft-kept')).toContainText("they aren't saved yet");
-		await expect(page.getByRole('button', { name: 'Restore' })).toHaveCount(0);
-		await expect(bar).toContainText('1 unsaved change');
+		await expect(page.getByTestId('draft-kept')).toContainText("they aren't saved yet", WAIT);
+		await expect(page.getByRole('button', { name: 'Restore' })).toHaveCount(0, WAIT);
+		await expect(bar).toContainText('1 unsaved change', WAIT);
 
 		await bar.getByRole('button', { name: 'Save changes' }).click();
 		await expect(bar).toContainText('Saved', WAIT);
 		expect(backend.patches.at(-1)).toEqual({
 			crawler: { if_revision: 3, intensity: 'aggressive' }
 		});
-		await expect(page.getByTestId('draft-kept')).toHaveCount(0);
+		await expect(page.getByTestId('draft-kept')).toHaveCount(0, WAIT);
 	});
 
 	test('Keep editing stays, and the next save that finds the session ended asks again', async ({
@@ -105,8 +105,8 @@ test.describe('a Settings draft across sign-in', () => {
 		await expect(dialog).toBeVisible(WAIT);
 		await dialog.getByRole('button', { name: 'Keep editing' }).click();
 		await expect(dialog).toHaveCount(0, WAIT);
-		await expect(page).toHaveURL(ON_PAGE);
-		await expect(page.getByRole('radio', { name: 'low' })).toBeChecked();
+		await expect(page).toHaveURL(ON_PAGE, WAIT);
+		await expect(page.getByRole('radio', { name: 'low' })).toBeChecked(WAIT);
 		expect(
 			await page.evaluate(() => sessionStorage.getItem('lodestar.settings.kept.v1'))
 		).toBeNull();
@@ -136,8 +136,8 @@ test.describe('a Settings draft across sign-in', () => {
 		const dialog = page.getByRole('dialog', { name: 'Leave without saving?' });
 		await dialog.getByRole('button', { name: 'Save changes' }).click();
 		await expect(dialog).toHaveCount(0, WAIT);
-		await expect(page).toHaveURL(ON_PAGE);
+		await expect(page).toHaveURL(ON_PAGE, WAIT);
 		await expect(page.getByText("Lodestar couldn't save the change.")).toBeVisible(WAIT);
-		await expect(page.getByRole('radio', { name: 'low' })).toBeChecked();
+		await expect(page.getByRole('radio', { name: 'low' })).toBeChecked(WAIT);
 	});
 });

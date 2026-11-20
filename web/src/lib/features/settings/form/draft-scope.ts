@@ -25,19 +25,24 @@ export function storage(): Storage | undefined {
 export const SIGN_IN_KEY = 'lodestar.signin.v1';
 export const REARM_EVENT = 'lodestar:signin-rearm';
 
-export type SignInReason = 'expired' | 'notice' | 'setup';
+/**
+ * True after an explicit Sign out (`signedout`) or on an instance that needs its setup again
+ * (`setup`), until the next sign-in: nothing may write a draft then (`writeDraft`), so a pending
+ * debounce, a form torn down later or a save refused afterwards can't bring one back.
+ */
+export function draftsBlocked(): boolean {
+	const v = signInPending();
+	return v === 'signedout' || v === 'setup';
+}
 
-/** Why the app is going to sign in (or set up), if it is. */
-export function signInPending(): SignInReason | null {
+/**
+ * Why the app is going to sign in (`expired`, `notice`), set up (`setup`), or the user signed out
+ * (`signedout`), if it is.
+ */
+export function signInPending(): string | null {
 	try {
-		const v = storage()?.getItem(SIGN_IN_KEY);
-		return v === 'expired' || v === 'notice' || v === 'setup' ? v : null;
+		return storage()?.getItem(SIGN_IN_KEY) ?? null;
 	} catch {
 		return null;
 	}
-}
-
-/** The user stayed on the page instead of signing in: the shell redirects on the next 401. */
-export function rearmSignIn(): void {
-	globalThis.dispatchEvent?.(new Event(REARM_EVENT));
 }

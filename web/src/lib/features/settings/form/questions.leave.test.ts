@@ -10,17 +10,16 @@ vi.mock('./dialogs', () => ({
 	}
 }));
 
-import { KEPT_KEY } from './draft-scope';
+import { DRAFT_PREFIX, KEPT_KEY, REARM_EVENT, SIGN_IN_KEY } from './draft-scope';
 import type { SettingsForm } from './form.svelte';
-import { ask } from './dialogs';
 import { askToLeave } from './questions';
-import { askSignedOut } from './signed-out';
+import { onSessionEnd } from './signed-out';
 import { spec } from './testing/values';
 import type { FieldSpec, SaveResult } from './types';
 
 type Fake = Pick<
 	SettingsForm,
-	'id' | 'dirtyCount' | 'save' | 'settled' | 'discard' | 'keepForSignIn' | 'specs' | 'field'
+	'id' | 'dirtyCount' | 'save' | 'settled' | 'discard' | 'specs' | 'field'
 >;
 
 type FakeForm = Fake & { saves: number } & SettingsForm;
@@ -38,7 +37,6 @@ function fakeForm(results: SaveResult[], over: Partial<Fake> = {}): FakeForm {
 		save: vi.fn(async (): Promise<SaveResult> => results[saves++] ?? { ok: true, restart: [] }),
 		settled: vi.fn(async () => {}),
 		discard: vi.fn(),
-		keepForSignIn: vi.fn(() => true),
 		...over
 	};
 	return f as FakeForm;
@@ -81,72 +79,94 @@ describe('askToLeave: Save changes', () => {
 	});
 });
 
-describe('askSignedOut', () => {
+describe('onSessionEnd (signed-out.ts)', () => {
 	const login = new URL('/login?next=%2Fsettings%2Fcrawler', location.origin);
 
-	it('names the Legal Notice when that is what is due', async () => {
-		dialogs.answer = 'keep';
-		await askSignedOut(ask, fakeForm([]), login, 'notice', signal, vi.fn(), vi.fn());
-		const q = JSON.stringify(dialogs.asked);
-		expect(q).toContain('Accept the Legal Notice to save');
-		expect(q).toContain('Continue');
-	});
+	/** A form as the engine is: it writes a draft for its dirty fields when asked. */
+	function engine(over: Record<string, unknown> = {}) {
+		const f = {
+			...fakeForm([]),
+			useDrafts: true,
+			draftUnavailable: false,
+			status: 'ready',
+			draft: null,
+			draftData: null,
+			writeNow: vi.fn(() => sessionStorage.setItem(DRAFT_PREFIX + 'crawler', '{"v":1}')),
+			...over
+		};
+		return f as unknown as SettingsForm;
+	}
 
-	it('keeps the draft and goes to sign in', async () => {
+	it('keeps the draft, marks it for this screen and goes to sign in', async () => {
 		dialogs.answer = 'signin';
-		const form = fakeForm([]);
 		const navigate = vi.fn(async () => {});
-		const stay = vi.fn();
-		await askSignedOut(ask, form, login, 'expired', signal, navigate, stay);
-		expect(form.keepForSignIn).toHaveBeenCalledOnce();
-		expect(sessionStorage.getItem(KEPT_KEY)).toContain(location.pathname);
+		await onSessionEnd('signin', engine(), login, signal, navigate, vi.fn());
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'crawler')).not.toBeNull();
+		expect(JSON.parse(sessionStorage.getItem(KEPT_KEY)!)).toMatchObject({
+			id: 'crawler',
+			path: location.pathname
+		});
 		expect(navigate).toHaveBeenCalledWith(login.href);
-		expect(stay).not.toHaveBeenCalled();
+		expect(JSON.stringify(dialogs.asked)).toContain("You've been signed out");
 		expect(JSON.stringify(dialogs.asked)).toContain('This browser tab keeps them meanwhile');
 	});
 
-	it.each(['keep', null])('stays on %s, dropping the marker', async (answer) => {
-		dialogs.answer = answer;
-		sessionStorage.setItem(KEPT_KEY, '{}');
-		const form = fakeForm([]);
-		const navigate = vi.fn(async () => {});
-		const stay = vi.fn();
-		await askSignedOut(ask, form, login, 'expired', signal, navigate, stay);
-		expect(navigate).not.toHaveBeenCalled();
-		expect(stay).toHaveBeenCalledOnce();
-		expect(sessionStorage.getItem(KEPT_KEY)).toBeNull();
-	});
+	it.each(['keep', null])(
+		'stays on %s: drops the mark and re-arms the redirect',
+		async (answer) => {
+			dialogs.answer = answer;
+			const rearm = vi.fn();
+			addEventListener(REARM_EVENT, rearm);
+			const navigate = vi.fn(async () => {});
+			await onSessionEnd('signin', engine(), login, signal, navigate, vi.fn());
+			removeEventListener(REARM_EVENT, rearm);
+			expect(navigate).not.toHaveBeenCalled();
+			expect(rearm).toHaveBeenCalledOnce();
+			expect(sessionStorage.getItem(KEPT_KEY)).toBeNull();
+		}
+	);
 
 	it('never promises to keep what it can’t', async () => {
 		dialogs.answer = 'keep';
-		await askSignedOut(
-			ask,
-			fakeForm([], { keepForSignIn: vi.fn(() => false) }),
-			login,
-			'expired',
-			signal,
-			vi.fn(),
-			vi.fn()
-		);
+		await onSessionEnd('signin', engine({ useDrafts: false }), login, signal, vi.fn(), vi.fn());
 		expect(JSON.stringify(dialogs.asked)).toContain("they'll be lost");
 	});
 
 	it('says passwords and keys are never kept', async () => {
 		dialogs.answer = 'keep';
 		const secret = spec('notifications.ntfy_token', { writeOnly: true });
-		await askSignedOut(
-			ask,
-			fakeForm([], {
-				dirtyCount: 2,
-				specs: [secret],
-				field: () => ({ dirty: true }) as never
-			}),
+		await onSessionEnd(
+			'signin',
+			engine({ dirtyCount: 2, specs: [secret], field: () => ({ dirty: true }) }),
 			login,
-			'expired',
 			signal,
 			vi.fn(),
 			vi.fn()
 		);
 		expect(JSON.stringify(dialogs.asked)).toContain("Passwords and keys aren't kept");
+	});
+
+	it('names the Legal Notice when that is what is due', async () => {
+		dialogs.answer = 'keep';
+		sessionStorage.setItem(SIGN_IN_KEY, 'notice');
+		await onSessionEnd('signin', engine(), login, signal, vi.fn(), vi.fn());
+		const q = JSON.stringify(dialogs.asked);
+		expect(q).toContain('Accept the Legal Notice to save');
+		expect(q).toContain('Continue');
+	});
+
+	it('goes straight on after a Sign out or to setup, keeping nothing', async () => {
+		const form = engine();
+		const navigate = vi.fn(async () => {});
+		await onSessionEnd(
+			'setup',
+			form,
+			new URL('/setup', location.origin),
+			signal,
+			navigate,
+			vi.fn()
+		);
+		expect(navigate).toHaveBeenCalledOnce();
+		expect(dialogs.asked).toHaveLength(0);
 	});
 });

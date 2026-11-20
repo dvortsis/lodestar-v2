@@ -58,6 +58,8 @@ describe('leaveDecision', () => {
 	it('lets a re-claimed instance go to setup', () => {
 		expect(leaveDecision({ ...base, to: at('/setup'), signIn: 'setup' })).toBe('setup');
 		expect(leaveDecision({ ...base, to: at('/login'), signIn: 'setup' })).toBe('prompt');
+		// An explicit Sign out keeps nothing either.
+		expect(leaveDecision({ ...base, to: at('/login'), signIn: 'signedout' })).toBe('setup');
 		expect(leaveDecision({ ...base, to: at('/setup') })).toBe('prompt');
 	});
 });

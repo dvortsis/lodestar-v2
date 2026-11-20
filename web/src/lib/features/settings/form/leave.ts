@@ -4,7 +4,8 @@
 //   browser — cancel it so the browser asks (closing or reloading the tab)
 //   signin  — the session ended (or the Legal Notice is due) and the app is going to sign in:
 //             cancel it, say so, keep the draft for the sign-in (X-session-draft-keep)
-//   setup   — the instance needs its first-run setup again: nothing staged is kept, so let it go
+//   setup   — the user signed out, or the instance needs its first-run setup again: nothing
+//             staged is kept, so let it go
 
 export interface LeaveInput {
 	/** Unsaved changes (dirty fields or conflicts). */
@@ -16,7 +17,7 @@ export interface LeaveInput {
 	/** Set while the guard's own navigation after Save or Discard runs. */
 	bypass: boolean;
 	/** Why the app is going to sign in or set up, if it is (`signInPending()`). */
-	signIn?: 'expired' | 'notice' | 'setup' | null;
+	signIn?: string | null;
 }
 
 export type LeaveDecision = 'allow' | 'prompt' | 'browser' | 'signin' | 'setup';
@@ -36,8 +37,10 @@ export function leaveDecision({
 }: LeaveInput): LeaveDecision {
 	if (!dirty || bypass) return 'allow';
 	if (type === 'leave') return 'browser';
+	// Signed out on purpose, or re-claimed: nothing staged is kept, so let it go.
 	if (signIn === 'setup' && isPage(to, from, '/setup')) return 'setup';
-	if (signIn && signIn !== 'setup' && isPage(to, from, '/login')) return 'signin';
+	if (signIn === 'signedout' && isPage(to, from, '/login')) return 'setup';
+	if ((signIn === 'expired' || signIn === 'notice') && isPage(to, from, '/login')) return 'signin';
 	// A hash or query change on the same path isn't leaving the screen.
 	if (from && to && from.origin === to.origin && from.pathname === to.pathname) return 'allow';
 	return 'prompt';

@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { components } from '$lib/api/schema';
 import { draftOf, planRestore, readDraft, writeDraft, type Draft } from './draft';
-import { KEPT_KEY } from './draft-scope';
-import { KEPT_MAX_AGE_MS, takeKept } from './saving';
+import { KEPT_KEY, SIGN_IN_KEY } from './draft-scope';
+import { KEPT_MAX_AGE_MS, takeKept } from './kept-restore';
 import { dropKept, markKept } from './signed-out';
 import { neverDrafted } from './draft-store';
 import { readSection } from './schema';
@@ -181,6 +181,20 @@ describe('the kept marker', () => {
 		markKept('crawler', '/settings/crawler', 1);
 		dropKept();
 		expect(sessionStorage.getItem(KEPT_KEY)).toBeNull();
+	});
+});
+
+describe('drafts are blocked after a Sign out or on a re-claimed instance', () => {
+	it.each(['signedout', 'setup'])('%s: nothing is written, only removed', (state) => {
+		sessionStorage.setItem(SIGN_IN_KEY, state);
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
+		expect(sessionStorage.getItem('lodestar.settings.draft.v1.crawler')).toBeNull();
+		expect(writeDraft('crawler', null)).toBe(true);
+	});
+
+	it.each(['expired', 'notice'])('%s: drafts are kept', (state) => {
+		sessionStorage.setItem(SIGN_IN_KEY, state);
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
 	});
 });
 

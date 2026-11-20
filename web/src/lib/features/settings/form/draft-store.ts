@@ -1,7 +1,7 @@
 // Drafts' storage and writing them (§10.10.5; the format is in `draft.ts`). Part of a section's
 // first view, so an edit is kept from the first keystroke even when the edit chunk can't load.
 // Reading and restoring one (`draft.ts`) load with the edit chunk.
-import { DRAFT_PREFIX, storage } from './draft-scope';
+import { DRAFT_PREFIX, draftsBlocked, storage } from './draft-scope';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
 import { dirtyNames, isLocked, JsonDraft, RESET, type SectionState } from './values';
@@ -57,9 +57,9 @@ export function writeDraft(id: string, draft: Draft | null): boolean {
 	const store = storage();
 	if (!store) return false;
 	try {
-		if (!draft) {
+		if (!draft || draftsBlocked()) {
 			store.removeItem(DRAFT_PREFIX + id);
-			return true;
+			return !draft;
 		}
 		const text = JSON.stringify(draft);
 		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {

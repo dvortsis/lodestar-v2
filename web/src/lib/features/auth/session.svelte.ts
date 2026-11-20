@@ -17,12 +17,13 @@ const session = $state<{ status: SessionStatus }>({ status: 'unknown' });
 
 /** Every Settings draft key, and the kept-for-sign-in marker, start with this. */
 export const SETTINGS_DRAFTS_PREFIX = 'lodestar.settings.';
-/** Why the app is on its way to sign in: `expired`, `notice` or `setup`; absent otherwise. */
+/** Why the app is on its way to sign in: `expired`, `notice`, `setup`, or `signedout` after an
+ * explicit Sign out (which also blocks Settings drafts until the next sign-in); absent otherwise. */
 export const SIGN_IN_KEY = 'lodestar.signin.v1';
 /** The Settings form stayed on the page instead of signing in: redirect again on the next 401. */
 export const REARM_EVENT = 'lodestar:signin-rearm';
 
-export type SignInReason = 'expired' | 'notice' | 'setup';
+export type SignInReason = 'expired' | 'notice' | 'setup' | 'signedout';
 
 function store(): Storage | undefined {
 	try {
@@ -47,7 +48,7 @@ function setSignIn(reason: SignInReason | null): void {
 export function signInPending(): SignInReason | null {
 	try {
 		const v = store()?.getItem(SIGN_IN_KEY);
-		return v === 'expired' || v === 'notice' || v === 'setup' ? v : null;
+		return v === 'expired' || v === 'notice' || v === 'setup' || v === 'signedout' ? v : null;
 	} catch {
 		return null;
 	}
@@ -111,7 +112,9 @@ export function installAuthHandlers(): () => void {
 		// An instance that needs its first-run setup again may have a new owner: nothing staged
 		// on it is kept (X-session-draft-keep).
 		if (setupRequired) clearSettingsDrafts();
-		setSignIn(setupRequired ? 'setup' : noticeRequired ? 'notice' : 'expired');
+		// After an explicit Sign out a refused request is no expiry: nothing is kept for it.
+		if (setupRequired) setSignIn('setup');
+		else if (signInPending() !== 'signedout') setSignIn(noticeRequired ? 'notice' : 'expired');
 		void (setupRequired ? toSetup() : toLoginFrom(next));
 	};
 	onLoginRequired(handler);
@@ -140,9 +143,10 @@ export function rearmSignIn(): void {
 /** Ends the session and goes to the sign-in page. Rejects (staying put) if the server can't be reached. */
 export async function logout(): Promise<void> {
 	await api.post('/logout', { body: {} });
-	// Signing out ends whatever was staged in this tab: nothing is kept for the next sign-in.
+	// Signing out ends whatever was staged in this tab: nothing is kept for the next sign-in, and
+	// no draft can be written again until it (a pending debounce, a form torn down later).
+	setSignIn('signedout');
 	clearSettingsDrafts();
-	setSignIn(null);
 	setSession('signed_out');
 	await toLogin();
 }

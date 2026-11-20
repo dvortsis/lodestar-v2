@@ -12,8 +12,10 @@
 // The Maps and Sets here are bookkeeping that nothing renders; reactive state is `$state.raw`
 // records replaced on every change.
 /* eslint-disable svelte/prefer-svelte-reactivity */
+import type { Component } from 'svelte';
 import { ApiError, isAbort, latest } from '$lib/api/client';
 import { m } from '$lib/paraglide/messages.js';
+import { KEPT_KEY, storage } from './draft-scope';
 import { draftOf, hasDraft, writeDraft, type Draft } from './draft-store';
 import type { Instant } from './instant';
 import { getSection, type Batch } from './requests';
@@ -71,8 +73,9 @@ export interface SettingsForm {
 	readonly draft: null | { fields: number; dropped: number };
 	/** A draft is stored but the code that offers it didn't load: it's kept for a reload. */
 	readonly draftUnavailable: boolean;
-	/** The draft kept across a sign-in was restored: the form says the changes aren't saved yet. */
-	readonly kept: boolean;
+	/** The draft kept across a sign-in was restored: its note says the changes aren't saved yet
+	 * (a component from the on-demand `kept-restore.ts`, which `DraftBanner` shows). */
+	readonly kept: Component | null;
 	/** The latest polite announcement; `id` changes with each one. */
 	readonly announcement: { id: number; text: string } | null;
 	/** The latest save's result, from any caller (the bar, ⌘/Ctrl+S, the wizard's Next). */
@@ -91,11 +94,6 @@ export interface SettingsForm {
 	resolve(key: FieldKey, pick: 'mine' | 'theirs'): void;
 	restoreDraft(): void;
 	dropDraft(): void;
-	/**
-	 * The session ended with unsaved changes: writes the draft now, over any still on offer.
-	 * False when this browser can't keep it (`signed-out.ts` then marks it for the sign-in).
-	 */
-	keepForSignIn(): boolean;
 	/** Resolves once no save is in flight (at once when none is). */
 	settled(): Promise<void>;
 	retry(): Promise<void>;
@@ -170,7 +168,6 @@ const API = [
 	'resolve',
 	'restoreDraft',
 	'dropDraft',
-	'keepForSignIn',
 	'settled',
 	'retry',
 	'removeSecret',
@@ -211,7 +208,7 @@ export class Engine implements SettingsForm {
 	instantUndo = $state.raw<Record<string, { until: number; prev: SettingValue }>>({});
 	draft = $state.raw<null | { fields: number; dropped: number }>(null);
 	draftUnavailable = $state(false);
-	kept = $state(false);
+	kept = $state.raw<Component | null>(null);
 	/** The preview code didn't load: previewed fields say so. */
 	previewFailed = $state(false);
 	announcement = $state.raw<{ id: number; text: string } | null>(null);
@@ -224,8 +221,8 @@ export class Engine implements SettingsForm {
 	draftTimer: ReturnType<typeof setTimeout> | undefined;
 	previewTimer: ReturnType<typeof setTimeout> | undefined;
 	draftData: Draft | null = null;
-	/** The save in flight, for `settled()`. */
-	saving: Promise<SaveResult> | null = null;
+	/** The save, Undo or Retry in flight (`holding`), for `settled()`. */
+	flight: Promise<unknown> | null = null;
 	inFlight: Set<string> | null = null; // sections of the save in flight
 	sending = new Set<string>(); // its fields: an edit to one is kept until the response
 	failedOp: 'save' | 'undo' = 'save'; // what Retry re-runs
@@ -333,7 +330,7 @@ export class Engine implements SettingsForm {
 			for (const v of values) next[v.section] = fromValues(v);
 			this.sections = next;
 			this.status = 'ready';
-			if (offered) editMod!.offerDraft(this);
+			if (offered) this.offer(editMod!);
 			else if (offered === false) this.draftUnavailable = true;
 			this.schedulePreview();
 		} catch (e) {
@@ -439,6 +436,25 @@ export class Engine implements SettingsForm {
 
 	// --- drafts ------------------------------------------------------------------------------
 
+	/**
+	 * Offers the stored draft; one kept for the sign-in that has just returned here
+	 * (X-session-draft-keep) is restored at once by `kept-restore.ts`, which loads only when its
+	 * mark is there, and falls back to the usual offer if it can't load.
+	 */
+	offer(edit: typeof import('./edit')) {
+		let mark: string | null | undefined;
+		try {
+			mark = storage()?.getItem(KEPT_KEY);
+		} catch {
+			mark = null;
+		}
+		if (!mark) return edit.offerDraft(this);
+		void import('./kept-restore').then(
+			(mod) => !this.destroyed && mod.offerKept(this, edit.offerDraft, edit.restoreDraft),
+			() => !this.destroyed && edit.offerDraft(this)
+		);
+	}
+
 	writeNow() {
 		clearTimeout(this.draftTimer);
 		this.draftTimer = undefined;
@@ -543,28 +559,11 @@ export class Engine implements SettingsForm {
 			this.dropSecrets();
 			return { ok: false, reason: 'network' };
 		}
-		const p = pipeline.save(this);
-		// A save started while one is in flight answers `busy` at once: the first stays tracked.
-		if (!this.saving) {
-			this.saving = p;
-			p.finally(() => {
-				if (this.saving === p) this.saving = null;
-			}).catch(ignore);
-		}
-		return p;
+		return pipeline.save(this);
 	}
 
 	async settled(): Promise<void> {
-		while (this.saving) await this.saving.catch(ignore);
-	}
-
-	keepForSignIn(): boolean {
-		if (!this.useDrafts || this.draftUnavailable || this.status === 'loading') return false;
-		// What's on the page is newer than a draft still on offer: it's the one kept.
-		this.draft = null;
-		this.draftData = null;
-		this.writeNow();
-		return hasDraft(this.id);
+		while (this.flight) await this.flight.catch(ignore);
 	}
 
 	/** Something to discard was staged, which loaded the pipeline. */

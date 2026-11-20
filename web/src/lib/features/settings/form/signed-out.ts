@@ -1,33 +1,82 @@
-// The question when a save finds the session ended (X-session-draft-keep, UI review L2). Its own
-// on-demand chunk, loaded only then, so neither a first view nor the edit chunk carries it. The
-// dialog comes from the edit chunk (`ask`), which the form loads alongside.
+// Everything after a save finds the session ended (X-session-draft-keep, UI review L2), on demand:
+// the form's leave guard loads this only then, so no first view carries it. It keeps the draft
+// for the sign-in, asks, and re-arms the shell's redirect if the user stays; or, for an instance
+// that needs its first-run setup again, discards what was staged and goes on.
 import { m } from '$lib/paraglide/messages.js';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
-import type { Question } from './dialogs';
-import { KEPT_KEY, storage } from './draft-scope';
-import { neverDrafted } from './draft-store';
-import type { SettingsForm } from './form.svelte';
+import { KEPT_KEY, REARM_EVENT, SIGN_IN_KEY, storage } from './draft-scope';
+import { hasDraft, neverDrafted } from './draft-store';
+import { loadEdit, type Engine, type SettingsForm } from './form.svelte';
 
-type Ask = (q: Question, signal?: AbortSignal) => Promise<string | null>;
+/** Marks `id`'s draft as kept for the sign-in that returns to `path`. False when refused. */
+export function markKept(id: string, path: string, at: number): boolean {
+	try {
+		const store = storage();
+		if (!store) return false;
+		store.setItem(KEPT_KEY, JSON.stringify({ id, path, at }));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Removes the kept mark (the user stayed on the page instead of signing in). */
+export function dropKept(): void {
+	try {
+		storage()?.removeItem(KEPT_KEY);
+	} catch {
+		// blocked
+	}
+}
+
+/** Writes the draft now, over any still on offer (what's on the page is newer). */
+export function keepDraft(form: SettingsForm): boolean {
+	const e = form as Engine;
+	if (!e.useDrafts || e.draftUnavailable || e.status === 'loading') return false;
+	e.draft = null;
+	e.draftData = null;
+	e.writeNow();
+	return hasDraft(e.id) && markKept(e.id, location.pathname, Date.now());
+}
+
+const notice = () => {
+	try {
+		return storage()?.getItem(SIGN_IN_KEY) === 'notice';
+	} catch {
+		return false;
+	}
+};
 
 /**
- * The session ended (or the Legal Notice is due) with unsaved changes, and the app is going to
- * sign in. Keeps the draft first, so the question says exactly what survives: Sign in goes on,
- * and the sign-in returns here and restores it; Keep editing (or Esc) stays, and the next save
- * that finds the session ended asks again.
+ * The leave guard's `signin` or `setup` decision (`leave.ts`). `navigate` continues past the
+ * guard; `fallback` is the ordinary leave question, used if the dialog's code can't load.
  */
-export async function askSignedOut(
-	ask: Ask,
+export async function onSessionEnd(
+	kind: 'signin' | 'setup',
 	form: SettingsForm,
 	to: URL,
-	reason: 'expired' | 'notice',
 	signal: AbortSignal,
 	navigate: (href: string) => Promise<void>,
-	stay: () => void
+	fallback: () => void
 ): Promise<void> {
+	if (kind === 'setup') {
+		// Signed out, or a re-claimed instance: nothing staged is kept. The shell has dropped the
+		// drafts and blocks new ones (`draftsBlocked`); the staged values go with the page.
+		await navigate(to.href);
+		return;
+	}
+	let ask: Awaited<ReturnType<typeof loadEdit>>['ask'];
+	try {
+		ask = (await loadEdit()).ask;
+	} catch {
+		fallback();
+		return;
+	}
+	const isNotice = notice();
 	const count = formatCount(form.dirtyCount, currentLocale());
-	const kept = form.keepForSignIn() && markKept(form.id, location.pathname, Date.now());
+	// Kept before asking, so the question says exactly what survives the sign-in.
+	const kept = keepDraft(form);
 	const secrets = form.specs.some((spec) => neverDrafted(spec) && form.field(spec.key).dirty);
 	const body = [
 		kept ? m.settings_form_signed_out_body({ count }) : m.settings_form_signed_out_lost({ count })
@@ -35,14 +84,13 @@ export async function askSignedOut(
 	if (kept && secrets) body.push(m.settings_form_secrets_not_kept());
 	const answer = await ask(
 		{
-			title:
-				reason === 'notice' ? m.settings_form_notice_title() : m.settings_form_signed_out_title(),
+			title: isNotice ? m.settings_form_notice_title() : m.settings_form_signed_out_title(),
 			body,
 			actions: [
 				{ id: 'keep', label: m.settings_form_keep_editing() },
 				{
 					id: 'signin',
-					label: reason === 'notice' ? m.settings_form_continue() : m.settings_form_sign_in(),
+					label: isNotice ? m.settings_form_continue() : m.settings_form_sign_in(),
 					variant: 'primary'
 				}
 			],
@@ -51,31 +99,11 @@ export async function askSignedOut(
 		signal
 	);
 	if (answer !== 'signin') {
-		// Staying: the marker goes, so a later visit offers the draft as usual instead.
+		// Staying: the mark goes (a later visit offers the draft as usual), and the shell
+		// redirects again on the next save that finds the session ended.
 		dropKept();
-		stay();
+		globalThis.dispatchEvent?.(new Event(REARM_EVENT));
 		return;
 	}
 	await navigate(to.href);
-}
-
-/** Marks `id`'s draft as kept for the sign-in that returns to `path`. False when refused. */
-export function markKept(id: string, path: string, at: number): boolean {
-	const store = storage();
-	if (!store) return false;
-	try {
-		store.setItem(KEPT_KEY, JSON.stringify({ id, path, at }));
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** Removes the kept marker (the user stayed on the page instead of signing in). */
-export function dropKept(): void {
-	try {
-		storage()?.removeItem(KEPT_KEY);
-	} catch {
-		// blocked
-	}
 }

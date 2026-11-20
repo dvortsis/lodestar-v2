@@ -12,7 +12,7 @@
 	import { loadControls } from './controls.svelte';
 	import { lazyPart } from './lazy.svelte';
 	import { loadEdit, loadedEdit, preloadSettingsForm, type SettingsForm } from './form.svelte';
-	import { rearmSignIn, signInPending } from './draft-scope';
+	import { signInPending } from './draft-scope';
 	import { hardNavigate, leaveDecision } from './leave';
 	import { loadMessages, messagesFailed, messagesLoaded } from './messages';
 	import type { FieldKey } from './types';
@@ -242,31 +242,17 @@
 			signIn: signInPending()
 		});
 		if (decision === 'allow') return;
-		if (decision === 'setup') {
-			// A re-claimed instance keeps nothing staged (the shell has dropped the drafts).
-			form.discard();
-			return;
-		}
 		nav.cancel(); // for 'leave', this raises the browser's own prompt
-		if (decision === 'prompt' && nav.to) void confirmLeave(nav.to.url, nav.willUnload);
-		if (decision === 'signin' && nav.to) void confirmSignIn(nav.to.url);
+		const to = nav.to?.url;
+		if (!to || decision === 'browser') return;
+		const ask = () => void confirmLeave(to, nav.willUnload);
+		if (decision === 'prompt') return ask();
+		// The session ended (or setup is due): all of that loads only now (X-session-draft-keep).
+		void import('./signed-out').then(
+			(mod) => mod.onSessionEnd(decision, form, to, asking.signal, leaveTo, ask),
+			ask
+		);
 	});
-
-	/** The session ended with unsaved changes: say so, keep the draft and go to sign in. */
-	async function confirmSignIn(to: URL) {
-		const reason = signInPending() === 'notice' ? 'notice' : 'expired';
-		let parts: [Awaited<ReturnType<typeof loadEdit>>, typeof import('./signed-out')];
-		try {
-			parts = await Promise.all([loadEdit(), import('./signed-out')]);
-		} catch {
-			// The question can't load: keep what can be kept and go to sign in anyway.
-			form.keepForSignIn();
-			hardNavigate(to.href);
-			return;
-		}
-		const [edit, { askSignedOut }] = parts;
-		await askSignedOut(edit.ask, form, to, reason, asking.signal, leaveTo, rearmSignIn);
-	}
 
 	async function leaveTo(href: string) {
 		bypass = true;

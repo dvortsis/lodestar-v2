@@ -26,6 +26,7 @@ import {
 	signInPending
 } from './session.svelte';
 import * as scope from '$lib/features/settings/form/draft-scope';
+import { writeDraft } from '$lib/features/settings/form/draft-store';
 
 const { DRAFT_PREFIX, KEPT_KEY } = scope;
 const markKept = (id: string, path: string, at: number) =>
@@ -232,7 +233,7 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 		expect(stored().every((v) => v !== null)).toBe(true);
 	});
 
-	it('drops them all on Sign out', async () => {
+	it('drops them all on Sign out, and blocks new ones until the next sign-in', async () => {
 		seed();
 		vi.stubGlobal(
 			'fetch',
@@ -240,7 +241,20 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 		);
 		await logout();
 		expect(stored()).toEqual([null, null]);
+		expect(signInPending()).toBe('signedout');
+		// A pending debounce or a form torn down later can't write one back.
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'crawler')).toBeNull();
+		// A save refused afterwards is no expiry: nothing is kept for it.
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => expired(false))
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(signInPending()).toBe('signedout');
+		setSession('signed_in');
 		expect(signInPending()).toBeNull();
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
 	});
 
 	it('drops them all when the instance needs its first-run setup again', async () => {
@@ -285,7 +299,7 @@ describe('the keys the shell and the Settings form share (no import between them
 		);
 		await expect(api.get('/filters')).rejects.toThrow();
 		expect(scope.signInPending()).toBe('expired');
-		scope.rearmSignIn(); // the window event
+		dispatchEvent(new Event(scope.REARM_EVENT)); // what signed-out.ts sends
 		expect(signInPending()).toBeNull();
 		await expect(api.get('/filters')).rejects.toThrow();
 		expect(nav.toLoginFrom).toHaveBeenCalledTimes(2);

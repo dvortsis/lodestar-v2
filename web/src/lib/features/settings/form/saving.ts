@@ -7,7 +7,6 @@ import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
 import { clearDraft, planRestore, readDraft } from './draft';
-import { KEPT_KEY, storage } from './draft-scope';
 import { UNDO_MS, type Engine, type Sections } from './form.svelte';
 import { merge, resolve as resolveField, sectionValues } from './merge';
 import {
@@ -77,34 +76,6 @@ export function lockedNote(saved: SettingValue): string {
 
 // --- drafts --------------------------------------------------------------------------------
 
-/** A kept marker older than this isn't honoured (the draft is still offered as usual). */
-export const KEPT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Whether `id`'s draft was kept (by `signed-out.ts`) for a sign-in that has now returned to
- * `path`. A marker naming this form is removed, matched or not, so it's honoured once, on the
- * screen it came from; a bad or stale one reads as none.
- */
-export function takeKept(id: string, path: string, now: number): boolean {
-	try {
-		const store = storage();
-		const text = store?.getItem(KEPT_KEY);
-		if (!store || !text) return false;
-		let k: { id?: unknown; path?: unknown; at?: unknown } | null = null;
-		try {
-			k = text.length <= 4096 ? JSON.parse(text) : null;
-		} catch {
-			// unreadable: removed below
-		}
-		if (typeof k?.id === 'string' && k.id !== id) return false; // another screen's
-		store.removeItem(KEPT_KEY);
-		const age = typeof k?.at === 'number' ? now - k.at : -1;
-		return k?.path === path && age >= 0 && age <= KEPT_MAX_AGE_MS;
-	} catch {
-		return false; // blocked
-	}
-}
-
 export function offerDraft(e: Engine) {
 	const d = readDraft(e.id);
 	if (!d) return;
@@ -121,12 +92,6 @@ export function offerDraft(e: Engine) {
 	}
 	e.draftData = d;
 	e.draft = { fields: plan.fields, dropped: plan.dropped };
-	// Kept for the sign-in that has just returned here (X-session-draft-keep): restored at once,
-	// and the form says it isn't saved yet, rather than asking.
-	if (takeKept(e.id, globalThis.location?.pathname ?? '', Date.now())) {
-		restoreDraft(e);
-		e.kept = true;
-	}
 }
 
 export function restoreDraft(e: Engine) {
@@ -141,7 +106,7 @@ export function restoreDraft(e: Engine) {
 }
 
 export function dropDraft(e: Engine) {
-	e.kept = false;
+	e.kept = null;
 	e.draftData = null;
 	e.draft = null;
 	clearDraft(e.id);
@@ -160,7 +125,7 @@ export function discard(e: Engine) {
 	e.formErrors = [];
 	clearTimeout(e.draftTimer);
 	if (e.useDrafts && !e.draft) clearDraft(e.id);
-	e.kept = false;
+	e.kept = null;
 	if (e.status === 'save-error' || e.status === 'offline') e.status = 'ready';
 	e.saveError = undefined;
 	e.schedulePreview();
@@ -426,10 +391,14 @@ export async function holding<T>(
 ): Promise<T> {
 	e.inFlight = sent;
 	if (keys) e.sending = new Set(keys);
+	// Every save, Undo, Retry or secret removal goes through here, so `settled()` sees each one.
+	const p = f();
+	e.flight = p;
 	try {
-		return await f();
+		return await p;
 	} finally {
 		afterSend(e, sent);
+		if (e.flight === p) e.flight = null;
 	}
 }
 
@@ -505,7 +474,7 @@ async function saveNow(e: Engine): Promise<SaveResult> {
 			startUndo(e, prev, r.batch, r.values);
 			e.status = 'saved';
 			e.saveError = undefined;
-			e.kept = false;
+			e.kept = null;
 			if (e.useDrafts) {
 				if (dirtyKeys(e).length === 0) {
 					clearTimeout(e.draftTimer);

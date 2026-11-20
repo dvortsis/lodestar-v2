@@ -171,6 +171,8 @@ const settingsOnDemand = [
 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
 	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
 	/features\/settings\/form\/ConfirmDialog\.svelte$/,
+	/features\/settings\/form\/(signed-out|kept-restore)\.ts$/,
+	/features\/settings\/form\/KeptNote\.svelte$/,
 	// Filters & Safety loads its change flows on the first change (S-filters-2c).
 	...filtersDoor
 ];
