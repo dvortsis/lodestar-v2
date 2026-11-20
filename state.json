@@ -4213,7 +4213,8 @@
     "2026-11-05T09:04Z #460 X-log-url-redact-2 merged (40c5c846; monotone by construction), archived; X-log-url-redact-3 launched in slot 2.",
     "2026-11-05T09:10Z #473 X-followups-1105 merged (50aeef0f), archived; slot 9 idle with reason.",
     "2026-11-05T10:01Z #481 X-test-hygiene-1105 merged (4fd9a0c0), archived; slot 4 idle with reason.",
-    "2026-11-05T10:05Z #482 X-ci-disk merged (f88ed2f5), archived; slot 11 idle with reason."
+    "2026-11-05T10:05Z #482 X-ci-disk merged (f88ed2f5), archived; slot 11 idle with reason.",
+    "2026-11-20T15:17Z #986 X-enr-lane-nits merged b5236cb4; Sonnet session archived. Slot 3 -> X-leaktest-wg0-flake (Opus; leak-test harness is security-relevant so not Sonnet), folds in X-test-vm-runbook-step6. X-msi-upgrade-env-value stays queued: low, the user guide recommends data_dir in config.toml, not the service Environment value."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10293,6 +10294,13 @@
       "sha": "b36eb8f2",
       "at": "2026-11-20T14:12Z",
       "note": "review CHANGES then delta MERGE; two-sighting rule (runner \u00a72.19); follow-ups -> X-snapshot-followups (same session)"
+    },
+    {
+      "pr": 986,
+      "slice": "X-enr-lane-nits",
+      "sha": "b5236cb4",
+      "at": "2026-11-20T15:17Z",
+      "note": "#971 optionals (fuzz README igdb row, catalogue order, credential_spec comment); runner read the 6+/5- diff as the fresh reviewer; Sonnet session archived"
     }
   ],
   "active_sessions": {
@@ -10538,7 +10546,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T14:12Z",
+    "updated": "2026-11-20T15:17Z",
     "items": [
       {
         "slot": 1,
@@ -10562,13 +10570,13 @@
       },
       {
         "slot": 3,
-        "slice": "X-enr-lane-nits",
-        "role": "build (sonnet)",
-        "agent": "session_01MMjhnBSC5JnD2q4qaJmMFS",
+        "slice": "X-leaktest-wg0-flake",
+        "role": "build",
+        "agent": "session_01MMjhnAFco6jJ7ScJXqqR6k",
         "model": "opus",
-        "since": "2026-11-20T14:08Z",
-        "doing": "same session; brief briefs/X-enr-lane-nits.md",
-        "status": "running"
+        "since": "2026-11-20T15:17Z",
+        "doing": "leak-test phase B retries until its deadline (leak verdict unchanged); runbook step 6 folded in",
+        "status": "active"
       },
       {
         "slot": 4,
