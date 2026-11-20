@@ -10230,6 +10230,13 @@
       "sha": "67f1b345",
       "at": "2026-11-20T09:21Z",
       "note": "supersedes #864 (closed); fresh Opus + security review MERGE; deployed stack update is the owner step"
+    },
+    {
+      "pr": 978,
+      "slice": "runner-records-r5",
+      "sha": "e0e3eb17",
+      "at": "2026-11-20T09:22Z",
+      "note": "owner decisions to \u00a72.81, r5.1 records, owner-queue n 30 (owns overlap question); three fresh Opus review rounds"
     }
   ],
   "active_sessions": {
