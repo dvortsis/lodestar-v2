@@ -16,8 +16,8 @@
 		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr);
 	}
 	/* Owner §2.66: with the drawer in flow the results may narrow to a 480 px floor,
-	   --results-min-width-drawer. DetailHostBody sizes the
-	   drawer so the results keep --results-min-width whenever the window has room. */
+	   --results-min-width-drawer. DetailHostBody sizes the drawer so the results keep
+	   --results-min-width whenever the window has room. */
 	&:has(.ls-detail-host[data-mode='inline'] [data-testid='drawer']) {
 		grid-template-columns: var(--rail-width) minmax(var(--results-min-width-drawer), 1fr) auto;
 	}

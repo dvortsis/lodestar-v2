@@ -151,7 +151,8 @@
 	align-items: center;
 	gap: var(--spacing);
 }
-/* Discover's Newest list is about recency: the discovered time leads its facts (review I3). */
+/* Discover's Newest list is about recency: the discovered time leads its facts (review I3). Tied
+   to the section's heading id in DiscoverPage.svelte; e2e/search-results-adaptive checks it. */
 [aria-labelledby='discover-newest-h'] .rr-discovered {
 	order: -4;
 }

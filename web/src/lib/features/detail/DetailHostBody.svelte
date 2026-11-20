@@ -4,8 +4,8 @@
 	// screen view with Back below large. The browser's Back (popstate) clears the state and closes it.
 	// In flow (owner §2.66): while the drawer is open the results track may narrow below
 	// --results-min-width to a floor of --results-min-width-drawer (480 px), and the drawer narrows
-	// towards --drawer-min-width until the window fits the stored
-	// width. So it sits beside the results from 1366 px instead of covering them.
+	// towards --drawer-min-width until the window fits the stored width. So it sits beside the
+	// results from 1366 px instead of covering them.
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';

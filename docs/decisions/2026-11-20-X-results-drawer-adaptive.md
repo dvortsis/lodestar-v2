@@ -12,6 +12,7 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
 - **The drawer's width.** It is the stored width, or `--drawer-overlay-width` if none is stored, capped at the most that still leaves the results `--results-min-width` (560 px). It is never under `--drawer-min-width`; there the results give way instead, down to their floor.
   - **A cap, not a step.** The owner's wording is "opens at `--drawer-min-width` until the window is wide enough for the stored width". The slice reads that as a cap rather than a jump: between the two, the drawer grows with the window. That avoids a jump of up to 160 px at one exact width.
   - **Resizing never rewrites the stored width.** The cap is the Drawer's `maxWidth`, so the Drawer clamps the shown width and the stored value stays as the user chose it. A test checks that 640 stays stored at 1440 px, and is shown again at 1920 px.
+  - **Neither does a resize press at the cap** (fixed in `Drawer.svelte` in this slice). The Drawer stored a clamped width whenever it differed from the stored one, so widening at the cap would have saved 536 over 640. It now compares against the width shown: a press the cap clamps stores nothing, and a press that narrows the drawer is stored as before. A keyboard test covers both.
   - **Dragging stops at the cap.** The resize handle can't push the results below `--results-min-width`. The floor only applies while the drawer is at its own minimum.
 
 ## Rows adapt to their own width (I3, L5)
@@ -19,6 +20,7 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
 - **A fact drops whole, never mid-word.** The facts line now wraps, and only its first line shows (`height: 1lh`). A fact that doesn't fit therefore moves to the hidden second line instead of being cut at the end ("3 hours ag").
   - `1lh` follows the line height, so it still holds under WCAG 1.4.12 text spacing (L5). A test injects the 1.4.12 overrides.
   - Dropped facts stay in the accessibility tree, and they are all in the drawer and in Table mode.
+- **Its limits.** The first fact on the line can't wrap away, so a first fact wider than the whole row is still cut: a feature's own fact, or the badge group. Under 1.4.12 text spacing, a badge can be about half a pixel taller than `1lh`, so its bottom border clips; the text doesn't. Compact rows don't wrap, since their facts don't flex; a 768 px test shows none is cut there.
 - **What drops first.** Facts drop from the end of the line. The technical trackers fact (§10.4 keeps it off the row; X-row-rail removes it) now comes last, after the discovered time, so it is the first to go.
   - The 480 px container tier (`@container result-row`) now also keeps the discovered time, so a phone shows when each torrent was found (I3).
   - The tiers read the row's own width, not the viewport's (§10.15).

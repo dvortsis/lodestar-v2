@@ -53,6 +53,18 @@ async function factsWhole(page: Page): Promise<number> {
 	return cut.seen;
 }
 
+/** The fact is on its line's visible part: not wrapped out, not cut at the end. `toBeVisible`
+ * can't tell, since it ignores clipping by `overflow: hidden`. */
+async function onLine(l: Locator) {
+	const shown = await l.evaluate((el) => {
+		const fact = el.closest('.rr-facts > *') ?? el;
+		const line = fact.closest('.rr-facts')!.getBoundingClientRect();
+		const f = fact.getBoundingClientRect();
+		return f.width > 0 && f.top < line.bottom - 1 && f.right <= line.right + 1;
+	});
+	expect(shown).toBe(true);
+}
+
 /** The control's centre is its own: nothing (the drawer) covers it. */
 async function uncovered(l: Locator) {
 	const hitSelf = await l.evaluate((el) => {
@@ -104,7 +116,8 @@ test.describe('the drawer beside the results', () => {
 		await openRow(page, 1);
 		await expect(host(page)).toHaveAttribute('data-mode', 'inline');
 		expect((await box(drawer(page))).width).toBe(480);
-		expect((await box(panel(page))).width).toBeGreaterThanOrEqual(530);
+		// About 542 px with overlay scrollbars; a classic scrollbar takes its width from it.
+		expect((await box(panel(page))).width).toBeGreaterThanOrEqual(480);
 	});
 
 	test('a stored width is used once the window fits it', async ({ page, go, mock }) => {
@@ -124,6 +137,27 @@ test.describe('the drawer beside the results', () => {
 		await expect.poll(async () => (await box(drawer(page))).width).toBe(640);
 		// Resizing never stored the narrowed width.
 		expect(await page.evaluate(() => localStorage.getItem('lodestar.drawer.width'))).toBe('640');
+	});
+
+	test('widening by keyboard at the cap stores nothing', async ({ page, go, mock }) => {
+		await page.addInitScript(() => localStorage.setItem('lodestar.drawer.width', '640'));
+		server(mock, () => body(hits(3)));
+		await page.setViewportSize({ width: 1440, height: 900 });
+		await go('/search?q=lantern');
+		await openRow(page, 1);
+		const handle = drawer(page).getByRole('separator');
+		const capped = Number(await handle.getAttribute('aria-valuenow'));
+		expect(capped).toBeLessThan(640);
+		await handle.focus();
+		await page.keyboard.press('ArrowLeft');
+		await page.keyboard.press('Home');
+		await expect(handle).toHaveAttribute('aria-valuenow', String(capped));
+		expect(await page.evaluate(() => localStorage.getItem('lodestar.drawer.width'))).toBe('640');
+		// Narrowing is a choice, and is stored.
+		await page.keyboard.press('ArrowRight');
+		await expect
+			.poll(() => page.evaluate(() => localStorage.getItem('lodestar.drawer.width')))
+			.toBe(String(capped - 16));
 	});
 
 	test('below 1366 px it still overlays, keeping the list visible', async ({ page, go, mock }) => {
@@ -156,11 +190,21 @@ test.describe('rows adapt to their own width', () => {
 			expect(await factsWhole(page)).toBeGreaterThan(0);
 			// Size, availability and the discovered time survive every width (I3).
 			const id = `result-${hashOf(1)}`;
-			await expect(page.getByTestId(`${id}-size`)).toBeVisible();
-			await expect(page.getByTestId(`${id}-swarm`)).toBeVisible();
-			await expect(page.getByTestId(`${id}-discovered`)).toBeVisible();
+			for (const fact of ['size', 'swarm', 'discovered'])
+				await onLine(page.getByTestId(`${id}-${fact}`));
 		});
 	}
+
+	test.describe('compact', () => {
+		test.use({ density: 'compact' });
+		test('compact rows cut no fact either', async ({ page, go, mock }) => {
+			await page.setViewportSize({ width: 768, height: 900 });
+			server(mock, () => body(hits(6)));
+			await go('/search?q=lantern');
+			await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
+			expect(await factsWhole(page)).toBeGreaterThan(0);
+		});
+	});
 
 	test('under WCAG 1.4.12 text spacing, facts still drop whole', async ({ page, go, mock }) => {
 		await page.setViewportSize({ width: 1024, height: 900 });
@@ -185,14 +229,14 @@ test('Discover Newest leads with the discovered time', async ({ page, go, mock }
 	const section = page.locator('[aria-labelledby="discover-newest-h"]');
 	const facts = section.locator('.rr-facts').first();
 	await expect(facts).toBeVisible();
-	const first = facts.locator(':scope > *').filter({ visible: true });
-	// Ordered by `order`: the leftmost visible fact is the discovered time.
-	const lefts = await first.evaluateAll((els) =>
-		els.map((e) => ({
-			discovered: e.classList.contains('rr-discovered'),
-			left: e.getBoundingClientRect().left
-		}))
-	);
-	const leftmost = lefts.reduce((a, b) => (b.left < a.left ? b : a));
-	expect(leftmost.discovered).toBe(true);
+	// Ordered by `order`: the leftmost fact on the line's visible part is the discovered time.
+	const leftmost = await facts.evaluate((line) => {
+		const bottom = line.getBoundingClientRect().bottom;
+		const shown = [...line.children]
+			.map((e) => ({ e, r: e.getBoundingClientRect() }))
+			.filter(({ r }) => r.width > 0 && r.top < bottom - 1);
+		shown.sort((a, b) => a.r.left - b.r.left);
+		return shown[0]?.e.classList.contains('rr-discovered') ?? false;
+	});
+	expect(leftmost).toBe(true);
 });
