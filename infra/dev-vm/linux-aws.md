@@ -56,8 +56,10 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - **Give `leak-test.sh` its own work folder, never `/opt/lodestar-run`.** The test installs its work folder's `compose.yaml` into the stack, which is `/opt/lodestar-run`. Pointing both at the same folder makes that copy fail, and the test stops at `compose_installed`. The fleet's step bootstrap uses a fresh folder each run too. As root:
 
      ```bash
-     if systemctl is-active --quiet lodestar-leaktest; then echo "a leak test is still running"; exit 1; fi
+     state=$(systemctl show -p ActiveState --value lodestar-leaktest)
+     case $state in inactive|failed) ;; *) echo "a leak test is still running ($state)"; exit 1 ;; esac
      systemctl reset-failed lodestar-leaktest 2>/dev/null || true
+     rm -f /root/leaktest.log
      rm -rf /opt/lodestar-leaktest
      install -d -o root -g root -m 0755 /opt/lodestar-leaktest
      install -o root -g root -m 0644 /opt/lodestar-run/compose.yaml /opt/lodestar-run/block-lib.sh /opt/lodestar-leaktest/
@@ -66,9 +68,9 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
      ```
 
      - The first argument is the work folder; the second is the stack, which holds `secrets/wg0.conf`.
-     - The first line refuses to start while an earlier run is going, so its folder isn't deleted under it. `truncate:` empties the log, so it only ever holds this run.
+     - The first two lines refuse to start unless an earlier run has fully ended (`inactive` or `failed`, not `deactivating`), so its folder isn't deleted under it. The log is removed, and `truncate:` empties it again on start, so it only ever holds this run.
      - The test takes several minutes, longer than one connector call, so it runs as a background unit. Poll it in later calls with `systemctl is-active lodestar-leaktest; tail -n 3 /root/leaktest.log`.
-     - While the first line reads `active`, the test is still running. Once it doesn't, the run is over:
+     - While the first line reads `active` or `deactivating`, the test is still running. Once it reads `inactive` or `failed`, the run is over:
        - a last log line of `ok leak_test` is a pass;
        - `fail leak_test` is a failure, with the failed names above it;
        - a log that ends with neither means the test was killed or hit an error. Read `systemctl status lodestar-leaktest`, and count it as a failure.

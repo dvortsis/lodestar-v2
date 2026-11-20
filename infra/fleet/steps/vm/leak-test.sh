@@ -399,22 +399,25 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
 # vpn_interface_held_down, a harness failure of its own, with counts saying
 # why (held_report). A probe that gets out is a leak whatever the interface
 # did, and fails at once. The phase's capture and counter judge every attempt.
-# The time budget (the runner's review of #988): a new attempt starts only
-# while the time left covers the slowest attempt seen in the phase, and at
-# least HELD_ATTEMPT_MIN seconds; the interface checks in phase B wait no
-# longer than the time left (never under their 10 s floor). So the phase ends
-# close to its deadline with a clear verdict, well inside the step's 900 s.
+# The time budget (the runner's review of #988) bounds the retries only: each
+# probe's first attempt always runs, as before, so a phase with no flaps
+# behaves as it always did. A retry starts only while the time left covers
+# the slowest attempt seen in the phase, and at least HELD_ATTEMPT_MIN
+# seconds; a retry's interface checks wait no longer than the time left
+# (never under their 10 s floor). So a flapping phase ends close to its
+# deadline with a clear verdict, inside the step's 900 s.
 held_bad=""
 held_dead=""  # an interface check never ran by its deadline, or the phase ran out: no bracket can be had
 held_until="" # the phase's own deadline (held_start), well inside the step's 900 s
 held_ups=0    # how many times phase B found the interface back up
 held_was_up=unknown # 1: the last check read it up; empty: down. A return counts once, and only after a down read
 held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
-held_need=""  # the time an attempt needs before it may start (held_start, then the slowest seen)
+held_need=""  # the time a retry needs before it may start (held_start, then the slowest seen)
+held_retry="" # set while a retry runs: its interface checks are capped at the time left
 held_start() {
   local wait=${HELD_PHASE_WAIT:-180} need=${HELD_ATTEMPT_MIN:-30}
-  [[ $wait =~ ^[0-9]{1,4}$ ]] || wait=180
-  [[ $need =~ ^[0-9]{1,4}$ ]] || need=30
+  [[ $wait =~ ^(0|[1-9][0-9]{0,3})$ ]] || wait=180  # no leading zero: (( )) would read it as octal
+  [[ $need =~ ^(0|[1-9][0-9]{0,3})$ ]] || need=30
   held_until=$((SECONDS + wait))
   held_need=$need
 }
@@ -435,10 +438,12 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
   local n=$1 rc after try=0 saved index index_rc start same
   shift
   while :; do
-    # No deadline set is no deadline kept: fail closed. Otherwise an attempt
-    # starts only with the time it needs still left.
-    if [[ -z $held_until || -z $held_need ]] || ((held_until - SECONDS < held_need)); then held_dead=1; fi
+    # No deadline set is no deadline kept: fail closed, for every probe.
+    [[ -n $held_until && -n $held_need ]] || held_dead=1
     [[ -z $held_dead ]] || break
+    # A retry starts only with the time it needs still left; the first attempt always runs.
+    ((try > 0 && held_until - SECONDS < held_need)) && break
+    held_retry=""; ((try > 0)) && held_retry=1
     try=$((try + 1))
     start=$SECONDS
     saved=$not_run
@@ -448,6 +453,7 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       "$@" >/dev/null 2>&1; rc=$?
       iface_seen_up >/dev/null 2>&1; after=$?
       held_seen "$after"
+      held_retry=""
       if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
       # Down both times and the same interface: gluetun didn't recreate it
       # in between (its ifindex would differ).
@@ -467,6 +473,7 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
     fi
     not_run=$saved  # a discarded attempt's unrun probe is no verdict either
   done
+  held_retry=""
   held_bad=1
   if [[ $n == - ]]; then held_skipped+=("udp_ifdown $try"); else held_skipped+=("$n $try"); echo "skip $n"; fi
 }
@@ -499,9 +506,9 @@ iface_index() { probe sh -c 'cat "/sys/class/net/$1/ifindex" 2>/dev/null; true' 
 # taken as a verdict. Past the deadline it's still NOT_RUN, which fails.
 iface_seen_up() {
   local wait=${IFACE_WAIT:-120} until rc saved=$not_run
-  [[ $wait =~ ^[0-9]{1,5}$ ]] || wait=10
-  # In phase B, no longer than the time left before its deadline.
-  [[ -n $held_until ]] && ((held_until - SECONDS < wait)) && wait=$((held_until - SECONDS))
+  [[ $wait =~ ^[1-9][0-9]{0,4}$ ]] || wait=10  # no leading zero: (( )) would read it as octal
+  # A phase B retry's checks: no longer than the time left before its deadline.
+  [[ -n $held_retry ]] && ((held_until - SECONDS < wait)) && wait=$((held_until - SECONDS))
   ((wait >= 10)) || wait=10
   until=$((SECONDS + wait))
   while :; do
