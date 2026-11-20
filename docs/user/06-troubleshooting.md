@@ -20,12 +20,12 @@ This chapter lists common problems with fixes, then says how to get help.
 | Windows logs three failure events for one problem | Windows restarts the service twice after it stops with an error, 60 seconds apart, so one problem shows three times. **(Newer than v0.5.1)** When the cause is the data folder ([section 6.2](#62-fix-windows-service-error-3)), the Application log also has three notes from the source **Lodestar**, one for each start | Fix the cause once, as in [section 6.2](#62-fix-windows-service-error-3). The count starts again after a day. |
 | Other computers can't open the web page, or few torrents are found, on Windows | Windows treats your network as a **Public network**. Lodestar's firewall rules allow private networks only, on purpose | If this is your own home network and you trust every device on it, set it to private: **Settings → Network & internet**, select your connection, then under **Network profile type** select **Private network**. On a network you don't control, such as a café or hotel, leave it **Public**. Never add the Public profile to Lodestar's rules: that opens Lodestar to everyone on such networks. |
 | Lodestar logs the warning `logging.folder_shared` on Windows | The `logs` folder has an extra account in its permissions | In an [elevated PowerShell](glossary.md#elevated-powershell), run `icacls "C:\ProgramData\Lodestar\logs"` to see the accounts. SYSTEM, Administrators, `NT SERVICE\Lodestar`, `OWNER RIGHTS` and `CREATOR OWNER` belong there. Remove any other account with `icacls "C:\ProgramData\Lodestar\logs" /remove:g "<account>" /T /C`, then run `Restart-Service Lodestar`. |
-| The Windows service stops at once and stays stopped | Windows restarts it twice after an error, then leaves it stopped until the count resets after a day | **(Newer than v0.5.1)** First open **Event Viewer**, then **Windows Logs → Application**, and look for an **Error** from the source **Lodestar** (event ID 3). If there is one, follow [section 6.2](#62-fix-windows-service-error-3). Otherwise look for the reason in the log. In an [elevated PowerShell](glossary.md#elevated-powershell), run `Get-Content -LiteralPath 'C:\ProgramData\Lodestar\logs\lodestar.log' -Tail 50`. If Windows reported error 536870915 or "error 3", follow [section 6.2](#62-fix-windows-service-error-3). Otherwise fix what the log names, then run `Start-Service Lodestar`. |
+| The Windows service stops at once and stays stopped | Windows restarts it twice after an error, then leaves it stopped until the count resets after a day | **(Newer than v0.5.1)** First open **Event Viewer**, then **Windows Logs → Application**, and look for an **Error** from the source **Lodestar** (event ID 3, 5 or 6). If there is one, follow [section 6.2](#62-fix-windows-service-error-3). Otherwise look for the reason in the log. In an [elevated PowerShell](glossary.md#elevated-powershell), run `Get-Content -LiteralPath 'C:\ProgramData\Lodestar\logs\lodestar.log' -Tail 50`. If Windows reported error 536870915 or "error 3", follow [section 6.2](#62-fix-windows-service-error-3). Otherwise fix what the log names, then run `Start-Service Lodestar`. |
 | Lodestar won't start and the web page doesn't load. On Linux the journal says `serve: binding 0.0.0.0:8090: Address already in use`. The portable ZIP's console says `binding 0.0.0.0:8090` and "Only one usage of each socket address". The Windows service log says only `service: stopped on an error` | Another program already uses port `8090`, so Lodestar can't start | On Windows, run `netstat -ano \| findstr :8090` in an elevated PowerShell. Take the number at the end of the line and run `Get-Process -Id <number>` to see which program it is. Stop or reconfigure that program. On Linux, run `sudo ss -ltnp \| grep 8090`. To move Lodestar instead on Linux, run `sudo systemctl edit lodestar`, add `[Service]` and `Environment=LODESTAR_HTTP_BIND=0.0.0.0:8091`, then run `sudo systemctl restart lodestar` and open `http://localhost:8091/` from then on. |
 | The wizard, Settings or Insights warns about the data folder, or about ports on Windows | The data folder is on a [FUSE](glossary.md#fuse) or network filesystem, or Windows has too few outgoing ports left | See [section 4.6](04-install-on-windows-and-linux.md#46-fix-a-data-folder-warning) and [section 4.7](04-install-on-windows-and-linux.md#47-fix-the-windows-port-warning). |
 
 ## 6.2 Fix Windows service error 3
-<!-- index: error 3; error 536870915; 0x20000003; event 7024; event ID 5; full path; Windows service; icacls; Repair; folder_shared; service-specific error 3 -->
+<!-- index: error 3; error 536870915; 0x20000003; event 7024; event ID 5; event ID 6; data folder is a file; can't be read; can't be written; can't be created; full path; Windows service; icacls; Repair; folder_shared; service-specific error 3 -->
 
 At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows "service-specific error 536870915" (`0x20000003`). Event Viewer has event 7024 in the **System** log, which may show only the raw code, such as `%%536870915`. Older versions show "error 3" instead.
 
@@ -34,6 +34,26 @@ At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is pri
 It names the data folder and says to run the installer's **Repair** as an administrator. It holds only the folder's path and that fix, so anyone who can open Event Viewer can read it. The exact reason is still in the file below.
 
 **(Newer than v0.5.1)** Event ID **5** means a path setting isn't a full path. It's one of `LODESTAR_DATA_DIR`, `LODESTAR_DHT_WITNESS_DIR`, `--config` or `%ProgramData%`. In the config file, it's `data_dir`, `restart_witness_dir` or a `blocklist` file. A full path starts with a drive letter, a colon and a backslash, such as `D:\Lodestar`. The file below names the setting. Set it to a full path or remove it, then run `Start-Service Lodestar`.
+
+**(Newer than v0.5.1)** Event ID **6** means the service can't use its data folder. The note names the folder and the setting that chose it: `LODESTAR_DATA_DIR`, `data_dir` in the config file, or the default, `C:\ProgramData\Lodestar`. It also says which of four problems it found:
+
+| The note says the folder | What to do |
+|---|---|
+| is a file, not a folder | Move or rename that file. Or set the setting to a folder instead. For the default folder, the service creates the folder at its next start. |
+| can't be read by the service account | For the default folder, run the installer's **Repair**. For any other folder, give the service account access, as below. Or set the setting to a folder it can use. |
+| can't be written to by the service account | The same as for "can't be read". |
+| can't be created | A file is in the way, or the drive doesn't exist. The file below names the file in the way. Move it away and create the folder, or set the setting to a folder on a drive that exists. |
+
+The **service account** is `NT SERVICE\Lodestar`, the account Windows runs Lodestar's service as. To give it access to a folder such as `D:\Lodestar`, run this in an [elevated PowerShell](glossary.md#elevated-powershell):
+
+```powershell
+icacls "D:\Lodestar" /grant "NT SERVICE\Lodestar:(OI)(CI)F"
+```
+
+**Result:** `icacls` reports `Successfully processed 1 files`. Then run `Start-Service Lodestar`.
+
+> [!WARNING]
+> Give access to `NT SERVICE\Lodestar` only. Don't give it to **Everyone** or **Users**: the folder holds your library, your password and your keys.
 
 In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lodestar"`. `"D:\Lodestar"` in double quotes is an error.
 

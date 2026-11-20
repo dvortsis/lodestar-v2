@@ -114,36 +114,9 @@ pub fn apply_witness_default(
     }
 }
 
-/// The service's config and data folder, with its own folder `default_dir`
-/// made private by `secure` before anything in it is read, by the same rule
-/// the CLI uses ([`crate::cli::ServiceGuard`]), so the two never disagree:
-/// - before any config is read: when neither `--config` (`explicit`) nor
-///   `LODESTAR_DATA_DIR` points elsewhere (`config.toml` there is read),
-///   when `LODESTAR_DATA_DIR` names that folder or a folder inside it, or
-///   when the config file is inside it;
-/// - after loading, before anything else: when the data folder is that
-///   folder or inside it.
-///
-/// `secure` runs at most once. An error is the Event Log's [`Refusal`]
-/// and the full reason: why the folder is used and isn't private, or which
-/// setting isn't a full path. A config that failed to load has
-/// `default_dir` as its data folder, for the log.
-///
-/// No path setting is resolved against the working folder, which is the
-/// system folder under the SCM (X-win-service-relative-paths and -2): an
-/// empty or relative `LODESTAR_DATA_DIR`, a relative `--config`, a relative
-/// `default_dir` (from `%ProgramData%`), and a relative `data_dir`,
-/// restart witness folder (`dht.restart_witness_dir` or
-/// `LODESTAR_DHT_WITNESS_DIR`) or
-/// `blocklist.files` entry is refused, naming the setting. The first three
-/// are refused before anything is read, the rest once the config is loaded
-/// and before any of them is used. The CLI keeps relative paths, which a
-/// portable install uses.
-///
-/// The SCM path calls [`load_checked`], which also gives the folder the
-/// Event Log names; this keeps the earlier shape for the tests.
-// Outside the tests nothing calls it.
-#[cfg_attr(not(test), allow(dead_code))]
+/// [`load_checked`] without the folder the Event Log names, as the
+/// relative-path tests use it.
+#[cfg(test)]
 pub fn load_guarded(
     default_dir: &Path,
     explicit: Option<PathBuf>,
@@ -157,16 +130,42 @@ pub fn load_guarded(
 /// its full reason and the folder the Event Log names.
 pub type Checked = Result<(Result<Config, String>, PathBuf), (Refusal, String, PathBuf)>;
 
-/// [`load_guarded`], with the folder the Event Log names: the unusable
-/// data folder for [`Refusal::Unusable`], else `default_dir`.
+/// The service's config and data folder, with its own folder `default_dir`
+/// made private by `secure` before anything in it is read, by the same rule
+/// the CLI uses ([`crate::cli::ServiceGuard`]), so the two never disagree:
+/// - before any config is read: when neither `--config` (`explicit`) nor
+///   `LODESTAR_DATA_DIR` points elsewhere (`config.toml` there is read),
+///   when `LODESTAR_DATA_DIR` names that folder or a folder inside it, or
+///   when the config file is inside it;
+/// - after loading, before anything else: when the data folder is that
+///   folder or inside it.
+///
+/// `secure` runs at most once. An error is the Event Log's [`Refusal`],
+/// the full reason (why the folder is used and isn't private, which
+/// setting isn't a full path, or why the data folder can't be used) and
+/// the folder the Event Log names: the unusable data folder for
+/// [`Refusal::Unusable`], else `default_dir`. A config that failed to load
+/// has `default_dir` as its data folder, for the log.
+///
+/// No path setting is resolved against the working folder, which is the
+/// system folder under the SCM (X-win-service-relative-paths and -2): an
+/// empty or relative `LODESTAR_DATA_DIR`, a relative `--config`, a relative
+/// `default_dir` (from `%ProgramData%`), and a relative `data_dir`,
+/// restart witness folder (`dht.restart_witness_dir` or
+/// `LODESTAR_DHT_WITNESS_DIR`) or
+/// `blocklist.files` entry is refused, naming the setting. The first three
+/// are refused before anything is read, the rest once the config is loaded
+/// and before any of them is used. The CLI keeps relative paths, which a
+/// portable install uses.
 ///
 /// X-win-data-dir-unusable-log: a data folder that is a file, can't be
-/// read or can't be created is refused ([`unusable`]), naming the setting
+/// read, written or created is refused ([`unusable`]), naming the setting
 /// that chose it. The service's own folder is checked just before the ACL
 /// step, which would otherwise fail first and point at Repair, and never
-/// created there ([`acl::secure_dir`] creates it private). Any other data
-/// folder is checked, and created if missing, once the config is loaded
-/// and the guard has run, before anything uses it.
+/// created or written there ([`acl::secure_dir`] creates it private). The
+/// data folder, whichever it is, is checked again once the config is
+/// loaded and the guard has run, before anything uses it: created if
+/// missing, and written to (X-win-data-dir-followups).
 pub fn load_checked(
     default_dir: &Path,
     explicit: Option<PathBuf>,
@@ -214,7 +213,7 @@ pub fn load_checked(
     Ok((config, data_dir))
 }
 
-/// [`load_guarded`]'s load and checks, with the config file it read.
+/// [`load_checked`]'s load and checks, with the config file it read.
 #[allow(clippy::type_complexity)]
 fn load_paths(
     default_dir: &Path,
@@ -413,6 +412,8 @@ pub enum Problem {
     File,
     /// The service's account can't list it.
     Unreadable,
+    /// The service's account can list it but not create a file in it.
+    Unwritable,
     /// It's missing and can't be made: a file or a missing drive is in the
     /// way, or creating it failed.
     Uncreatable,
@@ -423,6 +424,7 @@ impl Problem {
         match self {
             Problem::File => "is a file, not a folder",
             Problem::Unreadable => "can't be read by the service account",
+            Problem::Unwritable => "can't be written to by the service account",
             Problem::Uncreatable => "can't be created",
         }
     }
@@ -438,7 +440,7 @@ fn unusable_fix(setting: Setting, problem: Problem) -> String {
                     "move or rename that file, then start the service again, which creates \
                      the folder"
                 }
-                Problem::Unreadable => "run the Lodestar installer's Repair",
+                Problem::Unreadable | Problem::Unwritable => "run the Lodestar installer's Repair",
                 Problem::Uncreatable => {
                     "make sure %ProgramData% is a folder on a working drive, then run the \
                      Lodestar installer's Repair"
@@ -455,9 +457,15 @@ fn unusable_fix(setting: Setting, problem: Problem) -> String {
             "give the Lodestar service full control of that folder, or set {name} to a folder \
              it can use"
         ),
-        Problem::Uncreatable => {
-            format!("create that folder, or set {name} to a folder on a drive that exists")
-        }
+        Problem::Unwritable => format!(
+            "give the Lodestar service permission to change files in that folder, or set {name} \
+             to a folder it can write to"
+        ),
+        // The temp log names a file in the way.
+        Problem::Uncreatable => format!(
+            "move away any file in the folder's path and create the folder, or set {name} to \
+             a folder on a drive that exists"
+        ),
     }
 }
 
@@ -497,8 +505,10 @@ fn unusable_refusal(
 /// `None` when it can. Nothing is followed or created through a link or
 /// junction, or any other reparse point: with one on the way, this says
 /// nothing, and the folder is used as before ([`acl::secure_dir`] refuses
-/// them in the service's own folder). A missing folder is created when
-/// `create` is set and the nearest folder that exists is a real one.
+/// them in the service's own folder). With `create` set (once the folder
+/// is in use, after the ACL step), a missing folder is created when the
+/// nearest folder that exists is a real one, and the folder must take a
+/// new file ([`writable`]). Without it nothing is written.
 fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
     use std::io::ErrorKind::{NotADirectory, NotFound};
     let meta = |p: &Path| std::fs::symlink_metadata(p);
@@ -506,9 +516,11 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
     match meta(dir) {
         Ok(m) if is_link(&m) => None,
         Ok(m) if !m.is_dir() => Some((Problem::File, String::new())),
-        Ok(_) => std::fs::read_dir(dir)
-            .err()
-            .map(|e| (Problem::Unreadable, e.to_string())),
+        Ok(_) => match std::fs::read_dir(dir) {
+            Err(e) => Some((Problem::Unreadable, e.to_string())),
+            Ok(_) if create => writable(dir),
+            Ok(_) => None,
+        },
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             Some((Problem::Unreadable, e.to_string()))
         }
@@ -525,9 +537,10 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
                     }
                     Ok(_) if !create || dir.ancestors().skip(i + 1).any(link) => return None,
                     Ok(_) => {
-                        return std::fs::create_dir_all(dir)
-                            .err()
-                            .map(|e| (Problem::Uncreatable, e.to_string()));
+                        return match std::fs::create_dir_all(dir) {
+                            Err(e) => Some((Problem::Uncreatable, e.to_string())),
+                            Ok(()) => writable(dir),
+                        };
                     }
                     Err(e) if matches!(e.kind(), NotFound | NotADirectory) => {}
                     Err(e) => {
@@ -538,6 +551,42 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
             Some((Problem::Uncreatable, "no part of its path exists".into()))
         }
     }
+}
+
+/// Whether the service can create a file in `dir`: a uniquely named probe
+/// is created there and removed. `create_new` never opens an existing
+/// file or link, so a name that's taken (a probe a crash left behind, or
+/// anything else) is skipped for the next.
+fn writable(dir: &Path) -> Option<(Problem, String)> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    probe_write(dir, stamp)
+}
+
+/// [`writable`] with the probe names' `stamp`.
+fn probe_write(dir: &Path, stamp: u128) -> Option<(Problem, String)> {
+    let mut last = None;
+    for n in 0..16 {
+        let probe = dir.join(format!(
+            ".lodestar-write-check-{}-{stamp}-{n}",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(file) => {
+                drop(file);
+                let _ = std::fs::remove_file(&probe);
+                return None;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Some((Problem::Unwritable, e.to_string())),
+        }
+    }
+    last.map(|e| (Problem::Unwritable, e.to_string()))
 }
 
 /// A link, junction or any other reparse point.
@@ -581,7 +630,7 @@ pub enum Refusal {
     RollingBack,
     /// A path setting isn't a full path: `LODESTAR_DATA_DIR`, `--config`,
     /// `%ProgramData%`, `data_dir`, the restart witness folder or a
-    /// `blocklist.files` entry ([`load_guarded`]): the start is refused.
+    /// `blocklist.files` entry ([`load_checked`]): the start is refused.
     NotFullPath,
     /// The data folder, chosen by the [`Setting`], has the [`Problem`]
     /// ([`load_checked`]): the start is refused.
@@ -2190,6 +2239,8 @@ mod tests {
             None,
             |_| None,
             || {
+                // unusable(default_dir, false) never creates it.
+                assert!(!svc.exists(), "created before the ACL step");
                 created.set(true);
                 std::fs::create_dir_all(&svc).map_err(|e| e.to_string())
             },
@@ -2206,23 +2257,46 @@ mod tests {
         );
     }
 
-    /// Makes `dir` unlistable for this process, or listable again; `false`
-    /// where that didn't take (root on Unix ignores permissions). Never
-    /// panics, so [`Locked`] can call it while unwinding.
-    fn deny_listing(dir: &Path, deny: bool) -> bool {
+    /// Whether this process can list `dir`, or with `write`, create a file
+    /// in it.
+    fn denied(dir: &Path, write: bool) -> bool {
+        if !write {
+            return std::fs::read_dir(dir).is_err();
+        }
+        let probe = dir.join("denied-probe");
+        let made = std::fs::File::create_new(&probe).is_ok();
+        let _ = std::fs::remove_file(&probe);
+        !made
+    }
+
+    /// Denies this process listing `dir`, or with `write` creating files in
+    /// it, or lifts that; `false` where it didn't take (root on Unix ignores
+    /// permissions). Never panics, so [`Locked`] can call it while
+    /// unwinding.
+    fn deny_access(dir: &Path, write: bool, deny: bool) -> bool {
         #[cfg(unix)]
         let set = {
             use std::os::unix::fs::PermissionsExt;
-            let mode = if deny { 0o000 } else { 0o755 };
+            let mode = match (deny, write) {
+                (false, _) => 0o755,
+                (true, false) => 0o000,
+                (true, true) => 0o555,
+            };
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).is_ok()
         };
         #[cfg(windows)]
         let set = {
-            // Everyone denied listing; removed again with /remove:d.
-            let how: &[&str] = if deny {
-                &["/deny", "*S-1-1-0:(RD)"]
+            // Everyone denied listing (RD) or adding a file (WD); removed
+            // again with /remove:d.
+            let entry = if write {
+                "*S-1-1-0:(WD)"
             } else {
-                &["/remove:d", "*S-1-1-0"]
+                "*S-1-1-0:(RD)"
+            };
+            let how: [&str; 2] = if deny {
+                ["/deny", entry]
+            } else {
+                ["/remove:d", "*S-1-1-0"]
             };
             std::process::Command::new("icacls")
                 .arg(dir)
@@ -2230,16 +2304,16 @@ mod tests {
                 .output()
                 .is_ok_and(|o| o.status.success())
         };
-        set && std::fs::read_dir(dir).is_err() == deny
+        set && denied(dir, write) == deny
     }
 
-    /// Makes its folder listable again when dropped, even after a failed assertion, so the
-    /// temp folder can be removed.
+    /// Lifts [`deny_access`] when dropped, even after a failed assertion,
+    /// so the temp folder can be removed.
     struct Locked<'a>(&'a Path);
 
     impl Drop for Locked<'_> {
         fn drop(&mut self) {
-            deny_listing(self.0, false);
+            deny_access(self.0, false, false);
         }
     }
 
@@ -2253,7 +2327,7 @@ mod tests {
         let locked = root.join("locked");
         std::fs::create_dir_all(&locked).unwrap();
         let _locked = Locked(&locked);
-        if !deny_listing(&locked, true) {
+        if !deny_access(&locked, false, true) {
             eprintln!("skipped: permissions don't apply to this account");
             return;
         }
@@ -2264,17 +2338,67 @@ mod tests {
             &locked,
         );
         let _svc_locked = Locked(&svc);
-        assert!(deny_listing(&svc, true));
+        assert!(deny_access(&svc, false, true));
         let default = unusable_as(
             load_checked(&svc, None, |_| None, unasked),
             Setting::Default,
             Problem::Unreadable,
             &svc,
         );
-        assert!(deny_listing(&locked, false));
-        assert!(deny_listing(&svc, false));
+        assert!(deny_access(&locked, false, false));
+        assert!(deny_access(&svc, false, false));
         assert!(env.contains("full control"), "{env}");
         assert!(default.contains("Repair"), "{default}");
+    }
+
+    /// A data folder the service can list but not write to is refused,
+    /// the service's own folder too once the ACL step has run; a writable
+    /// one passes, and the probe leaves nothing behind.
+    #[test]
+    fn the_service_refuses_a_data_folder_it_cant_write() {
+        let (_root, root) = real_root();
+        let svc = root.join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        let open = root.join("open");
+        let (c, d) = load_checked(&svc, None, env_data(&open), unasked).unwrap();
+        assert_eq!((c.unwrap().data_dir, d), (open.clone(), open.clone()));
+        assert_eq!(std::fs::read_dir(&open).unwrap().count(), 0, "probe left");
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let _locked = Locked(&locked);
+        if !deny_access(&locked, true, true) {
+            eprintln!("skipped: permissions don't apply to this account");
+            return;
+        }
+        let env = unusable_as(
+            load_checked(&svc, None, env_data(&locked), unasked),
+            Setting::Env,
+            Problem::Unwritable,
+            &locked,
+        );
+        assert!(env.contains("folder it can write to"), "{env}");
+        let _svc_locked = Locked(&svc);
+        assert!(deny_access(&svc, true, true));
+        let default = unusable_as(
+            load_checked(&svc, None, |_| None, || Ok(())),
+            Setting::Default,
+            Problem::Unwritable,
+            &svc,
+        );
+        assert!(default.contains("Repair"), "{default}");
+        assert!(deny_access(&locked, true, false) && deny_access(&svc, true, false));
+    }
+
+    /// A probe name that's taken, as a crash could leave one, is skipped:
+    /// never opened, and the check still passes, leaving only that file.
+    #[test]
+    fn a_taken_probe_name_is_skipped() {
+        let (_root, root) = real_root();
+        let left = root.join(format!(".lodestar-write-check-{}-7-0", std::process::id()));
+        std::fs::write(&left, "left by a crash").unwrap();
+        assert_eq!(probe_write(&root, 7), None);
+        assert_eq!(std::fs::read_to_string(&left).unwrap(), "left by a crash");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     }
 
     /// Nothing is followed or created through a link: a data folder that
@@ -2305,7 +2429,12 @@ mod tests {
     fn the_unusable_folder_note_names_the_setting_folder_and_fix() {
         let dir = Path::new(r"D:\Lodestar");
         for setting in [Setting::Default, Setting::Env, Setting::File] {
-            for problem in [Problem::File, Problem::Unreadable, Problem::Uncreatable] {
+            for problem in [
+                Problem::File,
+                Problem::Unreadable,
+                Problem::Unwritable,
+                Problem::Uncreatable,
+            ] {
                 let refusal = Refusal::Unusable(setting, problem);
                 let text = event_log_text(refusal, dir);
                 for part in [r"D:\Lodestar", setting.source(), problem.text()] {
