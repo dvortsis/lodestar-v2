@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T11:03Z",
+  "updated_at": "2026-11-20T11:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-20T11:03Z",
+  "last_heartbeat": "2026-11-20T11:13Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10251,6 +10251,13 @@
       "sha": "5b4c6baa",
       "at": "2026-11-20T11:03Z",
       "note": "delta review MERGE; optionals to next GS brief"
+    },
+    {
+      "pr": 977,
+      "slice": "CR-LOOKUP-END",
+      "sha": "079752e0",
+      "at": "2026-11-20T11:13Z",
+      "note": "delta review MERGE (IPv6 /48 fix); session archived; sampler hold lifted"
     }
   ],
   "active_sessions": {
@@ -10496,16 +10503,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T11:03Z",
+    "updated": "2026-11-20T11:13Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CR-LOOKUP-END",
+        "slice": "X-win-data-dir-unusable-log",
         "role": "build",
-        "agent": "claude",
+        "agent": "session_01MMjhnATTvyFiLGcTacVqve",
         "model": "opus",
-        "since": "2026-11-20T07:52Z",
-        "doing": "dht.lookup_end: end on values / closest set, start on admission; ledger nits; CR-SIM screen after #974",
+        "since": "2026-11-20T11:13Z",
+        "doing": "Windows: refuse unusable data folder with Event Log entry",
         "status": "active"
       },
       {
@@ -10515,7 +10522,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T08:45Z",
-        "doing": "holding its PR until #977 merges (owns overlap; owner-queue item 30)",
+        "doing": "bring main in after #977, open PR",
         "status": "active"
       },
       {
@@ -10627,7 +10634,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-20T11:03Z",
+  "heartbeat": "2026-11-20T11:13Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
