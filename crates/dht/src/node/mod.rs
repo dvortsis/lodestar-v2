@@ -171,6 +171,12 @@ pub struct Config {
     /// asks the BEP 51 responder that listed its hash. Off allocates no
     /// hint state and sends nothing differently.
     pub responder_hints: bool,
+    /// CR-LOOKUP-END (`dht.lookup_end`): a peer request ends, and frees its
+    /// slot, once it holds enough values from enough distinct responders
+    /// or each leg's closest set has answered, and an admitted request
+    /// starts at once instead of on the next tick. Off, lookups end and
+    /// start exactly as before.
+    pub lookup_end: bool,
     /// CR-1b's target prefixes (`dht.target_prefixes`): BEP 51 sample and
     /// exploration targets take the next of 256 eight-bit prefixes, per
     /// family, with a random suffix. Off draws every target at random, as
@@ -256,6 +262,7 @@ impl Default for Config {
             paused: false,
             restart: None,
             responder_hints: false,
+            lookup_end: false,
             target_prefixes: false,
             utp: None,
             shard: None,

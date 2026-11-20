@@ -25,16 +25,20 @@ pub enum LedgerEnd {
     Cancelled,
     /// Still running when the actor stopped.
     Shutdown,
+    /// CR-LOOKUP-END: it held enough values, from enough distinct
+    /// responders, before converging.
+    EnoughValues,
 }
 
 impl LedgerEnd {
-    pub const ALL: [LedgerEnd; 6] = [
+    pub const ALL: [LedgerEnd; 7] = [
         LedgerEnd::Values,
         LedgerEnd::NoValues,
         LedgerEnd::Deadline,
         LedgerEnd::QueryCap,
         LedgerEnd::Cancelled,
         LedgerEnd::Shutdown,
+        LedgerEnd::EnoughValues,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -45,6 +49,7 @@ impl LedgerEnd {
             LedgerEnd::QueryCap => "query_cap",
             LedgerEnd::Cancelled => "cancelled",
             LedgerEnd::Shutdown => "shutdown",
+            LedgerEnd::EnoughValues => "enough_values",
         }
     }
 }
@@ -319,6 +324,21 @@ pub struct LedgerSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every snapshot array is indexed by `as usize`, so each `ALL` must
+    /// list its enum in declaration order.
+    #[test]
+    fn each_all_is_in_index_order() {
+        for (i, v) in LedgerEnd::ALL.iter().enumerate() {
+            assert_eq!(*v as usize, i, "{v:?}");
+        }
+        for (i, v) in QueryPurpose::ALL.iter().enumerate() {
+            assert_eq!(*v as usize, i, "{v:?}");
+        }
+        for (i, v) in HintOutcome::ALL.iter().enumerate() {
+            assert_eq!(*v as usize, i, "{v:?}");
+        }
+    }
 
     #[test]
     fn histogram_buckets_are_le_and_cumulative() {

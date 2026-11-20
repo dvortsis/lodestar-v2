@@ -270,6 +270,26 @@ impl Lookup {
             .any(|c| c.state == State::Fresh)
     }
 
+    /// CR-LOOKUP-END's convergence test: the [`K`] closest candidates that
+    /// haven't failed have all answered, so no closer node is left to ask
+    /// (candidates are kept in distance order). Unlike [`Lookup::is_done`],
+    /// it doesn't wait for queries still out to nodes outside that set, or
+    /// for queries outside the candidate list (a hint, a router), unless
+    /// nobody has answered yet: a lookup with no answer is never converged
+    /// while something is still out.
+    pub fn closest_answered(&self) -> bool {
+        if self.is_done() {
+            return true;
+        }
+        let mut closest = self
+            .candidates
+            .iter()
+            .filter(|c| c.state != State::Failed)
+            .take(K)
+            .peekable();
+        closest.peek().is_some() && closest.all(|c| c.state == State::Responded)
+    }
+
     /// The closest nodes that answered.
     #[cfg(test)]
     pub fn closest(&self) -> impl Iterator<Item = NodeInfo> + '_ {
@@ -290,6 +310,41 @@ mod tests {
             id: NodeId([b; 20]),
             addr: SocketAddr::from(([10, 0, 0, b], 1)),
         }
+    }
+
+    /// CR-LOOKUP-END: converged once the K closest that haven't failed
+    /// have answered, whatever is still out beyond them; never while
+    /// nobody has answered and something is out.
+    #[test]
+    fn closest_answered_ignores_queries_beyond_the_closest_set() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        // Three far nodes go out.
+        for b in [0xF1, 0xF2, 0xF3] {
+            l.add(n(b));
+        }
+        assert_eq!(l.next().len(), 3);
+        assert!(!l.closest_answered(), "nobody has answered");
+        // One answers with K closer nodes; they're asked one at a time.
+        l.on_response(&NodeId([0xF1; 20]), (1..=K as u8).map(n), &[]);
+        while let Some(c) = l.next_limit(1).pop() {
+            assert!(!l.closest_answered());
+            l.on_response(&c.id, std::iter::empty(), &[]);
+        }
+        assert!(l.closest_answered());
+        assert!(!l.is_done(), "two far queries are still out");
+        // A failed node in the set gives its place to the next one.
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        l.add(n(1));
+        l.add(n(2));
+        let sent = l.next();
+        l.on_failure(&sent[0].id);
+        assert!(!l.closest_answered());
+        l.on_response(&sent[1].id, std::iter::empty(), &[]);
+        assert!(l.closest_answered() && l.is_done());
+        // An empty lookup with something outside the list out waits.
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        l.extra_in_flight = 1;
+        assert!(!l.closest_answered());
     }
 
     #[test]
