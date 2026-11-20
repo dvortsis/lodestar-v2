@@ -1,0 +1,5 @@
+GET https://api.srrdb.com/v1/search/nothing/like/this
+Accept: application/json
+
+HTTP 200
+Content-Type: application/json; charset=utf-8

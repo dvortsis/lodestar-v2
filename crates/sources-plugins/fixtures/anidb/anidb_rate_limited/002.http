@@ -1,0 +1,5 @@
+GET http://api.anidb.net:9001/httpapi?request=anime&client=lodestartest&clientver=1&protover=1&aid=9001
+Accept-Encoding: gzip
+
+HTTP 429
+Retry-After: 120

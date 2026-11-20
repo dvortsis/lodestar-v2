@@ -1,0 +1,13 @@
+{
+ "results": [
+  {"release": "Harbour.Lights.2004.1080p.BluRay.x264-QUiETGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0999901", "size": 8603626447, "note": "SENTINEL-UNREAD"},
+  {"release": "Harbour.Lights.2004.DVDRip.XviD-OTHERGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0999901", "size": 1460775867},
+  {"release": "Harbour.Lights.2004.FRENCH.DVDRip.XviD-FRGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": null, "size": 1467911439},
+  {"release": "Harbour.Lights.Revisited.2004.720p.WEB.h264-REVGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0999902", "size": 4729758592},
+  {"release": "OST-Harbour_Lights-2004-MUSiCGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0999901", "size": 102162259},
+  {"release": "Harbour.Lights.2004.S01E01.720p.HDTV.x264-TVGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0999903", "size": 610144248}
+ ],
+ "resultsCount": 6,
+ "warnings": [],
+ "query": ["+*harbour*", "+*lights*", "+*2004*"]
+}

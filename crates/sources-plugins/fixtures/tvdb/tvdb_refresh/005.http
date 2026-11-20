@@ -1,0 +1,6 @@
+GET https://api4.thetvdb.com/v4/search?query=Breaking+Bad&type=series&limit=10
+Accept: application/json
+Authorization: Bearer fake.token.two
+
+HTTP 200
+Content-Type: application/json

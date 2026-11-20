@@ -1,0 +1,4 @@
+GET https://anidb.net/api/anime-titles.xml.gz
+
+HTTP 503
+Content-Type: text/html
