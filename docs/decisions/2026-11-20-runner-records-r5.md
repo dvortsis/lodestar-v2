@@ -1,6 +1,6 @@
 # runner-records-r5 decisions
 
-The runner's records PR after #970 (path to 100, r5 and r5.1). It records the owner's decisions from 2026-11-14 to 2026-11-20 in `docs/owner-decisions.md` §2.72 to §2.80, and the runner's own calls below. Each call is flagged to the owner, who can veto it (§2.19).
+The runner's records PR after #970 (path to 100, r5 and r5.1). It records the owner's decisions from 2026-11-14 to 2026-11-20 in `docs/owner-decisions.md` §2.72 to §2.81, and the runner's own calls below. Each call is flagged to the owner, who can veto it (§2.19).
 
 ## Switch names (runner, 2026-11-20)
 - **The four new crawler switches have fixed names,** so their briefs, CR-COL-5's switch sets and the A/B records all use the same ones:

@@ -768,6 +768,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - The design, which amends CR-SPEC rule 6.1 before any data exists (§2.25), is `docs/decisions/2026-11-20-path-to-100-cr-spec.md`.
     - Its A2 (stacked controls) and A3 (no idle host) are open to the owner's veto until stage 2's first block.
 
+81. **Four build sessions, and as many testing sessions as needed** (owner, in the runner session, 2026-11-20 about 06:25Z): "I'm going to bed. Keep 4 running sessions, with as many additional sessions for testing as needed."
+    - **Build:** four slices at a time, as before (`limits.phase_total` 4).
+    - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now a floor the dashboard shows, not a cap.
+    - **Unchanged (runner's reading):** the cloud spending caps (§2.74), the host-safety rules (§2.68), at most three reviewers at a time, and every other bound.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
