@@ -1,0 +1,6 @@
+{"status":"success","results":4,"time":"0.004s","results_total":4,"data":[
+{"id":900004,"pretime":1700000300,"release":"Quiet.Harbor.2021.2160p.WEB.H265-SYNTH","section":"X265-HD","files":40,"size":9100,"status":0,"reason":"","group":"SYNTH","genre":"Drama","url":"/rls/Quiet.Harbor.2021.2160p.WEB.H265-SYNTH"},
+{"id":900003,"pretime":1700000200,"release":"Quiet.Harbor.2021.1080p.WEB.H264-SYNTH","section":"X264-HD","files":24,"size":4200,"status":1,"reason":"mislabeled.source","group":"SENTINEL","genre":"Drama","url":"/rls/Quiet.Harbor.2021.1080p.WEB.H264-SYNTH","nfo":"https://nfo.example/SENTINEL.nfo"},
+{"id":900002,"pretime":1700000100,"release":"Quiet.Harbor.2021.PROPER.1080p.WEB.H264-OTHER","section":"X264-HD","files":24,"size":4300,"status":2,"reason":"fine.after.all","group":"OTHER","genre":"","url":"/rls/Quiet.Harbor.2021.PROPER.1080p.WEB.H264-OTHER"},
+{"id":900001,"pretime":1700000000,"release":"Quiet.Harbor.Lights.2021.720p.WEB.H264-SYNTH","section":"X264-SD","files":11,"size":1900,"status":3,"reason":"dupe","group":"SYNTH","genre":"Comedy","url":"/rls/Quiet.Harbor.Lights.2021.720p.WEB.H264-SYNTH"}
+],"page":1}

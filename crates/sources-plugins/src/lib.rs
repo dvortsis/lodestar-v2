@@ -29,6 +29,7 @@ pub mod full_scrape;
 pub mod musicbrainz;
 pub mod nyaa;
 pub mod openlibrary;
+pub mod predb;
 pub mod prowlarr;
 pub mod srrdb;
 pub mod stashdb;

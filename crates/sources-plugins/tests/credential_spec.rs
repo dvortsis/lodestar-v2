@@ -287,6 +287,12 @@ fn plugins_without_a_credential_store_declare_none() {
         lodestar_sources::identify::Identifier::manifest(&ol).clone(),
         *lodestar_sources::identify::Identifier::policy(&ol),
     ));
+    // PreDB (ENR-predb) too.
+    let p = lodestar_sources_plugins::predb::PreDb::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&p).clone(),
+        *lodestar_sources::identify::Identifier::policy(&p),
+    ));
     for (m, policy) in plugins {
         assert!(policy.credentials.is_empty(), "{}", m.id);
         check(&m, &policy, &Recording::default());
@@ -312,6 +318,7 @@ fn every_catalogued_plugin_is_checked() {
         lodestar_sources_plugins::wikidata::ID,
         lodestar_sources_plugins::discogs::ID, lodestar_sources_plugins::musicbrainz::ID, lodestar_sources_plugins::srrdb::ID, tvdb::ID,
         lodestar_sources_plugins::openlibrary::ID,
+        lodestar_sources_plugins::predb::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
     assert_eq!(listed, BTreeSet::from(checked));

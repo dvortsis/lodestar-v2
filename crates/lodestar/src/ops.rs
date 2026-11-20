@@ -973,6 +973,9 @@ mod spec_tests {
                 lodestar_sources_plugins::srrdb::ID,
                 *lodestar_sources::identify::Identifier::policy(
                     &lodestar_sources_plugins::srrdb::Srrdb::new(),
+                lodestar_sources_plugins::predb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::predb::PreDb::new(),
                 ),
             ),
         ]

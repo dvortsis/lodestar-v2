@@ -13,6 +13,7 @@ pub mod lemmy;
 pub mod musicbrainz;
 pub mod nostr;
 pub mod openlibrary;
+pub mod predb;
 pub mod rss;
 pub mod srrdb;
 pub mod stashdb;

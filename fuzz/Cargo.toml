@@ -389,6 +389,8 @@ bench = false
 [[bin]]
 name = "discogs"
 path = "fuzz_targets/discogs.rs"
+name = "predb"
+path = "fuzz_targets/predb.rs"
 test = false
 doc = false
 bench = false

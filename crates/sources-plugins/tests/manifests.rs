@@ -78,6 +78,10 @@ fn each_entry_is_its_plugins_own_manifest() {
             &lodestar_sources_plugins::openlibrary::OpenLibrary::new(),
         )
         .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::predb::PreDb::new(),
+        )
+        .clone(),
         prowlarr::Prowlarr::unconfigured(creds()).manifest().clone(),
         lodestar_sources::identify::Identifier::manifest(
             &lodestar_sources_plugins::srrdb::Srrdb::new(),
