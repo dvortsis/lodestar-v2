@@ -10,6 +10,7 @@ use std::time::Duration;
 use lodestar_pipeline::identify;
 use lodestar_sources::terms::{Retention, Terms};
 use lodestar_store::snapshots::claims;
+use lodestar_store::{Store, StoreConfig};
 use proptest::prelude::*;
 
 /// The retention the live sweep (`identify::sweep_recorded`) reads from a
@@ -82,17 +83,44 @@ proptest! {
         );
     }
 
-    /// The window matches the live sweep's: dropped at or past the drop
-    /// age, or stamped beyond the slack.
+    /// The window is the live sweep's: a claim stamped `at` is dropped by
+    /// `identify::sweep_expired` at `now` exactly when it's outside
+    /// `claims::window`.
     #[test]
     fn the_window_is_the_sweeps(
         days in 0u64..2_000,
-        now in -4_000_000_000i64..4_000_000_000,
-        at in -4_000_000_000i64..4_000_000_000,
+        now in 1_000_000_000i64..2_000_000_000,
+        offset in prop_oneof![-200_000_000i64..200_000_000, -3i64..3, 3_597i64..3_603],
     ) {
         let r = Retention::days(days);
-        let w = claims::window(claims::max_age_secs(&Terms { retention: r, ..Terms::STRICT }.record()), now);
-        let swept = at <= now - r.drop_after() || at > now + identify::FUTURE_SLACK_SECS;
-        prop_assert_eq!(at < w.before || at > w.after, swept);
+        let drop = r.drop_after();
+        // Near both edges (the drop age, the slack) as often as anywhere.
+        let at = if (-3..3).contains(&offset) {
+            now - drop + offset
+        } else {
+            now + offset
+        };
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = s.register_source("plugin", "1", 0).unwrap();
+        s.connection()
+            .execute(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+                 VALUES (1, ?1, 't', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+                [&[7u8; 20][..]],
+            )
+            .unwrap();
+        let c = lodestar_store::claims::Claims {
+            details: Some(Box::new(lodestar_store::claims::Details {
+                canonical_title: Some("The Film".into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        prop_assert!(s.put_claims_at(1, src, &c, false, at).unwrap());
+        let swept = identify::sweep_expired(&mut s, src, &r, now).unwrap();
+        let record = Terms { retention: r, ..Terms::STRICT }.record();
+        let w = claims::window(claims::max_age_secs(&record), now);
+        prop_assert_eq!(!swept.dropped.is_empty(), at < w.before || at > w.after);
     }
 }

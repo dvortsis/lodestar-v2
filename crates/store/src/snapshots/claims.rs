@@ -14,14 +14,18 @@
 //!   applies: the host rewrites a restored store's record with the
 //!   plugin's current terms when it registers it;
 //! - **the clock** is `now`, but never behind the snapshot's own
-//!   high-water mark for the source, nor behind any mark the live store
-//!   holds, so a clock that steps back keeps nothing;
+//!   high-water mark for the source, nor behind the live store's mark for
+//!   the same plugin, so a clock that steps back keeps nothing;
 //! - **a claim stamped more than [`FUTURE_SLACK_SECS`] ahead** has no age
 //!   to trust and goes, as live.
 //!
 //! A source with no terms record in the snapshot or the live store isn't
 //! an identify source (the runtime records terms before a plugin's first
 //! claim), so its claims stay, as live.
+//!
+//! A snapshot whose claims can't be checked fails closed: the hourly pass
+//! deletes it and a rollback refuses it (`super::purge_snapshots`,
+//! `super::purge_for_restore`, `super::apply_source_purges`).
 //!
 //! `lodestar-store` doesn't depend on `lodestar-sources`, where `Terms`
 //! lives (it depends on the store), so this is a small reader of the
@@ -116,39 +120,68 @@ pub fn window(max_age: u64, now: i64) -> Window {
     }
 }
 
-/// What the live store says about identify sources, read once per pass.
-#[derive(Debug, Default)]
-pub(crate) struct LiveTerms {
-    /// Each plugin's recorded retention limit.
-    max_age: HashMap<String, u64>,
-    /// The highest retention mark of any source: a time the clock has
-    /// already reached.
-    clock: Option<i64>,
+/// What the live store says about one plugin: its recorded retention
+/// limit and its retention mark, each if it has one.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LivePlugin {
+    pub(crate) max_age: Option<u64>,
+    pub(crate) mark: Option<i64>,
 }
+
+/// What the live store says about identify sources, by plugin, read once
+/// per pass.
+#[derive(Debug, Default)]
+pub(crate) struct LiveTerms(pub(crate) HashMap<String, LivePlugin>);
 
 impl LiveTerms {
     pub(crate) fn read(conn: &Connection) -> rusqlite::Result<LiveTerms> {
         if !super::has_table(conn, "source_state")? {
             return Ok(LiveTerms::default());
         }
-        let mut max_age = HashMap::new();
-        let mut stmt = conn.prepare(
-            "SELECT s.plugin, t.value FROM source_state t JOIN sources s ON s.id = t.source_id
-             WHERE t.key = ?1",
-        )?;
-        for row in stmt.query_map([TERMS_KEY], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
-        })? {
-            let (plugin, record) = row?;
-            max_age.insert(plugin, max_age_secs(&record));
+        let mut out = HashMap::new();
+        for (_, plugin, record, mark) in source_rows(conn)? {
+            out.insert(
+                plugin,
+                LivePlugin {
+                    max_age: record.as_deref().map(max_age_secs),
+                    mark: mark.as_deref().and_then(read_clock),
+                },
+            );
         }
-        let mut clock = None;
-        let mut stmt = conn.prepare("SELECT value FROM source_state WHERE key = ?1")?;
-        for v in stmt.query_map([CLOCK_KEY], |r| r.get::<_, Vec<u8>>(0))? {
-            clock = clock.max(read_clock(&v?));
-        }
-        Ok(LiveTerms { max_age, clock })
+        Ok(LiveTerms(out))
     }
+}
+
+/// Every source as `(id, plugin, terms record, retention mark)`.
+type SourceRow = (i64, String, Option<Vec<u8>>, Option<Vec<u8>>);
+
+fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.plugin,
+                (SELECT value FROM source_state WHERE source_id = s.id AND key = ?1),
+                (SELECT value FROM source_state WHERE source_id = s.id AND key = ?2)
+         FROM sources s",
+    )?;
+    stmt.query_map([TERMS_KEY, CLOCK_KEY], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+    })?
+    .collect()
+}
+
+/// Whether `conn` has what the claims purge reads: stamped claims
+/// (V15's column), sources and their state.
+pub(crate) fn checkable(conn: &Connection) -> rusqlite::Result<bool> {
+    if !(super::has_table(conn, "sources")? && super::has_table(conn, "source_state")?) {
+        return Ok(false);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('torrent_claims') WHERE name = 'stored_at'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// One source's due claims in a snapshot.
@@ -164,35 +197,10 @@ pub(crate) struct Due {
 }
 
 /// Every source with a terms record in `conn` (a snapshot at a schema with
-/// claim stamps) or in the live store, with the window its claims are
-/// dropped by at `now`.
+/// claim stamps) or, for the same plugin, in the live store, with the
+/// window its claims are dropped by at `now`: the clock never behind the
+/// snapshot's mark for the source nor the live store's for the plugin.
 pub(crate) fn due(conn: &Connection, live: &LiveTerms, now: i64) -> rusqlite::Result<Vec<Due>> {
-    let mut sources: Vec<(i64, Option<u64>, Option<i64>)> = Vec::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT s.id, s.plugin,
-                    (SELECT value FROM source_state WHERE source_id = s.id AND key = ?1),
-                    (SELECT value FROM source_state WHERE source_id = s.id AND key = ?2)
-             FROM sources s",
-        )?;
-        let rows = stmt.query_map([TERMS_KEY, CLOCK_KEY], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, Option<Vec<u8>>>(2)?,
-                r.get::<_, Option<Vec<u8>>>(3)?,
-            ))
-        })?;
-        for row in rows {
-            let (id, plugin, record, mark) = row?;
-            let own = record.as_deref().map(max_age_secs);
-            let max_age = match (own, live.max_age.get(&plugin).copied()) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
-            sources.push((id, max_age, mark.as_deref().and_then(read_clock)));
-        }
-    }
     let mut out = Vec::new();
     let mut any = conn.prepare(
         "SELECT 1 FROM torrent_claims WHERE source_id = ?1 AND stored_at < ?2
@@ -200,13 +208,18 @@ pub(crate) fn due(conn: &Connection, live: &LiveTerms, now: i64) -> rusqlite::Re
          SELECT 1 FROM torrent_claims WHERE source_id = ?1 AND stored_at > ?3
          LIMIT 1",
     )?;
-    for (source, max_age, mark) in sources {
-        let Some(max_age) = max_age else {
-            continue;
+    for (source, plugin, record, mark) in source_rows(conn)? {
+        let own = record.as_deref().map(max_age_secs);
+        let theirs = live.0.get(&plugin).copied().unwrap_or_default();
+        let max_age = match (own, theirs.max_age) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => continue,
         };
+        let mark = mark.as_deref().and_then(read_clock);
         let clock = now
             .max(mark.unwrap_or(i64::MIN))
-            .max(live.clock.unwrap_or(i64::MIN));
+            .max(theirs.mark.unwrap_or(i64::MIN));
         let window = window(max_age, clock);
         let found = any
             .query_row(params![source, window.before, window.after], |_| Ok(()))
@@ -243,12 +256,13 @@ pub(crate) fn purge(
     due: &[Due],
     cap: Option<usize>,
 ) -> rusqlite::Result<(usize, bool)> {
-    let mut done = 0usize;
+    // `done` counts the rows chosen, for the cap; `deleted` the rows gone.
+    let (mut done, mut deleted) = (0usize, 0usize);
     for d in due.iter().filter(|d| d.any) {
         loop {
             let room = cap.map_or(CHUNK, |c| c.saturating_sub(done).min(CHUNK));
             if room == 0 {
-                return Ok((done, true));
+                return Ok((deleted, true));
             }
             let tx = crate::begin_write(conn)?;
             let ids = {
@@ -274,6 +288,7 @@ pub(crate) fn purge(
                 for id in &ids {
                     if delete.execute(params![id, d.source])? > 0 {
                         mark.execute([id])?;
+                        deleted += 1;
                     }
                 }
             }
@@ -284,7 +299,7 @@ pub(crate) fn purge(
             }
         }
     }
-    Ok((done, false))
+    Ok((deleted, false))
 }
 
 /// Raises each source's retention mark in `conn` to the clock its purge
@@ -303,6 +318,7 @@ pub(crate) fn raise_marks(conn: &Connection, due: &[Due]) -> rusqlite::Result<()
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     use proptest::prelude::*;
@@ -592,7 +608,7 @@ mod tests {
         let conn = store.connection();
         torrent(conn, 1);
         torrent(conn, 2);
-        claim(conn, 1, tmdb, T - 20 * DAY);
+        claim(conn, 1, tmdb, T - 6 * DAY);
         claim(conn, 2, tmdb, T - DAY);
         state(conn, tmdb, CLOCK_KEY, &T.to_be_bytes());
         let snap = take(&store, &db);
@@ -604,8 +620,9 @@ mod tests {
         super::super::purge_for_restore(store.connection(), &staged, T)
             .unwrap()
             .unwrap();
-        // The claim 20 days old is gone (dropped at 9); the one a day old
-        // stays, as the live sweep keeps it until 9 days by its mark.
+        // The claim 6 days old by the wall clock is 11 by the live mark, so
+        // it's gone (dropped at 9); the one a day old stays, as the live
+        // sweep keeps it until 9 days by its mark.
         assert_eq!(stamps(&staged, tmdb), vec![(2, T - DAY)]);
         let mark: Vec<u8> = Connection::open(&staged)
             .unwrap()
@@ -616,6 +633,100 @@ mod tests {
             )
             .unwrap();
         assert_eq!(read_clock(&mark), Some(T + 5 * DAY));
+    }
+
+    /// The update rollback's path (`apply_source_purges`, with no source
+    /// purge recorded) drops expired claims and raises the marks, by the
+    /// wall clock.
+    #[test]
+    fn an_update_rollback_brings_back_no_expired_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, db, [tmdb, _, _]) = live(dir.path());
+        let tmdb = i64::from(tmdb.get());
+        let now = super::super::modified(&db).unwrap();
+        let conn = store.connection();
+        torrent(conn, 1);
+        torrent(conn, 2);
+        claim(conn, 1, tmdb, now - 30 * DAY);
+        claim(conn, 2, tmdb, now - DAY);
+        let snap = take(&store, &db);
+        super::super::apply_source_purges(store.connection(), &snap).unwrap();
+        assert_eq!(stamps(&snap, tmdb), vec![(2, now - DAY)]);
+        let conn = Connection::open(&snap).unwrap();
+        let mark: Vec<u8> = conn
+            .query_row(
+                "SELECT value FROM source_state WHERE source_id = ?1 AND key = ?2",
+                params![tmdb, CLOCK_KEY],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(read_clock(&mark).unwrap() >= now);
+        drop(conn);
+        assert_eq!(super::super::modified(&snap), Some(T));
+        assert!(!super::super::side_exists(&snap, "-wal"));
+    }
+
+    /// A snapshot whose claims can't be checked is deleted, never kept.
+    #[test]
+    fn a_snapshot_whose_claims_cannot_be_checked_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, i64::from(tmdb.get()), T - 30 * DAY);
+        let snap = take(&store, &db);
+        Connection::open(&snap)
+            .unwrap()
+            .execute_batch("DROP TABLE source_state")
+            .unwrap();
+        super::super::set_modified(&snap, T).unwrap();
+        let r = store.purge_snapshots(T, 0);
+        assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
+        assert!(!snap.exists());
+        // A rollback refuses such a copy.
+        let staged = dir.path().join("lodestar.rollback-y.tmp");
+        let snap = take(&store, &db);
+        std::fs::copy(&snap, &staged).unwrap();
+        Connection::open(&staged)
+            .unwrap()
+            .execute_batch("DROP TABLE source_state")
+            .unwrap();
+        assert!(super::super::purge_for_restore(store.connection(), &staged, T).is_err());
+    }
+
+    /// A schema newer than this build's plans loses its expired claims all
+    /// the same; one without stamped claims is left as it was.
+    #[test]
+    fn a_newer_schema_loses_its_expired_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        let tmdb = i64::from(tmdb.get());
+        torrent(store.connection(), 1);
+        torrent(store.connection(), 2);
+        claim(store.connection(), 1, tmdb, T - 30 * DAY);
+        claim(store.connection(), 2, tmdb, T - DAY);
+        let snap = take(&store, &db);
+        let newer = Connection::open(&snap).unwrap();
+        newer
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+                [crate::snapshots::Plan::KNOWN_THROUGH + 1],
+            )
+            .unwrap();
+        drop(newer);
+        super::super::set_modified(&snap, T).unwrap();
+        let r = store.purge_snapshots(T, 0);
+        assert_eq!(r.claims, 1, "{:?}", r.warnings);
+        assert_eq!(stamps(&snap, tmdb), vec![(2, T - DAY)]);
+        assert_eq!(super::super::modified(&snap), Some(T));
+        // Without the stamps: nothing to check, nothing written.
+        Connection::open(&snap)
+            .unwrap()
+            .execute_batch("DROP INDEX torrent_claims_stored; ALTER TABLE torrent_claims DROP COLUMN stored_at;")
+            .unwrap();
+        super::super::set_modified(&snap, T).unwrap();
+        let r = store.purge_snapshots(T + DAY, 0);
+        assert_eq!(r.claims, 0);
+        assert!(r.unchecked.is_empty() && snap.exists());
     }
 
     proptest! {
@@ -632,10 +743,23 @@ mod tests {
             garbled in any::<bool>(),
             claims in proptest::collection::vec((any::<bool>(), -500i64..5), 1..12),
             mark in proptest::option::of(-100i64..100),
+            live_days in proptest::option::of(0u64..400),
+            live_mark in proptest::option::of(-100i64..100),
             steps in proptest::collection::vec(-200i64..200, 1..8),
         ) {
             let rec = if garbled { vec![1, 8, 0] } else { record(days) };
-            let max_age = if garbled { 180 * DAY } else { (days as i64).max(2) * DAY };
+            let own_max = if garbled { 180 * DAY } else { (days as i64).max(2) * DAY };
+            // The live store's record for the same plugin, when it has one,
+            // can only shorten it.
+            let max_age = live_days.map_or(own_max, |d| own_max.min((d as i64).max(2) * DAY));
+            let live_mark = live_mark.map(|m| T + m * DAY);
+            let live = LiveTerms(HashMap::from([(
+                "a".to_string(),
+                LivePlugin {
+                    max_age: live_days.map(|d| max_age_secs(&record(d))),
+                    mark: live_mark,
+                },
+            )]));
             let mut conn = memory(&rec);
             let mark = mark.map(|m| T + m * DAY);
             if let Some(m) = mark {
@@ -654,8 +778,10 @@ mod tests {
             let mut gone = vec![false; rows.len()];
             for step in steps {
                 clock += step * DAY;
-                let used = clock.max(mark.unwrap_or(i64::MIN));
-                let d = due(&conn, &LiveTerms::default(), clock).unwrap();
+                let used = clock
+                    .max(mark.unwrap_or(i64::MIN))
+                    .max(live_mark.unwrap_or(i64::MIN));
+                let d = due(&conn, &live, clock).unwrap();
                 prop_assert_eq!(purge(&mut conn, &d, Some(MAX_PER_PASS)).unwrap().1, false);
                 let held = stamps_in(&conn, 1);
                 for (n, &(id, source, at)) in rows.iter().enumerate() {
@@ -668,6 +794,7 @@ mod tests {
                     // Independently of the formula: nothing kept is as old
                     // as the limit by the clock used.
                     prop_assert!(got.is_none() || used - at < max_age);
+                    prop_assert!(got.is_none() || at - used <= 3_600);
                 }
                 let others = stamps_in(&conn, 2);
                 prop_assert_eq!(others.len(), rows.iter().filter(|r| r.1 == 2).count());
