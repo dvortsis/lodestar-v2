@@ -80,6 +80,10 @@ fn each_entry_is_its_plugins_own_manifest() {
             &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
         )
         .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::igdb::Igdb::new(creds()),
+        )
+        .clone(),
         nyaa::Nyaa::new().manifest().clone(),
         nyaa::Sukebei::new().manifest().clone(),
         lodestar_sources::identify::Identifier::manifest(

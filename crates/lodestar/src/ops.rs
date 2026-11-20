@@ -953,6 +953,12 @@ mod spec_tests {
                 *lodestar_sources::identify::Identifier::policy(&discogs::Discogs::new(creds())),
             ),
             (full_scrape::ID, *scrape.policy()),
+            (
+                lodestar_sources_plugins::igdb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::igdb::Igdb::new(creds()),
+                ),
+            ),
             (nyaa::ID, *nyaa::Nyaa::new().policy()),
             (nyaa::SUKEBEI_ID, *nyaa::Sukebei::new().policy()),
             (
@@ -1056,6 +1062,11 @@ mod spec_tests {
                 json!([
                     { "kind": "username", "label": "Registered AniDB client name", "name": "client", "required": true },
                     { "kind": "username", "label": "Registered AniDB client version", "name": "clientver", "required": true }
+                ])
+            } else if id == lodestar_sources_plugins::igdb::ID {
+                json!([
+                    { "kind": "secret", "label": "Twitch Client ID", "name": "client_id", "required": true },
+                    { "kind": "secret", "label": "Twitch Client secret", "name": "client_secret", "required": true }
                 ])
             } else {
                 json!([])

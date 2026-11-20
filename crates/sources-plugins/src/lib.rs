@@ -28,6 +28,7 @@ pub mod catalogue;
 pub mod clients;
 pub mod discogs;
 pub mod full_scrape;
+pub mod igdb;
 pub mod musicbrainz;
 pub mod nyaa;
 pub mod openlibrary;

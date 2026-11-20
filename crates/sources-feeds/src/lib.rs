@@ -10,6 +10,7 @@ pub mod anilist;
 pub mod archive_org;
 mod common;
 pub mod discogs;
+pub mod igdb;
 pub mod json;
 pub mod lemmy;
 pub mod musicbrainz;

@@ -37,6 +37,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("discogs", &discogs::MANIFEST),
     ("full_scrape", &full_scrape::MANIFEST),
     ("musicbrainz", &musicbrainz::MANIFEST),
+    ("igdb", &crate::igdb::MANIFEST),
     ("nyaa", &nyaa::MANIFEST),
     ("nyaa", &nyaa::SUKEBEI_MANIFEST),
     ("openlibrary", &crate::openlibrary::MANIFEST),

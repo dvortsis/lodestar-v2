@@ -245,6 +245,24 @@ async fn the_enrichers_read_exactly_what_they_declare() {
         lodestar_sources::identify::Identifier::policy(&a),
         &rec,
     );
+
+    // IGDB (ENR-igdb), an identifier with two Account credentials.
+    let rec = Arc::new(Recording::default());
+    let g = lodestar_sources_plugins::igdb::Igdb::new(rec.clone());
+    igdb_once(&g).await;
+    check(Identifier::manifest(&g), Identifier::policy(&g), &rec);
+}
+
+async fn igdb_once(i: &lodestar_sources_plugins::igdb::Igdb) -> String {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        i.policy(),
+        &UserLimits::default(),
+    );
+    let q = Query::new("Synthetic Title", Some(2001), MediaKind::Game).unwrap();
+    i.lookup(&kit, &q).await.unwrap_err().0
 }
 
 async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String {
@@ -352,6 +370,7 @@ fn every_catalogued_plugin_is_checked() {
         lodestar_sources_plugins::anilist::ID,
         lodestar_sources_plugins::openlibrary::ID,
         lodestar_sources_plugins::predb::ID,
+        lodestar_sources_plugins::igdb::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
     assert_eq!(listed, BTreeSet::from(checked));
@@ -381,6 +400,17 @@ async fn the_declared_names_are_the_ones_it_uses() {
     let without = discogs_once(&d(none())).await;
     assert_ne!(with, without, "discogs: {with}");
     assert!(!with.contains("fakeDiscogsToken"), "{with}");
+    use lodestar_sources_plugins::igdb::{CLIENT_ID, CLIENT_SECRET, Igdb};
+    let both = || {
+        Arc::new(StaticCredentials::new([
+            (CLIENT_ID, "testclientid0"),
+            (CLIENT_SECRET, "testclientsecret0"),
+        ]))
+    };
+    let with = igdb_once(&Igdb::new(both())).await;
+    let without = igdb_once(&Igdb::new(none())).await;
+    assert_ne!(with, without, "igdb: {with}");
+    assert!(!with.contains("testclient"), "{with}");
 }
 
 /// TheTVDB (ENR-tvdb), an Account identifier: it reads its API key and
