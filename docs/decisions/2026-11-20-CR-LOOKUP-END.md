@@ -15,16 +15,17 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
   - Each start's queries still go through the query rate and the outstanding cap (`admit_query`). A throttled query waits for a later drive, as before. A test sends one request with an empty bucket and one with a full cap; neither sends anything over the limit.
 
 ## The constants
-- **`ENOUGH_VALUES` = 8.** It's a candidate default (§2.19), to be tuned from `dht_lookup_values` once CR-AB-LC has run.
+- **`ENOUGH_VALUES` = 8.** It's a candidate default, accepted by the runner and flagged to the owner (§2.19). Tune it from `dht_lookup_values` once CR-AB-LC has run.
   - **What a fetch uses** (CR-0, `docs/build-plan.md` §0.5): about 4.7 metadata attempts a second for 1.286 admitted lookups a second, so about 3.7 fetch attempts per lookup.
   - **Why 8:** it's about twice that, which leaves room for the dead and NATed peers that make up most failures (H3), yet it's reached from one or two replies (a reply lists up to 16).
   - **Where it can fall short:** the pool holds up to 32 peers per key (`max_peers_per_key`). A key that runs out of peers before a fetch succeeds is re-looked-up later under the pool's existing retry rules, so a low value costs a retry, not the hash.
   - **What's unchanged:** the caps on values (16 kept per reply, 64 per leg and per request) are as before.
-- **`VALUE_RESPONDERS` = 2,** counted as distinct networks (/24, IPv6 /64, the actor's existing `network()`), not distinct addresses.
+- **`VALUE_RESPONDERS` = 2,** also accepted by the runner (§2.19), counted as distinct networks (/24, IPv6 /64, the actor's existing `network()`), not distinct addresses.
   - **The hostile-reply rule:** one responder can't end a lookup on its own, however many addresses or ports it answers from within one network.
   - **What a hostile node can do:** with values from a single network, a request runs on as it does today, to its closest set, the deadline or the query cap. That's no regression.
   - **Which values count:** only values that pass the existing endpoint policy (no port 0, no martian, private or blocklisted address in production) and are de-duplicated. They also have to arrive in a reply matched to a query still awaiting it, from the address asked; spoofed, late and unknown-tid replies count for nothing.
   - **Memory:** the per-request state this adds is at most 2 network keys and a flag.
+  - **Mixed address families:** the network that counts is the responder's, never its values'. A reply's values count toward `ENOUGH_VALUES` whatever their family (IPv4 and IPv6 peers alike, once validated). The responder that sent them counts once, by its own address: an IPv4 address by its /24, an IPv6 address by its /64, and an IPv4-mapped IPv6 address as its IPv4 /24, so a node can't count twice by answering in both forms. A dual-stack request's two legs share one count, so an IPv4 responder and an IPv6 responder are two networks, even if one operator runs both. That's accepted: it takes two addresses in different families, and a single responder still can't end a lookup on its own.
 
 ## What doesn't change, either way
 `LOOKUP_DEADLINE` (25 s), the 64-query cap, `ALPHA` (3), the query rate, the outstanding cap and the 32 lookup slots are unchanged.
@@ -52,4 +53,4 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
 Pending. `crates/crawler-sim/**` is X-crawler-sim-calibrate's (#974) until it merges. Then the calibrated scenario runs 8 seeds, off against on, reporting `W`, `q` and `y` beside stored per minute. The change is kept only if output per slot-second and output per query both rise. The numbers go here.
 
 ## New file
-`crates/dht/src/node/lookup_end_tests.rs` holds the actor tests, following `hint_tests.rs` and `ledger_tests.rs`. It isn't in the brief's owns; the runner was told.
+`crates/dht/src/node/lookup_end_tests.rs` holds the actor tests, following `hint_tests.rs` and `ledger_tests.rs`. The runner accepted it into the owns.
