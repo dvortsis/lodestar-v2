@@ -25,6 +25,7 @@ pub mod arr;
 pub mod catalogue;
 pub mod clients;
 pub mod full_scrape;
+pub mod musicbrainz;
 pub mod nyaa;
 pub mod openlibrary;
 pub mod prowlarr;

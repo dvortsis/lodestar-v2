@@ -248,6 +248,11 @@ fn plugins_without_a_credential_store_declare_none() {
         lodestar_sources::identify::Identifier::manifest(&w).clone(),
         *lodestar_sources::identify::Identifier::policy(&w),
     ));
+    let mb = lodestar_sources_plugins::musicbrainz::MusicBrainz::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&mb).clone(),
+        *lodestar_sources::identify::Identifier::policy(&mb),
+    ));
     // Open Library (ENR-ol) too.
     let ol = lodestar_sources_plugins::openlibrary::OpenLibrary::new();
     plugins.push((
@@ -277,6 +282,7 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
+        lodestar_sources_plugins::musicbrainz::ID,
         lodestar_sources_plugins::openlibrary::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();

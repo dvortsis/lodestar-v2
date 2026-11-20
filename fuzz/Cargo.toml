@@ -266,6 +266,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "musicbrainz"
+path = "fuzz_targets/musicbrainz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "openlibrary"
 path = "fuzz_targets/openlibrary.rs"
 test = false

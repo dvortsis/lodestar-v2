@@ -959,6 +959,12 @@ mod spec_tests {
                 wikidata::ID,
                 *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata::new()),
             ),
+            (
+                lodestar_sources_plugins::musicbrainz::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
+                ),
+            ),
         ]
     }
 
