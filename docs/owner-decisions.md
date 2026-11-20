@@ -722,8 +722,8 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **The operator tripwire** (owner, 2026-11-14 about 01:30Z, relayed by the same session: "a"). The owner chose option (a), held like the OPERATOR findings (`docs/security/v1/README.md` §5). It replaces the runner's 2026-11-11 fail-closed call (OP-4) and is built in X-operator-hardening.
 
 72. **Out of the loop for cloud testing, Unraid testing and the API credit** (owner, 2026-11-14, in chat): "I don't want to be in the loop for cloud testing, unraid testing, and claude API. Just keep to pre-set limits, best practices, and all decisions should be ux-focused."
-    - **No per-wake approval.** The owner doesn't approve each wake. Work that suits the operator or the API lane goes there, and it may use models up to the top tier.
-    - **The limits are the ones already set (runner's reading):** the session caps (§2.64), the cloud spending caps (§2.74), the API credit's caps (§2.67 as amended by §2.75) and §2.68's host-safety rules. Within them the runner decides, choosing for UX and best practice, records each call in `docs/decisions/` and flags it (§2.19).
+    - **No per-wake approval.** The owner doesn't approve each wake. Work that suits the operator or the API lane goes there. The owner's earlier message the same day set the model ceiling: "I want you to offload tasks that are suited for it. You can use models up to [the top tier]" (model name omitted, as for every model identifier in the repository).
+    - **The limits are the ones already set (runner's reading):** the session caps (§2.64), the cloud spending caps (as later set by §2.74), the API credit's caps (§2.67 as amended by §2.75) and §2.68's host-safety rules. Within them the runner decides, choosing for UX and best practice, records each call in `docs/decisions/` and flags it (§2.19).
     - §2.33's "still for the owner" list is unchanged.
 
 73. **The AWS quota increase was denied: the Lambda concurrency request** (owner, 2026-11-14 about 19:17Z, in chat, superseding an earlier report that it had been granted; clarified 2026-11-15T18:15Z, relayed by the dashboard session).
@@ -770,7 +770,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
 81. **Four build sessions, and as many testing sessions as needed** (owner, in the runner session, 2026-11-20 about 06:25Z): "I'm going to bed. Keep 4 running sessions, with as many additional sessions for testing as needed."
     - **Build:** four slices at a time, as before (`limits.phase_total` 4).
-    - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now a floor the dashboard shows, not a cap.
+    - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now only the number of testing rows the dashboard shows, not a limit.
     - **Unchanged (runner's reading):** the cloud spending caps (§2.74), the host-safety rules (§2.68), at most three reviewers at a time, and every other bound.
 
 ## 3. Points still open (not decided by the owner)

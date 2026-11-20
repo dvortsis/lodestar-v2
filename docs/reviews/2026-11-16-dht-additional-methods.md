@@ -43,7 +43,7 @@ Seven routing-table and lookup-execution techniques pass the screen for credible
 
 7. **Per-lookup `/24` (IPv4) & `/64` (IPv6) candidate shortlist diversification and same-IP multi-port deduplication**
    - *Credible primary sources:* `arvidn/libtorrent` (`RC_2_0` commit `70272f366804ded6c3bfefb2af5088acc6bddae1`, `settings_pack::dht_restrict_search_ips = true`, [`traversal_algorithm.cpp#L194-L229`](https://github.com/arvidn/libtorrent/blob/70272f366804ded6c3bfefb2af5088acc6bddae1/src/kademlia/traversal_algorithm.cpp#L194-L229), [`routing_table.cpp#L468-L494`](https://github.com/arvidn/libtorrent/blob/70272f366804ded6c3bfefb2af5088acc6bddae1/src/kademlia/routing_table.cpp#L468-L494)); Liang Wang and Jussi Kangasharju, *"Real-World Sybil Attacks in BitTorrent Mainline DHT"*, IEEE GLOBECOM 2012 / IEEE P2P 2013; Ingmar Baumgart and Sebastian Mies, *"S/Kademlia: A Practicable Approach Towards Secure Key-Based Routing"*, IEEE ICPADS 2007.
-   - *Current Lodestar gap:* Lookup shortlist diversity: low severity; recorded by the runner as finding S1-16 for a hardening slice; detail held.
+   - *Current Lodestar gap:* Lookup shortlist diversity; see the runner's security records.
 
 ### Consolidated summary across all seven methods
 
@@ -55,7 +55,7 @@ Seven routing-table and lookup-execution techniques pass the screen for credible
 | 4 | `NICE` 3-min quarantine + paced stale probing | Jimenez et al. 2011 (`BEP5 → NICE` `-53.8%` p50 latency, `54% → 64%` replies) | `routing.rs:206`, `actor.rs:1400, 2263` | Attacks `38.2%` outbound DHT timeouts; smooth maintenance |
 | 5 | Two-stage decoupled `short_timeout` (`1 s`) | `libtorrent` `rpc_manager.cpp:397`, `traversal_algorithm.cpp:350`; Jimenez Fig. 2 | `actor.rs:2206`, `lookup.rs:139` | Eliminates `4–5 s` `ALPHA=3` freezes without false node failures |
 | 6 | Multi-bit prefix zone splits / `virtual_ids` | Maymounkov & Mazières 2002; Salah et al. 2014 (`KAD` `1.986` vs `NR128` `2.311` hops) | `routing.rs:278`, `actor.rs:663` | Resolves more prefix bits while avoiding stale 128-buckets under churn |
-| 7 | Per-lookup `/24` & `/64` shortlist diversification | `libtorrent` `traversal_algorithm.cpp:194`; Wang & Kangasharju 2012/2013 | lookup shortlist (S1-16; detail held) | Prevents single-IP multi-port / `/24` Sybils from eclipsing lookups |
+| 7 | Per-lookup `/24` & `/64` shortlist diversification | `libtorrent` `traversal_algorithm.cpp:194`; Wang & Kangasharju 2012/2013 | lookup shortlist | Prevents single-IP multi-port / `/24` Sybils from eclipsing lookups |
 
 ## Why these are additional methods here
 
@@ -73,7 +73,7 @@ The history check included `git log --all -G` over routing/lookup code and resea
 
 ## Applicability and experiment order
 
-Note that **Method 7** (per-lookup `/24` & `/64` shortlist diversification and same-IP deduplication) is a low-risk correctness and eclipse-resilience hardening fix that can be verified in unit tests and `CR-SIM` before or alongside routing changes. For throughput experimentation under frozen [CR-SPEC](../decisions/2026-11-02-CR-SPEC.md) (after `CR-AB-ADM`, `CR-AB-4`, and `CR-1a-*` / `CR-1c` address admission and metadata conversion):
+Note that **Method 7** (per-lookup `/24` & `/64` shortlist diversification and same-IP deduplication) is a low-risk eclipse-resilience change that can be verified in unit tests and `CR-SIM` before or alongside routing changes. For throughput experimentation under frozen [CR-SPEC](../decisions/2026-11-02-CR-SPEC.md) (after `CR-AB-ADM`, `CR-AB-4`, and `CR-1a-*` / `CR-1c` address admission and metadata conversion):
 
 1. **Decouple lookup stalls first via `short_timeout` (`Method 5`) and outward bucket-walk `closest`:** Before raising routing-table size, remove the `4–5 s` single-timeout freeze on `38.2%` dead queries by firing a `short_timeout` (`~1 s`) slot advance without failing the routing node or aborting late replies, and replace the full-table sort in `RoutingTable::closest` with an outward bucket walk from `bucket_index(target)`. Screen against `CR-SIM` first at matched aggregate `queries_per_sec` / `max_outstanding` caps.
 2. **Test `NICE` quarantine (`3 min`) + paced single-contact stale probing (`Method 4`):** Directly targets Lodestar's `38.2%` outbound DHT timeout ratio and maintenance burstiness by validating transient responders before promoting them out of `replacements` and smoothing pings to `1 / 6 s`. Measure lookup query response rate, `dht_timeouts_total`, and occupied lookup duration at equal aggregate query budgets.

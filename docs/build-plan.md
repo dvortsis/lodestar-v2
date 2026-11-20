@@ -342,7 +342,7 @@ A bounded soft timeout is CR-5's first candidate if the ledger still shows resid
 | 4 (CR-AB-1) | CR-1a-S, CR-1a-H, CR-1b, only where the ledger justifies them | earlier winners | ABBA/BAAB each, or skipped with its reason | 0–9 |
 | 5 | CR-5's candidate, if any, then CR-COMB | earlier winners | stacked arm; then 24 h on a fresh directory | about 1.5 plus any CR-5 arm |
 
-The stages total about 16.5–28.5 host-days, not counting a possible CR-5 arm (about 3 days). With the 30 % retry budget, 28.5 host-days × 1.3 is about 37 days, or about 5.3 weeks.
+The stages total about 16.5–25.5 host-days. With the route-backoff run (0–3 days, only if the baseline shows IPv6 no-route events) the calendar below totals about 16.5–28.5 host-days, not counting the 1-day bitmagnet comparator or a possible CR-5 arm (about 3 days). With the 30 % retry budget, 28.5 host-days × 1.3 is about 37 days, or about 5.3 weeks.
 
 Checkpoint 1's report carries the measured ledger and this build's state as the owner's option if the projection falls short.
 
@@ -465,9 +465,9 @@ flowchart LR
   | CR-COMB 24 h acceptance (fresh directory, suppression and warmup included) | about 1.5 days |
   | **Total** | **about 16.5–28.5 host-days** |
 
-  r5.1 (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`) replaces r5's 20–32 host-days and r3's 8–9 days. r3 assumed one block per treatment, where CR-SPEC requires two (O6). A block is about 34 h, including its one 6 h suppression, so a treatment takes about 3 host-days. An inconclusive treatment costs two more blocks. A possible CR-5 arm (about 3 days) isn't in the total.
+  r5.1 (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`) replaces r5's 20–32 host-days and r3's 8–9 days. r3 assumed one block per treatment, where CR-SPEC requires two (O6). A block is about 34 h, including its one 6 h suppression, so a treatment takes about 3 host-days. An inconclusive treatment costs two more blocks. The total leaves out the 1-day bitmagnet comparator and a possible CR-5 arm (about 3 days).
 
-  The r5.1 figures include each block's one 6 h suppression and its warmups (CR-SPEC rule 2.3). Add a retry budget of about 30 % for interruptions and repeats (28.5 host-days × 1.3 is about 5.3 weeks). **Plan for roughly three to five weeks of exclusive host time**, and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the host calendar in `runner-state` (import-pilot bookings, and the planned experiment-host runs, which need no booking since §2.68) and states the next run in every daily summary.
+  The r5.1 figures include each block's one 6 h suppression and its warmups (CR-SPEC rule 2.3). Add a retry budget of about 30 % for interruptions and repeats (28.5 host-days × 1.3 is about 5.3 weeks). **Plan for roughly three to five and a half weeks of exclusive host time**, and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the host calendar in `runner-state` (import-pilot bookings, and the planned experiment-host runs, which need no booking since §2.68) and states the next run in every daily summary.
 - **CI capacity:** each push starts about 37 jobs that every PR queues behind. One push per round of fixes.
 - **Release branches:** fixes for a release land on `main` first and are cherry-picked; nothing is developed on a release branch.
 - **Hub files** (§1.3 table): unchanged.

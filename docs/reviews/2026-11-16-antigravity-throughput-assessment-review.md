@@ -40,7 +40,7 @@ Specify bounded speculative slots, total sent-query cap, aggregate query rate, f
 
 ### 6. Medium: subnet filtering is a coverage tradeoff, not an unconditional low-risk correctness fix
 
-Exact endpoint duplication and many aliases from one IP can waste work (a related low-severity weakness is held as finding S1-16). However, a hard one-contact-per-/24 or /64 policy can also exclude independent useful nodes, and exempting all initial seeds weakens the stated eclipse guarantee. Replacing fresh candidates requires carefully bounded provenance and candidate lifetime rules.
+Exact endpoint duplication and many aliases from one IP can waste work. However, a hard one-contact-per-/24 or /64 policy can also exclude independent useful nodes, and exempting all initial seeds weakens the stated eclipse guarantee. Replacing fresh candidates requires carefully bounded provenance and candidate lifetime rules.
 
 Test same-IP aliases separately from subnet caps. Measure collision prevalence, useful contacts rejected, timeouts and final yield; preserve a bounded fallback policy if strict subnet diversity exhausts candidates. Report any security benefit separately from a throughput effect. The current evidence does not demonstrate how much of Lodestar's traffic encounters the hypothesized attack.
 
