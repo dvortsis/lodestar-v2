@@ -30,8 +30,9 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
 
 ## Sizes
 
-- Every `size-limit` entry passes, and no limit was raised.
-- Search results (lazy) is at 40,602 of 40,610 B. The next change to the row needs a budget review.
+- **One limit raised, by the runner (§2.26, 2026-11-20).** The global "CSS" entry in `web/.size-limit.mjs` goes from 19.72 KB to 19.73 KB. That covers only the new token: 5 B gzipped, which takes the sheet from 19,717 B to 19,722 B, 2 B over the old limit. The built sheet is otherwise byte-identical to `main`'s. That one line is outside this slice's owns, and the change was made after X-session-draft-keep, which was editing the same file, merged.
+- Every other `size-limit` entry passes unchanged.
+- Search results (lazy) is at 40,603 of 40,610 B. The next change to the row (X-row-rail) needs a budget review.
 - Detail drawer is at 28,111 of 28,128 B.
 - A comment using the word "shrink" had added a `.shrink` utility to the global sheet. It was reworded, so Tailwind's scan of `.svelte` comments costs nothing here.
 
