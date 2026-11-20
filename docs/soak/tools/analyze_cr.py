@@ -548,8 +548,12 @@ def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatm
             on = [s for s in own if switches[s]]
             checks.add("A1", "treatment_switches_together", len(on) in (0, len(own)),
                        detail=None if len(on) in (0, len(own)) else {"on": on})
+            others = sorted(others)
             checks.add("A2", "control_is_the_stacked_winners", others == winners,
                        detail=None if others == winners else {"on": others, "winners": winners})
+            unknown = config.get("unknown_switch_env") or []
+            checks.add("A2", "no_unrecognized_switch_variable", not unknown, "missing",
+                       {"variables": unknown} if unknown else None)
         else:
             checks.add("6.1", "other_switches_off", not others, detail={"on": others} if others else None)
     # Boundary API checks: the settings at each boundary, imports and pauses since the start.
@@ -733,6 +737,7 @@ def lookup_cost_pair(checks, window, switches, preset):
             over.append(round(a["e"] - window[0]["e"]))
     out = {"on": all(switches.get(s) for s in collect.TREATMENT_SWITCHES["lc"]),
            "ended_on_values": led["ended_on_values"], "max_slots_occupied": max(occupied, default=None),
+           "slots_capacity": get(window[-1]["snap"], LEDGER["cap"]),
            "peak_queries_per_second": peak, "preset_queries_per_second": rate,
            "intervals_over_rate": len(over)}
     if out["on"]:

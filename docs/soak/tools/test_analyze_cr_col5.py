@@ -57,10 +57,10 @@ class LedgerSim(cr.Sim):
                            if x.startswith(f"lodestar_{n} ")), x) for x in lines]
             out += [f"# HELP lodestar_{L['ended']} Lookups ended, by reason.", f"# TYPE lodestar_{L['ended']} counter",
                     f'lodestar_{L["ended"]}{{reason="mystery"}} 4', 'lodestar_dht_peer_bytes{ip="192.0.2.1"} 5']
-        for reason, n in (("values", values), ("closest", ended - values)):
+        for reason, n in ((collect.LEDGER_VALUE_REASONS[0], values), ("no_values", ended - values)):
             out.append(f'lodestar_{L["ended"]}{{reason="{reason}"}} {n}')
             out.append(f'lodestar_{L["residence"]}{{reason="{reason}"}} {n * self.residence:.3f}')
-        out.append(f'lodestar_{L["queries"]}{{purpose="peer_lookup"}} {math.floor(ended * self.queries)}')
+        out.append(f'lodestar_{L["queries"]}{{purpose="{collect.LEDGER_PEER_PURPOSE}"}} {math.floor(ended * self.queries)}')
         out.append(f'lodestar_{L["queries"]}{{purpose="sample"}} {math.floor(e * 5)}')
         out.append(f"lodestar_dht_queries_out_total {math.floor(e * self.qps)}")
         occupied = self.occupied(e) if callable(self.occupied) else self.occupied
@@ -199,6 +199,23 @@ class StackTests(Base):
         detail = next(c["detail"] for c in report["checks"] if c["check"] == "control_is_the_stacked_winners")
         self.assertEqual(detail, {"on": ["coordinated_admission", "utp"], "winners": ["coordinated_admission"]})
 
+    def test_winners_out_of_switch_order_are_still_the_control(self):
+        winners = ("utp", "route_backoff")  # SWITCH_ENV order, not alphabetical
+        report = self.run_sim(LedgerSim(winners=winners), winners=list(winners))
+        self.assertValid(report)
+        self.assertEqual(report["winners"], ["route_backoff", "utp"])
+
+    def test_an_unrecognized_switch_variable_is_missing_identity(self):
+        env = {"LODESTAR_DHT_UTP": "true", "LODESTAR_DHT_PORT": "6881", "LODESTAR_DHT_LOOKUP_ENDS": "true"}
+        config = collect.config_identity(env)
+        self.assertEqual(config["unknown_switch_env"], ["LODESTAR_DHT_LOOKUP_ENDS"])
+        self.assertNotIn("unknown_switch_env", collect.config_identity({"LODESTAR_DHT_PORT": "6881"}))
+        sim = LedgerSim()
+        sim.config_extra = {"unknown_switch_env": ["LODESTAR_DHT_LOOKUP_ENDS"]}
+        report = self.run_sim(sim)
+        self.assertEqual(report["verdict"], "invalid")
+        self.assertIn("no_unrecognized_switch_variable", self.failed(report))
+
     def test_half_a_pair_is_invalid(self):
         sim = LedgerSim()
         sim.switches["preset_slots"] = False
@@ -256,6 +273,14 @@ class LookupCostPairTests(Base):
         sim.qps = 205.0  # within the 5 % share pings to queriers spend
         self.assertValid(self.run_sim(sim))
 
+    def test_an_unreadable_rate_interval_counts_as_over(self):
+        sim = LedgerSim()
+        sim.edits.append((lambda e, i: 1500 <= e < 1560, lambda row, lines: lines.__setitem__(
+            slice(None), [x for x in lines if not x.startswith("lodestar_dht_queries_out_total ")])))
+        report = self.run_sim(sim)
+        self.assertIn("query_rate_within_preset", self.failed(report))
+        self.assertEqual(report["mechanism"]["lookup_cost_pair"]["slots_capacity"], 64)
+
     def test_absent_ledger_series_are_missing_evidence_not_a_crash(self):
         sim = LedgerSim()
         sim.ledger = False
@@ -299,8 +324,8 @@ class LedgerTests(Base):
     def test_sanitizer_keeps_ledger_series_and_histogram_edges(self):
         text = "\n".join([
             f'lodestar_{L["first_values"]}_bucket{{le="0.5"}} 3', f'lodestar_{L["first_values"]}_bucket{{le="+Inf"}} 9',
-            f'lodestar_{L["first_values"]}_bucket{{le="1.2.3.4"}} 1', f'lodestar_{L["values"]}_count 4',
-            f'lodestar_{L["hints"]}{{outcome="guarded"}} 2', f'lodestar_{L["queries"]}{{purpose="ping"}} 7',
+            f'lodestar_{L["first_values"]}_bucket{{le="1.2.3.4"}} 1', f'lodestar_{L["first_values"]}_bucket{{le="3"}} 1', f'lodestar_{L["values"]}_count 4',
+            f'lodestar_{L["hints"]}{{outcome="guard_skipped"}} 2', f'lodestar_{L["queries"]}{{purpose="ping"}} 7',
             f'lodestar_{L["queries"]}{{purpose="ping",peer="x"}} 7', "lodestar_dht_peer_lookup_seconds_total 2.500"])
         kept = collect.sanitize_snapshot(text).splitlines()
         self.assertEqual(len(kept), 6)
@@ -312,7 +337,7 @@ class LedgerTests(Base):
 # ----------------------------------------------------------------- blocks and the effect
 def lc_seg(arm, net, start, winners=("coordinated_admission",), given=None, w=6.0):
     s = cr.seg(arm, net, start, others={k: True for k in winners})
-    s["identity"]["switches"].update(utp=False, lookup_end=arm == "B", preset_slots=arm == "B")
+    s["identity"]["switches"].update(utp="utp" in winners, lookup_end=arm == "B", preset_slots=arm == "B")
     s.update(treatment="lc", winners=sorted(winners if given is None else given))
     s["ledger"] = {"window": {"W_seconds": w if arm == "A" else w / 3, "q": 40.0 if arm == "A" else 12.0, "y": 0.16}}
     return s
@@ -345,7 +370,7 @@ class StackedEffectTests(unittest.TestCase):
         out = analyze_cr.analyze_effect("lc", blocks, ["coordinated_admission", "utp"])
         self.assertIn("segment_judged_with_other_winners", out["blocks"][1]["problems"])
 
-    def test_control_set_differing_between_blocks_is_invalid(self):
+    def test_a_block_run_without_the_winners_is_not_the_stacked_winners(self):
         blocks = [lc_block("ABBA", self.WIN[0]), lc_block("BAAB", self.WIN[1], start=12, winners=(), given=[])]
         with self.assertRaisesRegex(ValueError, "give --winners"):
             analyze_cr.analyze_effect("lc", blocks)
@@ -354,6 +379,13 @@ class StackedEffectTests(unittest.TestCase):
         out = analyze_cr.analyze_effect("lc", blocks, ["coordinated_admission"])
         self.assertIn("control_not_the_stacked_winners", out["blocks"][1]["problems"])
         self.assertEqual(out["outcome"], "not_decidable")
+
+    def test_winners_out_of_switch_order_through_effect(self):
+        w = ("utp", "route_backoff")
+        out = analyze_cr.analyze_effect("lc", [lc_block("ABBA", self.WIN[0], winners=w),
+                                               lc_block("BAAB", self.WIN[1], start=12, winners=w)], list(w))
+        self.assertEqual(out["outcome"], "win")
+        self.assertEqual(out["control_switches"], ["route_backoff", "safe_restart", "utp"])
 
     def test_half_a_pair_splits_the_block(self):
         block = lc_block("ABBA", self.WIN[0])

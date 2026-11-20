@@ -150,33 +150,24 @@ PLAIN = frozenset((
     "dht_routing_nodes", "dht_routing_good_nodes",
 ))
 
-
-class Matching:
-    """A label-value set given by a pattern, for histogram edges whose values aren't fixed here."""
-
-    def __init__(self, pattern):
-        self.pattern = re.compile(pattern)
-
-    def __contains__(self, value):
-        return isinstance(value, str) and bool(self.pattern.fullmatch(value))
-
-
-_LE = (("le", Matching(r"[0-9]{1,6}(?:\.[0-9]{1,3})?|\+Inf")),)
-# CR-COL-5: CR-LEDGER's lookup ledger (build-plan §0.5 "Path to 100"), from which the
-# analyzer reads W, q and y and r5.1 A1's mechanism check.
-# PLACEHOLDER: these names and label values are CR-COL-5's stand-ins until CR-LEDGER fixes
-# its own; the runner relays them, and they are replaced here before the PR merges.
-LEDGER_END_REASONS = frozenset(("values", "closest", "deadline", "query_cap", "cancelled", "shutdown"))
+# CR-COL-5: CR-LEDGER's lookup ledger (build-plan §0.5 "Path to 100"; docs/metrics.md,
+# "Lookup ledger (CR-LEDGER, 2026-11-20)"), from which the analyzer reads W, q and y and
+# r5.1 A1's mechanism check. Names relayed by the runner, 2026-11-20.
+LEDGER_END_REASONS = frozenset(("values", "no_values", "deadline", "query_cap", "cancelled", "shutdown"))
 LEDGER_VALUE_REASONS = ("values",)  # the reasons that mean "the lookup ended on values"
-LEDGER_PURPOSES = frozenset(("peer_lookup", "maintenance", "sample", "hint", "announce", "ping"))
+# They sum to dht_queries_out_total.
+LEDGER_PURPOSES = frozenset(("peer_lookup", "hint", "scrape", "bootstrap", "refresh", "explore", "sample", "ping"))
 LEDGER_PEER_PURPOSE = "peer_lookup"
+LEDGER_HINT_OUTCOMES = frozenset(("values", "no_values", "unanswered", "guard_skipped"))
+LEDGER_FIRST_VALUES_EDGES = frozenset(("0.5", "1", "2", "4", "8", "12", "16", "20", "25", "+Inf"))
+LEDGER_VALUES_EDGES = frozenset(("0", "1", "2", "4", "8", "16", "32", "64", "+Inf"))
 LEDGER = {
     "residence": "dht_lookup_residence_seconds_total",   # {reason}: slot-seconds by end reason
-    "ended": "dht_lookups_ended_total",                  # {reason}: lookups ended
+    "ended": "dht_lookup_ended_total",                   # {reason}: one per started peer request
     "queries": "dht_queries_sent_total",                 # {purpose}: DHT queries sent
-    "occupied": "dht_lookup_slots_occupied",             # gauge: slots held now
-    "cap": "dht_lookup_slots_cap",                       # gauge: the configured slot count
-    "no_values": "dht_lookups_without_values_total",
+    "occupied": "dht_lookup_slots_occupied",             # gauge: active plus queued requests
+    "cap": "dht_lookup_slots_capacity",                  # gauge: the configured slot count
+    "no_values": "dht_lookup_without_values_total",
     "first_values": "dht_lookup_first_values_seconds",   # histogram
     "values": "dht_lookup_values",                       # histogram
     "hints": "dht_hint_outcomes_total",                  # {outcome}
@@ -185,9 +176,9 @@ LABELLED.update({
     LEDGER["residence"]: (("reason", LEDGER_END_REASONS),),
     LEDGER["ended"]: (("reason", LEDGER_END_REASONS),),
     LEDGER["queries"]: (("purpose", LEDGER_PURPOSES),),
-    LEDGER["first_values"] + "_bucket": _LE,
-    LEDGER["values"] + "_bucket": _LE,
-    LEDGER["hints"]: (("outcome", frozenset(("values", "no_values", "unanswered", "guarded"))),),
+    LEDGER["first_values"] + "_bucket": (("le", LEDGER_FIRST_VALUES_EDGES),),
+    LEDGER["values"] + "_bucket": (("le", LEDGER_VALUES_EDGES),),
+    LEDGER["hints"]: (("outcome", LEDGER_HINT_OUTCOMES),),
 })
 PLAIN = PLAIN | frozenset((
     LEDGER["occupied"], LEDGER["cap"], LEDGER["no_values"],
@@ -1132,11 +1123,16 @@ SWITCH_ENV = {
     "target_prefixes": "LODESTAR_DHT_TARGET_PREFIXES",
     "utp": "LODESTAR_DHT_UTP",
     "route_backoff": "LODESTAR_DHT_ROUTE_BACKOFF",
-    # PLACEHOLDER names (CR-COL-5) until CR-LOOKUP-END and CR-1c fix theirs: dht.lookup_end
-    # and CR-1c's preset-sized slots.
+    # r5's switches (names fixed by the runner, 2026-11-20): CR-LOOKUP-END, CR-1c,
+    # CR-HINT-FIRST and X-sampler-cooldown-split.
     "lookup_end": "LODESTAR_DHT_LOOKUP_END",
     "preset_slots": "LODESTAR_DHT_PRESET_SLOTS",
+    "hint_first": "LODESTAR_DHT_HINT_FIRST",
+    "sampler_cooldown_split": "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT",
 }
+# LODESTAR_DHT_* variables that aren't switches. Any other is reported by name (never its
+# value), so a switch this list doesn't know isn't silently read as off.
+DHT_SETTING_ENV = frozenset(("LODESTAR_DHT_PORT", "LODESTAR_DHT_ENABLED", "LODESTAR_DHT_WITNESS_DIR"))
 PRESETS = ("low", "balanced", "aggressive")
 CHECKLIST_ITEMS = ("auto_update", "backup")
 CHECKLIST_STATES = ("excluded", "not_applicable")
@@ -1185,6 +1181,9 @@ def config_identity(env, mounts=None):
         else:
             switches[name], sources[name] = False, "default"
     preset = env.get("LODESTAR_INTENSITY")
+    known = set(SWITCH_ENV.values()) | DHT_SETTING_ENV
+    unknown = sorted(v for v in env if v.startswith("LODESTAR_DHT_") and v not in known
+                     and re.fullmatch(r"[A-Z0-9_]{1,64}", v))
     out = {"switches": switches, "switch_sources": sources,
            "env_preset": preset if preset in PRESETS else (None if preset is not None else "unset")}
     witness, data = env.get("LODESTAR_DHT_WITNESS_DIR") or None, env.get("LODESTAR_DATA_DIR") or None
@@ -1204,6 +1203,8 @@ def config_identity(env, mounts=None):
         info["outside_data_dir"] = data is not None and not (
             witness == data or witness.startswith(data.rstrip("/") + "/"))
     out["witness"] = info
+    if unknown:  # absent when empty, so a stage-1 run.json is unchanged
+        out["unknown_switch_env"] = unknown
     return out
 
 
