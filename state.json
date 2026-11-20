@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T11:13Z",
+  "updated_at": "2026-11-20T12:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-20T11:13Z",
+  "last_heartbeat": "2026-11-20T12:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10503,7 +10503,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T11:13Z",
+    "updated": "2026-11-20T12:38Z",
     "items": [
       {
         "slot": 1,
@@ -10512,7 +10512,7 @@
         "agent": "session_01MMjhnATTvyFiLGcTacVqve",
         "model": "opus",
         "since": "2026-11-20T11:13Z",
-        "doing": "Windows: refuse unusable data folder with Event Log entry",
+        "doing": "#983 open 9827e7ba; CI running (first Windows compile)",
         "status": "active"
       },
       {
@@ -10522,7 +10522,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T08:45Z",
-        "doing": "bring main in after #977, open PR",
+        "doing": "#981 MERGE (full + delta) at 0e33f272; awaiting ci-ok",
         "status": "active"
       },
       {
@@ -10532,7 +10532,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T11:03Z",
-        "doing": "root-cause Windows logging history flake",
+        "doing": "#982 MERGE at 6557edf2; awaiting ci-ok",
         "status": "active"
       },
       {
@@ -10542,7 +10542,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T10:12Z",
-        "doing": "PR #980 open, CI running",
+        "doing": "#980 review CHANGES relayed (tests for rotation+stuck reset; 2-pass corrupt before delete); fix round",
         "status": "active"
       }
     ],
@@ -10634,7 +10634,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-20T11:13Z",
+  "heartbeat": "2026-11-20T12:38Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
