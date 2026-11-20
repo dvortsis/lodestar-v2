@@ -102,7 +102,6 @@
                   "aws:RequestTag/Environment": "Test",
                   "aws:RequestTag/ManagedBy": "Terraform",
                   "aws:RequestTag/Purpose": "X-test-vm",
-                  "ec2:MetadataHttpProtocolIpv6": "disabled",
                   "ec2:Tenancy": "default",
                   "aws:RequestTag/LaunchedBy": "${aws:userid}"
                 },

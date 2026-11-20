@@ -46,7 +46,7 @@ EXPECTED = {
                 "ec2:InstanceType": "c6a.xlarge", "ec2:MetadataHttpTokens": "required",
                 "aws:RequestTag/Project": "Lodestar", "aws:RequestTag/Environment": "Test",
                 "aws:RequestTag/ManagedBy": "Terraform", "aws:RequestTag/Purpose": "X-test-vm",
-                "ec2:MetadataHttpProtocolIpv6": "disabled", "ec2:Tenancy": "default",
+                "ec2:Tenancy": "default",
                 "aws:RequestTag/LaunchedBy": "${aws:userid}"},
             "NumericLessThanEquals": {"ec2:MetadataHttpPutResponseHopLimit": "1"},
             "Null": {"aws:RequestTag/ExpiresAt": "false"},
@@ -139,6 +139,24 @@ class PolicyTests(unittest.TestCase):
             if r["Type"] in ("AWS::IAM::Role", "AWS::IAM::ManagedPolicy"):
                 self.assertLessEqual(len(r["Properties"].get("Description", "")), 1000, name)
 
+    def test_every_condition_key_exists(self):
+        # A condition on a key a service never sets is false, so an Allow
+        # with one silently allows nothing. Keys checked against the Service
+        # Authorization Reference (EC2, SSM, IAM) and the global keys, 2026-11-20Z.
+        known = {"aws:RequestTag/", "aws:TagKeys", "aws:RequestedRegion", "ec2:CreateAction",
+                 "ec2:Encrypted", "ec2:InstanceType", "ec2:MetadataHttpPutResponseHopLimit",
+                 "ec2:MetadataHttpTokens", "ec2:Owner", "ec2:ResourceTag/", "ec2:Subnet",
+                 "ec2:Tenancy", "ec2:VolumeSize", "iam:PassedToService", "ssm:resourceTag/"}
+        t = json.loads(TEMPLATE.read_text())
+        docs = [r["Properties"]["PolicyDocument"] for r in t["Resources"].values()
+                if "PolicyDocument" in r["Properties"]]
+        docs += [p["PolicyDocument"] for r in t["Resources"].values() for p in r["Properties"].get("Policies", [])]
+        for doc in docs:
+            for st in doc["Statement"]:
+                for keys in st.get("Condition", {}).values():
+                    for k in keys:
+                        self.assertTrue(k in known or k.split("/")[0] + "/" in known, (st.get("Sid"), k))
+
     def test_no_wildcard_writes(self):
         _, _, sts = statements()
         for st in sts:
@@ -163,7 +181,9 @@ class PolicyTests(unittest.TestCase):
         eq = inst["Condition"]["StringEquals"]
         self.assertEqual(eq["ec2:InstanceType"], "c6a.xlarge")
         self.assertEqual(eq["ec2:MetadataHttpTokens"], "required")
-        self.assertEqual(eq["ec2:MetadataHttpProtocolIpv6"], "disabled")
+        # IAM has no key for the IMDS IPv6 endpoint; one on an absent key never
+        # matches, which refused every launch (2026-11-20Z).
+        self.assertNotIn("ec2:MetadataHttpProtocolIpv6", eq)
         # Bridged containers are kept from the role only by the hop limit.
         self.assertEqual(inst["Condition"]["NumericLessThanEquals"], {"ec2:MetadataHttpPutResponseHopLimit": "1"})
         for k, v in {"Project": "Lodestar", "Environment": "Test", "ManagedBy": "Terraform",

@@ -24,7 +24,7 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - the image from `ssm:GetParameter` `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`;
    - `c6a.xlarge` (4 vCPU, 8 GiB);
    - `IamInstanceProfile={Name: lodestar-claude-testvm-linux}`;
-   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}`, so containers can't reach the metadata service (the policy requires all three);
+   - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}`, so containers can't reach the metadata service (the policy requires the first two; IAM has no condition key for the IPv6 endpoint, so the third is a rule for the sessions);
    - `/dev/sda1` with `VolumeSize=100`, `VolumeType=gp3`, `Encrypted=true`. A block with `ROLE=main` needs 50 GiB free for its collector after the image build, and the test user can't grow a volume later (`ec2:ModifyVolume` is denied);
    - the network interface with a public IPv4, exactly as `windows.md` Phase 2 step 2 says (the subnet has no NAT; the security group allows no inbound traffic);
    - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume. The policy lets Claude stop, delete or run commands only on instances tagged `Purpose=X-test-vm` whose `LaunchedBy` is its own `UserId`, so the owner's own fleet instances, which share the other tags, stay out of reach;
