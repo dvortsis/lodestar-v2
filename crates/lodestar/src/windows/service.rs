@@ -168,6 +168,10 @@ pub fn load_checked(
     env: impl Fn(&str) -> Option<String>,
     secure: impl FnOnce() -> Result<(), String>,
 ) -> Checked {
+    // LODESTAR_DATA_DIR naming the service's folder, or a folder inside
+    // it, is what led there.
+    let by_env = env("LODESTAR_DATA_DIR")
+        .is_some_and(|d| Path::new(&d).is_absolute() && within(Path::new(&d), default_dir));
     let found = std::cell::Cell::new(None);
     let checked = || match unusable(default_dir, false) {
         Some(problem) => {
@@ -179,7 +183,12 @@ pub fn load_checked(
     let (config, data_dir, file) =
         load_paths(default_dir, explicit, env, checked).map_err(|(r, why)| match found.take() {
             Some((problem, detail)) => {
-                unusable_refusal(Setting::Default, default_dir, problem, &detail, None)
+                let setting = if by_env {
+                    Setting::Env
+                } else {
+                    Setting::Default
+                };
+                unusable_refusal(setting, default_dir, problem, &detail, None)
             }
             None => (r, why, default_dir.to_path_buf()),
         })?;
@@ -495,8 +504,12 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
         Ok(_) => std::fs::read_dir(dir)
             .err()
             .map(|e| (Problem::Unreadable, e.to_string())),
-        Err(e) if !matches!(e.kind(), NotFound | NotADirectory) => {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             Some((Problem::Unreadable, e.to_string()))
+        }
+        // An invalid name or an unreachable network path, say.
+        Err(e) if !matches!(e.kind(), NotFound | NotADirectory) => {
+            Some((Problem::Uncreatable, e.to_string()))
         }
         Err(_) => {
             for (i, up) in dir.ancestors().enumerate().skip(1) {
@@ -588,10 +601,10 @@ impl Refusal {
 /// refuses to start, or waits for a rollback. Every local user can read
 /// that log, and the Legal Notice (section 5) allows only what happened,
 /// how to fix it, and folder paths. So this is a fixed sentence, the
-/// folder `dir`, and for [`Refusal::Unusable`] the setting's name alone: never [`super::acl`]'s own reason, which names
-/// accounts and SIDs, nor anything else from the config. The full reason,
-/// with the exact command, goes to `%SystemRoot%\Temp\lodestar-service.log`
-/// only.
+/// folder `dir`, and for [`Refusal::Unusable`] the setting's name alone:
+/// never [`super::acl`]'s own reason, which names accounts and SIDs, nor
+/// anything else from the config. The full reason, with the exact command,
+/// goes to `%SystemRoot%\Temp\lodestar-service.log` only.
 pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
     // One line, no control or invisible characters: a folder name can't
     // forge a second message.
@@ -1504,8 +1517,8 @@ mod scm {
     /// The config and the data folder, with `%ProgramData%\Lodestar` made
     /// private ([`acl`]) before anything in it is read, whenever it's used
     /// ([`super::load_checked`]). An error is the Event Log's refusal, the
-    /// full reason and the folder to name. The third part is the restart witness folder when it can't
-    /// be used, and why.
+    /// full reason and the folder to name. The third part is the restart
+    /// witness folder when it can't be used, and why.
     #[allow(clippy::type_complexity)]
     fn load(
         own: Option<&str>,
@@ -2073,15 +2086,28 @@ mod tests {
         panic!("the ACL step ran")
     }
 
+    /// A temp folder and its real path, with no link on the way (macOS's
+    /// `/var` is one), which the checks would rightly skip.
+    fn real_root() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        // Windows' temp folder has none, and icacls takes no \\?\ path.
+        let real = if cfg!(windows) {
+            root.path().to_path_buf()
+        } else {
+            root.path().canonicalize().unwrap()
+        };
+        (root, real)
+    }
+
     /// X-win-data-dir-unusable-log: a data folder that is a file is refused
     /// with its own Event Log entry, whichever setting chose it, and the
     /// service's own folder before the ACL step.
     #[test]
     fn the_service_refuses_a_data_folder_that_is_a_file() {
-        let root = tempfile::tempdir().unwrap();
-        let svc = root.path().join("ProgramData").join("Lodestar");
+        let (_root, root) = real_root();
+        let svc = root.join("ProgramData").join("Lodestar");
         std::fs::create_dir_all(&svc).unwrap();
-        let file = root.path().join("data.txt");
+        let file = root.join("data.txt");
         std::fs::write(&file, "").unwrap();
 
         let why = unusable_as(
@@ -2097,7 +2123,7 @@ mod tests {
             Err((Refusal::Unusable(Setting::Env, Problem::File), _))
         ));
 
-        let config = root.path().join("service.toml");
+        let config = root.join("service.toml");
         std::fs::write(
             &config,
             format!("data_dir = {:?}\n", file.to_string_lossy()),
@@ -2128,11 +2154,11 @@ mod tests {
     /// is refused; one that can is created before anything uses it.
     #[test]
     fn the_service_refuses_a_data_folder_it_cant_create() {
-        let root = tempfile::tempdir().unwrap();
-        let program_data = root.path().join("ProgramData");
+        let (_root, root) = real_root();
+        let program_data = root.join("ProgramData");
         let svc = program_data.join("Lodestar");
         std::fs::create_dir_all(&svc).unwrap();
-        let file = root.path().join("data.txt");
+        let file = root.join("data.txt");
         std::fs::write(&file, "").unwrap();
         let under_file = file.join("Lodestar");
 
@@ -2145,7 +2171,7 @@ mod tests {
         assert!(why.contains("is a file"), "{why}");
 
         // A missing folder is created, and nests.
-        let fresh = root.path().join("D").join("Lodestar");
+        let fresh = root.join("D").join("Lodestar");
         let (c, d) = load_checked(&svc, None, env_data(&fresh), unasked).unwrap();
         assert_eq!((c.unwrap().data_dir, &d), (fresh.clone(), &fresh));
         assert!(fresh.is_dir());
@@ -2175,46 +2201,54 @@ mod tests {
         );
     }
 
-    /// Makes `dir` unlistable for this process; `false` where it can't
-    /// (root on Unix ignores permissions).
+    /// Makes `dir` unlistable for this process, or listable again; `false`
+    /// where that didn't take (root on Unix ignores permissions). Never
+    /// panics, so [`Locked`] can call it while unwinding.
     fn deny_listing(dir: &Path, deny: bool) -> bool {
         #[cfg(unix)]
-        {
+        let set = {
             use std::os::unix::fs::PermissionsExt;
             let mode = if deny { 0o000 } else { 0o755 };
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
-        }
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).is_ok()
+        };
         #[cfg(windows)]
-        {
+        let set = {
             // Everyone denied listing; removed again with /remove:d.
             let how: &[&str] = if deny {
                 &["/deny", "*S-1-1-0:(RD)"]
             } else {
                 &["/remove:d", "*S-1-1-0"]
             };
-            let ok = std::process::Command::new("icacls")
+            std::process::Command::new("icacls")
                 .arg(dir)
                 .args(how)
                 .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "icacls {how:?}");
+                .is_ok_and(|o| o.status.success())
+        };
+        set && std::fs::read_dir(dir).is_err() == deny
+    }
+
+    /// Makes its folder listable again when dropped, even after a failed assertion, so the
+    /// temp folder can be removed.
+    struct Locked<'a>(&'a Path);
+
+    impl Drop for Locked<'_> {
+        fn drop(&mut self) {
+            deny_listing(self.0, false);
         }
-        std::fs::read_dir(dir).is_err() == deny
     }
 
     /// A data folder the service's account can't list is refused, naming
     /// it, and the service's own folder before the ACL step.
     #[test]
     fn the_service_refuses_a_data_folder_it_cant_read() {
-        let root = tempfile::tempdir().unwrap();
-        let svc = root.path().join("ProgramData").join("Lodestar");
+        let (_root, root) = real_root();
+        let svc = root.join("ProgramData").join("Lodestar");
         std::fs::create_dir_all(&svc).unwrap();
-        let locked = root.path().join("locked");
+        let locked = root.join("locked");
         std::fs::create_dir_all(&locked).unwrap();
+        let _locked = Locked(&locked);
         if !deny_listing(&locked, true) {
-            assert!(deny_listing(&locked, false));
             eprintln!("skipped: permissions don't apply to this account");
             return;
         }
@@ -2224,6 +2258,7 @@ mod tests {
             Problem::Unreadable,
             &locked,
         );
+        let _svc_locked = Locked(&svc);
         assert!(deny_listing(&svc, true));
         let default = unusable_as(
             load_checked(&svc, None, |_| None, unasked),
@@ -2231,7 +2266,8 @@ mod tests {
             Problem::Unreadable,
             &svc,
         );
-        assert!(deny_listing(&locked, false) && deny_listing(&svc, false));
+        assert!(deny_listing(&locked, false));
+        assert!(deny_listing(&svc, false));
         assert!(env.contains("full control"), "{env}");
         assert!(default.contains("Repair"), "{default}");
     }
@@ -2241,17 +2277,17 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_link_is_never_followed_or_created_through() {
-        let root = tempfile::tempdir().unwrap();
-        let svc = root.path().join("ProgramData").join("Lodestar");
+        let (_root, root) = real_root();
+        let svc = root.join("ProgramData").join("Lodestar");
         std::fs::create_dir_all(&svc).unwrap();
-        let file = root.path().join("data.txt");
+        let file = root.join("data.txt");
         std::fs::write(&file, "").unwrap();
-        let to_file = root.path().join("to-file");
+        let to_file = root.join("to-file");
         std::os::unix::fs::symlink(&file, &to_file).unwrap();
         assert!(load_checked(&svc, None, env_data(&to_file), unasked).is_ok());
-        let real = root.path().join("real");
+        let real = root.join("real");
         std::fs::create_dir_all(&real).unwrap();
-        let to_dir = root.path().join("to-dir");
+        let to_dir = root.join("to-dir");
         std::os::unix::fs::symlink(&real, &to_dir).unwrap();
         let through = to_dir.join("a").join("Lodestar");
         assert!(load_checked(&svc, None, env_data(&through), unasked).is_ok());
