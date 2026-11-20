@@ -8939,6 +8939,14 @@
     {
       "id": "X-test-vm-fix",
       "notes": "2026-11-20T06:48Z #864 fresh Opus + security review on 51f8d9f2: CHANGES (2 blocking, 7 important; surface: test-VM IAM template, SSH helper, docs). Detail held locally; send by message only. Coordinator did its last round, so a runner follow-up slice on a NEW branch from 51f8d9f2 carries the fixes and supersedes #864. Next free build slot, Opus, /security-review. Owner FYI: the deployed stack may predate these tightenings."
+    },
+    {
+      "id": "lettre-advisories",
+      "notes": "2026-11-20T07:40Z RustSec red on main since 07:00Z: lettre 0.11.23 hit by RUSTSEC-2026-0560..0565. Runner bumped to 0.11.24 (pin, fuzz lock, rust.json, architecture.md) in #971 head 730a31c1; main goes green when #971 lands. PRs touching Cargo.lock stay red on RustSec until then (not theirs, \u00a72.18)."
+    },
+    {
+      "id": "GS-3-r1",
+      "notes": "2026-11-20T07:40Z #973 review at f7f36845: CHANGES relayed (B1 exact-count double budget; I1 members() unbounded per group; I2 window_bound per chunk + cursor-page bench column; O1-O4)."
     }
   ],
   "main_health": [
@@ -10535,7 +10543,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T06:48Z",
+  "updated": "2026-11-20T07:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
