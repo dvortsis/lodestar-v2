@@ -157,6 +157,22 @@ mod tests {
         assert!(!vals.insert(net(2), v(2, 200)));
     }
 
+    /// At an even share (within one), no value moves between sources.
+    #[test]
+    fn an_even_share_is_stable() {
+        let mut vals = Values::default();
+        fill(&mut vals, 1, 22);
+        fill(&mut vals, 2, 21);
+        fill(&mut vals, 3, 21);
+        assert_eq!(vals.len(), MAX_VALUES);
+        assert!(!vals.insert(net(2), v(2, 100)));
+        assert!(!vals.insert(net(3), v(3, 100)));
+        assert_eq!(
+            (vals.held(net(1)), vals.held(net(2)), vals.held(net(3))),
+            (22, 21, 21)
+        );
+    }
+
     #[test]
     fn a_value_is_held_once() {
         let mut vals = Values::default();
@@ -186,6 +202,7 @@ mod tests {
             let mut vals = Values::default();
             for (s, i) in offers {
                 let before: Vec<usize> = (0..6).map(|n| vals.held(net(n))).collect();
+                let mine = before[usize::from(s)];
                 vals.insert(net(s), v(s % 3, i));
                 proptest::prop_assert!(vals.len() <= MAX_VALUES);
                 proptest::prop_assert_eq!(vals.len(), vals.iter().count());
@@ -198,6 +215,9 @@ mod tests {
                     let after = vals.held(net(n));
                     if after < was {
                         proptest::prop_assert_eq!(after + 1, was);
+                        // Only a source holding at least two more than
+                        // the inserting one gives a value up.
+                        proptest::prop_assert!(was >= mine + 2);
                         proptest::prop_assert!(after >= MAX_VALUES / 6);
                     }
                 }
