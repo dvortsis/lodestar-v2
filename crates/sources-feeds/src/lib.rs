@@ -20,6 +20,7 @@ pub mod predb;
 pub mod rss;
 pub mod srrdb;
 pub mod stashdb;
+pub mod steam;
 pub mod tmdb;
 pub mod torznab;
 pub mod tpdb;

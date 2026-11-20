@@ -657,6 +657,7 @@ placement:
   - /^ENR-[a-z]+$/
   - ENR-terms-api
   - X-snapshot-claims-retention
+  - X-snapshot-followups-2
 - ws: ws-m7-w5
   match:
   - ENR-11

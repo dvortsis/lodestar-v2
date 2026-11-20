@@ -976,6 +976,12 @@ mod spec_tests {
                 *AdultEnricher::policy(&stashdb::StashDb::new(creds())),
             ),
             (
+                lodestar_sources_plugins::steam::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::steam::Steam::new(creds()),
+                ),
+            ),
+            (
                 tmdb::ID,
                 *lodestar_sources::identify::Identifier::policy(&tmdb::Tmdb::new(creds())),
             ),
@@ -1075,6 +1081,8 @@ mod spec_tests {
                     { "kind": "secret", "label": "Twitch Client ID", "name": "client_id", "required": true },
                     { "kind": "secret", "label": "Twitch Client secret", "name": "client_secret", "required": true }
                 ])
+            } else if id == lodestar_sources_plugins::steam::ID {
+                json!([{ "kind": "secret", "label": "Steam Web API key", "name": "api_key", "required": true }])
             } else {
                 json!([])
             };

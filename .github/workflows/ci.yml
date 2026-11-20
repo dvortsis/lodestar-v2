@@ -564,6 +564,10 @@ jobs:
         run: |
           python infra/aws/fleet-control/build_templates.py --check
           python -m unittest discover -s infra/aws/fleet-control -p 'test_*.py' -v
+      # The test-VM tooling (X-test-vm): the IAM template's guard rails and
+      # CloudFormation's limits, the Linux bootstrap and devvm.py. No cloud call.
+      - name: Test-VM tooling tests
+        run: python -m unittest discover -s infra/dev-vm/tests -p 'test_*.py' -v
       # Each template inlines its index.py; the committed JSON must be exactly
       # what build_template.py produces from the committed source.
       - name: Templates match their Lambda source

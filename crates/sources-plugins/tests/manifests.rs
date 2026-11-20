@@ -101,6 +101,10 @@ fn each_entry_is_its_plugins_own_manifest() {
         .clone(),
         AdultEnricher::manifest(&stashdb).clone(),
         lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::steam::Steam::new(creds()),
+        )
+        .clone(),
+        lodestar_sources::identify::Identifier::manifest(
             &lodestar_sources_plugins::tmdb::Tmdb::new(creds()),
         )
         .clone(),

@@ -36,6 +36,7 @@ pub mod predb;
 pub mod prowlarr;
 pub mod srrdb;
 pub mod stashdb;
+pub mod steam;
 pub mod tmdb;
 pub mod torrent_cache;
 pub mod tpdb;
