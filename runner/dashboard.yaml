@@ -380,6 +380,7 @@ placement:
   - X-log-url-redact-5
   - X-flake-boot-shell
   - X-flake-subs-stall
+  - X-flake-log-history-win
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
