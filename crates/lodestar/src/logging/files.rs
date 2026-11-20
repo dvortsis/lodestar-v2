@@ -218,7 +218,8 @@ fn scan(dir: &Path) -> io::Result<Vec<Listed>> {
 
 /// The first readable line's time (at most 64 KiB read, decompressed).
 pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
-    let mut f = open_regular(&name.path(dir)).ok()?;
+    // As history opens it: a rotated `.jsonl` being compressed is its `.gz`.
+    let (name, mut f) = open_listed(dir, name).ok()?;
     let line = read::first_line(&mut f, name.gz()).ok()??;
     let v: Json = serde_json::from_slice(&line).ok()?;
     let ts = v.get("ts")?.as_str()?;
@@ -231,11 +232,12 @@ pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
 /// **Whatever the error on the `.jsonl`**, not only "not found": the
 /// compression renames the finished `.gz` into place first and deletes
 /// the `.jsonl` after, so while the `.jsonl` is being deleted its `.gz`
-/// is already whole. On Windows a file being deleted can stay in the
-/// folder, unopenable (access denied or delete pending), while any handle
-/// is open on it; reading only "not found" as "compressed since" skipped
-/// the rest of that file (X-flake-log-history-win). When the `.gz` can't
-/// be opened either, the `.jsonl`'s own error is returned.
+/// is already whole. On Windows an open of a file being deleted can fail
+/// with another error than "not found" (access denied while the deletion
+/// is pending, or a sharing violation from a scanner holding it); reading
+/// only "not found" as "compressed since" skipped the rest of that file
+/// (X-flake-log-history-win). When the `.gz` can't be opened either, the
+/// `.jsonl`'s own error is returned.
 pub fn open_listed(dir: &Path, name: &LogName) -> io::Result<(LogName, std::fs::File)> {
     match open_regular(&name.path(dir)) {
         Ok(f) => Ok((name.clone(), f)),
