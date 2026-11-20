@@ -790,7 +790,8 @@ These series measure lookup cost directly, instead of deriving it from other cou
 | `dht_lookup_without_values_total` | counter | — | Ended requests that never got a reply with values. |
 | `dht_lookup_values` | histogram | `le`: 0, 1, 2, 4, 8, 16, 32, 64, `+Inf` | Distinct peer values each ended request found across its legs. At most 64, as many as a final reply holds. |
 | `dht_hint_outcomes_total{outcome}` | counter | `outcome`: `values`, `no_values`, `unanswered`, `guard_skipped` | What each responder hint (CR-1a-H) came to. `values` and `no_values` mean the hinted `get_peers` was answered (an error reply counts as `no_values`). `unanswered` means it timed out, or its request ended first. `guard_skipped` means it wasn't sent because the per-IP guard refused it; that's also in `dht_hint_fallbacks_total` as `throttled` or `guard_full`. Stays 0 with `dht.responder_hints` off. |
-| `dht_lookup_slots_occupied` | gauge | — | Peer requests holding a slot now, running or queued (`dht_peer_active` + `dht_peer_queued`), as of the last maintenance tick. |
+| `dht_lookup_slots_occupied` | gauge | — | Occupied lookup slots: peer requests running now, each holding one slot. Never counts requests waiting in the queue (those are `dht_lookup_queued`). Set on each maintenance tick; equals `dht_peer_active`. |
+| `dht_lookup_queued` | gauge | — | Admitted peer requests waiting in the queue to start, as of the last maintenance tick. Equals `dht_peer_queued`. Running plus queued stays at most 32. |
 | `dht_lookup_slots_capacity` | gauge | — | The slots: 32, set at start. |
 
 **Identities.** Over any window:
@@ -802,7 +803,7 @@ These series measure lookup cost directly, instead of deriving it from other cou
 - **`W`** (seconds a lookup runs) = the sum of `rate(dht_lookup_residence_seconds_total)` ÷ `ended`. A slot is held for `W` plus the queue wait (up to one tick). Read it per `reason` too: a `W` held up by `deadline` and `query_cap` is a lookup that doesn't converge.
 - **`q`** (queries per lookup) = `rate(dht_queries_sent_total{purpose=~"peer_lookup|hint"})` ÷ `ended`. A harvest-only request spends `peer_lookup` queries too, but none runs in production.
 - **`y`** (stored per lookup) = `rate(metadata_new_verified_total)`, summed over origins, ÷ `ended`. Stored torrents from other sources count in the numerator too, so compare `y` only between arms with the same sources.
-- **`L`** (running lookups, on average) = the sum of `rate(dht_lookup_residence_seconds_total)`, by Little's law, over windows much longer than the 25 s deadline (residence is counted when a request ends). It doesn't depend on when a tick lands. `dht_lookup_slots_occupied` is sampled once a tick and also counts queued requests, so it reads a little above `L`. Compare both with `dht_lookup_slots_capacity`.
+- **`L`** (running lookups, on average) = the sum of `rate(dht_lookup_residence_seconds_total)`, by Little's law, over windows much longer than the 25 s deadline (residence is counted when a request ends). It doesn't depend on when a tick lands, while `dht_lookup_slots_occupied` is sampled once a tick. Compare both with `dht_lookup_slots_capacity`.
 
 `dht_peer_lookup_seconds_total` and `dht_peer_lookups_answered_total` are unchanged. They cover only requests answered to a waiting caller, so they're not the ledger's `ended`.
 

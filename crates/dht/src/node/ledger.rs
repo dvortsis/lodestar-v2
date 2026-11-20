@@ -223,8 +223,10 @@ pub struct Ledger {
     pub values: Histogram<{ VALUES_BUCKETS.len() }>,
     /// By [`HintOutcome`].
     pub hint_outcomes: [AtomicU64; HintOutcome::ALL.len()],
-    /// Gauges: requests holding a slot (running or queued), and the cap.
+    /// Gauges: running requests (each holds a lookup slot), requests
+    /// waiting in the queue to start, and the cap.
     pub slots_occupied: AtomicU64,
+    pub queued: AtomicU64,
     pub slots_capacity: AtomicU64,
 }
 
@@ -239,6 +241,7 @@ impl Default for Ledger {
             values: Histogram::new(&VALUES_BUCKETS),
             hint_outcomes: Default::default(),
             slots_occupied: AtomicU64::new(0),
+            queued: AtomicU64::new(0),
             slots_capacity: AtomicU64::new(0),
         }
     }
@@ -289,6 +292,7 @@ impl Ledger {
             values: self.values.snapshot(),
             hint_outcomes: std::array::from_fn(|i| g(&self.hint_outcomes[i])),
             slots_occupied: g(&self.slots_occupied),
+            queued: g(&self.queued),
             slots_capacity: g(&self.slots_capacity),
         }
     }
@@ -308,6 +312,7 @@ pub struct LedgerSnapshot {
     /// By [`HintOutcome::ALL`].
     pub hint_outcomes: [u64; HintOutcome::ALL.len()],
     pub slots_occupied: u64,
+    pub queued: u64,
     pub slots_capacity: u64,
 }
 

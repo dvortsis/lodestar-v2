@@ -501,3 +501,18 @@ async fn each_query_counts_under_its_own_purpose() {
     assert_eq!(ledger(&a).queries.iter().sum::<u64>(), 5);
     assert_identities(&a);
 }
+
+/// `slots_occupied` is running requests only; a queued one is `queued`.
+#[tokio::test(start_paused = true)]
+async fn occupied_slots_never_count_queued_requests() {
+    let (mut a, sockets) = fixture();
+    node(&mut a, 42, UNBOUND);
+    assert_eq!(ledger(&a).slots_capacity, 32, "set at start");
+    let _running = request(&mut a, &sockets, 1);
+    let (tx, _queued) = oneshot::channel();
+    a.admit_request(InfoHash([2; 20]), Admit::Final(tx), None);
+    assert_eq!(a.get_peers_queue.len(), 1);
+    a.publish_slots();
+    let l = ledger(&a);
+    assert_eq!((l.slots_occupied, l.queued), (1, 1));
+}

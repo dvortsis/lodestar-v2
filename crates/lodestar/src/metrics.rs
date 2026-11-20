@@ -1379,8 +1379,14 @@ fn render_ledger(o: &mut Out, d: &StatsSnapshot) {
     o.one(
         "dht_lookup_slots_occupied",
         "gauge",
-        "Peer requests holding a slot (running or queued), as of the last tick.",
+        "Occupied lookup slots: running peer requests, never queued ones, as of the last tick.",
         l.slots_occupied,
+    );
+    o.one(
+        "dht_lookup_queued",
+        "gauge",
+        "Admitted peer requests waiting in the queue to start, as of the last tick.",
+        l.queued,
     );
     o.one(
         "dht_lookup_slots_capacity",
@@ -2118,6 +2124,7 @@ mod tests {
         };
         l.hint_outcomes[HintOutcome::GuardSkipped as usize] = 6;
         l.slots_occupied = 7;
+        l.queued = 2;
         l.slots_capacity = 32;
         let mut o = Out(String::new());
         render_ledger(&mut o, &d);
@@ -2148,6 +2155,8 @@ mod tests {
             "lodestar_dht_hint_outcomes_total{outcome=\"unanswered\"} 0",
             "# TYPE lodestar_dht_lookup_slots_occupied gauge",
             "lodestar_dht_lookup_slots_occupied 7",
+            "# TYPE lodestar_dht_lookup_queued gauge",
+            "lodestar_dht_lookup_queued 2",
             "lodestar_dht_lookup_slots_capacity 32",
         ] {
             assert!(
@@ -2180,7 +2189,7 @@ mod tests {
                 .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
                 .filter_map(|l| l.split(' ').next())
                 .collect();
-        assert_eq!(families.len(), 9);
+        assert_eq!(families.len(), 10);
         for family in families {
             let row = format!("| `{family}");
             assert!(

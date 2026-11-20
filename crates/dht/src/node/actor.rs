@@ -2833,10 +2833,7 @@ impl Actor {
         self.stats
             .peer_queued
             .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
-        self.stats.ledger.slots_occupied.store(
-            (self.active_get_peers + self.get_peers_queue.len()) as u64,
-            Ordering::Relaxed,
-        );
+        self.publish_slots();
         self.stats
             .lookup_scheduled
             .store(self.stalled.len() as u64, Ordering::Relaxed);
@@ -2850,6 +2847,18 @@ impl Actor {
         self.stats
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
+    }
+
+    /// The ledger's slot gauges: running requests (occupied slots) and,
+    /// apart, queued ones.
+    fn publish_slots(&self) {
+        let ledger = &self.stats.ledger;
+        ledger
+            .slots_occupied
+            .store(self.active_get_peers as u64, Ordering::Relaxed);
+        ledger
+            .queued
+            .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
     }
 
     /// The routing-table gauges at `now` (secs since the actor's epoch):
