@@ -1,4 +1,4 @@
-# X-crawler-sim-calibrate decisions
+# X-crawler-sim-calibrate decisions (#974)
 
 A CR-SIM scenario, `live-lookup`, calibrated to CR-0's live lookup, so lookup-cost changes get a screen that can judge them (r5 "Path to 100", `docs/decisions/2026-11-20-path-to-100.md`; build-plan §0.5 step 3). Test code only: no change to `crates/dht` or any production code. The existing goldens are byte-identical, and their sha256 hashes match `main`.
 
