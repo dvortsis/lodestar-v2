@@ -437,6 +437,19 @@ async fn a_repeated_parameter_is_named() {
             "{uri}"
         );
     }
+    // Signed out, it's still a 401 first: the parameters aren't read.
+    let anon = Request::get("/api/v1/search?sort=a&sort=b")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = call(&f.app, anon).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    // POST reads its body, not the URL's query.
+    let (status, _, body) = call(
+        &f.app,
+        post("/api/v1/search?q=a&q=b", Some(&c), json!({ "q": "movie" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     // Unknown parameters stay ignored, repeated or not.
     let (status, _, body) = call(&f.app, get("/api/v1/search?q=movie&x=1&x=2", &c)).await;
     assert_eq!(status, StatusCode::OK, "{body}");

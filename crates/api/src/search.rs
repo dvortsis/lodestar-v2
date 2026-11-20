@@ -296,14 +296,16 @@ fn repeated(query: &str) -> Option<&'static str> {
     None
 }
 
-/// Refuses a `/search` query that repeats a parameter, naming it, before
+/// Refuses a `GET /search` query that repeats a parameter, naming it, before
 /// the extractor would refuse it as a generic "wrong type or value".
 async fn single_valued(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    if let Some(name) = req.uri().query().and_then(repeated) {
+    // POST reads its body, never the URL's query.
+    let get = req.method() == axum::http::Method::GET;
+    if let Some(name) = req.uri().query().filter(|_| get).and_then(repeated) {
         return ApiError::bad_request(
             "repeated_parameter",
             format!("{name} was sent more than once: send it once."),
@@ -600,18 +602,12 @@ async fn run_search(
             None
         };
         let collapsed = collapse && unavailable.is_none();
+        // A collapsed cursor reads its own lease, which had group data
+        // when the cursor was made, so it is always asked for and found
+        // again here: only an ungrouped cursor sent with collapse=group
+        // can differ. (Either way, the message names the cursor's kind.)
         if let Some(c) = cursor.filter(|c| c.collapse != collapsed) {
-            return Err(if c.collapse {
-                // Asked for, but this snapshot has no group data.
-                ApiError::bad_request(
-                    "bad_cursor",
-                    "That cursor belongs to a collapsed search, and group data isn't ready now: \
-                     start the search again.",
-                )
-                .field("cursor")
-            } else {
-                cursor_kind(false)
-            });
+            return Err(cursor_kind(c.collapse));
         }
         // A collapsed search counts torrents and groups together, under
         // one budget when exact (`collapse::counts`).

@@ -7,16 +7,20 @@ Follow-ups from #992's review (O1–O3): clearer, bounded errors for `/api/v1/se
   - at most 64 characters, cut on a character boundary and marked with "…";
   - with control and other unprintable characters escaped (Rust's `Debug` for strings: `\n`, `\u{1b}`, `\0`, `\u{202e}`, `\u{2028}`, …).
 
-  So a 10 kB value gives an error of under 300 bytes, and an error can't carry a raw newline, escape sequence or bidi override into a log or the UI.
+  So a 10 kB value gives an error of well under 1 kB (64 characters before escaping), and an error can't carry a raw newline, escape sequence or bidi override into a log or the UI.
+  - `sort_param` is shared, so the bounded echo also reaches `/facets`, `/export` and saved searches.
   - Query syntax errors (`query_syntax`) come from the search crate's parser, which this slice doesn't own. They already quote values with the same `Debug` escaping, and `q` is refused past `MAX_QUERY_BYTES` (2,048), so they're bounded and printable too. They're left as they are.
 - **A repeated parameter is named (O2).** `GET /search` with a parameter sent twice (`?sort=a&sort=b`) used to get the generic `bad_parameter` ("A query parameter has the wrong type or value.") with no field. It now gets `repeated_parameter`, `field: <name>`, "sort was sent more than once: send it once."
   - This covers every parameter `/search` takes, each single-valued: `q`, `ast`, `sort`, `limit`, `offset`, `hidden`, `tz`, `cursor`, `collapse`, `exact` and `explain`. A unit test checks that the list matches `SearchRequest`'s fields.
   - Unknown parameters are still ignored, repeated or not.
+  - Only `GET` is checked. `POST /search` reads its body and ignores the URL's query, as before.
+  - The layer runs inside the auth guard, so a signed-out request is still a 401 first (tested).
+  - `/facets`, which takes the same parameters, still answers a repeated one with the generic `bad_parameter`: a possible follow-up, outside this slice's owns.
   - **It's checked in a route layer on `/search`, not in the extractors.**
     - The shared `extract::Query` (and its generic error) isn't this slice's.
     - Changing the handlers' signatures would reach into `discover.rs`, which calls `search_get` with a `Query` directly.
     - A repeated key in a `POST` body's JSON still gets the JSON extractor's generic error.
 - **A cursor sent with the other kind of request says so (O3).** The code stays `bad_cursor`, with `field: cursor`, because the UI answers `bad_cursor` by starting the search again (`client.ts`, the results and facets stores). Only the message changes:
   - a collapsed cursor without `collapse=group` (none sent, or `collapse=none`): "That cursor belongs to a collapsed search: send collapse=group with it, or start the search again.";
-  - an ungrouped cursor with `collapse=group` while group data is ready: "That cursor belongs to an ungrouped search: send it without collapse=group, or start the search again.";
-  - a collapsed cursor with `collapse=group` on a snapshot without group data: "That cursor belongs to a collapsed search, and group data isn't ready now: start the search again."
+  - an ungrouped cursor with `collapse=group` while group data is ready: "That cursor belongs to an ungrouped search: send it without collapse=group, or start the search again."
+  - A collapsed cursor sent with `collapse=group` always finds group data again, because it reads its own lease, which had group data when the cursor was made. So that case can't differ, and the check after the lease only ever sees an ungrouped cursor.
