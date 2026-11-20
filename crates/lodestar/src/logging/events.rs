@@ -1144,6 +1144,172 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
 
+    // ── Worker progress (X-worker-service-log, §19.6) ──
+    // The worker's progress lines, logged where no one reads its stderr:
+    // under the Windows service (`cli::worker::run_until`). Each carries
+    // only which line it was, fixed reasons and numbers: never the line's
+    // text, a worker name, an address, a token or an error's text.
+    /// The worker is connecting to its coordinator's saved address.
+    WORKER_CONNECTING {
+        id: "worker.connecting",
+        component: Workers,
+        level: Info,
+        message: "The worker is connecting to its coordinator",
+        fields: {},
+    }
+    /// The worker connected to its coordinator.
+    WORKER_CONNECTED {
+        id: "worker.connected",
+        component: Workers,
+        level: Info,
+        message: "The worker connected to its coordinator",
+        fields: {},
+    }
+    /// The worker's own work asked for a fresh session; it connects again
+    /// at once.
+    WORKER_FRESH_SESSION {
+        id: "worker.fresh_session",
+        component: Workers,
+        level: Info,
+        message: "The worker connects again for a fresh session",
+        fields: {},
+    }
+    /// The connection to the coordinator dropped; the worker connects
+    /// again after a wait (`worker.retrying`).
+    WORKER_CONNECTION_LOST {
+        id: "worker.connection_lost",
+        component: Workers,
+        level: Warn,
+        message: "The connection to the coordinator was lost",
+        fields: {},
+    }
+    /// The coordinator turned the connection away for now (busy, or
+    /// stopping); the worker tries again after a wait.
+    WORKER_TURNED_AWAY {
+        id: "worker.turned_away",
+        component: Workers,
+        level: Warn,
+        message: "The coordinator turned the worker's connection away for now",
+        fields: {},
+    }
+    /// A connection attempt failed (`reason`: unreachable, timeout,
+    /// refused, stopped, protocol, invalid, closed, or other for a TLS or
+    /// link error); the worker tries again after a wait.
+    WORKER_CONNECT_FAILED {
+        id: "worker.connect_failed",
+        component: Workers,
+        level: Warn,
+        message: "The worker couldn't connect to its coordinator",
+        fields: { reason: Label },
+    }
+    /// The worker connects again after `wait_ms` milliseconds (its
+    /// back-off).
+    WORKER_RETRYING {
+        id: "worker.retrying",
+        component: Workers,
+        level: Info,
+        message: "The worker connects again after a wait",
+        fields: { wait_ms: Label },
+    }
+    /// The coordinator is draining this worker: it finishes its current
+    /// work, then stops.
+    WORKER_DRAINING {
+        id: "worker.draining",
+        component: Workers,
+        level: Info,
+        message: "The worker is draining: it finishes its current work, then stops",
+        fields: {},
+    }
+    /// This machine's clock is `seconds` off the coordinator's (either
+    /// way).
+    WORKER_CLOCK_SKEWED {
+        id: "worker.clock_skewed",
+        component: Workers,
+        level: Warn,
+        message: "This machine's clock is off the coordinator's; set it to update automatically (NTP)",
+        fields: { seconds: Label },
+    }
+    /// The worker's certificate was renewed; it connects again with it.
+    WORKER_RENEWED {
+        id: "worker.renewed",
+        component: Workers,
+        level: Info,
+        message: "The worker's certificate was renewed; it connects again with it",
+        fields: {},
+    }
+    /// The coordinator refused the renewed certificate; the worker tries
+    /// to renew again later.
+    WORKER_RENEWAL_REFUSED {
+        id: "worker.renewal_refused",
+        component: Workers,
+        level: Warn,
+        message: "The worker's renewed certificate was refused; it tries again later",
+        fields: {},
+    }
+    /// The renewed credentials couldn't be saved; the worker keeps trying.
+    WORKER_RENEWAL_UNSAVED {
+        id: "worker.renewal_unsaved",
+        component: Workers,
+        level: Warn,
+        message: "The worker's renewed credentials couldn't be saved; it tries again",
+        fields: {},
+    }
+    /// The worker is stopping: it hands its current work back to the
+    /// coordinator first.
+    WORKER_HANDING_BACK {
+        id: "worker.handing_back",
+        component: Workers,
+        level: Info,
+        message: "The worker is stopping: handing its current work back to the coordinator",
+        fields: {},
+    }
+    /// The coordinator didn't take the work back before the stop's
+    /// deadline: the worker keeps it for its next start.
+    WORKER_HANDBACK_TIMED_OUT {
+        id: "worker.handback_timed_out",
+        component: Workers,
+        level: Warn,
+        message: "The coordinator didn't take the work back in time; the worker keeps it for its next start",
+        fields: {},
+    }
+    /// The worker stopped when asked to.
+    WORKER_STOPPED {
+        id: "worker.stopped",
+        component: Workers,
+        level: Info,
+        message: "The worker stopped",
+        fields: {},
+    }
+    /// The worker was drained: the coordinator has its work back, and it
+    /// stopped.
+    WORKER_DRAINED {
+        id: "worker.drained",
+        component: Workers,
+        level: Info,
+        message: "The worker was drained and stopped; the coordinator has its work back",
+        fields: {},
+    }
+    /// The worker stopped on something the user has to act on (`reason`:
+    /// revoked, expired, outdated, identity_mismatch or replaced). The
+    /// service's own failure line follows; the installer's log has the
+    /// full text.
+    WORKER_EXITED {
+        id: "worker.exited",
+        component: Workers,
+        level: Error,
+        message: "The worker stopped on something that needs your attention",
+        fields: { reason: Label },
+    }
+    /// A worker progress line with no event of its own; its text isn't
+    /// logged.
+    WORKER_STATUS {
+        id: "worker.status",
+        component: Workers,
+        level: Info,
+        message: "The worker reported its status",
+        fields: {},
+    }
+
     // ── Workers API (WK-14, §19.6, §19.7) ──
     /// A worker connected while the planner already had 4,096 workers: it
     /// gets no assignment until one leaves, and is tried again then. Said

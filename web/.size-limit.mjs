@@ -485,7 +485,8 @@ const eventNamesLimits = {
 	search: '2250 B',
 	// runner §2.26, UP-1: measured 704 B, the watch labels.
 	sources: '768 B',
-	workers: '3780 B',
+	// runner §2.26, X-worker-service-log: measured 5785 B with the 18 worker progress events, + 10%.
+	workers: '6370 B',
 	api: '650 B',
 	companions: '1160 B',
 	integrations: '1060 B',
