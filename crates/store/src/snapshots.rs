@@ -26,6 +26,9 @@
 //!   deletion records its hash and time in `snapshot_deletions`,
 //!   independently of temporary fetch holds). A snapshot of a schema this
 //!   build doesn't know is left alone, with a warning.
+//! - **drops identify claims past their source's retention** (V15+), by
+//!   the rules of the live retention sweep or stricter ([`claims`]), so a
+//!   lookup service's claim never outlives its terms inside a snapshot.
 //!
 //! **The deletion journal is bounded.** A journal row is looked up only in
 //! snapshots taken up to [`TAKEN_MARGIN`] after it, so a hash deleted and
@@ -52,6 +55,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::{InfoHash, Store};
+
+pub mod claims;
 
 /// Snapshots are kept this many days after they were taken.
 pub const RETAIN_DAYS: i64 = 90;
@@ -301,6 +306,9 @@ pub(crate) struct Plan {
     /// Drop unverified items whose hash the live store deleted or holds
     /// (`unverified_items`, v14+). Torrent claims go with their torrents.
     unverified: bool,
+    /// Drop identify claims past their source's retention
+    /// (`torrent_claims.stored_at`, v15+; [`claims`]).
+    claims: bool,
 }
 
 impl Plan {
@@ -316,7 +324,8 @@ impl Plan {
     /// | 4–9 | purged | purged | absent |
     /// | 10–12 | purged | purged | purged |
     /// | 13 | purged, and import candidates | purged | purged |
-    /// | 14–15 | purged, with candidates and unverified items | purged | purged |
+    /// | 14 | purged, with candidates and unverified items | purged | purged |
+    /// | 15 | as 14, and identify claims past their retention | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -329,6 +338,7 @@ impl Plan {
                 user_data: false,
                 candidates: false,
                 unverified: false,
+                claims: false,
             }),
             // V4 adds cs_hashes, tombstones, quarantine (hash, rule,
             // sealed, at, expires_at) and filter_hits (at), unchanged
@@ -342,6 +352,7 @@ impl Plan {
                 user_data: false,
                 candidates: false,
                 unverified: false,
+                claims: false,
             }),
             // V10 adds your data (saved searches, alerts, marks,
             // collections), API keys and the query log. Alerts, marks and
@@ -365,6 +376,7 @@ impl Plan {
                 user_data: true,
                 candidates: false,
                 unverified: false,
+                claims: false,
             }),
             // V13 adds imports (IMP-1). Candidates hold hashes and names
             // that aren't torrents, so they go by hash; the other import
@@ -376,19 +388,32 @@ impl Plan {
                 user_data: true,
                 candidates: true,
                 unverified: false,
+                claims: false,
             }),
             // V14 adds Sources (SRC-1). Unverified items hold keys and
             // claim names that aren't torrents, so they go by hash, as
             // candidates do. Torrent claims cascade from torrents; plugin
-            // state holds no names. V15 (ENR-terms) only stamps claims
-            // with when they were written.
-            14..=Self::KNOWN_THROUGH => Some(Plan {
+            // state holds no names. No identify plugin ran on a V14 store
+            // (V15's notes), so it holds no claims with a retention.
+            14 => Some(Plan {
                 torrents: true,
                 filter: true,
                 query_log: true,
                 user_data: true,
                 candidates: true,
                 unverified: true,
+                claims: false,
+            }),
+            // V15 (ENR-terms) stamps claims with when they were written:
+            // identify claims go at their source's retention ([`claims`]).
+            15..=Self::KNOWN_THROUGH => Some(Plan {
+                torrents: true,
+                filter: true,
+                query_log: true,
+                user_data: true,
+                candidates: true,
+                unverified: true,
+                claims: true,
             }),
             _ => None,
         }
@@ -415,6 +440,9 @@ pub struct PurgeReport {
     pub candidates: usize,
     /// Unverified items deleted from snapshots.
     pub unverified: usize,
+    /// Identify claims deleted from snapshots past their source's
+    /// retention ([`claims`]).
+    pub claims: usize,
     /// Purged sources whose consent record, credentials and settings were
     /// dropped from a snapshot, counted once per snapshot (SRC-14b).
     pub sources: usize,
@@ -486,6 +514,8 @@ struct Live {
     /// Purged sources (SRC-14b): the plugin and when its purge ended
     /// (`sources.purged.<plugin>`). Few, so every pass reads them all.
     purged_sources: Vec<(String, i64)>,
+    /// Identify sources' recorded terms and the retention clock.
+    terms: claims::LiveTerms,
 }
 
 /// V10 tables with AUTOINCREMENT ids whose deleted rows a snapshot loses.
@@ -558,6 +588,7 @@ impl Live {
             HashMap::new()
         };
         let purged_sources = purged_sources(conn)?;
+        let terms = claims::LiveTerms::read(conn)?;
         Ok(Live {
             deleted,
             sealed,
@@ -567,6 +598,7 @@ impl Live {
             user_ids,
             revoked,
             purged_sources,
+            terms,
         })
     }
 
@@ -760,7 +792,16 @@ impl Store {
                     report.user_data += n.user_data;
                     report.candidates += n.candidates;
                     report.unverified += n.unverified;
+                    report.claims += n.claims;
                     report.sources += n.sources;
+                    if n.claims_left {
+                        report.warnings.push(format!(
+                            "the snapshot {} still holds expired identify claims after this \
+                             pass's {} deletions; the next pass goes on",
+                            snap.path.display(),
+                            claims::MAX_PER_PASS
+                        ));
+                    }
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -826,6 +867,9 @@ struct Counts {
     user_data: usize,
     candidates: usize,
     unverified: usize,
+    claims: usize,
+    /// The pass's cap stopped the claims purge with some still due.
+    claims_left: bool,
 }
 
 /// Deletes a snapshot and any side file SQLite left beside it: whether
@@ -1065,7 +1109,18 @@ fn purge_one(
             }
         }
     }
+    // Identify claims past their retention, and for a rollback's copy the
+    // retention marks to raise to the clock used.
+    let due = if plan.claims {
+        claims::due(&conn, &live.terms, now)?
+    } else {
+        Vec::new()
+    };
+    let claims_due = due.iter().any(claims::Due::any);
+    let raise = carry.is_some() && due.iter().any(claims::Due::mark_behind);
     if ids.is_empty()
+        && !claims_due
+        && !raise
         && sources.is_empty()
         && holds.is_none()
         && journal.is_empty()
@@ -1181,6 +1236,9 @@ fn purge_one(
         for (plugin, at) in &sources {
             scrub_source(&tx, plugin, *at)?;
         }
+        if raise {
+            claims::raise_marks(&tx, &due)?;
+        }
         tx.commit()?;
         Ok(Counts {
             sources: sources.len(),
@@ -1190,8 +1248,20 @@ fn purge_one(
             user_data,
             candidates: candidates_gone,
             unverified: unverified_gone,
+            claims: 0,
+            claims_left: false,
         })
-    })();
+    })()
+    .and_then(|mut n| {
+        // Chunked, after the rest: each chunk commits on its own, and a
+        // pass stopped partway finds the rest due on the next. A
+        // rollback's copy is purged of every one.
+        if claims_due {
+            let cap = carry.is_none().then_some(claims::MAX_PER_PASS);
+            (n.claims, n.claims_left) = claims::purge(&mut conn, &due, cap)?;
+        }
+        Ok(n)
+    });
     if wal {
         // Copies the new pages into the file and empties the WAL, then
         // goes back to a single file, as `VACUUM INTO` wrote it.
@@ -1638,6 +1708,11 @@ fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
 /// ([`carry_holds`], [`carry_lists`]), so it goes on refusing what they
 /// hold. The copy ends as one file, with no WAL beside
 /// it.
+///
+/// Identify claims past their retention leave the copy, every one, and
+/// its retention marks are raised to the clock that purge used, so the
+/// restored store's sweep never runs behind the store it replaces
+/// ([`claims`]).
 ///
 /// `Ok(None)` when the copy holds a schema this build can't purge: then
 /// it mustn't be restored.
