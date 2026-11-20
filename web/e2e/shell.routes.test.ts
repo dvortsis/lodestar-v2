@@ -3,7 +3,14 @@
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
 import type { Route } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
-import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
+import {
+	crawlerEvent,
+	engage,
+	engageBare,
+	liveEvents,
+	networkQuiet,
+	openPaletteWithKey
+} from './support/events-server';
 import { interact } from './support/interact';
 import { expect, test } from './support/test';
 import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
@@ -440,11 +447,21 @@ test.describe('401 hand-off', () => {
 		page,
 		mock
 	}) => {
+		// Signed out everywhere: with the mock's default ("signed in"), /login would send the page back
+		// to `next`, the stream's 401 to /login again, and the URL would only pass this check mid-bounce.
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: false });
 		mock.error('listSavedSearches', 401, 'login_required');
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(false)));
 		await page.goto('/alerts?x=1');
 		await engage(page);
-		await expect(page).toHaveURL(/\/login\?next=%2Falerts%3Fx%3D1$/);
+		const signIn = /\/login\?next=%2Falerts%3Fx%3D1$/;
+		await expect(page).toHaveURL(signIn);
+		// And it stays: once /login has asked who is signed in and everything has settled, it is
+		// still on /login, not bounced back to /alerts.
+		const quiet = networkQuiet(page);
+		await expect.poll(() => mock.calls('getAuthStatus').length).toBeGreaterThan(0);
+		await quiet();
+		expect(page.url()).toMatch(signIn);
 	});
 
 	test('the sign-in and setup screens have no chrome and open no stream', async ({
@@ -457,12 +474,13 @@ test.describe('401 hand-off', () => {
 		const events = await liveEvents(page);
 		for (const path of ['/login', '/setup', '/welcome']) {
 			await go(path);
-			await engage(page); // the stream starts on the first interaction: none must on these screens
+			await engageBare(page); // the stream starts on the first interaction: none must here
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
-			// engage() has just interacted for four seconds; a stream the shell was going to start on an
-			// interaction would be in requests() by now. Its 30 s idle fallback is out of reach of any wait.
+			// engageBare() waited for the chrome to take the interaction and for the network to settle: a
+			// stream the shell was going to start on it would be in requests() by now. Its 30 s idle
+			// fallback is out of reach of any wait.
 			expect(await events.requests()).toHaveLength(0);
 		}
 		expect(mock.calls('getEvents')).toHaveLength(0);

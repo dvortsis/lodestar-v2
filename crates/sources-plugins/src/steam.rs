@@ -8,7 +8,12 @@
 //! the paging cursor and fixed parameters only, never anything from an
 //! item. The list is fetched again at most once per [`REFRESH`]; a failed
 //! fetch keeps the old index and waits [`RETRY`] before trying again (a
-//! cancelled one waits [`CANCELLED`]).
+//! cancelled one waits [`CANCELLED`]). A finished list that is empty, or
+//! much smaller than the one in use, is refused: the old index stays, a
+//! plain warning is kept as the plugin's status, and the next try waits
+//! [`RETRY`] (see [`suspicious`]). A smaller list that keeps coming back
+//! at about one size is accepted after [`SHRINK_SIGHTINGS`] refusals over
+//! [`SHRINK_SPAN`] (see [`Sightings`]).
 //!
 //! **Account class, off by default.** The list needs a Steam Web API key,
 //! read from the per-source store on each refresh and sent in the
@@ -64,6 +69,24 @@ pub const RETRY: Duration = Duration::from_secs(3600);
 /// The wait after a refresh cancelled mid-request (its lookup timed out):
 /// short, since nothing failed and the partial list resumes at its cursor.
 pub const CANCELLED: Duration = Duration::from_secs(60);
+/// Below this many apps in the list in use, a new list is refused only
+/// when it's empty: a small list can halve for ordinary reasons.
+pub const SHRINK_FLOOR: usize = 1_000;
+/// The key in the plugin's state store that holds its warning, if any.
+/// Removed once a normal list is accepted.
+pub const WARNING_KEY: &str = "warning";
+/// The key in the plugin's state store that counts refused smaller lists
+/// of about one size (see [`Sightings`]).
+pub const SIGHTINGS_KEY: &str = "shrink_sightings";
+/// A refused smaller list is accepted once lists of about its size
+/// (within [`SHRINK_TOLERANCE_PCT`]) have come back this many refreshes in
+/// a row ...
+pub const SHRINK_SIGHTINGS: u32 = 3;
+/// ... spanning at least this long, first to last.
+pub const SHRINK_SPAN: Duration = Duration::from_secs(24 * 3600);
+/// How far, in percent of the first sighting, a later one may be and
+/// still count as the same size.
+pub const SHRINK_TOLERANCE_PCT: usize = 5;
 /// How sure a match is: one game has the title. The list has no years.
 pub const CONFIDENCE: u8 = 70;
 /// What leaves the install: no title, no item data.
@@ -151,6 +174,133 @@ pub const BAD_ANSWER: &str = "Steam's answer wasn't understood";
 pub const TOO_LONG: &str = "Steam's app list is longer than the plugin keeps";
 const FAILED: &str = "Steam's request failed";
 
+/// Why a finished list is refused, as the plain warning the plugin keeps
+/// as its status, or `None` when it's accepted. `old` is the number of
+/// apps in the list in use (`None` before the first list), `new` the
+/// number in the list just fetched.
+///
+/// Refused: an empty list, always; and, once the list in use holds at
+/// least [`SHRINK_FLOOR`] apps, one with fewer than half as many. Steam's
+/// catalogue only grows by a few percent a month, so a list half the size
+/// is a broken or cut-off answer, not real news.
+pub fn suspicious(old: Option<usize>, new: usize) -> Option<String> {
+    // "Later", not "in an hour": the line stays while later tries fail
+    // for other reasons.
+    let retry = "it will be tried again later";
+    match old {
+        None if new == 0 => Some(format!(
+            "Steam's app list came back empty, so no games can be matched yet; {retry}"
+        )),
+        Some(o) if new == 0 => Some(format!(
+            "Steam's app list came back empty; the current list of {o} games is kept and {retry}"
+        )),
+        Some(o) if o >= SHRINK_FLOOR && new.saturating_mul(2) < o => Some(format!(
+            "Steam's app list came back with {new} games, under half the current {o}; the current list is kept and {retry}"
+        )),
+        _ => None,
+    }
+}
+
+/// Refused smaller lists of about one size, seen on refreshes in a row
+/// against one list in use: that list's size, the first sighting's size
+/// and wall-clock time (Unix seconds), and how many. Kept in the plugin's
+/// state store, so the count survives a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sightings {
+    /// Apps in the list in use when the count started. A count kept for
+    /// another list (a clear that was lost) starts again.
+    pub old: usize,
+    pub size: usize,
+    pub first: u64,
+    pub count: u32,
+}
+
+impl Sightings {
+    /// `old size first count`, as decimal text.
+    pub fn encode(&self) -> Vec<u8> {
+        format!("{} {} {} {}", self.old, self.size, self.first, self.count).into_bytes()
+    }
+
+    /// `None` for anything [`encode`](Sightings::encode) didn't write, or
+    /// that no real count holds (a size of 0 or over [`MAX_APPS`], a count
+    /// of 0): the count starts again. Never fails open.
+    pub fn decode(v: &[u8]) -> Option<Sightings> {
+        let mut it = std::str::from_utf8(v).ok()?.split(' ');
+        let s = Sightings {
+            old: it.next()?.parse().ok()?,
+            size: it.next()?.parse().ok()?,
+            first: it.next()?.parse().ok()?,
+            count: it.next()?.parse().ok()?,
+        };
+        let real = |n: usize| (1..=MAX_APPS).contains(&n);
+        (it.next().is_none() && real(s.old) && real(s.size) && s.count > 0).then_some(s)
+    }
+
+    /// Counts a refused list of `size` apps at `now`, against a list in
+    /// use of `old` apps. One more sighting if the count is for the same
+    /// list in use, `size` is within [`SHRINK_TOLERANCE_PCT`] of the first
+    /// sighting, and the first isn't in the future; else a new count.
+    /// Returns the new sightings and whether the list is now accepted. An
+    /// empty list is never accepted.
+    pub fn see(prev: Option<Sightings>, old: usize, size: usize, now: u64) -> (Sightings, bool) {
+        let s = match prev {
+            Some(p)
+                if p.old == old
+                    && now >= p.first
+                    && p.size.abs_diff(size).saturating_mul(100)
+                        <= p.size.saturating_mul(SHRINK_TOLERANCE_PCT) =>
+            {
+                Sightings {
+                    count: p.count.saturating_add(1),
+                    ..p
+                }
+            }
+            _ => Sightings {
+                old,
+                size,
+                first: now,
+                count: 1,
+            },
+        };
+        let span = now.saturating_sub(s.first);
+        (
+            s,
+            size > 0 && s.count >= SHRINK_SIGHTINGS && span >= SHRINK_SPAN.as_secs(),
+        )
+    }
+}
+
+/// The plain status line kept when a smaller list is accepted after
+/// [`SHRINK_SIGHTINGS`] refusals.
+pub fn shrink_accepted(old: usize, new: usize) -> String {
+    format!(
+        "Steam's app list shrank from {old} to {new} games and kept coming back that size for a day, so the smaller list is now used"
+    )
+}
+
+/// What a finished refresh comes to.
+enum Outcome {
+    /// Used; `note` is the status line when a smaller list was accepted
+    /// after repeated sightings.
+    Accepted {
+        names: Names,
+        apps: usize,
+        note: Option<String>,
+    },
+    /// Refused by [`suspicious`]; the warning.
+    Refused(String),
+    Failed(PluginError),
+}
+
+/// Wall-clock Unix seconds; a test passes its own.
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+fn system_clock() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 type Names = HashMap<String, Vec<(u32, String)>>;
 
 /// The bounds on one refresh. [`Limits::DEFAULT`] is what the plugin
@@ -190,9 +340,13 @@ struct Partial {
 #[derive(Default)]
 struct Index {
     names: Names,
+    /// Apps in the list in use (counted as fetched, before folding).
+    apps: usize,
     fetched: Option<Instant>,
     retry_at: Option<Instant>,
     partial: Option<Partial>,
+    /// Why the last finished list was refused, until one is accepted.
+    warning: Option<String>,
 }
 
 impl Partial {
@@ -245,6 +399,8 @@ pub struct Steam {
     index: std::sync::Mutex<Index>,
     /// Held by the one lookup that is refreshing.
     refreshing: Mutex<()>,
+    /// Times the shrink sightings, which outlive the process.
+    clock: Clock,
 }
 
 impl fmt::Debug for Steam {
@@ -265,7 +421,13 @@ impl Steam {
             limits,
             index: std::sync::Mutex::new(Index::default()),
             refreshing: Mutex::new(()),
+            clock: Arc::new(system_clock),
         }
+    }
+
+    /// The same plugin on another wall clock (tests).
+    pub fn with_clock(self, clock: Clock) -> Steam {
+        Steam { clock, ..self }
     }
 
     /// Where the plugin's egress may send requests (SRC-5).
@@ -282,12 +444,20 @@ impl Steam {
         self.index.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The plugin's warning, if the last finished list was refused (see
+    /// [`suspicious`]). The same text is kept in the plugin's state under
+    /// [`WARNING_KEY`], for the status page.
+    pub fn warning(&self) -> Option<String> {
+        self.index().warning.clone()
+    }
+
     /// Runs (or resumes) a refresh. The caller holds `refreshing`. The
     /// old index answers lookups until the new list is complete; on an
     /// error it stays, the partial list is dropped and the next try
     /// waits [`RETRY`]. A missing or bad key fails at once and sets no
     /// wait: nothing was sent, and a key stored a moment later is used on
-    /// the next lookup.
+    /// the next lookup. A finished list [`suspicious`] refuses is treated
+    /// as an error, and its warning is kept until a list is accepted.
     async fn refresh(&self, kit: &Kit) -> Result<(), PluginError> {
         let key = match self.credentials.get(ID, API_KEY).await {
             Ok(Some(k)) => k,
@@ -298,25 +468,103 @@ impl Steam {
             return Err(fail(BAD_CREDENTIALS));
         }
         let r = self.fetch(kit, &key).await;
-        let mut index = self.index();
-        match r {
-            Ok(names) => {
-                index.names = names;
-                index.fetched = Some(Instant::now());
-                index.retry_at = None;
-                Ok(())
+        // Decided first, with the state store, then applied under the
+        // index lock. `refreshing` is held, so the index can't change in
+        // between.
+        let outcome = match r {
+            Err(e) => Outcome::Failed(e),
+            Ok((names, apps)) => {
+                let old = {
+                    let index = self.index();
+                    index.fetched.map(|_| index.apps)
+                };
+                match (suspicious(old, apps), old) {
+                    (None, _) => Outcome::Accepted {
+                        names,
+                        apps,
+                        note: None,
+                    },
+                    // Smaller, not empty: counted towards the escape hatch.
+                    (Some(w), Some(o)) if apps > 0 => match self.shrink_seen(kit, o, apps).await {
+                        Some(note) => Outcome::Accepted {
+                            names,
+                            apps,
+                            note: Some(note),
+                        },
+                        None => Outcome::Refused(w),
+                    },
+                    (Some(w), _) => Outcome::Refused(w),
+                }
             }
-            Err(e) => {
-                index.partial = None;
-                index.retry_at = Some(Instant::now() + RETRY);
-                Err(e)
+        };
+        // What to do with the status in the state store, once the index
+        // lock is let go: `None` clears it, `Some(w)` sets it.
+        let (r, status) = {
+            let mut index = self.index();
+            match outcome {
+                Outcome::Accepted { names, apps, note } => {
+                    index.names = names;
+                    index.apps = apps;
+                    index.fetched = Some(Instant::now());
+                    index.retry_at = None;
+                    index.warning = note.clone();
+                    // Cleared on every normal list, not only when one is
+                    // held in memory: a warning stored before a restart,
+                    // or whose clear was lost, goes too.
+                    (Ok(()), Some(note))
+                }
+                Outcome::Refused(w) => {
+                    index.retry_at = Some(Instant::now() + RETRY);
+                    index.warning = Some(w.clone());
+                    (Err(fail(&w)), Some(Some(w)))
+                }
+                Outcome::Failed(e) => {
+                    index.partial = None;
+                    index.retry_at = Some(Instant::now() + RETRY);
+                    (Err(e), None)
+                }
             }
+        };
+        // Best effort: a failing state store loses only the status line,
+        // and the next accepted list clears it again.
+        match status {
+            Some(Some(w)) => {
+                let _ = kit.state.set(WARNING_KEY, w.into_bytes()).await;
+            }
+            Some(None) => {
+                let _ = kit.state.remove(WARNING_KEY).await;
+            }
+            None => {}
         }
+        // Any accepted list ends the count: a normal one resets it.
+        if r.is_ok() {
+            let _ = kit.state.remove(SIGHTINGS_KEY).await;
+        }
+        r
+    }
+
+    /// Counts a refused smaller list of `new` apps against the stored
+    /// sightings. Returns the status line if it's now accepted. A store
+    /// that can't be read counts from one (never accepts early).
+    async fn shrink_seen(&self, kit: &Kit, old: usize, new: usize) -> Option<String> {
+        let prev = kit
+            .state
+            .get(SIGHTINGS_KEY)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| Sightings::decode(&v));
+        let (seen, accept) = Sightings::see(prev, old, new, (self.clock)());
+        if accept {
+            return Some(shrink_accepted(old, new));
+        }
+        let _ = kit.state.set(SIGHTINGS_KEY, seen.encode()).await;
+        None
     }
 
     /// Fetches the rest of the list, from the saved cursor on, and
-    /// returns the whole new index.
-    async fn fetch(&self, kit: &Kit, key: &Secret) -> Result<Names, PluginError> {
+    /// returns the whole new index and the number of apps in it.
+    async fn fetch(&self, kit: &Kit, key: &Secret) -> Result<(Names, usize), PluginError> {
         let lim = self.limits;
         loop {
             let after = {
@@ -373,7 +621,7 @@ impl Steam {
             match (page.more, page.last_appid) {
                 (false, _) => {
                     let done = index.partial.take().unwrap_or_else(Partial::new);
-                    return Ok(done.names);
+                    return Ok((done.names, done.apps));
                 }
                 // The cursor must move forward, or the list never ends.
                 (true, Some(next)) if part.after.is_none_or(|a| next > a) => {
