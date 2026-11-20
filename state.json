@@ -10208,6 +10208,12 @@
       "sha": "dac1468a",
       "at": "2026-11-20T07:52Z",
       "note": "fresh Opus+security MERGE, optionals 1,2,4 folded into CR-LOOKUP-END"
+    },
+    {
+      "pr": 974,
+      "sha": "538be7b9",
+      "slice": "X-crawler-sim-calibrate",
+      "at": "2026-11-20T08:45Z"
     }
   ],
   "active_sessions": {
@@ -10453,7 +10459,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T07:52Z",
+    "updated": "2026-11-20T08:45Z",
     "items": [
       {
         "slot": 1,
@@ -10467,12 +10473,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-crawler-sim-calibrate",
+        "slice": "X-sampler-cooldown-split",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-20T05:54Z",
-        "doing": "session_01MMjhnByeR5BT5612xRLRbj: building",
+        "since": "2026-11-20T08:45Z",
+        "doing": "launching",
         "status": "active"
       },
       {
@@ -10584,7 +10590,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T08:41Z",
+  "updated": "2026-11-20T08:45Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
