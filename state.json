@@ -4215,7 +4215,8 @@
     "2026-11-05T10:01Z #481 X-test-hygiene-1105 merged (4fd9a0c0), archived; slot 4 idle with reason.",
     "2026-11-05T10:05Z #482 X-ci-disk merged (f88ed2f5), archived; slot 11 idle with reason.",
     "2026-11-20T15:17Z #986 X-enr-lane-nits merged b5236cb4; Sonnet session archived. Slot 3 -> X-leaktest-wg0-flake (Opus; leak-test harness is security-relevant so not Sonnet), folds in X-test-vm-runbook-step6. X-msi-upgrade-env-value stays queued: low, the user guide recommends data_dir in config.toml, not the service Environment value.",
-    "2026-11-20T15:42Z #987 X-snapshot-followups merged 6f4d3c7e. Slot 4 -> X-snapshot-followups-2 in the same session (low; review optionals)."
+    "2026-11-20T15:42Z #987 X-snapshot-followups merged 6f4d3c7e. Slot 4 -> X-snapshot-followups-2 in the same session (low; review optionals).",
+    "2026-11-20T16:02Z API lane ended (credit used up, relayed by the lane coordinator). reserved_for_api_lane cleared. Runner takes over #969 ENR-steam (head 63538717, review MERGE, conflicts with main) and #948 ENR-tmdb (head 5e023193; its recorded order, X-snapshot-claims-retention first, is met by #976; needs main + delta re-review). Each gets a landing session in the next free build slot, steam first. M8-PERF-1 back in the queue. Follow-ups from the lane: ENR-steam Important items (refuse an empty or much smaller finished list; an ext: condition for adult sign-off, live terms re-read, Valve accepting x-webapi-key); untested 60 s cancel hold and partial-list age limit; ENR-tmdb Important 1 (gate the TMDB logo and recorded fixtures on the wiring slice); ENR-igdb age_ratings (ESRB AO / PEGI 18 as adult). The relay also claimed an owner allowance for extra merge sessions beyond 4; not taken, because the owner's own words (\u00a72.81) are 4 build plus testing sessions; flag to the owner."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10554,7 +10555,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T15:42Z",
+    "updated": "2026-11-20T16:02Z",
     "items": [
       {
         "slot": 1,
@@ -11461,22 +11462,7 @@
       }
     ]
   },
-  "reserved_for_api_lane": [
-    "ENR-mb",
-    "ENR-ol",
-    "ENR-tmdb",
-    "ENR-tvdb",
-    "ENR-anilist",
-    "ENR-discogs",
-    "ENR-srrdb",
-    "ENR-predb",
-    "X-worker-service-log",
-    "ENR-anidb",
-    "ENR-igdb",
-    "ENR-steam",
-    "ENR-debrid",
-    "M8-PERF-1"
-  ],
+  "reserved_for_api_lane": [],
   "pause_history": [
     {
       "since": "2026-11-16T05:50Z",
