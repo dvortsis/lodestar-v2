@@ -261,15 +261,33 @@ lodestar_log::catalogue! {
         message: "WAL checkpoint at shutdown failed",
         fields: { error: Error },
     }
-    /// A snapshot was deleted: past its retention, or (failing closed)
-    /// because its identify claims couldn't be checked against their
-    /// terms. `reason` says which.
+    /// A snapshot past its retention was deleted.
     SNAPSHOT_EXPIRED {
         id: "pipeline.snapshot_expired",
         component: Pipeline,
         level: Info,
-        message: "Deleted a snapshot",
-        fields: { what: Label, path: Path, days: Size, reason: Label },
+        message: "Deleted a snapshot past its retention",
+        fields: { what: Label, path: Path, days: Size },
+    }
+    /// A snapshot was deleted, failing closed, because its identify claims
+    /// couldn't be checked against their terms (X-snapshot-claims-retention):
+    /// keeping it could keep a lookup service's answers past their limit.
+    SNAPSHOT_UNCHECKED {
+        id: "pipeline.snapshot_unchecked",
+        component: Pipeline,
+        level: Warn,
+        message: "Deleted a damaged snapshot whose lookup answers couldn't be checked",
+        fields: { path: Path },
+    }
+    /// A snapshot's purge keeps failing with an error it retries every
+    /// hour (busy, I/O, disk full): logged when it first fails and then at
+    /// most once a day while it goes on.
+    SNAPSHOT_STUCK {
+        id: "pipeline.snapshot_stuck",
+        component: Pipeline,
+        level: Warn,
+        message: "A snapshot's cleanup keeps failing; it tries again every hour",
+        fields: { path: Path, error: Label },
     }
     /// The snapshot purge met problems (a file it couldn't delete or
     /// purge); it tries again at the next purge.

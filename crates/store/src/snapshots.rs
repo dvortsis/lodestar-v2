@@ -430,6 +430,10 @@ pub struct PurgeReport {
     /// Snapshots deleted because their identify claims couldn't be checked
     /// against their terms (failing closed).
     pub unchecked: Vec<PathBuf>,
+    /// Snapshots whose purge failed with an error the pass retries (never
+    /// a reason to delete one), with the kind of error: each reported when
+    /// it first fails and then at most once a day while it keeps failing.
+    pub stuck: Vec<(PathBuf, &'static str)>,
     /// Torrents deleted from snapshots.
     pub torrents: usize,
     /// Quarantine rows ended (expired) or sealed names cleared.
@@ -457,8 +461,11 @@ pub struct PurgeReport {
 /// kept on the writer's [`Store`] for the life of the process. The first
 /// pass after a start (or over a new or replaced file) looks up every hold
 /// since the snapshot was taken; later ones only those since the last.
+///
+/// The second map holds, for a snapshot whose purge keeps failing with an
+/// error it retries, when that was last reported ([`PurgeReport::stuck`]).
 #[derive(Debug, Default)]
-pub(crate) struct Marks(HashMap<PathBuf, Mark>);
+pub(crate) struct Marks(HashMap<PathBuf, Mark>, HashMap<PathBuf, i64>);
 
 #[derive(Debug, Clone, Copy)]
 struct Mark {
@@ -664,6 +671,9 @@ impl Store {
         self.snapshot_marks
             .0
             .retain(|path, _| all.iter().any(|s| &s.path == path));
+        self.snapshot_marks
+            .1
+            .retain(|path, _| all.iter().any(|s| &s.path == path));
         // Whether a snapshot may still hold a deletion this pass didn't
         // scrub: then the journal rows it read stay.
         let mut blocked = false;
@@ -778,11 +788,18 @@ impl Store {
                 return report;
             }
         };
-        // One time budget for the claims purge across the pass.
+        // One time budget for the claims deletes across the pass, drawn down
+        // only by them; and a different snapshot first each hour, so a
+        // backlog in one can't starve the rest.
+        let budget = std::cell::Cell::new(claims::PASS_BUDGET);
         let limit = claims::Limit {
             rows: claims::MAX_PER_PASS,
-            deadline: std::time::Instant::now() + claims::PASS_BUDGET,
+            budget: &budget,
         };
+        if !keep.is_empty() {
+            let first = usize::try_from(now.div_euclid(3_600).rem_euclid(keep.len() as i64));
+            keep.rotate_left(first.unwrap_or(0));
+        }
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
             match purge_one(&snap, &live, since, now, hits_before, None, Some(limit)) {
@@ -799,6 +816,7 @@ impl Store {
                             purge_claims_only(&snap.path, &live.terms, now, Some(limit), false);
                         match checked {
                             Ok(Some((n, left))) => {
+                                self.snapshot_marks.1.remove(&snap.path);
                                 report.claims += n;
                                 if n > 0 {
                                     report.purged.push(snap.path.clone());
@@ -807,15 +825,20 @@ impl Store {
                                     report.warnings.push(claims_left(&snap.path));
                                 }
                             }
-                            Ok(None) => {}
+                            Ok(None) => {
+                                self.snapshot_marks.1.remove(&snap.path);
+                            }
                             Err(e) if claims::persistent(&e) => {
                                 blocked |= drop_unchecked(&snap, &e.to_string(), &mut report);
                             }
-                            Err(e) => report.warnings.push(format!(
-                                "dropping expired identify claims from the snapshot {} failed \
-                                 (it's tried again next pass): {e}",
-                                snap.path.display()
-                            )),
+                            Err(e) => {
+                                report.warnings.push(format!(
+                                    "dropping expired identify claims from the snapshot {} \
+                                     failed (it's tried again next pass): {e}",
+                                    snap.path.display()
+                                ));
+                                stuck(&mut self.snapshot_marks.1, &snap.path, &e, now, &mut report);
+                            }
                         }
                     }
                     continue;
@@ -846,9 +869,11 @@ impl Store {
                         "purging the snapshot {} failed (it was left as it was): {e}",
                         snap.path.display()
                     ));
+                    stuck(&mut self.snapshot_marks.1, &snap.path, &e, now, &mut report);
                     continue;
                 }
             }
+            self.snapshot_marks.1.remove(&snap.path);
             let full_at = match self.snapshot_marks.0.get(&snap.path) {
                 Some(m) if !full => m.full_at,
                 _ => now,
@@ -887,14 +912,57 @@ impl Store {
     }
 }
 
-/// The warning for a snapshot the pass's cap left expired claims in.
+/// The warning for a snapshot the pass's limits (its time budget, or the
+/// row cap) left expired claims in.
 fn claims_left(path: &Path) -> String {
     format!(
-        "the snapshot {} still holds expired identify claims after this pass's {} deletions; \
-         the next pass goes on",
+        "the snapshot {} still holds expired identify claims when this pass's limits ran \
+         out ({} s of deletes, or {} rows); the next pass goes on",
         path.display(),
+        claims::PASS_BUDGET.as_secs(),
         claims::MAX_PER_PASS
     )
+}
+
+/// Records that the purge of the snapshot at `path` failed with an error
+/// it retries, and reports it in [`PurgeReport::stuck`] at most once a day
+/// while it keeps failing, so a snapshot stuck on a retried error is seen
+/// by path, not only counted. `warned` holds when each was last reported.
+fn stuck(
+    warned: &mut HashMap<PathBuf, i64>,
+    path: &Path,
+    e: &crate::Error,
+    now: i64,
+    report: &mut PurgeReport,
+) {
+    let due = warned
+        .get(path)
+        .is_none_or(|at| now < *at || now.saturating_sub(*at) >= 86_400);
+    if due {
+        warned.insert(path.to_path_buf(), now);
+        report.stuck.push((path.to_path_buf(), error_kind(e)));
+    }
+}
+
+/// A short, fixed name for the kind of error, for the log.
+fn error_kind(e: &crate::Error) -> &'static str {
+    use rusqlite::ErrorCode as C;
+    let crate::Error::Sqlite(e) = e else {
+        return "other";
+    };
+    match e.sqlite_error_code() {
+        Some(C::DatabaseBusy) => "busy",
+        Some(C::DatabaseLocked) => "locked",
+        Some(C::SystemIoFailure) => "I/O error",
+        Some(C::DiskFull) => "disk full",
+        Some(C::OutOfMemory) => "out of memory",
+        Some(C::OperationInterrupted) => "interrupted",
+        Some(C::CannotOpen) => "can't open",
+        Some(C::ReadOnly) => "read-only",
+        Some(C::PermissionDenied) => "permission denied",
+        Some(C::DatabaseCorrupt | C::NotADatabase) => "damaged",
+        _ => "database error",
+    }
 }
 
 /// Fails closed on a snapshot whose identify claims couldn't be checked
@@ -940,7 +1008,8 @@ struct Counts {
     candidates: usize,
     unverified: usize,
     claims: usize,
-    /// The pass's cap stopped the claims purge with some still due.
+    /// The pass's limits (its time budget, or the row cap) stopped the
+    /// claims purge with some still due.
     claims_left: bool,
 }
 
@@ -1024,7 +1093,7 @@ fn purge_one(
     now: i64,
     hits_before: i64,
     carry: Option<&Carry<'_>>,
-    limit: Option<claims::Limit>,
+    limit: Option<claims::Limit<'_>>,
 ) -> crate::Result<Outcome> {
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
@@ -1387,7 +1456,7 @@ fn purge_claims_only(
     path: &Path,
     terms: &claims::LiveTerms,
     now: i64,
-    limit: Option<claims::Limit>,
+    limit: Option<claims::Limit<'_>>,
     raise: bool,
 ) -> crate::Result<Option<(usize, bool)>> {
     let taken = modified(path);
