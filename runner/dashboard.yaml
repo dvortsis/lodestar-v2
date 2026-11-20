@@ -658,6 +658,7 @@ placement:
   - X-watch-stall-retry
   - /^ENR-[a-z]+$/
   - ENR-terms-api
+  - X-steam-followups
   - X-snapshot-claims-retention
   - X-snapshot-followups-2
 - ws: ws-m7-w5
