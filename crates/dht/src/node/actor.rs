@@ -15,6 +15,7 @@ use tokio::time::Instant;
 use lodestar_metainfo::InfoHash;
 
 use super::hints::{self, Hint, Hints};
+use super::ledger::{self, HintOutcome, LedgerEnd, QueryPurpose};
 use super::limits::{Answered, Network, SourceBuckets, network, source};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
@@ -468,6 +469,8 @@ struct PeerRequest {
     started: Instant,
     /// Its deadline ran out (a streaming terminal says so).
     expired: bool,
+    /// CR-LEDGER: what the ledger records when it ends.
+    ledger: ledger::Entry,
 }
 
 struct Actor {
@@ -650,7 +653,13 @@ pub(crate) async fn run(
         }
     }
     actor.release_permits();
+    actor.end_ledger_at_shutdown();
     actor.finish()
+}
+
+/// A duration in whole ms, saturating.
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 async fn recv_second(
@@ -1171,7 +1180,7 @@ impl Actor {
     ) -> Result<u64, Sent> {
         let now = Instant::now();
         self.admit_query(family, to, now)?;
-        self.send_admitted(sockets, family, to, node, method, purpose, now)
+        self.send_admitted(sockets, family, to, node, method, purpose, false, now)
     }
 
     /// Whether a query to `to` may go out now: the right family, room under
@@ -1203,6 +1212,7 @@ impl Actor {
         node: Option<NodeId>,
         method: Method<'_>,
         purpose: Purpose,
+        hinted: bool,
         now: Instant,
     ) -> Result<u64, Sent> {
         // Never reuse a wire token in this process, even after success,
@@ -1235,6 +1245,7 @@ impl Actor {
             return Err(sent);
         }
         Stats::inc(&self.stats.queries_out);
+        self.stats.ledger.query(self.query_purpose(purpose, hinted));
         *self.pending_addrs.entry(to).or_default() += 1;
         self.pending.insert(
             tid,
@@ -1244,10 +1255,27 @@ impl Actor {
                 sent: now,
                 family,
                 purpose,
-                hinted: false,
+                hinted,
             },
         );
         Ok(tid)
+    }
+
+    /// The ledger's purpose for a query being sent: for a lookup's, from
+    /// the kind of lookup it serves.
+    fn query_purpose(&self, purpose: Purpose, hinted: bool) -> QueryPurpose {
+        match purpose {
+            Purpose::Ping => QueryPurpose::Ping,
+            Purpose::Sample => QueryPurpose::Sample,
+            Purpose::Lookup(_) if hinted => QueryPurpose::Hint,
+            Purpose::Lookup(lid) => match self.lookups.get(&lid) {
+                Some(l) if l.scrape => QueryPurpose::Scrape,
+                Some(l) if l.info_hash.is_some() => QueryPurpose::PeerLookup,
+                Some(l) if l.bootstrap => QueryPurpose::Bootstrap,
+                Some(l) if l.explore => QueryPurpose::Explore,
+                _ => QueryPurpose::Refresh,
+            },
+        }
     }
 
     fn take_pending(&mut self, tid: u64) -> Pending {
@@ -1391,6 +1419,7 @@ impl Actor {
             Some(id),
             Method::Ping,
             Purpose::Ping,
+            false,
             now,
         ) {
             self.verify_tids.insert(tid);
@@ -1800,6 +1829,13 @@ impl Actor {
                 {
                     streamed.clone_from(&peers);
                 }
+                // CR-LEDGER: the request's first reply with values.
+                if !peers.is_empty()
+                    && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
+                    && r.ledger.first_values_ms.is_none()
+                {
+                    r.ledger.first_values_ms = Some(millis(r.started.elapsed()));
+                }
                 match pending.id {
                     Some(id) => {
                         if lookup.scrape {
@@ -1813,6 +1849,9 @@ impl Actor {
                         lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
                         if !peers.is_empty() {
                             Stats::inc(&self.stats.hint_useful);
+                            self.stats.ledger.hint(HintOutcome::Values);
+                        } else {
+                            self.stats.ledger.hint(HintOutcome::NoValues);
                         }
                         lookup.absorb(others, &peers);
                     }
@@ -1824,7 +1863,12 @@ impl Actor {
             }
             _ => match pending.id {
                 Some(id) => lookup.on_failure(&id),
-                None => lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1),
+                None => {
+                    if pending.hinted {
+                        self.stats.ledger.hint(HintOutcome::NoValues);
+                    }
+                    lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
+                }
             },
         }
         // CR-1a-S: a streaming request's peers go out as they arrive,
@@ -1961,6 +2005,7 @@ impl Actor {
                 peers: Set::default(),
                 started: Instant::now(),
                 expired: false,
+                ledger: ledger::Entry::default(),
             },
         );
         // Hints serve pool requests only, not the legacy harvest-only
@@ -2049,23 +2094,28 @@ impl Actor {
             return Err(HintFallback::Throttled);
         }
         let guard = self.hints.as_mut().expect("hints are on");
-        guard.admit(to.ip(), now)?;
+        if let Err(why) = guard.admit(to.ip(), now) {
+            self.stats.ledger.hint(HintOutcome::GuardSkipped);
+            return Err(why);
+        }
         let method = Method::GetPeers {
             info_hash: hash,
             want: Want::default(),
             scrape: false,
             noseed: false,
         };
-        let tid = match self.dispatch_query(sockets, family, to, None, method, Purpose::Lookup(lid))
-        {
-            Ok(tid) => tid,
+        // `dispatch_query`, with the query marked hinted as it's sent.
+        let sent_at = Instant::now();
+        let sent = self.admit_query(family, to, sent_at).and_then(|()| {
+            let purpose = Purpose::Lookup(lid);
+            self.send_admitted(sockets, family, to, None, method, purpose, true, sent_at)
+        });
+        match sent {
+            Ok(_) => {}
             Err(Sent::Failed) => return Err(HintFallback::SendFailed),
             Err(_) => return Err(HintFallback::Throttled),
-        };
-        Stats::inc(&self.stats.hint_queries);
-        if let Some(p) = self.pending.get_mut(&tid) {
-            p.hinted = true;
         }
+        Stats::inc(&self.stats.hint_queries);
         if let Some(h) = &mut self.hints {
             h.sent(to.ip(), now);
         }
@@ -2387,7 +2437,14 @@ impl Actor {
         let exhausted = owner
             .and_then(|o| self.peer_requests.get(&o))
             .is_some_and(|r| r.sent >= MAX_PEER_QUERIES && r.inflight == 0);
-        if exhausted || self.lookups.get(&lid).is_some_and(Lookup::is_done) {
+        let done = self.lookups.get(&lid).is_some_and(Lookup::is_done);
+        if exhausted || done {
+            if exhausted
+                && !done
+                && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
+            {
+                r.ledger.capped = true;
+            }
             self.finish_lookup(lid);
         } else if !self.stalled.contains(&lid) {
             // Also covers immediate send failure with fresh candidates but
@@ -2406,7 +2463,9 @@ impl Actor {
             })
             .collect();
         for t in tids {
-            self.take_pending(t);
+            if self.take_pending(t).hinted {
+                self.stats.ledger.hint(HintOutcome::Unanswered);
+            }
         }
         self.stalled.retain(|id| *id != lid);
         let Some(done) = self.lookups.remove(&lid) else {
@@ -2449,18 +2508,35 @@ impl Actor {
             let Some(r) = self.peer_requests.get_mut(&owner) else {
                 return;
             };
-            // A stream sent its peers as they came.
-            if !matches!(r.reply, Some(Reply::Stream(_))) {
-                for p in done.peers {
-                    if r.peers.len() < 64 {
-                        r.peers.insert(p);
-                    }
+            // A stream sent its peers as they came; they're kept here too
+            // only so the ledger counts each distinct one once.
+            for p in done.peers {
+                if r.peers.len() < 64 {
+                    r.peers.insert(p);
                 }
             }
             r.remaining -= 1;
             if r.remaining == 0 {
                 let r = self.peer_requests.remove(&owner).expect("present");
                 self.active_get_peers -= 1;
+                let why = if r.reply.as_ref().is_some_and(Reply::is_closed) {
+                    LedgerEnd::Cancelled
+                } else if r.expired {
+                    LedgerEnd::Deadline
+                } else if r.ledger.capped {
+                    LedgerEnd::QueryCap
+                } else if !r.peers.is_empty() {
+                    LedgerEnd::Values
+                } else {
+                    LedgerEnd::NoValues
+                };
+                let entry = ledger::Entry {
+                    values: r.peers.len() as u64,
+                    ..r.ledger
+                };
+                self.stats
+                    .ledger
+                    .end(why, &entry, millis(r.started.elapsed()));
                 let mut peers: Vec<_> = r.peers.into_iter().collect();
                 peers.sort_unstable();
                 if let Some(Reply::Stream(stream)) = r.reply {
@@ -2528,6 +2604,25 @@ impl Actor {
         }
         for r in self.peer_requests.values_mut() {
             PermitReturn::Shutdown.release(&self.stats, r.permit.take());
+        }
+    }
+
+    /// At shutdown, once: the ledger ends the requests still running, with
+    /// the values their unfinished legs hold so far.
+    fn end_ledger_at_shutdown(&mut self) {
+        for (owner, r) in &self.peer_requests {
+            let mut found = r.peers.clone();
+            for l in self.lookups.values().filter(|l| l.owner == Some(*owner)) {
+                found.extend(l.peers.iter().copied());
+            }
+            let entry = ledger::Entry {
+                values: found.len().min(64) as u64,
+                ..r.ledger
+            };
+            let residence = millis(r.started.elapsed());
+            self.stats
+                .ledger
+                .end(LedgerEnd::Shutdown, &entry, residence);
         }
     }
 
@@ -2612,6 +2707,9 @@ impl Actor {
         for tid in expired {
             let p = self.take_pending(tid);
             Stats::inc(&self.stats.timeouts);
+            if p.hinted {
+                self.stats.ledger.hint(HintOutcome::Unanswered);
+            }
             if let Some(id) = p.id {
                 self.families[p.family].table.failed(&id, now);
             }
@@ -2731,6 +2829,14 @@ impl Actor {
         self.stats
             .peer_queued
             .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
+        let ledger = &self.stats.ledger;
+        ledger.slots_occupied.store(
+            (self.active_get_peers + self.get_peers_queue.len()) as u64,
+            Ordering::Relaxed,
+        );
+        ledger
+            .slots_capacity
+            .store(MAX_GET_PEERS as u64, Ordering::Relaxed);
         self.stats
             .lookup_scheduled
             .store(self.stalled.len() as u64, Ordering::Relaxed);
@@ -4831,3 +4937,7 @@ mod verify_tests;
 #[cfg(test)]
 #[path = "limit_tests.rs"]
 mod limit_tests;
+
+#[cfg(test)]
+#[path = "ledger_tests.rs"]
+mod ledger_tests;
