@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T12:38Z",
+  "updated_at": "2026-11-20T12:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10258,6 +10258,13 @@
       "sha": "079752e0",
       "at": "2026-11-20T11:13Z",
       "note": "delta review MERGE (IPv6 /48 fix); session archived; sampler hold lifted"
+    },
+    {
+      "pr": 982,
+      "slice": "X-flake-log-history-win",
+      "sha": "48f5a540",
+      "at": "2026-11-20T12:54Z",
+      "note": "review MERGE; optionals to a logging follow-up; session archived"
     }
   ],
   "active_sessions": {
@@ -10503,7 +10510,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T12:38Z",
+    "updated": "2026-11-20T12:54Z",
     "items": [
       {
         "slot": 1,
@@ -10527,13 +10534,13 @@
       },
       {
         "slot": 3,
-        "slice": "X-flake-log-history-win",
-        "role": "build",
-        "agent": "claude",
+        "slice": "X-network-lost-msg",
+        "role": "build (sonnet)",
+        "agent": "session_01MMjhnBSC5JnD2q4qaJmMFS",
         "model": "opus",
-        "since": "2026-11-20T11:03Z",
-        "doing": "#982 MERGE at 6557edf2; awaiting ci-ok",
-        "status": "active"
+        "since": "2026-11-20T12:54Z",
+        "doing": "launched; brief briefs/X-network-lost-msg.md",
+        "status": "running"
       },
       {
         "slot": 4,
