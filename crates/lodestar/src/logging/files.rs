@@ -227,17 +227,25 @@ pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
 
 /// Opens a listed file: a rotated `.jsonl` compressed since the listing
 /// is its `.gz`, with the same lines at the same offsets.
+///
+/// **Whatever the error on the `.jsonl`**, not only "not found": the
+/// compression renames the finished `.gz` into place first and deletes
+/// the `.jsonl` after, so while the `.jsonl` is being deleted its `.gz`
+/// is already whole. On Windows a file being deleted can stay in the
+/// folder, unopenable (access denied or delete pending), while any handle
+/// is open on it; reading only "not found" as "compressed since" skipped
+/// the rest of that file (X-flake-log-history-win). When the `.gz` can't
+/// be opened either, the `.jsonl`'s own error is returned.
 pub fn open_listed(dir: &Path, name: &LogName) -> io::Result<(LogName, std::fs::File)> {
     match open_regular(&name.path(dir)) {
         Ok(f) => Ok((name.clone(), f)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => match name.compressed() {
-            Some(gz) => {
-                let f = open_regular(&gz.path(dir))?;
-                Ok((gz, f))
-            }
+        Err(e) => match name.compressed() {
+            Some(gz) => match open_regular(&gz.path(dir)) {
+                Ok(f) => Ok((gz, f)),
+                Err(_) => Err(e),
+            },
             None => Err(e),
         },
-        Err(e) => Err(e),
     }
 }
 

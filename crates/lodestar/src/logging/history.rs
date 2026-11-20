@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use super::Runtime;
 use super::entry::Entry;
 use super::files::{self, Listed};
-use super::names::{LogName, open_regular};
+use super::names::LogName;
 use super::read;
 use super::view::{self, matches, ring_line};
 
@@ -150,9 +150,11 @@ fn unbase64url(s: &str) -> Option<Vec<u8>> {
 /// The longest cursor (`/logs` refuses longer ones first).
 const MAX_CURSOR: usize = 512;
 
-/// A file's first-line fingerprint, to know the current file again.
+/// A file's first-line fingerprint, to know the current file again. A
+/// rotated `.jsonl` compressed (or being deleted) since it was listed is
+/// read as its `.gz`, as [`files::open_listed`] reads it.
 fn head_of(dir: &std::path::Path, name: &LogName) -> u64 {
-    let Ok(mut f) = open_regular(&name.path(dir)) else {
+    let Ok((name, mut f)) = files::open_listed(dir, name) else {
         return 0;
     };
     match read::first_line(&mut f, name.gz()) {
@@ -517,6 +519,38 @@ mod tests {
         let (name, _) = files::open_listed(dir.path(), &plain).unwrap();
         assert_eq!(name, plain.compressed().unwrap());
         assert!(files::open_listed(dir.path(), &LogName::Current).is_err());
+    }
+
+    /// X-flake-log-history-win: a rotated `.jsonl` that is still in the
+    /// folder but can't be opened (on Windows: being deleted while a handle
+    /// is open on it, access denied or delete pending), with its finished
+    /// `.gz` beside it, is read as the `.gz`. Before, only "not found" fell
+    /// back, so history counted the file unreadable and skipped the rest of
+    /// it: on Windows CI, lines 161..140 of a page's file went missing. A
+    /// folder under the `.jsonl` name stands in for the delete-pending file
+    /// (opening it fails, and not as "not found").
+    #[test]
+    fn a_jsonl_that_cant_be_opened_beside_its_gz_is_read_as_the_gz() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = LogName::parse("lodestar-20261023T101500.123Z.jsonl").unwrap();
+        let gz = plain.compressed().unwrap();
+        std::fs::create_dir(plain.path(dir.path())).unwrap();
+        let err = super::super::names::open_regular(&plain.path(dir.path())).unwrap_err();
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
+        // Without its `.gz`, the `.jsonl`'s own error.
+        let e = files::open_listed(dir.path(), &plain).unwrap_err();
+        assert_eq!(e.kind(), err.kind());
+        std::fs::write(gz.path(dir.path()), "x").unwrap();
+        let (name, _) = files::open_listed(dir.path(), &plain).unwrap();
+        assert_eq!(name, gz);
+        // The current file has no `.gz`: its error stands.
+        std::fs::create_dir(LogName::Current.path(dir.path())).unwrap();
+        assert!(files::open_listed(dir.path(), &LogName::Current).is_err());
+        // And the head fingerprint reads the `.gz` too.
+        let mut gzw = Vec::new();
+        super::super::read::write_gz(&mut &b"{\"a\":1}\n"[..], &mut gzw).unwrap();
+        std::fs::write(gz.path(dir.path()), &gzw).unwrap();
+        assert_eq!(head_of(dir.path(), &plain), fingerprint_of(b"{\"a\":1}"));
     }
 
     #[test]
