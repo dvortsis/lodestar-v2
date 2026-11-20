@@ -3,17 +3,19 @@
 Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, built together under owner decision §2.66 items 1 to 3, plus I3's Discover note and L5 (`docs/decisions/2026-11-14-runner-ui-review-placement.md`). Architecture §10.15, §10.4 and §10.2. Choices made by the slice session on 2026-11-20Z for the runner to confirm.
 
 ## The drawer beside the results from 1366 px (I1, §2.66 item 1)
-- **When the drawer is in flow.** From the xx-large range (1366 px), the drawer sits beside the results whenever the drawer's minimum fits beside the results' floor. Both are 480 px. Below that, it overlays as before.
+
+- **When the drawer is in flow.** From the xx-large range (1366 px), the drawer sits beside the results whenever the drawer's minimum (`--drawer-min-width`) fits beside the results' floor (`--results-min-width-drawer`). Both are 480 px. Below that, it overlays as before.
   - At 1366 px that leaves the results about 542 px, as the owner's decision expects.
-- **The results' floor.** While the drawer is in flow, the grid's results track is `minmax(var(--drawer-min-width), 1fr)` instead of `minmax(var(--results-min-width), 1fr)`.
-  - **No new token.** §2.66 sets the floor equal to `--drawer-min-width` (480 px), so the slice reuses that token in `results.css` and `DetailHostBody.svelte`, with a comment at each.
-  - **For the runner:** if the floor and the drawer's minimum ever need to differ, a token PR adds `--results-min-width-drawer` and replaces those two uses.
+- **The results' floor.** While the drawer is in flow, the grid's results track is `minmax(var(--results-min-width-drawer), 1fr)` instead of `minmax(var(--results-min-width), 1fr)`.
+  - **A new token, `--results-min-width-drawer` (480 px)** (runner, 2026-11-20). It's the results track's floor while the drawer is in flow. Reusing `--drawer-min-width`, which has the same value, would have tied two meanings together, and the tokens are a contract.
+  - **Edited outside this slice's owns, as the runner approved:** one line in `web/src/lib/theme/tokens.css` and one row in `docs/design-tokens.md`. No token test or theme-compiler list enumerates the layout tokens, so nothing else changed.
 - **The drawer's width.** It is the stored width, or `--drawer-overlay-width` if none is stored, capped at the most that still leaves the results `--results-min-width` (560 px). It is never under `--drawer-min-width`; there the results give way instead, down to their floor.
   - **A cap, not a step.** The owner's wording is "opens at `--drawer-min-width` until the window is wide enough for the stored width". The slice reads that as a cap rather than a jump: between the two, the drawer grows with the window. That avoids a jump of up to 160 px at one exact width.
   - **Resizing never rewrites the stored width.** The cap is the Drawer's `maxWidth`, so the Drawer clamps the shown width and the stored value stays as the user chose it. A test checks that 640 stays stored at 1440 px, and is shown again at 1920 px.
   - **Dragging stops at the cap.** The resize handle can't push the results below `--results-min-width`. The floor only applies while the drawer is at its own minimum.
 
 ## Rows adapt to their own width (I3, L5)
+
 - **A fact drops whole, never mid-word.** The facts line now wraps, and only its first line shows (`height: 1lh`). A fact that doesn't fit therefore moves to the hidden second line instead of being cut at the end ("3 hours ag").
   - `1lh` follows the line height, so it still holds under WCAG 1.4.12 text spacing (L5). A test injects the 1.4.12 overrides.
   - Dropped facts stay in the accessibility tree, and they are all in the drawer and in Table mode.
@@ -25,12 +27,14 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
 - **The facts order within §10.4.** Only the trackers fact moved, behind the discovered time. §10.4's listed choice facts keep their order.
 
 ## Sizes
+
 - Every `size-limit` entry passes, and no limit was raised.
 - Search results (lazy) is at 40,602 of 40,610 B. The next change to the row needs a budget review.
 - Detail drawer is at 28,111 of 28,128 B.
 - A comment using the word "shrink" had added a `.shrink` utility to the global sheet. It was reworded, so Tailwind's scan of `.svelte` comments costs nothing here.
 
 ## Tests and baselines
+
 - **`e2e/search-results-adaptive.routes.test.ts`:**
   - the drawer is in flow at 1366 and 1440 px, beside the results, not over them;
   - at 1366 px the drawer is 480 px and the results at least 530 px;
@@ -45,5 +49,6 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
 - **Baselines are generated in CI** with the repo's marker-file workflow (`web/e2e/README.md`). The refreshed 768 and 1024 px search baselines come from that run too, along with any other baseline that shows a result row, such as Discover. None were made in this container.
 
 ## Not here
+
 - Group versions (GS-5) and "Identified as" (ENR-13: text, IDs and links only) are unchanged.
 - Removing the technical facts from the row, and the two-tier row, are X-row-rail's.

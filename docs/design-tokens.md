@@ -229,6 +229,7 @@ No `rounded-full` on containers or primary buttons. Tailwind's default
 | `--card-height` | per breakpoint | Cards density: a fixed height per breakpoint, set by the Search slice and recorded here when chosen (not yet specified in §10.2). |
 | `--rail-width` | 264px | Facet rail (fixed). |
 | `--results-min-width` | 560px | Results column minimum. |
+| `--results-min-width-drawer` | 480px | Results column floor while the detail drawer is in flow (owner §2.66, item 1). |
 | `--drawer-min-width` | 480px | Persistent drawer minimum (resizable; width persisted). |
 | `--drawer-max-width` | 640px | Persistent drawer maximum. |
 | `--drawer-overlay-width` | 560px | Drawer overlay at x-large (§10.15). |

@@ -3,8 +3,8 @@
 	// and places itself: in flow from xx-large up, an overlay at x-large and large, and a full
 	// screen view with Back below large. The browser's Back (popstate) clears the state and closes it.
 	// In flow (owner §2.66): while the drawer is open the results track may narrow below
-	// --results-min-width to a floor of --drawer-min-width (480 px; the two are equal by that
-	// decision), and the drawer narrows towards --drawer-min-width until the window fits the stored
+	// --results-min-width to a floor of --results-min-width-drawer (480 px), and the drawer narrows
+	// towards --drawer-min-width until the window fits the stored
 	// width. So it sits beside the results from 1366 px instead of covering them.
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
@@ -115,10 +115,11 @@
 	});
 
 	const drawerMin = tokenPx('--drawer-min-width', 480);
-	// In flow only if the drawer's minimum fits beside the results' floor, which is the same 480 px
-	// (§2.66).
+	// In flow only if the drawer's minimum fits beside the results' floor (§2.66).
 	const mode = $derived<Mode>(
-		viewportMode === 'inline' && room < 2 * drawerMin ? 'overlay' : viewportMode
+		viewportMode === 'inline' && room < drawerMin + tokenPx('--results-min-width-drawer', 480)
+			? 'overlay'
+			: viewportMode
 	);
 
 	$effect(() => {
