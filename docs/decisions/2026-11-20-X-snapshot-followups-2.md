@@ -4,9 +4,14 @@ The optional findings from #987's fresh review, given to the same session by the
 
 ## A failed time restore says so
 - **Before:** `KeepTime` ignored `set_modified`'s error. A snapshot whose time couldn't be put back after a purge wrote it could outlive its 90 days with no sign.
-- **Now:** the failure is recorded in a thread-local `Cell`, which the hourly pass reads after each snapshot's purge (`note_restore`). It adds one warning naming the snapshot: "the date of the snapshot … couldn't be put back after Lodestar wrote to it; it may be kept longer than its 90 days". The pass runs on one thread, so a thread-local is the simplest seam. The pass clears it at the start, so a restore by `settle` or a rollback is never reported as the pass's.
+- **Now:** the hourly pass owns a `Cell` (`RestoreFailed`) and hands it to each `KeepTime` it creates: through `purge_one`'s `Hourly` argument, which also carries the claims budget, and through `purge_claims_only`. A failed restore is recorded there. After each of those two calls, the pass turns it into one warning naming that snapshot (`note_restore`): "the date of the snapshot … couldn't be put back after Lodestar wrote to it ({kind}); it may be kept longer than its 90 days".
+- **No hidden state (runner, 2026-11-20).** The pass first used a thread-local, which the runner replaced. A `Cell` owned by the pass needs no reset. A restore failure from `settle`, `apply_source_purges` or a rollback's copy, which `lodestar rollback` may run on the same thread before a pass, can never reach a pass's report. Those callers pass no `Cell`, so their failures stay silent; the runner queues them separately.
 - **Not a warning:** a file that's already gone (`NotFound`).
-- **Tested:** `a_failed_time_restore_is_reported`, through a test-only switch (`FAIL_RESTORE`) that makes every restore on the thread fail.
+- **Tested:**
+  - `a_failed_time_restore_is_reported`;
+  - `a_failed_restore_names_its_own_snapshot`. A newer schema's claims-only purge fails its restore beside a second snapshot, in both processing orders, and the warning must name the right file.
+
+  Both inject the failure through a test-only thread-local switch (`FAIL_RESTORE`), the one thread-local left, and only in tests.
 
 ## No write when the time is already right
 - **The change:** `KeepTime` compares the file's time, to the second, with the time it would put back, and writes only when they differ. A pass with nothing to purge therefore no longer rewrites every kept snapshot's time each hour. It still opens each one through SQLite to look.
@@ -22,4 +27,4 @@ The optional findings from #987's fresh review, given to the same session by the
 - **Tested:** `a_pass_that_looks_at_nothing_forgets_the_sightings` covers the holds case. The other clears are defensive and untested, because they can't be reached without fault injection. A listing failure needs the folder unreadable, which root ignores. No snapshot being left means no sighting can remain anyway. An unreadable time needs a metadata error other than NotFound.
 
 ## Mutation-checked by hand
-Each new test fails when its behaviour is removed: the warning, the no-write skip, and the clear on a failed read of the live store's holds.
+Each new test fails when its behaviour is removed: the warning, the report after the claims-only purge, the no-write skip, and the clear on a failed read of the live store's holds.

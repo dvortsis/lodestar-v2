@@ -1192,6 +1192,54 @@ mod tests {
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
     }
 
+    /// A newer schema's claims-only purge that can't put the time back is
+    /// reported under its own snapshot, never the next one's: a second
+    /// snapshot, with nothing to purge, is processed in the same pass.
+    #[test]
+    fn a_failed_restore_names_its_own_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, db, [tmdb, _, _]) = live(dir.path());
+        // B first, before the claim: nothing in it to purge.
+        let b = crate::schema::snapshot_path(&db, 100);
+        store
+            .connection()
+            .execute("VACUUM INTO ?1", [b.to_string_lossy()])
+            .unwrap();
+        super::super::set_modified(&b, T).unwrap();
+        let tmdb = i64::from(tmdb.get());
+        torrent(store.connection(), 1);
+        torrent(store.connection(), 2);
+        // One claim due at T, one an hour on: A is written in both passes.
+        claim(store.connection(), 1, tmdb, T - 30 * DAY);
+        claim(store.connection(), 2, tmdb, T - 9 * DAY + 3_000);
+        let a = take(&store, &db);
+        run(
+            &a,
+            &format!(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES ({}, 0)",
+                crate::snapshots::Plan::KNOWN_THROUGH + 1
+            ),
+        );
+        let mut store = store;
+        // The pass starts at a different snapshot each hour: both orders.
+        for now in [T, T + 3_600] {
+            super::super::FAIL_RESTORE.set(true);
+            let r = pass(&mut store, now);
+            super::super::FAIL_RESTORE.set(false);
+            let named = |p: &Path| {
+                let name = p.display().to_string();
+                r.warnings
+                    .iter()
+                    .filter(|w| w.contains(&name) && w.contains("couldn't be put back"))
+                    .count()
+            };
+            assert_eq!(r.claims, 1, "{:?}", r.warnings);
+            assert_eq!(named(&a), 1, "{:?}", r.warnings);
+            assert_eq!(named(&b), 0, "{:?}", r.warnings);
+            super::super::set_modified(&a, T).unwrap();
+        }
+    }
+
     /// A pass with nothing to do leaves the snapshot's time as it was,
     /// without writing it: a sub-second part a write would drop survives.
     /// (Needs a filesystem with sub-second times, as CI's are; not FAT or

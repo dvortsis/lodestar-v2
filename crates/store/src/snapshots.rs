@@ -688,8 +688,8 @@ impl Store {
         let Some(db) = self.path.clone() else {
             return report;
         };
-        // Only this pass's own restores are reported.
-        RESTORE_FAILED.set(None);
+        // This pass's own failed time restores, reported per snapshot.
+        let restore_failed = RestoreFailed::new(None);
         let all = match list(&db) {
             Ok(all) => all,
             Err(e) => {
@@ -846,8 +846,20 @@ impl Store {
             // every pass that looked since found them so: any other
             // outcome now resets it.
             let lasting = self.snapshot_marks.2.remove(&snap.path);
-            let outcome = purge_one(&snap, &live, since, now, hits_before, None, Some(limit));
-            note_restore(&snap.path, &mut report);
+            let failed = Some(&restore_failed);
+            let outcome = purge_one(
+                &snap,
+                &live,
+                since,
+                now,
+                hits_before,
+                None,
+                Some(Hourly {
+                    limit,
+                    failed: &restore_failed,
+                }),
+            );
+            note_restore(&snap.path, &restore_failed, &mut report);
             match outcome {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
@@ -858,9 +870,15 @@ impl Store {
                     // same, or, when they can't be checked, the snapshot
                     // goes. Any other error is tried again next pass.
                     if newer {
-                        let checked =
-                            purge_claims_only(&snap.path, &live.terms, now, Some(limit), false);
-                        note_restore(&snap.path, &mut report);
+                        let checked = purge_claims_only(
+                            &snap.path,
+                            &live.terms,
+                            now,
+                            Some(limit),
+                            false,
+                            failed,
+                        );
+                        note_restore(&snap.path, &restore_failed, &mut report);
                         match checked {
                             Ok(Some((n, left))) => {
                                 self.snapshot_marks.1.remove(&snap.path);
@@ -1176,10 +1194,24 @@ fn open_rw(path: &Path) -> rusqlite::Result<Connection> {
 /// expiry goes by that time, and folding a WAL or purging writes the file,
 /// which moves it to now: kept, the snapshot would outlive its 90 days.
 /// Declared before the snapshot's connection, it runs after that closes,
-/// on every way out, an early `?` included.
+/// on every way out, an early `?` included. A restore that fails is
+/// recorded in `failed`, when given, for the hourly pass to report.
 struct KeepTime<'a> {
     path: &'a Path,
     at: Option<i64>,
+    failed: Option<&'a RestoreFailed>,
+}
+
+/// Where a [`KeepTime`] records why it couldn't put a snapshot's time
+/// back; owned by the hourly pass, which reports it ([`note_restore`]).
+type RestoreFailed = std::cell::Cell<Option<std::io::ErrorKind>>;
+
+/// What only the hourly pass gives [`purge_one`]: its claims budget, and
+/// where a failed time restore is recorded. A rollback's copy has neither.
+#[derive(Clone, Copy)]
+struct Hourly<'a> {
+    limit: claims::Limit<'a>,
+    failed: &'a RestoreFailed,
 }
 
 impl Drop for KeepTime<'_> {
@@ -1204,17 +1236,13 @@ impl Drop for KeepTime<'_> {
             Ok(()) => {}
             // Gone meanwhile: nothing left to keep.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => RESTORE_FAILED.set(Some(e.kind())),
+            Err(e) => {
+                if let Some(failed) = self.failed {
+                    failed.set(Some(e.kind()));
+                }
+            }
         }
     }
-}
-
-thread_local! {
-    /// A [`KeepTime`] on this thread couldn't put a snapshot's time back,
-    /// and why: the hourly pass turns it into a warning
-    /// ([`note_restore`]).
-    static RESTORE_FAILED: std::cell::Cell<Option<std::io::ErrorKind>> =
-        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1226,8 +1254,8 @@ thread_local! {
 /// Adds a warning to `report` when restoring `path`'s time just failed:
 /// the snapshot could then be kept past its 90 days, so it's said, by
 /// name.
-fn note_restore(path: &Path, report: &mut PurgeReport) {
-    if let Some(kind) = RESTORE_FAILED.take() {
+fn note_restore(path: &Path, failed: &RestoreFailed, report: &mut PurgeReport) {
+    if let Some(kind) = failed.take() {
         report.warnings.push(format!(
             "the date of the snapshot {} couldn't be put back after Lodestar wrote to it \
              ({kind}); it may be kept longer than its {RETAIN_DAYS} days",
@@ -1245,6 +1273,7 @@ pub fn settle(path: &Path) -> rusqlite::Result<bool> {
     let _time = KeepTime {
         path,
         at: modified(path),
+        failed: None,
     };
     let conn = open_rw(path)?;
     settle_conn(&conn)
@@ -1279,13 +1308,15 @@ fn purge_one(
     now: i64,
     hits_before: i64,
     carry: Option<&Carry<'_>>,
-    limit: Option<claims::Limit<'_>>,
+    hourly: Option<Hourly<'_>>,
 ) -> crate::Result<Outcome> {
+    let limit = hourly.map(|h| h.limit);
     // The expiry goes by the modification time: whatever happens below,
     // it stays the time the snapshot was taken.
     let _time = KeepTime {
         path: &snap.path,
         at: snap.taken_at,
+        failed: hourly.map(|h| h.failed),
     };
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
@@ -1634,10 +1665,12 @@ fn purge_claims_only(
     now: i64,
     limit: Option<claims::Limit<'_>>,
     raise: bool,
+    failed: Option<&RestoreFailed>,
 ) -> crate::Result<Option<(usize, bool)>> {
     let _time = KeepTime {
         path,
         at: modified(path),
+        failed,
     };
     let mut conn = open_rw(path)?;
     settle_conn(&conn)?;
@@ -1711,7 +1744,7 @@ fn purge_claims_only(
 pub fn apply_source_purges(store: &Connection, snapshot: &Path, now: i64) -> crate::Result<usize> {
     let terms = claims::LiveTerms::read(store)?;
     let applied = apply_purges_only(store, snapshot)?;
-    purge_claims_only(snapshot, &terms, now, None, true)?;
+    purge_claims_only(snapshot, &terms, now, None, true, None)?;
     // A WAL left beside it would be lost with the rename.
     if settle(snapshot)? || side_exists(snapshot, "-wal") {
         return Err(crate::Error::Corrupt(
@@ -1730,6 +1763,7 @@ fn apply_purges_only(store: &Connection, snapshot: &Path) -> crate::Result<usize
     let _time = KeepTime {
         path: snapshot,
         at: modified(snapshot),
+        failed: None,
     };
     let mut conn = open_rw(snapshot)?;
     settle_conn(&conn)?;
@@ -4017,7 +4051,7 @@ mod tests {
         // The claims-only purge (newer schemas, the update rollback) too.
         let snap = folded_then_failing(&store, &db, 20);
         let terms = claims::LiveTerms::default();
-        assert!(purge_claims_only(&snap, &terms, T, None, true).is_err());
+        assert!(purge_claims_only(&snap, &terms, T, None, true, None).is_err());
         assert!(!side(&snap, "-wal").exists(), "the fold ran");
         assert_eq!(modified(&snap), Some(T));
     }
