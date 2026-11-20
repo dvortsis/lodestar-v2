@@ -24,7 +24,8 @@
 //! claim), so its claims stay, as live.
 //!
 //! A snapshot whose claims can't be checked however often the pass tries
-//! ([`persistent`]) fails closed: the hourly pass deletes it and a
+//! ([`persistent`]) fails closed: the hourly pass deletes it once a pass
+//! an hour or more after the first finds the same, and a
 //! rollback refuses it (`super::purge_snapshots`, `super::purge_for_restore`,
 //! `super::apply_source_purges`). Any other error is retried next pass.
 //! The hourly pass spends at most [`PASS_BUDGET`] deleting claims.
@@ -35,6 +36,7 @@
 //! it, the keys and the slack to `Terms::record`, `Terms::from_record` and
 //! `Retention::drop_after`.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -68,16 +70,20 @@ pub(crate) const MAX_PER_PASS: usize = 1_000_000;
 
 /// How long one hourly pass spends deleting claims, across every
 /// snapshot, while it holds the writer's store: under 1 % of the hour.
-/// Checked between chunks, so a pass overruns it by one chunk at most. A
-/// backlog left over goes on the next pass (a warning names it), and the
-/// one-day margin before the limit leaves 24 passes for it.
+/// Only the deletes count against it, not the rest of the purge, and the
+/// pass starts at a different snapshot each hour, so a backlog in one
+/// can't starve the others. Checked between chunks, so a pass overruns it
+/// by one chunk at most. A backlog left over goes on the next pass (a
+/// warning names it), and the one-day margin before the limit leaves 24
+/// passes for it.
 pub(crate) const PASS_BUDGET: Duration = Duration::from_secs(30);
 
-/// How much one purge may delete: `rows` per snapshot, until `deadline`.
+/// How much one purge may delete: `rows` per snapshot, in what's left of
+/// the pass's `budget`, which each purge draws down by the time it spends.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Limit {
+pub(crate) struct Limit<'a> {
     pub(crate) rows: usize,
-    pub(crate) deadline: Instant,
+    pub(crate) budget: &'a Cell<Duration>,
 }
 
 /// Whether `e` shows the snapshot itself can't be checked, however often
@@ -300,14 +306,29 @@ impl Due {
 pub(crate) fn purge(
     conn: &mut Connection,
     due: &[Due],
-    limit: Option<Limit>,
+    limit: Option<Limit<'_>>,
+) -> rusqlite::Result<(usize, bool)> {
+    let start = Instant::now();
+    let deadline = limit.map(|l| start + l.budget.get());
+    let result = purge_within(conn, due, limit.map(|l| l.rows), deadline);
+    if let Some(l) = limit {
+        l.budget.set(l.budget.get().saturating_sub(start.elapsed()));
+    }
+    result
+}
+
+fn purge_within(
+    conn: &mut Connection,
+    due: &[Due],
+    rows: Option<usize>,
+    deadline: Option<Instant>,
 ) -> rusqlite::Result<(usize, bool)> {
     // `done` counts the rows chosen, for the cap; `deleted` the rows gone.
     let (mut done, mut deleted) = (0usize, 0usize);
     for d in due.iter().filter(|d| d.any) {
         loop {
-            let room = limit.map_or(CHUNK, |l| l.rows.saturating_sub(done).min(CHUNK));
-            if room == 0 || limit.is_some_and(|l| Instant::now() >= l.deadline) {
+            let room = rows.map_or(CHUNK, |r| r.saturating_sub(done).min(CHUNK));
+            if room == 0 || deadline.is_some_and(|d| Instant::now() >= d) {
                 return Ok((deleted, true));
             }
             let tx = crate::begin_write(conn)?;
@@ -595,12 +616,9 @@ mod tests {
         assert_eq!(max_age_secs(&record(0)), 2 * DAY as u64);
     }
 
-    /// A limit of `n` rows and an hour.
-    fn rows_limit(n: usize) -> Limit {
-        Limit {
-            rows: n,
-            deadline: Instant::now() + Duration::from_secs(3_600),
-        }
+    /// An hour: more than any test spends.
+    fn hour() -> Cell<Duration> {
+        Cell::new(Duration::from_secs(3_600))
     }
 
     /// A schema-current database in memory with sources 1 (`a`, the
@@ -641,14 +659,30 @@ mod tests {
         // Stopped partway (a cap here; a crash between chunks is the same:
         // each chunk commits alone).
         assert_eq!(
-            purge(&mut conn, &due, Some(rows_limit(5))).unwrap(),
+            purge(
+                &mut conn,
+                &due,
+                Some(Limit {
+                    rows: 5,
+                    budget: &hour()
+                })
+            )
+            .unwrap(),
             (5, true)
         );
         assert_eq!(stamps_in(&conn, 1).len(), CHUNK + 3);
         // The next pass, over more than one chunk, finishes it.
         let due = super::due(&conn, &LiveTerms::default(), T).unwrap();
         assert_eq!(
-            purge(&mut conn, &due, Some(rows_limit(MAX_PER_PASS))).unwrap(),
+            purge(
+                &mut conn,
+                &due,
+                Some(Limit {
+                    rows: MAX_PER_PASS,
+                    budget: &hour()
+                })
+            )
+            .unwrap(),
             (CHUNK + 2, false)
         );
         assert_eq!(stamps_in(&conn, 1), vec![(n + 1, T)]);
@@ -736,10 +770,18 @@ mod tests {
             .execute_batch("DROP TABLE source_state")
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
+        // Seen once, it's kept and reported: a torn read can look the same.
         let r = store.purge_snapshots(T, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        assert_eq!(r.stuck, vec![(snap.clone(), "can't be checked")]);
+        // Again under an hour on: still kept.
+        let r = store.purge_snapshots(T + 1_800, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        // An hour on from the first sighting, the same again: deleted.
+        let r = store.purge_snapshots(T + 3_600, 0);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
         assert!(!snap.exists());
-        // A rollback refuses such a copy.
+        // A rollback refuses such a copy at once.
         let staged = dir.path().join("lodestar.rollback-y.tmp");
         let snap = take(&store, &db);
         std::fs::copy(&snap, &staged).unwrap();
@@ -750,8 +792,13 @@ mod tests {
         assert!(super::super::purge_for_restore(store.connection(), &staged, T).is_err());
     }
 
-    /// A held lock (BUSY, or any error a later pass may not meet) never
-    /// deletes a snapshot: it's retried, and the next pass purges it.
+    /// A held lock never deletes a snapshot: it's retried, and the next
+    /// pass purges it. The exclusive lock stops `purge_one` at its first
+    /// schema read, so this covers the purge's existing `Err` path and the
+    /// daily stuck report; `a_lock_in_the_claims_stage_is_retried` reaches
+    /// the claims stage's own retry branch, and `only_lasting_errors_fail_closed`
+    /// covers the classifier the rest of the claims stage shares (its
+    /// read and delete errors can't be met here without fault injection).
     #[test]
     fn a_busy_snapshot_is_kept_and_retried() {
         let dir = tempfile::tempdir().unwrap();
@@ -764,9 +811,63 @@ mod tests {
         holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
         let r = store.purge_snapshots(T, 0);
         assert!(r.unchecked.is_empty() && !r.warnings.is_empty());
+        assert_eq!(r.stuck, vec![(snap.clone(), "busy")]);
+        // Still stuck an hour on: not reported again until a day has gone.
+        let r = store.purge_snapshots(T + 3_600, 0);
+        assert!(r.stuck.is_empty() && !r.warnings.is_empty());
+        let r = store.purge_snapshots(T + 86_400, 0);
+        assert_eq!(r.stuck.len(), 1);
         holder.execute_batch("ROLLBACK").unwrap();
         drop(holder);
         assert!(snap.exists());
+        let r = store.purge_snapshots(T + 86_400 + 3_600, 0);
+        assert_eq!(r.claims, 1, "{:?}", r.warnings);
+        assert!(r.stuck.is_empty());
+        assert!(stamps(&snap, tmdb).is_empty());
+        // The clean pass cleared the record: stuck again, it's reported at
+        // once, not a day after the last report.
+        let holder = Connection::open(&snap).unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let r = store.purge_snapshots(T + 86_400 + 7_200, 0);
+        assert_eq!(r.stuck, vec![(snap.clone(), "busy")]);
+        holder.execute_batch("ROLLBACK").unwrap();
+    }
+
+    /// A newer schema's claims stage meets a writer's lock. The write lock
+    /// lets it read, so the error comes from its own first write, the
+    /// switch to WAL: retried, never deleted, and reported as stuck.
+    #[test]
+    fn a_lock_in_the_claims_stage_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        let tmdb = i64::from(tmdb.get());
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, tmdb, T - 30 * DAY);
+        let snap = take(&store, &db);
+        Connection::open(&snap)
+            .unwrap()
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+                [crate::snapshots::Plan::KNOWN_THROUGH + 1],
+            )
+            .unwrap();
+        super::super::set_modified(&snap, T).unwrap();
+        let holder = Connection::open(&snap).unwrap();
+        holder
+            .execute_batch("BEGIN IMMEDIATE; UPDATE torrents SET name = name WHERE id = 1;")
+            .unwrap();
+        let r = store.purge_snapshots(T, 0);
+        assert!(r.unchecked.is_empty(), "{:?}", r.warnings);
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains("tried again next pass")),
+            "{:?}",
+            r.warnings
+        );
+        assert_eq!(r.stuck.len(), 1, "{:?}", r.warnings);
+        holder.execute_batch("ROLLBACK").unwrap();
+        drop(holder);
         let r = store.purge_snapshots(T + 3_600, 0);
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert!(stamps(&snap, tmdb).is_empty());
@@ -802,20 +903,30 @@ mod tests {
         assert!(!persistent(&crate::Error::Sqlite(code(ffi::SQLITE_BUSY))));
     }
 
-    /// Past the pass's deadline, nothing more is deleted, and the rest is
-    /// left for the next pass.
+    /// With the pass's budget spent, nothing more is deleted, and the rest
+    /// is left for the next pass. A purge draws the budget down by the time
+    /// it spends, and only that.
     #[test]
     fn the_time_budget_stops_the_purge() {
         let mut conn = memory(&record(10));
         torrent(&conn, 1);
         claim(&conn, 1, 1, T - 100 * DAY);
         let due = due(&conn, &LiveTerms::default(), T).unwrap();
-        let spent = Limit {
+        let spent = Cell::new(Duration::ZERO);
+        let limit = Limit {
             rows: MAX_PER_PASS,
-            deadline: Instant::now(),
+            budget: &spent,
         };
-        assert_eq!(purge(&mut conn, &due, Some(spent)).unwrap(), (0, true));
+        assert_eq!(purge(&mut conn, &due, Some(limit)).unwrap(), (0, true));
         assert_eq!(stamps_in(&conn, 1).len(), 1);
+        let budget = hour();
+        let limit = Limit {
+            rows: MAX_PER_PASS,
+            budget: &budget,
+        };
+        assert_eq!(purge(&mut conn, &due, Some(limit)).unwrap(), (1, false));
+        assert!(budget.get() < Duration::from_secs(3_600));
+        assert!(budget.get() > Duration::from_secs(3_500));
     }
 
     /// A newer schema with stamped claims but without the tables the check
@@ -837,8 +948,76 @@ mod tests {
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
         let r = store.purge_snapshots(T, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        let r = store.purge_snapshots(T + 3_600, 0);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
         assert!(!snap.exists());
+    }
+
+    /// A pass in between that checks the claims (or meets a retried error)
+    /// resets the count: a lasting error must be seen on two passes in a
+    /// row before the snapshot goes.
+    #[test]
+    fn a_clean_pass_resets_the_two_sightings() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, i64::from(tmdb.get()), T - 30 * DAY);
+        let snap = take(&store, &db);
+        let rename = |sql: &str| {
+            Connection::open(&snap).unwrap().execute_batch(sql).unwrap();
+            super::super::set_modified(&snap, T).unwrap();
+        };
+        rename("ALTER TABLE source_state RENAME TO plugin_state");
+        assert!(store.purge_snapshots(T, 0).unchecked.is_empty());
+        // Readable again for one pass: the sighting is forgotten.
+        rename("ALTER TABLE plugin_state RENAME TO source_state");
+        let r = store.purge_snapshots(T + 3_600, 0);
+        assert!(
+            r.unchecked.is_empty() && r.stuck.is_empty(),
+            "{:?}",
+            r.warnings
+        );
+        rename("ALTER TABLE source_state RENAME TO plugin_state");
+        let r = store.purge_snapshots(T + 7_200, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        assert_eq!(r.stuck.len(), 1, "reported again after the reset");
+        let r = store.purge_snapshots(T + 10_800, 0);
+        assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
+    }
+
+    /// Each hour's pass starts at the next snapshot, so every one goes
+    /// first at least once every `n` passes.
+    #[test]
+    fn the_pass_starts_at_a_different_snapshot_each_hour() {
+        use super::super::first_index;
+        assert_eq!(first_index(T, 0), 0);
+        assert_eq!(first_index(T, 1), 0);
+        let starts: Vec<_> = (0..6).map(|h| first_index(T + h * 3_600, 3)).collect();
+        for (h, start) in starts.iter().enumerate() {
+            assert_eq!(*start, (starts[0] + h) % 3, "{starts:?}");
+        }
+        assert_eq!(first_index(T + 3_599, 3), starts[0], "the same all hour");
+        assert_eq!(first_index(-1, 3), 2, "never out of range");
+        // In a real pass: two snapshots, each with a claim due at T and
+        // another due an hour on, purged in one order, then the other.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        let tmdb = i64::from(tmdb.get());
+        torrent(store.connection(), 1);
+        torrent(store.connection(), 2);
+        claim(store.connection(), 1, tmdb, T - 9 * DAY - 1);
+        claim(store.connection(), 2, tmdb, T - 9 * DAY + 3_000);
+        let a = take(&store, &db);
+        let b = crate::schema::snapshot_path(&db, 100);
+        std::fs::copy(&a, &b).unwrap();
+        super::super::set_modified(&b, T).unwrap();
+        let first = store.purge_snapshots(T, 0).purged;
+        let second = store.purge_snapshots(T + 3_600, 0).purged;
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(second.len(), 2, "{second:?}");
+        assert_eq!(first[0], second[1]);
+        assert_eq!(first[1], second[0]);
     }
 
     /// A schema newer than this build's plans loses its expired claims all
@@ -930,7 +1109,7 @@ mod tests {
                     .max(mark.unwrap_or(i64::MIN))
                     .max(live_mark.unwrap_or(i64::MIN));
                 let d = due(&conn, &live, clock).unwrap();
-                prop_assert_eq!(purge(&mut conn, &d, Some(rows_limit(MAX_PER_PASS))).unwrap().1, false);
+                prop_assert_eq!(purge(&mut conn, &d, Some(Limit { rows: MAX_PER_PASS, budget: &hour() })).unwrap().1, false);
                 let held = stamps_in(&conn, 1);
                 for (n, &(id, source, at)) in rows.iter().enumerate() {
                     if source == 2 {
