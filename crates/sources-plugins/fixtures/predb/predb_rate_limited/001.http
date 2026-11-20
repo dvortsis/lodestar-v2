@@ -1,0 +1,6 @@
+GET https://api.predb.net/?type=search&q=quiet+harbor+2021&limit=100
+Accept: application/json
+
+HTTP 429
+Retry-After: 120
+Content-Type: application/json

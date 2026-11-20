@@ -1138,3 +1138,42 @@ async fn the_blocking_pool_path_reaches_a_resume() {
     assert!(!run.sampler.reserve(addr(8), 2, Instant::now()), "restored");
     run.commit(&d);
 }
+
+/// X-sampler-cooldown-split: a cooldown in the spill filter can't be
+/// listed, so the snapshot's gate holds the next run's sampling until it
+/// ends; the listed ones are restored as before. With nothing spilled, the
+/// split adds no gate.
+#[tokio::test(start_paused = true)]
+async fn a_spilled_cooldown_gates_the_next_run_until_it_ends() {
+    for spill in [true, false] {
+        let d = Dirs::new("spill");
+        let c = clock();
+        let mut r = Run::boot(&d, &c, true);
+        advance(horizon()).await;
+        r.tick();
+        r.sampler = Sampler::split_with_capacity(if spill { 1 } else { 2 });
+        let t0 = Instant::now();
+        r.sampled(addr(1), 1, Duration::from_secs(3600));
+        // With one place, this moves addr(1)'s cooldown to the filter.
+        r.sampled(addr(2), 2, Duration::from_secs(600));
+        assert_eq!(r.sampler.spill_counts().0, usize::from(spill));
+        r.commit(&d);
+
+        advance(Duration::from_secs(60)).await;
+        let mut r = Run::boot(&d, &c, true);
+        assert_eq!(r.proof.reason(), Reason::Resumed);
+        assert!(!r.sampler.reserve(addr(2), 10, Instant::now()), "restored");
+        if !spill {
+            assert!(r.proof.may_sample(Instant::now()), "no gate");
+            continue;
+        }
+        assert!(!r.proof.may_sample(Instant::now()), "gated");
+        let end = t0 + Duration::from_secs(3600);
+        advance(end - Instant::now() - Duration::from_millis(1)).await;
+        r.tick();
+        assert!(!r.proof.may_sample(Instant::now()));
+        advance(Duration::from_secs(1)).await;
+        r.tick();
+        assert!(r.proof.may_sample(Instant::now()));
+    }
+}

@@ -20,6 +20,9 @@ pub struct Scenario {
     /// Two legs with a clean restart between them; `minutes` is then
     /// leg 2's length.
     pub restart: Option<Restart>,
+    /// Print the capacity ledger (`W`, `q`, `y`, occupancy) in the report.
+    /// Off in the baselines, whose goldens predate it.
+    pub ledger: bool,
 }
 
 /// CR-SIM-restart: leg 1 starts fresh with `dht.safe_restart` on, sits out
@@ -63,6 +66,12 @@ pub struct NetConfig {
     /// as a responder storing them would (CR-1a-H's screen). Off in the
     /// baselines, whose goldens predate it.
     pub samplers_hold: bool,
+    /// Stale contacts per node, in permille of one (floor, plus the
+    /// remainder as a chance): addresses beside the node in id space that
+    /// never answer, listed with it in replies from near a target. Each
+    /// must time out before a lookup can end (`live-lookup`). 0 in the
+    /// baselines.
+    pub stale_permille: u32,
 }
 
 /// Reply delay: `base + U(0, jitter)`, or `slow` instead with
@@ -123,6 +132,8 @@ pub struct Switches {
     pub streaming_peers: bool,
     /// CR-1b: `dht.target_prefixes`.
     pub target_prefixes: bool,
+    /// CR-LOOKUP-END: `dht.lookup_end`.
+    pub lookup_end: bool,
 }
 
 impl Switches {
@@ -136,6 +147,7 @@ impl Switches {
         dht.responder_hints = self.responder_hints;
         pool.streaming_peers = self.streaming_peers;
         dht.target_prefixes = self.target_prefixes;
+        dht.lookup_end = self.lookup_end;
     }
 
     /// For the report header: `name=value` of every switch that's on.
@@ -145,6 +157,7 @@ impl Switches {
             (self.responder_hints, "responder_hints=true"),
             (self.streaming_peers, "streaming_peers=true"),
             (self.target_prefixes, "target_prefixes=true"),
+            (self.lookup_end, "lookup_end=true"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
@@ -180,6 +193,7 @@ pub fn base(name: &'static str) -> Scenario {
             sample_size: 20,
             held_per_node: 60,
             samplers_hold: false,
+            stale_permille: 0,
         },
         swarm: SwarmConfig {
             catalogue: 20_000,
@@ -201,6 +215,7 @@ pub fn base(name: &'static str) -> Scenario {
         pool: PoolConfig::default(),
         switches: Switches::default(),
         restart: None,
+        ledger: false,
     }
 }
 
@@ -253,5 +268,50 @@ pub fn restart_honoured() -> Scenario {
         gap_s: 120,
         safe_restart: true,
     });
+    s
+}
+
+/// X-crawler-sim-calibrate: the live lookup as CR-0's 24 h measured it
+/// (README, "The calibrated scenario"). Keys far outrun the 32 slots, as
+/// live. Stale contacts near every target must each time out (4 s, at
+/// most 3 in flight) before a lookup can end, and each closer responder
+/// lists more, so most lookups run to the 25 s deadline.
+/// The knobs are calibrated, not the outputs: `live_lookup_is_calibrated`
+/// checks what they produce against CR-0 on every `SCREEN_SEEDS` seed.
+pub fn live_lookup() -> Scenario {
+    let mut s = base("live-lookup");
+    s.minutes = 12;
+    s.ledger = true;
+    s.net.nodes = 5_000;
+    s.net.dead_permille = 30;
+    s.net.loss_permille = 5;
+    // About 1.75 stale contacts beside every node: most lookups end at
+    // the deadline.
+    s.net.stale_permille = 1_750;
+    s.net.latency = Latency {
+        base_ms: 60,
+        jitter_ms: 400,
+        slow_permille: 150,
+        slow_ms: 3_000,
+    };
+    // Enough sampling to bring the query rate to CR-0's 76/s.
+    s.net.bep51_permille = 700;
+    s.net.sample_interval_s = 120;
+    s.net.held_per_node = 200;
+    s.swarm.catalogue = 200_000;
+    // With the fetch outcomes below: CR-0's 3.7 attempts and 0.16 stored
+    // per admitted lookup.
+    s.swarm.live_permille = 700;
+    s.swarm.max_peers = 16;
+    // CR-0's fetch failures by attempt: 4.4% stored, 10.7% refused, 14.1%
+    // unreachable, the rest timed out. Success and refusal are permille
+    // of the 85.9% reachable: 0.859 × 51 = 4.4%, 0.859 × 125 = 10.7%.
+    s.swarm.fetch = FetchConfig {
+        unreachable_permille: 141,
+        success_permille: 51,
+        slow_permille: 0,
+        refuse_permille: 125,
+        ..s.swarm.fetch
+    };
     s
 }

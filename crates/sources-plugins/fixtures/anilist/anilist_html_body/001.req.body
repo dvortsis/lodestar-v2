@@ -1,0 +1,1 @@
+{"query":"query ($search: String, $perPage: Int, $isAdult: Boolean) { Page(page: 1, perPage: $perPage) { media(search: $search, type: ANIME, isAdult: $isAdult) { id format isAdult countryOfOrigin seasonYear startDate { year } title { romaji english native } synonyms } } }","variables":{"search":"Perfect Blue","perPage":10,"isAdult":false}}

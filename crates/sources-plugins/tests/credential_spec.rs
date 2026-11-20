@@ -19,7 +19,7 @@ use lodestar_sources_plugins::full_scrape::{StaticPrivateTrackers, SystemClock};
 use lodestar_sources_plugins::prowlarr::{Config, Manager};
 use lodestar_sources_plugins::{
     Credentials, StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape,
-    nyaa, prowlarr, stashdb, torrent_cache, tpdb,
+    nyaa, prowlarr, stashdb, torrent_cache, tpdb, tvdb,
 };
 use lodestar_store::SourceId;
 
@@ -217,6 +217,69 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     let s = stashdb::StashDb::new(rec.clone());
     lookup_once(&s).await;
     check(AdultEnricher::manifest(&s), AdultEnricher::policy(&s), &rec);
+
+    // Discogs (ENR-discogs), an identifier with an Account credential.
+    let rec = Arc::new(Recording::default());
+    let d = lodestar_sources_plugins::discogs::Discogs::new(rec.clone());
+    discogs_once(&d).await;
+    use lodestar_sources::identify::Identifier;
+    check(Identifier::manifest(&d), Identifier::policy(&d), &rec);
+    // AniDB (ENR-anidb), an identifier with a client name and version.
+    let rec = Arc::new(Recording::default());
+    let a = lodestar_sources_plugins::anidb::AniDb::new(rec.clone());
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        lodestar_sources::identify::Identifier::policy(&a),
+        &UserLimits::default(),
+    );
+    let q = lodestar_sources::identify::Query::new(
+        "Synthetic Title",
+        None,
+        lodestar_sources::identify::MediaKind::Tv,
+    )
+    .unwrap();
+    let _ = lodestar_sources::identify::Identifier::lookup(&a, &kit, &q).await;
+    check(
+        lodestar_sources::identify::Identifier::manifest(&a),
+        lodestar_sources::identify::Identifier::policy(&a),
+        &rec,
+    );
+
+    // IGDB (ENR-igdb), an identifier with two Account credentials.
+    let rec = Arc::new(Recording::default());
+    let g = lodestar_sources_plugins::igdb::Igdb::new(rec.clone());
+    igdb_once(&g).await;
+    check(Identifier::manifest(&g), Identifier::policy(&g), &rec);
+}
+
+async fn igdb_once(i: &lodestar_sources_plugins::igdb::Igdb) -> String {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        i.policy(),
+        &UserLimits::default(),
+    );
+    let q = Query::new("Synthetic Title", Some(2001), MediaKind::Game).unwrap();
+    i.lookup(&kit, &q).await.unwrap_err().0
+}
+
+async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        d.policy(),
+        &UserLimits::default(),
+    );
+    let q = Query::new(
+        "Synthetic Artist - Synthetic Album",
+        Some(2001),
+        MediaKind::Music,
+    )
+    .unwrap();
+    d.lookup(&kit, &q).await.unwrap_err().0
 }
 
 /// Steam (ENR-steam) reads its one declared key on a refresh.
@@ -265,11 +328,33 @@ fn plugins_without_a_credential_store_declare_none() {
         lodestar_sources::identify::Identifier::manifest(&w).clone(),
         *lodestar_sources::identify::Identifier::policy(&w),
     ));
+    let mb = lodestar_sources_plugins::musicbrainz::MusicBrainz::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&mb).clone(),
+        *lodestar_sources::identify::Identifier::policy(&mb),
+    ));
+    let srr = lodestar_sources_plugins::srrdb::Srrdb::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&srr).clone(),
+        *lodestar_sources::identify::Identifier::policy(&srr),
+    ));
+    // AniList (ENR-anilist) too.
+    let al = lodestar_sources_plugins::anilist::AniList::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&al).clone(),
+        *lodestar_sources::identify::Identifier::policy(&al),
+    ));
     // Open Library (ENR-ol) too.
     let ol = lodestar_sources_plugins::openlibrary::OpenLibrary::new();
     plugins.push((
         lodestar_sources::identify::Identifier::manifest(&ol).clone(),
         *lodestar_sources::identify::Identifier::policy(&ol),
+    ));
+    // PreDB (ENR-predb) too.
+    let p = lodestar_sources_plugins::predb::PreDb::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&p).clone(),
+        *lodestar_sources::identify::Identifier::policy(&p),
     ));
     for (m, policy) in plugins {
         assert!(policy.credentials.is_empty(), "{}", m.id);
@@ -277,8 +362,8 @@ fn plugins_without_a_credential_store_declare_none() {
     }
 }
 
-/// The three above and these nine are every plugin in the catalogue, so
-/// a new one has to be added here.
+/// Every plugin in the catalogue is named here, so a new one has to be
+/// added here.
 #[test]
 fn every_catalogued_plugin_is_checked() {
     let checked = [
@@ -294,7 +379,15 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
+        lodestar_sources_plugins::anidb::ID,
+        lodestar_sources_plugins::discogs::ID,
+        lodestar_sources_plugins::musicbrainz::ID,
+        lodestar_sources_plugins::srrdb::ID,
+        tvdb::ID,
+        lodestar_sources_plugins::anilist::ID,
         lodestar_sources_plugins::openlibrary::ID,
+        lodestar_sources_plugins::predb::ID,
+        lodestar_sources_plugins::igdb::ID,
         lodestar_sources_plugins::steam::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
@@ -314,4 +407,58 @@ async fn the_declared_names_are_the_ones_it_uses() {
     let with = lookup_once(&stashdb::StashDb::new(stored())).await;
     let without = lookup_once(&stashdb::StashDb::new(none())).await;
     assert_ne!(with, without, "stashdb: {with}");
+    let token = || {
+        Arc::new(StaticCredentials::new([(
+            lodestar_sources_plugins::discogs::TOKEN,
+            "fakeDiscogsToken0000",
+        )]))
+    };
+    let d = lodestar_sources_plugins::discogs::Discogs::new;
+    let with = discogs_once(&d(token())).await;
+    let without = discogs_once(&d(none())).await;
+    assert_ne!(with, without, "discogs: {with}");
+    assert!(!with.contains("fakeDiscogsToken"), "{with}");
+    use lodestar_sources_plugins::igdb::{CLIENT_ID, CLIENT_SECRET, Igdb};
+    let both = || {
+        Arc::new(StaticCredentials::new([
+            (CLIENT_ID, "testclientid0"),
+            (CLIENT_SECRET, "testclientsecret0"),
+        ]))
+    };
+    let with = igdb_once(&Igdb::new(both())).await;
+    let without = igdb_once(&Igdb::new(none())).await;
+    assert_ne!(with, without, "igdb: {with}");
+    assert!(!with.contains("testclient"), "{with}");
+}
+
+/// TheTVDB (ENR-tvdb), an Account identifier: it reads its API key and
+/// its optional PIN, under its own id, and nothing else; with the key
+/// stored it gets past it to its request, which `NoEgress` refuses.
+#[tokio::test(start_paused = true)]
+async fn tvdb_reads_exactly_what_it_declares() {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    async fn once(t: &tvdb::Tvdb) -> String {
+        let kit = Kit::new(
+            Arc::new(MemoryState::new()),
+            Arc::new(NoEgress),
+            t.policy(),
+            &UserLimits::default(),
+        );
+        let q = Query::new("Synthetic Series", Some(2008), MediaKind::Tv).unwrap();
+        t.lookup(&kit, &q).await.unwrap_err().0
+    }
+    let rec = Arc::new(Recording::default());
+    let t = tvdb::Tvdb::new(rec.clone());
+    assert_eq!(once(&t).await, tvdb::NO_KEY);
+    check(t.manifest(), t.policy(), &rec);
+    assert_eq!(
+        names(t.policy().credentials),
+        BTreeSet::from(["api_key".into(), "pin".into()])
+    );
+    let stored = Arc::new(StaticCredentials::new([(
+        "api_key",
+        "00000000-fake-0000-0000-00000000fake",
+    )]));
+    let with = once(&tvdb::Tvdb::new(stored)).await;
+    assert_eq!(with, tvdb::FAILED, "past the key, to the refused request");
 }

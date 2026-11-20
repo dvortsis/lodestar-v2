@@ -1,0 +1,5 @@
+{"status":"success","results":3,"time":"0.003s","data":[
+{"id":900013,"pretime":1700100200,"release":"Glass.Orchard.2019.1080p.BluRay.x264-SYNTH","section":"X264-HD","files":30,"size":7000,"status":0,"reason":"","group":"SYNTH","genre":"Thriller","url":"/rls/x"},
+{"id":900012,"pretime":1700100100,"release":"Glass.Orchard.1987.1080p.BluRay.x264-SYNTH","section":"X264-HD","files":30,"size":7000,"status":0,"reason":"","group":"SYNTH","genre":"Horror","url":"/rls/y"},
+{"id":900011,"pretime":1700100000,"release":"Glass.Orchard.S01E02.720p.WEB.H264-SYNTH","section":"TV-WEB-HD-X264","files":0,"size":0,"status":0,"reason":"","group":"SYNTH","genre":"","url":"/rls/z"}
+],"page":1}

@@ -6483,7 +6483,7 @@
           {
             "name": "offset",
             "in": "query",
-            "description": "`offset + limit` may not pass 10,000. Not with `cursor`.",
+            "description": "`offset + limit` may not pass 10,000. Not with `cursor`. With `collapse=group` it counts groups, and a page that stops at its scan bound answers with a smaller `offset` (the groups actually before it): page collapsed results with `next_cursor`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -6516,6 +6516,20 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "collapse",
+            "in": "query",
+            "description": "`group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "`collapse` on `GET /search`: `group` for one row per group of\nversions, `none` (the default) for every torrent.",
+              "enum": [
+                "group",
+                "none"
+              ]
             }
           },
           {
@@ -12670,6 +12684,13 @@
           "pki",
           "pauses",
           "server"
+        ]
+      },
+      "CollapseUnavailable": {
+        "type": "string",
+        "description": "Why a search asked to collapse came back ungrouped.",
+        "enum": [
+          "group_key_not_ready"
         ]
       },
       "CollectionCreate": {
@@ -22249,6 +22270,12 @@
           "name": {
             "type": "string"
           },
+          "others": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Other matches in this hit's group of versions; present only on a\ncollapsed search's hits (`collapsed`).",
+            "minimum": 0
+          },
           "piece_len": {
             "type": "integer",
             "format": "int64",
@@ -22649,9 +22676,26 @@
             "type": "string",
             "description": "The query as the server understood it."
           },
+          "collapse_unavailable": {
+            "$ref": "#/components/schemas/CollapseUnavailable",
+            "description": "Why `collapse=group` came back ungrouped; absent otherwise."
+          },
+          "collapsed": {
+            "type": "boolean",
+            "description": "The rows are groups of versions (`collapse=group` with group data\nready): each hit has `others`, `offset` counts groups, and\n`groups` is sent. `total` still counts torrents. A collapsed page\ncan come back short, even empty, with a `next_cursor`: it stopped\nat its scan bound, and the next page carries on. Sent only when\ntrue, so ungrouped responses are as before."
+          },
           "explain": {
             "$ref": "#/components/schemas/SearchExplain",
             "description": "Present only when asked for with `explain`."
+          },
+          "groups": {
+            "type": "integer",
+            "description": "Groups among all the matches, when `collapsed`: exact while\n`total` is, else an estimate (`groups_approx`).",
+            "minimum": 0
+          },
+          "groups_approx": {
+            "type": "boolean",
+            "description": "`groups` is an estimate (shown with \"≈\"); sent with `groups`."
           },
           "hits": {
             "type": "array",

@@ -15,6 +15,7 @@ use tokio::time::Instant;
 use lodestar_metainfo::InfoHash;
 
 use super::hints::{self, Hint, Hints};
+use super::ledger::{self, HintOutcome, LedgerEnd, QueryPurpose};
 use super::limits::{Answered, Network, SourceBuckets, network, source};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
@@ -65,6 +66,16 @@ const JOIN_LEVELS: usize = 32;
 /// first self-lookup ([`Actor::parks_lookups`]).
 const PARK_DEADLINE: Duration = Duration::from_secs(30);
 const MAX_PEER_QUERIES: usize = 64;
+/// CR-LOOKUP-END: distinct, validated values that end a peer request early
+/// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
+const ENOUGH_VALUES: usize = 8;
+/// CR-LOOKUP-END: the distinct sources (an IPv4 /24 or an IPv6 /48, as
+/// [`source`] keys them: one operator's usual allocation) whose replies must
+/// have carried values before [`ENOUGH_VALUES`] can end a request, and that a
+/// leg's closest set must span before it converges early. One responder,
+/// however many addresses it answers from in a network, can't end a lookup
+/// on its own.
+const VALUE_RESPONDERS: usize = 2;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
 const SAMPLE_SHARE: f64 = 0.5;
@@ -468,6 +479,13 @@ struct PeerRequest {
     started: Instant,
     /// Its deadline ran out (a streaming terminal says so).
     expired: bool,
+    /// CR-LEDGER: what the ledger records when it ends.
+    ledger: ledger::Entry,
+    /// CR-LOOKUP-END: sources (/24, IPv6 /48) whose replies carried
+    /// values, at most [`VALUE_RESPONDERS`].
+    value_nets: Vec<Network>,
+    /// CR-LOOKUP-END ended it on enough values.
+    enough: bool,
 }
 
 struct Actor {
@@ -619,7 +637,10 @@ pub(crate) async fn run(
                 }
             }
             _ = tick.tick() => actor.maintain(&sockets),
-            Some(cmd) = commands.recv() => actor.on_command(cmd),
+            Some(cmd) = commands.recv() => {
+                actor.on_command(cmd);
+                actor.start_admitted(&sockets);
+            }
             (family, r) = async {
                 // Maintenance has priority, but neither socket does.
                 tokio::select! {
@@ -650,7 +671,13 @@ pub(crate) async fn run(
         }
     }
     actor.release_permits();
+    actor.end_ledger_at_shutdown();
     actor.finish()
+}
+
+/// A duration in whole ms, saturating.
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 async fn recv_second(
@@ -771,6 +798,10 @@ impl Actor {
         now: Instant,
         mut rng: StdRng,
     ) -> Self {
+        stats
+            .ledger
+            .slots_capacity
+            .store(MAX_GET_PEERS as u64, Ordering::Relaxed);
         // WK-4: the full shard is no shard, byte for byte.
         let shard = cfg.shard.filter(|s| !s.is_full());
         let ids = initial_ids(&cfg, shard.as_ref(), saved, &mut rng);
@@ -829,7 +860,7 @@ impl Actor {
             harvest,
             seen: SeenFilter::new(SEEN_CAPACITY, 0.01),
             peer_store: PeerStore::default(),
-            sampler: Sampler::default(),
+            sampler: Sampler::new(cfg.sampler_cooldown_split),
             recent: VecDeque::with_capacity(RECENT_SAMPLES),
             get_peers_queue: VecDeque::new(),
             peer_requests: Map::default(),
@@ -1171,7 +1202,7 @@ impl Actor {
     ) -> Result<u64, Sent> {
         let now = Instant::now();
         self.admit_query(family, to, now)?;
-        self.send_admitted(sockets, family, to, node, method, purpose, now)
+        self.send_admitted(sockets, family, to, node, method, purpose, false, now)
     }
 
     /// Whether a query to `to` may go out now: the right family, room under
@@ -1203,6 +1234,7 @@ impl Actor {
         node: Option<NodeId>,
         method: Method<'_>,
         purpose: Purpose,
+        hinted: bool,
         now: Instant,
     ) -> Result<u64, Sent> {
         // Never reuse a wire token in this process, even after success,
@@ -1235,6 +1267,7 @@ impl Actor {
             return Err(sent);
         }
         Stats::inc(&self.stats.queries_out);
+        self.stats.ledger.query(self.query_purpose(purpose, hinted));
         *self.pending_addrs.entry(to).or_default() += 1;
         self.pending.insert(
             tid,
@@ -1244,10 +1277,27 @@ impl Actor {
                 sent: now,
                 family,
                 purpose,
-                hinted: false,
+                hinted,
             },
         );
         Ok(tid)
+    }
+
+    /// The ledger's purpose for a query being sent: for a lookup's, from
+    /// the kind of lookup it serves.
+    fn query_purpose(&self, purpose: Purpose, hinted: bool) -> QueryPurpose {
+        match purpose {
+            Purpose::Ping => QueryPurpose::Ping,
+            Purpose::Sample => QueryPurpose::Sample,
+            Purpose::Lookup(_) if hinted => QueryPurpose::Hint,
+            Purpose::Lookup(lid) => match self.lookups.get(&lid) {
+                Some(l) if l.scrape => QueryPurpose::Scrape,
+                Some(l) if l.info_hash.is_some() => QueryPurpose::PeerLookup,
+                Some(l) if l.bootstrap => QueryPurpose::Bootstrap,
+                Some(l) if l.explore => QueryPurpose::Explore,
+                _ => QueryPurpose::Refresh,
+            },
+        }
     }
 
     fn take_pending(&mut self, tid: u64) -> Pending {
@@ -1391,6 +1441,7 @@ impl Actor {
             Some(id),
             Method::Ping,
             Purpose::Ping,
+            false,
             now,
         ) {
             self.verify_tids.insert(tid);
@@ -1800,6 +1851,33 @@ impl Actor {
                 {
                     streamed.clone_from(&peers);
                 }
+                // CR-LOOKUP-END: the request's values so far, across legs,
+                // and the networks that sent them.
+                if self.cfg.lookup_end
+                    && !peers.is_empty()
+                    && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
+                {
+                    for p in &peers {
+                        if r.peers.len() >= 64 {
+                            break;
+                        }
+                        r.peers.insert(*p);
+                    }
+                    // A second network repeating values already held counts:
+                    // the nodes storing a hash list the same swarm, and that
+                    // agreement is the corroboration the rule asks for.
+                    let net = source(from.ip());
+                    if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
+                        r.value_nets.push(net);
+                    }
+                }
+                // CR-LEDGER: the request's first reply with values.
+                if !peers.is_empty()
+                    && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
+                    && r.ledger.first_values_ms.is_none()
+                {
+                    r.ledger.first_values_ms = Some(millis(r.started.elapsed()));
+                }
                 match pending.id {
                     Some(id) => {
                         if lookup.scrape {
@@ -1813,6 +1891,9 @@ impl Actor {
                         lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
                         if !peers.is_empty() {
                             Stats::inc(&self.stats.hint_useful);
+                            self.stats.ledger.hint(HintOutcome::Values);
+                        } else {
+                            self.stats.ledger.hint(HintOutcome::NoValues);
                         }
                         lookup.absorb(others, &peers);
                     }
@@ -1824,7 +1905,12 @@ impl Actor {
             }
             _ => match pending.id {
                 Some(id) => lookup.on_failure(&id),
-                None => lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1),
+                None => {
+                    if pending.hinted {
+                        self.stats.ledger.hint(HintOutcome::NoValues);
+                    }
+                    lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
+                }
             },
         }
         // CR-1a-S: a streaming request's peers go out as they arrive,
@@ -1838,7 +1924,60 @@ impl Actor {
                 first_batch(&self.stats, r.started);
             }
         }
+        if let Some(owner) = owner
+            && self.has_enough_values(owner)
+        {
+            self.end_on_enough_values(owner);
+            return;
+        }
         self.drive_lookup(sockets, lid);
+    }
+
+    /// CR-LOOKUP-END: whether request `owner` holds [`ENOUGH_VALUES`]
+    /// distinct values from [`VALUE_RESPONDERS`] sources. Always false
+    /// with the switch off.
+    fn has_enough_values(&self, owner: u32) -> bool {
+        self.cfg.lookup_end
+            && self.peer_requests.get(&owner).is_some_and(|r| {
+                r.peers.len() >= ENOUGH_VALUES && r.value_nets.len() >= VALUE_RESPONDERS
+            })
+    }
+
+    /// CR-LOOKUP-END: ends every leg of request `owner` now; the last one
+    /// answers the caller and frees the slot, as a converged lookup would.
+    fn end_on_enough_values(&mut self, owner: u32) {
+        if let Some(r) = self.peer_requests.get_mut(&owner) {
+            r.enough = true;
+        }
+        let legs: Vec<u32> = self
+            .lookups
+            .iter()
+            .filter(|(_, l)| l.owner == Some(owner))
+            .map(|(lid, _)| *lid)
+            .collect();
+        for lid in legs {
+            self.finish_lookup(lid);
+        }
+    }
+
+    /// Starts queued requests while there's a free slot, unless paused or
+    /// parked for the bootstrap.
+    fn start_queued(&mut self, sockets: &[SendSocket], now: Instant) {
+        while !self.paused && self.active_get_peers < MAX_GET_PEERS && !self.parks_lookups(now) {
+            let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
+                break;
+            };
+            self.start_peer_request(sockets, hash, reply, permit);
+        }
+    }
+
+    /// CR-LOOKUP-END: after a command, an admitted request starts at once
+    /// instead of on the next tick. Its queries still go through the query
+    /// rate and the outstanding cap. Nothing with the switch off.
+    fn start_admitted(&mut self, sockets: &[SendSocket]) {
+        if self.cfg.lookup_end {
+            self.start_queued(sockets, Instant::now());
+        }
     }
 
     fn on_external_ip(&mut self, reporter: IpAddr, reported: SocketAddr) {
@@ -1961,6 +2100,9 @@ impl Actor {
                 peers: Set::default(),
                 started: Instant::now(),
                 expired: false,
+                ledger: ledger::Entry::default(),
+                value_nets: Vec::new(),
+                enough: false,
             },
         );
         // Hints serve pool requests only, not the legacy harvest-only
@@ -2049,23 +2191,28 @@ impl Actor {
             return Err(HintFallback::Throttled);
         }
         let guard = self.hints.as_mut().expect("hints are on");
-        guard.admit(to.ip(), now)?;
+        if let Err(why) = guard.admit(to.ip(), now) {
+            self.stats.ledger.hint(HintOutcome::GuardSkipped);
+            return Err(why);
+        }
         let method = Method::GetPeers {
             info_hash: hash,
             want: Want::default(),
             scrape: false,
             noseed: false,
         };
-        let tid = match self.dispatch_query(sockets, family, to, None, method, Purpose::Lookup(lid))
-        {
-            Ok(tid) => tid,
+        // `dispatch_query`, with the query marked hinted as it's sent.
+        let sent_at = Instant::now();
+        let sent = self.admit_query(family, to, sent_at).and_then(|()| {
+            let purpose = Purpose::Lookup(lid);
+            self.send_admitted(sockets, family, to, None, method, purpose, true, sent_at)
+        });
+        match sent {
+            Ok(_) => {}
             Err(Sent::Failed) => return Err(HintFallback::SendFailed),
             Err(_) => return Err(HintFallback::Throttled),
-        };
-        Stats::inc(&self.stats.hint_queries);
-        if let Some(p) = self.pending.get_mut(&tid) {
-            p.hinted = true;
         }
+        Stats::inc(&self.stats.hint_queries);
         if let Some(h) = &mut self.hints {
             h.sent(to.ip(), now);
         }
@@ -2387,7 +2534,17 @@ impl Actor {
         let exhausted = owner
             .and_then(|o| self.peer_requests.get(&o))
             .is_some_and(|r| r.sent >= MAX_PEER_QUERIES && r.inflight == 0);
-        if exhausted || self.lookups.get(&lid).is_some_and(Lookup::is_done) {
+        let lookup_end = self.cfg.lookup_end && owner.is_some();
+        let done = self.lookups.get(&lid).is_some_and(|l| {
+            l.is_done() || (lookup_end && !l.scrape && l.closest_answered(VALUE_RESPONDERS))
+        });
+        if exhausted || done {
+            if exhausted
+                && !done
+                && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
+            {
+                r.ledger.capped = true;
+            }
             self.finish_lookup(lid);
         } else if !self.stalled.contains(&lid) {
             // Also covers immediate send failure with fresh candidates but
@@ -2406,7 +2563,9 @@ impl Actor {
             })
             .collect();
         for t in tids {
-            self.take_pending(t);
+            if self.take_pending(t).hinted {
+                self.stats.ledger.hint(HintOutcome::Unanswered);
+            }
         }
         self.stalled.retain(|id| *id != lid);
         let Some(done) = self.lookups.remove(&lid) else {
@@ -2449,18 +2608,37 @@ impl Actor {
             let Some(r) = self.peer_requests.get_mut(&owner) else {
                 return;
             };
-            // A stream sent its peers as they came.
-            if !matches!(r.reply, Some(Reply::Stream(_))) {
-                for p in done.peers {
-                    if r.peers.len() < 64 {
-                        r.peers.insert(p);
-                    }
+            // A stream sent its peers as they came; they're kept here too
+            // only so the ledger counts each distinct one once.
+            for p in done.peers {
+                if r.peers.len() < 64 {
+                    r.peers.insert(p);
                 }
             }
             r.remaining -= 1;
             if r.remaining == 0 {
                 let r = self.peer_requests.remove(&owner).expect("present");
                 self.active_get_peers -= 1;
+                let why = if r.reply.as_ref().is_some_and(Reply::is_closed) {
+                    LedgerEnd::Cancelled
+                } else if r.expired {
+                    LedgerEnd::Deadline
+                } else if r.enough {
+                    LedgerEnd::EnoughValues
+                } else if r.ledger.capped {
+                    LedgerEnd::QueryCap
+                } else if !r.peers.is_empty() {
+                    LedgerEnd::Values
+                } else {
+                    LedgerEnd::NoValues
+                };
+                let entry = ledger::Entry {
+                    values: r.peers.len() as u64,
+                    ..r.ledger
+                };
+                self.stats
+                    .ledger
+                    .end(why, &entry, millis(r.started.elapsed()));
                 let mut peers: Vec<_> = r.peers.into_iter().collect();
                 peers.sort_unstable();
                 if let Some(Reply::Stream(stream)) = r.reply {
@@ -2529,6 +2707,29 @@ impl Actor {
         for r in self.peer_requests.values_mut() {
             PermitReturn::Shutdown.release(&self.stats, r.permit.take());
         }
+    }
+
+    /// At shutdown, once: the ledger ends the requests still running, with
+    /// the values their unfinished legs hold so far.
+    fn end_ledger_at_shutdown(&mut self) {
+        for (owner, r) in &self.peer_requests {
+            let mut found = r.peers.clone();
+            for l in self.lookups.values().filter(|l| l.owner == Some(*owner)) {
+                found.extend(l.peers.iter().copied());
+            }
+            let entry = ledger::Entry {
+                values: found.len().min(64) as u64,
+                ..r.ledger
+            };
+            let residence = millis(r.started.elapsed());
+            self.stats
+                .ledger
+                .end(LedgerEnd::Shutdown, &entry, residence);
+        }
+        // Nothing holds a slot or waits for one any more.
+        let ledger = &self.stats.ledger;
+        ledger.slots_occupied.store(0, Ordering::Relaxed);
+        ledger.queued.store(0, Ordering::Relaxed);
     }
 
     /// Self-lookups seeded with saved nodes and the bootstrap routers.
@@ -2612,6 +2813,9 @@ impl Actor {
         for tid in expired {
             let p = self.take_pending(tid);
             Stats::inc(&self.stats.timeouts);
+            if p.hinted {
+                self.stats.ledger.hint(HintOutcome::Unanswered);
+            }
             if let Some(id) = p.id {
                 self.families[p.family].table.failed(&id, now);
             }
@@ -2680,6 +2884,14 @@ impl Actor {
         self.stats
             .sample_cooling
             .store(self.sampler.cooling() as u64, Ordering::Relaxed);
+        let sampling = self.cfg.harvest.sample && !self.paused && self.proof.may_sample(now_i);
+        self.stats.sample_full_seconds.store(
+            self.sampler.full_time(now_i, sampling).as_secs(),
+            Ordering::Relaxed,
+        );
+        self.stats
+            .sample_spill_slots
+            .store(self.sampler.spill_used() as u64, Ordering::Relaxed);
         if now_i.duration_since(self.last_summary.0) >= crate::log_events::SUMMARY_EVERY {
             self.summarize(now_i);
         }
@@ -2692,12 +2904,7 @@ impl Actor {
                 }
             }
         }
-        while !self.paused && self.active_get_peers < MAX_GET_PEERS && !self.parks_lookups(now_i) {
-            let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
-                break;
-            };
-            self.start_peer_request(sockets, hash, reply, permit);
-        }
+        self.start_queued(sockets, now_i);
         // After the requests: in the turn that releases parked ones, they
         // have first claim on the query budget.
         self.rejoin_tick(sockets);
@@ -2731,6 +2938,7 @@ impl Actor {
         self.stats
             .peer_queued
             .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
+        self.publish_slots();
         self.stats
             .lookup_scheduled
             .store(self.stalled.len() as u64, Ordering::Relaxed);
@@ -2744,6 +2952,18 @@ impl Actor {
         self.stats
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
+    }
+
+    /// The ledger's slot gauges: running requests (occupied slots) and,
+    /// apart, queued ones.
+    fn publish_slots(&self) {
+        let ledger = &self.stats.ledger;
+        ledger
+            .slots_occupied
+            .store(self.active_get_peers as u64, Ordering::Relaxed);
+        ledger
+            .queued
+            .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
     }
 
     /// The routing-table gauges at `now` (secs since the actor's epoch):
@@ -4831,3 +5051,11 @@ mod verify_tests;
 #[cfg(test)]
 #[path = "limit_tests.rs"]
 mod limit_tests;
+
+#[cfg(test)]
+#[path = "ledger_tests.rs"]
+mod ledger_tests;
+
+#[cfg(test)]
+#[path = "lookup_end_tests.rs"]
+mod lookup_end_tests;

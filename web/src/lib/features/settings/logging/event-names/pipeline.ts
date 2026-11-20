@@ -104,6 +104,14 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_snapshot_expired_n,
 		m.settings_logging_ev_pipeline_snapshot_expired_h
 	],
+	'pipeline.snapshot_unchecked': [
+		m.settings_logging_ev_pipeline_snapshot_unchecked_n,
+		m.settings_logging_ev_pipeline_snapshot_unchecked_h
+	],
+	'pipeline.snapshot_stuck': [
+		m.settings_logging_ev_pipeline_snapshot_stuck_n,
+		m.settings_logging_ev_pipeline_snapshot_stuck_h
+	],
 	'pipeline.snapshot_purge_problems': [
 		m.settings_logging_ev_pipeline_snapshot_purge_problems_n,
 		m.settings_logging_ev_pipeline_snapshot_purge_problems_h

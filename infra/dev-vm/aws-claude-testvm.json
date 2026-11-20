@@ -1,0 +1,478 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, default tenancy, mandatory tags with ExpiresAt and LaunchedBy), and stop, delete and run commands only on the instances it launched itself, and read EC2, SSM, quota and cost data. The user may pass only the two roles this stack creates: the Windows test instance's (the SSM agent policy only) and the Linux test instances' (the SSM agent policy, plus reading only the PIA login secret this stack creates). It is itself denied Secrets Manager and instance attribute reads. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters. The managed policy's own Description still says \"the Windows test instance only\": it is kept as deployed because changing it would replace the policy, and the replacement fails on the fixed name. The statements are what count.",
+  "Parameters": {
+    "SubnetId": {
+      "Type": "AWS::EC2::Subnet::Id",
+      "Description": "The Lodestar Windows subnet: the value of LODESTAR_AWS_SUBNET_ID on your PC."
+    },
+    "SecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Description": "The Lodestar Windows security group: the value of LODESTAR_AWS_SECURITY_GROUP_ID on your PC."
+    },
+    "UbuntuImageOwnerId": {
+      "Type": "String",
+      "AllowedPattern": "^[0-9]{12}$",
+      "Description": "Canonical's public AMI publisher account, which owns the official Ubuntu images. Type the value given in infra/dev-vm/linux-aws.md (Deploy). It is not one of your accounts."
+    },
+    "UserName": {
+      "Type": "String",
+      "Default": "lodestar-claude-testvm",
+      "AllowedPattern": "^[A-Za-z0-9+=,.@_-]{1,64}$"
+    }
+  },
+  "Resources": {
+    "ClaudeTestVmUser": {
+      "Type": "AWS::IAM::User",
+      "Properties": {
+        "UserName": {
+          "Ref": "UserName"
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy",
+          {
+            "Ref": "ClaudeTestVmPolicy"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "ClaudeTestVmPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "ManagedPolicyName": {
+          "Fn::Sub": "${UserName}-policy"
+        },
+        "Description": "X-test-vm: what Claude may do in AWS (the Windows test instance only).",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "ReadInventoryAndCost",
+              "Effect": "Allow",
+              "Action": [
+                "ec2:Describe*",
+                "ec2:GetConsoleOutput",
+                "ssm:DescribeInstanceInformation",
+                "ssm:DescribeInstanceProperties",
+                "ssm:GetCommandInvocation",
+                "ssm:ListCommandInvocations",
+                "ssm:ListCommands",
+                "cloudformation:DescribeStacks",
+                "cloudformation:ListStacks",
+                "iam:GetInstanceProfile",
+                "iam:ListInstanceProfiles",
+                "ce:GetCostAndUsage",
+                "budgets:ViewBudget",
+                "servicequotas:GetServiceQuota"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "ReadLatestAmiIds",
+              "Effect": "Allow",
+              "Action": "ssm:GetParameter",
+              "Resource": [
+                "arn:aws:ssm:us-east-1::parameter/aws/service/ami-windows-latest/*",
+                "arn:aws:ssm:us-east-1::parameter/aws/service/ami-amazon-linux-latest/*",
+                "arn:aws:ssm:us-east-1::parameter/aws/service/canonical/ubuntu/server/*"
+              ]
+            },
+            {
+              "Sid": "RunOnlyTheGuardedInstance",
+              "Effect": "Allow",
+              "Action": "ec2:RunInstances",
+              "Resource": {
+                "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "ec2:InstanceType": "c6a.xlarge",
+                  "ec2:MetadataHttpTokens": "required",
+                  "aws:RequestTag/Project": "Lodestar",
+                  "aws:RequestTag/Environment": "Test",
+                  "aws:RequestTag/ManagedBy": "Terraform",
+                  "aws:RequestTag/Purpose": "X-test-vm",
+                  "ec2:MetadataHttpProtocolIpv6": "disabled",
+                  "ec2:Tenancy": "default",
+                  "aws:RequestTag/LaunchedBy": "${aws:userid}"
+                },
+                "NumericLessThanEquals": {
+                  "ec2:MetadataHttpPutResponseHopLimit": "1"
+                },
+                "Null": {
+                  "aws:RequestTag/ExpiresAt": "false"
+                },
+                "ForAllValues:StringEquals": {
+                  "aws:TagKeys": [
+                    "Project",
+                    "Environment",
+                    "ManagedBy",
+                    "Purpose",
+                    "ExpiresAt",
+                    "LaunchedBy",
+                    "Name"
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "RunOnlyEncryptedBoundedVolumes",
+              "Effect": "Allow",
+              "Action": "ec2:RunInstances",
+              "Resource": {
+                "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:volume/*"
+              },
+              "Condition": {
+                "Bool": {
+                  "ec2:Encrypted": "true"
+                },
+                "NumericLessThanEquals": {
+                  "ec2:VolumeSize": "100"
+                },
+                "StringEquals": {
+                  "aws:RequestTag/Project": "Lodestar"
+                }
+              }
+            },
+            {
+              "Sid": "RunOnlyInTheLodestarNetwork",
+              "Effect": "Allow",
+              "Action": "ec2:RunInstances",
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:subnet/${SubnetId}"
+                },
+                {
+                  "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:security-group/${SecurityGroupId}"
+                }
+              ]
+            },
+            {
+              "Sid": "RunNetworkInterfaceOnlyInThatSubnet",
+              "Effect": "Allow",
+              "Action": "ec2:RunInstances",
+              "Resource": {
+                "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:network-interface/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "ec2:Subnet": {
+                    "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:subnet/${SubnetId}"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "RunOnlyAmazonOrCanonicalImages",
+              "Effect": "Allow",
+              "Action": "ec2:RunInstances",
+              "Resource": [
+                "arn:aws:ec2:us-east-1::image/*",
+                "arn:aws:ec2:us-east-1::snapshot/*"
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "ec2:Owner": [
+                    "amazon",
+                    {
+                      "Ref": "UbuntuImageOwnerId"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "TagOnlyAtLaunch",
+              "Effect": "Allow",
+              "Action": "ec2:CreateTags",
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*"
+                },
+                {
+                  "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:volume/*"
+                }
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "ec2:CreateAction": "RunInstances"
+                }
+              }
+            },
+            {
+              "Sid": "PassOnlyTheStackTestRolesToEc2",
+              "Effect": "Allow",
+              "Action": "iam:PassRole",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "WindowsTestVmRole",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::GetAtt": [
+                    "LinuxTestVmRole",
+                    "Arn"
+                  ]
+                }
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "iam:PassedToService": "ec2.amazonaws.com"
+                }
+              }
+            },
+            {
+              "Sid": "ManageOnlyOwnLodestarTestInstances",
+              "Effect": "Allow",
+              "Action": [
+                "ec2:TerminateInstances",
+                "ec2:StopInstances",
+                "ec2:StartInstances",
+                "ec2:RebootInstances"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "ec2:ResourceTag/Project": "Lodestar",
+                  "ec2:ResourceTag/Environment": "Test",
+                  "ec2:InstanceType": "c6a.xlarge",
+                  "ec2:ResourceTag/Purpose": "X-test-vm",
+                  "ec2:ResourceTag/LaunchedBy": "${aws:userid}"
+                }
+              }
+            },
+            {
+              "Sid": "RunCommandsOnlyOnOwnLodestarTestInstances",
+              "Effect": "Allow",
+              "Action": "ssm:SendCommand",
+              "Resource": {
+                "Fn::Sub": "arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "ssm:resourceTag/Project": "Lodestar",
+                  "ssm:resourceTag/Environment": "Test",
+                  "ssm:resourceTag/Purpose": "X-test-vm",
+                  "ssm:resourceTag/LaunchedBy": "${aws:userid}"
+                }
+              }
+            },
+            {
+              "Sid": "RunCommandsOnlyWithTheStandardScriptDocuments",
+              "Effect": "Allow",
+              "Action": "ssm:SendCommand",
+              "Resource": [
+                "arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript",
+                "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"
+              ]
+            },
+            {
+              "Sid": "CancelOwnCommands",
+              "Effect": "Allow",
+              "Action": "ssm:CancelCommand",
+              "Resource": "*"
+            },
+            {
+              "Sid": "NothingOutsideUsEast1",
+              "Effect": "Deny",
+              "Action": [
+                "ec2:*",
+                "ssm:*"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:RequestedRegion": "us-east-1"
+                }
+              }
+            },
+            {
+              "Sid": "NoSecretsManager",
+              "Effect": "Deny",
+              "Action": "secretsmanager:*",
+              "Resource": "*"
+            },
+            {
+              "Sid": "NoInstanceAttributeReads",
+              "Effect": "Deny",
+              "Action": "ec2:DescribeInstanceAttribute",
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    },
+    "PiaLoginSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${UserName}/pia-login"
+        },
+        "Description": "X-test-vm: the owner's PIA login for the Linux test instances. The owner types the values in the console (Retrieve secret value, Edit). Only LinuxTestVmRole can read it; Claude's user is denied Secrets Manager. Keep the keys username and password.",
+        "SecretString": "{\"username\":\"\",\"password\":\"\"}",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "WindowsTestVmRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${UserName}-windows"
+        },
+        "Description": "X-test-vm: the Windows test instance's role. SSM management only, nothing else.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "WindowsTestVmInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "InstanceProfileName": {
+          "Fn::Sub": "${UserName}-windows"
+        },
+        "Roles": [
+          {
+            "Ref": "WindowsTestVmRole"
+          }
+        ]
+      }
+    },
+    "LinuxTestVmRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${UserName}-linux"
+        },
+        "Description": "X-test-vm: the Linux test instances' role. SSM management, and reading the PIA login secret, nothing else.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "ReadOnlyThePiaLoginSecret",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": {
+                    "Ref": "PiaLoginSecret"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "LinuxTestVmInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "InstanceProfileName": {
+          "Fn::Sub": "${UserName}-linux"
+        },
+        "Roles": [
+          {
+            "Ref": "LinuxTestVmRole"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "UserName": {
+      "Value": {
+        "Ref": "ClaudeTestVmUser"
+      }
+    },
+    "SignInUrl": {
+      "Value": {
+        "Fn::Sub": "https://${AWS::AccountId}.signin.aws.amazon.com/console"
+      }
+    },
+    "PiaLoginSecretName": {
+      "Value": {
+        "Fn::Sub": "${UserName}/pia-login"
+      }
+    },
+    "LinuxInstanceProfile": {
+      "Value": {
+        "Ref": "LinuxTestVmInstanceProfile"
+      }
+    },
+    "WindowsInstanceProfile": {
+      "Value": {
+        "Ref": "WindowsTestVmInstanceProfile"
+      }
+    }
+  }
+}

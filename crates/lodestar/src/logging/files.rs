@@ -218,7 +218,8 @@ fn scan(dir: &Path) -> io::Result<Vec<Listed>> {
 
 /// The first readable line's time (at most 64 KiB read, decompressed).
 pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
-    let mut f = open_regular(&name.path(dir)).ok()?;
+    // As history opens it: a rotated `.jsonl` being compressed is its `.gz`.
+    let (name, mut f) = open_listed(dir, name).ok()?;
     let line = read::first_line(&mut f, name.gz()).ok()??;
     let v: Json = serde_json::from_slice(&line).ok()?;
     let ts = v.get("ts")?.as_str()?;
@@ -227,17 +228,26 @@ pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
 
 /// Opens a listed file: a rotated `.jsonl` compressed since the listing
 /// is its `.gz`, with the same lines at the same offsets.
+///
+/// **Whatever the error on the `.jsonl`**, not only "not found": the
+/// compression renames the finished `.gz` into place first and deletes
+/// the `.jsonl` after, so while the `.jsonl` is being deleted its `.gz`
+/// is already whole. On Windows an open of a file being deleted can fail
+/// with another error than "not found" (access denied while the deletion
+/// is pending, or a sharing violation from a scanner holding it); reading
+/// only "not found" as "compressed since" skipped the rest of that file
+/// (X-flake-log-history-win). When the `.gz` can't be opened either, the
+/// `.jsonl`'s own error is returned.
 pub fn open_listed(dir: &Path, name: &LogName) -> io::Result<(LogName, std::fs::File)> {
     match open_regular(&name.path(dir)) {
         Ok(f) => Ok((name.clone(), f)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => match name.compressed() {
-            Some(gz) => {
-                let f = open_regular(&gz.path(dir))?;
-                Ok((gz, f))
-            }
+        Err(e) => match name.compressed() {
+            Some(gz) => match open_regular(&gz.path(dir)) {
+                Ok(f) => Ok((gz, f)),
+                Err(_) => Err(e),
+            },
             None => Err(e),
         },
-        Err(e) => Err(e),
     }
 }
 

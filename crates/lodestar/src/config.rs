@@ -194,6 +194,11 @@ pub struct Dht {
     /// the hash. Off by default (docs/decisions/2026-10-30-CR-1a-H.md);
     /// not in the Settings UI.
     pub responder_hints: bool,
+    /// CR-LOOKUP-END: a peer lookup ends, and frees its slot, once it holds
+    /// enough values or its closest set has answered, and starts as soon
+    /// as it's admitted. Off by default
+    /// (docs/decisions/2026-11-20-CR-LOOKUP-END.md); not in the Settings UI.
+    pub lookup_end: bool,
     /// CR-1a-S: a peer lookup hands the fetch pool its peers in bounded
     /// batches as they arrive. Off by default
     /// (docs/decisions/2026-10-31-CR-1a-S.md); not in the Settings UI.
@@ -211,6 +216,12 @@ pub struct Dht {
     /// cached UDP-connect probe). Off by default
     /// (docs/decisions/2026-11-02-CR-4.md); not in the Settings UI.
     pub route_backoff: bool,
+    /// X-sampler-cooldown-split: a full BEP 51 sampler table moves its
+    /// soonest-ending cooldowns into a bounded filter instead of stopping
+    /// admission. Off by default
+    /// (docs/decisions/2026-11-20-X-sampler-cooldown-split.md); not in the
+    /// Settings UI.
+    pub sampler_cooldown_split: bool,
 }
 
 impl Default for Dht {
@@ -229,10 +240,12 @@ impl Default for Dht {
             restart_witness_dir: None,
             coordinated_admission: false,
             responder_hints: false,
+            lookup_end: false,
             streaming_peers: false,
             target_prefixes: false,
             utp: false,
             route_backoff: false,
+            sampler_cooldown_split: false,
         }
     }
 }
@@ -794,6 +807,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_RESPONDER_HINTS", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_LOOKUP_END") {
+            config.dht.lookup_end = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_LOOKUP_END", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_STREAMING_PEERS") {
             config.dht.streaming_peers = v
                 .parse()
@@ -803,6 +821,11 @@ impl Config {
             config.dht.target_prefixes = v
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_TARGET_PREFIXES", &v))?;
+        }
+        if let Some(v) = env("LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT") {
+            config.dht.sampler_cooldown_split = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT", &v))?;
         }
         if let Some(v) = env("LODESTAR_DHT_UTP") {
             config.dht.utp = v.parse().map_err(|_| parse("LODESTAR_DHT_UTP", &v))?;
@@ -872,7 +895,9 @@ impl Config {
                 .safe_restart
                 .then(|| dht::RestartConfig::new(self.dht.restart_witness_dir.clone())),
             responder_hints: self.dht.responder_hints,
+            lookup_end: self.dht.lookup_end,
             target_prefixes: self.dht.target_prefixes,
+            sampler_cooldown_split: self.dht.sampler_cooldown_split,
             ..dht::Config::default()
         }
     }
@@ -1430,6 +1455,30 @@ mod tests {
         assert!(Config::load(None, bad).is_err());
     }
 
+    #[test]
+    fn sampler_cooldown_split_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.sampler_cooldown_split);
+        assert!(!c.dht_config().sampler_cooldown_split);
+        let env =
+            |k: &str| (k == "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT").then(|| "true".to_string());
+        assert!(
+            Config::load(None, env)
+                .unwrap()
+                .dht_config()
+                .sampler_cooldown_split
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nsampler_cooldown_split = true\n").unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert!(c.dht_config().sampler_cooldown_split);
+        std::fs::write(&path, "[dht]\nsampler_cooldown_split = 1\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        let bad = |k: &str| (k == "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT").then(|| "on".to_string());
+        assert!(Config::load(None, bad).is_err());
+    }
+
     /// The metadata size limit is used as it is up to 47 MiB and held to
     /// 47 MiB above.
     #[test]
@@ -1501,6 +1550,32 @@ mod tests {
         assert!(
             Config::load(None, |k: &str| {
                 (k == "LODESTAR_DHT_RESPONDER_HINTS").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn lookup_end_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.lookup_end);
+        assert!(!c.dht_config().lookup_end);
+        let env = |k: &str| (k == "LODESTAR_DHT_LOOKUP_END").then(|| "true".to_string());
+        assert!(Config::load(None, env).unwrap().dht_config().lookup_end);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nlookup_end = true\n").unwrap();
+        assert!(
+            Config::load(Some(&path), no_env)
+                .unwrap()
+                .dht_config()
+                .lookup_end
+        );
+        std::fs::write(&path, "[dht]\nlookup_end = \"yes\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_LOOKUP_END").then(|| "maybe".to_string())
             })
             .is_err()
         );

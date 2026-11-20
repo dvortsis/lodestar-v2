@@ -10,6 +10,10 @@
 //! so lookups take about log₈(N) hops; a node within the target's
 //! neighbourhood answers with the 8 XOR-closest ids there. The 8 closest
 //! to a live hash hold its swarm and return it as `values`.
+//!
+//! With [`NetConfig::stale_permille`], a reply also lists stale contacts:
+//! addresses that never answer, with ids beside the live nodes it lists,
+//! so they sit in a lookup's closest set and must time out before it ends.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
@@ -474,11 +478,50 @@ impl Net {
             let lo = centre.saturating_sub(K / 2).min(self.nodes.len() - K);
             (lo..lo + K).collect()
         };
-        picks
-            .into_iter()
-            .map(|j| NodeInfo {
+        let mut out: Vec<NodeInfo> = picks
+            .iter()
+            .map(|&j| NodeInfo {
                 id: self.nodes[j].id,
                 addr: self.nodes[j].addr,
+            })
+            .collect();
+        // Only near the target: the closest set is where stale entries
+        // pile up, and far hops' answers come from well-kept buckets.
+        if self.cfg.stale_permille > 0 && d <= WINDOW {
+            out.extend(picks.iter().flat_map(|&j| self.stale(j)));
+        }
+        out
+    }
+
+    /// The stale contacts beside node `j` in id space, which every reply
+    /// listing `j` lists too: `stale_permille / 1000` of them on average,
+    /// fixed per node, so the network holds a bounded set. Each keeps
+    /// `j`'s first 8 bytes, so it's as near any target as `j` is.
+    fn stale(&self, j: usize) -> Vec<NodeInfo> {
+        let key = |k: u64, purpose: u64| hash(&[self.seed, j as u64, k, purpose]);
+        let p = u64::from(self.cfg.stale_permille);
+        let n = p / 1000 + u64::from(key(0, 6) % 1000 < p % 1000);
+        (1..=n)
+            .filter_map(|k| {
+                let mut id = self.nodes[j].id.0;
+                id[8..16].copy_from_slice(&key(k, 7).to_be_bytes());
+                id[16..].copy_from_slice(&key(k, 8).to_be_bytes()[..4]);
+                let r = key(k, 9);
+                let ip = Ipv4Addr::new(
+                    PREFIXES[(r % PREFIXES.len() as u64) as usize],
+                    (r >> 8) as u8,
+                    (r >> 16) as u8,
+                    1 + ((r >> 24) % 254) as u8,
+                );
+                let addr = SocketAddr::from((ip, 1024 + ((r >> 32) % 64_000) as u16));
+                // A clash with a live address would answer as that node.
+                (lodestar_network_policy::allows(addr, false)
+                    && addr != self.me
+                    && !self.by_addr.contains_key(&addr))
+                .then_some(NodeInfo {
+                    id: NodeId(id),
+                    addr,
+                })
             })
             .collect()
     }
@@ -592,6 +635,29 @@ mod tests {
         assert!(n.heap.is_empty());
         let replies: Vec<bool> = n.asks.iter().map(|a| a.reply.is_some()).collect();
         assert_eq!(replies, [true, false, false]);
+    }
+
+    /// Stale contacts are off by default, listed only near the target,
+    /// fixed per node, beside it in id space and never a live address.
+    #[tokio::test]
+    async fn stale_contacts_sit_beside_near_picks_only() {
+        let mut n = net();
+        let target = [0x5a; 20];
+        let pos = n.rank(&target);
+        let near = pos.min(n.nodes.len() - 1);
+        let far = (pos + n.nodes.len() / 2) % n.nodes.len();
+        assert_eq!(n.closer(&target, near).len(), K, "off: the K picks only");
+        n.cfg.stale_permille = 1_750;
+        let reply = n.closer(&target, near);
+        assert!(reply.len() > K, "near replies list stale contacts");
+        assert_eq!(reply, n.closer(&target, near), "fixed per node");
+        let picks = &reply[..K];
+        for s in &reply[K..] {
+            assert!(!n.by_addr.contains_key(&s.addr), "never a live address");
+            assert!(picks.iter().any(|p| p.id.0[..8] == s.id.0[..8]));
+        }
+        assert!(far.abs_diff(pos) > WINDOW);
+        assert_eq!(n.closer(&target, far).len(), K, "far replies list none");
     }
 
     /// Samples rotate through what a node holds once per interval, and
