@@ -556,7 +556,8 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
 /// Whether the service can create a file in `dir`: a uniquely named probe
 /// is created there and removed. `create_new` never opens an existing
 /// file or link, so a name that's taken (a probe a crash left behind, or
-/// anything else) is skipped for the next.
+/// anything else) is skipped for the next. A link above `dir` is followed,
+/// as the service's own writes there would follow it.
 fn writable(dir: &Path) -> Option<(Problem, String)> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2387,6 +2388,15 @@ mod tests {
         );
         assert!(default.contains("Repair"), "{default}");
         assert!(deny_access(&locked, true, false) && deny_access(&svc, true, false));
+        // An existing folder that passes keeps no probe either.
+        let before = std::fs::read_dir(&svc).unwrap().count();
+        let (c, _) = load_checked(&svc, None, |_| None, || Ok(())).unwrap();
+        assert!(c.is_ok());
+        assert_eq!(
+            std::fs::read_dir(&svc).unwrap().count(),
+            before,
+            "probe left"
+        );
     }
 
     /// A probe name that's taken, as a crash could leave one, is skipped:

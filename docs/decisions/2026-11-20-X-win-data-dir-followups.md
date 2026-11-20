@@ -9,7 +9,7 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
   - **The fix for any other folder:** give the Lodestar service permission to change files there, or set the setting to a folder it can write to.
 - **The probe:** create a uniquely named file in the folder with `create_new`, then delete it.
   - **The name** is `.lodestar-write-check-<process>-<time>-<n>`.
-  - **No link is followed:** `create_new` never opens an existing file or link.
+  - **The probe never opens an existing name:** `create_new` fails on an existing file or link. A link or junction above the folder is followed, as the service's own writes there would follow it; the earlier checks still skip a data folder that is itself one, or a missing one with one above it.
   - **A crash can't break the next start:** if a name is taken, for example by a probe a crash left behind, the probe moves on to the next name. It tries 16 names.
   - **A failed delete is ignored.** The file is empty, and the next start uses another name.
 - **When (this PR's call):** only in the check that runs once the config is loaded and the guard has run. That covers the service's own folder too, after the ACL step has made it private.
@@ -23,7 +23,8 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
 
 ## User guide
 - **§6.2 of `docs/user/06-troubleshooting.md`** describes event ID 6: what it means, the setting it names, and a table of the four problems with the fix for each.
-  - **The safe choice:** give access to `NT SERVICE\Lodestar` only, with the exact `icacls` command, and never to Everyone or Users.
+  - **The safe recommendation:** use the default folder, which the service keeps private. Someone keeping their own folder is shown how to make it private to SYSTEM, Administrators and `NT SERVICE\Lodestar` with `icacls /inheritance:r /grant:r`, how to check it, how to remove a deny entry, and how to undo it.
+  - **For the default folder,** the guide says not to create it by hand: a hand-made folder inherits shared permissions and the ACL step refuses it (ID 3). Repair, or the service's next start, creates it private.
   - **The "stops at once" row** in the table at the top of the page now looks for event ID 3, 5 or 6.
 
 ## Tests
@@ -31,4 +32,5 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
   - **Write is denied** with `icacls /deny Everyone:(WD)` on Windows and mode 555 on Unix. The test is skipped where permissions don't apply (root), and the deny is lifted on drop.
   - **It fails with the probe removed** (checked by disabling it, as an unprivileged user).
 - **`a_taken_probe_name_is_skipped`:** a file already holding the first probe name is left untouched, and the check passes.
+- **The write test also checks** that an existing folder that passes keeps no probe.
 - **Every new message** is covered by the existing note test, which now includes `Unwritable`.
