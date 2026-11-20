@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T13:48Z",
+  "updated_at": "2026-11-20T14:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10279,6 +10279,13 @@
       "sha": "b8e2a3b0",
       "at": "2026-11-20T13:48Z",
       "note": "review MERGE (no blocking/important); follow-ups -> X-win-data-dir-followups in same session"
+    },
+    {
+      "pr": 984,
+      "slice": "X-network-lost-msg",
+      "sha": "9922a41c",
+      "at": "2026-11-20T14:08Z",
+      "note": "one-string copy fix; runner read the diff as the fresh reviewer"
     }
   ],
   "active_sessions": {
@@ -10524,7 +10531,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T13:48Z",
+    "updated": "2026-11-20T14:08Z",
     "items": [
       {
         "slot": 1,
@@ -10548,12 +10555,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-network-lost-msg",
+        "slice": "X-enr-lane-nits",
         "role": "build (sonnet)",
         "agent": "session_01MMjhnBSC5JnD2q4qaJmMFS",
         "model": "opus",
-        "since": "2026-11-20T12:54Z",
-        "doing": "launched; brief briefs/X-network-lost-msg.md",
+        "since": "2026-11-20T14:08Z",
+        "doing": "same session; brief briefs/X-enr-lane-nits.md",
         "status": "running"
       },
       {
@@ -10563,7 +10570,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T10:12Z",
-        "doing": "#980 fix round pushed 719ad4ad; await ready, then delta review",
+        "doing": "#980 ready 719ad4ad; delta review running",
         "status": "active"
       }
     ],
