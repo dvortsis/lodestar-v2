@@ -27,18 +27,23 @@ superseded.
   failed fetch. With no list yet, the lookup is an error carrying the
   warning, as any first-fetch failure is.
 - **The warning.** Plain text naming both sizes and saying the list will be
-  tried again in an hour, e.g. "Steam's app list came back with 500 games,
-  under half the current 1200; the current list is kept and it will be
-  tried again in an hour". It's kept until a list is accepted: in memory
-  (`Steam::warning`, for tests and the wiring slice) and in the plugin's own
-  state store under `steam::WARNING_KEY` (`warning`), the per-source store
-  a status page can read. The write is best effort: a failing state store
-  loses only the status line, never the list. The `Identifier` trait has
-  no status hook today; surfacing the key on the Sources page is left to
-  the wiring slice (for the runner).
+  tried again later, e.g. "Steam's app list came back with 500 games, under
+  half the current 1200; the current list is kept and it will be tried
+  again later". "Later", not "in an hour": the line stays while later tries
+  fail for other reasons. It's kept in memory (`Steam::warning`, for tests
+  and the wiring slice) and in the plugin's own state store under
+  `steam::WARNING_KEY` (`warning`), the per-source store a status page can
+  read. Every accepted list removes the stored key, whether or not memory
+  holds a warning, so one stored before a restart, or whose clear was
+  lost, goes too. The writes are best effort: a failing state store loses
+  only the status line, never the list. The `Identifier` trait has no
+  status hook today; surfacing the key on the Sources page is left to the
+  wiring slice (for the runner).
 - **Known limit.** If Steam's list really did halve, the plugin would keep
   the old list and retry hourly until someone looks. That is the safe side
-  (old names still match real games); the warning says why.
+  (old names still match real games), and the warning says why. An escape
+  hatch, such as accepting after several refusals of about the same size,
+  is left to the runner.
 
 ## Tests for behaviour #969 left untested
 - **The 60 s cancel hold** (`CANCELLED`): a lookup cancelled mid-request is

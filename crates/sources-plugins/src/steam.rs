@@ -170,9 +170,9 @@ const FAILED: &str = "Steam's request failed";
 /// catalogue only grows by a few percent a month, so a list half the size
 /// is a broken or cut-off answer, not real news.
 pub fn suspicious(old: Option<usize>, new: usize) -> Option<String> {
-    // The text names the wait: `RETRY` is an hour.
-    const _: () = assert!(RETRY.as_secs() == 3600);
-    let retry = "it will be tried again in an hour";
+    // "Later", not "in an hour": the line stays while later tries fail
+    // for other reasons.
+    let retry = "it will be tried again later";
     match old {
         None if new == 0 => Some(format!(
             "Steam's app list came back empty, so no games can be matched yet; {retry}"
@@ -347,7 +347,7 @@ impl Steam {
         }
         let r = self.fetch(kit, &key).await;
         // What to do with the status in the state store, once the index
-        // lock is let go: `Some(None)` clears it, `Some(Some(w))` sets it.
+        // lock is let go: `None` clears it, `Some(w)` sets it.
         let (r, status) = {
             let mut index = self.index();
             match r {
@@ -357,8 +357,11 @@ impl Steam {
                         index.apps = apps;
                         index.fetched = Some(Instant::now());
                         index.retry_at = None;
-                        let cleared = index.warning.take().map(|_| None);
-                        (Ok(()), cleared)
+                        index.warning = None;
+                        // Cleared on every accepted list, not only when one
+                        // is held in memory: a warning stored before a
+                        // restart, or whose clear was lost, goes too.
+                        (Ok(()), Some(None))
                     }
                     Some(w) => {
                         index.retry_at = Some(Instant::now() + RETRY);
@@ -373,7 +376,8 @@ impl Steam {
                 }
             }
         };
-        // Best effort: a failing state store loses only the status line.
+        // Best effort: a failing state store loses only the status line,
+        // and the next accepted list clears it again.
         match status {
             Some(Some(w)) => {
                 let _ = kit.state.set(WARNING_KEY, w.into_bytes()).await;

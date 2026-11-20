@@ -436,6 +436,26 @@ async fn an_empty_first_list_is_refused_and_a_small_one_accepted() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_accepted_list_clears_a_warning_left_from_before_a_restart() {
+    let replayer = Arc::new(Replayer::new(vec![page(
+        None,
+        200,
+        &body(&[(70, "Example Quest")], false, None),
+    )]));
+    let p = plugin(Some(HEX_KEY));
+    let k = kit(replayer.clone(), &p);
+    k.state
+        .set(steam::WARNING_KEY, b"left from before".to_vec())
+        .await
+        .unwrap();
+    let got = p.lookup(&k, &game("Example Quest")).await.unwrap();
+    assert_eq!(id_of(&got), Some("70".into()));
+    assert_eq!(p.warning(), None);
+    assert_eq!(stored_warning(&k).await, None);
+    replayer.finish().unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_much_smaller_or_empty_list_keeps_the_current_one() {
     let replayer = Arc::new(Replayer::new(vec![
         // The list in use: 1,200 games, Example Quest as 70.
@@ -505,6 +525,8 @@ async fn a_much_smaller_or_empty_list_keeps_the_current_one() {
 
 #[tokio::test(start_paused = true)]
 async fn a_cancelled_request_holds_for_exactly_cancelled() {
+    // The hold the decisions file names.
+    assert_eq!(steam::CANCELLED, Duration::from_secs(60));
     let t0 = tokio::time::Instant::now();
     let replayer = Arc::new(Replayer::new(vec![page(
         None,
