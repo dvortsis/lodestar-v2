@@ -1179,9 +1179,8 @@ mod tests {
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         let name = snap.display().to_string();
         assert!(
-            r.warnings
-                .iter()
-                .any(|w| w.contains(&name) && w.contains("original date couldn't be put back")),
+            r.warnings.iter().any(|w| w.contains(&name)
+                && w.contains("couldn't be put back after Lodestar wrote to it")),
             "{:?}",
             r.warnings
         );
@@ -1195,6 +1194,8 @@ mod tests {
 
     /// A pass with nothing to do leaves the snapshot's time as it was,
     /// without writing it: a sub-second part a write would drop survives.
+    /// (Needs a filesystem with sub-second times, as CI's are; not FAT or
+    /// HFS+.)
     #[test]
     fn a_pass_with_nothing_to_do_writes_no_time() {
         let dir = tempfile::tempdir().unwrap();

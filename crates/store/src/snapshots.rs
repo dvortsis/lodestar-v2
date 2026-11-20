@@ -696,6 +696,8 @@ impl Store {
                 report
                     .warnings
                     .push(format!("listing the store's snapshots failed: {e}"));
+                // Looked at no snapshot: forget every sighting (as below).
+                self.snapshot_marks.2.clear();
                 return report;
             }
         };
@@ -738,8 +740,10 @@ impl Store {
             }
             if snap.taken_at.is_none() {
                 match std::fs::metadata(&snap.path) {
-                    // Can't be looked at now (or gone): next pass.
+                    // Can't be looked at now (or gone): next pass, which
+                    // must then see a lasting error afresh.
                     Err(e) => {
+                        self.snapshot_marks.2.remove(&snap.path);
                         if e.kind() != std::io::ErrorKind::NotFound {
                             blocked = true;
                             report.warnings.push(format!(
@@ -1005,8 +1009,9 @@ const CONFIRM_SECS: i64 = 3_600;
 
 /// A snapshot whose identify claims couldn't be checked for a lasting
 /// reason (`why`). Deleted only when every pass that looked found the
-/// same since a first sighting at least [`CONFIRM_SECS`] earlier (`lasting`, when it first did); otherwise kept,
-/// recorded and reported as stuck, so the next pass decides. `at` is
+/// same since a first sighting at least [`CONFIRM_SECS`] earlier
+/// (`lasting`, when it first did); otherwise kept, recorded and reported
+/// as stuck, so the next pass decides. `at` is
 /// `(lasting, now, mono)`: the wait is measured on the monotonic clock, so
 /// a wall clock stepping forward can't shorten it, and a wall clock that
 /// stepped back behind the first sighting starts the wait again. Whether
@@ -1183,7 +1188,7 @@ impl Drop for KeepTime<'_> {
             return;
         };
         // Already right (nothing was written): no write, so a pass with
-        // nothing to do doesn't open every kept snapshot for writing.
+        // nothing to do doesn't rewrite every kept snapshot's time.
         if modified(self.path) == Some(at) {
             return;
         }
@@ -1224,8 +1229,8 @@ thread_local! {
 fn note_restore(path: &Path, report: &mut PurgeReport) {
     if let Some(kind) = RESTORE_FAILED.take() {
         report.warnings.push(format!(
-            "after cleaning the snapshot {}, its original date couldn't be put back ({kind}); \
-             it may now be kept longer than {RETAIN_DAYS} days",
+            "the date of the snapshot {} couldn't be put back after Lodestar wrote to it \
+             ({kind}); it may be kept longer than its {RETAIN_DAYS} days",
             path.display()
         ));
     }
