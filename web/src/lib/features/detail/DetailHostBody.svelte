@@ -2,6 +2,10 @@
 	// The drawer the search page mounts (§10.5, §10.15). It shows while `page.state.detail` is set
 	// and places itself: in flow from xx-large up, an overlay at x-large and large, and a full
 	// screen view with Back below large. The browser's Back (popstate) clears the state and closes it.
+	// In flow (owner §2.66): while the drawer is open the results track may narrow below
+	// --results-min-width to a floor of --drawer-min-width (480 px; the two are equal by that
+	// decision), and the drawer narrows towards --drawer-min-width until the window fits the stored
+	// width. So it sits beside the results from 1366 px instead of covering them.
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
@@ -26,9 +30,8 @@
 		overlay: '(min-width: 1024px)',
 		narrow: '(min-width: 640px)'
 	};
-	let mode = $state<Mode>('overlay');
-	let gridWidth = $state(0);
-	let gridOverhead = $state(0);
+	// The grid's width left for the results and the drawer: less its padding, gaps and rail.
+	let room = $state(0);
 	let viewportMode = $state<Mode>('overlay');
 
 	function readWidth(): number | undefined {
@@ -93,13 +96,12 @@
 		const measure = () => {
 			if (!grid) return;
 			const style = getComputedStyle(grid);
-			gridWidth = grid.clientWidth;
-			gridOverhead =
-				parseFloat(style.paddingLeft) +
-				parseFloat(style.paddingRight) +
-				(searchGrid ? 2 : 1) * (parseFloat(style.columnGap) || 0) +
-				(searchGrid ? tokenPx('--rail-width', 264) : 0) +
-				tokenPx('--results-min-width', 560);
+			room =
+				grid.clientWidth -
+				parseFloat(style.paddingLeft) -
+				parseFloat(style.paddingRight) -
+				(searchGrid ? 2 : 1) * (parseFloat(style.columnGap) || 0) -
+				(searchGrid ? tokenPx('--rail-width', 264) : 0);
 		};
 		const observer = new ResizeObserver(measure);
 		if (grid) observer.observe(grid);
@@ -112,14 +114,12 @@
 		};
 	});
 
-	$effect(() => {
-		const chosen = Math.min(
-			tokenPx('--drawer-max-width', 640),
-			Math.max(tokenPx('--drawer-min-width', 480), stored ?? tokenPx('--drawer-overlay-width', 560))
-		);
-		mode =
-			viewportMode === 'inline' && gridWidth < gridOverhead + chosen ? 'overlay' : viewportMode;
-	});
+	const drawerMin = tokenPx('--drawer-min-width', 480);
+	// In flow only if the drawer's minimum fits beside the results' floor, which is the same 480 px
+	// (§2.66).
+	const mode = $derived<Mode>(
+		viewportMode === 'inline' && room < 2 * drawerMin ? 'overlay' : viewportMode
+	);
 
 	$effect(() => {
 		if (!open || mode !== 'full' || !container) return;
@@ -174,7 +174,10 @@
 		announce = m.detail_announce({ title });
 	});
 
-	// In flow: the width the viewer chose. Overlays use their tokens; full screen takes the container.
+	// In flow: the width the viewer chose, up to the most that leaves the results
+	// --results-min-width, but never under the drawer's own minimum: there the results give way
+	// instead, down to their floor. The Drawer clamps to that maximum, so a narrow window never
+	// rewrites the stored width. Overlays use their tokens; full screen takes the container.
 	// Back and "Back to Search" close like the drawer's own X: focus returns to the invoker.
 	function back() {
 		const target = focusTarget();
@@ -202,7 +205,14 @@
 			resizeLabel={m.detail_resize()}
 			{width}
 			minWidth={mode === 'full' ? 0 : undefined}
-			maxWidth={mode === 'full' ? 100_000 : undefined}
+			maxWidth={mode === 'full'
+				? 100_000
+				: mode === 'inline'
+					? Math.min(
+							tokenPx('--drawer-max-width', 640),
+							Math.max(drawerMin, room - tokenPx('--results-min-width', 560))
+						)
+					: undefined}
 			onWidthChange={mode === 'inline' ? saveWidth : undefined}
 			onClose={closeDetail}
 			returnFocus={focusTarget}

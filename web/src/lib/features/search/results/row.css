@@ -64,7 +64,13 @@
 .rr-via {
 	flex: none;
 }
+/* A fact that doesn't fit the row drops whole instead of clipping mid-word (review I3, L5): the
+   line wraps, and only its first line (1lh, so it follows a user's text-spacing line height) shows.
+   The tiers below drop the least useful facts first, by the row's own width (§10.15). Dropped
+   facts stay in the accessibility tree and are all in the drawer. */
 .rr-facts {
+	flex-wrap: wrap;
+	height: 1lh;
 	gap: calc(var(--spacing) * 4);
 	font-variant-numeric: tabular-nums;
 }
@@ -145,11 +151,17 @@
 	align-items: center;
 	gap: var(--spacing);
 }
-/* Prioritize decision facts by the actual row width, including Discover's
-   narrow panels. Density remains the user's choice. */
+/* Discover's Newest list is about recency: the discovered time leads its facts (review I3). */
+[aria-labelledby='discover-newest-h'] .rr-discovered {
+	order: -4;
+}
+
+/* By the row's own width, not the viewport's (§10.15). Above 480 px the facts drop from the end
+   of the line (the technical trackers fact is last); at 480 px and under, all but size,
+   availability, discovered and a feature's own fact go. Density stays the user's choice. */
 @container result-row (max-width: 480px) {
 	.rr-raw,
-	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-extra),
+	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-discovered):not(.rr-extra),
 	.rr-leechers,
 	.rr-action-label {
 		display: none;
