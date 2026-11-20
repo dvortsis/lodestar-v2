@@ -554,6 +554,11 @@ placement:
   - CR-1c
   - CR-SPEC
   - CR-COL-3
+  - CR-LEDGER
+  - CR-LOOKUP-END
+  - CR-HINT-FIRST
+  - X-sampler-cooldown-split
+  - X-crawler-sim-calibrate
 - ws: ws-cr-live
   match:
   - CR-AB-*
@@ -1211,7 +1216,7 @@ roadmap:
     members: []
   - id: cr4
     label: Build crawler experiments
-    plain: Admission, hints, streaming, prefixes and uTP, each behind an off switch.
+    plain: Admission, hints, streaming, prefixes and uTP, then the lookup-cost changes (measure, end on values, hint first) and the sampler split, each behind an off switch.
     col: 0
     row: 0
     members:
@@ -1222,6 +1227,11 @@ roadmap:
     - CR-1a-S
     - CR-1b
     - CR-4
+    - CR-LEDGER
+    - CR-LOOKUP-END
+    - CR-HINT-FIRST
+    - X-sampler-cooldown-split
+    - X-crawler-sim-calibrate
   - id: crab
     label: Live A/B on the experiment host
     plain: Paired on/off runs plus a bitmagnet comparator. Needs your host.
