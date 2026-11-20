@@ -1515,7 +1515,8 @@ fn render_target_prefixes(o: &mut Out, d: &StatsSnapshot) {
     );
 }
 
-/// X-sampler-cooldown-split's sampler-full time (docs/metrics.md),
+/// X-sampler-cooldown-split's sampler-full time and filter occupancy
+/// (docs/metrics.md),
 /// exported with the switch on or off so both arms of an A/B have it.
 fn render_sampler_full(o: &mut Out, d: &StatsSnapshot) {
     o.one(
@@ -1523,6 +1524,12 @@ fn render_sampler_full(o: &mut Out, d: &StatsSnapshot) {
         "counter",
         "Seconds the BEP 51 sampler could not admit a node while sampling was allowed.",
         d.sample_full_seconds,
+    );
+    o.one(
+        "dht_sample_spill_slots",
+        "gauge",
+        "Spill filter slots in use (dht.sampler_cooldown_split), of 8388608.",
+        d.sample_spill_slots,
     );
 }
 
@@ -2390,12 +2397,13 @@ mod tests {
         assert!(!out.contains("have_bytes") && !out.contains("hot_columns"));
     }
 
-    /// X-sampler-cooldown-split: the counter renders its value and has its
-    /// row in docs/metrics.md.
+    /// X-sampler-cooldown-split: the counter and gauge render their values
+    /// and have their rows in docs/metrics.md.
     #[test]
     fn sampler_full_seconds_renders_and_is_documented() {
         let d = StatsSnapshot {
             sample_full_seconds: 4321,
+            sample_spill_slots: 77,
             ..StatsSnapshot::default()
         };
         let mut o = Out(String::new());
@@ -2403,6 +2411,8 @@ mod tests {
         for line in [
             "# TYPE lodestar_dht_sample_full_seconds_total counter",
             "lodestar_dht_sample_full_seconds_total 4321",
+            "# TYPE lodestar_dht_sample_spill_slots gauge",
+            "lodestar_dht_sample_spill_slots 77",
         ] {
             assert!(
                 o.0.lines().any(|l| l == line),
@@ -2411,11 +2421,12 @@ mod tests {
             );
         }
         let doc = include_str!("../../../docs/metrics.md");
-        assert!(
-            doc.lines()
-                .any(|l| l.starts_with("| `dht_sample_full_seconds_total`")),
-            "docs/metrics.md has no row for dht_sample_full_seconds_total"
-        );
+        for family in ["dht_sample_full_seconds_total", "dht_sample_spill_slots"] {
+            assert!(
+                doc.lines().any(|l| l.starts_with(&format!("| `{family}`"))),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
     }
 
     #[test]

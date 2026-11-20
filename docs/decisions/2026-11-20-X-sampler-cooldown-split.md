@@ -5,12 +5,15 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
 ## The switch
 - **`dht.sampler_cooldown_split`, a bool, off by default.** It's set in `config.toml` (`[dht] sampler_cooldown_split = true`) or with `LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT=true`, read at start, and a bad value is a config error (`sampler_cooldown_split_is_off_unless_asked_for`). It isn't in the Settings UI. The collector already records it (`docs/decisions/2026-11-20-CR-COL-5.md`).
 - **Off is today's sampler.** No filter is allocated (`Option::None`), every call takes today's path, and the existing sampler, proof and actor tests pass unchanged. `below_capacity_the_switch_changes_nothing` checks that on and off answer every call the same while the table isn't full, so on changes behaviour only when the table would otherwise stop admission.
-- **Unchanged either way:** the 200,000-place table (`restart::MAX_ENTRIES`), the per-IP and per-block shares, the cooldown lengths, WK-10e's scale and clamp (`MAX_SCALE`, 48 h), the query rate and the outstanding cap.
+- **Unchanged either way:** the 200,000-place table (`restart::MAX_ENTRIES`), the per-IP and per-block shares (with the switch on, moved cooldowns keep counting against them; see "Shares"), the cooldown lengths, WK-10e's scale and clamp (`MAX_SCALE`, 48 h), the query rate and the outstanding cap.
 
 ## The structure
 - **When the table is full and a node needs a place, the cooldown that ends soonest moves out** to a spill filter (`sampler.rs`, `spill::Spill`). In-flight records never move. Up to 16 of the soonest are tried, so one record that doesn't fit doesn't stop the rest.
-- **The filter is a fixed table of 2^23 32-bit slots in groups of 8.** Each slot holds a 20-bit fingerprint of the address and the minute its cooldown ends, modulo 4,096 minutes (68 h). An address may sit in either of two groups, chosen by a SipHash with a per-process random key, and goes in the emptier one.
-  - **Why not a Bloom filter per time bucket (the brief's example):** a lookup has to ask every live bucket's filter, so false positives add up. With the 100-plus segments Balanced's steady state needs, most strangers would read as "maybe cooling" and sampling would stall again. Here a lookup reads two groups, about 16 in 2^20 (0.0015 %) false positives, measured below 0.1 % at 90 % fill (`the_filter_is_bounded_keeps_every_key_and_rarely_misfires`).
+- **The filter is a fixed table of 2^23 32-bit slots in blocks of 64.** Each slot holds a 20-bit tag of the address and the minute its cooldown ends, modulo 4,096 minutes (68 h).
+  - **Where a slot goes:** an address may sit in either of two blocks, chosen by a SipHash with a per-process random key over its widest share (its IPv4 /24 or IPv6 /48). It goes in the emptier block.
+  - **The tag:** 8 bits of that share's key, 4 bits of the IPv6 /64 (none on IPv4), 4 bits (IPv6) or 8 bits (IPv4) of the IP, and 4 bits of the address.
+  - **One slot per cooldown;** nothing is merged.
+  - **Why not a Bloom filter per time bucket (the brief's example):** a lookup has to ask every live bucket's filter, so false positives add up. With the 100-plus segments Balanced's steady state needs, most strangers would read as "maybe cooling" and sampling would stall again. Here a lookup reads two blocks. False positives run about 128 in 2^20 (0.012 %) for an address whose /24 or /48 has nothing moved, measured below 0.1 % at 90 % fill (`the_filter_is_bounded_keeps_every_key_and_rarely_misfires`). In a /24 holding its full 64 moved cooldowns, about 64 in 2^12 (1.6 %).
   - **Why minutes:** a moved cooldown ends at most 60 s late, against up to a bucket's width with coarse buckets.
 - **The bound: 32 MiB, stated and measured.** The slots are one allocation of exactly 33,554,432 bytes, made on the first spill and never grown; the structure holds nothing else on the heap. The test asserts the bytes held. Capacity is 8,388,608 cooldowns; half full takes no refusal and 90 % refuses under 1 % (each refused cooldown stays in the table). `saturated()` treats the filter as full past 15/16 of its slots.
   - **Sizing, with WK-10e's scale:** live cooldowns ≈ sample rate × (answered share × interval × scale + unanswered share × 6 h). At Balanced (about 100 samples a second), with about a fifth answered at about 6 h:
@@ -21,18 +24,36 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
     - **Main process:** steady-state RSS under 1 GB at 10M torrents with default caches. The sampler's table is about 35–45 MB at its cap (`docs/decisions/2026-11-02-R-mem-triage.md`); the filter adds 32 MiB, about 3 % of that budget.
     - **A worker running a DHT node** (§19, WK-10e) has RSS ≤ 256 MB at defaults. The switch is off by default there too. Turned on, table plus filter is about 75 MB at worst, so a worker that turns it on should check its soak RSS against that budget.
   - **Measured, and only when used:** with the switch off, nothing is allocated (`a_full_table_with_the_switch_off_waits_as_before` asserts 0 bytes). With it on, nothing is allocated until the first cooldown moves (`a_spilled_cooldown_never_ends_early_and_ends_within_a_minute` asserts 0 bytes for a filter that stored nothing). Then exactly 33,554,432 bytes are allocated, once (`the_filter_is_bounded_keeps_every_key_and_rarely_misfires`).
-- **Ended slots are swept,** 4,096 slots a maintenance tick (a full pass about every 17 minutes), long before an ended minute could wrap round 68 h later and read as live. If one ever did, it would only skip a node.
+- **Ended slots are swept,** 8,192 slots a maintenance tick, so a full pass takes about 17 minutes.
+  - An unswept ended slot would read as live again about 1,215 minutes (20 h) after it ends: minutes wrap at 4,096, and a live end may lie up to 2,881 minutes ahead. The sweep runs long before that.
+  - If one ever did read as live, it would only skip a node and over-count a share.
+  - `debug_assert!` checks that the filter's clock never runs before its base, which is the moment of the first move.
 
 ## Never shorter
 - **A node in cooldown is never sampled before its cooldown ends.** The argument:
   1. The table is exact, as today.
   2. A cooldown moves to the filter with its end rounded up to the next whole minute.
-  3. A fingerprint match keeps the later of the two ends, so a duplicate, a spoofed contact or a collision can only lengthen a cooldown.
+  3. Every moved cooldown has its own slot until it ends, so a duplicate, a spoofed contact or a tag collision can only add a match (a skip), never remove one.
   4. The filter has no false negatives: a stored end is at most 48 h and a minute ahead (`HORIZON_MIN`), so it can't wrap while live, and an insert past that is refused and stays in the table.
   5. A refusal leaves the cooldown in the table. Nothing is dropped to make room.
   6. Admission (`offer`, `next`, `reserve`) asks the table and the filter.
 - **WK-10e's scaled cooldowns** (up to 48 h) move like any other and keep their full length.
 - **Tested:** `no_node_is_sampled_in_cooldown` (proptest, 512 cases) runs random offers, direct reservations of any address (as a spoofed or duplicate contact would make), answers with any interval and scale, aborts, prunes, restarts and up to 3 h steps, against a table of 1–5 places. No node is ever reserved before its true end, and the table and filter stay within their bounds. `a_full_split_table_keeps_admitting_and_refuses_cooled_nodes` and `a_full_filter_leaves_the_table_full` cover the edges.
+
+## Shares (the runner's I1, 2026-11-20)
+- **Moved cooldowns keep counting against their source's shares until they end,** as they do in the table with the switch off. The shares are `MAX_PER_IP` 8, `MAX_PER_V4_NETWORK` 64, `MAX_PER_V6_NETWORK` 16 and `MAX_PER_V6_ALLOCATION` 64.
+  - **The bug this fixes:** freeing a share on the move would have let one IP, or one /24, take about 11× (Balanced) to 54× (Aggressive) its share of the sample budget.
+  - **How the count works:** `Spill::shares` counts the live slots in the address's two blocks whose tag matches at each level: the IP, the /24 or /64, and the /48. `has_room` adds those counts to the table's.
+  - **Never low:** every moved cooldown keeps its own slot in one of those two blocks until its minute passes.
+  - **Sometimes high, which only skips:** another key in the same blocks with the same tag bits also matches. At the IP level that is 1 in 256 per neighbour (1 in 16 for an IPv6 /64 within its /48).
+- **No extra memory:** it costs nothing beyond the 32 MiB slots. Each check reads two 256-byte blocks.
+- **Tested:** `moved_cooldowns_still_hold_their_sources_shares` runs 2 h of a full table of 6 h timeouts, with a hostile source offering 5 new addresses a second. The hostile source is one IP with many ports, one /24, one IPv6 /64 and one /48 in turn.
+  - With the switch off and with it on, each gets at most its share.
+  - With the share counting removed, one IP got 29 samples against its share of 8.
+  - The split still samples over ten times as many nodes in all.
+
+## Occupancy (the runner's I3)
+- **`dht_sample_spill_slots`,** a gauge of filter slots in use, of 8,388,608, so an experiment can see the filter near 15/16 (7,864,320), where the sampler falls back to its table alone. Its row is in `docs/metrics.md`, with a render test.
 
 ## Restart (CR-0d)
 - **Which case applies (the runner's condition, 2026-11-20):** spilled cooldowns are **not** kept in the snapshot. A test shows instead that the restored state never samples a node earlier than today's restore would.

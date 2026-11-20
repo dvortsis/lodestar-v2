@@ -54,7 +54,7 @@ fn a_spilled_cooldown_never_ends_early_and_ends_within_a_minute() {
 }
 
 #[test]
-fn a_spilled_cooldown_keeps_the_later_end() {
+fn a_spilled_address_cools_until_its_later_end() {
     let now = Instant::now();
     let long = now + Duration::from_secs(7200);
     let short = now + Duration::from_secs(600);
@@ -65,12 +65,12 @@ fn a_spilled_cooldown_keeps_the_later_end() {
         f.contains(&wide(1), long - NS),
         "a shorter one can't cut it"
     );
-    assert_eq!(f.counts().0, 1, "one slot for one address");
+    assert_eq!(f.counts().0, 2, "each cooldown has its own slot");
     let mut f = Spill::new(now);
     assert!(f.insert(&wide(1), short, now));
     assert!(f.insert(&wide(1), long, now));
-    assert!(f.contains(&wide(1), long - NS), "a longer one extends it");
-    assert_eq!(f.counts().0, 1);
+    assert!(f.contains(&wide(1), long - NS), "the longer one holds");
+    assert_eq!(f.counts().0, 2);
 }
 
 /// The bound, measured: the filter holds its slots and nothing else, takes
@@ -204,8 +204,9 @@ fn a_full_filter_leaves_the_table_full() {
     assert_eq!(s.known(), 1);
 }
 
-/// An ended slot that wraps round (68 h later, with no sweep) reads as
-/// cooling, which only skips the node; one sweep pass frees it.
+/// An ended slot left unswept reads as cooling again from about 20 h after
+/// it ends (here 4,096 minutes on), which only skips the node; one sweep
+/// pass frees it.
 #[test]
 fn a_wrapped_slot_only_skips_until_swept() {
     let base = Instant::now();
@@ -248,6 +249,93 @@ fn full_time_counts_only_full_and_allowed_time() {
     assert!(!on.saturated());
     on.full_time(now, true);
     assert_eq!(on.full_time(t(9), true), Duration::ZERO);
+}
+
+/// Samples sent to the addresses `hostile` picks, and in all, over 2 h of
+/// a full table of 6 h timeouts: each second offers 5 new hostile and 5
+/// new ordinary nodes and sends up to 10 samples.
+fn source_samples(split: bool, hostile: impl Fn(u32) -> SocketAddr) -> (u64, u64) {
+    let mut s = if split {
+        Sampler::split_with_capacity(50)
+    } else {
+        Sampler::with_capacity(50)
+    };
+    let start = Instant::now();
+    let (mut flying, mut token, mut sent, mut theirs, mut n) = (vec![], 0u64, 0, 0, 0u32);
+    for sec in 0..2 * 3600u64 {
+        let now = start + Duration::from_secs(sec);
+        let (done, still): (Vec<_>, Vec<_>) =
+            flying
+                .drain(..)
+                .partition(|(_, _, at): &(SocketAddr, u64, Instant)| {
+                    now.duration_since(*at).as_secs() >= 4
+                });
+        flying = still;
+        for (a, t, _) in done {
+            assert!(s.complete(a, t, MAX_INTERVAL, now));
+        }
+        s.prune(now);
+        for _ in 0..5 {
+            s.offer(node(hostile(n)), now);
+            s.offer(node(wide(n)), now);
+            n += 1;
+        }
+        for _ in 0..10 {
+            let Some(x) = s.next(now) else { break };
+            token += 1;
+            if s.reserve(x.addr, token, now) {
+                flying.push((x.addr, token, now));
+                sent += 1;
+                if x.addr.ip() != wide(0).ip() && !x.addr.to_string().starts_with("11.") {
+                    theirs += 1;
+                }
+            }
+        }
+    }
+    (theirs, sent)
+}
+
+/// The runner's I1: with the switch on and the table full, one IP with
+/// many ports, one IPv4 /24, one IPv6 /64 and one /48 each get no more
+/// samples per cooldown than with the switch off: moved cooldowns still
+/// hold their shares.
+#[test]
+fn moved_cooldowns_still_hold_their_sources_shares() {
+    let one_ip = |i: u32| SocketAddr::from(([10, 9, 9, 9], 1 + (i % 60_000) as u16));
+    let one_24 = |i: u32| SocketAddr::from(([10, 9, 9, 1 + (i % 250) as u8], 1 + (i / 250) as u16));
+    let one_64 = |i: u32| {
+        SocketAddr::from((
+            [
+                0x2001,
+                0xdb8,
+                9,
+                9,
+                0,
+                0,
+                (i >> 8) as u16,
+                1 + (i & 0xFF) as u16,
+            ],
+            6881,
+        ))
+    };
+    let one_48 =
+        |i: u32| SocketAddr::from(([0x2001, 0xdb8, 9, (i % 5000) as u16, 0, 0, 0, 1], 6881));
+    for (name, cap, f) in [
+        ("one IP", MAX_PER_IP, &one_ip as &dyn Fn(u32) -> SocketAddr),
+        ("one /24", MAX_PER_V4_NETWORK, &one_24),
+        ("one /64", MAX_PER_V6_NETWORK, &one_64),
+        ("one /48", MAX_PER_V6_ALLOCATION, &one_48),
+    ] {
+        let (off, off_all) = source_samples(false, f);
+        let (on, on_all) = source_samples(true, f);
+        assert!(off <= u64::from(cap), "{name}: off {off}");
+        assert!(on <= u64::from(cap), "{name}: on {on} > {cap}");
+        assert!(on <= off.max(u64::from(cap)), "{name}: on {on}, off {off}");
+        assert!(
+            on_all > 10 * off_all,
+            "{name}: the split still samples others"
+        );
+    }
 }
 
 /// Off against on, while the table never fills, every call answers the same.

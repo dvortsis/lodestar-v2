@@ -76,8 +76,10 @@ pub(crate) struct Sampler {
     restored_live: usize,
     restored_refused: u64,
     restored_honoured: u64,
-    /// `dht.sampler_cooldown_split`: cooldowns moved out of a full table.
-    /// `None` with the switch off, which allocates nothing.
+    /// `dht.sampler_cooldown_split`.
+    split: bool,
+    /// Cooldowns moved out of a full table: made at the first move, so
+    /// `None` until then and always with the switch off.
     spill: Option<spill::Spill>,
     /// Time the sampler couldn't admit while sampling was allowed, and
     /// when that was last checked ([`Sampler::full_time`]).
@@ -107,7 +109,8 @@ impl Sampler {
             restored_live: 0,
             restored_refused: 0,
             restored_honoured: 0,
-            spill: split.then(|| spill::Spill::new(Instant::now())),
+            split,
+            spill: None,
             full: Duration::ZERO,
             full_checked: None,
         }
@@ -152,12 +155,14 @@ impl Sampler {
     /// end soonest into the spill filter (switch on only). False when the
     /// table is still full: the switch is off, nothing is cooling, or the
     /// filter is at its bound. A moved cooldown is never shortened: the
-    /// filter keeps it to the end of its time bucket.
+    /// filter keeps it to the end of its minute.
     fn make_room(&mut self, now: Instant) -> bool {
         while self.states.len() >= self.capacity {
-            let Some(spill) = self.spill.as_mut() else {
+            if !self.split {
                 return false;
-            };
+            }
+            // The filter's clock starts at its first move.
+            let spill = self.spill.get_or_insert_with(|| spill::Spill::new(now));
             // The soonest that fits: a refusal (both its groups full) is
             // rare, so a few tries find room if there is any.
             let Some(&(until, token, addr)) = self
@@ -188,18 +193,25 @@ impl Sampler {
     /// Whether a new address fits its IP's and its block's shares.
     /// Loopback is never a remote node (the public policy refuses it), so
     /// it has no share: a local test network runs many nodes on it.
-    fn has_room(&self, addr: &SocketAddr) -> bool {
+    fn has_room(&self, addr: &SocketAddr, now: Instant) -> bool {
         let ip = addr.ip().to_canonical();
+        if ip.is_loopback() {
+            return true;
+        }
         let net_cap = if ip.is_ipv4() {
             MAX_PER_V4_NETWORK
         } else {
             MAX_PER_V6_NETWORK
         };
-        ip.is_loopback()
-            || (count(&self.per_ip, ip) < MAX_PER_IP
-                && count(&self.per_network, network(ip)) < net_cap
-                && allocation(ip)
-                    .is_none_or(|a| count(&self.per_allocation, a) < MAX_PER_V6_ALLOCATION))
+        // With the split on, moved cooldowns still hold their shares.
+        let (si, sn, sa) = self
+            .spill
+            .as_ref()
+            .map_or((0, 0, 0), |s| s.shares(addr, now));
+        count(&self.per_ip, ip) + si < MAX_PER_IP
+            && count(&self.per_network, network(ip)) + sn < net_cap
+            && allocation(ip)
+                .is_none_or(|a| count(&self.per_allocation, a) + sa < MAX_PER_V6_ALLOCATION)
     }
 
     /// Updates the shares after `addr` was (`was`) or wasn't tracked
@@ -241,7 +253,7 @@ impl Sampler {
         if self.frontier.len() < MAX_FRONTIER
             && !self.queued.contains(&node.addr)
             && self.table_eligible(&node.addr, now)
-            && (was || self.has_room(&node.addr))
+            && (was || self.has_room(&node.addr, now))
             && !self.spilled(&node.addr, now)
         {
             self.queued.insert(node.addr);
@@ -282,7 +294,7 @@ impl Sampler {
         if self.states.len() >= self.capacity {
             self.make_room(now);
         }
-        if self.states.len() >= self.capacity || !(was || self.has_room(&addr)) {
+        if self.states.len() >= self.capacity || !(was || self.has_room(&addr, now)) {
             self.recount(&addr, was);
             return false;
         }
@@ -477,10 +489,9 @@ impl Sampler {
     /// `next` admits no one that tick without this saying so.
     pub fn saturated(&self) -> bool {
         self.known() >= self.capacity
-            && !self
-                .spill
-                .as_ref()
-                .is_some_and(|s| self.cooling() > 0 && s.has_room())
+            && !(self.split
+                && self.cooling() > 0
+                && self.spill.as_ref().is_none_or(spill::Spill::has_room))
     }
 
     /// The running total of time spent [`saturated`](Self::saturated)
@@ -495,6 +506,11 @@ impl Sampler {
         }
         self.full_checked = Some(now);
         self.full
+    }
+
+    /// Spill filter slots in use (0 with the switch off), for the gauge.
+    pub fn spill_used(&self) -> usize {
+        self.spill.as_ref().map_or(0, spill::Spill::used)
     }
 
     /// Spill slots in use and the filter's heap bytes (0, 0 with the
@@ -524,53 +540,70 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 }
 
 /// X-sampler-cooldown-split's cooldown memory: a fixed table of 32-bit
-/// slots, each a 20-bit fingerprint of an address and the minute its
-/// cooldown ends, so remembering who not to ask takes about 4 bytes a
-/// node instead of a table place.
+/// slots, each a 20-bit tag of an address and the minute its cooldown
+/// ends, so remembering who not to ask takes about 4 bytes a node instead
+/// of a table place.
 ///
 /// - **Never shorter.** A cooldown ending at `until` is stored as the
 ///   first whole minute at or after it, and [`Spill::contains`] answers
-///   yes until that minute. Each address may live in one of two groups of
-///   eight slots; a slot whose fingerprint matches is extended to the later
-///   end, never cut. There are no false negatives: a node in cooldown is
-///   always refused. A false positive (another address with the same
-///   fingerprint in one of its groups, about 16 in 2^20) only skips a node.
+///   yes until that minute. There are no false negatives: a node in
+///   cooldown is always refused. A false positive (another address with the
+///   same tag in one of its blocks) only skips a node.
+/// - **Shares still hold.** An address's slots sit in one of two blocks of
+///   64 chosen by its widest share (its IPv4 /24 or IPv6 /48), and its tag
+///   is built from its block, its IPv6 /64, its IP and the address. So
+///   [`Spill::shares`] counts, from the two blocks alone, how many moved
+///   cooldowns each of its IP, block and /48 still holds, and the sampler's
+///   per-source shares count them until they end. Every stored cooldown has
+///   its own slot (none is merged into another), so a count is never low;
+///   tag collisions only make it high, which only skips a node.
 /// - **Bounded.** [`SLOTS`] slots, 32 MiB, allocated on the first spill.
-///   When both groups are full of live cooldowns, [`Spill::insert`]
+///   When both blocks are full of live cooldowns, [`Spill::insert`]
 ///   refuses and the cooldown stays in the sampler's table: the sampler is
 ///   then no worse than with the switch off.
-/// - **Hostile input.** Addresses are hashed with a per-process random
-///   key (SipHash), so remote nodes can't aim at one group, and only nodes
-///   this node sampled are ever inserted, at the sample rate.
+/// - **Hostile input.** Keys are hashed with a per-process random key
+///   (SipHash), so remote nodes can't aim at one block, and only nodes this
+///   node sampled are ever inserted, at the sample rate.
 ///
 /// Minutes are kept modulo 4096 (68 h). A live end is at most
-/// [`HORIZON_MIN`] ahead; [`Spill::sweep`] clears ended slots, a pass every
-/// few minutes, long before an old minute could wrap round to look live
-/// again (and if it ever did, it would only skip a node).
+/// [`HORIZON_MIN`] (48 h and a minute) ahead, so an ended slot that isn't
+/// cleared reads as live again about 1,215 minutes (20 h) after it ends.
+/// [`Spill::sweep`] clears ended slots in a pass every 17 minutes, long
+/// before that; and if one ever did read as live, it would only skip a
+/// node.
 pub(crate) mod spill {
     use std::collections::hash_map::RandomState;
     use std::hash::BuildHasher;
-    use std::net::SocketAddr;
+    use std::net::{IpAddr, SocketAddr};
     use std::time::Duration;
 
     use tokio::time::Instant;
 
+    use super::super::limits::{allocation, network};
+
     const MINUTE_NANOS: u128 = 60_000_000_000;
     const MINUTE_BITS: u32 = 12;
     const MINUTE_MASK: u32 = (1 << MINUTE_BITS) - 1;
-    const FP_MASK: u64 = (1 << (32 - MINUTE_BITS)) - 1;
+    /// The tag, above the minute: 8 bits of the block's key, 4 of the
+    /// IPv6 /64 (0 on IPv4), 4 (IPv6) or 8 (IPv4) of the IP, and 4 of the
+    /// address. A used slot's tag is never all zero.
+    const KEY_MASK: u32 = 0xFF << 24;
+    const NET_MASK: u32 = 0xFFF << 20;
+    const IP_MASK: u32 = 0xFFFF << 16;
+    const TAG_MASK: u32 = !MINUTE_MASK;
     /// The furthest a stored end may lie ahead of the current minute: the
     /// longest cooldown (`MAX_INTERVAL` × `MAX_SCALE`, 48 h) and a minute.
     pub const HORIZON_MIN: u32 = 48 * 60 + 1;
-    const GROUP: usize = 8;
-    const GROUPS: usize = 1 << 20;
+    /// A block holds the widest share's cap (64) twice over.
+    const BLOCK: usize = 64;
+    const BLOCKS: usize = 1 << 17;
     /// 2^23 slots of 4 bytes: 32 MiB. Balanced (100 samples a second)
     /// keeps about 2.2 million cooldowns live at WK-10e scale 1 and about
     /// 5.2 million at scale 8 (a fifth answered, cooling 48 h); the usable
     /// 15/16 of this holds either.
-    pub const SLOTS: usize = GROUPS * GROUP;
-    /// Slots cleared of ended cooldowns per [`Spill::sweep`]: a full pass
-    /// every 1,024 sweeps (about 17 minutes at the 1 s maintenance tick).
+    pub const SLOTS: usize = BLOCKS * BLOCK;
+    /// Slots cleared of ended cooldowns per [`Spill::sweep`] (8,192): a
+    /// full pass every 1,024 sweeps, about 17 minutes at the 1 s tick.
     pub const SWEEP: usize = SLOTS / 1024;
     /// The filter's heap bytes once allocated: the slots and nothing else.
     #[cfg(test)]
@@ -583,11 +616,18 @@ pub(crate) mod spill {
         base: Instant,
         /// Empty until the first insert.
         slots: Box<[u32]>,
-        /// Slots holding a fingerprint, ended or not.
+        /// Slots holding a tag, ended or not.
         used: usize,
         cursor: usize,
         /// The latest end ever stored: an upper bound on every live one.
         last: Option<Instant>,
+    }
+
+    /// Where an address's slots live, and its tag (above the minute).
+    struct Place {
+        blocks: [usize; 2],
+        tag: u32,
+        v4: bool,
     }
 
     impl Spill {
@@ -619,20 +659,40 @@ pub(crate) mod spill {
             slot != 0 && (slot.wrapping_sub(first as u32) & MINUTE_MASK) < HORIZON_MIN
         }
 
-        /// The address's two groups and its fingerprint, never 0.
-        fn place(&self, addr: &SocketAddr) -> ([usize; 2], u32) {
-            let h = self.hasher.hash_one(addr);
-            let g1 = (h as usize) % GROUPS;
-            let g2 = ((h >> 20) as usize) % GROUPS;
-            let fp = ((h >> 40) & FP_MASK) as u32;
-            ([g1, g2], fp.max(1) << MINUTE_BITS)
+        fn place(&self, addr: &SocketAddr) -> Place {
+            let ip = addr.ip().to_canonical();
+            let net = network(ip);
+            let widest = allocation(ip).unwrap_or(net);
+            // One keyed hash per level, each in its own domain.
+            let hk = self.hasher.hash_one((0u8, widest));
+            let hi = self.hasher.hash_one((1u8, ip));
+            let ha = self.hasher.hash_one((3u8, addr));
+            let v4 = matches!(ip, IpAddr::V4(_));
+            let mid = if v4 {
+                (hi & 0xFF) as u32
+            } else {
+                let hn = self.hasher.hash_one((2u8, net));
+                ((hn & 0xF) << 4 | (hi & 0xF)) as u32
+            };
+            // The key's byte is never 0, so a used slot is never 0.
+            let key = ((hk >> 56) as u32).max(1);
+            Place {
+                blocks: [(hk as usize) % BLOCKS, ((hk >> 17) as usize) % BLOCKS],
+                tag: key << 24 | mid << 16 | ((ha & 0xF) as u32) << MINUTE_BITS,
+                v4,
+            }
         }
 
-        /// Remembers that `addr` cools until `until`. False, changing
-        /// nothing, when both its groups are full of live cooldowns or
-        /// `until` is past the horizon; true without storing anything when
-        /// the cooldown has already ended.
+        fn block(&self, b: usize) -> &[u32] {
+            &self.slots[b * BLOCK..(b + 1) * BLOCK]
+        }
+
+        /// Remembers that `addr` cools until `until`, in a slot of its own.
+        /// False, changing nothing, when both its blocks are full of live
+        /// cooldowns or `until` is past the horizon; true without storing
+        /// anything when the cooldown has already ended.
         pub fn insert(&mut self, addr: &SocketAddr, until: Instant, now: Instant) -> bool {
+            debug_assert!(now >= self.base, "the filter's clock starts at its base");
             if until <= now {
                 return true;
             }
@@ -647,32 +707,20 @@ pub(crate) mod spill {
             if self.slots.is_empty() {
                 self.slots = vec![0; SLOTS].into_boxed_slice();
             }
-            let (groups, fp) = self.place(addr);
-            let stored = fp | (end as u32 & MINUTE_MASK);
-            // Per group: its first free slot and how many are free.
+            let place = self.place(addr);
+            // Per block: its first free slot and how many are free.
             let mut free = [(0, 0); 2];
-            for (k, g) in groups.into_iter().enumerate() {
-                for i in g * GROUP..(g + 1) * GROUP {
-                    let slot = self.slots[i];
-                    if Spill::live(slot, first) {
-                        if slot & !MINUTE_MASK == fp {
-                            // The same fingerprint: keep the later end.
-                            let held = slot.wrapping_sub(first as u32) & MINUTE_MASK;
-                            if u64::from(held) < ahead {
-                                self.slots[i] = stored;
-                            }
-                            self.extend(end);
-                            return true;
-                        }
-                    } else {
+            for (k, b) in place.blocks.into_iter().enumerate() {
+                for (j, slot) in self.block(b).iter().enumerate() {
+                    if !Spill::live(*slot, first) {
                         if free[k].1 == 0 {
-                            free[k].0 = i;
+                            free[k].0 = b * BLOCK + j;
                         }
                         free[k].1 += 1;
                     }
                 }
             }
-            // The emptier group (two choices keep the load even).
+            // The emptier block (two choices keep the load even).
             let (i, n) = if free[1].1 > free[0].1 {
                 free[1]
             } else {
@@ -684,29 +732,52 @@ pub(crate) mod spill {
             if self.slots[i] == 0 {
                 self.used += 1;
             }
-            self.slots[i] = stored;
-            self.extend(end);
+            self.slots[i] = place.tag | (end as u32 & MINUTE_MASK);
+            let end = self.base + Duration::from_secs(end.saturating_mul(60));
+            self.last = Some(self.last.map_or(end, |l| l.max(end)));
             true
         }
 
-        fn extend(&mut self, end: u64) {
-            let end = self.base + Duration::from_secs(end.saturating_mul(60));
-            self.last = Some(self.last.map_or(end, |l| l.max(end)));
+        /// Live slots in `addr`'s blocks whose tag matches its own under
+        /// `mask`.
+        fn count(&self, place: &Place, mask: u32, first: u64) -> u32 {
+            let want = place.tag & mask;
+            let mut n = 0;
+            for b in place.blocks {
+                n += self
+                    .block(b)
+                    .iter()
+                    .filter(|s| *s & mask == want && Spill::live(**s, first))
+                    .count() as u32;
+            }
+            n
         }
 
         /// Whether `addr` may still be cooling at `now`: never false while
         /// a cooldown stored for it hasn't ended.
         pub fn contains(&self, addr: &SocketAddr, now: Instant) -> bool {
+            self.used != 0 && self.count(&self.place(addr), TAG_MASK, self.first_live(now)) > 0
+        }
+
+        /// Live moved cooldowns that count against `addr`'s IP, its block
+        /// (IPv4 /24 or IPv6 /64) and its IPv6 /48 (0 on IPv4): never fewer
+        /// than truly held, sometimes more.
+        pub fn shares(&self, addr: &SocketAddr, now: Instant) -> (u32, u32, u32) {
             if self.used == 0 {
-                return false;
+                return (0, 0, 0);
             }
             let first = self.first_live(now);
-            let (groups, fp) = self.place(addr);
-            groups.iter().any(|g| {
-                self.slots[g * GROUP..(g + 1) * GROUP]
-                    .iter()
-                    .any(|s| s & !MINUTE_MASK == fp && Spill::live(*s, first))
-            })
+            let place = self.place(addr);
+            let ip = self.count(&place, IP_MASK, first);
+            if place.v4 {
+                (ip, self.count(&place, KEY_MASK, first), 0)
+            } else {
+                (
+                    ip,
+                    self.count(&place, NET_MASK, first),
+                    self.count(&place, KEY_MASK, first),
+                )
+            }
         }
 
         /// Clears ended slots, [`SWEEP`] of them from where the last
@@ -732,9 +803,14 @@ pub(crate) mod spill {
         }
 
         /// Whether there's likely room: below 15/16 of the slots used. An
-        /// insert can still refuse (both its groups full).
+        /// insert can still refuse (both its blocks full).
         pub fn has_room(&self) -> bool {
             self.used < SLOTS / 16 * 15
+        }
+
+        /// Slots in use, ended or not (until swept).
+        pub fn used(&self) -> usize {
+            self.used
         }
 
         /// Slots in use, ended or not, and heap bytes held.

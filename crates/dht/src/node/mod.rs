@@ -364,6 +364,9 @@ pub struct Stats {
     /// Seconds the sampler couldn't admit anyone while sampling was
     /// allowed (X-sampler-cooldown-split). Stored, but only ever rises.
     pub sample_full_seconds: AtomicU64,
+    /// Gauge: spill filter slots in use (X-sampler-cooldown-split), out of
+    /// 8,388,608; past 15/16 the sampler falls back to its table alone.
+    pub sample_spill_slots: AtomicU64,
     /// BEP 33 scrapes asked for, answered, and refused because the queue
     /// was full.
     pub scrapes_requested: AtomicU64,
@@ -486,6 +489,7 @@ impl Stats {
             restart_persist_errors: std::array::from_fn(|i| g(&self.restart_persist_errors[i])),
             sample_deferred: g(&self.sample_deferred),
             sample_full_seconds: g(&self.sample_full_seconds),
+            sample_spill_slots: g(&self.sample_spill_slots),
             scrapes_requested: g(&self.scrapes_requested),
             scrapes_completed: g(&self.scrapes_completed),
             scrapes_dropped: g(&self.scrapes_dropped),
@@ -805,6 +809,7 @@ pub struct StatsSnapshot {
     pub restart_persist_errors: [u64; 6],
     pub sample_deferred: u64,
     pub sample_full_seconds: u64,
+    pub sample_spill_slots: u64,
     pub scrapes_requested: u64,
     pub scrapes_completed: u64,
     pub scrapes_dropped: u64,

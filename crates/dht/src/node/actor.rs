@@ -2889,6 +2889,9 @@ impl Actor {
             self.sampler.full_time(now_i, sampling).as_secs(),
             Ordering::Relaxed,
         );
+        self.stats
+            .sample_spill_slots
+            .store(self.sampler.spill_used() as u64, Ordering::Relaxed);
         if now_i.duration_since(self.last_summary.0) >= crate::log_events::SUMMARY_EVERY {
             self.summarize(now_i);
         }
