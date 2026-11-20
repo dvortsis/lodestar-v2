@@ -603,3 +603,131 @@ async fn a_partial_list_at_its_age_limit_starts_again() {
     assert_eq!(id_of(&got), Some("90".into()));
     assert!(!replayer.requests()[1].1.url.contains("last_appid"));
 }
+
+#[test]
+fn shrink_sightings_count_within_tolerance_and_need_a_day() {
+    use steam::{SHRINK_SPAN, Sightings};
+    let day = SHRINK_SPAN.as_secs();
+    let (s1, ok) = Sightings::see(None, 500, 1_000);
+    assert!(!ok);
+    assert_eq!((s1.size, s1.first, s1.count), (500, 1_000, 1));
+    // 5% of the first sighting either way still counts; the first stays.
+    let (s2, ok) = Sightings::see(Some(s1), 525, 2_000);
+    assert!(!ok);
+    assert_eq!((s2.size, s2.first, s2.count), (500, 1_000, 2));
+    let (s3, ok) = Sightings::see(Some(s2), 475, 1_000 + day - 1);
+    assert!(!ok, "three, but a second short of a day");
+    assert_eq!(s3.count, 3);
+    assert!(Sightings::see(Some(s2), 475, 1_000 + day).1);
+    // Two sightings over two days aren't enough.
+    assert!(!Sightings::see(Some(s1), 500, 1_000 + 2 * day).1);
+    // Past 5% the count starts again at the new size.
+    let (r, ok) = Sightings::see(Some(s2), 526, 1_000 + day);
+    assert!(!ok);
+    assert_eq!((r.size, r.first, r.count), (526, 1_000 + day, 1));
+    // A clock that went back never accepts.
+    assert!(!Sightings::see(Some(s2), 500, 0).1);
+    // Round trip; anything else starts the count again.
+    assert_eq!(Sightings::decode(&s3.encode()), Some(s3));
+    for bad in [&b""[..], b"1 2", b"1 2 3 4", b"a b c", b"-1 2 3"] {
+        assert_eq!(Sightings::decode(bad), None);
+    }
+}
+
+/// Starts from a list of 1,200 games (Example Quest as 70000), then for
+/// each `(wait, games)` waits and looks up Example Quest against a new list
+/// of that many games (Example Quest as 90000). Returns the ids answered,
+/// the plugin and its kit.
+async fn shrink_run(steps: &[(Duration, u32)]) -> (Vec<String>, Steam, Kit, Arc<Replayer>) {
+    let base = tokio::time::Instant::now();
+    let mut exchanges = vec![page(None, 200, &many(1_199, &[(70_000, "Example Quest")]))];
+    for (_, n) in steps {
+        exchanges.push(page(None, 200, &many(n - 1, &[(90_000, "Example Quest")])));
+    }
+    let replayer = Arc::new(Replayer::new(exchanges));
+    // The wall clock moves with the paused test clock.
+    let p = plugin(Some(HEX_KEY)).with_clock(Arc::new(move || {
+        1_700_000_000 + (tokio::time::Instant::now() - base).as_secs()
+    }));
+    let k = kit(replayer.clone(), &p);
+    let q = game("Example Quest");
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    let mut ids = Vec::new();
+    for (wait, _) in steps {
+        tokio::time::advance(*wait).await;
+        ids.push(id_of(&p.lookup(&k, &q).await.unwrap()).unwrap());
+    }
+    replayer.finish().unwrap();
+    assert_eq!(replayer.requests().len(), steps.len() + 1);
+    (ids, p, k, replayer)
+}
+
+async fn stored_sightings(k: &Kit) -> Option<steam::Sightings> {
+    let v = k.state.get(steam::SIGHTINGS_KEY).await.unwrap()?;
+    Some(steam::Sightings::decode(&v).expect("sightings decode"))
+}
+
+const HOUR: Duration = steam::RETRY;
+
+#[tokio::test(start_paused = true)]
+async fn two_sightings_of_a_smaller_list_are_refused() {
+    let (ids, p, k, _) = shrink_run(&[(steam::REFRESH, 500), (HOUR, 500)]).await;
+    assert_eq!(ids, ["70000", "70000"]);
+    // Kept in the state store, so the count survives a restart.
+    let s = stored_sightings(&k).await.unwrap();
+    assert_eq!((s.size, s.count), (500, 2));
+    assert!(p.warning().unwrap().contains("under half"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn three_sightings_inside_a_day_are_refused() {
+    let steps = [(steam::REFRESH, 500), (HOUR, 510), (HOUR, 490)];
+    let (ids, _, k, _) = shrink_run(&steps).await;
+    assert_eq!(ids, ["70000", "70000", "70000"]);
+    assert_eq!(stored_sightings(&k).await.unwrap().count, 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn three_sightings_spanning_a_day_are_accepted() {
+    let last = steam::SHRINK_SPAN - HOUR;
+    let steps = [(steam::REFRESH, 500), (HOUR, 510), (last, 495)];
+    let (ids, p, k, _) = shrink_run(&steps).await;
+    assert_eq!(ids, ["70000", "70000", "90000"]);
+    let note = p.warning().expect("a status line");
+    assert_eq!(note, steam::shrink_accepted(1_200, 495));
+    assert!(note.contains("1200") && note.contains("495"), "{note}");
+    assert_eq!(stored_warning(&k).await, Some(note));
+    // The count is done with.
+    assert_eq!(stored_sightings(&k).await, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_size_outside_five_percent_starts_the_count_again() {
+    let last = steam::SHRINK_SPAN - HOUR;
+    // 540 is 8% over 500.
+    let steps = [(steam::REFRESH, 500), (HOUR, 500), (last, 540)];
+    let (ids, _, k, _) = shrink_run(&steps).await;
+    assert_eq!(ids, ["70000", "70000", "70000"]);
+    let s = stored_sightings(&k).await.unwrap();
+    assert_eq!((s.size, s.count), (540, 1));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_normal_list_starts_the_count_again() {
+    // Two sightings, then a normal list (1,150 of 1,200), then the small
+    // size again a day later: counted from one, so refused.
+    let steps = [
+        (steam::REFRESH, 500),
+        (HOUR, 500),
+        (HOUR, 1_150),
+        (steam::REFRESH, 500),
+    ];
+    let (ids, p, k, _) = shrink_run(&steps).await;
+    assert_eq!(ids, ["70000", "70000", "90000", "90000"]);
+    let s = stored_sightings(&k).await.unwrap();
+    assert_eq!((s.size, s.count), (500, 1));
+    assert!(p.warning().unwrap().contains("1150"));
+}
