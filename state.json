@@ -4227,7 +4227,8 @@
     "2026-11-20T19:49Z #992 merged 51c54e09. Slot 4 -> X-flake-e2e-expect-timeout (same session), then X-search-param-errors (#992's pre-existing optionals: cap the echoed value; repeated-parameter field; collapsed cursor without collapse).",
     "2026-11-20T19:55Z #991 merged 985f99c6. Slot 2 -> X-sec-S1-18 (held: S1-18, S1-19; low, surface 1), same session.",
     "2026-11-20T20:33Z #948 ENR-tmdb merged 8eec1fa9. Slot 1 -> X-ui-plan-r5 (Track U; same session). Lesson: give each reviewer its own CARGO_TARGET_DIR (a shared one gave a false unresolved-import failure).",
-    "2026-11-20T21:04Z #996 merged ab9efe45. Runner PR #997 (Track U placement after \u00a710). Slot 1 -> X-session-draft-keep (same session; /security-review). \u00a72.19 flags owed: typed GB = 1,000^3 (#996); S1-19 rule (id only); #993 reset tied to in-use size."
+    "2026-11-20T21:04Z #996 merged ab9efe45. Runner PR #997 (Track U placement after \u00a710). Slot 1 -> X-session-draft-keep (same session; /security-review). \u00a72.19 flags owed: typed GB = 1,000^3 (#996); S1-19 rule (id only); #993 reset tied to in-use size.",
+    "2026-11-20T21:11Z #997 merged 7a9d2ff1. #995 review CHANGES: the flake's cause is an unmocked getAuthStatus bounce; fix round sent. Queued X-auth-early-401 (web auth, UX; entry in the next records PR)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10384,6 +10385,13 @@
       "sha": "ab9efe45",
       "at": "2026-11-20T21:04Z",
       "note": "fresh review CHANGES (4 important) then two fix rounds read by runner; units: two readings, stored text stays 1,024-based and canonical"
+    },
+    {
+      "pr": 997,
+      "slice": "runner placement after #996",
+      "sha": "7a9d2ff1",
+      "at": "2026-11-20T21:11Z",
+      "note": "fresh review CHANGES (owns overlap on search messages and clauses.ts) fixed; runner read the delta"
     }
   ],
   "active_sessions": {
@@ -10629,7 +10637,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T21:04Z",
+    "updated": "2026-11-20T21:11Z",
     "items": [
       {
         "slot": 1,
