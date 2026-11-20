@@ -251,6 +251,12 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     let g = lodestar_sources_plugins::igdb::Igdb::new(rec.clone());
     igdb_once(&g).await;
     check(Identifier::manifest(&g), Identifier::policy(&g), &rec);
+
+    // TMDB (ENR-tmdb), an identifier with an Account credential.
+    let rec = Arc::new(Recording::default());
+    let t = lodestar_sources_plugins::tmdb::Tmdb::new(rec.clone());
+    identify_once(&t).await;
+    check(Identifier::manifest(&t), Identifier::policy(&t), &rec);
 }
 
 async fn igdb_once(i: &lodestar_sources_plugins::igdb::Igdb) -> String {
@@ -280,6 +286,22 @@ async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String 
     )
     .unwrap();
     d.lookup(&kit, &q).await.unwrap_err().0
+}
+
+async fn identify_once<I: lodestar_sources::identify::Identifier>(i: &I) -> String {
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        i.policy(),
+        &UserLimits::default(),
+    );
+    let q = lodestar_sources::identify::Query::new(
+        "Synthetic Title",
+        Some(2001),
+        lodestar_sources::identify::MediaKind::Movie,
+    )
+    .unwrap();
+    i.lookup(&kit, &q).await.unwrap_err().0
 }
 
 /// Steam (ENR-steam) reads its one declared key on a refresh.
@@ -379,6 +401,7 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
+        lodestar_sources_plugins::tmdb::ID,
         lodestar_sources_plugins::anidb::ID,
         lodestar_sources_plugins::discogs::ID,
         lodestar_sources_plugins::musicbrainz::ID,
@@ -429,6 +452,16 @@ async fn the_declared_names_are_the_ones_it_uses() {
     let without = igdb_once(&Igdb::new(none())).await;
     assert_ne!(with, without, "igdb: {with}");
     assert!(!with.contains("testclient"), "{with}");
+    let tmdb_token = || {
+        Arc::new(StaticCredentials::new([(
+            lodestar_sources_plugins::tmdb::TOKEN,
+            "fake-tmdb-token.0000",
+        )]))
+    };
+    let with = identify_once(&lodestar_sources_plugins::tmdb::Tmdb::new(tmdb_token())).await;
+    let without = identify_once(&lodestar_sources_plugins::tmdb::Tmdb::new(none())).await;
+    assert_ne!(with, without, "tmdb: {with}");
+    assert!(!with.contains("fake-tmdb-token"), "{with}");
 }
 
 /// TheTVDB (ENR-tvdb), an Account identifier: it reads its API key and

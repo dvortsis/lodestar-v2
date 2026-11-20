@@ -432,3 +432,10 @@ path = "fuzz_targets/steam.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tmdb"
+path = "fuzz_targets/tmdb.rs"
+test = false
+doc = false
+bench = false

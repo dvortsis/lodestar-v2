@@ -1,0 +1,44 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "backdrop_path": "/SENTINEL-IMAGE.jpg",
+   "genre_ids": [
+    18,
+    80
+   ],
+   "id": 278,
+   "original_language": "en",
+   "original_title": "The Shawshank Redemption",
+   "overview": "SENTINEL-OVERVIEW",
+   "popularity": 12.5,
+   "poster_path": "/SENTINEL-POSTER.jpg",
+   "release_date": "1994-09-23",
+   "title": "The Shawshank Redemption",
+   "video": false,
+   "vote_average": 8.7,
+   "vote_count": 1000
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/SENTINEL-IMAGE.jpg",
+   "genre_ids": [
+    99
+   ],
+   "id": 900001,
+   "original_language": "en",
+   "original_title": "Shawshank: The Outside Story",
+   "overview": "SENTINEL-OVERVIEW",
+   "popularity": 12.5,
+   "poster_path": "/SENTINEL-POSTER.jpg",
+   "release_date": "2004-01-01",
+   "title": "Shawshank: The Outside Story",
+   "video": false,
+   "vote_average": 8.7,
+   "vote_count": 1000
+  }
+ ],
+ "total_pages": 1,
+ "total_results": 2
+}

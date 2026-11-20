@@ -104,6 +104,10 @@ fn each_entry_is_its_plugins_own_manifest() {
             &lodestar_sources_plugins::steam::Steam::new(creds()),
         )
         .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::tmdb::Tmdb::new(creds()),
+        )
+        .clone(),
         cache.manifest().clone(),
         AdultEnricher::manifest(&tpdb).clone(),
         lodestar_sources::identify::Identifier::manifest(&tvdb::Tvdb::new(creds())).clone(),

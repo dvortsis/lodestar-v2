@@ -22,7 +22,7 @@ use lodestar_sources::Manifest;
 use crate::srrdb;
 use crate::{
     academic, archive_org, arr, clients, discogs, full_scrape, musicbrainz, nyaa, prowlarr,
-    stashdb, torrent_cache, tpdb, tvdb, wikidata,
+    stashdb, tmdb, torrent_cache, tpdb, tvdb, wikidata,
 };
 
 /// `(module, manifest)` for every plugin, in `lib.rs` order. A module
@@ -46,6 +46,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("srrdb", &srrdb::MANIFEST),
     ("stashdb", &stashdb::MANIFEST),
     ("steam", &crate::steam::MANIFEST),
+    ("tmdb", &tmdb::MANIFEST),
     ("torrent_cache", &torrent_cache::MANIFEST),
     ("tpdb", &tpdb::MANIFEST),
     ("tvdb", &tvdb::MANIFEST),
