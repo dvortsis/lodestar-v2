@@ -50,6 +50,20 @@ impl Values {
             .flat_map(|(net, vs)| vs.iter().map(move |v| (*net, *v)))
     }
 
+    /// The values held, counting each source's up to `per_source` only.
+    pub fn spread(&self, per_source: usize) -> usize {
+        self.by_source
+            .iter()
+            .map(|(_, vs)| vs.len().min(per_source))
+            .sum()
+    }
+
+    /// The sources holding values.
+    #[cfg(test)]
+    pub fn sources(&self) -> usize {
+        self.by_source.len()
+    }
+
     fn held(&self, source: Network) -> usize {
         self.by_source
             .iter()
@@ -192,6 +206,18 @@ mod tests {
         assert_eq!(request.len(), MAX_VALUES);
         assert_eq!(request.held(net(2)), 8);
         assert_eq!(request.held(net(1)), 56);
+    }
+
+    #[test]
+    fn spread_counts_each_source_up_to_its_share() {
+        let mut vals = Values::default();
+        fill(&mut vals, 1, 8);
+        assert_eq!(vals.spread(4), 4);
+        fill(&mut vals, 2, 1);
+        assert_eq!(vals.spread(4), 5);
+        fill(&mut vals, 2, 4);
+        assert_eq!(vals.spread(4), 8);
+        assert_eq!(vals.sources(), 2);
     }
 
     proptest::proptest! {

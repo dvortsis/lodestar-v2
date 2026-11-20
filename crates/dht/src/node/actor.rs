@@ -24,7 +24,7 @@ use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::shard::Shard;
-use super::stream::{LookupEnd, SessionAdmit, Stream};
+use super::stream::{LookupEnd, SessionAdmit, Stream, stream_source};
 use super::tids::TxIds;
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
@@ -70,11 +70,11 @@ const MAX_PEER_QUERIES: usize = 64;
 /// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
 const ENOUGH_VALUES: usize = 8;
 /// CR-LOOKUP-END: the distinct sources (an IPv4 /24 or an IPv6 /48, as
-/// [`source`] keys them: one operator's usual allocation) whose replies must
-/// have carried values before [`ENOUGH_VALUES`] can end a request, and that a
-/// leg's closest set must span before it converges early. One responder,
-/// however many addresses it answers from in a network, can't end a lookup
-/// on its own.
+/// [`source`] keys them: one operator's usual allocation) that must each
+/// hold their share of [`ENOUGH_VALUES`] before a request ends on values
+/// (see [`Actor::has_enough_values`]), and that a leg's closest set must
+/// span before it converges early. One responder, however many addresses
+/// it answers from in a network, can't end a lookup on its own.
 const VALUE_RESPONDERS: usize = 2;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
@@ -482,9 +482,6 @@ struct PeerRequest {
     expired: bool,
     /// CR-LEDGER: what the ledger records when it ends.
     ledger: ledger::Entry,
-    /// CR-LOOKUP-END: sources (/24, IPv6 /48) whose replies carried
-    /// values, at most [`VALUE_RESPONDERS`].
-    value_nets: Vec<Network>,
     /// CR-LOOKUP-END ended it on enough values.
     enough: bool,
 }
@@ -1864,12 +1861,6 @@ impl Actor {
                     for p in &peers {
                         r.peers.insert(net, *p);
                     }
-                    // A second network repeating values already held counts:
-                    // the nodes storing a hash list the same swarm, and that
-                    // agreement is the corroboration the rule asks for.
-                    if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
-                        r.value_nets.push(net);
-                    }
                 }
                 // CR-LEDGER: the request's first reply with values.
                 if !peers.is_empty()
@@ -1919,7 +1910,7 @@ impl Actor {
             && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
             && let Some(Reply::Stream(stream)) = r.reply.as_mut()
         {
-            stream.offer(&streamed, &self.stats);
+            stream.offer(stream_source(from.ip()), &streamed, &self.stats);
             if stream.first_sent() {
                 first_batch(&self.stats, r.started);
             }
@@ -1933,14 +1924,18 @@ impl Actor {
         self.drive_lookup(sockets, lid);
     }
 
-    /// CR-LOOKUP-END: whether request `owner` holds [`ENOUGH_VALUES`]
-    /// distinct values from [`VALUE_RESPONDERS`] sources. Always false
-    /// with the switch off.
+    /// CR-LOOKUP-END, as X-sec-S1-18 refines it: whether request `owner`
+    /// holds [`ENOUGH_VALUES`] distinct values counting each source (the
+    /// one that sent a value first, see [`Values`]) up to
+    /// `ENOUGH_VALUES / VALUE_RESPONDERS` only. So at least
+    /// [`VALUE_RESPONDERS`] sources must each hold that many: 4 apiece
+    /// today. Always false with the switch off.
     fn has_enough_values(&self, owner: u32) -> bool {
         self.cfg.lookup_end
-            && self.peer_requests.get(&owner).is_some_and(|r| {
-                r.peers.len() >= ENOUGH_VALUES && r.value_nets.len() >= VALUE_RESPONDERS
-            })
+            && self
+                .peer_requests
+                .get(&owner)
+                .is_some_and(|r| r.peers.spread(ENOUGH_VALUES / VALUE_RESPONDERS) >= ENOUGH_VALUES)
     }
 
     /// CR-LOOKUP-END: ends every leg of request `owner` now; the last one
@@ -2101,7 +2096,6 @@ impl Actor {
                 started: Instant::now(),
                 expired: false,
                 ledger: ledger::Entry::default(),
-                value_nets: Vec::new(),
                 enough: false,
             },
         );
