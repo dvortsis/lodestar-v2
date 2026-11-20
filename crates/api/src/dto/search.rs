@@ -241,6 +241,30 @@ pub enum CollapseMode {
     None,
 }
 
+impl CollapseMode {
+    /// Every mode, in the order an error lists them.
+    pub const ALL: [CollapseMode; 2] = [CollapseMode::Group, CollapseMode::None];
+
+    /// The query value, as serde (and so the OpenAPI schema) spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CollapseMode::Group => "group",
+            CollapseMode::None => "none",
+        }
+    }
+}
+
+/// Parses the query value through serde, so the accepted spellings are
+/// the schema's own.
+impl std::str::FromStr for CollapseMode {
+    type Err = serde::de::value::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use serde::de::IntoDeserializer;
+        CollapseMode::deserialize(s.into_deserializer())
+    }
+}
+
 /// Why a search asked to collapse came back ungrouped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -849,6 +873,27 @@ mod tests {
     use super::*;
     use lodestar_search::parse;
     use serde_json::Value;
+
+    /// `ALL`, `as_str` and `FromStr` all spell every mode as serde (and
+    /// so the OpenAPI schema) does.
+    #[test]
+    fn collapse_modes_parse_and_print_as_the_schema_spells_them() {
+        // Exhaustive: a new mode fails to compile here until it's listed.
+        for m in CollapseMode::ALL {
+            match m {
+                CollapseMode::Group | CollapseMode::None => {}
+            }
+        }
+        assert_eq!(CollapseMode::ALL.len(), 2);
+        for m in CollapseMode::ALL {
+            let wire = serde_json::to_value(m).unwrap();
+            assert_eq!(wire, Value::from(m.as_str()), "{m:?}");
+            assert_eq!(m.as_str().parse::<CollapseMode>().unwrap(), m);
+        }
+        for bad in ["", "Group", "GROUP", "title", "group "] {
+            assert!(bad.parse::<CollapseMode>().is_err(), "{bad:?}");
+        }
+    }
 
     /// Every kind of node, nested.
     const QUERIES: &[&str] = &[
