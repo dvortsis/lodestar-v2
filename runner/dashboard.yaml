@@ -435,6 +435,7 @@ placement:
   - X-win-service-path-hardening
   - X-win-service-cwd-fallback
   - X-win-service-relative-paths
+  - X-win-service-relative-paths-2
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
@@ -643,6 +644,7 @@ placement:
   - X-watch-env
   - X-watch-stall-retry
   - /^ENR-[a-z]+$/
+  - ENR-terms-api
 - ws: ws-m7-w5
   match:
   - ENR-11
@@ -824,6 +826,7 @@ placement:
   - X-floor-renew-metrics-nits
   - X-import-progress-visible
   - X-import-status-lock
+  - X-import-rate-1m
   - X-store-load-busy-map
   - X-store-busy-nits
   - X-routing-table-metric
