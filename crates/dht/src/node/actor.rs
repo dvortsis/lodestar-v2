@@ -70,9 +70,10 @@ const MAX_PEER_QUERIES: usize = 64;
 /// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
 const ENOUGH_VALUES: usize = 8;
 /// CR-LOOKUP-END: the distinct networks (/24, IPv6 /64) whose replies must
-/// have carried values before [`ENOUGH_VALUES`] can end a request, so one
-/// responder, however many addresses it answers from in a network, can't
-/// end a lookup on its own.
+/// have added values before [`ENOUGH_VALUES`] can end a request, and that a
+/// leg's closest set must span before it converges early. One responder,
+/// however many addresses it answers from in a network, can't end a lookup
+/// on its own.
 const VALUE_RESPONDERS: usize = 2;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
@@ -1855,14 +1856,20 @@ impl Actor {
                     && !peers.is_empty()
                     && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
                 {
+                    // A network counts only for a reply that added a value
+                    // the request didn't hold yet.
+                    let mut added = false;
                     for p in &peers {
                         if r.peers.len() >= 64 {
                             break;
                         }
-                        r.peers.insert(*p);
+                        added |= r.peers.insert(*p);
                     }
                     let net = network(from.ip());
-                    if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
+                    if added
+                        && r.value_nets.len() < VALUE_RESPONDERS
+                        && !r.value_nets.contains(&net)
+                    {
                         r.value_nets.push(net);
                     }
                 }
@@ -2530,10 +2537,9 @@ impl Actor {
             .and_then(|o| self.peer_requests.get(&o))
             .is_some_and(|r| r.sent >= MAX_PEER_QUERIES && r.inflight == 0);
         let lookup_end = self.cfg.lookup_end && owner.is_some();
-        let done = self
-            .lookups
-            .get(&lid)
-            .is_some_and(|l| l.is_done() || (lookup_end && !l.scrape && l.closest_answered()));
+        let done = self.lookups.get(&lid).is_some_and(|l| {
+            l.is_done() || (lookup_end && !l.scrape && l.closest_answered(VALUE_RESPONDERS))
+        });
         if exhausted || done {
             if exhausted
                 && !done

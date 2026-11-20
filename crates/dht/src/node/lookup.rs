@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 
 use tokio::time::Instant;
 
+use super::limits::{Network, network};
 use super::transport::Set;
 
 use lodestar_metainfo::InfoHash;
@@ -272,22 +273,38 @@ impl Lookup {
 
     /// CR-LOOKUP-END's convergence test: the [`K`] closest candidates that
     /// haven't failed have all answered, so no closer node is left to ask
-    /// (candidates are kept in distance order). Unlike [`Lookup::is_done`],
-    /// it doesn't wait for queries still out to nodes outside that set, or
-    /// for queries outside the candidate list (a hint, a router), unless
-    /// nobody has answered yet: a lookup with no answer is never converged
-    /// while something is still out.
-    pub fn closest_answered(&self) -> bool {
+    /// (candidates are kept in distance order), and they answered from at
+    /// least `networks` distinct networks (/24, IPv6 /64). Unlike
+    /// [`Lookup::is_done`], it doesn't wait for queries still out to
+    /// candidates outside that set. It does wait for a query outside the
+    /// candidate list (a hint, a router): that's at most one per leg, and
+    /// often the leg's best source of values. The network rule keeps one
+    /// operator from ending a leg early by answering, at once, for made-up
+    /// ids it lists just next to the target. Whatever it says,
+    /// [`Lookup::is_done`] still ends the leg as before.
+    pub fn closest_answered(&self, networks: usize) -> bool {
         if self.is_done() {
             return true;
         }
-        let mut closest = self
+        if self.extra_in_flight > 0 {
+            return false;
+        }
+        let mut seen: Vec<Network> = Vec::with_capacity(networks);
+        for c in self
             .candidates
             .iter()
             .filter(|c| c.state != State::Failed)
             .take(K)
-            .peekable();
-        closest.peek().is_some() && closest.all(|c| c.state == State::Responded)
+        {
+            if c.state != State::Responded {
+                return false;
+            }
+            let net = network(c.info.addr.ip());
+            if seen.len() < networks && !seen.contains(&net) {
+                seen.push(net);
+            }
+        }
+        seen.len() >= networks
     }
 
     /// The closest nodes that answered.
@@ -312,39 +329,83 @@ mod tests {
         }
     }
 
+    /// A node in its own /24 (`10.0.<b>.1`), so every one is a network.
+    fn spread(b: u8) -> NodeInfo {
+        NodeInfo {
+            id: NodeId([b; 20]),
+            addr: SocketAddr::from(([10, 0, b, 1], 1)),
+        }
+    }
+
     /// CR-LOOKUP-END: converged once the K closest that haven't failed
-    /// have answered, whatever is still out beyond them; never while
-    /// nobody has answered and something is out.
+    /// have answered from enough networks, whatever is still out to
+    /// candidates beyond them; never while a query outside the list is out.
     #[test]
     fn closest_answered_ignores_queries_beyond_the_closest_set() {
         let mut l = Lookup::new(NodeId([0; 20]), 0);
         // Three far nodes go out.
         for b in [0xF1, 0xF2, 0xF3] {
-            l.add(n(b));
+            l.add(spread(b));
         }
         assert_eq!(l.next().len(), 3);
-        assert!(!l.closest_answered(), "nobody has answered");
+        assert!(!l.closest_answered(2), "nobody has answered");
         // One answers with K closer nodes; they're asked one at a time.
-        l.on_response(&NodeId([0xF1; 20]), (1..=K as u8).map(n), &[]);
+        l.on_response(&NodeId([0xF1; 20]), (1..=K as u8).map(spread), &[]);
         while let Some(c) = l.next_limit(1).pop() {
-            assert!(!l.closest_answered());
+            assert!(!l.closest_answered(2));
             l.on_response(&c.id, std::iter::empty(), &[]);
         }
-        assert!(l.closest_answered());
+        assert!(l.closest_answered(2));
         assert!(!l.is_done(), "two far queries are still out");
         // A failed node in the set gives its place to the next one.
         let mut l = Lookup::new(NodeId([0; 20]), 0);
-        l.add(n(1));
-        l.add(n(2));
+        l.add(spread(1));
+        l.add(spread(2));
         let sent = l.next();
         l.on_failure(&sent[0].id);
-        assert!(!l.closest_answered());
+        assert!(!l.closest_answered(2));
         l.on_response(&sent[1].id, std::iter::empty(), &[]);
-        assert!(l.closest_answered() && l.is_done());
-        // An empty lookup with something outside the list out waits.
+        assert!(l.closest_answered(2) && l.is_done());
+    }
+
+    /// A hint (or router) query out holds the leg, even with fewer than K
+    /// candidates all answered.
+    #[test]
+    fn closest_answered_waits_for_a_query_outside_the_list() {
         let mut l = Lookup::new(NodeId([0; 20]), 0);
         l.extra_in_flight = 1;
-        assert!(!l.closest_answered());
+        assert!(!l.closest_answered(1));
+        for b in 1..=3 {
+            l.add(spread(b));
+        }
+        for c in l.next() {
+            l.on_response(&c.id, std::iter::empty(), &[]);
+        }
+        assert!(!l.closest_answered(1), "the hint is still out");
+        l.extra_in_flight = 0;
+        assert!(l.closest_answered(1));
+    }
+
+    /// One network answering at once for made-up ids next to the target
+    /// can't converge a leg early; the queries out to others still count.
+    #[test]
+    fn one_network_cannot_converge_a_leg_early() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        for b in [0xF1, 0xF2, 0xF3] {
+            l.add(spread(b));
+        }
+        l.next();
+        // The hostile far node lists K ids at its own /24 on many ports.
+        let fake = (1..=K as u8).map(|b| NodeInfo {
+            id: NodeId([b; 20]),
+            addr: SocketAddr::from(([10, 0, 0xF1, 1], u16::from(b))),
+        });
+        l.on_response(&NodeId([0xF1; 20]), fake, &[]);
+        while let Some(c) = l.next_limit(1).pop() {
+            l.on_response(&c.id, std::iter::empty(), &[]);
+        }
+        assert!(!l.closest_answered(2), "one network");
+        assert!(!l.is_done(), "the honest queries are still out");
     }
 
     #[test]

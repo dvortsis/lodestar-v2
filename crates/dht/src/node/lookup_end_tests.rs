@@ -181,8 +181,8 @@ async fn the_closest_set_ends_a_leg_without_waiting_for_farther_queries() {
         let far: Vec<_> = (0..3).map(|i| at(0xF0 + i, 0, 11 + u16::from(i))).collect();
         table(&mut a, &far);
         let mut rx = request(&mut a, &s);
-        // The first far node knows 8 much closer ones.
-        let close: Vec<_> = (1..=8).map(|i| at(i, 0, 20 + u16::from(i))).collect();
+        // The first far node knows 8 much closer ones, each in its own /24.
+        let close: Vec<_> = (1..=8).map(|i| at(i, i, 20 + u16::from(i))).collect();
         answer(&mut a, &s, &far[0], vec![], &close);
         for n in &close {
             assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
@@ -311,6 +311,9 @@ proptest! {
             for r in a.peer_requests.values() {
                 prop_assert!(r.peers.len() <= 64);
                 prop_assert!(r.value_nets.len() <= 1);
+                for p in &r.peers {
+                    prop_assert!(p.port() != 0 && endpoint_allowed(&a.cfg, *p));
+                }
             }
             let l = ledger(&a);
             prop_assert_eq!(l.ended[LedgerEnd::EnoughValues as usize], 0);
@@ -347,6 +350,137 @@ proptest! {
             prop_assert_eq!(a.pending.len(), 3, "nothing was answered");
             for r in a.peer_requests.values() {
                 prop_assert!(r.peers.is_empty() && r.value_nets.is_empty());
+            }
+        }
+    }
+}
+
+/// One network answering at once for 8 made-up ids next to the target
+/// can't converge a leg early: the honest queries out still hold it.
+#[tokio::test(start_paused = true)]
+async fn one_network_cannot_converge_a_leg_early() {
+    let (mut a, s) = actor(true);
+    let far: Vec<_> = (0..3).map(|i| at(0xF0 + i, i, 11 + u16::from(i))).collect();
+    table(&mut a, &far);
+    let mut rx = request(&mut a, &s);
+    // far[0] lists 8 ids just next to the target, all in its own /24.
+    let fake: Vec<_> = (1..=8).map(|i| at(i, 0, 20 + u16::from(i))).collect();
+    answer(&mut a, &s, &far[0], vec![], &fake);
+    for n in &fake {
+        answer(&mut a, &s, n, vec![], &[]);
+    }
+    assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    assert_eq!(a.pending.len(), 2, "far[1] and far[2] still out");
+}
+
+/// A reply that adds no new value doesn't count its network: a second
+/// network repeating values already held can't complete the pair.
+#[tokio::test(start_paused = true)]
+async fn a_network_counts_only_for_new_values() {
+    let (mut a, s) = actor(true);
+    let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
+    table(&mut a, &[n1, n2, n3]);
+    let mut rx = request(&mut a, &s);
+    answer(&mut a, &s, &n1, peers(0, 9), &[]);
+    answer(&mut a, &s, &n2, peers(0, 9), &[]);
+    assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    // A new value from a third network completes it.
+    answer(&mut a, &s, &n3, peers(9, 1), &[]);
+    assert_eq!(rx.try_recv().unwrap().len(), 10);
+    assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
+}
+
+/// Each new end releases the request's permit exactly once, as
+/// `completed`, for a final reply and for a stream (which reads
+/// `complete`).
+#[tokio::test(start_paused = true)]
+async fn every_new_end_returns_its_permit_once() {
+    use crate::node::LookupEnd;
+    use crate::node::stream::LookupSession;
+    let completed =
+        |a: &Actor| a.stats.snapshot().peer_permit_returns[PermitReturn::Completed as usize];
+    for stream in [false, true] {
+        for end_on_values in [true, false] {
+            let (mut a, s) = actor(true);
+            let sem = Arc::new(tokio::sync::Semaphore::new(1));
+            let permit = sem.clone().try_acquire_owned().unwrap();
+            let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
+            table(&mut a, &[n1, n2, n3]);
+            let mut session = None;
+            let mut rx = None;
+            if stream {
+                let (tx, mut admitted) = oneshot::channel::<Option<LookupSession>>();
+                a.on_command(Command::RequestSession(HASH, Box::new(tx), Some(permit)));
+                a.start_admitted(&s);
+                session = Some(admitted.try_recv().unwrap().expect("a session"));
+            } else {
+                let (tx, r) = oneshot::channel();
+                a.start_peer_request(&s, HASH, Some(tx.into()), Some(permit));
+                rx = Some(r);
+            }
+            assert_eq!(sem.available_permits(), 0);
+            if end_on_values {
+                answer(&mut a, &s, &n1, peers(0, 8), &[]);
+                answer(&mut a, &s, &n2, peers(8, 1), &[]);
+            } else {
+                for n in [&n1, &n2, &n3] {
+                    answer(&mut a, &s, n, vec![], &[]);
+                }
+            }
+            assert!(
+                a.peer_requests.is_empty(),
+                "stream {stream}, values {end_on_values}"
+            );
+            assert_eq!(sem.available_permits(), 1);
+            assert_eq!(completed(&a), 1);
+            let why = if end_on_values {
+                LedgerEnd::EnoughValues
+            } else {
+                LedgerEnd::NoValues
+            };
+            assert_eq!(ended(&a, why), 1);
+            if let Some(mut s) = session {
+                assert_eq!(s.terminal.try_recv(), Ok(LookupEnd::Complete));
+            }
+            if let Some(mut r) = rx {
+                assert!(r.try_recv().is_ok());
+            }
+            // Nothing later returns it again.
+            a.scrape_tick(&s, Instant::now());
+            a.release_permits();
+            assert_eq!(completed(&a), 1);
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Two networks answering with fewer than 8 distinct valid values
+    /// (duplicates and port-0 junk included) never end on values.
+    #[test]
+    fn two_networks_with_too_few_values_never_end_early(
+        replies in prop::collection::vec((0u16..7, 0u16..2), 0..60),
+    ) {
+        let (mut a, s) = actor(true);
+        let nodes: Vec<_> = (1..=10).map(|i| at(i * 0x10, i % 2, 10 + u16::from(i))).collect();
+        table(&mut a, &nodes);
+        let _rx = request(&mut a, &s);
+        for (chunk, junk) in replies.chunks(3).zip(0u16..) {
+            let mut out: Vec<_> = a.pending.iter().map(|(t, p)| (*t, p.to, p.id)).collect();
+            out.sort_unstable();
+            let Some(&(tid, to, id)) = out.get(usize::from(junk) % out.len().max(1)) else {
+                break;
+            };
+            // Only 7 distinct valid values exist; port 0 never counts.
+            let values: Vec<SocketAddr> = chunk
+                .iter()
+                .map(|(v, zero)| SocketAddr::from(([10, 0, 0, 1], if *zero == 1 { 0 } else { 3000 + v })))
+                .collect();
+            deliver_reply(&mut a, &s, tid, 0, to, id.unwrap(), values);
+            prop_assert_eq!(ended(&a, LedgerEnd::EnoughValues), 0);
+            for r in a.peer_requests.values() {
+                prop_assert!(r.peers.len() < ENOUGH_VALUES);
             }
         }
     }
