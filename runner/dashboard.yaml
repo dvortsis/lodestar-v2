@@ -436,6 +436,8 @@ placement:
   - X-win-service-cwd-fallback
   - X-win-service-relative-paths
   - X-win-service-relative-paths-2
+  - X-win-data-dir-unusable-log
+  - X-msi-upgrade-env-value
   - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
@@ -457,6 +459,7 @@ placement:
   - X-cloud-infra
   - X-cloud-infra-2
   - X-test-vm
+  - X-test-vm-fix
   - X-gluetun-guard-reboot
   - X-gluetun-guard-reboot-nits
   - X-scrub-guard-fields
