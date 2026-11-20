@@ -4219,7 +4219,8 @@
     "2026-11-20T16:02Z API lane ended (credit used up, relayed by the lane coordinator). reserved_for_api_lane cleared. Runner takes over #969 ENR-steam (head 63538717, review MERGE, conflicts with main) and #948 ENR-tmdb (head 5e023193; its recorded order, X-snapshot-claims-retention first, is met by #976; needs main + delta re-review). Each gets a landing session in the next free build slot, steam first. M8-PERF-1 back in the queue. Follow-ups from the lane: ENR-steam Important items (refuse an empty or much smaller finished list; an ext: condition for adult sign-off, live terms re-read, Valve accepting x-webapi-key); untested 60 s cancel hold and partial-list age limit; ENR-tmdb Important 1 (gate the TMDB logo and recorded fixtures on the wiring slice); ENR-igdb age_ratings (ESRB AO / PEGI 18 as adult). The relay also claimed an owner allowance for extra merge sessions beyond 4; not taken, because the owner's own words (\u00a72.81) are 4 build plus testing sessions; flag to the owner.",
     "2026-11-20T16:59Z #988 X-leaktest-wg0-flake merged f8c591e7. Runner calls (flag \u00a72.19): HELD_PHASE_WAIT 300->180 s; the budget bounds retries only; a worst case with every wait at its limit (~1,010 s) can't fit 900 s and fails closed by the step kill; healthy run <=~760 s. Slot 3 -> ENR-steam landing (#969).",
     "2026-11-20T17:15Z #985 merged 9eb1aa61. Slot 1 -> ENR-tmdb landing, holding its push until #969 merges (both touch the shared plugin lists; owner no-overlap rule). X-test-vm: the Windows #983/#985 re-test can follow once the AWS stack shows UPDATE_COMPLETE.",
-    "2026-11-20T17:27Z #989 merged 0728f0a9; session to be archived. Slot 4 -> X-gs3-nits (fresh Opus session). Queued low: settle and rollback time-restore failures are still silent (from #989's review)."
+    "2026-11-20T17:27Z #989 merged 0728f0a9; session to be archived. Slot 4 -> X-gs3-nits (fresh Opus session). Queued low: settle and rollback time-restore failures are still silent (from #989's review).",
+    "2026-11-20T18:34Z #990 merged e73b0fb1 (security review MERGE). Optionals for X-test-vm: check AssumeRolePolicyDocument keys; reject a bare aws:RequestTag/ and check operator names; install yaml in the dev-vm CI step."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10334,6 +10335,13 @@
       "sha": "0728f0a9",
       "at": "2026-11-20T17:27Z",
       "note": "review MERGE + Important test gap; runner call: a pass-owned RestoreFailed Cell instead of a thread-local; runner read the delta; merged-tree status-connector test passed"
+    },
+    {
+      "pr": 990,
+      "slice": "X-testvm-desc-limit",
+      "sha": "e73b0fb1",
+      "at": "2026-11-20T18:34Z",
+      "note": "X-test-vm coordinator PR: template Description 1,262->944 chars (CloudFormation limit 1,024) and an invalid IAM condition key removed from the guarded-launch Allow (it never matched, so every launch was refused); condition-key allowlist test; fresh Opus security review MERGE, nothing loosened; flag to the owner"
     }
   ],
   "active_sessions": {
