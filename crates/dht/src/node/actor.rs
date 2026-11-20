@@ -780,6 +780,10 @@ impl Actor {
         now: Instant,
         mut rng: StdRng,
     ) -> Self {
+        stats
+            .ledger
+            .slots_capacity
+            .store(MAX_GET_PEERS as u64, Ordering::Relaxed);
         // WK-4: the full shard is no shard, byte for byte.
         let shard = cfg.shard.filter(|s| !s.is_full());
         let ids = initial_ids(&cfg, shard.as_ref(), saved, &mut rng);
@@ -2829,14 +2833,10 @@ impl Actor {
         self.stats
             .peer_queued
             .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
-        let ledger = &self.stats.ledger;
-        ledger.slots_occupied.store(
+        self.stats.ledger.slots_occupied.store(
             (self.active_get_peers + self.get_peers_queue.len()) as u64,
             Ordering::Relaxed,
         );
-        ledger
-            .slots_capacity
-            .store(MAX_GET_PEERS as u64, Ordering::Relaxed);
         self.stats
             .lookup_scheduled
             .store(self.stalled.len() as u64, Ordering::Relaxed);

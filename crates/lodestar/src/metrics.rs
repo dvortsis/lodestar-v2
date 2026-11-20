@@ -2175,12 +2175,11 @@ mod tests {
         );
         // Each family it renders has its row in docs/metrics.md.
         let doc = include_str!("../../../docs/metrics.md");
-        let families: Vec<_> = o
-            .0
-            .lines()
-            .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
-            .filter_map(|l| l.split(' ').next())
-            .collect();
+        let families: Vec<_> =
+            o.0.lines()
+                .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
+                .filter_map(|l| l.split(' ').next())
+                .collect();
         assert_eq!(families.len(), 9);
         for family in families {
             let row = format!("| `{family}");

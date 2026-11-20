@@ -12,9 +12,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// (`dht_lookup_ended_total{reason}`). Exactly one per started request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerEnd {
-    /// Every leg converged on its closest set, and values were found.
+    /// Every leg converged on its closest set (or ran out of candidates),
+    /// and values were found.
     Values,
-    /// Every leg converged on its closest set without values.
+    /// The same, without values.
     NoValues,
     /// The 25 s request deadline ran out first.
     Deadline,
