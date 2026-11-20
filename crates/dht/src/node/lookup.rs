@@ -7,13 +7,15 @@ use std::net::SocketAddr;
 use tokio::time::Instant;
 
 use super::limits::{Network, source};
-use super::transport::Set;
 
 use lodestar_metainfo::InfoHash;
 
 use crate::bep33::Bloom;
 use crate::compact::{NodeId, NodeInfo};
 use crate::routing::K;
+
+mod values;
+pub(crate) use values::{MAX_VALUES, Values};
 
 pub(crate) const ALPHA: usize = 3;
 /// Candidates kept per lookup; the far tail is never queried anyway.
@@ -44,7 +46,8 @@ pub(crate) struct Lookup {
     pub family: usize,
     candidates: Vec<Candidate>,
     in_flight: usize,
-    pub peers: Set<SocketAddr>,
+    /// The leg's values, shared out by source ([`Values`]).
+    pub peers: Values,
     /// Queries sent outside the candidate list (e.g. to bootstrap
     /// routers, whose ids we don't know yet).
     pub extra_in_flight: usize,
@@ -74,7 +77,7 @@ impl Lookup {
             family,
             candidates: Vec::new(),
             in_flight: 0,
-            peers: Set::default(),
+            peers: Values::default(),
             extra_in_flight: 0,
             info_hash: None,
             scrape: false,
@@ -179,29 +182,36 @@ impl Lookup {
         }
     }
 
-    /// A queried node answered. Returns whether it was one of ours.
+    /// A queried node answered from `from`. Returns whether it was one
+    /// of ours.
     pub fn on_response(
         &mut self,
         id: &NodeId,
+        from: SocketAddr,
         nodes: impl Iterator<Item = NodeInfo>,
         peers: &[SocketAddr],
     ) -> bool {
         let ours = self.settle(id, State::Responded);
-        self.absorb(nodes, peers);
+        self.absorb(from, nodes, peers);
         ours
     }
 
     /// Takes a reply's nodes (by their own XOR distance) and peers without
-    /// settling any candidate: for a query outside the candidate list.
-    pub fn absorb(&mut self, nodes: impl Iterator<Item = NodeInfo>, peers: &[SocketAddr]) {
+    /// settling any candidate: for a query outside the candidate list. The
+    /// peers are filed under `from`'s [`source`], which gets its share of
+    /// the leg's [`MAX_VALUES`] ([`Values`]).
+    pub fn absorb(
+        &mut self,
+        from: SocketAddr,
+        nodes: impl Iterator<Item = NodeInfo>,
+        peers: &[SocketAddr],
+    ) {
         for n in nodes {
             self.add(n);
         }
+        let net = source(from.ip());
         for peer in peers {
-            if self.peers.len() >= 64 {
-                break;
-            }
-            self.peers.insert(*peer);
+            self.peers.insert(net, *peer);
         }
     }
 
@@ -323,6 +333,12 @@ impl Lookup {
 mod tests {
     use super::*;
 
+    /// Where a test reply comes from, when that doesn't matter.
+    const FROM: SocketAddr = SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 7, 0, 1)),
+        1,
+    );
+
     fn n(b: u8) -> NodeInfo {
         NodeInfo {
             id: NodeId([b; 20]),
@@ -351,10 +367,10 @@ mod tests {
         assert_eq!(l.next().len(), 3);
         assert!(!l.closest_answered(2), "nobody has answered");
         // One answers with K closer nodes; they're asked one at a time.
-        l.on_response(&NodeId([0xF1; 20]), (1..=K as u8).map(spread), &[]);
+        l.on_response(&NodeId([0xF1; 20]), FROM, (1..=K as u8).map(spread), &[]);
         while let Some(c) = l.next_limit(1).pop() {
             assert!(!l.closest_answered(2));
-            l.on_response(&c.id, std::iter::empty(), &[]);
+            l.on_response(&c.id, FROM, std::iter::empty(), &[]);
         }
         assert!(l.closest_answered(2));
         assert!(!l.is_done(), "two far queries are still out");
@@ -365,7 +381,7 @@ mod tests {
         let sent = l.next();
         l.on_failure(&sent[0].id);
         assert!(!l.closest_answered(2));
-        l.on_response(&sent[1].id, std::iter::empty(), &[]);
+        l.on_response(&sent[1].id, FROM, std::iter::empty(), &[]);
         assert!(l.closest_answered(2) && l.is_done());
     }
 
@@ -397,9 +413,9 @@ mod tests {
                 let s = if b == K as u8 { second_site } else { 1 };
                 site(b, s, u16::from(b))
             });
-            l.on_response(&NodeId([0xF1; 20]), close, &[]);
+            l.on_response(&NodeId([0xF1; 20]), FROM, close, &[]);
             while let Some(c) = l.next_limit(1).pop() {
-                l.on_response(&c.id, std::iter::empty(), &[]);
+                l.on_response(&c.id, FROM, std::iter::empty(), &[]);
             }
             assert!(!l.is_done(), "two far queries are still out");
             l.closest_answered(2)
@@ -419,7 +435,7 @@ mod tests {
             l.add(spread(b));
         }
         for c in l.next() {
-            l.on_response(&c.id, std::iter::empty(), &[]);
+            l.on_response(&c.id, FROM, std::iter::empty(), &[]);
         }
         assert!(!l.closest_answered(1), "the hint is still out");
         l.extra_in_flight = 0;
@@ -440,12 +456,45 @@ mod tests {
             id: NodeId([b; 20]),
             addr: SocketAddr::from(([10, 0, 0xF1, 1], u16::from(b))),
         });
-        l.on_response(&NodeId([0xF1; 20]), fake, &[]);
+        l.on_response(&NodeId([0xF1; 20]), FROM, fake, &[]);
         while let Some(c) = l.next_limit(1).pop() {
-            l.on_response(&c.id, std::iter::empty(), &[]);
+            l.on_response(&c.id, FROM, std::iter::empty(), &[]);
         }
         assert!(!l.closest_answered(2), "one network");
         assert!(!l.is_done(), "the honest queries are still out");
+    }
+
+    fn values(net: u8, n: u8) -> Vec<SocketAddr> {
+        (0..n)
+            .map(|i| SocketAddr::from(([10, 9, net, i], 6881)))
+            .collect()
+    }
+
+    /// A leg's values are shared between sources, within its cap.
+    #[test]
+    fn leg_values_are_shared_across_sources() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        let first = SocketAddr::from(([10, 1, 0, 1], 1));
+        let second = SocketAddr::from(([10, 2, 0, 1], 1));
+        // Another address in the first's /24 is the same source.
+        let first_again = SocketAddr::from(([10, 1, 0, 2], 1));
+        l.absorb(first, std::iter::empty(), &values(1, 64));
+        assert_eq!(l.peers.len(), MAX_VALUES);
+        l.absorb(first_again, std::iter::empty(), &values(3, 64));
+        assert!(values(3, 64).iter().all(|v| !l.peers.contains(v)));
+        l.absorb(second, std::iter::empty(), &values(2, 5));
+        assert_eq!(l.peers.len(), MAX_VALUES);
+        assert!(values(2, 5).iter().all(|v| l.peers.contains(v)));
+    }
+
+    /// A responder answering alone still fills the whole leg.
+    #[test]
+    fn one_source_alone_fills_the_leg() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        l.add(n(1));
+        l.next();
+        l.on_response(&NodeId([1; 20]), FROM, std::iter::empty(), &values(1, 100));
+        assert_eq!(l.peers.len(), MAX_VALUES);
     }
 
     #[test]
@@ -457,7 +506,7 @@ mod tests {
         let first: Vec<u8> = l.next().iter().map(|i| i.id.0[0]).collect();
         assert_eq!(first, [1, 3, 5]);
         assert!(l.next().is_empty(), "alpha in flight");
-        l.on_response(&NodeId([1; 20]), [n(2)].into_iter(), &[]);
+        l.on_response(&NodeId([1; 20]), FROM, [n(2)].into_iter(), &[]);
         let second: Vec<u8> = l.next().iter().map(|i| i.id.0[0]).collect();
         assert_eq!(second, [2], "newly learned closer node goes first");
     }
@@ -475,7 +524,7 @@ mod tests {
                 if q.id.0[0] == 2 {
                     l.on_failure(&q.id);
                 } else {
-                    l.on_response(&q.id, std::iter::empty(), &[]);
+                    l.on_response(&q.id, FROM, std::iter::empty(), &[]);
                 }
             }
         }
@@ -512,7 +561,7 @@ mod tests {
         l.add(n(1));
         l.next();
         let peer = SocketAddr::from(([1, 2, 3, 4], 5));
-        l.on_response(&NodeId([1; 20]), std::iter::empty(), &[peer, peer]);
+        l.on_response(&NodeId([1; 20]), FROM, std::iter::empty(), &[peer, peer]);
         assert_eq!(l.peers.len(), 1);
         assert!(l.is_done());
     }
@@ -545,7 +594,7 @@ mod tests {
                     // Farther than the K: its peers must not count.
                     _ => l.record_blooms(&q.id, Some(&bloom(&[100, 101])), None),
                 }
-                l.on_response(&q.id, std::iter::empty(), &[]);
+                l.on_response(&q.id, FROM, std::iter::empty(), &[]);
             }
         }
         let (seeds, peers, n) = l.scrape_blooms();
@@ -562,7 +611,7 @@ mod tests {
         l.retry_later(&q[0].id);
         assert!(!l.is_done(), "still has a fresh close node");
         assert_eq!(l.next(), q, "asked again on the next drive");
-        l.on_response(&q[0].id, std::iter::empty(), &[]);
+        l.on_response(&q[0].id, FROM, std::iter::empty(), &[]);
         assert!(l.is_done());
     }
 }

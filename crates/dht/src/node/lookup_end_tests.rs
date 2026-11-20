@@ -528,3 +528,35 @@ async fn two_ipv6_subnets_of_one_site_are_one_responder() {
     assert_eq!(rx.try_recv().unwrap().len(), 11);
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
 }
+
+/// While its legs run, a request files each reply's values under the
+/// responder's source, and a source's share of the budget holds across
+/// its addresses.
+#[tokio::test(start_paused = true)]
+async fn request_values_are_filed_per_source_while_legs_run() {
+    let held = |a: &Actor, n: &NodeInfo| {
+        let r = a.peer_requests.values().next().expect("request running");
+        let net = source(n.addr.ip());
+        r.peers.entries().filter(|(s, _)| *s == net).count()
+    };
+    // Two networks, too few values between them to end the request.
+    let (mut a, s) = actor(true);
+    let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 0, 13));
+    table(&mut a, &[n1, n2, n3]);
+    let mut rx = request(&mut a, &s);
+    answer(&mut a, &s, &n1, peers(0, 4), &[]);
+    answer(&mut a, &s, &n2, peers(4, 3), &[]);
+    assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    assert_eq!((held(&a, &n1), held(&a, &n2)), (4, 3));
+    // One network fills the budget; another of its addresses adds nothing.
+    let (mut a, s) = actor(true);
+    table(&mut a, &[n1, n2, n3]);
+    let mut rx = request(&mut a, &s);
+    answer(&mut a, &s, &n1, peers(0, 64), &[]);
+    assert_eq!(held(&a, &n1), MAX_VALUES);
+    answer(&mut a, &s, &n3, peers(64, 10), &[]);
+    assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    let r = a.peer_requests.values().next().expect("request running");
+    assert_eq!(r.peers.len(), MAX_VALUES);
+    assert!(peers(64, 10).iter().all(|p| !r.peers.contains(p)));
+}
