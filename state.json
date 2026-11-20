@@ -10187,6 +10187,13 @@
       "slice": "CR-COL-5",
       "merge": "89560524",
       "at": "2026-11-20T06:37Z"
+    },
+    {
+      "pr": 975,
+      "slice": "CR-LEDGER",
+      "sha": "dac1468a",
+      "at": "2026-11-20T07:52Z",
+      "note": "fresh Opus+security MERGE, optionals 1,2,4 folded into CR-LOOKUP-END"
     }
   ],
   "active_sessions": {
@@ -10432,16 +10439,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T06:38Z",
+    "updated": "2026-11-20T07:52Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CR-LEDGER",
+        "slice": "CR-LOOKUP-END",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-20T05:54Z",
-        "doing": "session_01MMjhnCFpG8WWQYLg3X4eSC: building",
+        "since": "2026-11-20T07:52Z",
+        "doing": "dht.lookup_end: end on values / closest set, start on admission; ledger nits; CR-SIM screen after #974",
         "status": "active"
       },
       {
@@ -10563,7 +10570,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T07:41Z",
+  "updated": "2026-11-20T07:52Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
