@@ -1167,6 +1167,96 @@ mod tests {
         assert!(r.stuck.is_empty(), "{:?}", r.stuck);
     }
 
+    /// A time that can't be put back after a purge wrote the snapshot is
+    /// named in a warning: it could be kept past its 90 days.
+    #[test]
+    fn a_failed_time_restore_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, snap) = one_claim(dir.path(), false);
+        super::super::FAIL_RESTORE.set(true);
+        let r = pass(&mut store, T);
+        super::super::FAIL_RESTORE.set(false);
+        assert_eq!(r.claims, 1, "{:?}", r.warnings);
+        let name = snap.display().to_string();
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains(&name) && w.contains("original date couldn't be put back")),
+            "{:?}",
+            r.warnings
+        );
+        // Nothing left to purge: nothing written, so nothing to report.
+        super::super::FAIL_RESTORE.set(true);
+        super::super::set_modified(&snap, T).unwrap();
+        let r = pass(&mut store, T + 3_600);
+        super::super::FAIL_RESTORE.set(false);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    }
+
+    /// A pass with nothing to do leaves the snapshot's time as it was,
+    /// without writing it: a sub-second part a write would drop survives.
+    #[test]
+    fn a_pass_with_nothing_to_do_writes_no_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, _) = live(dir.path());
+        let snap = take(&store, &db);
+        let at = std::time::UNIX_EPOCH + Duration::from_millis(T as u64 * 1_000 + 500);
+        let set = |path: &Path| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        };
+        set(&snap);
+        let r = pass(&mut store, T + 60);
+        assert!(
+            r.purged.is_empty() && r.warnings.is_empty(),
+            "{:?}",
+            r.warnings
+        );
+        assert_eq!(std::fs::metadata(&snap).unwrap().modified().unwrap(), at);
+        // A newer schema with nothing due: the claims-only purge too.
+        run(
+            &snap,
+            &format!(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES ({}, 0)",
+                crate::snapshots::Plan::KNOWN_THROUGH + 1
+            ),
+        );
+        set(&snap);
+        pass(&mut store, T + 120);
+        assert_eq!(std::fs::metadata(&snap).unwrap().modified().unwrap(), at);
+    }
+
+    /// A pass that returns before looking at any snapshot (here, the live
+    /// store's holds can't be read) forgets every sighting: a lasting
+    /// error must be seen again by passes that look, failing toward
+    /// keeping.
+    #[test]
+    fn a_pass_that_looks_at_nothing_forgets_the_sightings() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, snap) = one_claim(dir.path(), false);
+        run(&snap, HIDE);
+        assert!(pass(&mut store, T).unchecked.is_empty());
+        let live = |sql: &str| store_sql(&store, sql);
+        live("ALTER TABLE tombstones RENAME COLUMN at TO at_");
+        let r = pass(&mut store, T + 3_600);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        let live = |sql: &str| store_sql(&store, sql);
+        live("ALTER TABLE tombstones RENAME COLUMN at_ TO at");
+        // A first sighting again, not a second.
+        let r = pass(&mut store, T + 7_200);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        let r = pass(&mut store, T + 10_800);
+        assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
+    }
+
+    fn store_sql(store: &Store, sql: &str) {
+        store.connection().execute_batch(sql).unwrap();
+    }
+
     /// A schema newer than this build's plans loses its expired claims all
     /// the same; one without stamped claims is left as it was.
     #[test]

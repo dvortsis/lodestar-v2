@@ -465,9 +465,10 @@ pub struct PurgeReport {
 ///
 /// The second map holds, for a snapshot whose purge keeps failing with an
 /// error it retries, when that was last reported and the kind reported
-/// ([`PurgeReport::stuck`]). The third, for a snapshot whose claims the
-/// last pass found uncheckable for a lasting reason, when that was first
-/// seen ([`CONFIRM_SECS`]).
+/// ([`PurgeReport::stuck`]). The third, for a snapshot whose claims every
+/// pass that looked since found uncheckable for a lasting reason, when that
+/// was first seen ([`CONFIRM_SECS`]). A pass that returns before looking
+/// at any snapshot clears it.
 #[derive(Debug, Default)]
 pub(crate) struct Marks(
     HashMap<PathBuf, Mark>,
@@ -687,6 +688,8 @@ impl Store {
         let Some(db) = self.path.clone() else {
             return report;
         };
+        // Only this pass's own restores are reported.
+        RESTORE_FAILED.set(None);
         let all = match list(&db) {
             Ok(all) => all,
             Err(e) => {
@@ -803,6 +806,7 @@ impl Store {
             .min()
         else {
             // No snapshot left to hold a deletion, unless an unlink failed.
+            self.snapshot_marks.2.clear();
             if !blocked && let Err(e) = self.conn.execute("DELETE FROM snapshot_deletions", []) {
                 report
                     .warnings
@@ -816,6 +820,9 @@ impl Store {
                 report.warnings.push(format!(
                     "reading held hashes for the snapshot purge failed: {e}"
                 ));
+                // This pass looked at no snapshot: a lasting error must be
+                // seen again by passes that do (failing toward keeping).
+                self.snapshot_marks.2.clear();
                 return report;
             }
         };
@@ -832,9 +839,12 @@ impl Store {
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
             // When this snapshot's claims were first found uncheckable, if
-            // the last pass found them so: any other outcome now resets it.
+            // every pass that looked since found them so: any other
+            // outcome now resets it.
             let lasting = self.snapshot_marks.2.remove(&snap.path);
-            match purge_one(&snap, &live, since, now, hits_before, None, Some(limit)) {
+            let outcome = purge_one(&snap, &live, since, now, hits_before, None, Some(limit));
+            note_restore(&snap.path, &mut report);
+            match outcome {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
                 Ok(Outcome::Skipped(why, newer)) => {
@@ -846,6 +856,7 @@ impl Store {
                     if newer {
                         let checked =
                             purge_claims_only(&snap.path, &live.terms, now, Some(limit), false);
+                        note_restore(&snap.path, &mut report);
                         match checked {
                             Ok(Some((n, left))) => {
                                 self.snapshot_marks.1.remove(&snap.path);
@@ -993,8 +1004,8 @@ fn first_index(now: i64, n: usize) -> usize {
 const CONFIRM_SECS: i64 = 3_600;
 
 /// A snapshot whose identify claims couldn't be checked for a lasting
-/// reason (`why`). Deleted only when the last pass found the same at least
-/// [`CONFIRM_SECS`] earlier (`lasting`, when it first did); otherwise kept,
+/// reason (`why`). Deleted only when every pass that looked found the
+/// same since a first sighting at least [`CONFIRM_SECS`] earlier (`lasting`, when it first did); otherwise kept,
 /// recorded and reported as stuck, so the next pass decides. `at` is
 /// `(lasting, now, mono)`: the wait is measured on the monotonic clock, so
 /// a wall clock stepping forward can't shorten it, and a wall clock that
@@ -1168,9 +1179,55 @@ struct KeepTime<'a> {
 
 impl Drop for KeepTime<'_> {
     fn drop(&mut self) {
-        if let Some(at) = self.at {
-            let _ = set_modified(self.path, at);
+        let Some(at) = self.at else {
+            return;
+        };
+        // Already right (nothing was written): no write, so a pass with
+        // nothing to do doesn't open every kept snapshot for writing.
+        if modified(self.path) == Some(at) {
+            return;
         }
+        #[cfg(test)]
+        let result = if FAIL_RESTORE.get() {
+            Err(std::io::Error::other("injected"))
+        } else {
+            set_modified(self.path, at)
+        };
+        #[cfg(not(test))]
+        let result = set_modified(self.path, at);
+        match result {
+            Ok(()) => {}
+            // Gone meanwhile: nothing left to keep.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => RESTORE_FAILED.set(Some(e.kind())),
+        }
+    }
+}
+
+thread_local! {
+    /// A [`KeepTime`] on this thread couldn't put a snapshot's time back,
+    /// and why: the hourly pass turns it into a warning
+    /// ([`note_restore`]).
+    static RESTORE_FAILED: std::cell::Cell<Option<std::io::ErrorKind>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: every [`KeepTime`] on this thread fails to restore.
+    static FAIL_RESTORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Adds a warning to `report` when restoring `path`'s time just failed:
+/// the snapshot could then be kept past its 90 days, so it's said, by
+/// name.
+fn note_restore(path: &Path, report: &mut PurgeReport) {
+    if let Some(kind) = RESTORE_FAILED.take() {
+        report.warnings.push(format!(
+            "after cleaning the snapshot {}, its original date couldn't be put back ({kind}); \
+             it may now be kept longer than {RETAIN_DAYS} days",
+            path.display()
+        ));
     }
 }
 
@@ -1228,9 +1285,7 @@ fn purge_one(
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
     // folded in or nothing is written.
-    let folded = settle_conn(&conn)?;
-    // Closes the connection; `_time` puts the time back after it.
-    let restore_time = drop::<Connection>;
+    settle_conn(&conn)?;
     let has_migrations = has_table(&conn, "schema_migrations")?;
     let version: Option<i64> = if has_migrations {
         conn.query_row("SELECT max(version) FROM schema_migrations", [], |r| {
@@ -1240,9 +1295,6 @@ fn purge_one(
         None
     };
     let Some(plan) = version.and_then(Plan::for_version) else {
-        if folded {
-            restore_time(conn);
-        }
         let held = version.map_or_else(|| "no schema version".into(), |v| format!("schema v{v}"));
         return Ok(Outcome::Skipped(
             format!(
@@ -1385,9 +1437,6 @@ fn purge_one(
         match claims::due(&conn, &live.terms, now) {
             Ok(due) => due,
             Err(e) => {
-                if folded {
-                    restore_time(conn);
-                }
                 // Only a snapshot that can't be checked however often the
                 // pass tries fails closed; anything else, next pass.
                 if claims::persistent_sqlite(&e) {
@@ -1416,9 +1465,6 @@ fn purge_one(
         && gone_user.is_empty()
         && revoke.is_empty()
     {
-        if folded {
-            restore_time(conn);
-        }
         return Ok(Outcome::Unchanged);
     }
 
@@ -1554,7 +1600,8 @@ fn purge_one(
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
-    restore_time(conn);
+    // `conn` closes before `_time` puts the time back: declared after it.
+    drop(conn);
     let n = result?;
     Ok(match failed {
         Some(e) if claims::persistent_sqlite(&e) => Outcome::ClaimsUnchecked(e.to_string()),
@@ -1588,7 +1635,7 @@ fn purge_claims_only(
         at: modified(path),
     };
     let mut conn = open_rw(path)?;
-    let folded = settle_conn(&conn)?;
+    settle_conn(&conn)?;
     let version: Option<i64> = if has_table(&conn, "schema_migrations")? {
         conn.query_row("SELECT max(version) FROM schema_migrations", [], |r| {
             r.get(0)
@@ -1596,10 +1643,7 @@ fn purge_claims_only(
     } else {
         None
     };
-    // The time itself goes back when `_time` drops, after `conn`.
-    let restore = |conn: Connection, _wrote: bool| drop(conn);
     if !claims::stamped(&conn)? {
-        restore(conn, folded);
         // V15 added the stamps: a schema this build knows since then
         // without them is damaged. A newer one may have moved them.
         return match version {
@@ -1610,7 +1654,6 @@ fn purge_claims_only(
         };
     }
     if !claims::checkable(&conn)? {
-        restore(conn, folded);
         return Err(crate::Error::Corrupt(
             "the snapshot holds stamped claims but not the tables to check them",
         ));
@@ -1618,7 +1661,6 @@ fn purge_claims_only(
     let due = claims::due(&conn, terms, now)?;
     let raise = raise && due.iter().any(claims::Due::mark_behind);
     if !raise && !due.iter().any(claims::Due::any) {
-        restore(conn, folded);
         return Ok(Some((0, false)));
     }
     conn.pragma_update(None, "secure_delete", true)?;
@@ -1637,7 +1679,8 @@ fn purge_claims_only(
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
-    restore(conn, true);
+    // `conn` closes before `_time` puts the time back: declared after it.
+    drop(conn);
     Ok(Some(result?))
 }
 
@@ -1678,11 +1721,10 @@ fn apply_purges_only(store: &Connection, snapshot: &Path) -> crate::Result<usize
     if purged.is_empty() {
         return Ok(0);
     }
-    let taken = modified(snapshot);
     // Its early returns come after the fold too.
     let _time = KeepTime {
         path: snapshot,
-        at: taken,
+        at: modified(snapshot),
     };
     let mut conn = open_rw(snapshot)?;
     settle_conn(&conn)?;
@@ -1719,10 +1761,8 @@ fn apply_purges_only(store: &Connection, snapshot: &Path) -> crate::Result<usize
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
+    // `conn` closes before `_time` puts the time back: declared after it.
     drop(conn);
-    if let Some(t) = taken {
-        let _ = set_modified(snapshot, t);
-    }
     result?;
     Ok(due.len())
 }
