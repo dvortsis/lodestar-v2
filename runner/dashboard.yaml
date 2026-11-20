@@ -440,6 +440,7 @@ placement:
   - X-win-data-dir-unusable-log
   - X-msi-upgrade-env-value
   - X-leak-test-capture-kill
+  - X-leaktest-wg0-flake
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
