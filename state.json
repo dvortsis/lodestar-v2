@@ -8935,6 +8935,10 @@
       "note": "#972 review optionals: collect.py comment on dht_lookup_slots_occupied (follow CR-LEDGER metrics.md row); winners [[x]] TypeError; control_switches three shapes. Next collector PR.",
       "at": "2026-11-20T06:37Z",
       "notes": "Also add lodestar_dht_lookup_queued (CR-LEDGER #975, queue gauge split from dht_lookup_slots_occupied) to KEEP."
+    },
+    {
+      "id": "X-test-vm-fix",
+      "notes": "2026-11-20T06:48Z #864 fresh Opus + security review on 51f8d9f2: CHANGES (2 blocking, 7 important; surface: test-VM IAM template, SSH helper, docs). Detail held locally; send by message only. Coordinator did its last round, so a runner follow-up slice on a NEW branch from 51f8d9f2 carries the fixes and supersedes #864. Next free build slot, Opus, /security-review. Owner FYI: the deployed stack may predate these tightenings."
     }
   ],
   "main_health": [
@@ -10531,7 +10535,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T06:40Z",
+  "updated": "2026-11-20T06:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
