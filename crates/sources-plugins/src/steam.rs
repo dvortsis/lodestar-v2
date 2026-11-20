@@ -8,7 +8,10 @@
 //! the paging cursor and fixed parameters only, never anything from an
 //! item. The list is fetched again at most once per [`REFRESH`]; a failed
 //! fetch keeps the old index and waits [`RETRY`] before trying again (a
-//! cancelled one waits [`CANCELLED`]).
+//! cancelled one waits [`CANCELLED`]). A finished list that is empty, or
+//! much smaller than the one in use, is refused: the old index stays, a
+//! plain warning is kept as the plugin's status, and the next try waits
+//! [`RETRY`] (see [`suspicious`]).
 //!
 //! **Account class, off by default.** The list needs a Steam Web API key,
 //! read from the per-source store on each refresh and sent in the
@@ -64,6 +67,12 @@ pub const RETRY: Duration = Duration::from_secs(3600);
 /// The wait after a refresh cancelled mid-request (its lookup timed out):
 /// short, since nothing failed and the partial list resumes at its cursor.
 pub const CANCELLED: Duration = Duration::from_secs(60);
+/// Below this many apps in the list in use, a new list is refused only
+/// when it's empty: a small list can halve for ordinary reasons.
+pub const SHRINK_FLOOR: usize = 1_000;
+/// The key in the plugin's state store that holds its warning, if any.
+/// Removed once a list is accepted.
+pub const WARNING_KEY: &str = "warning";
 /// How sure a match is: one game has the title. The list has no years.
 pub const CONFIDENCE: u8 = 70;
 /// What leaves the install: no title, no item data.
@@ -151,6 +160,33 @@ pub const BAD_ANSWER: &str = "Steam's answer wasn't understood";
 pub const TOO_LONG: &str = "Steam's app list is longer than the plugin keeps";
 const FAILED: &str = "Steam's request failed";
 
+/// Why a finished list is refused, as the plain warning the plugin keeps
+/// as its status, or `None` when it's accepted. `old` is the number of
+/// apps in the list in use (`None` before the first list), `new` the
+/// number in the list just fetched.
+///
+/// Refused: an empty list, always; and, once the list in use holds at
+/// least [`SHRINK_FLOOR`] apps, one with fewer than half as many. Steam's
+/// catalogue only grows by a few percent a month, so a list half the size
+/// is a broken or cut-off answer, not real news.
+pub fn suspicious(old: Option<usize>, new: usize) -> Option<String> {
+    // The text names the wait: `RETRY` is an hour.
+    const _: () = assert!(RETRY.as_secs() == 3600);
+    let retry = "it will be tried again in an hour";
+    match old {
+        None if new == 0 => Some(format!(
+            "Steam's app list came back empty, so no games can be matched yet; {retry}"
+        )),
+        Some(o) if new == 0 => Some(format!(
+            "Steam's app list came back empty; the current list of {o} games is kept and {retry}"
+        )),
+        Some(o) if o >= SHRINK_FLOOR && new.saturating_mul(2) < o => Some(format!(
+            "Steam's app list came back with {new} games, under half the current {o}; the current list is kept and {retry}"
+        )),
+        _ => None,
+    }
+}
+
 type Names = HashMap<String, Vec<(u32, String)>>;
 
 /// The bounds on one refresh. [`Limits::DEFAULT`] is what the plugin
@@ -190,9 +226,13 @@ struct Partial {
 #[derive(Default)]
 struct Index {
     names: Names,
+    /// Apps in the list in use (counted as fetched, before folding).
+    apps: usize,
     fetched: Option<Instant>,
     retry_at: Option<Instant>,
     partial: Option<Partial>,
+    /// Why the last finished list was refused, until one is accepted.
+    warning: Option<String>,
 }
 
 impl Partial {
@@ -282,12 +322,20 @@ impl Steam {
         self.index.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The plugin's warning, if the last finished list was refused (see
+    /// [`suspicious`]). The same text is kept in the plugin's state under
+    /// [`WARNING_KEY`], for the status page.
+    pub fn warning(&self) -> Option<String> {
+        self.index().warning.clone()
+    }
+
     /// Runs (or resumes) a refresh. The caller holds `refreshing`. The
     /// old index answers lookups until the new list is complete; on an
     /// error it stays, the partial list is dropped and the next try
     /// waits [`RETRY`]. A missing or bad key fails at once and sets no
     /// wait: nothing was sent, and a key stored a moment later is used on
-    /// the next lookup.
+    /// the next lookup. A finished list [`suspicious`] refuses is treated
+    /// as an error, and its warning is kept until a list is accepted.
     async fn refresh(&self, kit: &Kit) -> Result<(), PluginError> {
         let key = match self.credentials.get(ID, API_KEY).await {
             Ok(Some(k)) => k,
@@ -298,25 +346,49 @@ impl Steam {
             return Err(fail(BAD_CREDENTIALS));
         }
         let r = self.fetch(kit, &key).await;
-        let mut index = self.index();
-        match r {
-            Ok(names) => {
-                index.names = names;
-                index.fetched = Some(Instant::now());
-                index.retry_at = None;
-                Ok(())
+        // What to do with the status in the state store, once the index
+        // lock is let go: `Some(None)` clears it, `Some(Some(w))` sets it.
+        let (r, status) = {
+            let mut index = self.index();
+            match r {
+                Ok((names, apps)) => match suspicious(index.fetched.map(|_| index.apps), apps) {
+                    None => {
+                        index.names = names;
+                        index.apps = apps;
+                        index.fetched = Some(Instant::now());
+                        index.retry_at = None;
+                        let cleared = index.warning.take().map(|_| None);
+                        (Ok(()), cleared)
+                    }
+                    Some(w) => {
+                        index.retry_at = Some(Instant::now() + RETRY);
+                        index.warning = Some(w.clone());
+                        (Err(fail(&w)), Some(Some(w)))
+                    }
+                },
+                Err(e) => {
+                    index.partial = None;
+                    index.retry_at = Some(Instant::now() + RETRY);
+                    (Err(e), None)
+                }
             }
-            Err(e) => {
-                index.partial = None;
-                index.retry_at = Some(Instant::now() + RETRY);
-                Err(e)
+        };
+        // Best effort: a failing state store loses only the status line.
+        match status {
+            Some(Some(w)) => {
+                let _ = kit.state.set(WARNING_KEY, w.into_bytes()).await;
             }
+            Some(None) => {
+                let _ = kit.state.remove(WARNING_KEY).await;
+            }
+            None => {}
         }
+        r
     }
 
     /// Fetches the rest of the list, from the saved cursor on, and
-    /// returns the whole new index.
-    async fn fetch(&self, kit: &Kit, key: &Secret) -> Result<Names, PluginError> {
+    /// returns the whole new index and the number of apps in it.
+    async fn fetch(&self, kit: &Kit, key: &Secret) -> Result<(Names, usize), PluginError> {
         let lim = self.limits;
         loop {
             let after = {
@@ -373,7 +445,7 @@ impl Steam {
             match (page.more, page.last_appid) {
                 (false, _) => {
                     let done = index.partial.take().unwrap_or_else(Partial::new);
-                    return Ok(done.names);
+                    return Ok((done.names, done.apps));
                 }
                 // The cursor must move forward, or the list never ends.
                 (true, Some(next)) if part.after.is_none_or(|a| next > a) => {

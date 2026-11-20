@@ -361,3 +361,223 @@ async fn a_cancelled_refresh_resumes_at_its_cursor() {
     replayer.finish().unwrap();
     assert_eq!(replayer.requests().len(), 2);
 }
+
+/// A one-page list body of `n` games, ids 10, 20, …, plus `extra`.
+fn many(n: u32, extra: &[(u32, &str)]) -> String {
+    let names: Vec<(u32, String)> = (1..=n).map(|i| (i * 10, format!("Filler {i}"))).collect();
+    let mut apps: Vec<(u32, &str)> = names.iter().map(|(id, n)| (*id, n.as_str())).collect();
+    apps.extend_from_slice(extra);
+    body(&apps, false, None)
+}
+
+/// Steam's answer when it has no apps at all: a `response` with nothing
+/// in it, which parses as a whole, empty page.
+const EMPTY: &str = r#"{"response":{}}"#;
+
+/// The plugin's warning as kept in its state store.
+async fn stored_warning(k: &Kit) -> Option<String> {
+    k.state
+        .get(steam::WARNING_KEY)
+        .await
+        .unwrap()
+        .map(|v| String::from_utf8(v).unwrap())
+}
+
+#[test]
+fn which_finished_lists_are_refused() {
+    use steam::{SHRINK_FLOOR, suspicious};
+    // The first list: only an empty one.
+    assert!(suspicious(None, 0).is_some());
+    assert!(suspicious(None, 1).is_none());
+    // Empty is refused whatever the list in use.
+    assert!(suspicious(Some(1), 0).is_some());
+    // Under the floor, any shrink is accepted.
+    assert!(suspicious(Some(SHRINK_FLOOR - 1), 1).is_none());
+    // At or over it, under half is refused; half or more is accepted.
+    assert!(suspicious(Some(SHRINK_FLOOR), SHRINK_FLOOR / 2 - 1).is_some());
+    assert!(suspicious(Some(SHRINK_FLOOR), SHRINK_FLOOR / 2).is_none());
+    assert!(suspicious(Some(1001), 500).is_some());
+    assert!(suspicious(Some(1001), 501).is_none());
+    assert!(suspicious(Some(200_000), 180_000).is_none());
+    assert!(suspicious(Some(200_000), 250_000).is_none());
+    // The warning names both sizes and says it will be tried again.
+    let w = suspicious(Some(200_000), 1_234).unwrap();
+    assert!(w.contains("1234") && w.contains("200000"), "{w}");
+    assert!(w.contains("kept") && w.contains("tried again"), "{w}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_empty_first_list_is_refused_and_a_small_one_accepted() {
+    let replayer = Arc::new(Replayer::new(vec![
+        page(None, 200, EMPTY),
+        // An hour on, a list of one game: small, but the first, so used.
+        page(None, 200, &body(&[(70, "Example Quest")], false, None)),
+    ]));
+    let p = plugin(Some(HEX_KEY));
+    let k = kit(replayer.clone(), &p);
+    let e = p.lookup(&k, &game("Example Quest")).await.unwrap_err();
+    let w = p.warning().expect("a warning is kept");
+    assert_eq!(e.0, w);
+    assert!(w.contains("empty") && w.contains("tried again"), "{w}");
+    assert_eq!(stored_warning(&k).await, Some(w));
+    // The retry wait holds: nothing more is sent.
+    tokio::time::advance(steam::RETRY - Duration::from_secs(1)).await;
+    let e = p.lookup(&k, &game("Example Quest")).await.unwrap_err();
+    assert_eq!(e.0, steam::HELD);
+    assert_eq!(replayer.requests().len(), 1);
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let got = p.lookup(&k, &game("Example Quest")).await.unwrap();
+    assert_eq!(id_of(&got), Some("70".into()));
+    // Accepted: the warning is cleared, in memory and in the store.
+    assert_eq!(p.warning(), None);
+    assert_eq!(stored_warning(&k).await, None);
+    replayer.finish().unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_much_smaller_or_empty_list_keeps_the_current_one() {
+    let replayer = Arc::new(Replayer::new(vec![
+        // The list in use: 1,200 games, Example Quest as 70.
+        page(None, 200, &many(1_199, &[(70_000, "Example Quest")])),
+        // A day on: 500 games, under half. Refused.
+        page(None, 200, &many(499, &[(90_000, "Example Quest")])),
+        // An hour on: empty. Refused.
+        page(None, 200, EMPTY),
+        // An hour on: 700 games, an ordinary shrink. Accepted.
+        page(None, 200, &many(699, &[(90_000, "Example Quest")])),
+    ]));
+    let p = plugin(Some(HEX_KEY));
+    let k = kit(replayer.clone(), &p);
+    let q = game("Example Quest");
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    assert_eq!(p.warning(), None);
+
+    tokio::time::advance(steam::REFRESH).await;
+    // The new list is refused; the lookup still answers from the old one.
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    assert_eq!(replayer.requests().len(), 2);
+    let w = p.warning().expect("a warning is kept");
+    assert!(
+        w.contains("500") && w.contains("1200") && w.contains("kept"),
+        "{w}"
+    );
+    assert_eq!(stored_warning(&k).await, Some(w));
+    // Filler from the refused list isn't there; the old list's is.
+    assert_eq!(
+        id_of(&p.lookup(&k, &game("Filler 1199")).await.unwrap()),
+        Some("11990".into())
+    );
+    // Inside the retry wait: answered locally, nothing sent.
+    tokio::time::advance(steam::RETRY - Duration::from_secs(1)).await;
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    assert_eq!(replayer.requests().len(), 2);
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("70000".into())
+    );
+    assert_eq!(replayer.requests().len(), 3);
+    let w = p.warning().expect("a warning is kept");
+    assert!(w.contains("empty") && w.contains("1200"), "{w}");
+    assert_eq!(stored_warning(&k).await, Some(w));
+
+    tokio::time::advance(steam::RETRY).await;
+    assert_eq!(
+        id_of(&p.lookup(&k, &q).await.unwrap()),
+        Some("90000".into())
+    );
+    assert_eq!(p.warning(), None);
+    assert_eq!(stored_warning(&k).await, None);
+    replayer.finish().unwrap();
+    assert_eq!(replayer.requests().len(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_request_holds_for_exactly_cancelled() {
+    let t0 = tokio::time::Instant::now();
+    let replayer = Arc::new(Replayer::new(vec![page(
+        None,
+        200,
+        &body(&[(70, "Example Quest")], false, None),
+    )]));
+    // The first request hangs, so the lookup is cancelled during it.
+    let slow = Arc::new(Slow {
+        inner: replayer.clone(),
+        slow: 0,
+        calls: AtomicUsize::new(0),
+    });
+    let p = plugin(Some(HEX_KEY));
+    let k = kit(slow, &p);
+    let q = game("Example Quest");
+    let cut = tokio::time::timeout(Duration::from_secs(30), p.lookup(&k, &q));
+    assert!(cut.await.is_err());
+    // One second before the hold ends: still held, nothing sent.
+    let left = t0 + steam::CANCELLED - Duration::from_secs(1) - tokio::time::Instant::now();
+    tokio::time::advance(left).await;
+    assert_eq!(p.lookup(&k, &q).await.unwrap_err().0, steam::HELD);
+    assert!(replayer.requests().is_empty());
+    // At the end of the hold: the refresh runs.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(id_of(&p.lookup(&k, &q).await.unwrap()), Some("70".into()));
+    replayer.finish().unwrap();
+    assert_eq!(replayer.requests().len(), 1);
+}
+
+/// Cuts a refresh during page two, then waits until `since_start` after
+/// the partial list was started and looks up again. `then` is what the
+/// replayer expects next.
+async fn after_a_cut(since_start: Duration, then: Exchange) -> (Arc<Replayer>, Lookup) {
+    let t0 = tokio::time::Instant::now();
+    let replayer = Arc::new(Replayer::new(vec![
+        page(None, 200, &body(&[(70, "Example Quest")], true, Some(400))),
+        then,
+    ]));
+    let slow = Arc::new(Slow {
+        inner: replayer.clone(),
+        slow: 1,
+        calls: AtomicUsize::new(0),
+    });
+    let p = plugin(Some(HEX_KEY));
+    let k = kit(slow, &p);
+    let q = game("Example Quest");
+    let cut = tokio::time::timeout(Duration::from_secs(30), p.lookup(&k, &q));
+    assert!(cut.await.is_err());
+    assert_eq!(replayer.requests().len(), 1);
+    tokio::time::advance(t0 + since_start - tokio::time::Instant::now()).await;
+    let got = p.lookup(&k, &q).await.unwrap();
+    replayer.finish().unwrap();
+    assert_eq!(replayer.requests().len(), 2);
+    (replayer, got)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_partial_list_inside_its_age_limit_resumes() {
+    let then = page(
+        Some(400),
+        200,
+        &body(&[(620, "Demo Puzzle 2")], false, None),
+    );
+    let (_, got) = after_a_cut(steam::REFRESH - Duration::from_secs(1), then).await;
+    // Page one's game was kept: the refresh went on from the cursor.
+    assert_eq!(id_of(&got), Some("70".into()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_partial_list_at_its_age_limit_starts_again() {
+    let then = page(None, 200, &body(&[(90, "Example Quest")], false, None));
+    let (replayer, got) = after_a_cut(steam::REFRESH, then).await;
+    // Page one was asked for again, and its new answer used.
+    assert_eq!(id_of(&got), Some("90".into()));
+    assert!(!replayer.requests()[1].1.url.contains("last_appid"));
+}
