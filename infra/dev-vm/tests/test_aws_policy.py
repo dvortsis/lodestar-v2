@@ -212,6 +212,17 @@ class PolicyTests(unittest.TestCase):
         roles = sorted(k for k, v in t["Resources"].items() if v["Type"] == "AWS::IAM::Role")
         self.assertEqual(roles, ["LinuxTestVmRole", "WindowsTestVmRole"])
 
+    def test_the_resource_set_is_pinned(self):
+        # Nothing can attach extra rights to a role or the user from the side.
+        t, _, _ = statements()
+        self.assertEqual({k: v["Type"] for k, v in t["Resources"].items()}, {
+            "ClaudeTestVmUser": "AWS::IAM::User", "ClaudeTestVmPolicy": "AWS::IAM::ManagedPolicy",
+            "PiaLoginSecret": "AWS::SecretsManager::Secret",
+            "WindowsTestVmRole": "AWS::IAM::Role", "WindowsTestVmInstanceProfile": "AWS::IAM::InstanceProfile",
+            "LinuxTestVmRole": "AWS::IAM::Role", "LinuxTestVmInstanceProfile": "AWS::IAM::InstanceProfile"})
+        self.assertEqual(sorted(t["Resources"]["ClaudeTestVmPolicy"]["Properties"]),
+                         ["Description", "ManagedPolicyName", "PolicyDocument"])
+
     def test_windows_role_is_ssm_core_only(self):
         t, _, _ = statements()
         res = t["Resources"]

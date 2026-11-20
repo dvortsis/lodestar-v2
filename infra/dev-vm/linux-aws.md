@@ -1,12 +1,14 @@
 # Linux test instances on AWS (X-test-vm)
 
-Linux test lanes can run on AWS as well as on Linode. A Claude cloud session starts the instance, runs every command through SSM Run Command, and deletes it. Nobody has to connect from a PC, and the owner types nothing per run. The decision is in `docs/decisions/2026-11-12-X-test-vm.md` ("Later decisions (2026-11-15)").
+Linux test lanes run on AWS (since 2026-11-15Z; the earlier Linode flow is historical). A Claude cloud session starts the instance, runs every command through SSM Run Command, and deletes it. Nobody has to connect from a PC, and the owner types nothing per run. The decision is in `docs/decisions/2026-11-12-X-test-vm.md` ("Later decisions (2026-11-15)").
 
 This is the current Linux flow; the Linode flow in `linux-lane.md` is historical. Once the instance is bootstrapped, `linux-lane.md`'s lane steps (sections 0–4) apply with the changes below: numbers only leave the machine, crawls are leads, no fixed sleeps, report before fixing, no PRs and no pushes from the instance.
 
 ## One-time setup (the owner)
 
 1. **Update the stack.** In CloudFormation → `lodestar-claude-testvm` → Update → Replace existing template, use `infra/dev-vm/aws-claude-testvm.json` at the commit Claude names. Keep the other parameters, tick the IAM acknowledgement, and submit.
+   - **Before updating to the 2026-11-20 template,** delete every instance tagged `Purpose=X-test-vm` (EC2 → Instances, filter by that tag). Instances launched under the old policy have no `LaunchedBy` tag, which can't be added later, so Claude could no longer stop, delete or run commands on them.
+   - **Sessions launch nothing until the update shows `UPDATE_COMPLETE`:** the old policy refuses a launch carrying `LaunchedBy`.
    - **`UbuntuImageOwnerId`:** Canonical's public publisher account, which owns the official Ubuntu images; it isn't one of yours. To find it, open Systems Manager → Parameter Store → Public parameters, look up `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`, then open that image in EC2 → AMIs and copy its **Owner**. It's a parameter so the repository holds no account numbers.
    - **After the 2026-11-20 review fixes** the template no longer takes `InstanceRoleName`: the stack creates its own Windows instance profile (`lodestar-claude-testvm-windows`, the SSM agent policy only), and the user may pass only the stack's two roles. CloudFormation drops the old parameter on update; nothing else to type.
    - The managed policy's description still says "the Windows test instance only". Leave it: changing it makes CloudFormation replace the policy, and the replacement fails because the name is fixed. The policy's statements are what count.

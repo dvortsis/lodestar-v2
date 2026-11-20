@@ -25,9 +25,10 @@
   and give the coordinator lodestar_testvm_ed25519.pub (the public half only).
 
   Nothing is left behind on the VM: the setup script runs from a pipe, not a
-  file, and Claude is started without a script file. The connection ignores
-  agent and X11 forwarding and any host key other than the pinned one, whatever
-  your own SSH settings say.
+  file, and Claude is started without a script file. The connection turns off
+  agent and X11 forwarding and trusts only the pinned host key, overriding
+  those settings in your own SSH config. (A user folder whose path has a space
+  makes the host-key check fail; it fails closed.)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\Connect-TestVm.ps1 -Ip 192.0.2.10 -HostKey "ssh-ed25519 AAAA..."
@@ -117,7 +118,8 @@ else
 fi
 
 if ! tmux has-session -t claude 2>/dev/null; then
-  # No script file: tmux gets the command itself, every value quoted.
+  # No script file: tmux gets the command itself, every value quoted with
+  # bash's printf %q, which needs bash as tmux's shell (lodestar's login shell).
   tmux new-session -d -s claude -c "$HOME/lodestar-v2" \
     "claude --remote-control $(printf %q "$NAME") --permission-mode auto $(printf %q "$FIRST"); exec bash"
 fi
@@ -145,7 +147,7 @@ $cmd = "bash <(printf %s '$(ConvertTo-B64 $remote)' | base64 -d)"
 
 Write-Host "Connecting to $User@$Ip. Enter your SSH key's passphrase if asked."
 # S3: only the pinned key is trusted (the global known-hosts file is the same
-# file), and nothing is forwarded, whatever ~/.ssh/config says.
+# file), and nothing is forwarded; these override ~/.ssh/config.
 & ssh -t -i $KeyFile `
     -o "UserKnownHostsFile=$kh" -o "GlobalKnownHostsFile=$kh" -o StrictHostKeyChecking=yes `
     -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no -o CheckHostIP=no -o IdentitiesOnly=yes `
