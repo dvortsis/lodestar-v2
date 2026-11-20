@@ -808,8 +808,8 @@ fn collapse_path(
     let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
     println!("\n  collapse=group (GS-3): a lease, the groups count and the first collapsed page");
     println!(
-        "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10} {:>12}  target",
-        "class", "p50", "p95", "max", "groups95", "page95", "torr/groups"
+        "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12}  target",
+        "class", "p50", "p95", "max", "groups95", "page95", "cursor95", "torr/groups"
     );
     for class in classes(a.seed, a.queries, a.hot).into_iter().filter(|c| {
         c.target == Some(KEYWORD_P95)
@@ -817,7 +817,7 @@ fn collapse_path(
             && a.only.as_deref().is_none_or(|o| c.name.contains(o))
     }) {
         let mut times = Vec::with_capacity(class.queries.len());
-        let (mut counting, mut paging) = (Vec::new(), Vec::new());
+        let (mut counting, mut paging, mut cursor) = (Vec::new(), Vec::new(), Vec::new());
         let (mut torrents, mut groups) = (0usize, 0usize);
         for q in &class.queries {
             let started = Instant::now();
@@ -833,6 +833,13 @@ fn collapse_path(
             let t = Instant::now();
             let page = collapse::page(&lease, Start::Offset(0), 50, &cancel)?;
             paging.push(t.elapsed());
+            // The second page, from the first's cursor: the path that
+            // checks groups served before (not in the timed total).
+            if let Some(next) = page.next {
+                let t = Instant::now();
+                collapse::page(&lease, Start::After(next), 50, &cancel)?;
+                cursor.push(t.elapsed());
+            }
             for r in &page.rows {
                 reader.torrent(r.hit.id as i64)?;
             }
@@ -846,15 +853,21 @@ fn collapse_path(
         times.sort();
         counting.sort();
         paging.sort();
+        cursor.sort();
         let p95 = pct(&times, 0.95);
         println!(
-            "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10} {:>12.2}  p95 ≤ {} ms {} (not gated)",
+            "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12.2}  p95 ≤ {} ms {} (not gated)",
             class.name,
             ms(pct(&times, 0.5)),
             ms(p95),
             ms(*times.last().expect("queries")),
             ms(pct(&counting, 0.95)),
             ms(pct(&paging, 0.95)),
+            if cursor.is_empty() {
+                "—".to_string()
+            } else {
+                ms(pct(&cursor, 0.95))
+            },
             torrents as f64 / groups.max(1) as f64,
             KEYWORD_P95.as_millis(),
             if p95 <= KEYWORD_P95 { "within" } else { "over" }

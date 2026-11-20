@@ -15563,7 +15563,7 @@ export interface operations {
                 sort?: string;
                 /** @description Results per page: 1–200, 50 by default. */
                 limit?: number;
-                /** @description `offset + limit` may not pass 10,000. Not with `cursor`. */
+                /** @description `offset + limit` may not pass 10,000. Not with `cursor`. With `collapse=group` it counts groups, and a page that stops at its scan bound answers with a smaller `offset` (the groups actually before it): page collapsed results with `next_cursor`. */
                 offset?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
@@ -15572,7 +15572,7 @@ export interface operations {
                 /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
                 cursor?: string;
                 /** @description `group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`. */
-                collapse?: string;
+                collapse?: "group" | "none";
                 /** @description `1` or `true`: count every match exactly, within a time budget. */
                 exact?: boolean;
                 /** @description `1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits. */

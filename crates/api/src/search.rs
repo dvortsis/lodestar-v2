@@ -25,10 +25,10 @@ use utoipa::OpenApi;
 use crate::auth::Access;
 use crate::dto::events::RebuildPhase;
 use crate::dto::search::{
-    ClauseRemoval, CollapseUnavailable, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors,
-    ExplainWeights, IndexRebuild, NaturalChip, NaturalProposal, ParseQuery, ParseResponse,
-    SearchExplain, SearchHit, SearchIndexState, SearchNotice, SearchRecovery, SearchRequest,
-    SearchResponse, UnpopulatedField,
+    ClauseRemoval, CollapseMode, CollapseUnavailable, CompositionShare, ExplainHit, ExplainPhase2,
+    ExplainPriors, ExplainWeights, IndexRebuild, NaturalChip, NaturalProposal, ParseQuery,
+    ParseResponse, SearchExplain, SearchHit, SearchIndexState, SearchNotice, SearchRecovery,
+    SearchRequest, SearchResponse, UnpopulatedField,
 };
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
@@ -323,11 +323,11 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         ("q" = Option<String>, Query, description = "The query text; empty browses everything."),
         ("sort" = Option<String>, Query, description = "`relevance` (the default), or `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` or `seen` with an optional `+` (ascending) or `-` (descending, the default). Never-scraped torrents sort last either way."),
         ("limit" = Option<usize>, Query, description = "Results per page: 1–200, 50 by default."),
-        ("offset" = Option<usize>, Query, description = "`offset + limit` may not pass 10,000. Not with `cursor`."),
+        ("offset" = Option<usize>, Query, description = "`offset + limit` may not pass 10,000. Not with `cursor`. With `collapse=group` it counts groups, and a page that stops at its scan bound answers with a smaller `offset` (the groups actually before it): page collapsed results with `next_cursor`."),
         ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
         ("tz" = Option<i32>, Query, description = "The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default."),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`."),
-        ("collapse" = Option<String>, Query, description = "`group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`."),
+        ("collapse" = inline(Option<CollapseMode>), Query, description = "`group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`."),
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
         ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
     ),
@@ -538,15 +538,15 @@ async fn run_search(
         if cursor.is_some_and(|c| c.collapse != collapsed) {
             return Err(bad_cursor());
         }
-        let total = if exact {
-            lease.exact_total(&cancel).map_err(failed)?
+        // A collapsed search counts torrents and groups together, under
+        // one budget when exact (`collapse::counts`).
+        let (total, groups) = if collapsed {
+            let (t, g) = collapse::counts(&lease, exact, &cancel).map_err(failed)?;
+            (t, Some(g))
+        } else if exact {
+            (lease.exact_total(&cancel).map_err(failed)?, None)
         } else {
-            lease.total()
-        };
-        let groups = if collapsed {
-            Some(collapse::groups(&lease, exact, &cancel).map_err(failed)?)
-        } else {
-            None
+            (lease.total(), None)
         };
         // Each row's other versions, when collapsed.
         let mut others: Vec<u64> = Vec::new();

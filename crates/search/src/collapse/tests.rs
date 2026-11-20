@@ -8,7 +8,7 @@ use tantivy::indexer::NoMergePolicy;
 use super::*;
 use crate::SearchIndex;
 use crate::index::Sort;
-use crate::lease::Page;
+use crate::lease::{Page, WindowBound};
 use crate::population::Generations;
 
 const NOW: i64 = 1_700_000_100;
@@ -303,7 +303,11 @@ fn a_page_ends_short_at_its_bounds_and_the_next_carries_on() {
         let l = lease(&index, "common", sort);
         let want = expected(&uncollapsed(&l), groups);
         for (g, h) in [(2, usize::MAX), (5, usize::MAX), (usize::MAX, 64), (3, 64)] {
-            let bounds = Bounds { groups: g, hits: h };
+            let bounds = Bounds {
+                groups: g,
+                hits: h,
+                ..Bounds::default()
+            };
             let (got, short) = scroll_bounded(&l, 10, bounds);
             assert_eq!(got, want, "{sort:?} groups {g} hits {h}");
             // The groups bound is never under a page's own size (it
@@ -321,6 +325,7 @@ fn a_page_ends_short_at_its_bounds_and_the_next_carries_on() {
     let bounds = Bounds {
         groups: 1,
         hits: 64,
+        ..Bounds::default()
     };
     let page = page_with(&l, Start::Offset(10), 5, bounds, &cancel).unwrap();
     if page.rows.is_empty() {
@@ -346,16 +351,134 @@ fn a_last_page_has_no_next_when_only_served_groups_follow() {
     // The last group's row ends a page; the hits after it are all its own
     // or served groups', so there's no next to an empty page.
     let groups = 3;
-    let index = fixture(300, 1, groups);
+    let index = fixture(40, 1, groups);
     let l = lease(&index, "", Sort::Discovered { desc: false });
-    let want = expected(&uncollapsed(&l), groups);
+    let all = uncollapsed(&l);
+    // Every hit fits the first chunk, so the walk has read them all when
+    // the last row is served.
+    assert!(all.len() <= CHUNK_MIN, "{} hits", all.len());
+    let want = expected(&all, groups);
+    assert!(want.len() < all.len(), "groups collapse");
     let cancel = CancelToken::new();
     let page = super::page(&l, Start::Offset(0), want.len(), &cancel).unwrap();
     assert_eq!(page.rows.len(), want.len());
-    // Every group appears within the first chunk here, so the walk knows.
-    if want.iter().all(|(id, _)| *id <= 64) {
-        assert_eq!(page.next, None);
+    assert_eq!(page.next, None);
+}
+
+#[test]
+fn a_group_far_larger_than_the_member_batch_pages_alike_and_holds_a_batch() {
+    // One group holds nearly every torrent; the served-before check holds
+    // at most its batch of addresses, and pages are the same as with the
+    // default batch.
+    let groups = 1;
+    let index = fixture(3_000, 2, groups);
+    for sort in [Sort::Relevance, Sort::Size { desc: false }] {
+        let l = lease(&index, "common", sort);
+        let want = expected(&uncollapsed(&l), groups);
+        let small = Bounds {
+            members: 16,
+            ..Bounds::default()
+        };
+        let (got, _) = scroll_bounded(&l, 7, small);
+        assert_eq!(got, want, "{sort:?}");
+        // A cursor page of it, checked directly.
+        let cancel = CancelToken::new();
+        let first = page_with(&l, Start::Offset(0), 3, small, &cancel).unwrap();
+        let key = group_of(first.rows[0].hit.id, groups)
+            .or_else(|| first.rows.iter().find_map(|r| group_of(r.hit.id, groups)))
+            .expect("a keyed row");
+        let m = members(
+            &l,
+            &[key],
+            first.next.as_ref(),
+            16,
+            &mut WindowBound::default(),
+            &cancel,
+        )
+        .unwrap();
+        assert!(m.held <= 16, "held {}", m.held);
+        assert!(m.count[&key] > 2_000, "{}", m.count[&key]);
     }
+}
+
+#[test]
+fn members_leapfrog_so_a_selective_query_costs_little_in_a_big_group() {
+    // A group of about 2,700 torrents and a query matching one of them:
+    // the walk seeks past the rest instead of visiting every member.
+    let groups = 1;
+    let index = fixture(3_000, 1, groups);
+    let l = lease(&index, "v7", Sort::Relevance);
+    assert_eq!(uncollapsed(&l), vec![7]);
+    let key = group_of(7, groups).unwrap();
+    let cancel = CancelToken::new();
+    let m = members(
+        &l,
+        &[key],
+        None,
+        MAX_MEMBERS,
+        &mut WindowBound::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(m.count[&key], 1);
+    assert!(m.steps <= 8, "{} steps", m.steps);
+    // And a broad one visits each member about once.
+    let l = lease(&index, "common", Sort::Relevance);
+    let m = members(
+        &l,
+        &[key],
+        None,
+        MAX_MEMBERS,
+        &mut WindowBound::default(),
+        &cancel,
+    )
+    .unwrap();
+    let size = (1..=3_000u64)
+        .filter(|&id| group_of(id, groups).is_some())
+        .count() as u64;
+    assert_eq!(m.count[&key], size);
+    assert!(m.steps <= 2 * size + 4, "{} steps for {size}", m.steps);
+}
+
+#[test]
+fn torrents_and_groups_are_counted_once_under_one_budget() {
+    use crate::testing::tripwire;
+    use std::sync::atomic::Ordering;
+    let index = fixture(4_000, 2, 30);
+    let never = CancelToken::new();
+    let cancel = CancelToken::new();
+    // A query matching every document that counts its visits.
+    let (c, visits) = tripwire(usize::MAX, &never);
+    let approx = Total {
+        value: 4_000,
+        approx: true,
+    };
+    let l = Lease::raw(index.clone(), c, approx);
+    // Generous: the torrents counted once (4,000 visits) and the groups
+    // once (4,000 more), both exact.
+    let budget = cancel.with_budget(std::time::Duration::from_secs(600));
+    let (t, g) = counts_within(&l, Some(&budget), &cancel).unwrap();
+    assert_eq!(
+        t,
+        Total {
+            value: 4_000,
+            approx: false
+        }
+    );
+    assert!(!g.approx);
+    let went = visits.load(Ordering::Relaxed);
+    assert!(went <= 2 * 4_000 + 64, "{went} visits");
+    // Kept: asking again counts nothing.
+    let (t2, g2) = counts_within(&l, Some(&budget), &cancel).unwrap();
+    assert_eq!((t2, g2), (t, g));
+    assert_eq!(visits.load(Ordering::Relaxed), went);
+    // One budget, already spent: neither count runs to the end; both
+    // stand as estimates.
+    let (c, _) = tripwire(usize::MAX, &never);
+    let l = Lease::raw(index, c, approx);
+    let spent = cancel.with_budget(std::time::Duration::ZERO);
+    let (t, g) = counts_within(&l, Some(&spent), &cancel).unwrap();
+    assert!(t.approx && g.approx, "{t:?} {g:?}");
 }
 
 #[test]

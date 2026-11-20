@@ -47,11 +47,11 @@ use tantivy::query::EnableScoring;
 use tantivy::schema::IndexRecordOption;
 use tantivy::{DocAddress, DocId, DocSet, Searcher, TERMINATED, Term};
 
-use crate::cancel::{self, CHECK_EVERY, CancelToken};
+use crate::cancel::{self, CancelToken};
 use crate::count::{self, Matcher, Total};
 use crate::cursor::Position;
 use crate::index::{Error, Hit, Result};
-use crate::lease::{EXACT_BUDGET, Lease, Start};
+use crate::lease::{EXACT_BUDGET, Lease, Start, WindowBound};
 use crate::population::Availability;
 
 /// Groups decided per page at most (served, or skipped as served
@@ -62,7 +62,9 @@ pub const MAX_SCAN_GROUPS: usize = 4_096;
 /// this bounds the walk through them.
 pub const MAX_SCAN_HITS: usize = 16_384;
 /// Member addresses held at once for the served-before check: past it
-/// they're checked and let go a batch at a time.
+/// they're checked and let go a batch at a time. Members are found by
+/// leapfrogging, never loaded whole, so this bounds a page's memory for
+/// the check however large a group is.
 pub const MAX_MEMBERS: usize = 1 << 18;
 /// Matches drawn for the groups estimate.
 pub const HT_SAMPLE: usize = 1_024;
@@ -174,6 +176,8 @@ pub fn page(
 pub(crate) struct Bounds {
     pub groups: usize,
     pub hits: usize,
+    /// Member addresses held at once for the served-before check.
+    pub members: usize,
 }
 
 impl Default for Bounds {
@@ -181,6 +185,7 @@ impl Default for Bounds {
         Bounds {
             groups: MAX_SCAN_GROUPS,
             hits: MAX_SCAN_HITS,
+            members: MAX_MEMBERS,
         }
     }
 }
@@ -204,6 +209,8 @@ pub(crate) fn page_with(
     let mut seen = KeySet::default();
     let mut rows = Vec::with_capacity(limit);
     let mut walked = 0usize;
+    // The cursor's two-phase window bound, found once for the page.
+    let mut bound = WindowBound::default();
     // An offset counts groups: the walk starts from the top.
     let mut from = match start {
         Start::After(p) => Start::After(p),
@@ -229,7 +236,14 @@ pub(crate) fn page_with(
                 fresh.push(*k);
             }
         }
-        let members = members(lease, &fresh, after.as_ref(), cancel)?;
+        let members = members(
+            lease,
+            &fresh,
+            after.as_ref(),
+            bounds.members,
+            &mut bound,
+            cancel,
+        )?;
         for (i, hit) in pg.hits.iter().enumerate() {
             // Whether this hit starts a row: keyless, or its group's first
             // hit here and not served before.
@@ -293,29 +307,42 @@ pub(crate) fn page_with(
 }
 
 /// The groups count for `lease`, kept on it for later pages. `exact`
-/// asks for the exact count on demand: the torrents and the groups are
-/// counted under one [`EXACT_BUDGET`], and out of time the estimate
-/// stands, as for torrents.
+/// asks for the exact count on demand: see [`counts`].
 pub fn groups(lease: &Lease, exact: bool, cancel: &CancelToken) -> Result<Total> {
-    if let Some(t) = lease.kept_groups()
-        && (!t.approx || !exact)
-    {
-        return Ok(t);
-    }
+    Ok(counts(lease, exact, cancel)?.1)
+}
+
+/// The torrents and groups counts of a collapsed search, the groups count
+/// kept on the lease for later pages. With `exact` (on demand), both are
+/// counted under **one** [`EXACT_BUDGET`]: the torrents count first (kept
+/// on the lease, as `Lease::exact_total` keeps it), then the groups. Out
+/// of time, an estimate stands for what wasn't counted, as for torrents.
+/// A collapsed search reads its torrents count here, not from
+/// `Lease::exact_total`, so nothing is counted twice or under a second
+/// budget.
+pub fn counts(lease: &Lease, exact: bool, cancel: &CancelToken) -> Result<(Total, Total)> {
     let budget = exact.then(|| cancel.with_budget(EXACT_BUDGET));
-    let torrents = match &budget {
+    counts_within(lease, budget.as_ref(), cancel)
+}
+
+/// [`counts`] under `budget` (`None`: no count on demand).
+pub(crate) fn counts_within(
+    lease: &Lease,
+    budget: Option<&CancelToken>,
+    cancel: &CancelToken,
+) -> Result<(Total, Total)> {
+    if let Some(t) = lease.kept_groups()
+        && (!t.approx || budget.is_none())
+    {
+        return Ok((lease.total(), t));
+    }
+    let torrents = match budget {
         Some(b) => lease.exact_total_within(b, EXACT_BUDGET)?,
         None => lease.total(),
     };
-    let t = groups_with(
-        lease,
-        torrents,
-        budget.as_ref(),
-        count::SAMPLE_ABOVE,
-        cancel,
-    )?;
-    lease.keep_groups(t);
-    Ok(t)
+    let groups = groups_with(lease, torrents, budget, count::SAMPLE_ABOVE, cancel)?;
+    lease.keep_groups(groups);
+    Ok((torrents, groups))
 }
 
 /// The groups count once the torrents count is `torrents`: exact while
@@ -471,7 +498,15 @@ fn estimate(
         let mut keys: Vec<u64> = drawn.iter().map(|d| d.group).collect();
         keys.sort_unstable();
         keys.dedup();
-        let sizes = members(lease, &keys, None, cancel)?.count;
+        let sizes = members(
+            lease,
+            &keys,
+            None,
+            MAX_MEMBERS,
+            &mut WindowBound::default(),
+            cancel,
+        )?
+        .count;
         mean = drawn
             .iter()
             .map(|d| 1.0 / sizes.get(&d.group).copied().unwrap_or(1).max(1) as f64)
@@ -558,31 +593,45 @@ impl<'a> Keys<'a> {
 }
 
 /// Groups' members among the query's matches.
-struct Members {
+pub(crate) struct Members {
     count: KeyMap<u64>,
     /// The groups with a member at or before the cursor position asked
     /// about: served on an earlier page.
     served: KeySet,
+    /// Leapfrog steps taken (a seek of the query or of a posting list):
+    /// the walk's cost, for tests.
+    pub(crate) steps: u64,
+    /// The most member addresses held at once, for tests.
+    pub(crate) held: usize,
 }
 
-/// The matches in each of `keys`' groups: the `title_identity` term's
-/// postings, checked against the query in doc order, segment by segment.
-/// With `after`, also which groups have a member ranking at or before it
-/// (checked [`MAX_MEMBERS`] addresses at a time, so memory stays bounded
-/// however large a group).
-fn members(
+/// The matches in each of `keys`' groups. Per segment, the groups'
+/// `title_identity` postings are merged in doc order and leapfrogged
+/// against the query: each step seeks whichever side is behind to the
+/// other's document, so the cost follows the smaller of a group and the
+/// query's matches, and no posting list is ever loaded whole. With
+/// `after`, also which groups have a member ranking at or before it,
+/// checked `batch` addresses at a time (so at most `batch` are held),
+/// and only for groups not already known served.
+pub(crate) fn members(
     lease: &Lease,
     keys: &[u64],
     after: Option<&Position>,
+    batch: usize,
+    bound: &mut WindowBound,
     cancel: &CancelToken,
 ) -> Result<Members> {
+    use std::cmp::Reverse;
     let mut out = Members {
         count: KeyMap::with_capacity_and_hasher(keys.len(), Keyed::default()),
         served: KeySet::default(),
+        steps: 0,
+        held: 0,
     };
     if keys.is_empty() {
         return Ok(out);
     }
+    let batch = batch.max(1);
     let field = lease.index().fields().title_identity;
     let searcher = lease.searcher();
     let compiled = lease.compiled();
@@ -590,65 +639,91 @@ fn members(
         .query
         .weight(EnableScoring::disabled_from_searcher(searcher))?;
     let mut pending: Vec<(u64, DocAddress)> = Vec::new();
-    let flush = |pending: &mut Vec<(u64, DocAddress)>, served: &mut KeySet| -> Result<()> {
-        let Some(p) = after else {
-            pending.clear();
-            return Ok(());
-        };
-        // Groups already known served need no more checking.
-        pending.retain(|(k, _)| !served.contains(k));
-        let addrs: Vec<DocAddress> = pending.iter().map(|(_, a)| *a).collect();
-        let before = lease.ranks_at_or_before(&addrs, p, cancel)?;
-        for ((k, _), b) in pending.iter().zip(before) {
-            if b {
-                served.insert(*k);
-            }
-        }
-        pending.clear();
-        Ok(())
-    };
-    let mut since = 0u32;
+    let stopped = |e| cancel::stopped_or(cancel, e);
     for (ord, reader) in searcher.segment_readers().iter().enumerate() {
         cancel.check()?;
         let inverted = reader.inverted_index(field)?;
-        let mut targets: Vec<(DocId, u64)> = Vec::new();
+        let mut lists = Vec::new();
+        let mut heads: BinaryHeap<Reverse<(DocId, usize)>> = BinaryHeap::new();
         for &k in keys {
             let term = Term::from_field_u64(field, k);
-            if let Some(mut p) = inverted
+            if let Some(p) = inverted
                 .read_postings(&term, IndexRecordOption::Basic)
                 .map_err(Error::Io)?
             {
-                let mut d = p.doc();
-                while d != TERMINATED {
-                    targets.push((d, k));
-                    d = p.advance();
-                    since += 1;
-                    if since >= CHECK_EVERY {
-                        since = 0;
-                        cancel.check()?;
-                    }
+                let d = p.doc();
+                if d != TERMINATED {
+                    heads.push(Reverse((d, lists.len())));
+                    lists.push((p, k));
                 }
             }
         }
-        if targets.is_empty() {
+        if heads.is_empty() {
             continue;
         }
-        targets.sort_unstable();
         let mut m = Matcher::new(weight.as_ref(), reader, compiled, cancel)?;
-        for (d, k) in targets {
-            if m.contains(d).map_err(|e| cancel::stopped_or(cancel, e))? {
-                *out.count.entry(k).or_default() += 1;
-                if after.is_some() {
-                    pending.push((k, DocAddress::new(ord as u32, d)));
-                    if pending.len() >= MAX_MEMBERS {
-                        flush(&mut pending, &mut out.served)?;
+        while let Some(Reverse((head, i))) = heads.pop() {
+            // The query to the group's next member, or past it.
+            let at = m.seek_to(head).map_err(stopped)?;
+            out.steps += 1;
+            if at == TERMINATED {
+                break;
+            }
+            let (list, k) = &mut lists[i];
+            let next = if at == head {
+                if m.passes_at(head) {
+                    *out.count.entry(*k).or_default() += 1;
+                    if after.is_some() && !out.served.contains(k) {
+                        pending.push((*k, DocAddress::new(ord as u32, head)));
+                        out.held = out.held.max(pending.len());
+                        if pending.len() >= batch {
+                            flush(lease, after, &mut pending, &mut out.served, bound, cancel)?;
+                        }
                     }
                 }
+                list.advance()
+            } else {
+                // The group's list to the query's next match.
+                out.steps += 1;
+                list.seek(at)
+            };
+            if next != TERMINATED {
+                heads.push(Reverse((next, i)));
             }
         }
     }
-    flush(&mut pending, &mut out.served)?;
+    flush(lease, after, &mut pending, &mut out.served, bound, cancel)?;
     Ok(out)
+}
+
+/// Checks `pending` members against the cursor position `after`, marking
+/// their groups served, and empties it.
+fn flush(
+    lease: &Lease,
+    after: Option<&Position>,
+    pending: &mut Vec<(u64, DocAddress)>,
+    served: &mut KeySet,
+    bound: &mut WindowBound,
+    cancel: &CancelToken,
+) -> Result<()> {
+    let Some(p) = after else {
+        pending.clear();
+        return Ok(());
+    };
+    // Groups already known served need no more checking.
+    pending.retain(|(k, _)| !served.contains(k));
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let addrs: Vec<DocAddress> = pending.iter().map(|(_, a)| *a).collect();
+    let before = lease.ranks_at_or_before(&addrs, p, bound, cancel)?;
+    for ((k, _), b) in pending.iter().zip(before) {
+        if b {
+            served.insert(*k);
+        }
+    }
+    pending.clear();
+    Ok(())
 }
 
 #[cfg(test)]

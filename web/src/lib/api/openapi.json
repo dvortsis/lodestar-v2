@@ -6483,7 +6483,7 @@
           {
             "name": "offset",
             "in": "query",
-            "description": "`offset + limit` may not pass 10,000. Not with `cursor`.",
+            "description": "`offset + limit` may not pass 10,000. Not with `cursor`. With `collapse=group` it counts groups, and a page that stops at its scan bound answers with a smaller `offset` (the groups actually before it): page collapsed results with `next_cursor`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -6524,7 +6524,12 @@
             "description": "`group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "description": "`collapse` on `GET /search`: `group` for one row per group of\nversions, `none` (the default) for every torrent.",
+              "enum": [
+                "group",
+                "none"
+              ]
             }
           },
           {

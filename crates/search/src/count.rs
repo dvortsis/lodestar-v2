@@ -307,12 +307,20 @@ impl<'a> Matcher<'a> {
 }
 
 impl Matcher<'_> {
-    /// Whether `doc` is a match (alive and in the ranges). Documents must
-    /// be asked in ascending order: the walk only moves forward.
-    pub(crate) fn contains(&mut self, doc: DocId) -> tantivy::Result<bool> {
-        self.seek(doc);
+    /// Moves to the first document the query matches at or after
+    /// `target` (whatever the deletes and ranges say), and returns it:
+    /// `TERMINATED` past the last. For leapfrogging another doc set
+    /// against the query (`collapse.rs`).
+    pub(crate) fn seek_to(&mut self, target: DocId) -> tantivy::Result<DocId> {
+        self.seek(target);
         self.tick(1)?;
-        Ok(self.docs.doc() == doc && self.passes(doc))
+        Ok(self.docs.doc())
+    }
+
+    /// Whether `doc`, where the walk stands, passes the deletes and the
+    /// ranges.
+    pub(crate) fn passes_at(&self, doc: DocId) -> bool {
+        self.passes(doc)
     }
 
     /// Hands the matches from the current document up to (not including)

@@ -417,12 +417,18 @@ impl Lease {
     /// this of a group's members to tell whether the group was served).
     /// Checks `cancel` between segments and every
     /// [`CHECK_EVERY`] documents.
+    /// `bound` keeps the two-phase window bound for `p` once found, so a
+    /// page asks for it once, however many batches it checks.
     pub(crate) fn ranks_at_or_before(
         &self,
         addrs: &[DocAddress],
         p: &Position,
+        bound: &mut WindowBound,
         cancel: &CancelToken,
     ) -> Result<Vec<bool>> {
+        if addrs.is_empty() {
+            return Ok(Vec::new());
+        }
         cancel.check()?;
         if !self.fits(p) {
             return Err(Error::Corrupt("the cursor doesn't fit its lease"));
@@ -450,7 +456,14 @@ impl Lease {
                 let start = start.map(|(score, addr)| Scored { score, addr });
                 let last = last.map(|(score, addr)| Scored { score, addr });
                 let scored = self.phase1_scores(addrs, cancel)?;
-                let bound = self.window_bound(start, cancel)?;
+                let bound = match bound.0 {
+                    Some(b) => b,
+                    None => {
+                        let b = self.window_bound(start, cancel)?;
+                        bound.0 = Some(b);
+                        b
+                    }
+                };
                 let mut out = vec![false; addrs.len()];
                 let mut inside = Vec::new();
                 for (i, m) in scored.iter().enumerate() {
@@ -675,6 +688,12 @@ impl Lease {
         }
     }
 }
+
+/// The two-phase window bound of one cursor position, once found
+/// ([`Lease::ranks_at_or_before`]); empty until then. Kept for one page
+/// only: a page's position is fixed.
+#[derive(Debug, Default)]
+pub(crate) struct WindowBound(Option<Option<Scored>>);
 
 /// A page of re-ranked hits, their score parts, and where the next starts.
 type Windowed = (Vec<Scored>, Vec<ScoreParts>, Option<Position>);

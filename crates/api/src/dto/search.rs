@@ -232,6 +232,15 @@ pub struct SearchResponse {
     pub groups_approx: Option<bool>,
 }
 
+/// `collapse` on `GET /search`: `group` for one row per group of
+/// versions, `none` (the default) for every torrent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CollapseMode {
+    Group,
+    None,
+}
+
 /// Why a search asked to collapse came back ungrouped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
