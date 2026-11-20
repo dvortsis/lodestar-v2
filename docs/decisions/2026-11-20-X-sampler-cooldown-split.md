@@ -29,6 +29,11 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
 - **Tested:** `no_node_is_sampled_in_cooldown` (proptest, 512 cases) runs random offers, direct reservations of any address (as a spoofed or duplicate contact would make), answers with any interval and scale, aborts, prunes, restarts and up to 3 h steps, against a table of 1–5 places. No node is ever reserved before its true end, and the table and filter stay within their bounds. `a_full_split_table_keeps_admitting_and_refuses_cooled_nodes` and `a_full_filter_leaves_the_table_full` cover the edges.
 
 ## Restart (CR-0d)
+- **Which case applies (the runner's condition, 2026-11-20):** spilled cooldowns are **not** kept in the snapshot. A test shows instead that the restored state never samples a node earlier than today's restore would.
+  - With the switch off, those cooldowns would have stayed in the table, and today's snapshot lists each one with its end, bounded by WK-10e.
+  - With it on, the gate holds every sample until at least that same bounded end.
+  - `no_node_is_sampled_in_cooldown` checks this against a reference that applies today's bound at each restart; `a_spilled_cooldown_gates_the_next_run_until_it_ends` checks it through `Proof::commit` and a real resume.
+  - No on-disk format change.
 - **The snapshot format doesn't change.** It lists the table, at most 200,000 entries, as today. The filter can't be listed, so on commit the proof takes the latest end the filter may hold (`Sampler::spill_end`, an upper bound on every live one), caps it at now + H as the snapshot's other entries are, and folds it into the snapshot's existing gate.
 - **The next run restores the listed cooldowns and samples no one until that gate passes.** That honours every moved cooldown at least as long as today's snapshot would have kept it. WK-10e's argument still bounds a scaled one to `MAX_INTERVAL` from the commit.
 - **The cost:** after a clean restart with spilled cooldowns, sampling waits up to about 6 h, as a run with a dirty marker does today. Today's sampler, restarted with a full table, mostly idles anyway until those cooldowns end.
