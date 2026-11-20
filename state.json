@@ -4221,7 +4221,8 @@
     "2026-11-20T17:15Z #985 merged 9eb1aa61. Slot 1 -> ENR-tmdb landing, holding its push until #969 merges (both touch the shared plugin lists; owner no-overlap rule). X-test-vm: the Windows #983/#985 re-test can follow once the AWS stack shows UPDATE_COMPLETE.",
     "2026-11-20T17:27Z #989 merged 0728f0a9; session to be archived. Slot 4 -> X-gs3-nits (fresh Opus session). Queued low: settle and rollback time-restore failures are still silent (from #989's review).",
     "2026-11-20T18:34Z #990 merged e73b0fb1 (security review MERGE). Optionals for X-test-vm: check AssumeRolePolicyDocument keys; reject a bare aws:RequestTag/ and check operator names; install yaml in the dev-vm CI step.",
-    "2026-11-20T18:38Z #969 ENR-steam merged 0eca1090. ENR-tmdb landing released to push. Slot 3 -> X-steam-followups (Opus). Runner owes an ext: condition for ENR-steam (adult sign-off, live terms re-read, Valve accepting x-webapi-key) in the next records PR."
+    "2026-11-20T18:38Z #969 ENR-steam merged 0eca1090. ENR-tmdb landing released to push. Slot 3 -> X-steam-followups (Opus). Runner owes an ext: condition for ENR-steam (adult sign-off, live terms re-read, Valve accepting x-webapi-key) in the next records PR.",
+    "2026-11-20T18:40Z X-sec-S1-17 PR #991 open (the session had idled 5 h with a local commit; nudged at the heartbeat). Candidate held findings S1-18 and S1-19 (surface 1, low or unrated; triage by #991's reviewer). Ids only; detail is local and held."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10614,7 +10615,7 @@
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
         "since": "2026-11-20T13:05Z",
-        "doing": "launched; detail by message; brief briefs/X-sec-S1-17.md",
+        "doing": "PR #991 open 21ba37cf; fresh Opus + security review running",
         "status": "running"
       },
       {
