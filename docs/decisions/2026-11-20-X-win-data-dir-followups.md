@@ -38,8 +38,8 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
 ## The runner's review (#985 at 428a77ee)
 The runner decided these fixes go in this PR.
 - **Only a denied write is a permission problem.** The probe reports `Problem::Unwritable` only for a permission error. Any other error, such as a full or write-protected drive, is a new `Problem::WriteFailed`, still under Event Log ID 6.
-  - The note says the folder "can't be written to" and gives no permission fix.
-  - It says to check the drive, and that the temp log names the system's error.
+  - The note says the folder "can't take new files" and gives no permission fix. The phrase isn't a prefix of the permission row's, so the two can't be confused.
+  - It says to free space on the drive or make it writable, and that the temp log names the system's error. For `LODESTAR_DATA_DIR` or `data_dir`, it also offers a folder on another drive.
   - Before, these errors sent the administrator to permissions for nothing. The guide has a row for it.
 - **A test now proves the probe runs after the ACL step.** The service's own folder is write-denied, and the ACL step stub lifts the deny. The start passes, and the earlier refusal shows the step ran first. Probing before that step fails the test (checked by changing the code).
 - **§6.2 reads in order:**
@@ -53,3 +53,12 @@ The runner decided these fixes go in this PR.
   - it mentions Controlled folder access;
   - for the default folder, it says to remove a `(DENY)` entry before running Repair again.
 - **Checked against the installer:** the installer's own script refuses any Deny entry. So the guide tells the reader to look for one in `icacls` output, which they can check, rather than quoting a Repair message.
+
+## The runner's delta review (#985 at 8f5c7051)
+- **`a_probe_that_fails_otherwise_is_write_failed`** reaches the `WriteFailed` mapping in two ways: a probe in a plain file (not a folder on Unix, not found on Windows), and a folder where all 16 probe names are taken. It fails when the mapping is reverted to `Unwritable`, which I checked by reverting it.
+- **The guide:**
+  - Controlled folder access moved to the "can't be written to" row, because it blocks writes.
+  - The phrases in the table are matched whole.
+  - The top of §6.2 points ID 5 and ID 6 readers to "Other refusals".
+  - The warning says the command stops inherited access, not that it removes every explicit entry.
+  - An Everyone deny entry is removed by its SID, `*S-1-1-0`, which works in any language of Windows.

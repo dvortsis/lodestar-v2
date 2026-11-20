@@ -27,6 +27,8 @@ This chapter lists common problems with fixes, then says how to get help.
 ## 6.2 Fix Windows service error 3
 <!-- index: error 3; error 536870915; 0x20000003; event 7024; event ID 5; event ID 6; data folder is a file; can't be read; can't be written; can't be created; full path; Windows service; icacls; Repair; folder_shared; service-specific error 3 -->
 
+If Event Viewer shows event ID 5 or 6 from **Lodestar**, go to "Other refusals" at the end of this section.
+
 At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows "service-specific error 536870915" (`0x20000003`). Event Viewer has event 7024 in the **System** log, which may show only the raw code, such as `%%536870915`. Older versions show "error 3" instead.
 
 **(Newer than v0.5.1)** Lodestar also writes a short note to the Application log. Open **Event Viewer**, then **Windows Logs → Application**, and look for an **Error** from the source **Lodestar**, event ID 3.
@@ -97,14 +99,14 @@ Get-Content "C:\Windows\Temp\lodestar-service.log" -Tail 20
 
 In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lodestar"`. `"D:\Lodestar"` in double quotes is an error.
 
-**(Newer than v0.5.1)** Event ID **6** means the service can't use its data folder. The note names the folder and the setting that chose it: `LODESTAR_DATA_DIR`, `data_dir` in the config file, or the default, `C:\ProgramData\Lodestar`. It also says what it found:
+**(Newer than v0.5.1)** Event ID **6** means the service can't use its data folder. The note names the folder and the setting that chose it: `LODESTAR_DATA_DIR`, `data_dir` in the config file, or the default, `C:\ProgramData\Lodestar`. It also says what it found, in one of these phrases:
 
 | The note says the folder | What to do |
 |---|---|
 | is a file, not a folder | Move or rename that file. For the default folder, the service then creates the folder at its next start. |
-| can't be read by the service account | For the default folder, run the installer's **Repair**. For your own folder, see below. Windows Security's **Controlled folder access** can also block it: allow `lodestar.exe` there, or use a folder it doesn't protect. |
-| can't be written to by the service account | For the default folder, run **Repair**. If Repair stops and `icacls "C:\ProgramData\Lodestar"` shows a `(DENY)` entry, remove it with `icacls "C:\ProgramData\Lodestar" /remove:d "<account>"`, using the account it shows, then run **Repair** again. For your own folder, see below. |
-| can't be written to | The drive may be full or write-protected. The temp log names Windows' error. Free some space or make the drive writable, or set the setting to a folder on another drive. |
+| can't be read by the service account | For the default folder, run the installer's **Repair**. For your own folder, see below. |
+| can't be written to by the service account | For the default folder, run **Repair**. If Repair stops and `icacls "C:\ProgramData\Lodestar"` shows a `(DENY)` entry, remove it with `icacls "C:\ProgramData\Lodestar" /remove:d "<account>"`, using the account it shows, then run **Repair** again. For your own folder, see below. Windows Security's **Controlled folder access** can also block writes: allow `lodestar.exe` there, or use a folder it doesn't protect. |
+| can't take new files | The drive may be full or write-protected. The temp log names Windows' error. Free some space or make the drive writable, or set the setting to a folder on another drive. |
 | can't be created | A file is in the way, or the drive doesn't exist. The temp log names the file in the way; move it away. For the default folder, don't create the folder yourself: make sure `C:\ProgramData` is a folder, then run **Repair**. For your own folder, create it, then see below. |
 
 **Recommended:** use the default folder. The service keeps it private. To go back to it, remove `LODESTAR_DATA_DIR` or `data_dir`, then run `Start-Service Lodestar`. Your library stays in the old folder, and the default folder starts empty. To bring the library with you, back it up first and restore it into the default folder ([section 3.7](03-keep-lodestar-safe.md#37-back-up-and-restore)).
@@ -112,7 +114,7 @@ In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lode
 If you keep your own folder, such as `D:\Lodestar`, make it private to the **service account**, `NT SERVICE\Lodestar`, the account Windows runs Lodestar's service as. A new folder shares the permissions of the drive it's on, which usually let every user read it.
 
 > [!WARNING]
-> The command below removes every other account's access to the folder and to everything in it. Use it only on a folder that holds nothing but Lodestar's data. Never give **Everyone** or **Users** access to the folder instead: it holds your library, your password and your keys. Give access to `NT SERVICE\Lodestar` only, as below.
+> The command below stops the folder, and everything in it, from inheriting other accounts' access from the drive. Use it only on a folder that holds nothing but Lodestar's data. Never give **Everyone** or **Users** access to the folder instead: it holds your library, your password and your keys. Give access to `NT SERVICE\Lodestar` only, as below.
 
 In an [elevated PowerShell](glossary.md#elevated-powershell), run:
 
@@ -120,7 +122,7 @@ In an [elevated PowerShell](glossary.md#elevated-powershell), run:
 icacls "D:\Lodestar" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "NT SERVICE\Lodestar:(OI)(CI)F"
 ```
 
-**Result:** `icacls "D:\Lodestar"` lists only `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators` and `NT SERVICE\Lodestar`. If it lists another account, remove that entry: `icacls "D:\Lodestar" /remove:g "<account>"` for an allow entry, or `/remove:d "<account>"` for a `(DENY)` entry, including one for **Everyone**. Then run `Start-Service Lodestar`. To undo the change, run `icacls "D:\Lodestar" /inheritance:e`.
+**Result:** `icacls "D:\Lodestar"` lists only `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators` and `NT SERVICE\Lodestar`. If it lists another account, remove that entry: `icacls "D:\Lodestar" /remove:g "<account>"` for an allow entry, or `/remove:d "<account>"` for a `(DENY)` entry. For a `(DENY)` entry for **Everyone**, use `/remove:d "*S-1-1-0"`, which works in any language of Windows. Then run `Start-Service Lodestar`. To undo the change, run `icacls "D:\Lodestar" /inheritance:e`.
 
 If File Explorer later says you don't have permission to open the folder, select **Cancel**, not **Continue**: **Continue** adds your own account to the folder.
 

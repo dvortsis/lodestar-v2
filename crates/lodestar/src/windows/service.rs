@@ -428,7 +428,7 @@ impl Problem {
             Problem::File => "is a file, not a folder",
             Problem::Unreadable => "can't be read by the service account",
             Problem::Unwritable => "can't be written to by the service account",
-            Problem::WriteFailed => "can't be written to",
+            Problem::WriteFailed => "can't take new files",
             Problem::Uncreatable => "can't be created",
         }
     }
@@ -437,9 +437,9 @@ impl Problem {
 /// The fix for an unusable data folder, in plain words, after "an
 /// administrator should".
 fn unusable_fix(setting: Setting, problem: Problem) -> String {
-    // Not a permission: the drive, whichever setting chose it.
-    const DRIVE: &str = "check its drive, which may be full or write-protected; the temp log \
-                         names the system's error";
+    // Not a permission: the drive, which may be full or write-protected.
+    const DRIVE: &str = "free space on its drive or make the drive writable (the temp log names \
+                         the system's error)";
     let name = match setting {
         Setting::Default => {
             return match problem {
@@ -465,7 +465,7 @@ fn unusable_fix(setting: Setting, problem: Problem) -> String {
             "give the Lodestar service full control of that folder, or set {name} to a folder \
              it can use"
         ),
-        Problem::WriteFailed => DRIVE.to_owned(),
+        Problem::WriteFailed => format!("{DRIVE}, or set {name} to a folder on another drive"),
         Problem::Unwritable => format!(
             "give the Lodestar service permission to change files in that folder, or set {name} \
              to a folder it can write to"
@@ -2446,6 +2446,28 @@ mod tests {
         assert_eq!(probe_write(&root, 7), None);
         assert_eq!(std::fs::read_to_string(&left).unwrap(), "left by a crash");
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    /// A probe that fails for a reason other than a denied permission is
+    /// WriteFailed, never sent to permissions: a "folder" that is a file
+    /// (not a folder on Unix, not found on Windows), or every name taken.
+    #[test]
+    fn a_probe_that_fails_otherwise_is_write_failed() {
+        let (_root, root) = real_root();
+        let file = root.join("plain.txt");
+        std::fs::write(&file, "").unwrap();
+        assert!(matches!(
+            probe_write(&file, 7),
+            Some((Problem::WriteFailed, _))
+        ));
+        for n in 0..16 {
+            let taken = format!(".lodestar-write-check-{}-7-{n}", std::process::id());
+            std::fs::write(root.join(taken), "").unwrap();
+        }
+        assert!(matches!(
+            probe_write(&root, 7),
+            Some((Problem::WriteFailed, _))
+        ));
     }
 
     /// Nothing is followed or created through a link: a data folder that
