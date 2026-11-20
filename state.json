@@ -4225,7 +4225,8 @@
     "2026-11-20T18:40Z X-sec-S1-17 PR #991 open (the session had idled 5 h with a local commit; nudged at the heartbeat). Candidate held findings S1-18 and S1-19 (surface 1, low or unrated; triage by #991's reviewer). Ids only; detail is local and held.",
     "2026-11-20T18:54Z #991 review MERGE; two in-PR tests asked. Held: S1-18 (low, surface 1) and S1-19 (low, surface 1) confirmed; fix slice X-sec-S1-18 follows #991.",
     "2026-11-20T19:49Z #992 merged 51c54e09. Slot 4 -> X-flake-e2e-expect-timeout (same session), then X-search-param-errors (#992's pre-existing optionals: cap the echoed value; repeated-parameter field; collapsed cursor without collapse).",
-    "2026-11-20T19:55Z #991 merged 985f99c6. Slot 2 -> X-sec-S1-18 (held: S1-18, S1-19; low, surface 1), same session."
+    "2026-11-20T19:55Z #991 merged 985f99c6. Slot 2 -> X-sec-S1-18 (held: S1-18, S1-19; low, surface 1), same session.",
+    "2026-11-20T20:33Z #948 ENR-tmdb merged 8eec1fa9. Slot 1 -> X-ui-plan-r5 (Track U; same session). Lesson: give each reviewer its own CARGO_TARGET_DIR (a shared one gave a false unresolved-import failure)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10368,6 +10369,13 @@
       "sha": "985f99c6",
       "at": "2026-11-20T19:55Z",
       "note": "fresh Opus and security review MERGE"
+    },
+    {
+      "pr": 948,
+      "slice": "ENR-tmdb",
+      "sha": "8eec1fa9",
+      "at": "2026-11-20T20:33Z",
+      "note": "landing: two merges of main; fresh delta review MERGE (resolutions correct; plugin-list mutations caught)"
     }
   ],
   "active_sessions": {
@@ -10613,16 +10621,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T19:55Z",
+    "updated": "2026-11-20T20:33Z",
     "items": [
       {
         "slot": 1,
-        "slice": "ENR-tmdb",
-        "role": "landing",
+        "slice": "X-ui-plan-r5",
+        "role": "docs",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-20T17:15Z",
-        "doing": "#969 merged: merge main again, push once, then a delta re-review of #948",
+        "since": "2026-11-20T20:33Z",
+        "doing": "\u00a710 for the \u00a72.14 reader (Track U, UI review D/U items)",
         "status": "running"
       },
       {
