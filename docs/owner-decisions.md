@@ -408,7 +408,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
 34. **CR-SPEC confirmed, with the runner's answers to O1-O6** (owner, 2026-11-04, relayed by a helper session; the owner approved the runner's recommendations in chat).
     - **CR-SPEC (`docs/decisions/2026-11-02-CR-SPEC.md`) is confirmed.** `owner-cr-spec` holds.
-    - **O1: exclude.** The 24 h gate window excludes the 6 h first-start suppression and the 60 min warm-up (rule 1.1). Startup is still published (rule 1.7). O2-O6 are accepted as written.
+    - **O1: exclude.** The 24 h gate window excludes the 6 h first-start suppression and the 60 min warm-up (rule 1.1). Startup is still published (rule 1.7). O2-O6 are accepted as written. *Amended by §2.77 (owner, 2026-11-15): once CR-0w removes the start wait, there is no first-start suppression to exclude; the warm-up is still excluded.*
     - **#367 stays out of v0.5.1** and ships in v0.5.2 from `main`, with no rc.4.
     - **Still queued:** the Q1 consent texts wait until SRC-4's drafts can be reviewed, and Checkpoint 1 stays queued.
 
@@ -720,6 +720,58 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **The sudo model for (b) is the runner's to choose** (owner, 2026-11-14 about 01:05Z, relayed by the same session: "the question about the sudo model: Let the runner decide."). The runner's choice is in `docs/decisions/2026-11-14-runner-trackq-order.md` and is flagged to the owner (§2.19). `ext:owner-pia-sudo-model` holds.
     - **The owner-started reviewer also builds** (owner, 2026-11-14 about 01:20Z, to that session: "Send whatever doesn't make sense for Fable to do to lower agents/ is efficient to do so. It's up to you what part other agents take over. Proceed with all. Keep coordinating with Agent Runner."). The session takes held fixes outside the child-safety core, early security-review passes and fuzz gaps; how its PRs land is the runner's call, in `docs/decisions/2026-11-14-runner-trackq-order.md`.
     - **The operator tripwire** (owner, 2026-11-14 about 01:30Z, relayed by the same session: "a"). The owner chose option (a), held like the OPERATOR findings (`docs/security/v1/README.md` §5). It replaces the runner's 2026-11-11 fail-closed call (OP-4) and is built in X-operator-hardening.
+
+72. **Out of the loop for cloud testing, Unraid testing and the API credit** (owner, 2026-11-14, in chat): "I don't want to be in the loop for cloud testing, unraid testing, and claude API. Just keep to pre-set limits, best practices, and all decisions should be ux-focused."
+    - **No per-wake approval.** The owner doesn't approve each wake. Work that suits the operator or the API lane goes there. The owner's earlier message the same day set the model ceiling: "I want you to offload tasks that are suited for it. You can use models up to [the top tier]" (model name omitted, as for every model identifier in the repository).
+    - **The limits are the ones already set (runner's reading):** the session caps (§2.64), the cloud spending caps (as later set by §2.74), the API credit's caps (§2.67 as amended by §2.75) and §2.68's host-safety rules. Within them the runner decides, choosing for UX and best practice, records each call in `docs/decisions/` and flags it (§2.19).
+    - §2.33's "still for the owner" list is unchanged.
+
+73. **The AWS quota increase was denied: the Lambda concurrency request** (owner, 2026-11-14 about 19:17Z, in chat, superseding an earlier report that it had been granted; clarified 2026-11-15T18:15Z, relayed by the dashboard session).
+    - Cloud tests and the fleet are sized to the current quota.
+    - The cleanup stack's Lambda concurrency request counts as denied. X-cleanup-fits-quota (#944) dropped the reserved concurrency for a lease with the same at-most-one-run bound (`docs/decisions/2026-11-15-X-cleanup-fits-quota.md`). The owner deploys it.
+    - The runner's AWS access stays as it is (owner).
+
+74. **Cloud testing runs concurrently, with a $100 cap on each cloud** (owner, 2026-11-15T03:29Z, relayed by the X-test-vm coordinator): "Do as many concurrent ongoing testing as there are items that need testing and have the cloud resources to perform the testing on. You can raise the total for both cloud services to $100 each". And: "The goal is to expedite the release by doing testing in the cloud concurrently and identifying issues/bugs more quickly."
+    - **Every item that needs a cloud test gets a lane at once,** as far as the cloud resources allow.
+    - **Cloud test spending caps:** $100 for Linode and $100 for AWS. Spend when it was relayed: Linode $7.37, AWS about $6.
+    - The fleet's $40 monthly compute cap is separate and unchanged.
+
+75. **The API credit, amended twice: a build lane gets it, and the operator is unfunded** (owner, 2026-11-15 from about 07:05Z, relayed to the runner by another session; amends §2.67).
+    - **The first amendment was replaced the same day:** it gave $140 to an owner-run build lane and $60 to the operator and the injection harness.
+    - **As it stands:**
+      - **The build lane gets $200.** It's one owner-run lane, working locally with a key from its own Console workspace, so no agent holds the operator's key. It builds only its reserved slices, up to three at once, each on its `slice/<id>` branch, outside the sessions of §2.64. It starts no new slice past $170, stops all work at $190 and spends at most $25 on a slice.
+      - **Reserved slices:** ENR-mb, ENR-ol, ENR-tmdb, ENR-tvdb, ENR-anilist, ENR-discogs, ENR-srrdb, ENR-predb, ENR-anidb, ENR-igdb, ENR-steam, ENR-debrid, X-worker-service-log and M8-PERF-1.
+      - **The operator's workspace limit is $0,** which is the runbook's off switch. Operator runs, the M8-SEC independent pass, fuzz triage and the runner's $40 review share are unfunded until the owner says otherwise.
+    - **What follows (runner):** owner-queue item 24 (rerun operator-apply) is on hold, and operator first-run checks 5 to 8 are stood down. X-operator-cap-60 (#920) stays a draft until the operator is funded again, then sets its caps to match.
+    - How the runner landed the lane's PRs is in `docs/decisions/2026-11-20-runner-records-r5.md`.
+
+76. **Two AWS stacks deployed by an agent, at the owner's request** (owner, 2026-11-15, in the "GitHub App and AWS stack setup" session; handed over to the runner at 17:23Z).
+    - That session deployed the fleet-control and pia-delivery stacks at the owner's explicit request. This was an exception, for those two stacks, to `infra/aws/fleet-control/README.md`'s "The owner deploys these, never CI or an agent."
+    - The rule stands for every other deploy, the cleanup stack included (runner's reading).
+
+77. **No sampling wait after a start** (owner, 2026-11-15 about 17:45Z, in a planning session; relayed to the runner at 17:58Z with #942): "We can't make people wait 6-hours before seeing progress. That's a terrible UX choice." The owner's other words, the details and the proposed slices are in `docs/decisions/2026-11-15-owner-no-start-wait.md`.
+    - **No sampling wait after any start,** and no blanket gate carried across a restart.
+    - **`interval` is still honoured within a run.**
+    - **Safe restart stays, on by default** (owner confirmed: "Correct").
+    - **The first-hour UX work goes ahead.**
+    - **The bitmagnet import stays deferred:** "I can't run tests on the unraid machine yet".
+    - **§2.34 O1 is amended:** once CR-0w removes the start wait, the gate window has no first-start suppression to exclude. The 60 min warm-up is still excluded.
+    - Any change to the Legal Notice that follows is the owner's to word.
+
+78. **The fleet and firewall tokens expire after 90 days** (owner, 2026-11-15T18:06Z, relayed by the dashboard session). That matches the plan's number, so no owner number changes and no rotation is needed now.
+
+79. **Path to 100: the crawler's build order and testing (r5)** (owner, 2026-11-20, in #970's session): "We'll go with your recommendation. Update the master plan with the path forward and testing needed."
+    - What changed in `docs/build-plan.md` §0.5 and `runner/slices.yaml` is in `docs/decisions/2026-11-20-path-to-100.md`. The gate, CR-SPEC's rules other than r5.1's design (§2.80) and every owner number are unchanged.
+    - The runner's §2.19 flags from #970 (CR-1c's dependency, the stage order, cloud runs checking mechanism only, the calendar) are in that file.
+
+80. **The lookup-cost pair is tested as one treatment, in the fastest reliable design (r5.1)** (owner, 2026-11-20, in #970's session): "Yes, run testing CR-LOOKUP-END and CR-1c together. The plan should be the most efficient. The goal is to get through testing as quickly as possible without sacrificing reliability and/or effectiveness of the testing."
+    - The design, which amends CR-SPEC rule 6.1 before any data exists (§2.25), is `docs/decisions/2026-11-20-path-to-100-cr-spec.md`.
+    - Its A2 (stacked controls) and A3 (no idle host) are open to the owner's veto until stage 2's first block.
+
+81. **Four build sessions, and as many testing sessions as needed** (owner, in the runner session, 2026-11-20 about 06:25Z): "I'm going to bed. Keep 4 running sessions, with as many additional sessions for testing as needed."
+    - **Build:** four slices at a time, as before (`limits.phase_total` 4).
+    - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now a reference number only; it limits nothing.
+    - **Unchanged (runner's reading):** the cloud spending caps (§2.74), the host-safety rules (§2.68), at most three reviewers at a time, and every other bound.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
