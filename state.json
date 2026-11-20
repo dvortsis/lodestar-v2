@@ -8919,7 +8919,8 @@
     {
       "id": "X-sampler-cooldown-split",
       "note": "Track C crawler lead 2026-11-16: BEP 51 sampler table fills with 6 h (x fleet scale) cooldowns ~35 min after suppression; sampling idles. Decouple cooldown memory from admission capacity, never shorten a cooldown. Launch on next free build slot after X-test-vm's resume check.",
-      "at": "2026-11-16T03:38Z"
+      "at": "2026-11-16T03:38Z",
+      "launched": "2026-11-20T08:46Z slot 2 session_01MMjhnAqWW2TJQWDwqrNziy"
     },
     {
       "id": "next-launch",
@@ -8938,7 +8939,8 @@
     },
     {
       "id": "X-test-vm-fix",
-      "notes": "2026-11-20T06:48Z #864 fresh Opus + security review on 51f8d9f2: CHANGES (2 blocking, 7 important; surface: test-VM IAM template, SSH helper, docs). Detail held locally; send by message only. Coordinator did its last round, so a runner follow-up slice on a NEW branch from 51f8d9f2 carries the fixes and supersedes #864. Next free build slot, Opus, /security-review. Owner FYI: the deployed stack may predate these tightenings."
+      "notes": "2026-11-20T06:48Z #864 fresh Opus + security review on 51f8d9f2: CHANGES (2 blocking, 7 important; surface: test-VM IAM template, SSH helper, docs). Detail held locally; send by message only. Coordinator did its last round, so a runner follow-up slice on a NEW branch from 51f8d9f2 carries the fixes and supersedes #864. Next free build slot, Opus, /security-review. Owner FYI: the deployed stack may predate these tightenings.",
+      "launched": "2026-11-20T08:46Z session_01MMjhn9oUgeH1y3jr68Anok"
     },
     {
       "id": "lettre-advisories",
@@ -10459,7 +10461,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T08:45Z",
+    "updated": "2026-11-20T08:46Z",
     "items": [
       {
         "slot": 1,
@@ -10478,7 +10480,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T08:45Z",
-        "doing": "launching",
+        "doing": "session_01MMjhnAqWW2TJQWDwqrNziy: building (brief briefs/X-sampler-cooldown-split.md)",
         "status": "active"
       },
       {
@@ -10590,7 +10592,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T08:45Z",
+  "updated": "2026-11-20T08:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -10843,7 +10845,7 @@
     ]
   },
   "extra": {
-    "updated": "2026-11-15T18:42Z",
+    "updated": "2026-11-20T08:46Z",
     "max": 4,
     "items": [
       {
@@ -10889,6 +10891,13 @@
         "since": "2026-11-15T23:56Z",
         "status": "active",
         "doing": "#943 D-guide-backup-fixes: bring main in after #950, API-key wording, step 6 alignment"
+      },
+      {
+        "name": "X-test-vm-fix (runner cloud-testing slice, owner 06:25Z \"as many additional sessions for testing as needed\")",
+        "session": "session_01MMjhn9oUgeH1y3jr68Anok",
+        "status": "active",
+        "since": "2026-11-20T08:46Z",
+        "doing": "#864 review fixes on slice/X-test-vm-fix from 51f8d9f2; detail by message; supersedes #864"
       }
     ],
     "note": "Owner \u00a72.64: 4 build (slots) + 4 cloud-testing (here, shared with the X-test-vm coordinator) + the owner-approved Fable slot. Cloud-testing share 1 is lent to X-flake-detect-macos (slot 2)."
