@@ -10615,7 +10615,7 @@
         "slot": 4,
         "slice": "X-gs3-nits",
         "role": "build",
-        "agent": "pending",
+        "agent": "session_01MMjhnBLWWDc2xQCuaJPWjK",
         "model": "opus",
         "since": "2026-11-20T17:27Z",
         "doing": "#973 optionals: next-page assert, collapse parsed via CollapseMode, the decisions bound wording",
