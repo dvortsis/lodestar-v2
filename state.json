@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-16T05:50Z",
+  "updated_at": "2026-11-20T05:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-16T05:50Z",
+  "last_heartbeat": "2026-11-20T05:54Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8913,6 +8913,10 @@
       "id": "X-sampler-cooldown-split",
       "note": "Track C crawler lead 2026-11-16: BEP 51 sampler table fills with 6 h (x fleet scale) cooldowns ~35 min after suppression; sampling idles. Decouple cooldown memory from admission capacity, never shorten a cooldown. Launch on next free build slot after X-test-vm's resume check.",
       "at": "2026-11-16T03:38Z"
+    },
+    {
+      "id": "next-launch",
+      "note": "next free slot: X-sampler-cooldown-split, then CR-LOOKUP-END after CR-LEDGER; X-snapshot-claims-retention before ENR-tmdb"
     }
   ],
   "main_health": [
@@ -10266,7 +10270,7 @@
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
   "queue_note": "Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1), adult stand-in release (q-adult-standin-release). Blocked on release cut: SRC-1. Seven-day usage warning active.",
-  "plan_ref": "docs/build-plan.md \u00a70 (r2, #369) + docs/handoff.md",
+  "plan_ref": "build-plan \u00a70.5 Path to 100 (r5/r5.1, PR #970, owner 2026-11-20)",
   "v051_gate": {
     "upgrade_test": "SATISFIED per owner-decisions \u00a72.28 (#371): r1 upgraded the Oct 22 volume V3->V12 cleanly; crates/store is byte-identical between v0.5.1-rc.1 and v0.5.1-rc.2 (git diff --quiet v0.5.1-rc.1 v0.5.1-rc.2 -- crates/store/), so the migration code matches whichever rc r1 ran. Runner-verified 2026-11-02T03:20Z."
   },
@@ -10365,49 +10369,47 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-16T05:50Z",
+    "updated": "2026-11-20T05:54Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-win-service-relative-paths-2",
+        "slice": "CR-LEDGER",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-16T02:26Z",
-        "doing": "idle: runner paused (owner, 2026-11-16, usage limit)",
-        "cap": "build (\u00a72.64 4+4)",
-        "status": "idle"
+        "since": "2026-11-20T05:54Z",
+        "doing": "launching",
+        "status": "active"
       },
       {
         "slot": 2,
-        "slice": "ENR-terms",
+        "slice": "X-crawler-sim-calibrate",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-16T00:41Z",
-        "doing": "idle: runner paused (owner, 2026-11-16, usage limit)",
-        "cap": "cloud-testing share used for build (\u00a72.64 4+4)",
-        "status": "idle"
+        "since": "2026-11-20T05:54Z",
+        "doing": "launching",
+        "status": "active"
       },
       {
         "slot": 3,
         "slice": "GS-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8PjQcwZmfBCR7E6zK: GS-3 paused, work on slice/GS-3 (b0592458), no PR yet; resume when owner lifts pause",
+        "model": "opus",
         "since": "2026-11-16T01:00Z",
-        "status": "idle"
+        "doing": "session_01MMjhn8PjQcwZmfBCR7E6zK: resumed 2026-11-20; bring main in, open PR",
+        "status": "active"
       },
       {
         "slot": 4,
-        "slice": "X-import-rate-1m",
+        "slice": "CR-COL-5",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-15T22:40Z",
-        "doing": "idle: runner paused (owner, 2026-11-16, usage limit)",
-        "cap": "build (\u00a72.64 4+4)",
-        "status": "idle"
+        "since": "2026-11-20T05:54Z",
+        "doing": "launching",
+        "status": "active"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10499,7 +10501,7 @@
     }
   ],
   "heartbeat": "2026-11-16T05:50Z",
-  "updated": "2026-11-16T07:48Z",
+  "updated": "2026-11-20T05:54Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -11277,11 +11279,15 @@
     "ENR-debrid",
     "M8-PERF-1"
   ],
-  "paused": {
-    "since": "2026-11-16T05:50Z",
-    "by": "owner, in chat 2026-11-16 (usage at 96%)",
-    "scope": "all build work, reviews and API-lane reviews; cloud testing also stopped (AWS lane torn down 07:06Z, 0 instances)",
-    "resume": "owner says so; then re-enable heartbeat + watchdog triggers, resume GS-3, review lane PRs, launch X-sampler-cooldown-split",
-    "updated": "2026-11-16T07:48Z"
-  }
+  "pause_history": [
+    {
+      "since": "2026-11-16T05:50Z",
+      "by": "owner, in chat 2026-11-16 (usage at 96%)",
+      "scope": "all build work, reviews and API-lane reviews; cloud testing also stopped (AWS lane torn down 07:06Z, 0 instances)",
+      "resume": "owner says so; then re-enable heartbeat + watchdog triggers, resume GS-3, review lane PRs, launch X-sampler-cooldown-split",
+      "updated": "2026-11-16T07:48Z",
+      "lifted": "2026-11-20T05:54Z",
+      "lifted_by": "owner, in chat 2026-11-20 (usage reset): work through the revised plan (#970, r5/r5.1)"
+    }
+  ]
 }
