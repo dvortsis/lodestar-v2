@@ -332,7 +332,7 @@ lodestar_log::catalogue! {
         id: "system.network_lost",
         component: System,
         level: Error,
-        message: "Network lost: only the loopback interface has been left for this many seconds, as happens when the container whose network Lodestar shares (such as gluetun) restarts. Lodestar is stopping so its restart policy can start it again inside that container's network",
+        message: "Network lost: only the loopback interface was left for the number of seconds in `seconds`, as happens when the container whose network Lodestar shares (such as gluetun) restarts. Lodestar is stopping so its restart policy can start it again inside that container's network",
         fields: { seconds: Label },
     }
     /// `LODESTAR_EXIT_ON_NETWORK_LOSS` is set off Linux, where it does
