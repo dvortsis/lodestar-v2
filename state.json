@@ -4229,7 +4229,8 @@
     "2026-11-20T20:33Z #948 ENR-tmdb merged 8eec1fa9. Slot 1 -> X-ui-plan-r5 (Track U; same session). Lesson: give each reviewer its own CARGO_TARGET_DIR (a shared one gave a false unresolved-import failure).",
     "2026-11-20T21:04Z #996 merged ab9efe45. Runner PR #997 (Track U placement after \u00a710). Slot 1 -> X-session-draft-keep (same session; /security-review). \u00a72.19 flags owed: typed GB = 1,000^3 (#996); S1-19 rule (id only); #993 reset tied to in-use size.",
     "2026-11-20T21:11Z #997 merged 7a9d2ff1. #995 review CHANGES: the flake's cause is an unmocked getAuthStatus bounce; fix round sent. Queued X-auth-early-401 (web auth, UX; entry in the next records PR).",
-    "2026-11-20T21:48Z #995 merged ae7b4c65. Slot 4 -> X-search-param-errors (same session)."
+    "2026-11-20T21:48Z #995 merged ae7b4c65. Slot 4 -> X-search-param-errors (same session).",
+    "2026-11-20T21:50Z #993 merged 8128060e. Slot 3 -> X-results-drawer-adaptive (same session). Optionals from the #993 delta review queued as low: the empty-list unit check uses size 1 (defence in depth only); a lost clear with an identical list size carries a count over (rare)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10400,6 +10401,13 @@
       "sha": "ae7b4c65",
       "at": "2026-11-20T21:48Z",
       "note": "review CHANGES: the real cause was an unmocked auth bounce; fixed and delta read by runner; merged-tree npm test OK"
+    },
+    {
+      "pr": 993,
+      "slice": "X-steam-followups",
+      "sha": "8128060e",
+      "at": "2026-11-20T21:50Z",
+      "note": "review CHANGES (1 blocking, 2 important) then delta MERGE (11 of 12 mutations caught; 1 equivalent); merged-tree npm test OK"
     }
   ],
   "active_sessions": {
@@ -10645,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T21:48Z",
+    "updated": "2026-11-20T21:50Z",
     "items": [
       {
         "slot": 1,
@@ -10669,12 +10677,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-steam-followups",
+        "slice": "X-results-drawer-adaptive",
         "role": "build",
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
-        "since": "2026-11-20T18:38Z",
-        "doing": "refuse an empty or much smaller finished app list; tests for the 60 s cancel hold and the partial-list age limit",
+        "since": "2026-11-20T21:50Z",
+        "doing": "Track U step 3: drawer beside results from 1366 px; rows adapt to their container",
         "status": "running"
       },
       {
