@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 
 use tokio::time::Instant;
 
-use super::limits::{Network, network};
+use super::limits::{Network, source};
 use super::transport::Set;
 
 use lodestar_metainfo::InfoHash;
@@ -274,7 +274,8 @@ impl Lookup {
     /// CR-LOOKUP-END's convergence test: the [`K`] closest candidates that
     /// haven't failed have all answered, so no closer node is left to ask
     /// (candidates are kept in distance order), and they answered from at
-    /// least `networks` distinct networks (/24, IPv6 /64). Unlike
+    /// least `networks` distinct sources (an IPv4 /24 or an IPv6 /48, one
+    /// operator's usual allocation). Unlike
     /// [`Lookup::is_done`], it doesn't wait for queries still out to
     /// candidates outside that set. It does wait for a query outside the
     /// candidate list (a hint, a router): that's at most one per leg, and
@@ -299,7 +300,7 @@ impl Lookup {
             if c.state != State::Responded {
                 return false;
             }
-            let net = network(c.info.addr.ip());
+            let net = source(c.info.addr.ip());
             if seen.len() < networks && !seen.contains(&net) {
                 seen.push(net);
             }
@@ -366,6 +367,45 @@ mod tests {
         assert!(!l.closest_answered(2));
         l.on_response(&sent[1].id, std::iter::empty(), &[]);
         assert!(l.closest_answered(2) && l.is_done());
+    }
+
+    /// An IPv6 node in `2001:db8:<site>:<subnet>::1`.
+    fn site(b: u8, site: u16, subnet: u16) -> NodeInfo {
+        NodeInfo {
+            id: NodeId([b; 20]),
+            addr: SocketAddr::from((
+                std::net::Ipv6Addr::new(0x2001, 0xdb8, site, subnet, 0, 0, 0, 1),
+                1,
+            )),
+        }
+    }
+
+    /// On IPv6 a source is a /48: a site's many /64s count once, so they
+    /// can't converge a leg early between them; a second site can.
+    #[test]
+    fn one_ipv6_site_is_one_source() {
+        let early = |second_site: u16| {
+            let mut l = Lookup::new(NodeId([0; 20]), 0);
+            // Three far nodes go out.
+            for (i, b) in [0xF1u8, 0xF2, 0xF3].into_iter().enumerate() {
+                l.add(site(b, 9, i as u16));
+            }
+            assert_eq!(l.next().len(), 3);
+            // One lists K closer nodes, each its own /64; all in one /48,
+            // or the last in a second.
+            let close = (1..=K as u8).map(|b| {
+                let s = if b == K as u8 { second_site } else { 1 };
+                site(b, s, u16::from(b))
+            });
+            l.on_response(&NodeId([0xF1; 20]), close, &[]);
+            while let Some(c) = l.next_limit(1).pop() {
+                l.on_response(&c.id, std::iter::empty(), &[]);
+            }
+            assert!(!l.is_done(), "two far queries are still out");
+            l.closest_answered(2)
+        };
+        assert!(!early(1), "8 /64s in one /48");
+        assert!(early(2), "a second /48");
     }
 
     /// A hint (or router) query out holds the leg, even with fewer than K

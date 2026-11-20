@@ -485,3 +485,46 @@ proptest! {
         }
     }
 }
+
+/// On IPv6 a responder's source is its /48: replies from two /64s of one
+/// site count once, so they can't end a request on values; a second site
+/// can. (The node here is IPv4; the replies are matched to queries sent to
+/// the IPv6 addresses, as a dual-stack request's IPv6 leg would be.)
+#[tokio::test(start_paused = true)]
+async fn two_ipv6_subnets_of_one_site_are_one_responder() {
+    let (mut a, s) = actor(true);
+    table(&mut a, &[at(0x10, 0, 11), at(0x20, 0, 12), at(0x30, 0, 13)]);
+    let mut rx = request(&mut a, &s);
+    let lid = *a.lookups.keys().next().unwrap();
+    let reply_from = |a: &mut Actor, ip: std::net::Ipv6Addr, values: Vec<SocketAddr>| {
+        let from = SocketAddr::from((ip, 6881));
+        let tid = a.tids.next_id().unwrap();
+        a.pending.insert(
+            tid,
+            Pending {
+                to: from,
+                id: None,
+                sent: Instant::now(),
+                family: 0,
+                purpose: Purpose::Lookup(lid),
+                hinted: false,
+            },
+        );
+        *a.pending_addrs.entry(from).or_default() += 1;
+        a.lookups.get_mut(&lid).unwrap().extra_in_flight += 1;
+        deliver_reply(a, &s, tid, 0, from, NodeId([0x77; 20]), values);
+    };
+    let ip =
+        |site: u16, subnet: u16| std::net::Ipv6Addr::new(0x2001, 0xdb8, site, subnet, 0, 0, 0, 1);
+    reply_from(&mut a, ip(1, 1), peers(0, 5));
+    reply_from(&mut a, ip(1, 2), peers(5, 5));
+    assert_eq!(
+        rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty),
+        "one /48"
+    );
+    assert_eq!(ended(&a, LedgerEnd::EnoughValues), 0);
+    reply_from(&mut a, ip(2, 1), peers(10, 1));
+    assert_eq!(rx.try_recv().unwrap().len(), 11);
+    assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
+}

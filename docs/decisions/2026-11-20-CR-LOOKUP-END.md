@@ -3,6 +3,8 @@
 CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the review's blind spot 1 (`docs/reviews/2026-11-20-path-to-100-review.md` §3). It sits behind `dht.lookup_end`, or `LODESTAR_DHT_LOOKUP_END`, and is **off by default**. With the switch off, lookups end and start exactly as before.
 
 ## What changes with the switch on
+Throughout, a **network** is a source as `limits::source()` keys it: an IPv4 /24 or an IPv6 /48.
+
 - **End on values.** A peer request ends, and frees its slot, as soon as it holds `ENOUGH_VALUES` = **8** distinct, validated values, and replies carrying values have come from at least `VALUE_RESPONDERS` = **2** distinct networks.
   - It ends every family leg at once. Queries still out are dropped, as they are on a cancel.
   - The caller gets the values, a final reply or a stream's `complete`, exactly as a converged lookup would give them.
@@ -25,7 +27,8 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
   - **Why 8:** it's about twice that, which leaves room for the dead and NATed peers that make up most failures (H3), yet one or two replies can reach it (an honest reply usually lists up to about 16 values; an inbound reply is cut at 64).
   - **Where it can fall short:** the pool holds up to 32 peers per key (`max_peers_per_key`). A key that runs out of peers before a fetch succeeds is re-looked-up later under the pool's existing retry rules, so a low value costs a retry, not the hash.
   - **What's unchanged:** the caps on values are as before: 64 taken from one inbound reply, and 64 per leg and per request.
-- **`VALUE_RESPONDERS` = 2,** also accepted by the runner (§2.19), counted as distinct networks (/24, IPv6 /64, the actor's existing `network()`), not distinct addresses.
+- **`VALUE_RESPONDERS` = 2,** also accepted by the runner (§2.19), counted as distinct sources, not distinct addresses: an IPv4 /24 or an IPv6 /48. That's `limits::source()`, the unit the codebase already uses for one operator: the per-source rate shares and the sampler's per-allocation cap.
+  - **Why /48 on IPv6:** a site is commonly given a whole /48, so it can answer from many /64s. Keyed on the /64 (the first version), one site could meet the two-responder rule on its own. The runner's security review found this and blocked on it; this round fixes it.
   - **The hostile-reply rule:** one responder can't end a lookup on its own, however many addresses or ports it answers from within one network.
   - **What a hostile node can do:** with values from a single network, a request runs on as it does today, to its closest set, the deadline or the query cap. That's no regression.
   - **Repeating values counts as corroboration.** A second network counts when its reply carries any valid value, even one the request already holds. The nodes storing a hash list the same swarm, so their agreement is what the rule is for.
@@ -34,7 +37,7 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
   - **Two cooperating networks** can end a request holding mostly their values. That meets the brief's rule, and it's no worse than today's final reply, which returns whatever values the lookup collected.
   - **Which values count:** only values that pass the existing endpoint policy (no port 0, no martian, private or blocklisted address in production) and are de-duplicated. They also have to arrive in a reply matched to a query still awaiting it, from the address asked; spoofed, late and unknown-tid replies count for nothing.
   - **Memory:** the per-request state this adds is at most 2 network keys and a flag. With the switch on, the request's value set fills as replies arrive instead of at each leg's end, still bounded at 64.
-  - **Mixed address families:** the network that counts is the responder's, never its values'. A reply's values count toward `ENOUGH_VALUES` whatever their family (IPv4 and IPv6 peers alike, once validated). The responder that sent them counts once, by its own address: an IPv4 address by its /24, an IPv6 address by its /64, and an IPv4-mapped IPv6 address as its IPv4 /24, so a node can't count twice by answering in both forms. A dual-stack request's two legs share one count, so an IPv4 responder and an IPv6 responder are two networks, even if one operator runs both. That's accepted: it takes two addresses in different families, and a single responder still can't end a lookup on its own.
+  - **Mixed address families:** the source that counts is the responder's, never its values'. A reply's values count toward `ENOUGH_VALUES` whatever their family (IPv4 and IPv6 peers alike, once validated). The responder that sent them counts once, by its own address: an IPv4 address by its /24, an IPv6 address by its /48, and an IPv4-mapped IPv6 address as its IPv4 /24, so a node can't count twice by answering in both forms. A dual-stack request's two legs share one count, so an IPv4 responder and an IPv6 responder are two sources, even if one operator runs both. That's accepted: it takes two addresses in different families, and a single responder still can't end a lookup on its own.
 
 ## What doesn't change, either way
 `LOOKUP_DEADLINE` (25 s), the 64-query cap, `ALPHA` (3), the query rate, the outstanding cap and the 32 lookup slots are unchanged.
@@ -62,7 +65,8 @@ CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the 
   - **Spoofed and unknown replies alone** leave the request with no values.
   - **Two networks with fewer than 8 distinct valid values,** duplicates and port 0 included, never end on values.
   - The deterministic end-on-values tests are the positive control.
-- **`Lookup` unit tests** for `closest_answered`: farther queries, a failed node, a hint out, and one network.
+- **`Lookup` unit tests** for `closest_answered`: farther queries, a failed node, a hint out, one network, and one IPv6 /48 (its /64s count once).
+- **One IPv6 site's two /64s** are one responder and can't end a request on values; a second /48 can (`two_ipv6_subnets_of_one_site_are_one_responder`).
 - **Equivalence with the switch off:** the existing dht suite passes unchanged, and every CR-SIM golden is byte-identical with the switch off (the packet-level check). `lookup_end_runs_deterministically` shows a run with it on is deterministic and ends some lookups on values.
 
 ## Screen (CR-SIM): kept
@@ -86,6 +90,7 @@ The calibrated `live-lookup` scenario (X-crawler-sim-calibrate, #974), 8 seeds (
 - **Every seed improved:** stored per minute rose on all 8 (+3.1 to +8.1 a minute; sign test `Better`), and so did stored per slot-second and stored per DHT query. Both keep conditions hold, so the change is kept.
 - **The mechanism is the one predicted:** about a third of lookups now end on values, `W` and `q` fall, the slots stay full, so more lookups run, and `y` is unchanged.
 - **A screen never replaces a live run.** CR-AB-LC measures it on the host, with CR-1c.
+- **Unchanged by keying IPv6 on the /48:** re-run after that fix, the screen's numbers are identical. The simulated network is IPv4 only, and `source()` keys IPv4 on the same /24 as before.
 - **Goldens:** every existing golden is byte-identical with the switch off. Only `golden/live-lookup.txt` changed, and only in its ledger lines, from #974's review items:
   - `q` and `W` residence are now read from CR-LEDGER's counters (same values on seed 1: 24.6 and 23.34 s);
   - two labels are reworded;

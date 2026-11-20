@@ -69,7 +69,8 @@ const MAX_PEER_QUERIES: usize = 64;
 /// CR-LOOKUP-END: distinct, validated values that end a peer request early
 /// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
 const ENOUGH_VALUES: usize = 8;
-/// CR-LOOKUP-END: the distinct networks (/24, IPv6 /64) whose replies must
+/// CR-LOOKUP-END: the distinct sources (an IPv4 /24 or an IPv6 /48, as
+/// [`source`] keys them: one operator's usual allocation) whose replies must
 /// have carried values before [`ENOUGH_VALUES`] can end a request, and that a
 /// leg's closest set must span before it converges early. One responder,
 /// however many addresses it answers from in a network, can't end a lookup
@@ -480,8 +481,8 @@ struct PeerRequest {
     expired: bool,
     /// CR-LEDGER: what the ledger records when it ends.
     ledger: ledger::Entry,
-    /// CR-LOOKUP-END: networks whose replies carried values, at most
-    /// [`VALUE_RESPONDERS`].
+    /// CR-LOOKUP-END: sources (/24, IPv6 /48) whose replies carried
+    /// values, at most [`VALUE_RESPONDERS`].
     value_nets: Vec<Network>,
     /// CR-LOOKUP-END ended it on enough values.
     enough: bool,
@@ -1865,7 +1866,7 @@ impl Actor {
                     // A second network repeating values already held counts:
                     // the nodes storing a hash list the same swarm, and that
                     // agreement is the corroboration the rule asks for.
-                    let net = network(from.ip());
+                    let net = source(from.ip());
                     if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
                         r.value_nets.push(net);
                     }
@@ -1933,7 +1934,7 @@ impl Actor {
     }
 
     /// CR-LOOKUP-END: whether request `owner` holds [`ENOUGH_VALUES`]
-    /// distinct values from [`VALUE_RESPONDERS`] networks. Always false
+    /// distinct values from [`VALUE_RESPONDERS`] sources. Always false
     /// with the switch off.
     fn has_enough_values(&self, owner: u32) -> bool {
         self.cfg.lookup_end
