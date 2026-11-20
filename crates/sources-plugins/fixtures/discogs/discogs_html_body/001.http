@@ -1,0 +1,6 @@
+GET https://api.discogs.com/database/search?type=master&release_title=Paper+Lanterns&artist=Synthetic+Orchestra&per_page=5&page=1
+Accept: application/json
+Authorization: Discogs token=fakeDiscogsToken0000
+
+HTTP 200
+Content-Type: text/html

@@ -1,0 +1,38 @@
+{
+ "pagination": {"page": 1, "pages": 1, "per_page": 5, "items": 2, "urls": {}},
+ "results": [
+  {
+   "id": 900001,
+   "type": "master",
+   "master_id": 900001,
+   "master_url": "https://api.discogs.com/masters/900001",
+   "uri": "/master/900001-SENTINEL",
+   "title": "Synthetic Orchestra - Paper Lanterns",
+   "year": "1998",
+   "country": "SENTINEL",
+   "format": ["Vinyl", "LP", "Album"],
+   "label": ["SENTINEL Records"],
+   "genre": ["Electronic"],
+   "style": ["SENTINEL"],
+   "catno": "SENTINEL 1",
+   "barcode": [],
+   "thumb": "https://i.discogs.example/SENTINEL.jpg",
+   "cover_image": "https://i.discogs.example/SENTINEL-cover.jpg",
+   "resource_url": "https://api.discogs.com/masters/900001",
+   "community": {"want": 1, "have": 2}
+  },
+  {
+   "id": 900002,
+   "type": "master",
+   "master_id": 900002,
+   "uri": "/master/900002-SENTINEL",
+   "title": "Synthetic Orchestra - Paper Lanterns (Remixes)",
+   "year": "1999",
+   "genre": ["Electronic"],
+   "thumb": "",
+   "cover_image": "",
+   "resource_url": "https://api.discogs.com/masters/900002",
+   "community": {"want": 0, "have": 0}
+  }
+ ]
+}

@@ -904,8 +904,7 @@ mod spec_tests {
     use lodestar_sources::{Policy, SourcePlugin};
     use lodestar_sources_plugins::full_scrape::{LookupError, PrivateTrackers, SystemClock};
     use lodestar_sources_plugins::{
-        StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa,
-        prowlarr, stashdb, torrent_cache, tpdb, tvdb, wikidata,
+        StaticCredentials, academic, archive_org, arr, catalogue, clients, discogs, full_scrape, nyaa, prowlarr, stashdb, torrent_cache, tpdb, tvdb, wikidata,
     };
     use serde_json::{Value, json};
 
@@ -936,6 +935,10 @@ mod spec_tests {
             (archive_org::ID, *archive_org::ArchiveOrg::new().policy()),
             (arr::ID, *arr::ArrWebhooks::new().policy()),
             (clients::ID, *clients::Clients::unconfigured().policy()),
+            (
+                discogs::ID,
+                *lodestar_sources::identify::Identifier::policy(&discogs::Discogs::new(creds())),
+            ),
             (full_scrape::ID, *scrape.policy()),
             (nyaa::ID, *nyaa::Nyaa::new().policy()),
             (nyaa::SUKEBEI_ID, *nyaa::Sukebei::new().policy()),
@@ -1021,6 +1024,9 @@ mod spec_tests {
                         "required": false
                     }
                 ])
+            } else if id == discogs::ID {
+                json!([{ "kind": "secret", "label": "Personal access token",
+                         "name": "personal_access_token", "required": true }])
             } else {
                 json!([])
             };

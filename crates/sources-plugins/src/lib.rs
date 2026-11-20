@@ -24,6 +24,7 @@ pub mod archive_org;
 pub mod arr;
 pub mod catalogue;
 pub mod clients;
+pub mod discogs;
 pub mod full_scrape;
 pub mod musicbrainz;
 pub mod nyaa;
