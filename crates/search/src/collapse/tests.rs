@@ -384,6 +384,10 @@ fn a_group_far_larger_than_the_member_batch_pages_alike_and_holds_a_batch() {
         // A cursor page of it, checked directly.
         let cancel = CancelToken::new();
         let first = page_with(&l, Start::Offset(0), 3, small, &cancel).unwrap();
+        assert!(
+            first.next.is_some(),
+            "{sort:?}: the first page has a next page"
+        );
         let key = group_of(first.rows[0].hit.id, groups)
             .or_else(|| first.rows.iter().find_map(|r| group_of(r.hit.id, groups)))
             .expect("a keyed row");

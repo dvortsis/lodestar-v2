@@ -350,6 +350,63 @@ async fn post_takes_collapse_too_and_rejects_unknown_values() {
 }
 
 #[tokio::test]
+async fn collapse_takes_group_none_or_nothing_and_names_them_otherwise() {
+    let f = fixture(27);
+    let c = session(&f).await;
+    let (status, _, group) = call(&f.app, get("/api/v1/search?q=movie&collapse=group", &c)).await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    assert_eq!(group["collapsed"], true, "{group}");
+    assert_eq!(hits(&group).len(), WORKS);
+    for uri in [
+        "/api/v1/search?q=movie&collapse=none",
+        "/api/v1/search?q=movie",
+    ] {
+        let (status, _, body) = call(&f.app, get(uri, &c)).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert!(body.get("collapsed").is_none(), "{uri}: {body}");
+        assert!(hits(&body).len() > WORKS, "{uri}: {body}");
+    }
+    // An unknown value, by GET or POST: the same 400 as an unknown sort,
+    // naming the parameter and the values it takes.
+    let (status, _, get_body) =
+        call(&f.app, get("/api/v1/search?q=movie&collapse=bogus", &c)).await;
+    let (post_status, _, post_body) = call(
+        &f.app,
+        post(
+            "/api/v1/search",
+            Some(&c),
+            json!({ "q": "movie", "collapse": "bogus" }),
+        ),
+    )
+    .await;
+    // Present but empty isn't the default: it's a value, and unknown.
+    let (empty_status, _, empty_body) =
+        call(&f.app, get("/api/v1/search?q=movie&collapse=", &c)).await;
+    for (status, body, value) in [
+        (status, &get_body, "bogus"),
+        (post_status, &post_body, "bogus"),
+        (empty_status, &empty_body, ""),
+    ] {
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let e = &body["error"];
+        assert_eq!(e["code"], "unknown_collapse", "{body}");
+        assert_eq!(e["field"], "collapse", "{body}");
+        assert_eq!(
+            e["message"],
+            format!("Unknown collapse {value:?}: use group or none."),
+            "{body}"
+        );
+    }
+    let (_, _, sort) = call(&f.app, get("/api/v1/search?q=movie&sort=bogus", &c)).await;
+    let keys = |v: &Value| {
+        let mut k: Vec<String> = v["error"].as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    assert_eq!(keys(&get_body), keys(&sort), "{get_body} vs {sort}");
+}
+
+#[tokio::test]
 async fn cursors_stay_with_their_own_kind_of_request() {
     let f = fixture(60);
     let c = session(&f).await;

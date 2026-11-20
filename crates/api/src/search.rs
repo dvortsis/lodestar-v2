@@ -271,16 +271,22 @@ pub(crate) async fn parse_query(
     }))
 }
 
-/// `collapse`: `group` or `none` (the default).
+/// `collapse`: `group` or `none` (the default), parsed through
+/// [`CollapseMode`] so the values, this error and the schema agree.
 fn collapse_param(s: Option<&str>) -> ApiResult<bool> {
-    match s.unwrap_or("none") {
-        "none" => Ok(false),
-        "group" => Ok(true),
-        other => Err(ApiError::bad_request(
-            "unknown_collapse",
-            format!("Unknown collapse {other:?}: use group or none."),
-        )
-        .field("collapse")),
+    let Some(s) = s else {
+        return Ok(false);
+    };
+    match s.parse::<CollapseMode>() {
+        Ok(mode) => Ok(mode == CollapseMode::Group),
+        Err(_) => {
+            let values: Vec<&str> = CollapseMode::ALL.iter().map(|m| m.as_str()).collect();
+            Err(ApiError::bad_request(
+                "unknown_collapse",
+                format!("Unknown collapse {s:?}: use {}.", values.join(" or ")),
+            )
+            .field("collapse"))
+        }
     }
 }
 
