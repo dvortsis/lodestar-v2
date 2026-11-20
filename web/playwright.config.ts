@@ -187,6 +187,9 @@ export default defineConfig<Appearance>({
 	...(fixture ? { globalSetup: './e2e/support/fixture-session.ts' } : {}),
 	// Pass --update-snapshots to regenerate Linux baselines; never commit macOS/Windows ones.
 	forbidOnly: !!process.env.CI,
+	// Condition waits get at least 10 s, so the slowest CI runner passes (CLAUDE.md;
+	// docs/decisions/2026-11-20-X-flake-e2e-expect-timeout.md). Playwright's own default is 5 s.
+	expect: { timeout: 10_000 },
 	retries: 0,
 	workers: process.env.CI ? 4 : undefined,
 	reporter: [['list'], ['html', { open: 'never' }]],

@@ -442,6 +442,7 @@ placement:
   - X-leak-test-capture-kill
   - X-leaktest-wg0-flake
   - X-flake-states-clock
+  - X-flake-e2e-expect-timeout
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
   - X-natural-wording
