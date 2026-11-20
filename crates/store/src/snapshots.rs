@@ -26,6 +26,9 @@
 //!   deletion records its hash and time in `snapshot_deletions`,
 //!   independently of temporary fetch holds). A snapshot of a schema this
 //!   build doesn't know is left alone, with a warning.
+//! - **drops identify claims past their source's retention** (V15+), by
+//!   the rules of the live retention sweep or stricter ([`claims`]), so a
+//!   lookup service's claim never outlives its terms inside a snapshot.
 //!
 //! **The deletion journal is bounded.** A journal row is looked up only in
 //! snapshots taken up to [`TAKEN_MARGIN`] after it, so a hash deleted and
@@ -52,6 +55,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::{InfoHash, Store};
+
+pub mod claims;
 
 /// Snapshots are kept this many days after they were taken.
 pub const RETAIN_DAYS: i64 = 90;
@@ -301,6 +306,9 @@ pub(crate) struct Plan {
     /// Drop unverified items whose hash the live store deleted or holds
     /// (`unverified_items`, v14+). Torrent claims go with their torrents.
     unverified: bool,
+    /// Drop identify claims past their source's retention
+    /// (`torrent_claims.stored_at`, v15+; [`claims`]).
+    claims: bool,
 }
 
 impl Plan {
@@ -316,7 +324,8 @@ impl Plan {
     /// | 4–9 | purged | purged | absent |
     /// | 10–12 | purged | purged | purged |
     /// | 13 | purged, and import candidates | purged | purged |
-    /// | 14–15 | purged, with candidates and unverified items | purged | purged |
+    /// | 14 | purged, with candidates and unverified items | purged | purged |
+    /// | 15 | as 14, and identify claims past their retention | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -329,6 +338,7 @@ impl Plan {
                 user_data: false,
                 candidates: false,
                 unverified: false,
+                claims: false,
             }),
             // V4 adds cs_hashes, tombstones, quarantine (hash, rule,
             // sealed, at, expires_at) and filter_hits (at), unchanged
@@ -342,6 +352,7 @@ impl Plan {
                 user_data: false,
                 candidates: false,
                 unverified: false,
+                claims: false,
             }),
             // V10 adds your data (saved searches, alerts, marks,
             // collections), API keys and the query log. Alerts, marks and
@@ -365,6 +376,7 @@ impl Plan {
                 user_data: true,
                 candidates: false,
                 unverified: false,
+                claims: false,
             }),
             // V13 adds imports (IMP-1). Candidates hold hashes and names
             // that aren't torrents, so they go by hash; the other import
@@ -376,19 +388,32 @@ impl Plan {
                 user_data: true,
                 candidates: true,
                 unverified: false,
+                claims: false,
             }),
             // V14 adds Sources (SRC-1). Unverified items hold keys and
             // claim names that aren't torrents, so they go by hash, as
             // candidates do. Torrent claims cascade from torrents; plugin
-            // state holds no names. V15 (ENR-terms) only stamps claims
-            // with when they were written.
-            14..=Self::KNOWN_THROUGH => Some(Plan {
+            // state holds no names. No identify plugin ran on a V14 store
+            // (V15's notes), so it holds no claims with a retention.
+            14 => Some(Plan {
                 torrents: true,
                 filter: true,
                 query_log: true,
                 user_data: true,
                 candidates: true,
                 unverified: true,
+                claims: false,
+            }),
+            // V15 (ENR-terms) stamps claims with when they were written:
+            // identify claims go at their source's retention ([`claims`]).
+            15..=Self::KNOWN_THROUGH => Some(Plan {
+                torrents: true,
+                filter: true,
+                query_log: true,
+                user_data: true,
+                candidates: true,
+                unverified: true,
+                claims: true,
             }),
             _ => None,
         }
@@ -402,6 +427,9 @@ pub struct PurgeReport {
     pub expired: Vec<Snapshot>,
     /// Snapshots that had something purged.
     pub purged: Vec<PathBuf>,
+    /// Snapshots deleted because their identify claims couldn't be checked
+    /// against their terms (failing closed).
+    pub unchecked: Vec<PathBuf>,
     /// Torrents deleted from snapshots.
     pub torrents: usize,
     /// Quarantine rows ended (expired) or sealed names cleared.
@@ -415,6 +443,9 @@ pub struct PurgeReport {
     pub candidates: usize,
     /// Unverified items deleted from snapshots.
     pub unverified: usize,
+    /// Identify claims deleted from snapshots past their source's
+    /// retention ([`claims`]).
+    pub claims: usize,
     /// Purged sources whose consent record, credentials and settings were
     /// dropped from a snapshot, counted once per snapshot (SRC-14b).
     pub sources: usize,
@@ -486,6 +517,8 @@ struct Live {
     /// Purged sources (SRC-14b): the plugin and when its purge ended
     /// (`sources.purged.<plugin>`). Few, so every pass reads them all.
     purged_sources: Vec<(String, i64)>,
+    /// Identify sources' recorded terms and the retention clock.
+    terms: claims::LiveTerms,
 }
 
 /// V10 tables with AUTOINCREMENT ids whose deleted rows a snapshot loses.
@@ -558,6 +591,7 @@ impl Live {
             HashMap::new()
         };
         let purged_sources = purged_sources(conn)?;
+        let terms = claims::LiveTerms::read(conn)?;
         Ok(Live {
             deleted,
             sealed,
@@ -567,6 +601,7 @@ impl Live {
             user_ids,
             revoked,
             purged_sources,
+            terms,
         })
     }
 
@@ -743,13 +778,51 @@ impl Store {
                 return report;
             }
         };
+        // One time budget for the claims purge across the pass.
+        let limit = claims::Limit {
+            rows: claims::MAX_PER_PASS,
+            deadline: std::time::Instant::now() + claims::PASS_BUDGET,
+        };
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
-            match purge_one(&snap, &live, since, now, hits_before, None) {
+            match purge_one(&snap, &live, since, now, hits_before, None, Some(limit)) {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
-                Ok(Outcome::Skipped(why)) => {
+                Ok(Outcome::Skipped(why, newer)) => {
                     report.warnings.push(why);
+                    // A newer schema this build can't purge may still hold
+                    // stamped claims: they go by their retention all the
+                    // same, or, when they can't be checked, the snapshot
+                    // goes. Any other error is tried again next pass.
+                    if newer {
+                        let checked =
+                            purge_claims_only(&snap.path, &live.terms, now, Some(limit), false);
+                        match checked {
+                            Ok(Some((n, left))) => {
+                                report.claims += n;
+                                if n > 0 {
+                                    report.purged.push(snap.path.clone());
+                                }
+                                if left {
+                                    report.warnings.push(claims_left(&snap.path));
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) if claims::persistent(&e) => {
+                                blocked |= drop_unchecked(&snap, &e.to_string(), &mut report);
+                            }
+                            Err(e) => report.warnings.push(format!(
+                                "dropping expired identify claims from the snapshot {} failed \
+                                 (it's tried again next pass): {e}",
+                                snap.path.display()
+                            )),
+                        }
+                    }
+                    continue;
+                }
+                Ok(Outcome::ClaimsUnchecked(why)) => {
+                    self.snapshot_marks.0.remove(&snap.path);
+                    blocked |= drop_unchecked(&snap, &why, &mut report);
                     continue;
                 }
                 Ok(Outcome::Unchanged) => {}
@@ -760,7 +833,11 @@ impl Store {
                     report.user_data += n.user_data;
                     report.candidates += n.candidates;
                     report.unverified += n.unverified;
+                    report.claims += n.claims;
                     report.sources += n.sources;
+                    if n.claims_left {
+                        report.warnings.push(claims_left(&snap.path));
+                    }
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -810,8 +887,44 @@ impl Store {
     }
 }
 
+/// The warning for a snapshot the pass's cap left expired claims in.
+fn claims_left(path: &Path) -> String {
+    format!(
+        "the snapshot {} still holds expired identify claims after this pass's {} deletions; \
+         the next pass goes on",
+        path.display(),
+        claims::MAX_PER_PASS
+    )
+}
+
+/// Fails closed on a snapshot whose identify claims couldn't be checked
+/// or purged: it's deleted, as an expired one is, so it can't keep a claim
+/// past its terms. Whether a file couldn't be deleted (the journal then
+/// stays).
+fn drop_unchecked(snap: &Snapshot, why: &str, report: &mut PurgeReport) -> bool {
+    report.warnings.push(format!(
+        "the identify claims in the snapshot {} couldn't be checked against their terms \
+         ({why}); it's deleted, so it can't keep them past their retention",
+        snap.path.display()
+    ));
+    let (gone, failed) = remove_snapshot(&snap.path);
+    for (path, e) in &failed {
+        report.warnings.push(format!(
+            "deleting the snapshot file {} failed: {e}",
+            path.display()
+        ));
+    }
+    if gone {
+        report.unchecked.push(snap.path.clone());
+    }
+    !failed.is_empty()
+}
+
 enum Outcome {
-    Skipped(String),
+    /// Not purged, and why; whether its schema is newer than this build's.
+    Skipped(String, bool),
+    /// Its identify claims couldn't be checked or purged, and why.
+    ClaimsUnchecked(String),
     Unchanged,
     Purged(Counts),
 }
@@ -826,6 +939,9 @@ struct Counts {
     user_data: usize,
     candidates: usize,
     unverified: usize,
+    claims: usize,
+    /// The pass's cap stopped the claims purge with some still due.
+    claims_left: bool,
 }
 
 /// Deletes a snapshot and any side file SQLite left beside it: whether
@@ -908,6 +1024,7 @@ fn purge_one(
     now: i64,
     hits_before: i64,
     carry: Option<&Carry<'_>>,
+    limit: Option<claims::Limit>,
 ) -> crate::Result<Outcome> {
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
@@ -934,11 +1051,15 @@ fn purge_one(
             restore_time(conn);
         }
         let held = version.map_or_else(|| "no schema version".into(), |v| format!("schema v{v}"));
-        return Ok(Outcome::Skipped(format!(
-            "the snapshot {} holds {held}, which this version doesn't know how to purge; it's \
-             left as it is and deleted when it's {RETAIN_DAYS} days old",
-            snap.path.display()
-        )));
+        return Ok(Outcome::Skipped(
+            format!(
+                "the snapshot {} holds {held}, which this version doesn't know how to purge; \
+                 it's left as it is, but for identify claims past their retention, and deleted \
+                 when it's {RETAIN_DAYS} days old",
+                snap.path.display()
+            ),
+            version.is_some_and(|v| v > Plan::KNOWN_THROUGH),
+        ));
     };
 
     // Look first, so a snapshot with nothing to purge isn't written (nor
@@ -1065,7 +1186,31 @@ fn purge_one(
             }
         }
     }
+    // Identify claims past their retention, and for a rollback's copy the
+    // retention marks to raise to the clock used.
+    let due = if plan.claims {
+        match claims::due(&conn, &live.terms, now) {
+            Ok(due) => due,
+            Err(e) => {
+                if folded {
+                    restore_time(conn);
+                }
+                // Only a snapshot that can't be checked however often the
+                // pass tries fails closed; anything else, next pass.
+                if claims::persistent_sqlite(&e) {
+                    return Ok(Outcome::ClaimsUnchecked(e.to_string()));
+                }
+                return Err(e.into());
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let claims_due = due.iter().any(claims::Due::any);
+    let raise = carry.is_some() && due.iter().any(claims::Due::mark_behind);
     if ids.is_empty()
+        && !claims_due
+        && !raise
         && sources.is_empty()
         && holds.is_none()
         && journal.is_empty()
@@ -1181,6 +1326,9 @@ fn purge_one(
         for (plugin, at) in &sources {
             scrub_source(&tx, plugin, *at)?;
         }
+        if raise {
+            claims::raise_marks(&tx, &due)?;
+        }
         tx.commit()?;
         Ok(Counts {
             sources: sources.len(),
@@ -1190,8 +1338,23 @@ fn purge_one(
             user_data,
             candidates: candidates_gone,
             unverified: unverified_gone,
+            claims: 0,
+            claims_left: false,
         })
     })();
+    // Chunked, after the rest: each chunk commits on its own, and a pass
+    // stopped partway finds the rest due on the next. A rollback's copy is
+    // purged of every one.
+    let mut failed = None;
+    let result = result.map(|mut n| {
+        if claims_due {
+            match claims::purge(&mut conn, &due, limit) {
+                Ok(done) => (n.claims, n.claims_left) = done,
+                Err(e) => failed = Some(e),
+            }
+        }
+        n
+    });
     if wal {
         // Copies the new pages into the file and empties the WAL, then
         // goes back to a single file, as `VACUUM INTO` wrote it.
@@ -1199,7 +1362,91 @@ fn purge_one(
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
     restore_time(conn);
-    Ok(Outcome::Purged(result?))
+    let n = result?;
+    Ok(match failed {
+        Some(e) if claims::persistent_sqlite(&e) => Outcome::ClaimsUnchecked(e.to_string()),
+        Some(e) => return Err(e.into()),
+        None => Outcome::Purged(n),
+    })
+}
+
+/// Drops the identify claims past their retention from the snapshot at
+/// `path`, on their own ([`claims`]): for a schema newer than this build's
+/// plans, and before an update rollback restores a snapshot. With `raise`,
+/// each identify source's retention mark goes up to the clock used, as for
+/// a rollback's copy. `None` when it holds no stamped claims (before V15);
+/// an error when a schema with them can't be read for it. The snapshot
+/// ends as one file with its modification time kept. The rows deleted,
+/// and whether `limit` left any due.
+///
+/// A schema with stamped claims but without what the check reads
+/// (`sources`, `source_state`, `torrent_parsed.parser_ver`) is
+/// [`Error::Corrupt`](crate::Error::Corrupt): it can't be checked, so the
+/// caller fails closed.
+fn purge_claims_only(
+    path: &Path,
+    terms: &claims::LiveTerms,
+    now: i64,
+    limit: Option<claims::Limit>,
+    raise: bool,
+) -> crate::Result<Option<(usize, bool)>> {
+    let taken = modified(path);
+    let mut conn = open_rw(path)?;
+    let folded = settle_conn(&conn)?;
+    let version: Option<i64> = if has_table(&conn, "schema_migrations")? {
+        conn.query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })?
+    } else {
+        None
+    };
+    let restore = |conn: Connection, wrote: bool| {
+        drop(conn);
+        if let Some(t) = taken.filter(|_| wrote) {
+            let _ = set_modified(path, t);
+        }
+    };
+    if !claims::stamped(&conn)? {
+        restore(conn, folded);
+        // V15 added the stamps: a schema this build knows since then
+        // without them is damaged. A newer one may have moved them.
+        return match version {
+            Some(v) if (15..=Plan::KNOWN_THROUGH).contains(&v) => Err(crate::Error::Corrupt(
+                "the snapshot's claims have no stamps to check",
+            )),
+            _ => Ok(None),
+        };
+    }
+    if !claims::checkable(&conn)? {
+        restore(conn, folded);
+        return Err(crate::Error::Corrupt(
+            "the snapshot holds stamped claims but not the tables to check them",
+        ));
+    }
+    let due = claims::due(&conn, terms, now)?;
+    let raise = raise && due.iter().any(claims::Due::mark_behind);
+    if !raise && !due.iter().any(claims::Due::any) {
+        restore(conn, folded);
+        return Ok(Some((0, false)));
+    }
+    conn.pragma_update(None, "secure_delete", true)?;
+    // A newer schema's cascades go too, leaving no orphan rows of claims.
+    conn.pragma_update(None, "foreign_keys", true)?;
+    let mode: String = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+    let result = (|| -> rusqlite::Result<(usize, bool)> {
+        if raise {
+            let tx = crate::begin_write(&mut conn)?;
+            claims::raise_marks(&tx, &due)?;
+            tx.commit()?;
+        }
+        claims::purge(&mut conn, &due, limit)
+    })();
+    if mode.eq_ignore_ascii_case("wal") {
+        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        let _ = conn.pragma_update(None, "journal_mode", "DELETE");
+    }
+    restore(conn, true);
+    Ok(Some(result?))
 }
 
 /// Applies every source purge `store` records to `snapshot`, in one
@@ -1215,7 +1462,26 @@ fn purge_one(
 /// none of the purged sources' records and every record. The snapshot
 /// ends as one file with its modification time kept. Returns the purges
 /// applied.
-pub fn apply_source_purges(store: &Connection, snapshot: &Path) -> crate::Result<usize> {
+///
+/// Then, as [`purge_for_restore`] does, every identify claim past its
+/// retention by the store's terms and clock goes, and the retention marks
+/// rise to that clock ([`claims`], X-snapshot-claims-retention): the
+/// snapshot can be up to 90 days old. `now` is the caller's clock. An
+/// error refuses the snapshot.
+pub fn apply_source_purges(store: &Connection, snapshot: &Path, now: i64) -> crate::Result<usize> {
+    let terms = claims::LiveTerms::read(store)?;
+    let applied = apply_purges_only(store, snapshot)?;
+    purge_claims_only(snapshot, &terms, now, None, true)?;
+    // A WAL left beside it would be lost with the rename.
+    if settle(snapshot)? || side_exists(snapshot, "-wal") {
+        return Err(crate::Error::Corrupt(
+            "the scrubbed snapshot still has a WAL",
+        ));
+    }
+    Ok(applied)
+}
+
+fn apply_purges_only(store: &Connection, snapshot: &Path) -> crate::Result<usize> {
     let purged = purged_sources(store)?;
     if purged.is_empty() {
         return Ok(0);
@@ -1261,12 +1527,6 @@ pub fn apply_source_purges(store: &Connection, snapshot: &Path) -> crate::Result
         let _ = set_modified(snapshot, t);
     }
     result?;
-    // A WAL left beside it would be lost with the rename.
-    if settle(snapshot)? || side_exists(snapshot, "-wal") {
-        return Err(crate::Error::Corrupt(
-            "the scrubbed snapshot still has a WAL",
-        ));
-    }
     Ok(due.len())
 }
 
@@ -1639,6 +1899,11 @@ fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
 /// hold. The copy ends as one file, with no WAL beside
 /// it.
 ///
+/// Identify claims past their retention leave the copy, every one, and
+/// its retention marks are raised to the clock that purge used, so the
+/// restored store's sweep never runs behind the store it replaces
+/// ([`claims`]).
+///
 /// `Ok(None)` when the copy holds a schema this build can't purge: then
 /// it mustn't be restored.
 pub fn purge_for_restore(
@@ -1663,7 +1928,7 @@ pub fn purge_for_restore(
         journal: &live.deleted,
         holds: store,
     };
-    let outcome = purge_one(&snap, &live, since, now, i64::MIN, Some(&carry))?;
+    let outcome = purge_one(&snap, &live, since, now, i64::MIN, Some(&carry), None)?;
     // `purge_one` checkpoints without checking: a WAL left beside the
     // copy would be lost with the rename, so it's folded in here.
     settle(staged)?;
@@ -1673,7 +1938,13 @@ pub fn purge_for_restore(
         return Err(crate::Error::Corrupt("the restored copy still has a WAL"));
     }
     Ok(match outcome {
-        Outcome::Skipped(_) => None,
+        Outcome::Skipped(..) => None,
+        // Refused: it may hold claims past their terms.
+        Outcome::ClaimsUnchecked(_) => {
+            return Err(crate::Error::Corrupt(
+                "the copy's identify claims couldn't be checked against their terms",
+            ));
+        }
         Outcome::Unchanged => Some(0),
         Outcome::Purged(n) => Some(n.torrents),
     })
