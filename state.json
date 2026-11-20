@@ -4214,7 +4214,8 @@
     "2026-11-05T09:10Z #473 X-followups-1105 merged (50aeef0f), archived; slot 9 idle with reason.",
     "2026-11-05T10:01Z #481 X-test-hygiene-1105 merged (4fd9a0c0), archived; slot 4 idle with reason.",
     "2026-11-05T10:05Z #482 X-ci-disk merged (f88ed2f5), archived; slot 11 idle with reason.",
-    "2026-11-20T15:17Z #986 X-enr-lane-nits merged b5236cb4; Sonnet session archived. Slot 3 -> X-leaktest-wg0-flake (Opus; leak-test harness is security-relevant so not Sonnet), folds in X-test-vm-runbook-step6. X-msi-upgrade-env-value stays queued: low, the user guide recommends data_dir in config.toml, not the service Environment value."
+    "2026-11-20T15:17Z #986 X-enr-lane-nits merged b5236cb4; Sonnet session archived. Slot 3 -> X-leaktest-wg0-flake (Opus; leak-test harness is security-relevant so not Sonnet), folds in X-test-vm-runbook-step6. X-msi-upgrade-env-value stays queued: low, the user guide recommends data_dir in config.toml, not the service Environment value.",
+    "2026-11-20T15:42Z #987 X-snapshot-followups merged 6f4d3c7e. Slot 4 -> X-snapshot-followups-2 in the same session (low; review optionals)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -10301,6 +10302,13 @@
       "sha": "b5236cb4",
       "at": "2026-11-20T15:17Z",
       "note": "#971 optionals (fuzz README igdb row, catalogue order, credential_spec comment); runner read the 6+/5- diff as the fresh reviewer; Sonnet session archived"
+    },
+    {
+      "pr": 987,
+      "slice": "X-snapshot-followups",
+      "sha": "6f4d3c7e",
+      "at": "2026-11-20T15:42Z",
+      "note": "fresh Opus review MERGE (6 mutations caught; restart, backward-clock and suspend fail toward keeping); 4 optionals -> X-snapshot-followups-2"
     }
   ],
   "active_sessions": {
@@ -10546,7 +10554,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T15:38Z",
+    "updated": "2026-11-20T15:42Z",
     "items": [
       {
         "slot": 1,
@@ -10580,12 +10588,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-snapshot-followups",
+        "slice": "X-snapshot-followups-2",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-20T14:12Z",
-        "doing": "same session; brief briefs/X-snapshot-followups.md (settle mtime bug, monotonic wait, tests, stuck kind)",
+        "since": "2026-11-20T15:42Z",
+        "doing": "#987 optionals: surface failed time restores, remove dead restore code, skip no-op set_modified, early-return sighting wording",
         "status": "running"
       }
     ],
