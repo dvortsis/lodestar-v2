@@ -8971,6 +8971,16 @@
     {
       "id": "CR-LOOKUP-END-calls",
       "notes": "2026-11-20T08:07Z Runner calls (\u00a72.19 flag): ENOUGH_VALUES=8 distinct validated values; VALUE_RESPONDERS=2 distinct /24 or /64 networks; lookup_end_tests.rs joins owns; PR opens before the CR-SIM screen, merge waits for screen (delta review) after #974."
+    },
+    {
+      "id": "X-win-data-dir-unusable-log",
+      "note": "Windows service re-test on main 50bdbc2: LODESTAR_DATA_DIR pointing at a plain file or an unreadable folder stops the service with service-specific error 1 and no Lodestar Event Log entry or service-log line (only System 7024). Lane traced it to crates/lodestar/src/windows/service.rs ~1205-1252: log open in the unusable folder fails silently and the code returns 1 without an Event Log entry. Fix: refuse with an Event Log entry naming the setting, value and fix, like the relative-path refusals (#959/#964). Medium, UX. Sonnet-eligible? No: service startup path, keep Opus.",
+      "added": "2026-11-20T08:41Z"
+    },
+    {
+      "id": "X-msi-upgrade-env-value",
+      "note": "Low: an MSI upgrade deletes the service Environment registry value (per-service vars like LODESTAR_DATA_DIR). No user doc points there today; matters only if docs ever do. Note for PK docs.",
+      "added": "2026-11-20T08:41Z"
     }
   ],
   "main_health": [
@@ -10574,7 +10584,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T08:07Z",
+  "updated": "2026-11-20T08:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
