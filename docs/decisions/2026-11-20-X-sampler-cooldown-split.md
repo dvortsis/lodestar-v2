@@ -17,7 +17,10 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
     - at scale 1, about 2.2 million cooldowns are live (2.0 million beyond the table, a quarter of the slots);
     - at scale 8 (48 h cooldowns for answers), about 5.2 million (5.0 million beyond the table, about 60 % of the slots).
     - Aggressive (about 500 a second) can fill the filter. It then refuses, and the table behaves as with the switch off: no worse than today.
-  - **The envelope (owner-decisions §1.6.3):** steady-state RSS under 1 GB at 10M torrents. The sampler's table is about 35–45 MB at its cap (`docs/decisions/2026-11-02-R-mem-triage.md`). The filter adds 32 MiB on top, only with the switch on and only once the table has filled.
+  - **The budget (`docs/architecture.md` §3, owner-decisions §1.6.3 and §1.6.5):**
+    - **Main process:** steady-state RSS under 1 GB at 10M torrents with default caches. The sampler's table is about 35–45 MB at its cap (`docs/decisions/2026-11-02-R-mem-triage.md`); the filter adds 32 MiB, about 3 % of that budget.
+    - **A worker running a DHT node** (§19, WK-10e) has RSS ≤ 256 MB at defaults. The switch is off by default there too. Turned on, table plus filter is about 75 MB at worst, so a worker that turns it on should check its soak RSS against that budget.
+  - **Measured, and only when used:** with the switch off, nothing is allocated (`a_full_table_with_the_switch_off_waits_as_before` asserts 0 bytes). With it on, nothing is allocated until the first cooldown moves (`a_spilled_cooldown_never_ends_early_and_ends_within_a_minute` asserts 0 bytes for a filter that stored nothing). Then exactly 33,554,432 bytes are allocated, once (`the_filter_is_bounded_keeps_every_key_and_rarely_misfires`).
 - **Ended slots are swept,** 4,096 slots a maintenance tick (a full pass about every 17 minutes), long before an ended minute could wrap round 68 h later and read as live. If one ever did, it would only skip a node.
 
 ## Never shorter
@@ -42,7 +45,10 @@ The BEP 51 sampler keeps remembering who not to ask without that memory stopping
 - **The cost:** with the switch on, every clean restart after the table has filled waits up to about 6 h before sampling, as a run with a dirty marker does today.
   - In steady state the filter holds cooldowns ending across the next 6 h, so the gate is near its cap.
   - Today's sampler, restarted with a table that isn't full, has no gate, and a restored full table frees places as its cooldowns end.
-  - This time is gated, so `dht_sample_full_seconds_total` doesn't count it. CR-AB-1 should avoid restarts inside a block, or report the gated time (`dht_sample_suppression_seconds`, `dht_sample_suppression_reason`) beside sampler-full time.
+  - **Plainly:** with the switch on, sampling is held after a clean restart once the table has filled, for up to about 6 h.
+  - This time is gated, so `dht_sample_full_seconds_total` doesn't count it.
+  - **CR-AB-1's handling (runner, 2026-11-20):** no restarts inside a block; where one happens, report the gated seconds (`dht_sample_suppression_seconds`, `dht_sample_suppression_reason`) beside sampler-full time.
+  - **Follow-up (needs the runner, an on-disk format change):** persist the filter under the restart proof's commit, so a restarted run samples at once. Not built here.
 - **With nothing spilled,** no gate is added (`a_spilled_cooldown_gates_the_next_run_until_it_ends`, both cases).
 - **CR-0d's restart tests pass unchanged with the switch off.** The proptest's restart step does what `Proof::commit` and the start do: seal in-flight samples at now + H, list, gate, and restore into a fresh sampler.
 - **A persisted filter** would let a restarted run sample at once. That's a new on-disk file under the restart proof's commit, which this slice doesn't own (`restart.rs`), so it's left as a follow-up if the live run shows restarts matter.
