@@ -778,24 +778,25 @@ impl Store {
                 return report;
             }
         };
+        // One time budget for the claims purge across the pass.
+        let limit = claims::Limit {
+            rows: claims::MAX_PER_PASS,
+            deadline: std::time::Instant::now() + claims::PASS_BUDGET,
+        };
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
-            match purge_one(&snap, &live, since, now, hits_before, None) {
+            match purge_one(&snap, &live, since, now, hits_before, None, Some(limit)) {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
                 Ok(Outcome::Skipped(why, newer)) => {
                     report.warnings.push(why);
                     // A newer schema this build can't purge may still hold
                     // stamped claims: they go by their retention all the
-                    // same, or the snapshot goes.
+                    // same, or, when they can't be checked, the snapshot
+                    // goes. Any other error is tried again next pass.
                     if newer {
-                        let checked = purge_claims_only(
-                            &snap.path,
-                            &live.terms,
-                            now,
-                            Some(claims::MAX_PER_PASS),
-                            false,
-                        );
+                        let checked =
+                            purge_claims_only(&snap.path, &live.terms, now, Some(limit), false);
                         match checked {
                             Ok(Some((n, left))) => {
                                 report.claims += n;
@@ -807,9 +808,14 @@ impl Store {
                                 }
                             }
                             Ok(None) => {}
-                            Err(e) => {
+                            Err(e) if claims::persistent(&e) => {
                                 blocked |= drop_unchecked(&snap, &e.to_string(), &mut report);
                             }
+                            Err(e) => report.warnings.push(format!(
+                                "dropping expired identify claims from the snapshot {} failed \
+                                 (it's tried again next pass): {e}",
+                                snap.path.display()
+                            )),
                         }
                     }
                     continue;
@@ -1018,6 +1024,7 @@ fn purge_one(
     now: i64,
     hits_before: i64,
     carry: Option<&Carry<'_>>,
+    limit: Option<claims::Limit>,
 ) -> crate::Result<Outcome> {
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
@@ -1188,7 +1195,12 @@ fn purge_one(
                 if folded {
                     restore_time(conn);
                 }
-                return Ok(Outcome::ClaimsUnchecked(e.to_string()));
+                // Only a snapshot that can't be checked however often the
+                // pass tries fails closed; anything else, next pass.
+                if claims::persistent_sqlite(&e) {
+                    return Ok(Outcome::ClaimsUnchecked(e.to_string()));
+                }
+                return Err(e.into());
             }
         }
     } else {
@@ -1333,13 +1345,12 @@ fn purge_one(
     // Chunked, after the rest: each chunk commits on its own, and a pass
     // stopped partway finds the rest due on the next. A rollback's copy is
     // purged of every one.
-    let mut unchecked = None;
+    let mut failed = None;
     let result = result.map(|mut n| {
         if claims_due {
-            let cap = carry.is_none().then_some(claims::MAX_PER_PASS);
-            match claims::purge(&mut conn, &due, cap) {
+            match claims::purge(&mut conn, &due, limit) {
                 Ok(done) => (n.claims, n.claims_left) = done,
-                Err(e) => unchecked = Some(e.to_string()),
+                Err(e) => failed = Some(e),
             }
         }
         n
@@ -1352,8 +1363,9 @@ fn purge_one(
     }
     restore_time(conn);
     let n = result?;
-    Ok(match unchecked {
-        Some(why) => Outcome::ClaimsUnchecked(why),
+    Ok(match failed {
+        Some(e) if claims::persistent_sqlite(&e) => Outcome::ClaimsUnchecked(e.to_string()),
+        Some(e) => return Err(e.into()),
         None => Outcome::Purged(n),
     })
 }
@@ -1365,12 +1377,17 @@ fn purge_one(
 /// a rollback's copy. `None` when it holds no stamped claims (before V15);
 /// an error when a schema with them can't be read for it. The snapshot
 /// ends as one file with its modification time kept. The rows deleted,
-/// and whether `cap` left any due.
+/// and whether `limit` left any due.
+///
+/// A schema with stamped claims but without what the check reads
+/// (`sources`, `source_state`, `torrent_parsed.parser_ver`) is
+/// [`Error::Corrupt`](crate::Error::Corrupt): it can't be checked, so the
+/// caller fails closed.
 fn purge_claims_only(
     path: &Path,
     terms: &claims::LiveTerms,
     now: i64,
-    cap: Option<usize>,
+    limit: Option<claims::Limit>,
     raise: bool,
 ) -> crate::Result<Option<(usize, bool)>> {
     let taken = modified(path);
@@ -1389,7 +1406,7 @@ fn purge_claims_only(
             let _ = set_modified(path, t);
         }
     };
-    if !claims::checkable(&conn)? {
+    if !claims::stamped(&conn)? {
         restore(conn, folded);
         // V15 added the stamps: a schema this build knows since then
         // without them is damaged. A newer one may have moved them.
@@ -1400,6 +1417,12 @@ fn purge_claims_only(
             _ => Ok(None),
         };
     }
+    if !claims::checkable(&conn)? {
+        restore(conn, folded);
+        return Err(crate::Error::Corrupt(
+            "the snapshot holds stamped claims but not the tables to check them",
+        ));
+    }
     let due = claims::due(&conn, terms, now)?;
     let raise = raise && due.iter().any(claims::Due::mark_behind);
     if !raise && !due.iter().any(claims::Due::any) {
@@ -1407,6 +1430,8 @@ fn purge_claims_only(
         return Ok(Some((0, false)));
     }
     conn.pragma_update(None, "secure_delete", true)?;
+    // A newer schema's cascades go too, leaving no orphan rows of claims.
+    conn.pragma_update(None, "foreign_keys", true)?;
     let mode: String = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
     let result = (|| -> rusqlite::Result<(usize, bool)> {
         if raise {
@@ -1414,7 +1439,7 @@ fn purge_claims_only(
             claims::raise_marks(&tx, &due)?;
             tx.commit()?;
         }
-        claims::purge(&mut conn, &due, cap)
+        claims::purge(&mut conn, &due, limit)
     })();
     if mode.eq_ignore_ascii_case("wal") {
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
@@ -1441,11 +1466,9 @@ fn purge_claims_only(
 /// Then, as [`purge_for_restore`] does, every identify claim past its
 /// retention by the store's terms and clock goes, and the retention marks
 /// rise to that clock ([`claims`], X-snapshot-claims-retention): the
-/// snapshot can be up to 90 days old. An error refuses the snapshot.
-pub fn apply_source_purges(store: &Connection, snapshot: &Path) -> crate::Result<usize> {
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+/// snapshot can be up to 90 days old. `now` is the caller's clock. An
+/// error refuses the snapshot.
+pub fn apply_source_purges(store: &Connection, snapshot: &Path, now: i64) -> crate::Result<usize> {
     let terms = claims::LiveTerms::read(store)?;
     let applied = apply_purges_only(store, snapshot)?;
     purge_claims_only(snapshot, &terms, now, None, true)?;
@@ -1905,7 +1928,7 @@ pub fn purge_for_restore(
         journal: &live.deleted,
         holds: store,
     };
-    let outcome = purge_one(&snap, &live, since, now, i64::MIN, Some(&carry))?;
+    let outcome = purge_one(&snap, &live, since, now, i64::MIN, Some(&carry), None)?;
     // `purge_one` checkpoints without checking: a WAL left beside the
     // copy would be lost with the rename, so it's folded in here.
     settle(staged)?;

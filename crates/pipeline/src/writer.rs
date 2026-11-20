@@ -749,7 +749,19 @@ impl Writer {
                     crate::log_events::SNAPSHOT_EXPIRED,
                     what = s.kind.describe(),
                     path = lodestar_log::Path::new(&s.path),
-                    days = days
+                    days = days,
+                    reason = "past its retention"
+                );
+            }
+            // Failing closed: a snapshot whose identify claims couldn't be
+            // checked against their terms is deleted, and named here.
+            for path in &snaps.unchecked {
+                lodestar_log::log_event!(
+                    crate::log_events::SNAPSHOT_EXPIRED,
+                    what = "snapshot",
+                    path = lodestar_log::Path::new(path),
+                    days = lodestar_store::snapshots::RETAIN_DAYS,
+                    reason = "identify claims could not be checked against their terms"
                 );
             }
             // Their text names paths and errors: counted, not repeated.

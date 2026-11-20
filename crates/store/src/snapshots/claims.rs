@@ -23,9 +23,11 @@
 //! an identify source (the runtime records terms before a plugin's first
 //! claim), so its claims stay, as live.
 //!
-//! A snapshot whose claims can't be checked fails closed: the hourly pass
-//! deletes it and a rollback refuses it (`super::purge_snapshots`,
-//! `super::purge_for_restore`, `super::apply_source_purges`).
+//! A snapshot whose claims can't be checked however often the pass tries
+//! ([`persistent`]) fails closed: the hourly pass deletes it and a
+//! rollback refuses it (`super::purge_snapshots`, `super::purge_for_restore`,
+//! `super::apply_source_purges`). Any other error is retried next pass.
+//! The hourly pass spends at most [`PASS_BUDGET`] deleting claims.
 //!
 //! `lodestar-store` doesn't depend on `lodestar-sources`, where `Terms`
 //! lives (it depends on the store), so this is a small reader of the
@@ -34,6 +36,7 @@
 //! `Retention::drop_after`.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -58,14 +61,49 @@ const RECORD_VERSION: u8 = 1;
 /// `DELETE … LIMIT`, so the rows are chosen first, by key.
 pub(crate) const CHUNK: usize = 2_000;
 
-/// Claim rows the hourly pass deletes from one snapshot at most. Above
-/// the fastest the identify runtime could write claims (one per looked-up
-/// item, under rate caps of a few a second; even its fastest pace through
-/// items, about 200 a second, is 720,000 an hour), so a snapshot never
-/// falls behind; a backlog left over goes on the next pass, well
-/// inside the one-day margin before the limit. A rollback's copy has no
-/// cap: it must hold none before it's restored.
+/// Claim rows the hourly pass deletes from one snapshot at most, a
+/// backstop under [`PASS_BUDGET`]. A rollback's copy has no limit: it must
+/// hold none before it's restored.
 pub(crate) const MAX_PER_PASS: usize = 1_000_000;
+
+/// How long one hourly pass spends deleting claims, across every
+/// snapshot, while it holds the writer's store: under 1 % of the hour.
+/// Checked between chunks, so a pass overruns it by one chunk at most. A
+/// backlog left over goes on the next pass (a warning names it), and the
+/// one-day margin before the limit leaves 24 passes for it.
+pub(crate) const PASS_BUDGET: Duration = Duration::from_secs(30);
+
+/// How much one purge may delete: `rows` per snapshot, until `deadline`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Limit {
+    pub(crate) rows: usize,
+    pub(crate) deadline: Instant,
+}
+
+/// Whether `e` shows the snapshot itself can't be checked, however often
+/// the pass tries: damaged, not a database, or missing a table or column
+/// the check reads. Then the snapshot fails closed. A busy lock, an I/O
+/// error, a full disk, no memory or an interrupt is retried on the next
+/// pass instead: the one-day margin before the limit leaves time.
+pub(crate) fn persistent(e: &crate::Error) -> bool {
+    match e {
+        crate::Error::Corrupt(_) => true,
+        crate::Error::Sqlite(e) => persistent_sqlite(e),
+        _ => false,
+    }
+}
+
+pub(crate) fn persistent_sqlite(e: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode;
+    if matches!(
+        e.sqlite_error_code(),
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase)
+    ) {
+        return true;
+    }
+    let text = e.to_string();
+    text.contains("no such table") || text.contains("no such column")
+}
 
 /// The retention limit, in seconds, a stored terms record holds: the
 /// record's `max_age`, floored at two days, or the default when the record
@@ -168,16 +206,24 @@ fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
     .collect()
 }
 
-/// Whether `conn` has what the claims purge reads: stamped claims
-/// (V15's column), sources and their state.
+/// Whether `conn` holds stamped claims (V15's column).
+pub(crate) fn stamped(conn: &Connection) -> rusqlite::Result<bool> {
+    has_column(conn, "torrent_claims", "stored_at")
+}
+
+/// Whether `conn` has everything else the claims purge reads and writes:
+/// sources, their state, and the backfill's marker.
 pub(crate) fn checkable(conn: &Connection) -> rusqlite::Result<bool> {
-    if !(super::has_table(conn, "sources")? && super::has_table(conn, "source_state")?) {
-        return Ok(false);
-    }
+    Ok(super::has_table(conn, "sources")?
+        && super::has_table(conn, "source_state")?
+        && has_column(conn, "torrent_parsed", "parser_ver")?)
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
     Ok(conn
         .query_row(
-            "SELECT 1 FROM pragma_table_info('torrent_claims') WHERE name = 'stored_at'",
-            [],
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+            [table, column],
             |_| Ok(()),
         )
         .optional()?
@@ -247,21 +293,21 @@ impl Due {
 }
 
 /// Deletes the due claims of every source in `due`, [`CHUNK`] rows per
-/// transaction, `cap` rows at most (none: every one). Each deleted row
+/// transaction, within `limit` (none: every one). Each deleted row
 /// marks its torrent for the backfill, as live. Resumable without a
 /// cursor: a deleted row no longer matches. Returns the rows deleted and
 /// whether any due row is left.
 pub(crate) fn purge(
     conn: &mut Connection,
     due: &[Due],
-    cap: Option<usize>,
+    limit: Option<Limit>,
 ) -> rusqlite::Result<(usize, bool)> {
     // `done` counts the rows chosen, for the cap; `deleted` the rows gone.
     let (mut done, mut deleted) = (0usize, 0usize);
     for d in due.iter().filter(|d| d.any) {
         loop {
-            let room = cap.map_or(CHUNK, |c| c.saturating_sub(done).min(CHUNK));
-            if room == 0 {
+            let room = limit.map_or(CHUNK, |l| l.rows.saturating_sub(done).min(CHUNK));
+            if room == 0 || limit.is_some_and(|l| Instant::now() >= l.deadline) {
                 return Ok((deleted, true));
             }
             let tx = crate::begin_write(conn)?;
@@ -549,6 +595,14 @@ mod tests {
         assert_eq!(max_age_secs(&record(0)), 2 * DAY as u64);
     }
 
+    /// A limit of `n` rows and an hour.
+    fn rows_limit(n: usize) -> Limit {
+        Limit {
+            rows: n,
+            deadline: Instant::now() + Duration::from_secs(3_600),
+        }
+    }
+
     /// A schema-current database in memory with sources 1 (`a`, the
     /// given record) and 2 (`b`, no record).
     fn memory(record_a: &[u8]) -> Connection {
@@ -586,12 +640,15 @@ mod tests {
         let due = due(&conn, &LiveTerms::default(), T).unwrap();
         // Stopped partway (a cap here; a crash between chunks is the same:
         // each chunk commits alone).
-        assert_eq!(purge(&mut conn, &due, Some(5)).unwrap(), (5, true));
+        assert_eq!(
+            purge(&mut conn, &due, Some(rows_limit(5))).unwrap(),
+            (5, true)
+        );
         assert_eq!(stamps_in(&conn, 1).len(), CHUNK + 3);
         // The next pass, over more than one chunk, finishes it.
         let due = super::due(&conn, &LiveTerms::default(), T).unwrap();
         assert_eq!(
-            purge(&mut conn, &due, Some(MAX_PER_PASS)).unwrap(),
+            purge(&mut conn, &due, Some(rows_limit(MAX_PER_PASS))).unwrap(),
             (CHUNK + 2, false)
         );
         assert_eq!(stamps_in(&conn, 1), vec![(n + 1, T)]);
@@ -650,7 +707,7 @@ mod tests {
         claim(conn, 1, tmdb, now - 30 * DAY);
         claim(conn, 2, tmdb, now - DAY);
         let snap = take(&store, &db);
-        super::super::apply_source_purges(store.connection(), &snap).unwrap();
+        super::super::apply_source_purges(store.connection(), &snap, now).unwrap();
         assert_eq!(stamps(&snap, tmdb), vec![(2, now - DAY)]);
         let conn = Connection::open(&snap).unwrap();
         let mark: Vec<u8> = conn
@@ -691,6 +748,97 @@ mod tests {
             .execute_batch("DROP TABLE source_state")
             .unwrap();
         assert!(super::super::purge_for_restore(store.connection(), &staged, T).is_err());
+    }
+
+    /// A held lock (BUSY, or any error a later pass may not meet) never
+    /// deletes a snapshot: it's retried, and the next pass purges it.
+    #[test]
+    fn a_busy_snapshot_is_kept_and_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        let tmdb = i64::from(tmdb.get());
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, tmdb, T - 30 * DAY);
+        let snap = take(&store, &db);
+        let holder = Connection::open(&snap).unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let r = store.purge_snapshots(T, 0);
+        assert!(r.unchecked.is_empty() && !r.warnings.is_empty());
+        holder.execute_batch("ROLLBACK").unwrap();
+        drop(holder);
+        assert!(snap.exists());
+        let r = store.purge_snapshots(T + 3_600, 0);
+        assert_eq!(r.claims, 1, "{:?}", r.warnings);
+        assert!(stamps(&snap, tmdb).is_empty());
+    }
+
+    /// Damage, a file that isn't a database, and a missing table or column
+    /// persist; busy, I/O, full, no memory and an interrupt pass.
+    #[test]
+    fn only_lasting_errors_fail_closed() {
+        use rusqlite::ffi;
+        let code = |c| rusqlite::Error::SqliteFailure(ffi::Error::new(c), None);
+        for c in [ffi::SQLITE_CORRUPT, ffi::SQLITE_NOTADB] {
+            assert!(persistent_sqlite(&code(c)), "{c}");
+        }
+        for c in [
+            ffi::SQLITE_BUSY,
+            ffi::SQLITE_LOCKED,
+            ffi::SQLITE_IOERR,
+            ffi::SQLITE_FULL,
+            ffi::SQLITE_NOMEM,
+            ffi::SQLITE_INTERRUPT,
+            ffi::SQLITE_CANTOPEN,
+        ] {
+            assert!(!persistent_sqlite(&code(c)), "{c}");
+        }
+        let conn = Connection::open_in_memory().unwrap();
+        let missing = conn.prepare("SELECT x FROM nowhere").unwrap_err();
+        assert!(persistent_sqlite(&missing));
+        conn.execute_batch("CREATE TABLE t (a)").unwrap();
+        let column = conn.prepare("SELECT b FROM t").unwrap_err();
+        assert!(persistent_sqlite(&column));
+        assert!(persistent(&crate::Error::Corrupt("x")));
+        assert!(!persistent(&crate::Error::Sqlite(code(ffi::SQLITE_BUSY))));
+    }
+
+    /// Past the pass's deadline, nothing more is deleted, and the rest is
+    /// left for the next pass.
+    #[test]
+    fn the_time_budget_stops_the_purge() {
+        let mut conn = memory(&record(10));
+        torrent(&conn, 1);
+        claim(&conn, 1, 1, T - 100 * DAY);
+        let due = due(&conn, &LiveTerms::default(), T).unwrap();
+        let spent = Limit {
+            rows: MAX_PER_PASS,
+            deadline: Instant::now(),
+        };
+        assert_eq!(purge(&mut conn, &due, Some(spent)).unwrap(), (0, true));
+        assert_eq!(stamps_in(&conn, 1).len(), 1);
+    }
+
+    /// A newer schema with stamped claims but without the tables the check
+    /// reads is deleted: it can't be checked.
+    #[test]
+    fn a_newer_schema_that_cannot_be_checked_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, i64::from(tmdb.get()), T - 30 * DAY);
+        let snap = take(&store, &db);
+        Connection::open(&snap)
+            .unwrap()
+            .execute_batch(&format!(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES ({}, 0);
+                 ALTER TABLE source_state RENAME TO plugin_state;",
+                crate::snapshots::Plan::KNOWN_THROUGH + 1
+            ))
+            .unwrap();
+        super::super::set_modified(&snap, T).unwrap();
+        let r = store.purge_snapshots(T, 0);
+        assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
+        assert!(!snap.exists());
     }
 
     /// A schema newer than this build's plans loses its expired claims all
@@ -782,7 +930,7 @@ mod tests {
                     .max(mark.unwrap_or(i64::MIN))
                     .max(live_mark.unwrap_or(i64::MIN));
                 let d = due(&conn, &live, clock).unwrap();
-                prop_assert_eq!(purge(&mut conn, &d, Some(MAX_PER_PASS)).unwrap().1, false);
+                prop_assert_eq!(purge(&mut conn, &d, Some(rows_limit(MAX_PER_PASS))).unwrap().1, false);
                 let held = stamps_in(&conn, 1);
                 for (n, &(id, source, at)) in rows.iter().enumerate() {
                     if source == 2 {
