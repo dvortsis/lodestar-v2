@@ -333,6 +333,26 @@ python3 docs/soak/tools/analyze_cr.py gate comb.json --comparator comp.json
 The bundle is aggregates and hourly rows only. `publish` refuses anything
 address- or infohash-shaped.
 
+### From stage 2: stacked controls and the lookup-cost pair (CR-COL-5)
+
+r5.1 (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`) changes two things from
+stage 2 (CR-AB-LC); stage 1 runs and is judged exactly as above.
+- **The control has every earlier winner on (A2).** Write the winners to a file,
+  `{"winners": ["coordinated_admission"]}` (an empty list if stage 1 had none),
+  and pass it as `--winners` to every `segment` and to `effect`. A segment whose
+  switches other than the treatment's aren't exactly those is invalid; so is a
+  block whose control differs, and an effect whose blocks' controls differ.
+  `effect` prints the control's switch set as `control_switches`.
+- **The lookup-cost pair is one treatment (A1):** `--treatment lc` turns on
+  `lookup_end` and `preset_slots` together in B (`LODESTAR_DHT_LOOKUP_END`,
+  `LODESTAR_DHT_PRESET_SLOTS`). A treatment segment is void unless lookups end on
+  values, occupied slots exceed 32 at least once, and the query rate stays within
+  the preset.
+
+Every segment also reports CR-LEDGER's `W`, `q` and `y` (`ledger`), and `effect`
+reports them per arm (`ledger_by_arm`). An older binary's are reported absent.
+See `docs/decisions/2026-11-20-CR-COL-5.md`.
+
 ## Tests
 
 ```sh
@@ -342,7 +362,8 @@ python3 -I -m unittest discover -s docs/soak/tools -p 'test_*.py'
 
 `test_collect_spec.py` runs each CR-SPEC run kind on the virtual clock and has
 `analyze_cr.py` judge it; `../test_analyze_cr.py` has a passing and a failing
-fixture for each rule the analyzer judges.
+fixture for each rule the analyzer judges, and `../test_analyze_cr_col5.py` for
+r5.1's checks, with stage 1's verdicts pinned in `../fixtures/`.
 
 The Linux tests use a fake HTTP server on 127.0.0.1, fake cgroup and `/proc`
 trees, a fake Docker API and a virtual clock. They need no network and no

@@ -149,7 +149,54 @@ PLAIN = frozenset((
     # when the network goes (a VPN restart). Both absent with the DHT off.
     "dht_routing_nodes", "dht_routing_good_nodes",
 ))
-MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 250
+
+
+class Matching:
+    """A label-value set given by a pattern, for histogram edges whose values aren't fixed here."""
+
+    def __init__(self, pattern):
+        self.pattern = re.compile(pattern)
+
+    def __contains__(self, value):
+        return isinstance(value, str) and bool(self.pattern.fullmatch(value))
+
+
+_LE = (("le", Matching(r"[0-9]{1,6}(?:\.[0-9]{1,3})?|\+Inf")),)
+# CR-COL-5: CR-LEDGER's lookup ledger (build-plan §0.5 "Path to 100"), from which the
+# analyzer reads W, q and y and r5.1 A1's mechanism check.
+# PLACEHOLDER: these names and label values are CR-COL-5's stand-ins until CR-LEDGER fixes
+# its own; the runner relays them, and they are replaced here before the PR merges.
+LEDGER_END_REASONS = frozenset(("values", "closest", "deadline", "query_cap", "cancelled", "shutdown"))
+LEDGER_VALUE_REASONS = ("values",)  # the reasons that mean "the lookup ended on values"
+LEDGER_PURPOSES = frozenset(("peer_lookup", "maintenance", "sample", "hint", "announce", "ping"))
+LEDGER_PEER_PURPOSE = "peer_lookup"
+LEDGER = {
+    "residence": "dht_lookup_residence_seconds_total",   # {reason}: slot-seconds by end reason
+    "ended": "dht_lookups_ended_total",                  # {reason}: lookups ended
+    "queries": "dht_queries_sent_total",                 # {purpose}: DHT queries sent
+    "occupied": "dht_lookup_slots_occupied",             # gauge: slots held now
+    "cap": "dht_lookup_slots_cap",                       # gauge: the configured slot count
+    "no_values": "dht_lookups_without_values_total",
+    "first_values": "dht_lookup_first_values_seconds",   # histogram
+    "values": "dht_lookup_values",                       # histogram
+    "hints": "dht_hint_outcomes_total",                  # {outcome}
+}
+LABELLED.update({
+    LEDGER["residence"]: (("reason", LEDGER_END_REASONS),),
+    LEDGER["ended"]: (("reason", LEDGER_END_REASONS),),
+    LEDGER["queries"]: (("purpose", LEDGER_PURPOSES),),
+    LEDGER["first_values"] + "_bucket": _LE,
+    LEDGER["values"] + "_bucket": _LE,
+    LEDGER["hints"]: (("outcome", frozenset(("values", "no_values", "unanswered", "guarded"))),),
+})
+PLAIN = PLAIN | frozenset((
+    LEDGER["occupied"], LEDGER["cap"], LEDGER["no_values"],
+    LEDGER["first_values"] + "_count", LEDGER["first_values"] + "_sum",
+    LEDGER["values"] + "_count", LEDGER["values"] + "_sum",
+    # Kept as they are (CR-1a-H's series): another reading of W, admission to answer.
+    "dht_peer_lookup_seconds_total", "dht_peer_lookups_answered_total",
+))
+MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 280
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
 SERIES = re.compile(r"^lodestar_([a-z_0-9]+)(\{[^{}\r\n]*\})? (" + NUMBER + r")\r?$")
@@ -1068,6 +1115,14 @@ SPEC_KINDS = ("ab", "comb", "comparator")
 SPEC_HOURS = {"ab": 6, "comb": 24, "comparator": 24}  # rule 1.3
 SPEC_WARMUP_MINUTES = 60  # rule 1.1
 TREATMENTS = {"adm": "coordinated_admission", "utp": "utp", "route": "route_backoff"}
+# CR-COL-5 (r5.1, docs/decisions/2026-11-20-path-to-100-cr-spec.md): every treatment's
+# switches, and those run from stage 2 against a stacked control (A2). The lookup-cost pair
+# is one treatment with both switches on in B (A1).
+TREATMENT_SWITCHES = {**{t: (s,) for t, s in TREATMENTS.items()}, "lc": ("lookup_end", "preset_slots")}
+STACKED = frozenset(("lc",))
+# The switches every CR-COL-3 collector records; a stage-1 run.json may hold only these.
+STAGE1_SWITCHES = ("safe_restart", "coordinated_admission", "responder_hints", "streaming_peers",
+                   "target_prefixes", "utp", "route_backoff")
 # Every crawler switch and its environment variable (crates/lodestar/src/config.rs).
 SWITCH_ENV = {
     "safe_restart": "LODESTAR_DHT_SAFE_RESTART",
@@ -1077,6 +1132,10 @@ SWITCH_ENV = {
     "target_prefixes": "LODESTAR_DHT_TARGET_PREFIXES",
     "utp": "LODESTAR_DHT_UTP",
     "route_backoff": "LODESTAR_DHT_ROUTE_BACKOFF",
+    # PLACEHOLDER names (CR-COL-5) until CR-LOOKUP-END and CR-1c fix theirs: dht.lookup_end
+    # and CR-1c's preset-sized slots.
+    "lookup_end": "LODESTAR_DHT_LOOKUP_END",
+    "preset_slots": "LODESTAR_DHT_PRESET_SLOTS",
 }
 PRESETS = ("low", "balanced", "aggressive")
 CHECKLIST_ITEMS = ("auto_update", "backup")
@@ -2151,7 +2210,7 @@ def build_parser():
                    help="Default 24 (cr0, comb, comparator) or 6 (ab)")
     p.add_argument("--run-kind", choices=("cr0",) + SPEC_KINDS, default="cr0",
                    help="cr0: the v0.5.1 soak. ab, comb, comparator: a CR-SPEC crawler run")
-    p.add_argument("--treatment", choices=sorted(TREATMENTS), help="The A/B's treatment (--run-kind ab)")
+    p.add_argument("--treatment", choices=sorted(TREATMENT_SWITCHES), help="The A/B's treatment (--run-kind ab)")
     p.add_argument("--spec-commit", help="Commit of docs/decisions/2026-11-02-CR-SPEC.md in force (CR-SPEC kinds)")
     p.add_argument("--password-file", help="Admin password for the settings and Insights checks (CR-SPEC kinds)")
     p.add_argument("--ip-echo-url", default=DEFAULT_IP_ECHO, help="Fixed IP-echo service for the public-IP check")

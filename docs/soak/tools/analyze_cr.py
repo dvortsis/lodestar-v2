@@ -5,13 +5,17 @@ docs/decisions/2026-11-02-CR-SPEC.md is the rulebook; rule numbers below are its
 Reads the Linux collector's evidence (linux/collect.py --run-kind ab|comb|comparator)
 and never contacts the crawler.
 
-  segment RUN [--output F] [--publish DIR]   one segment: window, rates, checks, verdict
-  effect --treatment T --block R R R R ...   block checks and the effect fit (rules 6.1-6.3)
+  segment RUN [--output F] [--publish DIR] [--winners W]
+                                             one segment: window, rates, checks, verdict
+  effect --treatment T --block R R R R ... [--winners W]
+                                             block checks and the effect fit (rules 6.1-6.3)
   route-baseline REPORT ...                  rule 5.3: run CR-AB-ROUTE, or record the skip
   gate COMB [--comparator COMP]              rule 6.8: the v0.6 crawler gate
   checkpoint1 --utp E --adm E ...            rule 6.9: the Checkpoint 1 projection
 
 `effect`, `gate` and `checkpoint1` read the JSON reports `segment` and `effect` write.
+From stage 2 (r5.1 A2, docs/decisions/2026-11-20-path-to-100-cr-spec.md) the control
+has every earlier winner on: `--winners` names them in a JSON file, {"winners": [...]}.
 Standard library only.
 """
 
@@ -47,8 +51,18 @@ COMPARATOR_CLEAR = 12 * 3600   # rule 2.2
 STOP_ALLOWANCE = 90            # the collector's stop path: up to 60 s, plus a sample's lag
 GATE_MEAN, GATE_HOUR = 100.0, 70.0  # owner-set (§2.25)
 NO_EFFECT = (math.log(0.95), math.log(1.05))  # rule 6.3: τ within [ln 0.95, ln 1.05]
-OTHER_SWITCHES = ("coordinated_admission", "responder_hints", "streaming_peers", "target_prefixes",
-                  "utp", "route_backoff")
+# Every switch an A/B can turn on (safe_restart is rule 2.3's, on in every arm).
+EXPERIMENT_SWITCHES = tuple(s for s in collect.SWITCH_ENV if s != "safe_restart")
+# r5.1 A1: the lookup-cost pair's mechanism. Each preset's query rate is
+# Intensity::queries_per_sec (crates/dht/src/node/mod.rs); pings to queriers spend their
+# own 5 % share on top (VERIFY_SHARE, crates/dht/src/node/actor.rs), and both buckets
+# hold one second's burst. An interval may also be up to a second long at each end
+# against the scrape's own clock, so the bound is rate × 1.05 × (interval + 2 s).
+PRESET_QUERY_RATE = {"low": 50, "balanced": 200, "aggressive": 1000}
+VERIFY_SHARE = 0.05
+RATE_SLACK_SECONDS = 2.0
+A1_SLOTS = 32
+LEDGER = collect.LEDGER
 ADMISSION_COUNTERS = ("fetch_admission_waits_total", "fetch_admission_wait_cancelled_total",
                       "fetch_admission_wakeups_total", "fetch_admission_grants_total",
                       "fetch_admission_refusals_total", "fetch_admission_holds_total",
@@ -70,7 +84,7 @@ BREAKDOWNS = ("metadata_excluded_total", "fetch_lost_total", "fetch_failures_tot
               "fetch_family_attempts_total", "fetch_family_success_total", "fetch_no_route_total",
               "fetch_route_probe_down_total", "fetch_route_skipped_total")
 SERIES = re.compile(r"^lodestar_([a-z_0-9]+)(\{[^{}\r\n]*\})? ([0-9]+(?:\.[0-9]+)?)$")
-LABEL = re.compile(r'([a-z_]+)="([A-Za-z0-9_+]*)"')
+LABEL = re.compile(r'([a-z_]+)="([A-Za-z0-9_+.]*)"')
 
 
 # ----------------------------------------------------------------- loading
@@ -199,6 +213,34 @@ def window_params(kind, settings):
     return int(hours), float(hour_s), float(warm)
 
 
+def stack_args(kind, treatment, winners):
+    """r5.1 A2: a stage-2+ treatment needs the earlier winners; stage 1 takes none."""
+    if kind != "ab":
+        if winners is not None:
+            raise ValueError("--winners applies only to an A/B segment")
+        return None
+    if treatment not in collect.TREATMENT_SWITCHES:
+        raise ValueError(f"Unknown treatment {treatment!r}")
+    if treatment not in collect.STACKED:
+        if winners is not None:
+            raise ValueError("--winners applies only from stage 2 (r5.1 A2); stage 1's control is the shipped defaults")
+        return None
+    if winners is None:
+        raise ValueError(f"{treatment} runs against a stacked control (r5.1 A2): give --winners")
+    if set(winners) & set(collect.TREATMENT_SWITCHES[treatment]):
+        raise ValueError("A winner can't be one of the treatment's own switches")
+    return sorted(winners)
+
+
+def load_winners(path):
+    """The stacked control's identity: {"winners": [switch, ...]}, possibly empty."""
+    value = read_json(Path(path)).get("winners")
+    if (not isinstance(value, list) or len(set(value)) != len(value)
+            or any(w not in EXPERIMENT_SWITCHES for w in value)):
+        raise ValueError(f"--winners must hold a list of distinct switches from {', '.join(EXPERIMENT_SWITCHES)}")
+    return sorted(value)
+
+
 def suppression_reason(snap):
     series = (snap or {}).get("dht_sample_suppression_reason") or {}
     on = [dict(k).get("reason") for k, v in series.items() if v == 1]
@@ -227,6 +269,9 @@ def required_series(kind, treatment, switches):
         req += [("dht_utp_in_total", {})]
     if treatment == "route" or switches.get("route_backoff"):
         req += [("fetch_route_skipped_total", {}), ("fetch_route_probe_down_total", {})]
+    if treatment == "lc":  # r5.1 A1 and the ledger it's read from, in both arms
+        req += [(LEDGER[k], {}) for k in ("residence", "ended", "occupied")]
+        req += [(LEDGER["queries"], {"purpose": collect.LEDGER_PEER_PURPOSE}), ("dht_queries_out_total", {})]
     return req
 
 
@@ -284,7 +329,7 @@ def breakdown(a, b, name):
 
 
 # ----------------------------------------------------------------- one segment
-def analyze_segment(root):
+def analyze_segment(root, winners=None):
     root = Path(root)
     run = read_json(root / "run.json")
     settings = run.get("settings") or {}
@@ -292,12 +337,15 @@ def analyze_segment(root):
     if kind not in KINDS:
         raise ValueError("Not a CR-SPEC run: settings.run_kind is not ab, comb or comparator")
     treatment = settings.get("treatment")
+    winners = stack_args(kind, treatment, winners)
     result = read_json(root / "result.json") if (root / "result.json").exists() else None
     rows = load_rows(root, kind)
     hours, hour_s, warm = window_params(kind, settings)
     rehearsal = settings.get("rehearsal") is True
     report = {"schema": 1, "spec": SPEC, "kind": kind, "treatment": treatment, "rehearsal": rehearsal,
               "window_hours": hours, "hour_seconds": hour_s}
+    if winners is not None:
+        report["winners"] = winners
     if result is None:  # rule 6.11: nothing that shows a rate while the window may be open
         report.update(state="window_open", samples=len(rows),
                       message="The collector hasn't finished; rates are shown only after the window ends.")
@@ -433,11 +481,11 @@ def analyze_segment(root):
     if kind == "comparator":
         comparator_checks(checks, run, ok, bounds, complete)
     else:
-        lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind)
+        lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners)
 
     if complete:
         try:
-            report.update(measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run))
+            report.update(measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treatment))
         except KeyError as error:  # a series absent at one end of a delta
             checks.add("6.10", "series_present_at_both_ends", False, "missing", {"series": str(error).strip("'")})
     return finish(report, checks)
@@ -471,11 +519,15 @@ def host_checklist(checks, run, kind, switches, config):
                    witness.get("host_mounted") is True and witness.get("outside_data_dir") is True)
 
 
-def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind):
-    """Rules 5.5, 6.1, 6.6 (identity) and 7.2 for a Lodestar segment."""
+def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners=None):
+    """Rules 5.5, 6.1 (as r5.1 amends it), 6.6 (identity) and 7.2 for a Lodestar segment."""
     switches = (config or {}).get("switches") or {}
     api = (config or {}).get("settings_api") or {}
-    switch_ok = set(switches) == set(collect.SWITCH_ENV) and all(isinstance(v, bool) for v in switches.values())
+    # A CR-COL-3 collector records the stage-1 switches; a stacked arm needs every switch.
+    recorded = set(switches)
+    switch_ok = (set(collect.STAGE1_SWITCHES) <= recorded <= set(collect.SWITCH_ENV)
+                 and all(isinstance(v, bool) for v in switches.values())
+                 and (treatment not in collect.STACKED or recorded == set(collect.SWITCH_ENV)))
     digest = run.get("image_digest") or run.get("sha256")
     spec_commit = (run.get("settings") or {}).get("spec_commit")
     have = bool(config) and switch_ok and api.get("intensity") in collect.PRESETS and bool(digest) \
@@ -490,8 +542,16 @@ def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatm
     checks.add("5.5", "balanced_preset", preset == "balanced", "void")
     if kind == "ab":
         checks.add("2.3", "safe_restart_on", switches["safe_restart"] is True)
-        others = [s for s in OTHER_SWITCHES if s != collect.TREATMENTS[treatment] and switches[s]]
-        checks.add("6.1", "other_switches_off", not others, detail={"on": others} if others else None)
+        own = collect.TREATMENT_SWITCHES[treatment]
+        others = [s for s in EXPERIMENT_SWITCHES if s not in own and switches.get(s)]
+        if treatment in collect.STACKED:
+            on = [s for s in own if switches[s]]
+            checks.add("A1", "treatment_switches_together", len(on) in (0, len(own)),
+                       detail=None if len(on) in (0, len(own)) else {"on": on})
+            checks.add("A2", "control_is_the_stacked_winners", others == winners,
+                       detail=None if others == winners else {"on": others, "winners": winners})
+        else:
+            checks.add("6.1", "other_switches_off", not others, detail={"on": others} if others else None)
     # Boundary API checks: the settings at each boundary, imports and pauses since the start.
     calls = [r["row"].get("api") for r in span if r["row"].get("boundary")]
     settings_seen = [c.get("settings") for c in calls if isinstance(c, dict) and isinstance(c.get("settings"), dict)]
@@ -526,7 +586,7 @@ def comparator_checks(checks, run, ok, bounds, complete):
     checks.add("6.6", "comparator_identity_recorded", bool((run.get("comparator") or {}).get("query")), "missing")
 
 
-def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run):
+def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treatment=None):
     """Rules 1.5-1.7, 3, 4, 5.1-5.3 and 7.1 over a complete window."""
     t_s, end = bounds[0], bounds[-1]
     window = [r for r in ok if t_s["e"] <= r["e"] <= end["e"]]
@@ -594,6 +654,12 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run):
     out["breakdowns"] = {n: breakdown(t_s, end, n) for n in BREAKDOWNS}
     out["guardrails"] = guardrails(t_s, end)
     out["mechanism"] = mechanism(checks, window, span_ok, t_s, end, switches)
+    preset = ((run.get("config") or {}).get("settings_api") or {}).get("intensity")
+    if treatment == "lc":
+        out["mechanism"]["lookup_cost_pair"] = lookup_cost_pair(checks, window, switches, preset)
+    # CR-LEDGER's W, q and y; absent series are reported absent (older binaries).
+    out["ledger"] = {"window": ledger(t_s, end),
+                     "hourly": [ledger(a, b) for a, b in zip(bounds, bounds[1:])]}
     out["resources"] = resources(window)
     # Rule 1.7: the startup period and the warmup, with their own rates.
     first = span_ok[0]
@@ -616,6 +682,65 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run):
     }
     out["already_stored_and_rediscovered"] = {
         r: delta(t_s, end, "metadata_excluded_total", reason=r) for r in ("already_stored", "rediscovered")}
+    return out
+
+
+def optional_delta(a, b, name, **labels):
+    """A delta, or None when the series is absent at either end (never an error)."""
+    left, right = get(a["snap"], name, **labels), get(b["snap"], name, **labels)
+    return None if left is None or right is None else right - left
+
+
+def ledger(a, b):
+    """W, q and y over the scrapes a..b, from CR-LEDGER's identities (docs/metrics.md):
+    W = residence seconds / lookups ended, q = peer-lookup queries / lookups ended,
+    y = stored / lookups ended."""
+    parts = {
+        "residence_seconds": optional_delta(a, b, LEDGER["residence"]),
+        "lookups_ended": optional_delta(a, b, LEDGER["ended"]),
+        "peer_lookup_queries": optional_delta(a, b, LEDGER["queries"], purpose=collect.LEDGER_PEER_PURPOSE),
+        "stored": optional_delta(a, b, "metadata_new_verified_total", origin="network"),
+        "peer_lookup_seconds": optional_delta(a, b, "dht_peer_lookup_seconds_total"),
+        "peer_lookups_answered": optional_delta(a, b, "dht_peer_lookups_answered_total"),
+    }
+    reasons = [optional_delta(a, b, LEDGER["ended"], reason=r) for r in collect.LEDGER_VALUE_REASONS]
+    parts["ended_on_values"] = None if any(r is None for r in reasons) else sum(reasons)
+    ended, answered = parts["lookups_ended"], parts["peer_lookups_answered"]
+
+    def per(value, count):
+        return value / count if value is not None and count else None
+    return {"W_seconds": per(parts["residence_seconds"], ended), "q": per(parts["peer_lookup_queries"], ended),
+            "y": per(parts["stored"], ended),
+            "seconds_per_answered": per(parts["peer_lookup_seconds"], answered), **parts,
+            "absent": sorted(k for k, v in parts.items() if v is None)}
+
+
+def lookup_cost_pair(checks, window, switches, preset):
+    """r5.1 A1: with both switches on, lookups end on values, the slots go above 32 at
+    least once, and the query rate stays within the preset; otherwise the segment is void."""
+    led = ledger(window[0], window[-1])
+    occupied = [get(r["snap"], LEDGER["occupied"]) for r in window]
+    occupied = [v for v in occupied if v is not None]
+    rate = PRESET_QUERY_RATE.get(preset)
+    over, peak = [], None
+    for a, b in zip(window, window[1:]):
+        sent, seconds = optional_delta(a, b, "dht_queries_out_total"), b["e"] - a["e"]
+        if sent is None or seconds <= 0 or rate is None:
+            over.append(round(a["e"] - window[0]["e"]))
+            continue
+        peak = max(peak or 0.0, sent / seconds)
+        if sent > rate * (1 + VERIFY_SHARE) * (seconds + RATE_SLACK_SECONDS):
+            over.append(round(a["e"] - window[0]["e"]))
+    out = {"on": all(switches.get(s) for s in collect.TREATMENT_SWITCHES["lc"]),
+           "ended_on_values": led["ended_on_values"], "max_slots_occupied": max(occupied, default=None),
+           "peak_queries_per_second": peak, "preset_queries_per_second": rate,
+           "intervals_over_rate": len(over)}
+    if out["on"]:
+        checks.add("A1", "lookups_end_on_values", (led["ended_on_values"] or 0) > 0, "void")
+        checks.add("A1", "slots_exceed_32_once", (out["max_slots_occupied"] or 0) > A1_SLOTS, "void",
+                   {"max_slots_occupied": out["max_slots_occupied"]})
+        checks.add("A1", "query_rate_within_preset", len(window) > 1 and not over, "void",
+                   {"peak_queries_per_second": peak, "intervals_over_or_unread": len(over)} if over else None)
     return out
 
 
@@ -791,6 +916,17 @@ def markdown(report):
              f"- Spec: `{report.get('spec')}`" + (" (rehearsal: not gate evidence)" if report.get("rehearsal") else ""),
              f"- Verdict: **{report.get('verdict', report.get('state'))}**"
              + (f" ({', '.join(report['verdict_reasons'])})" if report.get("verdict_reasons") else ""), ""]
+    switches = (report.get("identity") or {}).get("switches")
+    if switches is not None:
+        lines += ["## Switches", "", "On: " + (", ".join(sorted(k for k, v in switches.items() if v)) or "none") + "."]
+        if "winners" in report:
+            lines.append("Stacked control (r5.1 A2), earlier winners: " + (", ".join(report["winners"]) or "none") + ".")
+        lines.append("")
+    led = (report.get("ledger") or {}).get("window")
+    if led:
+        lines += ["## Ledger", "", f"W {f(led['W_seconds'])} s, q {f(led['q'])}, y {f(led['y'], 4)} over "
+                  f"{f(led['lookups_ended'])} lookups ended"
+                  + (f"; absent: {', '.join(led['absent'])}" if led["absent"] else "") + ".", ""]
     num = report.get("numerator")
     if num:
         w = num["window"]
@@ -905,25 +1041,40 @@ def segment_view(report):
             "start_hour": t.get("host_local_start_hour"),
             "reason_at_start": (report.get("startup") or {}).get("suppression_reason_at_start"),
             "clean_stop": report.get("clean_stop"), "guardrails": report.get("guardrails") or {},
-            "minutes": w.get("minutes")}
+            "minutes": w.get("minutes"), "winners": report.get("winners"),
+            "ledger": (report.get("ledger") or {}).get("window")}
 
 
-def judge_block(reports, treatment):
-    """Rules 2.3, 5, 6.1, 6.2's zero rule and 6.7 for one block of four segments."""
-    switch = collect.TREATMENTS[treatment]
+def judge_block(reports, treatment, winners=None):
+    """Rules 2.3, 5, 6.1 (with r5.1 A1 and A2), 6.2's zero rule and 6.7 for one block of four segments."""
+    own = collect.TREATMENT_SWITCHES[treatment]
     segs = [segment_view(r) for r in reports]
     problems = []
     if len(reports) != 4 or any(r.get("kind") != "ab" or r.get("treatment") != treatment for r in reports):
         return {"valid": False, "problems": ["not_four_segments_of_this_treatment"], "segments": segs}
-    arms = "".join("B" if s["switches"].get(switch) else "A" for s in segs)
+
+    def arm(s):  # a pair is B only with both switches on (A1)
+        on = [bool(s["switches"].get(x)) for x in own]
+        return "B" if all(on) else "A" if not any(on) else "?"
+    arms = "".join(arm(s) for s in segs)
+    if "?" in arms:
+        problems.append("treatment_switches_split")
     if arms not in ("ABBA", "BAAB"):
         problems.append("order_not_abba_or_baab")
     for s in segs:
         if s["verdict"] == "invalid" or (s["verdict"] == "void" and s["reasons"] != ["no_opportunity"]):
             problems.append("segment_" + s["verdict"])
-    sets = {tuple(sorted((k, v) for k, v in s["switches"].items() if k != switch)) for s in segs}
+    # Compared as the switches on, so a switch an older collector didn't record reads off.
+    sets = {frozenset(k for k, v in s["switches"].items() if v and k not in own) for s in segs}
     if len(sets) != 1:
         problems.append("switch_set_differs")
+    # Every switch on in the control arm, printed beside the result (r5.1 A2's reporting).
+    control = sorted({k for s, a in zip(segs, arms) if a == "A" for k, v in s["switches"].items() if v})
+    if treatment in collect.STACKED:
+        if [k for k in control if k != "safe_restart"] != winners:
+            problems.append("control_not_the_stacked_winners")
+        if any(s["winners"] != winners for s in segs):
+            problems.append("segment_judged_with_other_winners")
     if len({s["digest"] for s in segs}) != 1 or not segs[0]["digest"]:
         problems.append("image_digest_differs")
     for a, b in zip(segs, segs[1:]):  # rule 2.3: a clean stop, then a start within 10 minutes
@@ -944,7 +1095,7 @@ def judge_block(reports, treatment):
             and any(s["verdict"] == "valid" and s["net"] is not None and s["net"] <= 0
                     for s, arm in zip(segs, arms) if arm == "B"))
     return {"valid": not problems, "problems": sorted(set(problems)), "order": arms, "loss_without_fit": loss,
-            "segments": segs, "host_local_start_hours": [s["start_hour"] for s in segs]}
+            "segments": segs, "host_local_start_hours": [s["start_hour"] for s in segs], "control_switches": control}
 
 
 def fit_effect(blocks, field, treatment_arm="B"):
@@ -993,11 +1144,18 @@ def outcome(fit, valid_blocks):
     return "inconclusive_run_blocks_3_and_4" if valid_blocks == 2 else "inconclusive_switch_stays_off"
 
 
-def analyze_effect(treatment, block_reports):
-    blocks = [judge_block(reports, treatment) for reports in block_reports]
+def analyze_effect(treatment, block_reports, winners=None):
+    winners = stack_args("ab", treatment, winners)
+    blocks = [judge_block(reports, treatment, winners) for reports in block_reports]
     valid = [b for b in blocks if b["valid"]]
-    out = {"schema": 1, "spec": SPEC, "treatment": treatment, "switch": collect.TREATMENTS[treatment],
+    own = collect.TREATMENT_SWITCHES[treatment]
+    out = {"schema": 1, "spec": SPEC, "treatment": treatment, "switch": "+".join(own),
            "blocks": blocks, "valid_blocks": len(valid)}
+    controls = sorted({tuple(b["control_switches"]) for b in valid})
+    # The control's switch set, beside the result (r5.1 A2); one set across the blocks.
+    out["control_switches"] = list(controls[0]) if len(controls) == 1 else [list(c) for c in controls]
+    if winners is not None:
+        out["winners"] = winners
     orders = [b["order"] for b in valid]
     paired = len(valid) in (2, 4) and all(orders[i] == ("ABBA" if i % 2 == 0 else "BAAB") for i in range(len(valid)))
     rehearsal = any(r.get("rehearsal") for reports in block_reports for r in reports)
@@ -1007,6 +1165,11 @@ def analyze_effect(treatment, block_reports):
                                for b in valid for s, a in zip(b["segments"], b["order"]) if a == "A" and s["verdict"] == "valid"]
     out["treatment_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
                                  for b in valid for s, a in zip(b["segments"], b["order"]) if a == "B" and s["verdict"] == "valid"]
+    out["ledger_by_arm"] = ledger_by_arm(valid)
+    if len(controls) > 1:
+        out.update(outcome="invalid", decided=False,
+                   reason="the control's switch set differs between blocks of this treatment (r5.1 A2)")
+        return out
     if not paired:
         out.update(outcome="not_decidable", decided=False,
                    reason="needs 2 or 4 valid blocks, ABBA then BAAB in pairs (rules 6.1, 6.3)")
@@ -1030,6 +1193,20 @@ def analyze_effect(treatment, block_reports):
                               for arm in "AB"},
         "guardrails": guardrail_fits(valid),
     }
+    return out
+
+
+def ledger_by_arm(blocks):
+    """CR-LEDGER's W, q and y per valid segment and arm, with each arm's plain mean."""
+    out = {}
+    for arm in "AB":
+        rows = [{k: (s["ledger"] or {}).get(k) for k in ("W_seconds", "q", "y")}
+                for b in blocks for s, a in zip(b["segments"], b["order"]) if a == arm and s["verdict"] == "valid"]
+        means = {}
+        for k in ("W_seconds", "q", "y"):
+            vals = [r[k] for r in rows if r[k] is not None]
+            means[k] = sum(vals) / len(vals) if vals and len(vals) == len(rows) else None
+        out[arm] = {"segments": rows, "mean": means}
     return out
 
 
@@ -1227,9 +1404,11 @@ def main(argv=None):
     p.add_argument("root", type=Path)
     p.add_argument("--output", type=Path, help="New JSON report path, outside the run directory")
     p.add_argument("--publish", type=Path, help="New directory for the publishable bundle (rule 7)")
+    p.add_argument("--winners", help="From stage 2: JSON file naming the earlier winners (r5.1 A2)")
     p = sub.add_parser("effect")
-    p.add_argument("--treatment", choices=sorted(collect.TREATMENTS), required=True)
+    p.add_argument("--treatment", choices=sorted(collect.TREATMENT_SWITCHES), required=True)
     p.add_argument("--block", nargs=4, action="append", required=True, metavar="REPORT")
+    p.add_argument("--winners", help="From stage 2: JSON file naming the earlier winners (r5.1 A2)")
     p.add_argument("--output", type=Path)
     p = sub.add_parser("route-baseline")
     p.add_argument("reports", nargs="+")
@@ -1248,13 +1427,13 @@ def main(argv=None):
             for path in (args.output, args.publish):
                 if path and path.resolve().is_relative_to(args.root.resolve()):
                     parser.error("Reports go outside the run directory")
-            report = analyze_segment(args.root)
+            report = analyze_segment(args.root, load_winners(args.winners) if args.winners else None)
             if args.publish:
                 publish(report, args.publish)
             write(report, args.output)
         elif args.command == "effect":
-            write(analyze_effect(args.treatment, [[load_report(p) for p in block] for block in args.block]),
-                  args.output)
+            write(analyze_effect(args.treatment, [[load_report(p) for p in block] for block in args.block],
+                                 load_winners(args.winners) if args.winners else None), args.output)
         elif args.command == "route-baseline":
             write(route_baseline([load_report(p) for p in args.reports]), None)
         elif args.command == "gate":
