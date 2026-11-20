@@ -5,6 +5,7 @@ export * from './saving';
 export { sectionValues } from './merge';
 export { validate } from './validate';
 export { askDisruptive, askToLeave } from './questions';
+export { ask } from './dialogs';
 export { default as DraftBanner } from './DraftBanner.svelte';
 export { default as ErrorSummary } from './ErrorSummary.svelte';
 export { default as FieldConflict } from './FieldConflict.svelte';

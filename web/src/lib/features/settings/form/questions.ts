@@ -36,8 +36,15 @@ export async function askToLeave(
 ): Promise<void> {
 	const answer = await askLeave(formatCount(form.dirtyCount, currentLocale()), signal);
 	if (answer === 'save') {
-		// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
-		const r = await form.save();
+		// A save already in flight (the bar's, ⌘S) answers `busy`: wait for it, then save what's
+		// left, so this button never closes the question having saved nothing.
+		let r = await form.save();
+		if (!r.ok && r.reason === 'busy') {
+			await form.settled();
+			r = await form.save();
+		}
+		// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved. Any
+		// other failure stays on the page, where the bar, the summary or the sign-in says why.
 		if (!r.ok && r.reason !== 'nothing') return;
 	} else if (answer === 'discard') form.discard();
 	else return;

@@ -12,6 +12,7 @@
 	import { loadControls } from './controls.svelte';
 	import { lazyPart } from './lazy.svelte';
 	import { loadEdit, loadedEdit, preloadSettingsForm, type SettingsForm } from './form.svelte';
+	import { rearmSignIn, signInPending } from './draft-scope';
 	import { hardNavigate, leaveDecision } from './leave';
 	import { loadMessages, messagesFailed, messagesLoaded } from './messages';
 	import type { FieldKey } from './types';
@@ -104,7 +105,7 @@
 	$effect(() => BarPart.want(barShown));
 	$effect(() => SummaryPart.want(summaryShown));
 	$effect(() => NoticePart.want(notice));
-	$effect(() => DraftPart.want(form.draft));
+	$effect(() => DraftPart.want(form.draft || form.kept));
 	// The edit chunk didn't load: nothing can be saved from this page until a reload. A stored
 	// draft whose offer didn't load says so on its own.
 	const partFailed = $derived(
@@ -237,12 +238,45 @@
 			type: nav.type,
 			from: nav.from?.url ?? null,
 			to: nav.to?.url ?? null,
-			bypass
+			bypass,
+			signIn: signInPending()
 		});
 		if (decision === 'allow') return;
+		if (decision === 'setup') {
+			// A re-claimed instance keeps nothing staged (the shell has dropped the drafts).
+			form.discard();
+			return;
+		}
 		nav.cancel(); // for 'leave', this raises the browser's own prompt
 		if (decision === 'prompt' && nav.to) void confirmLeave(nav.to.url, nav.willUnload);
+		if (decision === 'signin' && nav.to) void confirmSignIn(nav.to.url);
 	});
+
+	/** The session ended with unsaved changes: say so, keep the draft and go to sign in. */
+	async function confirmSignIn(to: URL) {
+		const reason = signInPending() === 'notice' ? 'notice' : 'expired';
+		let parts: [Awaited<ReturnType<typeof loadEdit>>, typeof import('./signed-out')];
+		try {
+			parts = await Promise.all([loadEdit(), import('./signed-out')]);
+		} catch {
+			// The question can't load: keep what can be kept and go to sign in anyway.
+			form.keepForSignIn();
+			hardNavigate(to.href);
+			return;
+		}
+		const [edit, { askSignedOut }] = parts;
+		await askSignedOut(edit.ask, form, to, reason, asking.signal, leaveTo, rearmSignIn);
+	}
+
+	async function leaveTo(href: string) {
+		bypass = true;
+		try {
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
+			await goto(href);
+		} finally {
+			bypass = false;
+		}
+	}
 
 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
 	async function confirmLeave(to: URL, unload: boolean) {
@@ -254,15 +288,7 @@
 			hardNavigate(to.href);
 			return;
 		}
-		await edit.askToLeave(form, to, unload, asking.signal, async (href) => {
-			bypass = true;
-			try {
-				// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
-				await goto(href);
-			} finally {
-				bypass = false;
-			}
-		});
+		await edit.askToLeave(form, to, unload, asking.signal, leaveTo);
 	}
 </script>
 
@@ -282,7 +308,7 @@
 		/>
 	{/if}
 
-	{#if form.draft && DraftPart.part}
+	{#if (form.draft || form.kept) && DraftPart.part}
 		<DraftPart.part {form} />
 	{:else if form.draftUnavailable}
 		<Banner kind="warning">

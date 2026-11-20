@@ -1,0 +1,11 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"settings_form_signed_out_title": "You've been signed out",
+	"settings_form_notice_title": "Accept the Legal Notice to save",
+	"settings_form_signed_out_body": "Your changes aren't saved yet ({count}). Save them once you're back. This browser tab keeps them meanwhile.",
+	"settings_form_signed_out_lost": "Your changes aren't saved yet ({count}). They can't be kept while you're away, so they'll be lost. Keep editing to note them down, or go on now.",
+	"settings_form_secrets_not_kept": "Passwords and keys aren't kept, so you'll need to enter them again.",
+	"settings_form_sign_in": "Sign in",
+	"settings_form_continue": "Continue",
+	"settings_form_kept_body": "Your changes are back after you signed in, but they aren't saved yet. Check them, then save."
+}

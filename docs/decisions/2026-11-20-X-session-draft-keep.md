@@ -1,0 +1,40 @@
+# X-session-draft-keep decisions
+
+Track U step 4, UI review L2 (`docs/review/2026-11-13-ui-ux/03-not-done.md`): a Settings save that finds the session ended now says so, keeps the draft across the sign-in, and restores it on return. The leave dialog's "Save changes" now saves. Architecture §10.10.5 ("unsaved work is never lost silently") and §10.14 (what happened, then what to do).
+
+## What changed
+- **A save that finds the session ended asks a question, not "Leave without saving?"**
+  - The 401 handler records why the app is going to sign in: `expired`, `notice` (the Legal Notice is due) or `setup`.
+  - The Settings leave guard reads that reason. A navigation to `/login` then gets its own decision, `signin`.
+  - The question is "You've been signed out" (or "Accept the Legal Notice to save"). It says how many changes aren't saved and whether this browser tab can keep them.
+  - **Sign in** keeps the draft and goes on. **Keep editing**, or Esc, stays, and the next save that finds the session ended asks again: the shell re-arms its once-only redirect.
+  - The question never promises what it can't keep. When storage is blocked, or the only changes are secrets, it says the changes will be lost. When secrets are among them, it says passwords and keys must be entered again.
+- **Restored on return, with one line.** Before going to sign in, the form writes its draft and a "kept" marker naming the form and the screen's path.
+  - When the sign-in returns to that screen, the draft is restored at once, without the usual Restore / Discard offer. A note says "Your changes are back after you signed in, but they aren't saved yet."
+  - The marker is honoured once, only on the screen it names, and only within 24 h. A different screen, a bad marker or an old one falls back to the usual draft offer.
+  - The note goes away on a save or a discard.
+- **The leave dialog's "Save changes" saves.** If a save is already in flight, it waits for that save, then saves what's left, instead of answering "busy" and closing having saved nothing. Any failure stays on the page, where the bar, the summary or the sign-in question says why. The review's case (the session ended) is now the signed-out question.
+
+## Safety (the runner's brief; `/security-review` before merge)
+- **No secret reaches a draft, by the schema's flags.**
+  - The form already skipped `writeOnly` fields. It now also skips any field whose schema holds a `writeOnly` subschema anywhere (`FieldSpec.holdsSecret`).
+  - That covers `integrations.clients`, whose items' `password` key is the server's `secret_keys`. Before, a password typed into a client could have been drafted.
+  - A schema that can't be serialized counts as holding a secret.
+  - The restore re-checks the same flag, so a crafted stored draft can't bring a secret back.
+  - `draft-keep.test.ts` walks every field of B2's golden `GET /settings` and finds each one that is or holds a `writeOnly` subschema: the seven server secrets today, plus any new one automatically. It then checks that none is drafted or restored.
+- **`sessionStorage` only, scoped to this tab.** The draft, the marker and the sign-in reason are never in `localStorage`.
+  - **Sign out drops every draft and the marker** (`logout()`).
+  - So does **a 401 with `setup_required`**: the instance was re-claimed, so it may have a new owner. The leave guard then lets the navigation to `/setup` go and discards what was staged.
+  - **"A different account."** The runner's call is pending: see the open item below. Lodestar has one admin password and no usernames, and no API exposes an account or session identity. So the draft is kept only across a session expiry and dropped on every deliberate end. Sign out and a re-claimed instance are the only ways another owner reaches this tab.
+- **Bounded and fail-safe.** Drafts stay capped at 64 KiB. A marker over 4 KiB, unparseable or of the wrong shape reads as none and is removed. Every storage access is wrapped, so blocked or full storage loses only the convenience.
+- **`next` is unchanged.** It stays same-origin, relative and never an auth or API path. New tests cover the Settings return (path, query and field anchor) and reject `/settings/../login`, `/settings/../api/…` and off-site forms.
+
+## How the pieces share state
+- The shell's session (`auth/session.svelte.ts`) and the form's `settings/form/draft-scope.ts` share only `sessionStorage` keys and one window event (`lodestar:signin-rearm`), never an import.
+  - Why: an import either way made the bundler split a shared chunk into every Settings first view. That cost about 1 to 3 kB against a 45 KB route budget with 0.24 kB of headroom.
+  - `session.test.ts` checks that the key names match.
+- The signed-out question is its own on-demand file, `signed-out.ts`, loaded only when a save finds the session ended. It takes the edit chunk's `ask`, so the dialog code isn't duplicated or split. Restoring the kept draft lives in `saving.ts`, in the edit chunk.
+
+## Open: needs the runner
+- **The size budgets.** Measured with `signed-out.ts` listed as on demand: the Settings first views grow about 0.82 kB (44.76 to 45.58 kB, limit 45), the edit chunk 0.34 kB (11.12 to 11.46, limit 11.3) and Wizard steps 0.78 kB (53.65 to 54.43, limit 53.7). The runner decides budget changes under owner decision §2.26. This PR is red on size-limit until that's settled. The decision and its edit to `web/.size-limit.mjs` will be recorded here.
+- **"Keyed by account."** No account identity exists client-side. The runner was asked to choose between keeping a draft only across an expiry and dropping it on every deliberate end (built), and having the server add an opaque id to `GET /auth`.

@@ -44,6 +44,9 @@ export interface FieldSpec {
 	config?: string;
 	env?: string;
 	writeOnly: boolean;
+	/** A secret anywhere in the field's schema (a list whose items carry a credential): such a
+	 * field is never kept in a draft (`neverDrafted`). Absent when there's none. */
+	holdsSecret?: true;
 	readOnly: boolean;
 	restartRequired: boolean;
 }

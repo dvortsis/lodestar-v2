@@ -41,7 +41,8 @@ const ON_DEMAND = [
 	'FieldMenu.svelte',
 	'FieldKeys.svelte',
 	'save-key.ts',
-	'copy.ts'
+	'copy.ts',
+	'signed-out.ts'
 ];
 
 const STATIC = /(?:^|\n)\s*import\s+(?!type\b)[^'"]*?from\s+['"]\.\/([^'"]+)['"]/g;

@@ -40,4 +40,24 @@ describe('leaveDecision', () => {
 			'prompt'
 		);
 	});
+
+	it('answers signin when the session ended and the app goes to sign in', () => {
+		const to = at('/login?next=%2Fsettings%2Fcrawler');
+		expect(leaveDecision({ ...base, to, signIn: 'expired' })).toBe('signin');
+		expect(leaveDecision({ ...base, to, signIn: 'notice' })).toBe('signin');
+		// Not without a pending sign-in (a plain link to /login asks as usual).
+		expect(leaveDecision({ ...base, to })).toBe('prompt');
+		// Only to sign in, and only with something unsaved.
+		expect(leaveDecision({ ...base, to: at('/search'), signIn: 'expired' })).toBe('prompt');
+		expect(leaveDecision({ ...base, to, signIn: 'expired', dirty: false })).toBe('allow');
+		expect(
+			leaveDecision({ ...base, to: new URL('http://other.test/login'), signIn: 'expired' })
+		).toBe('prompt');
+	});
+
+	it('lets a re-claimed instance go to setup', () => {
+		expect(leaveDecision({ ...base, to: at('/setup'), signIn: 'setup' })).toBe('setup');
+		expect(leaveDecision({ ...base, to: at('/login'), signIn: 'setup' })).toBe('prompt');
+		expect(leaveDecision({ ...base, to: at('/setup') })).toBe('prompt');
+	});
 });

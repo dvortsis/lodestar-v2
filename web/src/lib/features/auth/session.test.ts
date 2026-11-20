@@ -13,7 +13,23 @@ vi.mock('./nav', () => nav);
 import { api } from '$lib/api/client';
 import { cacheDetail, cachedDetail, onDetailInvalidated } from '$lib/features/detail/cache';
 import { HASH, torrentDetail } from '$lib/features/detail/fixtures';
-import { currentSession, installAuthHandlers, logout, setSession } from './session.svelte';
+import {
+	clearSettingsDrafts,
+	currentSession,
+	installAuthHandlers,
+	logout,
+	rearmSignIn,
+	REARM_EVENT,
+	SETTINGS_DRAFTS_PREFIX,
+	setSession,
+	SIGN_IN_KEY,
+	signInPending
+} from './session.svelte';
+import * as scope from '$lib/features/settings/form/draft-scope';
+
+const { DRAFT_PREFIX, KEPT_KEY } = scope;
+const markKept = (id: string, path: string, at: number) =>
+	sessionStorage.setItem(KEPT_KEY, JSON.stringify({ id, path, at }));
 
 const json = (status: number, body: unknown) =>
 	new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -179,5 +195,110 @@ describe('logout', () => {
 		await expect(logout()).rejects.toMatchObject({ code: 'network' });
 		expect(nav.toLogin).not.toHaveBeenCalled();
 		expect(currentSession()).toBe('signed_in');
+	});
+});
+
+describe('Settings drafts across the session (X-session-draft-keep)', () => {
+	const seed = () => {
+		sessionStorage.clear();
+		sessionStorage.setItem(DRAFT_PREFIX + 'crawler', '{"v":1}');
+		markKept('crawler', '/settings/crawler', Date.now());
+	};
+	const stored = () => [DRAFT_PREFIX + 'crawler', KEPT_KEY].map((k) => sessionStorage.getItem(k));
+
+	it('keeps them when the session expires, and says a sign-in is pending', async () => {
+		seed();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => expired(false))
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(signInPending()).toBe('expired');
+		expect(stored().every((v) => v !== null)).toBe(true);
+		setSession('signed_in');
+		expect(signInPending()).toBeNull();
+	});
+
+	it('keeps them for the Legal Notice, which keeps the session', async () => {
+		seed();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				json(409, { error: { code: 'notice_required', message: 'Read it first.' } })
+			)
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(signInPending()).toBe('notice');
+		expect(stored().every((v) => v !== null)).toBe(true);
+	});
+
+	it('drops them all on Sign out', async () => {
+		seed();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => json(200, { ok: true }))
+		);
+		await logout();
+		expect(stored()).toEqual([null, null]);
+		expect(signInPending()).toBeNull();
+	});
+
+	it('drops them all when the instance needs its first-run setup again', async () => {
+		seed();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => expired(true))
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(stored()).toEqual([null, null]);
+		expect(signInPending()).toBe('setup');
+	});
+
+	it('redirects again after the user chose to stay', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => expired(false))
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(nav.toLoginFrom).toHaveBeenCalledTimes(1); // once until a request works
+		rearmSignIn();
+		expect(signInPending()).toBeNull();
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(nav.toLoginFrom).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('the keys the shell and the Settings form share (no import between them)', () => {
+	it('match', () => {
+		expect(scope.SIGN_IN_KEY).toBe(SIGN_IN_KEY);
+		expect(scope.REARM_EVENT).toBe(REARM_EVENT);
+		expect(DRAFT_PREFIX.startsWith(SETTINGS_DRAFTS_PREFIX)).toBe(true);
+		expect(KEPT_KEY.startsWith(SETTINGS_DRAFTS_PREFIX)).toBe(true);
+		expect(SIGN_IN_KEY.startsWith(SETTINGS_DRAFTS_PREFIX)).toBe(false); // a draft clear keeps it
+	});
+
+	it('the form sees what the shell wrote, and its re-arm reaches the shell', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => expired(false))
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(scope.signInPending()).toBe('expired');
+		scope.rearmSignIn(); // the window event
+		expect(signInPending()).toBeNull();
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(nav.toLoginFrom).toHaveBeenCalledTimes(2);
+	});
+
+	it('clearSettingsDrafts drops every draft and the marker, and nothing else', () => {
+		sessionStorage.clear();
+		sessionStorage.setItem(DRAFT_PREFIX + 'crawler', '{}');
+		sessionStorage.setItem(DRAFT_PREFIX + 'notifications', '{}');
+		markKept('crawler', '/settings/crawler', 1);
+		sessionStorage.setItem('lodestar.other', 'kept');
+		clearSettingsDrafts();
+		expect(sessionStorage.length).toBe(1);
+		expect(sessionStorage.getItem('lodestar.other')).toBe('kept');
 	});
 });
