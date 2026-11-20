@@ -8947,6 +8947,26 @@
     {
       "id": "GS-3-r1",
       "notes": "2026-11-20T07:40Z #973 review at f7f36845: CHANGES relayed (B1 exact-count double budget; I1 members() unbounded per group; I2 window_bound per chunk + cursor-page bench column; O1-O4)."
+    },
+    {
+      "id": "gluetun-retest-950",
+      "notes": "2026-11-20T07:41Z X-test-vm re-test of #950 on main 50bdbc20 (AWS Ubuntu, unprivileged): F3 FIXED. Worst recovery 41.4 s (target ~30 s); docker restart x5 32.5-41.4 s, kill -9 x3 34.6-41.2 s, 0 panics; in-gluetun VPN reconnect no restart; leak test 55/0, egress 0. Teardown verified, ~1.6 instance-h (~$0.27). Documented gaps confirmed (gluetun down >35 s keeps Lodestar down; out-of-compose recreate needs compose up --force-recreate; docker kill = manual stop)."
+    },
+    {
+      "id": "X-network-lost-msg",
+      "notes": "2026-11-20T07:41Z Small slice: system.network_lost message reads \"for this many seconds\" with the number missing (from #950 re-test). Sonnet-sized; queue for a free slot."
+    },
+    {
+      "id": "X-leaktest-wg0-flake",
+      "notes": "2026-11-20T07:41Z Leak test vpn_interface_held_down flaked once: gluetun re-raised wg0 (0 packets leaked); rerun passed. Harness fix to wait/tolerate re-raise without loosening the leak assertion."
+    },
+    {
+      "id": "X-test-vm-runbook-step6",
+      "notes": "2026-11-20T07:41Z linux-aws.md step 6: using /opt/lodestar-run as both leak-test.sh workdir and stack fails compose_installed; use a separate work copy. Coordinator folds into a later docs fix (not #864); fold into X-test-vm-fix if it lands first."
+    },
+    {
+      "id": "X-snapshot-claims-retention-976",
+      "notes": "2026-11-20T07:41Z #976 head c2d3cd62 opened; fresh Opus+security review running. Runner calls (\u00a72.19 flags): size ~1,232 (60% tests) accepted; extra owns crates/pipeline/tests/snapshot_terms.rs accepted; fail-closed delete of unverifiable V15+ snapshot and claims purge on newer-schema snapshots accepted subject to review."
     }
   ],
   "main_health": [
@@ -10543,7 +10563,7 @@
     }
   ],
   "heartbeat": "2026-11-20T06:38Z",
-  "updated": "2026-11-20T07:40Z",
+  "updated": "2026-11-20T07:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
