@@ -2,7 +2,9 @@
 //! GS-3): one row per group of versions with `others`, groups and
 //! torrents counted, collapsed cursors that never repeat or skip a group
 //! while torrents arrive, the ungrouped fallback while group data isn't
-//! ready, and cursors of either kind kept to their own requests.
+//! ready, and cursors of either kind kept to their own requests. Also
+//! the errors for its parameters: a repeated one is named, and an
+//! unknown value is echoed short and printable.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -407,6 +409,81 @@ async fn collapse_takes_group_none_or_nothing_and_names_them_otherwise() {
 }
 
 #[tokio::test]
+async fn a_repeated_parameter_is_named() {
+    let f = fixture(9);
+    let c = session(&f).await;
+    for (name, value) in [
+        ("q", "movie"),
+        ("ast", "x"),
+        ("sort", "size"),
+        ("limit", "5"),
+        ("offset", "0"),
+        ("hidden", "true"),
+        ("tz", "0"),
+        ("cursor", "x"),
+        ("collapse", "group"),
+        ("exact", "1"),
+        ("explain", "1"),
+    ] {
+        let uri = format!("/api/v1/search?{name}={value}&q=movie&{name}={value}");
+        let (status, _, body) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        let e = &body["error"];
+        assert_eq!(e["code"], "repeated_parameter", "{uri}: {body}");
+        assert_eq!(e["field"], name, "{uri}: {body}");
+        assert_eq!(
+            e["message"],
+            format!("{name} was sent more than once: send it once."),
+            "{uri}"
+        );
+    }
+    // Unknown parameters stay ignored, repeated or not.
+    let (status, _, body) = call(&f.app, get("/api/v1/search?q=movie&x=1&x=2", &c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn an_unknown_value_is_echoed_short_and_printable() {
+    let f = fixture(9);
+    let c = session(&f).await;
+    for name in ["sort", "collapse"] {
+        // 10 kB: the echo stops at 64 characters and says so.
+        let long = "z".repeat(10_240);
+        let (status, _, body) = call(
+            &f.app,
+            get(&format!("/api/v1/search?q=movie&{name}={long}"), &c),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+        let message = body["error"]["message"].as_str().unwrap();
+        let shown = format!("\"{}…\"", "z".repeat(64));
+        assert!(message.contains(&shown), "{name}: {message}");
+        assert!(message.len() < 300, "{name}: {} bytes", message.len());
+        // Control characters (a newline, an escape sequence, a NUL) come
+        // back escaped, never raw.
+        let raw = "a\n\u{1b}[31mb\u{0}";
+        let (status, _, body) = call(
+            &f.app,
+            get(
+                &format!("/api/v1/search?q=movie&{name}={}", encode(raw)),
+                &c,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(
+            !message.chars().any(char::is_control),
+            "{name}: {message:?}"
+        );
+        assert!(
+            message.contains(r#""a\n\u{1b}[31mb\0""#),
+            "{name}: {message}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn cursors_stay_with_their_own_kind_of_request() {
     let f = fixture(60);
     let c = session(&f).await;
@@ -426,12 +503,30 @@ async fn cursors_stay_with_their_own_kind_of_request() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "bad_cursor");
+    assert_eq!(body["error"]["field"], "cursor");
+    assert_eq!(
+        body["error"]["message"],
+        "That cursor belongs to an ungrouped search: send it without collapse=group, or start the search again."
+    );
     let grouped = "/api/v1/search?q=movie&limit=2&collapse=group";
     let (_, _, first) = call(&f.app, get(grouped, &c)).await;
     let cursor = encode(first["next_cursor"].as_str().unwrap());
-    let (status, _, body) = call(&f.app, get(&format!("{base}&cursor={cursor}"), &c)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["error"]["code"], "bad_cursor");
+    // A collapsed cursor without its collapse value, and with the other
+    // one: the error says which search it belongs to.
+    for uri in [
+        format!("{base}&cursor={cursor}"),
+        format!("{base}&collapse=none&cursor={cursor}"),
+    ] {
+        let (status, _, body) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert_eq!(body["error"]["code"], "bad_cursor", "{uri}");
+        assert_eq!(body["error"]["field"], "cursor", "{uri}");
+        assert_eq!(
+            body["error"]["message"],
+            "That cursor belongs to a collapsed search: send collapse=group with it, or start the search again.",
+            "{uri}"
+        );
+    }
     let (status, _, page) = call(&f.app, get(&format!("{grouped}&cursor={cursor}"), &c)).await;
     assert_eq!(status, StatusCode::OK, "{page}");
 }

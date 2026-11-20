@@ -192,7 +192,12 @@ pub fn routes() -> Router<ApiState> {
     auth::protected(
         Router::new()
             .route("/parse", get(parse_query))
-            .route("/search", get(search_route).post(search_post))
+            .route(
+                "/search",
+                get(search_route)
+                    .post(search_post)
+                    .layer(axum::middleware::from_fn(single_valued)),
+            )
             .route("/search/state", get(index_state)),
     )
 }
@@ -271,6 +276,59 @@ pub(crate) async fn parse_query(
     }))
 }
 
+/// The query parameters `/search` takes, each at most once. The same
+/// names as [`SearchRequest`]'s fields (a test checks them).
+const SEARCH_PARAMS: [&str; 11] = [
+    "q", "ast", "sort", "limit", "offset", "hidden", "tz", "cursor", "collapse", "exact", "explain",
+];
+
+/// The first of [`SEARCH_PARAMS`] that `query` sends more than once.
+fn repeated(query: &str) -> Option<&'static str> {
+    let mut seen = [false; SEARCH_PARAMS.len()];
+    for (key, _) in form_urlencoded::parse(query.as_bytes()) {
+        if let Some(i) = SEARCH_PARAMS.iter().position(|p| *p == key) {
+            if seen[i] {
+                return Some(SEARCH_PARAMS[i]);
+            }
+            seen[i] = true;
+        }
+    }
+    None
+}
+
+/// Refuses a `/search` query that repeats a parameter, naming it, before
+/// the extractor would refuse it as a generic "wrong type or value".
+async fn single_valued(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if let Some(name) = req.uri().query().and_then(repeated) {
+        return ApiError::bad_request(
+            "repeated_parameter",
+            format!("{name} was sent more than once: send it once."),
+        )
+        .field(name)
+        .into_response();
+    }
+    next.run(req).await
+}
+
+/// The longest a value is echoed back in an error, in characters.
+const ECHO_MAX: usize = 64;
+
+/// A request value as an error message shows it: quoted, at most
+/// [`ECHO_MAX`] characters (cut on a character boundary and marked with
+/// "…"), with control and other unprintable characters escaped, so an
+/// error can neither grow with the request nor carry them.
+fn echo(value: &str) -> String {
+    let mut shown: String = value.chars().take(ECHO_MAX).collect();
+    if value.chars().nth(ECHO_MAX).is_some() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
+
 /// `collapse`: `group` or `none` (the default), parsed through
 /// [`CollapseMode`] so the values, this error and the schema agree.
 fn collapse_param(s: Option<&str>) -> ApiResult<bool> {
@@ -283,7 +341,7 @@ fn collapse_param(s: Option<&str>) -> ApiResult<bool> {
             let values: Vec<&str> = CollapseMode::ALL.iter().map(|m| m.as_str()).collect();
             Err(ApiError::bad_request(
                 "unknown_collapse",
-                format!("Unknown collapse {s:?}: use {}.", values.join(" or ")),
+                format!("Unknown collapse {}: use {}.", echo(s), values.join(" or ")),
             )
             .field("collapse"))
         }
@@ -311,7 +369,8 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
             return Err(ApiError::bad_request(
                 "unknown_sort",
                 format!(
-                    "Unknown sort {other:?}: use relevance, discovered, size, files, seeders, leechers, trackers or seen, with + or - for the order."
+                    "Unknown sort {}: use relevance, discovered, size, files, seeders, leechers, trackers or seen, with + or - for the order.",
+                    echo(other)
                 ),
             )
             .field("sort"));
@@ -466,7 +525,7 @@ async fn run_search(
     // ungrouped one may continue `collapse=group` when group data wasn't
     // ready in its lease: checked against the lease below.)
     if cursor.is_some_and(|c| c.collapse && !collapse) {
-        return Err(bad_cursor());
+        return Err(cursor_kind(true));
     }
     let exact = p.exact.unwrap_or(false);
     let reader = s.reader.clone();
@@ -541,8 +600,18 @@ async fn run_search(
             None
         };
         let collapsed = collapse && unavailable.is_none();
-        if cursor.is_some_and(|c| c.collapse != collapsed) {
-            return Err(bad_cursor());
+        if let Some(c) = cursor.filter(|c| c.collapse != collapsed) {
+            return Err(if c.collapse {
+                // Asked for, but this snapshot has no group data.
+                ApiError::bad_request(
+                    "bad_cursor",
+                    "That cursor belongs to a collapsed search, and group data isn't ready now: \
+                     start the search again.",
+                )
+                .field("cursor")
+            } else {
+                cursor_kind(false)
+            });
         }
         // A collapsed search counts torrents and groups together, under
         // one budget when exact (`collapse::counts`).
@@ -1093,6 +1162,20 @@ pub(crate) fn search_error(e: SearchError) -> ApiError {
     }
 }
 
+/// A cursor sent with the other kind of request: a collapsed one
+/// without `collapse=group`, or an ungrouped one with it. Still
+/// `bad_cursor`, which the UI answers by starting again.
+fn cursor_kind(collapsed: bool) -> ApiError {
+    let message = if collapsed {
+        "That cursor belongs to a collapsed search: send collapse=group with it, or start the \
+         search again."
+    } else {
+        "That cursor belongs to an ungrouped search: send it without collapse=group, or start \
+         the search again."
+    };
+    ApiError::bad_request("bad_cursor", message).field("cursor")
+}
+
 fn bad_cursor() -> ApiError {
     ApiError::bad_request(
         "bad_cursor",
@@ -1319,6 +1402,64 @@ pub(crate) fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_params_are_the_request_fields() {
+        let fields = serde_json::to_value(SearchRequest::default()).unwrap();
+        let mut fields: Vec<&str> = fields
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        fields.sort_unstable();
+        let mut params = SEARCH_PARAMS.to_vec();
+        params.sort_unstable();
+        assert_eq!(fields, params);
+    }
+
+    #[test]
+    fn repeated_names_the_first_parameter_sent_twice() {
+        assert_eq!(repeated("q=a&sort=size"), None);
+        assert_eq!(repeated("q=a&sort=size&sort=-size"), Some("sort"));
+        assert_eq!(repeated("tz=1&q=a&tz=2&q=b"), Some("tz"));
+        // Percent-encoded names count; unknown names are left alone.
+        assert_eq!(repeated("c%6Fllapse=group&collapse=none"), Some("collapse"));
+        assert_eq!(repeated("x=1&x=2"), None);
+    }
+
+    #[test]
+    fn echo_is_bounded_quoted_and_printable() {
+        assert_eq!(echo("bogus"), "\"bogus\"");
+        // A long value: 64 characters, then "…", cut on a character
+        // boundary even inside multi-byte text.
+        let long = "é".repeat(10_000);
+        let shown = echo(&long);
+        assert_eq!(shown, format!("{:?}", format!("{}…", "é".repeat(ECHO_MAX))));
+        assert!(shown.len() < 200, "{}", shown.len());
+        assert_eq!(
+            echo(&"x".repeat(ECHO_MAX)),
+            format!("\"{}\"", "x".repeat(ECHO_MAX))
+        );
+        // Control and unprintable characters come out escaped, never raw.
+        for raw in [
+            "a\nb",
+            "a\rb",
+            "a\u{1b}[31mb",
+            "a\u{0}b",
+            "a\u{7f}b",
+            "a\u{202e}b",
+            "a\u{2028}b",
+        ] {
+            let shown = echo(raw);
+            assert!(
+                !shown
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '\u{202e}' | '\u{2028}')),
+                "{raw:?} -> {shown}"
+            );
+        }
+    }
 
     fn tag(key: TagKey, v: &str) -> Node {
         Node::Tag {

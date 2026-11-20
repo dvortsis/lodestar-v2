@@ -652,6 +652,7 @@ placement:
   - RX-2
   - GS-3
   - X-gs3-nits
+  - X-search-param-errors
   - ENR-12
   - UP-2
   - X-watch-env
