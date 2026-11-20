@@ -2133,6 +2133,7 @@ mod tests {
             "lodestar_dht_lookup_ended_total{reason=\"deadline\"} 3",
             "lodestar_dht_lookup_ended_total{reason=\"values\"} 2",
             "lodestar_dht_lookup_ended_total{reason=\"shutdown\"} 0",
+            "lodestar_dht_lookup_ended_total{reason=\"enough_values\"} 0",
             "lodestar_dht_lookup_residence_seconds_total{reason=\"deadline\"} 75.000",
             "lodestar_dht_lookup_residence_seconds_total{reason=\"query_cap\"} 0.000",
             "lodestar_dht_queries_sent_total{purpose=\"hint\"} 4",

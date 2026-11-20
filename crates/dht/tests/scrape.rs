@@ -33,6 +33,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         paused: false,
         restart: None,
         responder_hints: false,
+        lookup_end: false,
         target_prefixes: false,
         utp: None,
         shard: None,
