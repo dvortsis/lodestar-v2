@@ -46,17 +46,19 @@ Track U step 4, UI review L2 (`docs/review/2026-11-13-ui-ux/03-not-done.md`): a 
 
 One change outside this slice's files, approved by the runner: `web/.size-limit.mjs` lists `signed-out.ts`, `kept-restore.ts` and `KeptNote.svelte` in `settingsOnDemand`. The screen entries then stop at them, and "Settings controls (on demand)" gates them.
 
-Measured with those lines (main → this PR, kB):
+Measured with those lines (kB). The runner confirmed these exact limits as its call under §2.26: each over-budget entry rises by its measured overage, rounded up to the next 0.1 kB, and no more. No other limit moves.
 
-| Entry                           | main  | here  | Limit before | Limit now |
-| ------------------------------- | ----- | ----- | ------------ | --------- |
-| Settings section (own JS + CSS) | 44.76 | 45.45 | 45           | 45.5      |
-| Settings edit chunk             | 11.12 | 11.22 | 11.3         | 11.3      |
-| Settings controls (on demand)   | 33.64 | 35.73 | 38           | 38        |
-| InsightsScreen first view       | 44.58 | 45.28 | 45           | 45.3      |
-| LanguageScreen first view       | 44.38 | 45.08 | 45           | 45.1      |
-| NotificationsScreen first view  | 44.79 | 45.49 | 45.2         | 45.5      |
-| Wizard steps (on demand)        | 53.65 | 54.32 | 53.7         | 54.4      |
+| Entry                                        | main         | here         | Δ            | Limit before | Limit now   |
+| -------------------------------------------- | ------------ | ------------ | ------------ | ------------ | ----------- |
+| Settings section (own JS + CSS)              | 44.76        | 45.45        | +0.69        | 45           | 45.5        |
+| InsightsScreen first view                    | 44.58        | 45.28        | +0.70        | 45           | 45.3        |
+| LanguageScreen first view                    | 44.38        | 45.08        | +0.70        | 45           | 45.1        |
+| NotificationsScreen first view               | 44.79        | 45.49        | +0.70        | 45.2         | 45.5        |
+| Wizard steps (on demand)                     | 53.65        | 54.32        | +0.67        | 53.7         | 54.4        |
+| Settings edit chunk                          | 11.12        | 11.22        | +0.10        | 11.3         | 11.3 (fits) |
+| Settings controls (on demand)                | 33.64        | 35.73        | +2.09        | 38           | 38 (fits)   |
+| LoggingScreen, IntegrationsScreen first view | 43.97, 43.95 | 44.68, 44.65 | +0.71, +0.70 | 45           | 45 (fit)    |
 
-- The runner approved raising each over-budget entry by its measured overage, rounded up to the next 0.1 kB, and no more. _(Pending the runner's confirmation of these exact values.)_
-- **Why the wizard grows:** `wizard/FieldsStep.svelte` and `wizard/UpdatesStep.svelte` import `SettingsForm` statically (through `settings/form/embed`, with `leaveGuard={false}`). So they pay for the same first-view engine code, though they never use the leave path. Taking it out for the wizard means splitting the leave guard out of `SettingsForm`, a change to the shared engine beyond this slice. It is offered to the runner as a follow-up.
+- **Why the first views grow:** what stays always loaded is safety. That is the secret flag for list fields, the tracking of a save in flight (`settled()`), the draft-write block after a Sign out, the sign-in state read, the leave decision and the one-line hook. The 401 path itself, the question and the restore all load on demand.
+- **Why the wizard grows:** `wizard/FieldsStep.svelte` and `wizard/UpdatesStep.svelte` import `SettingsForm` statically (through `settings/form/embed`, with `leaveGuard={false}`). So they pay for the same first-view engine code, though they never use the leave path.
+- **Planned give-back:** the runner is queuing `X-settings-leave-guard-split`. It splits the leave guard out of `SettingsForm`, so the wizard's embed stops paying for it and the 0.67 kB comes back.
