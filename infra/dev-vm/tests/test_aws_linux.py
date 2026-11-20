@@ -61,10 +61,41 @@ class PiaAwsModeTest(unittest.TestCase):
         # Root runs the stack from here; lodestar must not own any part of it.
         text = (HERE / "pia-login.sh").read_text()
         self.assertIn('if [[ $mode == aws ]]; then run_dir=/opt/lodestar-run;', text)
-        self.assertIn("must be a root-owned folder writable by root only", text)
+        self.assertIn('require_root_only "$run_dir"', text)
         self.assertIn('[[ $run_dir == /home/lodestar/lodestar && $mode != aws ]]', text)
         runbook = (HERE / "linux-aws.md").read_text()
         self.assertIn("everything root runs lives in `/opt/lodestar-run`, never under `~lodestar`", runbook)
+
+    def test_aws_mode_runs_only_a_root_only_step_and_ca(self):
+        # O2: the step and CA must be root-only, checked before the secret is read.
+        text = (HERE / "pia-login.sh").read_text()
+        check = text.index('if [[ $mode == aws ]]; then\n  require_root_only "$step"\n  require_root_only "$ca"\nfi')
+        self.assertLess(check, text.index("curl --fail"))
+        self.assertLess(check, text.index("aws secretsmanager get-secret-value"))
+
+    def test_require_root_only_refuses_a_path_others_can_write(self):
+        text = (HERE / "pia-login.sh").read_text()
+        fn = re.search(r"^require_root_only\(\) \{\n.*?^\}\n", text, re.S | re.M).group(0)
+
+        def run(path):
+            return subprocess.run(["bash", "-c", fn + 'require_root_only "$1"; echo ok', "_", path],
+                                  capture_output=True, text=True)
+
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / "pia-wireguard.sh"
+            f.write_text("")
+            r = run(str(f))  # under /tmp (sticky, world-writable) and, as a non-root user, not root's
+            self.assertEqual(r.returncode, 2, r)
+            self.assertIn("must be owned by root and writable by root only", r.stderr)
+            self.assertNotIn("ok", r.stdout)
+            link = pathlib.Path(d) / "link"
+            link.symlink_to("/bin/sh")
+            self.assertEqual(run(str(link)).returncode, 2)
+        root_owned = next((p for p in ("/usr/bin/env", "/bin/sh") if pathlib.Path(p).stat().st_uid == 0
+                           and not pathlib.Path(p).is_symlink()), None)
+        if root_owned:
+            r = run(root_owned)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"), r)
 
     def test_aws_mode_reads_into_memory_and_keeps_nothing(self):
         text = (HERE / "pia-login.sh").read_text()

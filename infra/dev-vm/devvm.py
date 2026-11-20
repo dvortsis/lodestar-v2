@@ -149,8 +149,12 @@ def firewall_rules(admin_ip: str | None) -> dict:
 
 
 def check_ip(ip: str) -> str:
-    addr = ipaddress.IPv4Address(ip)
-    if not addr.is_global:
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ValueError:
+        sys.exit(f"{ip!r} is not an IPv4 address")
+    # is_global alone lets multicast through (224.0.0.0/4 counts as global).
+    if not addr.is_global or addr.is_multicast:
         sys.exit(f"{ip} is not a public IPv4 address")
     return str(addr)
 

@@ -1,5 +1,7 @@
 # The Windows test VM (X-test-vm)
 
+> **Current flow:** the stack is deployed, so a session starts at **Phase 2** below, signed in as `lodestar-claude-testvm`. **Phase 1 is historical** (the first deployment, 2026-11-12Z): updating the stack is now the owner's step in [`linux-aws.md`](linux-aws.md) ("One-time setup"). The runner's check list in Phase 2 step 5 records the first runs; take the current checks from your brief.
+
 One AWS Windows Server instance that Claude creates, tests on and deletes. It runs the Windows lane of `docs/plan/2026-11-08-cloud-test-plan.md` (Lane W) and the runner's Windows checks. Decisions and the owner's words: `docs/decisions/2026-11-12-X-test-vm.md`.
 
 | | |
@@ -19,18 +21,18 @@ One AWS Windows Server instance that Claude creates, tests on and deletes. It ru
 
 ## Two phases, because a session reads its connectors when it starts
 
-### Phase 1: setup, on the owner's one-time admin sign-in
-The owner has signed the AWS MCP connector in as their admin. A new session started after that does only this, then stops:
+### Phase 1 (historical): setup, on the owner's one-time admin sign-in
+Kept for the record; don't run it. The owner had signed the AWS MCP connector in as their admin. A new session started after that does only this, then stops:
 1. **Find the IDs; never write them to the repo.**
    - VPC, subnet, security group and instance profile: the **outputs** of the `lodestar-foundation` stack. The guard stack's live parameters hold only `NotificationEmail`.
    - Subnet: confirm with `DescribeSubnets` in that VPC. If there's more than one, ask the owner.
-   - Instance profile and its role: `ListInstanceProfiles`. Expect one Lodestar profile; check that the role has `AmazonSSMManagedInstanceCore`.
+   - (At the time, the owner's instance profile was a parameter. Since the 2026-11-20 review fixes the stack defines its own Windows and Linux profiles, and the owner's role can't be passed.)
 2. **Check the way out to the internet.** Claude Code, GitHub, rustup and Node all need it.
    - Look at the subnet's route table (its explicit association, else the VPC's main one) for `0.0.0.0/0` to an `igw-` or a `nat-`.
    - With an `igw-`, the instance also needs a public IPv4: check the subnet's `MapPublicIpOnLaunch`.
    - Check the security group's egress rules and `DescribeVpcEndpoints`.
    - **If there's no way out, stop and tell the owner.** A NAT gateway costs about $0.045/h plus data, and it's an infrastructure change the owner decides.
-3. **Deploy `infra/dev-vm/aws-claude-testvm.json`** as stack `lodestar-claude-testvm` (`CreateStack`, `CAPABILITY_NAMED_IAM`), with the three IDs as parameters. Wait for `CREATE_COMPLETE`.
+3. **Deploy `infra/dev-vm/aws-claude-testvm.json`** as stack `lodestar-claude-testvm` (`CreateStack`, `CAPABILITY_NAMED_IAM`), with the IDs as parameters. Wait for `CREATE_COMPLETE`.
 4. **Nothing else.** Never call `secretsmanager:GetSecretValue`. Don't touch the watchdog or guard stacks, Terraform state, OIDC or any other IAM.
 5. **Tell the owner to swap the connector** (below) and say they're done with the admin sign-in.
 
@@ -42,17 +44,18 @@ The owner has signed the AWS MCP connector in as their admin. A new session star
 5. Go to claude.ai → Settings → Connectors → AWS MCP → disconnect, then connect. Sign in as **IAM user**: your account ID, `lodestar-claude-testvm`, the password, then the MFA code.
 
 ### Phase 2: create, test, delete, as `lodestar-claude-testvm`
-A new session, started after the swap. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop.
+A new session, started after the swap. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop. Keep its `UserId` for the `LaunchedBy` tag (in the session only; never write it to the repository).
 1. **One Windows instance at a time:** refuse if a Windows instance tagged `Purpose=X-test-vm` is pending, running, stopping or stopped. Count with the filters `tag:Purpose=X-test-vm` and `platform=windows`; up to four Linux test instances may run alongside it.
-2. **Launch**, matching `infra/akamai/terraform/scripts/Deploy-AwsWindows.ps1` (lines 155–164):
-   - the image and instance profile;
+2. **Launch**, following `infra/akamai/terraform/scripts/Deploy-AwsWindows.ps1` (lines 155–164) except for the profile and tags below:
+   - the image, and the instance profile **`lodestar-claude-testvm-windows`** (the stack's Windows role: the SSM agent policy only). Never the Linux profile (`docs/decisions/2026-11-12-X-test-vm.md`, 2026-11-20 review fixes);
    - **a public IPv4 address:** `NetworkInterfaces=[{DeviceIndex: 0, SubnetId, Groups: [SG], AssociatePublicIpAddress: true}]`, with no top-level `SubnetId` or `SecurityGroupIds`.
      - **Why:** the subnet routes `0.0.0.0/0` to an internet gateway but has `MapPublicIpOnLaunch=false`, and there's no NAT gateway and no VPC endpoint. Without a public address, the instance can't reach SSM or the internet.
      - It's still unreachable from outside, because the security group allows no inbound traffic. The address costs about $0.005/h.
      - `Deploy-AwsWindows.ps1` doesn't do this yet; that's a follow-up for the runner.
    - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}` (the policy refuses a launch without all three);
    - `/dev/sda1` with `VolumeSize=100, Encrypted=true`;
-   - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume.
+   - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume. The policy lets this user stop, delete or run commands only on instances whose `LaunchedBy` is its own `UserId`, and refuses a launch without it.
+   - Default tenancy (leave `Placement.Tenancy` unset): the policy refuses dedicated tenancy.
    - Record the instance ID locally only.
 3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
 4. **Bootstrap with Run Command** (`executionTimeout` up to 7200 s per step):

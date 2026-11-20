@@ -27,6 +27,8 @@
 # /opt/lodestar-run with --aws-secret, where lodestar must not be able to touch
 # what root runs: there, the folder and every parent must be root-owned and
 # writable by root only, or the script refuses. --run-dir DIR overrides.
+# With --aws-secret the same holds for this checkout's pia-wireguard.sh and CA,
+# which root runs and reads: run it from a root-only clone (/opt/lodestar-src).
 #   sudo infra/dev-vm/pia-login.sh [--run-dir DIR] ...
 set -Eeuo pipefail
 umask 077
@@ -57,6 +59,23 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 if [[ $mode == rekey && -z $region && -f $store/region ]]; then region=$(<"$store/region"); fi
+
+# The path and every folder above it: root-owned, writable by root only.
+require_root_only() {
+  local p=$1
+  while :; do
+    [[ ! -L $p && $(stat -c '%u' -- "$p") == 0 && $(( 0$(stat -c '%a' -- "$p") & 022 )) -eq 0 ]] \
+      || { echo "refusing: $p must be owned by root and writable by root only" >&2; exit 2; }
+    [[ $p == / ]] && break
+    p=$(dirname -- "$p")
+  done
+}
+# With --aws-secret, the reviewed step and PIA's CA come from a root-only
+# checkout (/opt/lodestar-src in linux-aws.md). Checked before the secret is read.
+if [[ $mode == aws ]]; then
+  require_root_only "$step"
+  require_root_only "$ca"
+fi
 
 # A region with WireGuard servers, in the US (PIA's US servers have no port
 # forwarding, as the test plan's ground rule 1 requires), whose first server's
@@ -105,13 +124,7 @@ else
   # Root runs the stack from here: no other user may own or write any part of
   # the path, or it could swap the scripts or the secrets folder.
   install -d -m 0755 -o root -g root "$run_dir"
-  p=$run_dir
-  while :; do
-    [[ ! -L $p && $(stat -c '%u' -- "$p") == 0 && $(( 0$(stat -c '%a' -- "$p") & 022 )) -eq 0 ]] \
-      || { echo "refusing: $p must be a root-owned folder writable by root only" >&2; exit 2; }
-    [[ $p == / ]] && break
-    p=$(dirname -- "$p")
-  done
+  require_root_only "$run_dir"
 fi
 dest_dir=$run_dir/secrets
 dest="$dest_dir/wg0.conf"

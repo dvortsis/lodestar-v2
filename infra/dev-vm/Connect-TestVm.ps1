@@ -20,6 +20,15 @@
   What stays yours: typing the PIA login, and signing Claude in through the link
   it shows. When Claude is running, press Ctrl+B, let go, then D to leave it running.
 
+  The test VMs use their own SSH key, never the Akamai fleet's. Make it once:
+    ssh-keygen -t ed25519 -a 100 -f "$HOME\.ssh\lodestar_testvm_ed25519" -C "lodestar-testvm"
+  and give the coordinator lodestar_testvm_ed25519.pub (the public half only).
+
+  Nothing is left behind on the VM: the setup script runs from a pipe, not a
+  file, and Claude is started without a script file. The connection ignores
+  agent and X11 forwarding and any host key other than the pinned one, whatever
+  your own SSH settings say.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\Connect-TestVm.ps1 -Ip 192.0.2.10 -HostKey "ssh-ed25519 AAAA..."
 #>
@@ -27,7 +36,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Ip,
     # The VM's public host key line from devvm.py's work folder (host_ed25519.pub).
     [Parameter(Mandatory = $true)][string]$HostKey,
-    [string]$KeyFile = (Join-Path $HOME '.ssh\lodestar_akamai_ed25519'),
+    # The test VMs' own key (S1): never the Akamai fleet's lodestar_akamai_ed25519.
+    [string]$KeyFile = (Join-Path $HOME '.ssh\lodestar_testvm_ed25519'),
     [string]$User = 'lodestar',
     [string]$PiaRegion = 'us_new_york_city',
     [string]$SessionName = 'claude-dev test VM',
@@ -47,7 +57,12 @@ if ($parts.Count -lt 2 -or $parts[0] -ne 'ssh-ed25519' -or $parts[1] -notmatch '
 }
 if ($PiaRegion -notmatch '^[a-z0-9_]+$') { throw "-PiaRegion looks wrong: '$PiaRegion'" }
 if ($Branch -notmatch '^[A-Za-z0-9._/-]+$') { throw "-Branch looks wrong: '$Branch'" }
-if (-not (Test-Path -LiteralPath $KeyFile)) { throw "SSH key not found: $KeyFile (pass -KeyFile)" }
+if ([System.IO.Path]::GetFileName($KeyFile) -match '^lodestar_akamai') {
+    throw "Refusing the Akamai fleet's key ($KeyFile): the test VMs use their own. See this script's help (Get-Help .\Connect-TestVm.ps1 -Full)."
+}
+if (-not (Test-Path -LiteralPath $KeyFile)) {
+    throw "SSH key not found: $KeyFile. Make the test VMs' own key first (Get-Help .\Connect-TestVm.ps1 -Full), or pass -KeyFile."
+}
 if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
     throw 'ssh not found. Install it: Settings > System > Optional features > OpenSSH Client.'
 }
@@ -102,12 +117,9 @@ else
 fi
 
 if ! tmux has-session -t claude 2>/dev/null; then
-  {
-    echo 'cd "$HOME/lodestar-v2"'
-    echo "claude --remote-control $(printf %q "$NAME") --permission-mode auto $(printf %q "$FIRST")"
-    echo 'exec bash'
-  } > "$HOME/.devvm-claude.sh"
-  tmux new-session -d -s claude "bash $HOME/.devvm-claude.sh"
+  # No script file: tmux gets the command itself, every value quoted.
+  tmux new-session -d -s claude -c "$HOME/lodestar-v2" \
+    "claude --remote-control $(printf %q "$NAME") --permission-mode auto $(printf %q "$FIRST"); exec bash"
 fi
 
 cat <<'EOT'
@@ -128,11 +140,16 @@ $remote = $remote.Replace('__REGION__', (ConvertTo-B64 $PiaRegion))
 $remote = $remote.Replace('__NAME__', (ConvertTo-B64 $SessionName))
 $remote = $remote.Replace('__FIRST__', (ConvertTo-B64 $FirstMessage))
 $remote = $remote.Replace("`r`n", "`n")
-$cmd = "printf %s '$(ConvertTo-B64 $remote)' | base64 -d > ~/.devvm-connect.sh && bash ~/.devvm-connect.sh"
+# S2: the script runs from a pipe; nothing is written to the VM's disk.
+$cmd = "bash <(printf %s '$(ConvertTo-B64 $remote)' | base64 -d)"
 
 Write-Host "Connecting to $User@$Ip. Enter your SSH key's passphrase if asked."
+# S3: only the pinned key is trusted (the global known-hosts file is the same
+# file), and nothing is forwarded, whatever ~/.ssh/config says.
 & ssh -t -i $KeyFile `
-    -o "UserKnownHostsFile=$kh" -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes `
+    -o "UserKnownHostsFile=$kh" -o "GlobalKnownHostsFile=$kh" -o StrictHostKeyChecking=yes `
+    -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no -o CheckHostIP=no -o IdentitiesOnly=yes `
+    -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o PermitLocalCommand=no `
     -o ConnectTimeout=10 -o ConnectionAttempts=60 -o ServerAliveInterval=30 `
     "$User@$Ip" $cmd
 if ($LASTEXITCODE -ne 0) {

@@ -2,19 +2,20 @@
 
 Linux test lanes can run on AWS as well as on Linode. A Claude cloud session starts the instance, runs every command through SSM Run Command, and deletes it. Nobody has to connect from a PC, and the owner types nothing per run. The decision is in `docs/decisions/2026-11-12-X-test-vm.md` ("Later decisions (2026-11-15)").
 
-Once the instance is bootstrapped, `linux-lane.md` applies unchanged: numbers only leave the machine, crawls are leads, no fixed sleeps, report before fixing, no PRs and no pushes from the instance.
+This is the current Linux flow; the Linode flow in `linux-lane.md` is historical. Once the instance is bootstrapped, `linux-lane.md`'s lane steps (sections 0–4) apply with the changes below: numbers only leave the machine, crawls are leads, no fixed sleeps, report before fixing, no PRs and no pushes from the instance.
 
 ## One-time setup (the owner)
 
 1. **Update the stack.** In CloudFormation → `lodestar-claude-testvm` → Update → Replace existing template, use `infra/dev-vm/aws-claude-testvm.json` at the commit Claude names. Keep the other parameters, tick the IAM acknowledgement, and submit.
    - **`UbuntuImageOwnerId`:** Canonical's public publisher account, which owns the official Ubuntu images; it isn't one of yours. To find it, open Systems Manager → Parameter Store → Public parameters, look up `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`, then open that image in EC2 → AMIs and copy its **Owner**. It's a parameter so the repository holds no account numbers.
+   - **After the 2026-11-20 review fixes** the template no longer takes `InstanceRoleName`: the stack creates its own Windows instance profile (`lodestar-claude-testvm-windows`, the SSM agent policy only), and the user may pass only the stack's two roles. CloudFormation drops the old parameter on update; nothing else to type.
    - The managed policy's description still says "the Windows test instance only". Leave it: changing it makes CloudFormation replace the policy, and the replacement fails because the name is fixed. The policy's statements are what count.
 2. **Enter the PIA login.** In Secrets Manager → `lodestar-claude-testvm/pia-login` → Retrieve secret value → Edit, set `username` and `password`, and save.
    - Only the Linux instance role can read it directly. Claude's own user is denied the Secrets Manager API, but it can still reach the secret indirectly: Run Command runs as root on a Linux test instance, and root there can use the instance role. Claude's sessions are trusted, by rule only, never to read, print or copy it.
 
 ## What each lane does
 
-All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm`. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop.
+All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm`. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop. Keep its `UserId` for the `LaunchedBy` tag (in the session only; never write it to the repository).
 
 1. **Count first.** At most four Linux instances and one Windows instance run at once. Count instances with the filter `tag:Purpose=X-test-vm` (the owner's own fleet instances share `Project=Lodestar`, so never count by that), and refuse if four Linux ones are already pending, running, stopping or stopped.
 2. **Launch:** (the count of four is a rule for the sessions; the policy doesn't enforce it, and nothing but the per-cloud spend check bounds cost)
@@ -24,7 +25,8 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}`, so containers can't reach the metadata service (the policy requires all three);
    - `/dev/sda1` with `VolumeSize=100`, `VolumeType=gp3`, `Encrypted=true`. A block with `ROLE=main` needs 50 GiB free for its collector after the image build, and the test user can't grow a volume later (`ec2:ModifyVolume` is denied);
    - the network interface with a public IPv4, exactly as `windows.md` Phase 2 step 2 says (the subnet has no NAT; the security group allows no inbound traffic);
-   - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume. The policy lets Claude stop, delete or run commands only on instances tagged `Purpose=X-test-vm`, so the owner's own fleet instances, which share the other tags, stay out of reach.
+   - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume. The policy lets Claude stop, delete or run commands only on instances tagged `Purpose=X-test-vm` whose `LaunchedBy` is its own `UserId`, so the owner's own fleet instances, which share the other tags, stay out of reach;
+   - default tenancy (leave `Placement.Tenancy` unset): the policy refuses dedicated tenancy.
 3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
 4. **Bootstrap** with `AWS-RunShellScript` (`executionTimeout` 3600):
 

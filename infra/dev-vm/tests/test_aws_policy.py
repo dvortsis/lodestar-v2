@@ -18,6 +18,88 @@ def actions(st):
     return [a] if isinstance(a, str) else a
 
 
+def sub(arn):
+    return {"Fn::Sub": arn}
+
+
+INSTANCES = sub("arn:aws:ec2:us-east-1:${AWS::AccountId}:instance/*")
+VOLUMES = sub("arn:aws:ec2:us-east-1:${AWS::AccountId}:volume/*")
+SUBNET = sub("arn:aws:ec2:us-east-1:${AWS::AccountId}:subnet/${SubnetId}")
+EXPECTED = {
+    "ReadInventoryAndCost": {
+        "Effect": "Allow",
+        "Action": ["ec2:Describe*", "ec2:GetConsoleOutput", "ssm:DescribeInstanceInformation",
+                   "ssm:DescribeInstanceProperties", "ssm:GetCommandInvocation", "ssm:ListCommandInvocations",
+                   "ssm:ListCommands", "cloudformation:DescribeStacks", "cloudformation:ListStacks",
+                   "iam:GetInstanceProfile", "iam:ListInstanceProfiles", "ce:GetCostAndUsage",
+                   "budgets:ViewBudget", "servicequotas:GetServiceQuota"],
+        "Resource": "*"},
+    "ReadLatestAmiIds": {
+        "Effect": "Allow", "Action": "ssm:GetParameter",
+        "Resource": ["arn:aws:ssm:us-east-1::parameter/aws/service/ami-windows-latest/*",
+                     "arn:aws:ssm:us-east-1::parameter/aws/service/ami-amazon-linux-latest/*",
+                     "arn:aws:ssm:us-east-1::parameter/aws/service/canonical/ubuntu/server/*"]},
+    "RunOnlyTheGuardedInstance": {
+        "Effect": "Allow", "Action": "ec2:RunInstances", "Resource": INSTANCES,
+        "Condition": {
+            "StringEquals": {
+                "ec2:InstanceType": "c6a.xlarge", "ec2:MetadataHttpTokens": "required",
+                "aws:RequestTag/Project": "Lodestar", "aws:RequestTag/Environment": "Test",
+                "aws:RequestTag/ManagedBy": "Terraform", "aws:RequestTag/Purpose": "X-test-vm",
+                "ec2:MetadataHttpProtocolIpv6": "disabled", "ec2:Tenancy": "default",
+                "aws:RequestTag/LaunchedBy": "${aws:userid}"},
+            "NumericLessThanEquals": {"ec2:MetadataHttpPutResponseHopLimit": "1"},
+            "Null": {"aws:RequestTag/ExpiresAt": "false"},
+            "ForAllValues:StringEquals": {"aws:TagKeys": ["Project", "Environment", "ManagedBy", "Purpose",
+                                                          "ExpiresAt", "LaunchedBy", "Name"]}}},
+    "RunOnlyEncryptedBoundedVolumes": {
+        "Effect": "Allow", "Action": "ec2:RunInstances", "Resource": VOLUMES,
+        "Condition": {"Bool": {"ec2:Encrypted": "true"}, "NumericLessThanEquals": {"ec2:VolumeSize": "100"},
+                      "StringEquals": {"aws:RequestTag/Project": "Lodestar"}}},
+    "RunOnlyInTheLodestarNetwork": {
+        "Effect": "Allow", "Action": "ec2:RunInstances",
+        "Resource": [SUBNET, sub("arn:aws:ec2:us-east-1:${AWS::AccountId}:security-group/${SecurityGroupId}")]},
+    "RunNetworkInterfaceOnlyInThatSubnet": {
+        "Effect": "Allow", "Action": "ec2:RunInstances",
+        "Resource": sub("arn:aws:ec2:us-east-1:${AWS::AccountId}:network-interface/*"),
+        "Condition": {"StringEquals": {"ec2:Subnet": SUBNET}}},
+    "RunOnlyAmazonOrCanonicalImages": {
+        "Effect": "Allow", "Action": "ec2:RunInstances",
+        "Resource": ["arn:aws:ec2:us-east-1::image/*", "arn:aws:ec2:us-east-1::snapshot/*"],
+        "Condition": {"StringEquals": {"ec2:Owner": ["amazon", {"Ref": "UbuntuImageOwnerId"}]}}},
+    "TagOnlyAtLaunch": {
+        "Effect": "Allow", "Action": "ec2:CreateTags", "Resource": [INSTANCES, VOLUMES],
+        "Condition": {"StringEquals": {"ec2:CreateAction": "RunInstances"}}},
+    "PassOnlyTheStackTestRolesToEc2": {
+        "Effect": "Allow", "Action": "iam:PassRole",
+        "Resource": [{"Fn::GetAtt": ["WindowsTestVmRole", "Arn"]}, {"Fn::GetAtt": ["LinuxTestVmRole", "Arn"]}],
+        "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}},
+    "ManageOnlyOwnLodestarTestInstances": {
+        "Effect": "Allow",
+        "Action": ["ec2:TerminateInstances", "ec2:StopInstances", "ec2:StartInstances", "ec2:RebootInstances"],
+        "Resource": INSTANCES,
+        "Condition": {"StringEquals": {
+            "ec2:ResourceTag/Project": "Lodestar", "ec2:ResourceTag/Environment": "Test",
+            "ec2:InstanceType": "c6a.xlarge", "ec2:ResourceTag/Purpose": "X-test-vm",
+            "ec2:ResourceTag/LaunchedBy": "${aws:userid}"}}},
+    "RunCommandsOnlyOnOwnLodestarTestInstances": {
+        "Effect": "Allow", "Action": "ssm:SendCommand", "Resource": INSTANCES,
+        "Condition": {"StringEquals": {
+            "ssm:resourceTag/Project": "Lodestar", "ssm:resourceTag/Environment": "Test",
+            "ssm:resourceTag/Purpose": "X-test-vm", "ssm:resourceTag/LaunchedBy": "${aws:userid}"}}},
+    "RunCommandsOnlyWithTheStandardScriptDocuments": {
+        "Effect": "Allow", "Action": "ssm:SendCommand",
+        "Resource": ["arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript",
+                     "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"]},
+    "CancelOwnCommands": {"Effect": "Allow", "Action": "ssm:CancelCommand", "Resource": "*"},
+    "NothingOutsideUsEast1": {
+        "Effect": "Deny", "Action": ["ec2:*", "ssm:*"], "Resource": "*",
+        "Condition": {"StringNotEquals": {"aws:RequestedRegion": "us-east-1"}}},
+    "NoSecretsManager": {"Effect": "Deny", "Action": "secretsmanager:*", "Resource": "*"},
+    "NoInstanceAttributeReads": {"Effect": "Deny", "Action": "ec2:DescribeInstanceAttribute", "Resource": "*"},
+}
+
+
 class PolicyTests(unittest.TestCase):
     def test_no_account_or_resource_ids_in_the_public_repo(self):
         # Not even a public one: Canonical's publisher ID is a parameter the
@@ -88,19 +170,19 @@ class PolicyTests(unittest.TestCase):
 
     def test_destructive_and_command_actions_need_the_lodestar_tags(self):
         _, _, sts = statements()
-        mgmt = next(s for s in sts if s["Sid"] == "ManageOnlyLodestarTestInstances")
+        mgmt = next(s for s in sts if s["Sid"] == "ManageOnlyOwnLodestarTestInstances")
         self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/Project"], "Lodestar")
         self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/Environment"], "Test")
-        cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnLodestarTestInstances")
+        cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnOwnLodestarTestInstances")
         self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/Project"], "Lodestar")
 
     def test_owner_run_instances_with_the_same_tags_are_out_of_reach(self):
         # The owner's fleet instances carry Project=Lodestar and Environment=Test
         # too (Deploy-AwsWindows.ps1); only Purpose=X-test-vm marks Claude's own.
         _, _, sts = statements()
-        mgmt = next(s for s in sts if s["Sid"] == "ManageOnlyLodestarTestInstances")
+        mgmt = next(s for s in sts if s["Sid"] == "ManageOnlyOwnLodestarTestInstances")
         self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/Purpose"], "X-test-vm")
-        cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnLodestarTestInstances")
+        cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnOwnLodestarTestInstances")
         self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/Purpose"], "X-test-vm")
         doc = next(s for s in sts if s["Sid"] == "RunCommandsOnlyWithTheStandardScriptDocuments")
         self.assertEqual(doc["Resource"], ["arn:aws:ssm:us-east-1::document/AWS-RunPowerShellScript",
@@ -115,11 +197,93 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(param["AllowedPattern"], "^[0-9]{12}$")
         self.assertNotIn("Default", param)
 
-    def test_pass_role_names_only_the_two_test_roles(self):
+    def test_pass_role_names_only_the_two_stack_roles(self):
+        # B2: every passable role is defined here, holding only what its lane
+        # needs; never a role the template doesn't define (the owner's own).
+        t, _, sts = statements()
+        prs = [s for s in sts if "iam:PassRole" in actions(s)]
+        self.assertEqual(len(prs), 1)
+        self.assertEqual(prs[0]["Resource"], [{"Fn::GetAtt": ["WindowsTestVmRole", "Arn"]},
+                                              {"Fn::GetAtt": ["LinuxTestVmRole", "Arn"]}])
+        self.assertEqual(prs[0]["Condition"], {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}})
+        self.assertNotIn("InstanceRoleName", t["Parameters"])
+        self.assertNotIn("InstanceRoleName", TEMPLATE.read_text())
+        self.assertNotIn(":role/", json.dumps(prs[0]))
+        roles = sorted(k for k, v in t["Resources"].items() if v["Type"] == "AWS::IAM::Role")
+        self.assertEqual(roles, ["LinuxTestVmRole", "WindowsTestVmRole"])
+
+    def test_windows_role_is_ssm_core_only(self):
+        t, _, _ = statements()
+        res = t["Resources"]
+        role = res["WindowsTestVmRole"]["Properties"]
+        self.assertEqual(role["ManagedPolicyArns"], ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"])
+        self.assertEqual(sorted(role), ["AssumeRolePolicyDocument", "Description", "ManagedPolicyArns",
+                                        "RoleName", "Tags"])
+        self.assertEqual(role["AssumeRolePolicyDocument"]["Statement"],
+                         [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"},
+                           "Action": "sts:AssumeRole"}])
+        self.assertFalse([k for k, v in res.items() if v["Type"] == "AWS::IAM::Policy"])
+        self.assertEqual(res["WindowsTestVmInstanceProfile"]["Properties"]["Roles"], [{"Ref": "WindowsTestVmRole"}])
+
+    def test_linux_role_is_ssm_core_and_the_one_secret(self):
+        t, _, _ = statements()
+        role = t["Resources"]["LinuxTestVmRole"]["Properties"]
+        self.assertEqual(role["ManagedPolicyArns"], ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"])
+        self.assertEqual(sorted(role), ["AssumeRolePolicyDocument", "Description", "ManagedPolicyArns",
+                                        "Policies", "RoleName", "Tags"])
+        (inline,) = role["Policies"]
+        self.assertEqual(inline["PolicyDocument"]["Statement"],
+                         [{"Effect": "Allow", "Action": "secretsmanager:GetSecretValue",
+                           "Resource": {"Ref": "PiaLoginSecret"}}])
+
+    def test_mutations_need_the_launching_principal(self):
+        # I1: stop, start, reboot, delete and Run Command reach only instances
+        # this principal launched; the tag is forced at launch and can't change.
         _, _, sts = statements()
-        pr = next(s for s in sts if s["Sid"] == "PassOnlyTheTestInstanceRolesToEc2")
-        self.assertEqual(pr["Resource"], [{"Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/${InstanceRoleName}"},
-                                          {"Fn::GetAtt": ["LinuxTestVmRole", "Arn"]}])
+        inst = next(s for s in sts if s["Sid"] == "RunOnlyTheGuardedInstance")
+        self.assertEqual(inst["Condition"]["StringEquals"]["aws:RequestTag/LaunchedBy"], "${aws:userid}")
+        self.assertIn("LaunchedBy", inst["Condition"]["ForAllValues:StringEquals"]["aws:TagKeys"])
+        mgmt = next(s for s in sts if s["Sid"] == "ManageOnlyOwnLodestarTestInstances")
+        self.assertEqual(mgmt["Condition"]["StringEquals"]["ec2:ResourceTag/LaunchedBy"], "${aws:userid}")
+        cmd = next(s for s in sts if s["Sid"] == "RunCommandsOnlyOnOwnLodestarTestInstances")
+        self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/LaunchedBy"], "${aws:userid}")
+        mutating = {"ec2:TerminateInstances", "ec2:StopInstances", "ec2:StartInstances", "ec2:RebootInstances",
+                    "ec2:ModifyInstanceAttribute", "ec2:CreateTags", "ec2:DeleteTags", "ssm:SendCommand",
+                    "ssm:StartSession"}
+        for st in sts:
+            if st["Effect"] != "Allow" or not mutating & set(actions(st)):
+                continue
+            with self.subTest(sid=st["Sid"]):
+                if st["Sid"] == "TagOnlyAtLaunch":
+                    self.assertEqual(st["Condition"], {"StringEquals": {"ec2:CreateAction": "RunInstances"}})
+                elif st["Sid"] == "RunCommandsOnlyWithTheStandardScriptDocuments":
+                    self.assertTrue(all(r.startswith("arn:aws:ssm:us-east-1::document/") for r in st["Resource"]))
+                else:
+                    cond = st["Condition"]["StringEquals"]
+                    self.assertIn("${aws:userid}", cond.values())
+        self.assertFalse(any("ec2:DeleteTags" in actions(s) for s in sts if s["Effect"] == "Allow"))
+
+    def test_launch_needs_default_tenancy(self):
+        # I4: no dedicated hosts or instances.
+        _, _, sts = statements()
+        inst = next(s for s in sts if s["Sid"] == "RunOnlyTheGuardedInstance")
+        self.assertEqual(inst["Condition"]["StringEquals"]["ec2:Tenancy"], "default")
+
+    def test_no_instance_attribute_reads(self):
+        # O4: Describe* stays, without instance attribute reads.
+        _, _, sts = statements()
+        deny = next(s for s in sts if s["Sid"] == "NoInstanceAttributeReads")
+        self.assertEqual(deny, {"Sid": "NoInstanceAttributeReads", "Effect": "Deny",
+                                "Action": "ec2:DescribeInstanceAttribute", "Resource": "*"})
+
+    def test_every_statement_is_pinned_exactly(self):
+        # I2: any widening (an action, a resource, a dropped or loosened
+        # condition, a new statement) fails here and needs a reviewed change.
+        _, _, sts = statements()
+        self.assertEqual([s["Sid"] for s in sts], list(EXPECTED))
+        for st in sts:
+            with self.subTest(sid=st["Sid"]):
+                self.assertEqual(st, dict(EXPECTED[st["Sid"]], Sid=st["Sid"]))
 
     def test_the_user_is_denied_secrets_manager(self):
         _, _, sts = statements()

@@ -1,8 +1,10 @@
 # The Linux lane on the test VM (X-test-vm)
 
+> **Historical: the Linode flow.** Since 2026-11-15Z Linux test lanes run on AWS: follow [`linux-aws.md`](linux-aws.md), which uses this page's lane steps (sections 0–4) with its own changes. The parts below about the Linode machine, the owner typing the PIA login in an SSH window (`Connect-TestVm.ps1`), and reading the tools from the X-test-vm branch describe the earlier Linode flow and are kept for the record. If a Linode test VM is ever used again, connect with the test VMs' own key (`Connect-TestVm.ps1`'s help), never the Akamai fleet's.
+
 You are a Claude session running **on** the Linux test VM `claude-dev-<yyyymmdd>` (Ubuntu 24.04, Linode `g6-dedicated-4`: 4 dedicated vCPU, 8 GiB plus 8 GiB swap, 160 GB disk), as the user `lodestar`, under the owner's login through Remote Control. The testing-environment session (`session_01MMjhnBD1KHxsn7QRHHmpeM`) coordinates, and the runner (`session_01EYhgh4JX3AmHzKXPjYCoUg`) owns the build.
 
-**Authority:** the owner's decisions in `docs/decisions/2026-11-12-X-test-vm.md`, and the exception at the top of `.agents/skills/lodestar-fleet/SKILL.md`. You may run commands **on this VM only**. You hold no cloud credentials and need none.
+**Authority:** the owner's decisions in `docs/decisions/2026-11-12-X-test-vm.md` and your brief; `.agents/skills/lodestar-fleet/SKILL.md` describes their limits but grants nothing. You may run commands **on this VM only**. You hold no cloud credentials and need none.
 
 **Rules (all from `docs/plan/2026-11-08-cloud-test-plan.md` ground rules, and `CLAUDE.md`):**
 - **Crawl numbers are leads, never CR-SPEC or soak evidence,** and are never pooled with any other run.
@@ -13,7 +15,7 @@ You are a Claude session running **on** the Linux test VM `claude-dev-<yyyymmdd>
 - **No fixed sleeps** in anything you add: wait for a condition with a deadline.
 - **Report findings before writing any fix.** Write each result to `~/results/<step>.md` and summarise it in this chat. The coordinator reads it and tells the runner. Don't open PRs and don't push to others' branches.
 - **Test `main`:** work in `~/lodestar-v2` on `main`, freshly pulled (`git pull --ff-only`). Record the commit in each result.
-- **This runbook and the VM tools live on the X-test-vm branch until it merges.** Read them from a separate worktree, so the code under test stays `main`:
+- **Historical:** before X-test-vm merged, this runbook and the VM tools lived on its branch, read from a separate worktree so the code under test stayed `main`. They are on `main` now; the same worktree command still keeps the tools apart from the code under test:
   ```bash
   git -C ~/lodestar-v2 fetch origin main && git -C ~/lodestar-v2 worktree add ~/testkit FETCH_HEAD
   ```

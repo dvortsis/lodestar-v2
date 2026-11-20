@@ -139,6 +139,16 @@ class CreateTests(unittest.TestCase):
             devvm.cmd_create(a)
         self.assertEqual(api.mutations(), [])
 
+    def test_refuses_a_private_admin_address_before_any_change(self):
+        api = FakeApi()
+        for ip in ("10.0.0.1", "192.168.1.10", "224.0.0.1"):
+            with self.subTest(ip=ip), tempfile.TemporaryDirectory() as d, patched(api), \
+                    self.assertRaises(SystemExit):
+                a = self.args(d); a.admin_ip = ip
+                devvm.cmd_create(a)
+            self.assertFalse((Path(d) / "w").exists())
+        self.assertEqual(api.mutations(), [])
+
     def test_refuses_a_private_key(self):
         api = FakeApi()
         with tempfile.TemporaryDirectory() as d, patched(api), self.assertRaises(SystemExit):
@@ -273,6 +283,25 @@ class SetAdminIpTests(unittest.TestCase):
         self.assertEqual(body, devvm.firewall_rules("8.8.8.8"))
         self.assertEqual([r["addresses"]["ipv4"] for r in body["inbound"]], [["8.8.8.8/32"]])
 
+    def test_refuses_a_private_or_reserved_address_and_changes_nothing(self):
+        api = FakeApi(firewalls=[{"label": "claude-dev-20261116-fw", "id": 3}])
+        for ip in ("10.0.0.1", "172.16.5.4", "192.168.1.10", "100.64.0.1", "127.0.0.1", "169.254.169.254",
+                   "0.0.0.0", "192.0.2.10", "224.0.0.1", "255.255.255.255", "not-an-ip"):
+            with self.subTest(ip=ip), patched(api), self.assertRaises(SystemExit):
+                devvm.cmd_set_admin_ip(SimpleNamespace(label="claude-dev-20261116", admin_ip=ip))
+        self.assertEqual(api.mutations(), [])
+
+    def test_never_touches_decoy_firewalls(self):
+        # A near-miss label and the fleet's own firewall share the API listing.
+        api = FakeApi(firewalls=[{"label": "claude-dev-20261112x-fw", "id": 21}, {"label": "lodestar-fw", "id": 22},
+                                 {"label": "claude-dev-20261112-fw", "id": 23}])
+        with patched(api):
+            devvm.cmd_set_admin_ip(SimpleNamespace(label="claude-dev-20261112", admin_ip="8.8.8.8"))
+        self.assertEqual(api.mutations(), [("PUT", "/networking/firewalls/23/rules")])
+        with patched(api), self.assertRaises(SystemExit):
+            devvm.cmd_set_admin_ip(SimpleNamespace(label="lodestar", admin_ip="8.8.8.8"))
+        self.assertEqual(api.mutations(), [("PUT", "/networking/firewalls/23/rules")])
+
     def test_refuses_a_missing_firewall(self):
         api = FakeApi()
         with patched(api), self.assertRaises(SystemExit):
@@ -292,11 +321,13 @@ class DeleteTests(unittest.TestCase):
         api = FakeApi(
             linodes=[{"label": "claude-dev-20261112", "id": 5}, {"label": "lodestar-main", "id": 6},
                      {"label": "claude-dev-20261112x", "id": 8}],
-            firewalls=[{"label": "claude-dev-20261112-fw", "id": 11}, {"label": "lodestar-fw", "id": 12}],
+            firewalls=[{"label": "claude-dev-20261112-fw", "id": 11}, {"label": "lodestar-fw", "id": 12},
+                       {"label": "claude-dev-20261112x-fw", "id": 13}],
         )
         with patched(api):
             devvm.cmd_delete(SimpleNamespace(label="claude-dev-20261112", confirm="claude-dev-20261112"))
         self.assertEqual(api.mutations(), [("DELETE", "/linode/instances/5"), ("DELETE", "/networking/firewalls/11")])
+        self.assertEqual(sorted(f["label"] for f in api.firewalls), ["claude-dev-20261112x-fw", "lodestar-fw"])
 
 
 if __name__ == "__main__":

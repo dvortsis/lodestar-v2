@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, mandatory tags with ExpiresAt), and read EC2, SSM, quota and cost data. The Linux test instances get their own role, which can read only the PIA login secret this stack creates; the user itself is denied Secrets Manager. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters. The managed policy's own Description still says \"the Windows test instance only\": it is kept as deployed because changing it would replace the policy, and the replacement fails on the fixed name. The statements are what count.",
+  "Description": "Lodestar X-test-vm: a dedicated IAM user and its customer-managed policy (an inline user policy is capped at 2,048 characters) Claude signs in as through the AWS MCP connector. It may create, run commands on and delete only the test instances the Lodestar guardrails allow (Windows, Amazon Linux or Ubuntu images; c6a.xlarge, the Lodestar subnet and security group, encrypted root of at most 100 GiB, IMDSv2, default tenancy, mandatory tags with ExpiresAt and LaunchedBy), and stop, delete and run commands only on the instances it launched itself, and read EC2, SSM, quota and cost data. The user may pass only the two roles this stack creates: the Windows test instance's (the SSM agent policy only) and the Linux test instances' (the SSM agent policy, plus reading only the PIA login secret this stack creates). It is itself denied Secrets Manager and instance attribute reads. Owner decisions 2026-11-12Z and 2026-11-15Z; docs/decisions/2026-11-12-X-test-vm.md. Holds no account or resource IDs of the owner's: they are parameters. The managed policy's own Description still says \"the Windows test instance only\": it is kept as deployed because changing it would replace the policy, and the replacement fails on the fixed name. The statements are what count.",
   "Parameters": {
     "SubnetId": {
       "Type": "AWS::EC2::Subnet::Id",
@@ -9,11 +9,6 @@
     "SecurityGroupId": {
       "Type": "AWS::EC2::SecurityGroup::Id",
       "Description": "The Lodestar Windows security group: the value of LODESTAR_AWS_SECURITY_GROUP_ID on your PC."
-    },
-    "InstanceRoleName": {
-      "Type": "String",
-      "AllowedPattern": "^[A-Za-z0-9+=,.@_-]{1,64}$",
-      "Description": "The IAM role inside the instance profile named by LODESTAR_AWS_INSTANCE_PROFILE (often the same name)."
     },
     "UbuntuImageOwnerId": {
       "Type": "String",
@@ -107,7 +102,9 @@
                   "aws:RequestTag/Environment": "Test",
                   "aws:RequestTag/ManagedBy": "Terraform",
                   "aws:RequestTag/Purpose": "X-test-vm",
-                  "ec2:MetadataHttpProtocolIpv6": "disabled"
+                  "ec2:MetadataHttpProtocolIpv6": "disabled",
+                  "ec2:Tenancy": "default",
+                  "aws:RequestTag/LaunchedBy": "${aws:userid}"
                 },
                 "NumericLessThanEquals": {
                   "ec2:MetadataHttpPutResponseHopLimit": "1"
@@ -122,6 +119,7 @@
                     "ManagedBy",
                     "Purpose",
                     "ExpiresAt",
+                    "LaunchedBy",
                     "Name"
                   ]
                 }
@@ -212,12 +210,15 @@
               }
             },
             {
-              "Sid": "PassOnlyTheTestInstanceRolesToEc2",
+              "Sid": "PassOnlyTheStackTestRolesToEc2",
               "Effect": "Allow",
               "Action": "iam:PassRole",
               "Resource": [
                 {
-                  "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/${InstanceRoleName}"
+                  "Fn::GetAtt": [
+                    "WindowsTestVmRole",
+                    "Arn"
+                  ]
                 },
                 {
                   "Fn::GetAtt": [
@@ -233,7 +234,7 @@
               }
             },
             {
-              "Sid": "ManageOnlyLodestarTestInstances",
+              "Sid": "ManageOnlyOwnLodestarTestInstances",
               "Effect": "Allow",
               "Action": [
                 "ec2:TerminateInstances",
@@ -249,12 +250,13 @@
                   "ec2:ResourceTag/Project": "Lodestar",
                   "ec2:ResourceTag/Environment": "Test",
                   "ec2:InstanceType": "c6a.xlarge",
-                  "ec2:ResourceTag/Purpose": "X-test-vm"
+                  "ec2:ResourceTag/Purpose": "X-test-vm",
+                  "ec2:ResourceTag/LaunchedBy": "${aws:userid}"
                 }
               }
             },
             {
-              "Sid": "RunCommandsOnlyOnLodestarTestInstances",
+              "Sid": "RunCommandsOnlyOnOwnLodestarTestInstances",
               "Effect": "Allow",
               "Action": "ssm:SendCommand",
               "Resource": {
@@ -264,7 +266,8 @@
                 "StringEquals": {
                   "ssm:resourceTag/Project": "Lodestar",
                   "ssm:resourceTag/Environment": "Test",
-                  "ssm:resourceTag/Purpose": "X-test-vm"
+                  "ssm:resourceTag/Purpose": "X-test-vm",
+                  "ssm:resourceTag/LaunchedBy": "${aws:userid}"
                 }
               }
             },
@@ -302,6 +305,12 @@
               "Effect": "Deny",
               "Action": "secretsmanager:*",
               "Resource": "*"
+            },
+            {
+              "Sid": "NoInstanceAttributeReads",
+              "Effect": "Deny",
+              "Action": "ec2:DescribeInstanceAttribute",
+              "Resource": "*"
             }
           ]
         }
@@ -323,6 +332,53 @@
           {
             "Key": "Purpose",
             "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "WindowsTestVmRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${UserName}-windows"
+        },
+        "Description": "X-test-vm: the Windows test instance's role. SSM management only, nothing else.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "X-test-vm"
+          }
+        ]
+      }
+    },
+    "WindowsTestVmInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "InstanceProfileName": {
+          "Fn::Sub": "${UserName}-windows"
+        },
+        "Roles": [
+          {
+            "Ref": "WindowsTestVmRole"
           }
         ]
       }
@@ -411,6 +467,11 @@
     "LinuxInstanceProfile": {
       "Value": {
         "Ref": "LinuxTestVmInstanceProfile"
+      }
+    },
+    "WindowsInstanceProfile": {
+      "Value": {
+        "Ref": "WindowsTestVmInstanceProfile"
       }
     }
   }
