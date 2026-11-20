@@ -45,6 +45,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("prowlarr", &prowlarr::MANIFEST),
     ("srrdb", &srrdb::MANIFEST),
     ("stashdb", &stashdb::MANIFEST),
+    ("steam", &crate::steam::MANIFEST),
     ("torrent_cache", &torrent_cache::MANIFEST),
     ("tpdb", &tpdb::MANIFEST),
     ("tvdb", &tvdb::MANIFEST),
