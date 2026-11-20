@@ -139,6 +139,11 @@ pub fn apply_witness_default(
 /// are refused before anything is read, the rest once the config is loaded
 /// and before any of them is used. The CLI keeps relative paths, which a
 /// portable install uses.
+///
+/// The SCM path calls [`load_checked`], which also gives the folder the
+/// Event Log names; this keeps the earlier shape for the tests.
+// Outside the tests nothing calls it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn load_guarded(
     default_dir: &Path,
     explicit: Option<PathBuf>,
