@@ -362,6 +362,27 @@ mod tests {
         got
     }
 
+    /// X-sec-S1-18: the key a reply's share is counted against.
+    #[test]
+    fn stream_source_keys_by_source_and_exempts_loopback() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        let v4 = |a, b, c, d| stream_source(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+        let v6 = |s: &str| stream_source(s.parse::<Ipv6Addr>().unwrap().into());
+        assert_eq!(v4(127, 0, 0, 1), None);
+        assert_eq!(v4(127, 9, 9, 9), None);
+        assert_eq!(v6("::1"), None);
+        assert_eq!(v6("::ffff:127.0.0.1"), None);
+        // A mapped address is its IPv4 source; a /24 is one source.
+        assert!(v4(203, 0, 113, 7).is_some());
+        assert_eq!(v6("::ffff:203.0.113.7"), v4(203, 0, 113, 7));
+        assert_eq!(v4(203, 0, 113, 7), v4(203, 0, 113, 200));
+        assert_ne!(v4(203, 0, 113, 7), v4(203, 0, 114, 7));
+        // An IPv6 source is its /48: two /64s of one site are one.
+        assert!(v6("2001:db8:1:1::1").is_some());
+        assert_eq!(v6("2001:db8:1:1::1"), v6("2001:db8:1:2::1"));
+        assert_ne!(v6("2001:db8:1:1::1"), v6("2001:db8:2:1::1"));
+    }
+
     /// X-sec-S1-18: each source adds at most its share of the session.
     #[test]
     fn a_source_adds_at_most_its_share() {

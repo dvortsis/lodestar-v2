@@ -427,6 +427,31 @@ async fn each_network_must_send_its_share_to_end_a_request() {
     }
 }
 
+/// X-sec-S1-18: one source (here several addresses in one /24) repeating
+/// a value across replies vouches for it once.
+#[tokio::test(start_paused = true)]
+async fn a_value_repeated_across_one_sources_replies_counts_once() {
+    let (mut a, s) = actor(true);
+    let n1 = at(0x10, 0, 11);
+    let same: Vec<_> = (2..=5)
+        .map(|i| at(0x10 * i, 1, 10 + u16::from(i)))
+        .collect();
+    table(&mut a, &[&[n1][..], &same].concat());
+    let mut rx = request(&mut a, &s);
+    answer(&mut a, &s, &n1, peers(0, 8), &[]);
+    let repeated = peers(8, 1);
+    for n in &same {
+        assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        answer(&mut a, &s, n, repeated.clone(), &[]);
+    }
+    assert_eq!(ended(&a, LedgerEnd::EnoughValues), 0);
+    assert_eq!(
+        rx.try_recv().unwrap().len(),
+        9,
+        "ends on convergence instead"
+    );
+}
+
 /// Each new end releases the request's permit exactly once, as
 /// `completed`, for a final reply and for a stream (which reads
 /// `complete`).

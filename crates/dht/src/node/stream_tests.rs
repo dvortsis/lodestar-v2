@@ -3,7 +3,7 @@
 //! against the real actor, on tokio's paused clock where time matters.
 
 use super::*;
-use crate::node::stream::{LookupSession, STREAM_BATCH};
+use crate::node::stream::{LookupSession, STREAM_BATCH, STREAM_SOURCE_SHARE};
 use rand::SeedableRng;
 use tokio::sync::Semaphore;
 
@@ -106,6 +106,53 @@ fn drained(a: &Actor) {
     assert!(a.peer_requests.is_empty());
     assert!(a.get_peers_queue.is_empty());
     assert_eq!(a.active_get_peers, 0);
+}
+
+/// X-sec-S1-18: a reply from an off-host responder adds at most its
+/// source's share to the session, however many values it carries.
+#[tokio::test(start_paused = true)]
+async fn an_off_host_responder_adds_at_most_its_share_to_a_session() {
+    let (mut a, sockets) = actor();
+    nodes(&mut a, 0, false, &[901, 902]);
+    let mut s = stream(&mut a, &sockets, InfoHash([9; 20]), None);
+    let lid = *a.lookups.keys().next().unwrap();
+    // A query outside the candidate list (as a hint's is), to an address
+    // off the host.
+    let from = SocketAddr::from(([203, 0, 113, 9], 6881));
+    let tid = a.tids.next_id().unwrap();
+    a.pending.insert(
+        tid,
+        Pending {
+            to: from,
+            id: None,
+            sent: Instant::now(),
+            family: 0,
+            purpose: Purpose::Lookup(lid),
+            hinted: false,
+        },
+    );
+    *a.pending_addrs.entry(from).or_default() += 1;
+    a.lookups.get_mut(&lid).unwrap().extra_in_flight += 1;
+    super::tests::deliver_reply(
+        &mut a,
+        &sockets,
+        tid,
+        0,
+        from,
+        NodeId([0x77; 20]),
+        (0..32).map(peer).collect(),
+    );
+    let mut got = Vec::new();
+    while let Ok(batch) = s.batches.try_recv() {
+        got.extend(batch);
+    }
+    assert_eq!(
+        got,
+        (0..STREAM_SOURCE_SHARE as u16)
+            .map(peer)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(a.stats.snapshot().peer_stream_backpressure, 0);
 }
 
 #[tokio::test(start_paused = true)]
