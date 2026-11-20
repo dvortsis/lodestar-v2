@@ -440,15 +440,7 @@ pub async fn run(
         }
     }
     drop(dirs);
-    run::finish(
-        text,
-        &log,
-        d2,
-        net.stats,
-        stored_at_end,
-        run::steady(&minutes, |m| m.stored),
-        pool_end,
-    )
+    run::finish(text, &log, d2, net.stats, stored_at_end, &minutes, pool_end)
 }
 
 #[cfg(test)]

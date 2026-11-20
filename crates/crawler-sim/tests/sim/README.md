@@ -38,6 +38,7 @@ Regenerate only when the change is intended, and say why in the PR.
 | `high-latency` | H1: 35% dead, 6% loss, 0.35–1.75 s replies and 20% at 3.6 s (near the 4 s query timeout), so each owned lookup holds a slot longer |
 | `admission-pressure` | H2: 90% BEP 51 nodes on 60 s intervals over a 200,000-hash catalogue, 15% live, so keys far outrun the 32-request cap and churn through retries and eviction |
 | `restart-honoured` | CR-0d's restored restrictions end to end: `healthy` on 15 min ± 25% intervals, restarted cleanly with `dht.safe_restart` on (below) |
+| `live-lookup` | The live lookup as CR-0 measured it: slots full, lookups held to the 25 s deadline by stale contacts in the closest set. The calibrated scenario for lookup-cost changes (below) |
 
 `admission-pressure` also departs from the production pool defaults:
 `max_pending` 20,000 (not 200,000) and `retry_backoff` 30 s (not 120 s).
@@ -104,6 +105,119 @@ rows and the totals are leg 2's.
 The first minutes are warmup: the first BEP 51 sweep and the lock-step
 retries of its rejected keys. The report's `steady` line averages the
 minutes after the third; compare candidates on it, not on the totals.
+
+## The calibrated scenario (`live-lookup`)
+
+The baselines end lookups in 5.5–16 s, and CR-0's live lookups held a
+slot about 24 s, so a change to lookup length couldn't be judged on them
+(`docs/reviews/2026-11-20-path-to-100-review.md` §3.6). `live-lookup` is
+calibrated to CR-0's 24 h measurement window (86,440 s,
+`docs/soak/evidence/2026-10-30-cr0-final/`). Every lookup-cost change
+(CR-LOOKUP-END, CR-HINT-FIRST, CR-1c, X-sampler-cooldown-split) screens
+on it, off against on, before it takes host time (build-plan §0.5).
+
+### What makes it live-like
+
+- **Stale contacts** (`NetConfig::stale_permille`, 1,750‰): about 1.75
+  addresses beside every node in id space that never answer. Replies
+  from inside a target's neighbourhood list them next to the nodes they
+  list. Each one in the closest set must time out (4 s, at most 3 in
+  flight) before the lookup can end, and each closer responder lists
+  more, so most lookups run to the 25 s deadline, as live.
+  - Far hops list none, which keeps most of them out of the sampler's frontier.
+  - Some still reach it: in the golden, about 6,000 of 24,572 `sample_infohashes` go to stale contacts.
+- **Keys far outrun the slots:** 70% BEP 51 nodes on 120 s intervals over
+  a 200,000-hash catalogue, with the production pool defaults.
+- **Fetch outcomes per attempt as CR-0's:** 4.4% stored, 10.7% refused,
+  14.1% unreachable, the rest timed out. 70% of hashes have a swarm of
+  1–16 peers.
+- 5,000 nodes, 3% dead, 0.5% loss each way. Replies take 60–460 ms
+  (uniform), and 15% take 3 s: a mean of about 0.67 s.
+
+### The ledger
+
+With `Scenario::ledger` on, the report adds the capacity ledger over the
+minutes after warmup (`run::Ledger`). Each figure is named after the
+CR-LEDGER metric it stands for, with what the sim reads it from. CR-LEDGER
+isn't on `main` yet, so the sim reads the node's existing counters and
+the network edge. When it lands, swap in its counters under the same
+names.
+
+| Report name | Field | What the sim reads |
+|---|---|---|
+| `lookup_slots_occupied` | `slots` (`L`) | `peer_active`, sampled each second (of `lookup_slots_capacity`, 32) |
+| `peer_admitted_per_s` | `admitted_per_s` (`λ`) | `peer_admitted` deltas |
+| `W_little` | `w` | `L / λ`: how CR-0's 23.6 s was derived, so it's the calibrated `W` |
+| `lookup_residence_seconds_total/lookup_ended_total` | `w_residence` | CR-LEDGER's `W`. Here it's answered lookups' run time, admission to answer (`peer_lookup_millis / peer_lookups_answered`), which leaves out the few cancelled ones |
+| `queries_sent_total{purpose=peer_lookup\|hint}/admitted` | `q` | `get_peers` queries at the network edge. The node can't tell its lookups' queries from the rest |
+| `queries_out_total/admitted` | `q_all` | Every query: CR-0's upper bound on `q` |
+| `stored/admitted` | `y` | What reached the writer |
+| `fetches/admitted` | `fetches` | Peers tried |
+| `peers_found/admitted` | `found` | Keys whose peers were found (funnel `PeerFound`): about the share of lookups that return peers |
+| `outstanding` | `outstanding` | Mean of the `outstanding` gauge. Over `queries_out_total/s` it's the mean time a query is held |
+| `timeouts/queries_out` | `unanswered` | |
+| `lookup_deadlines/completed` | `deadlines_per_completed` | Includes the node's own `find_node` lookups |
+
+CR-LEDGER's time to first values, requests without values, values per
+request and hint outcomes aren't in the ledger. A later slice can add
+them from the same counters once they exist.
+
+### Calibration targets and results
+
+`live_lookup_is_calibrated` asserts each target on every one of the 8
+`SCREEN_SEEDS` and on their mean. It takes about 12 s of wall time (8
+threads; about 40 s of CPU in a debug build), and the whole `sim` test
+about 20 s.
+
+| Target (CR-0, 24 h) | Live | Tolerance | 8-seed mean | Seed range |
+|---|---|---|---|---|
+| Queries unanswered | 0.382 | ±0.03 | 0.385 | 0.378–0.391 |
+| `L`, slots occupied | 30.68 | ±1.0 | 30.82 | 30.80–30.85 |
+| `W`, slot residence | 23.86 s | ±1.5 s | 23.11 s | 22.53–23.51 s |
+| Admitted lookups/s | 1.286 | ±0.10 | 1.334 | 1.311–1.369 |
+| `y`, stored per admitted | 0.160 | ±0.04 | 0.164 | 0.149–0.181 |
+| Fetch attempts per admitted | 3.66 | ±0.6 | 3.84 | 3.65–4.18 |
+| Stored per minute | 12.34 | ±3.1 | 13.12 | 11.78–14.56 |
+| DHT queries/s | 76.1 | ±7.6 | 77.4 | 76.5–78.5 |
+| `q_all`, queries per admitted | 59.2 | ±6.0 | 58.0 | 57.1–58.6 |
+| Mean queries outstanding | 160 | ±24 | 151.9 | 150.9–153.1 |
+
+The live figures:
+- **From CR-0's counters over the window:** unanswered is `dht_timeouts_total / dht_queries_out_total`; admitted, `y`, fetch attempts and stored per minute come from the same counters.
+- **From the 73 baseline samples in `samples-hourly.jsonl`** (about 20 minutes apart): `L` and outstanding are means of the `dht_peer_active` and `dht_outstanding` gauges. The review's 30.3 and 23.6 s also averaged 3 warmup samples.
+- **Derived:** `W = L / λ`.
+
+The y and stored tolerances are wider: the 9 measured minutes hold about
+110–130 stores per seed, about 9% Poisson noise.
+
+Not calibrated, and why:
+- **`q`, lookups' own queries:** 24.4 per admitted lookup (seeds 24.0–24.8). CR-0 can't separate lookup queries from sampling and maintenance. The review's 40–55 was an estimate, and the sim puts the lookup share lower with sampling taking the rest. CR-LEDGER's queries by purpose will settle it. If live `q` comes out far from 24, recalibrate: fewer stale contacts, and slower sampling to keep the total.
+- **Reply latency:** CR-0 kept no latency histogram. The scripted distribution is constrained only through the mean hold time (outstanding over queries/s: 2.1 s live, 1.96 s here) and `W`.
+- **Lookups that return peers, and how many of the K closest answer:** CR-0 has no live figure for either. The sim reports `peers_found/admitted`, 0.57 on seed 1, so CR-LEDGER's `lookup_without_values_total` can be compared with it later. The share of hashes with a swarm (70%) is set against fetch attempts per admitted lookup, not against a live share.
+- **Fetch duration:** CR-0's attempts took about 3.8 s on average (review §3.5). Here, 70% time out at 8 s and unreachable peers fail at 4 s, about 6.3 s. That overstates fetch-socket pressure, so a CR-1c screen that leans on socket use should lower `timeout_ms` first.
+- **Deadlines per completed:** 1.24 here, against CR-0's 1.05. Both include non-owned lookups, and CR-0's also include IPv6 lookups, so it's reported, not matched.
+
+### Screening a lookup-cost change on it
+
+As in "A/B a candidate", but read the ledger beside the sign test. The
+review's rule (§5) keeps a change only if both `y·L/W` and `y·Q/q` rise.
+`screen` returns each seed's `[off, on]` ledgers, and runs each arm's 8
+seeds on 8 threads:
+
+```rust
+let off = scenario::live_lookup();
+// `lookup_end` stands for the candidate's own switch field.
+let on = Scenario { switches: Switches { lookup_end: true, ..Default::default() }, ..off.clone() };
+let v = screen(&off, &on);
+for (seed, [a, b]) in SCREEN_SEEDS.zip(&v.ledgers) {
+    println!("{seed}: W {:.1}→{:.1} q {:.1}→{:.1} y {:.3}→{:.3}", a.w_residence, b.w_residence, a.q, b.q, a.y, b.y);
+}
+assert_eq!(v.outcome, Outcome::Better, "{:?}", v.diffs);
+```
+
+Off must leave `golden/live-lookup.txt` unchanged, like every golden.
+Slot-count changes (CR-1c) should also show `queries/s` against the
+Balanced 200: at 76/s the budget isn't what binds today.
 
 ## The report
 
