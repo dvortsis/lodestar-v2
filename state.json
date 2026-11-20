@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T12:54Z",
+  "updated_at": "2026-11-20T13:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10265,6 +10265,13 @@
       "sha": "48f5a540",
       "at": "2026-11-20T12:54Z",
       "note": "review MERGE; optionals to a logging follow-up; session archived"
+    },
+    {
+      "pr": 981,
+      "slice": "X-sampler-cooldown-split",
+      "sha": "20f4bbae",
+      "at": "2026-11-20T13:05Z",
+      "note": "full + delta review MERGE; session archived; CR-HINT-FIRST/CR-1c now unblocked by sampler (still after S1-17 for actor.rs)"
     }
   ],
   "active_sessions": {
@@ -10510,7 +10517,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T12:54Z",
+    "updated": "2026-11-20T13:05Z",
     "items": [
       {
         "slot": 1,
@@ -10524,13 +10531,13 @@
       },
       {
         "slot": 2,
-        "slice": "X-sampler-cooldown-split",
-        "role": "build",
-        "agent": "claude",
+        "slice": "X-sec-S1-17",
+        "role": "build (opus, security)",
+        "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-20T08:45Z",
-        "doing": "#981 MERGE (full + delta) at 0e33f272; awaiting ci-ok",
-        "status": "active"
+        "since": "2026-11-20T13:05Z",
+        "doing": "launched; detail by message; brief briefs/X-sec-S1-17.md",
+        "status": "running"
       },
       {
         "slot": 3,
@@ -10549,7 +10556,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T10:12Z",
-        "doing": "#980 review CHANGES relayed (tests for rotation+stuck reset; 2-pass corrupt before delete); fix round",
+        "doing": "#980 fix round pushed 719ad4ad; await ready, then delta review",
         "status": "active"
       }
     ],
