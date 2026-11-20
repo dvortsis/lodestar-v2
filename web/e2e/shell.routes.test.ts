@@ -6,8 +6,8 @@ import { expectNoA11yViolations } from './a11y';
 import {
 	crawlerEvent,
 	engage,
+	engageBare,
 	liveEvents,
-	nudgeFor,
 	openPaletteWithKey
 } from './support/events-server';
 import { interact } from './support/interact';
@@ -463,12 +463,13 @@ test.describe('401 hand-off', () => {
 		const events = await liveEvents(page);
 		for (const path of ['/login', '/setup', '/welcome']) {
 			await go(path);
-			await nudgeFor(page, 4_000); // the stream starts on the first interaction: none must here
+			await engageBare(page); // the stream starts on the first interaction: none must here
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
-			// nudgeFor() has just interacted for four seconds; a stream the shell was going to start on an
-			// interaction would be in requests() by now. Its 30 s idle fallback is out of reach of any wait.
+			// engageBare() waited for the chrome to take the interaction, then kept interacting for 2 s: a
+			// stream the shell was going to start on one would be in requests() by now. Its 30 s idle
+			// fallback is out of reach of any wait.
 			expect(await events.requests()).toHaveLength(0);
 		}
 		expect(mock.calls('getEvents')).toHaveLength(0);

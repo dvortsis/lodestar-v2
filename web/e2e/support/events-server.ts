@@ -33,52 +33,30 @@ declare global {
 
 /** One synthetic interaction: an event the shell treats like the first key press. */
 async function nudge(page: Page) {
-	// A nudge that lands as the page navigates away (a 401 hand-off) has nothing left to do.
+	// One that lands as the page navigates away (a 401 hand-off) has nothing left to do.
 	await page.evaluate(() => window.dispatchEvent(new Event('focusin'))).catch(() => undefined);
 }
 
-const STREAM_PATH = '/api/v1/events';
-
 /**
- * The shell starts its stream on the first interaction (or 30 s after load). Tests that need it
- * right away call this: it nudges every 100 ms until the stream has been asked for (a request for
- * `/api/v1/events`, routed or not, or one `liveEvents` answered), with a 15 s deadline. The chrome
- * that listens for the nudge mounts a moment after load, later on a slow runner, so a nudge count
- * or a fixed time can run out first. Call it before the stream starts: it waits for a new request.
+ * The shell starts its chrome and stream on the first interaction (or 30 s after load). Tests that
+ * need them right away call this: once `#boot` has gone the shell's listener is attached (it goes
+ * in the same mount, see `interact.ts`), so one nudge is always taken, however late the shell
+ * hydrates. The caller's own assertion is the condition that the chrome or the stream got there.
  */
 export async function engage(page: Page) {
-	let asked = false;
-	const seen = (request: { url(): string }) => {
-		if (new URL(request.url()).pathname === STREAM_PATH) asked = true;
-	};
-	page.on('request', seen);
-	try {
-		await expect
-			.poll(
-				async () => {
-					if (!asked) {
-						const live = await page
-							.evaluate(() => (window.__sse?.requests.length ?? 0) > 0)
-							.catch(() => false);
-						asked ||= live;
-					}
-					if (!asked) await nudge(page);
-					return asked;
-				},
-				{ message: 'the shell never asked for its event stream', timeout: 15_000, intervals: [100] }
-			)
-			.toBe(true);
-	} finally {
-		page.off('request', seen);
-	}
+	await expect(page.locator('#boot')).toHaveCount(0);
+	await nudge(page);
 }
 
 /**
- * Nudges every 100 ms for `ms`, for a test that checks nothing starts on an interaction (the
- * sign-in screens open no stream). That is an absence, with no condition to wait for, so the
- * window is a fixed time; nothing waits on it to pass.
+ * For a screen that must open no stream (sign-in, setup, welcome): engages, waits until the chrome
+ * has mounted and taken the interaction (its toaster region, which the bare chrome has too), then
+ * keeps nudging for `ms`. A stream is an absence to check, with no condition to wait for, so that
+ * last window is a fixed time; it only starts once the chrome is there to start a stream.
  */
-export async function nudgeFor(page: Page, ms: number) {
+export async function engageBare(page: Page, ms = 2_000) {
+	await engage(page);
+	await expect(page.getByRole('region', { name: 'Notifications' })).toBeAttached();
 	const end = Date.now() + ms;
 	await expect
 		.poll(
@@ -139,11 +117,12 @@ export async function liveEvents(
 				new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
 			);
 		};
-		// Keep nudging until the chrome has mounted and taken it.
+		// Keep nudging until the chrome has mounted and taken it: until the stream is asked for, or
+		// for 30 s (the shell's own fallback), however late the page hydrates.
 		let tries = 0;
 		const nudge = setInterval(() => {
+			if (state.requests.length || ++tries > 300) return clearInterval(nudge);
 			dispatchEvent(new Event('focusin'));
-			if (++tries > 60) clearInterval(nudge);
 		}, 100);
 	}, initial);
 	return {
