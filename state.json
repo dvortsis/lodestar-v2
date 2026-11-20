@@ -10378,7 +10378,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T05:54Z",
-        "doing": "launching",
+        "doing": "session_01MMjhnCFpG8WWQYLg3X4eSC: building",
         "status": "active"
       },
       {
@@ -10388,7 +10388,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T05:54Z",
-        "doing": "launching",
+        "doing": "session_01MMjhnByeR5BT5612xRLRbj: building",
         "status": "active"
       },
       {
@@ -10408,7 +10408,7 @@
         "agent": "claude",
         "model": "opus",
         "since": "2026-11-20T05:54Z",
-        "doing": "launching",
+        "doing": "session_01MMjhnB8RzHX5A8Ytoy5pUk: building",
         "status": "active"
       }
     ],
