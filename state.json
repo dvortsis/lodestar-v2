@@ -10621,7 +10621,7 @@
         "slot": 3,
         "slice": "X-steam-followups",
         "role": "build",
-        "agent": "pending",
+        "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
         "since": "2026-11-20T18:38Z",
         "doing": "refuse an empty or much smaller finished app list; tests for the 60 s cancel hold and the partial-list age limit",
