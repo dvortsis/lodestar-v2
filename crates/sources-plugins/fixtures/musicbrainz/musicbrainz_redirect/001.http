@@ -1,0 +1,5 @@
+GET https://musicbrainz.org/ws/2/release-group?query=releasegroup%3A%22Harbour+Lights%22+AND+artist%3A%22The+Quiet+Engines%22&limit=5&fmt=json
+Accept: application/json
+
+HTTP 302
+Location: https://elsewhere.example/ws/2/release-group

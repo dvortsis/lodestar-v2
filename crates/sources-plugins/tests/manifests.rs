@@ -10,7 +10,7 @@ use lodestar_sources::{Kind, Manifest, SourcePlugin};
 use lodestar_sources_plugins::full_scrape::{StaticPrivateTrackers, SystemClock};
 use lodestar_sources_plugins::{
     StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa, prowlarr,
-    stashdb, torrent_cache, tpdb,
+    stashdb, torrent_cache, tpdb, tvdb,
 };
 
 /// The adult enrichers are picked by id (`PipelineConfig::adult_enrichers`)
@@ -55,14 +55,34 @@ fn each_entry_is_its_plugins_own_manifest() {
     let stashdb = stashdb::StashDb::new(creds());
     let plugins: Vec<Manifest> = vec![
         academic::Academic::new().manifest().clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::anidb::AniDb::new(creds()),
+        )
+        .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::anilist::AniList::new(),
+        )
+        .clone(),
         archive_org::ArchiveOrg::new().manifest().clone(),
         arr::ArrWebhooks::new().manifest().clone(),
         clients::Clients::unconfigured().manifest().clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::discogs::Discogs::new(creds()),
+        )
+        .clone(),
         full_scrape::FullScrape::unconfigured(
             Arc::new(StaticPrivateTrackers::none()),
             Arc::new(SystemClock::default()),
         )
         .manifest()
+        .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::igdb::Igdb::new(creds()),
+        )
+        .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
+        )
         .clone(),
         nyaa::Nyaa::new().manifest().clone(),
         nyaa::Sukebei::new().manifest().clone(),
@@ -70,7 +90,15 @@ fn each_entry_is_its_plugins_own_manifest() {
             &lodestar_sources_plugins::openlibrary::OpenLibrary::new(),
         )
         .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::predb::PreDb::new(),
+        )
+        .clone(),
         prowlarr::Prowlarr::unconfigured(creds()).manifest().clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::srrdb::Srrdb::new(),
+        )
+        .clone(),
         AdultEnricher::manifest(&stashdb).clone(),
         lodestar_sources::identify::Identifier::manifest(
             &lodestar_sources_plugins::tmdb::Tmdb::new(creds()),
@@ -78,6 +106,7 @@ fn each_entry_is_its_plugins_own_manifest() {
         .clone(),
         cache.manifest().clone(),
         AdultEnricher::manifest(&tpdb).clone(),
+        lodestar_sources::identify::Identifier::manifest(&tvdb::Tvdb::new(creds())).clone(),
         lodestar_sources::identify::Identifier::manifest(
             &lodestar_sources_plugins::wikidata::Wikidata::new(),
         )

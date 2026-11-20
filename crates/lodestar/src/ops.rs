@@ -904,8 +904,8 @@ mod spec_tests {
     use lodestar_sources::{Policy, SourcePlugin};
     use lodestar_sources_plugins::full_scrape::{LookupError, PrivateTrackers, SystemClock};
     use lodestar_sources_plugins::{
-        StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape, nyaa,
-        prowlarr, stashdb, tmdb, torrent_cache, tpdb, wikidata,
+        StaticCredentials, academic, archive_org, arr, catalogue, clients, discogs, full_scrape,
+        nyaa, prowlarr, stashdb, tmdb, torrent_cache, tpdb, tvdb, wikidata,
     };
     use serde_json::{Value, json};
 
@@ -933,10 +933,32 @@ mod spec_tests {
         );
         vec![
             (academic::ID, *academic::Academic::new().policy()),
+            (
+                lodestar_sources_plugins::anidb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::anidb::AniDb::new(creds()),
+                ),
+            ),
+            (
+                lodestar_sources_plugins::anilist::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::anilist::AniList::new(),
+                ),
+            ),
             (archive_org::ID, *archive_org::ArchiveOrg::new().policy()),
             (arr::ID, *arr::ArrWebhooks::new().policy()),
             (clients::ID, *clients::Clients::unconfigured().policy()),
+            (
+                discogs::ID,
+                *lodestar_sources::identify::Identifier::policy(&discogs::Discogs::new(creds())),
+            ),
             (full_scrape::ID, *scrape.policy()),
+            (
+                lodestar_sources_plugins::igdb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::igdb::Igdb::new(creds()),
+                ),
+            ),
             (nyaa::ID, *nyaa::Nyaa::new().policy()),
             (nyaa::SUKEBEI_ID, *nyaa::Sukebei::new().policy()),
             (
@@ -960,8 +982,30 @@ mod spec_tests {
             (torrent_cache::ID, *cache.policy()),
             (tpdb::ID, *AdultEnricher::policy(&tpdb::Tpdb::new(creds()))),
             (
+                tvdb::ID,
+                *lodestar_sources::identify::Identifier::policy(&tvdb::Tvdb::new(creds())),
+            ),
+            (
                 wikidata::ID,
                 *lodestar_sources::identify::Identifier::policy(&wikidata::Wikidata::new()),
+            ),
+            (
+                lodestar_sources_plugins::musicbrainz::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
+                ),
+            ),
+            (
+                lodestar_sources_plugins::srrdb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::srrdb::Srrdb::new(),
+                ),
+            ),
+            (
+                lodestar_sources_plugins::predb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::predb::PreDb::new(),
+                ),
             ),
         ]
     }
@@ -1008,6 +1052,29 @@ mod spec_tests {
             } else if id == tmdb::ID {
                 json!([{ "kind": "secret", "label": "API read access token",
                          "name": "read_access_token", "required": true }])
+            } else if id == tvdb::ID {
+                json!([
+                    { "kind": "secret", "label": "API key", "name": "api_key", "required": true },
+                    {
+                        "kind": "secret",
+                        "label": "Subscriber PIN (user-supported keys only)",
+                        "name": "pin",
+                        "required": false
+                    }
+                ])
+            } else if id == discogs::ID {
+                json!([{ "kind": "secret", "label": "Personal access token",
+                         "name": "personal_access_token", "required": true }])
+            } else if id == lodestar_sources_plugins::anidb::ID {
+                json!([
+                    { "kind": "username", "label": "Registered AniDB client name", "name": "client", "required": true },
+                    { "kind": "username", "label": "Registered AniDB client version", "name": "clientver", "required": true }
+                ])
+            } else if id == lodestar_sources_plugins::igdb::ID {
+                json!([
+                    { "kind": "secret", "label": "Twitch Client ID", "name": "client_id", "required": true },
+                    { "kind": "secret", "label": "Twitch Client secret", "name": "client_secret", "required": true }
+                ])
             } else {
                 json!([])
             };

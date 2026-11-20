@@ -5,6 +5,7 @@
 mod cache;
 mod cancel;
 pub mod catalogue;
+pub mod collapse;
 mod compile;
 mod count;
 mod cursor;
@@ -41,6 +42,7 @@ pub use cache::{
     ResultCache, SearchSpec,
 };
 pub use cancel::{CancelOnDrop, CancelToken};
+pub use collapse::{CollapsedPage, Row, Unavailable};
 pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
 pub use disk::{DiskStats, space_by_field_at};

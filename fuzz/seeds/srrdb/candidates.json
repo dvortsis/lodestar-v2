@@ -1,0 +1,11 @@
+{
+ "results": [
+  {"release": "Echoes.1999.DVDRip.XviD-AGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0888801", "size": 734003200},
+  {"release": "Echoes_1999_PAL_DVDR-BGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "0888801", "size": 4700000000},
+  {"release": "Echoes.2010.1080p.BluRay.x264-CGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "1888802", "size": 7900000000},
+  {"release": "Echoes.2010.720p.BluRay.x264-DGRP", "date": "2011-07-04 00:00:00", "hasNFO": "yes", "hasSRS": "yes", "isForeign": "no", "imdbId": "10888803", "size": 4400000000}
+ ],
+ "resultsCount": 4,
+ "warnings": [],
+ "query": ["+*echoes*"]
+}

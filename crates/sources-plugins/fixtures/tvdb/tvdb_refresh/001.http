@@ -1,0 +1,6 @@
+POST https://api4.thetvdb.com/v4/login
+Accept: application/json
+Content-Type: application/json
+
+HTTP 200
+Content-Type: application/json

@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use lodestar_dht::node::testing::{self, SimPort};
 use lodestar_dht::node::{
-    Config, Harvest, LookupEnd, Node, NodeHandle, SessionAdmit, SessionEnd, Source, StatsSnapshot,
+    Config, Harvest, LedgerEnd, LookupEnd, Node, NodeHandle, QueryPurpose, SessionAdmit,
+    SessionEnd, Source, StatsSnapshot,
 };
 use lodestar_peer_wire::FailureKind;
 use lodestar_sources::pool::spawn;
@@ -50,6 +51,52 @@ pub struct Report {
     /// Metadata stored per minute after warmup: what screening compares.
     pub steady_stored: f64,
     pub pool: PoolEnd,
+    /// The capacity ledger after warmup.
+    pub ledger: Ledger,
+}
+
+/// The capacity ledger (`docs/reviews/2026-11-20-path-to-100-review.md`
+/// §1) over the minutes after warmup, as CR-0's numbers were read: per
+/// admitted lookup, from counter deltas and the per-second slot gauge.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Ledger {
+    /// `L`: mean occupied peer-request slots (`peer_active`, each second).
+    pub slots: f64,
+    /// Admitted lookups per second.
+    pub admitted_per_s: f64,
+    /// `W`: mean slot residence by Little's law, `L / λ` (CR-0's method).
+    pub w: f64,
+    /// CR-LEDGER's `W`: `lookup_residence_seconds_total /
+    /// lookup_ended_total`, every reason. `w` stays the calibrated `W`.
+    pub w_residence: f64,
+    /// `q`: CR-LEDGER's `queries_sent_total{purpose=peer_lookup|hint}`
+    /// per ended lookup. It counts owned requests' queries only (harvest
+    /// `get_peers` aren't sent as peer lookups here).
+    pub q: f64,
+    /// Every DHT query per admitted lookup: CR-0's upper bound on `q`.
+    pub q_all: f64,
+    /// `y`: metadata stored per admitted lookup.
+    pub y: f64,
+    /// Fetch attempts (peers tried) per admitted lookup.
+    pub fetches: f64,
+    /// Keys whose peers were found (funnel `PeerFound`) per admitted
+    /// lookup: about the share of lookups that return peers.
+    pub found: f64,
+    pub stored_per_min: f64,
+    pub queries_per_s: f64,
+    /// Mean queries awaiting an answer (each second); over `queries_per_s`
+    /// it's the mean time a query is held, answered or not.
+    pub outstanding: f64,
+    /// Queries that timed out (`timeouts / queries_out`).
+    pub unanswered: f64,
+    /// Lookup deadlines per completed request. Counts every lookup leg
+    /// that ran into a deadline: the node's own find_node lookups and
+    /// non-owned `get_peers` lookups too, so it can pass 1, as CR-0's did
+    /// (1.05).
+    pub deadlines_per_completed: f64,
+    /// CR-LEDGER's `lookup_ended_total{reason}` over its sum: each end
+    /// reason's share, by [`LedgerEnd::ALL`].
+    pub ended_share: [f64; LedgerEnd::ALL.len()],
 }
 
 /// Pool counters at the measurement boundary, for screening reports.
@@ -92,8 +139,20 @@ pub struct Minute {
     pub fetched: u64,
     pub stored: u64,
     pub harvested: u64,
+    pub queries_out: u64,
+    pub timeouts: u64,
+    /// CR-LEDGER's peer lookup and hint queries.
+    pub lookup_queries: u64,
+    /// CR-LEDGER's ends, every reason, and their residence in ms.
+    pub ended: u64,
+    pub residence_millis: u64,
+    /// CR-LEDGER's ends by [`LedgerEnd::ALL`].
+    pub ended_by: [u64; LedgerEnd::ALL.len()],
+    pub deadlines: u64,
     pub dht_active: Gauge,
     pub dht_queued: Gauge,
+    /// The node's `outstanding` gauge: queries awaiting an answer.
+    pub outstanding: Gauge,
     pub pool_lookups: Gauge,
     pub pool_active: Gauge,
 }
@@ -109,6 +168,12 @@ pub struct Totals {
     fetched: u64,
     stored: u64,
     harvested: u64,
+    queries_out: u64,
+    timeouts: u64,
+    lookup_queries: u64,
+    residence_millis: u64,
+    ended_by: [u64; LedgerEnd::ALL.len()],
+    deadlines: u64,
 }
 
 /// `crates/pipeline/src/dht.rs`'s strategy codes.
@@ -339,6 +404,13 @@ impl Leg {
             fetched: p.fetched.load(Ordering::Relaxed),
             stored: self.stored.load(Ordering::Relaxed),
             harvested: d.harvested_sample + d.harvested_get_peers + d.harvested_announce,
+            queries_out: d.queries_out,
+            timeouts: d.timeouts,
+            lookup_queries: d.ledger.queries[QueryPurpose::PeerLookup as usize]
+                + d.ledger.queries[QueryPurpose::Hint as usize],
+            residence_millis: d.ledger.residence_millis.iter().sum(),
+            ended_by: d.ledger.ended,
+            deadlines: d.lookup_deadlines,
         }
     }
 
@@ -354,6 +426,7 @@ impl Leg {
             let p = self.pool.stats();
             minute.dht_active.add(d.peer_active);
             minute.dht_queued.add(d.peer_queued);
+            minute.outstanding.add(d.outstanding);
             minute.pool_lookups.add(p.lookups.load(Ordering::Relaxed));
             minute.pool_active.add(p.active.load(Ordering::Relaxed));
             if sec % 60 == 0 {
@@ -366,6 +439,13 @@ impl Leg {
                 minute.fetched = t.fetched - last.fetched;
                 minute.stored = t.stored - last.stored;
                 minute.harvested = t.harvested - last.harvested;
+                minute.queries_out = t.queries_out - last.queries_out;
+                minute.timeouts = t.timeouts - last.timeouts;
+                minute.lookup_queries = t.lookup_queries - last.lookup_queries;
+                minute.residence_millis = t.residence_millis - last.residence_millis;
+                minute.ended_by = std::array::from_fn(|i| t.ended_by[i] - last.ended_by[i]);
+                minute.ended = minute.ended_by.iter().sum();
+                minute.deadlines = t.deadlines - last.deadlines;
                 last = t;
                 out.push(std::mem::take(&mut minute));
             }
@@ -465,6 +545,9 @@ pub async fn run(s: &Scenario) -> Report {
     let stored_at_end = leg.stored.load(Ordering::Relaxed);
     let pool_end = leg.pool_end();
     write_minutes(&mut text, &minutes);
+    if s.ledger {
+        write_ledger(&mut text, &ledger(&minutes));
+    }
     write_totals(&mut text, &dht_final, leg.pool.stats(), &leg.funnel);
     let end = leg.stop().await;
     conservation(&dht_final, end.fetched, end.funnel_fetched, end.stored);
@@ -475,7 +558,7 @@ pub async fn run(s: &Scenario) -> Report {
         dht_final,
         end.net.stats,
         stored_at_end,
-        steady(&minutes, |m| m.stored),
+        &minutes,
         pool_end,
     )
 }
@@ -487,7 +570,7 @@ pub fn finish(
     dht: StatsSnapshot,
     net: NetStats,
     stored: u64,
-    steady_stored: f64,
+    minutes: &[Minute],
     pool: PoolEnd,
 ) -> Report {
     let mut log = log.lock().expect("log lock");
@@ -503,8 +586,9 @@ pub fn finish(
         dht,
         net,
         stored,
-        steady_stored,
+        steady_stored: steady(minutes, |m| m.stored),
         pool,
+        ledger: ledger(minutes),
     }
 }
 
@@ -540,6 +624,121 @@ pub fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored
 pub fn steady(minutes: &[Minute], f: fn(&Minute) -> u64) -> f64 {
     let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
     steady.iter().map(f).sum::<u64>() as f64 / steady.len().max(1) as f64
+}
+
+/// The ledger over the minutes after warmup, from the node's own
+/// CR-LEDGER counters and the per-second slot gauge.
+pub fn ledger(minutes: &[Minute]) -> Ledger {
+    let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
+    let sum = |f: fn(&Minute) -> u64| steady.iter().map(f).sum::<u64>() as f64;
+    let secs = 60.0 * steady.len().max(1) as f64;
+    let admitted = sum(|m| m.admitted).max(1.0);
+    let slots = sum(|m| m.dht_active.sum) / secs;
+    let admitted_per_s = sum(|m| m.admitted) / secs;
+    let queries = sum(|m| m.queries_out);
+    let ended = sum(|m| m.ended);
+    Ledger {
+        slots,
+        admitted_per_s,
+        w: slots * secs / admitted,
+        w_residence: sum(|m| m.residence_millis) / 1000.0 / ended.max(1.0),
+        q: sum(|m| m.lookup_queries) / ended.max(1.0),
+        q_all: queries / admitted,
+        y: sum(|m| m.stored) / admitted,
+        fetches: sum(|m| m.fetch_started) / admitted,
+        found: sum(|m| m.peers_found) / admitted,
+        stored_per_min: sum(|m| m.stored) * 60.0 / secs,
+        queries_per_s: queries / secs,
+        outstanding: sum(|m| m.outstanding.sum) / secs,
+        unanswered: sum(|m| m.timeouts) / queries.max(1.0),
+        deadlines_per_completed: sum(|m| m.deadlines) / sum(|m| m.completed).max(1.0),
+        ended_share: std::array::from_fn(|i| {
+            steady.iter().map(|m| m.ended_by[i]).sum::<u64>() as f64 / ended.max(1.0)
+        }),
+    }
+}
+
+/// One figure a line, each named after the CR-LEDGER metric (or ratio of
+/// metrics) it stands for, then what the sim reads it from.
+pub fn write_ledger(t: &mut String, l: &Ledger) {
+    let _ = writeln!(
+        t,
+        "\n# capacity ledger after {WARMUP_MINUTES} warmup min, named after CR-LEDGER's metrics (README, \"The calibrated scenario\")"
+    );
+    for (name, v, from) in [
+        (
+            "lookup_slots_occupied",
+            format!("{:.2}", l.slots),
+            "L: peer_active each second, of lookup_slots_capacity=32",
+        ),
+        (
+            "peer_admitted_per_s",
+            format!("{:.3}", l.admitted_per_s),
+            "λ",
+        ),
+        ("W_little", format!("{:.2}s", l.w), "L / λ, CR-0's method"),
+        (
+            "lookup_residence_seconds_total/lookup_ended_total",
+            format!("{:.2}s", l.w_residence),
+            "W per ended lookup, every reason",
+        ),
+        (
+            "queries_sent_total{purpose=peer_lookup|hint}/lookup_ended_total",
+            format!("{:.1}", l.q),
+            "q",
+        ),
+        (
+            "queries_out_total/admitted",
+            format!("{:.1}", l.q_all),
+            "q_all",
+        ),
+        (
+            "stored/admitted",
+            format!("{:.3}", l.y),
+            "y: what reached the writer",
+        ),
+        (
+            "fetches/admitted",
+            format!("{:.2}", l.fetches),
+            "peers tried",
+        ),
+        (
+            "peers_found/admitted",
+            format!("{:.3}", l.found),
+            "lookups that found peers",
+        ),
+        ("stored/min", format!("{:.2}", l.stored_per_min), ""),
+        ("queries_out_total/s", format!("{:.1}", l.queries_per_s), ""),
+        (
+            "outstanding",
+            format!("{:.1}", l.outstanding),
+            "mean, each second",
+        ),
+        (
+            "timeouts/queries_out",
+            format!("{:.3}", l.unanswered),
+            "unanswered",
+        ),
+        (
+            "lookup_deadlines/completed",
+            format!("{:.2}", l.deadlines_per_completed),
+            "includes find_node and non-owned get_peers lookups",
+        ),
+    ] {
+        let note = if from.is_empty() {
+            String::new()
+        } else {
+            format!("  ({from})")
+        };
+        let _ = writeln!(t, "{name}={v}{note}");
+    }
+    for (why, share) in LedgerEnd::ALL.iter().zip(l.ended_share) {
+        let _ = writeln!(
+            t,
+            "lookup_ended_total{{reason={}}}={share:.3}  (share of ends)",
+            why.as_str()
+        );
+    }
 }
 
 fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
@@ -583,6 +782,9 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
     );
     if n.samplers_hold {
         let _ = writeln!(t, "net: samplers_hold=true");
+    }
+    if n.stale_permille > 0 {
+        let _ = writeln!(t, "net: stale={}‰", n.stale_permille);
     }
     let w = &s.swarm;
     let _ = writeln!(
@@ -849,4 +1051,44 @@ pub fn write_net(t: &mut String, n: &NetStats, glue_dropped: u64, queued_at_end:
         t,
         "discoveries_dropped={glue_dropped} pool_queue_at_end={queued_at_end}"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ledger leaves warmup out and reads `W` by Little's law.
+    #[test]
+    fn ledger_skips_warmup_and_applies_littles_law() {
+        let minute = |admitted: u64, active: u64| Minute {
+            admitted,
+            stored: admitted / 6,
+            lookup_queries: admitted * 25,
+            ended: admitted,
+            ended_by: {
+                let mut by = [0; LedgerEnd::ALL.len()];
+                by[LedgerEnd::Deadline as usize] = admitted;
+                by
+            },
+            queries_out: admitted * 60,
+            timeouts: admitted * 20,
+            dht_active: Gauge {
+                sum: active * 60,
+                max: active,
+            },
+            ..Minute::default()
+        };
+        let mut minutes: Vec<Minute> = (0..WARMUP_MINUTES).map(|_| minute(1_000, 1)).collect();
+        minutes.extend((0..2).map(|_| minute(78, 30)));
+        let l = ledger(&minutes);
+        assert_eq!(l.slots, 30.0);
+        assert!((l.admitted_per_s - 1.3).abs() < 1e-9);
+        assert!((l.w - 30.0 / 1.3).abs() < 1e-9);
+        assert_eq!((l.q, l.q_all, l.y), (25.0, 60.0, 13.0 / 78.0));
+        assert!((l.unanswered - 1.0 / 3.0).abs() < 1e-9);
+        // Nothing admitted: finite, not NaN.
+        let none = ledger(&(0..5).map(|_| minute(0, 0)).collect::<Vec<_>>());
+        assert!(none.w.is_finite() && none.q.is_finite());
+        assert_eq!(l.ended_share[LedgerEnd::Deadline as usize], 1.0);
+    }
 }

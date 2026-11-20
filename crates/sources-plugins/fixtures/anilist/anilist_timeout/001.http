@@ -1,0 +1,5 @@
+POST https://graphql.anilist.co
+Accept: application/json
+Content-Type: application/json
+
+ERROR timed out

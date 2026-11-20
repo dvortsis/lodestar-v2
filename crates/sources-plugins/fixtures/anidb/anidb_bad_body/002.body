@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<anime id="9001" restricted="false">
+  <type>TV Series</type>
+  <episodecount>12</episodecount>
+  <startdate>2004-04-01</startdate>
+  <enddate>2004-06-24</enddate>
+  <titles>
+    <title xml:lang="x-jat" type="main">Hoshi no Kakera</title>
+    <title xml:lang="en" type="official">Star Fragments</title>
+    <title xml:lang="ja" type="official">星のかけら</title>
+   

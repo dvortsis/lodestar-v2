@@ -752,6 +752,23 @@ impl Writer {
                     days = days
                 );
             }
+            // Failing closed: a snapshot whose identify claims couldn't be
+            // checked against their terms is deleted, and named here.
+            for path in &snaps.unchecked {
+                lodestar_log::log_event!(
+                    crate::log_events::SNAPSHOT_UNCHECKED,
+                    path = lodestar_log::Path::new(path)
+                );
+            }
+            // A snapshot stuck on an error the purge retries, at most once
+            // a day each.
+            for (path, error) in &snaps.stuck {
+                lodestar_log::log_event!(
+                    crate::log_events::SNAPSHOT_STUCK,
+                    path = lodestar_log::Path::new(path),
+                    error = *error
+                );
+            }
             // Their text names paths and errors: counted, not repeated.
             if !snaps.warnings.is_empty() {
                 lodestar_log::log_event!(

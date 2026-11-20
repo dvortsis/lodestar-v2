@@ -307,6 +307,22 @@ impl<'a> Matcher<'a> {
 }
 
 impl Matcher<'_> {
+    /// Moves to the first document the query matches at or after
+    /// `target` (whatever the deletes and ranges say), and returns it:
+    /// `TERMINATED` past the last. For leapfrogging another doc set
+    /// against the query (`collapse.rs`).
+    pub(crate) fn seek_to(&mut self, target: DocId) -> tantivy::Result<DocId> {
+        self.seek(target);
+        self.tick(1)?;
+        Ok(self.docs.doc())
+    }
+
+    /// Whether `doc`, where the walk stands, passes the deletes and the
+    /// ranges.
+    pub(crate) fn passes_at(&self, doc: DocId) -> bool {
+        self.passes(doc)
+    }
+
     /// Hands the matches from the current document up to (not including)
     /// `end` to `f`, a block of up to [`COLLECT_BLOCK_BUFFER_LEN`] at a
     /// time, and returns how many there were.

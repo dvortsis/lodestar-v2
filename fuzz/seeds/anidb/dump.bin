@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic: the shape of AniDB's anime-titles.xml, every id and title made up. -->
+<animetitles>
+  <anime aid="9001"><title type="main" xml:lang="x-jat">Hoshi no Kakera</title><title type="official" xml:lang="en">Star Fragments</title><title type="official" xml:lang="ja">星のかけら</title><title type="syn" xml:lang="en">Fragments of Stars</title><title type="short" xml:lang="en">HnK</title></anime>
+  <anime aid="9002"><title type="main" xml:lang="x-jat">Umi to Sora</title><title type="official" xml:lang="en">Sea and Sky</title></anime>
+  <anime aid="9003"><title type="main" xml:lang="x-jat">Futago</title><title type="official" xml:lang="en">Twin Title</title></anime>
+  <anime aid="9004"><title type="main" xml:lang="x-jat">Futatsu</title><title type="official" xml:lang="en">Twin Title</title></anime>
+  <anime aid="9005"><title type="main" xml:lang="x-jat">Yoru no Hana</title></anime>
+</animetitles>

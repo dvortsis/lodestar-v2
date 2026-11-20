@@ -189,6 +189,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
             value: 0,
             approx: true,
         }),
+        groups: Mutex::new(None),
         now: 0,
         utc_offset: 0,
     }

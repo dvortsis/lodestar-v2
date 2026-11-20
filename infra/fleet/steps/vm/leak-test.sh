@@ -391,35 +391,76 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
 # counts only when the VPN interface was down both just before it and just
 # after it. gluetun's own VPN restart can bring the interface back at any
 # moment; then the attempt is discarded and run again with the interface
-# taken down first, at most HELD_TRIES times. A probe that never gets a clean
-# attempt is skipped and fails vpn_interface_held_down, a harness failure of
-# its own. A probe that gets out is a leak whatever the interface did, and
-# fails at once. The phase's capture and counter judge every attempt.
-HELD_TRIES=3
+# taken down first, for as long as the phase's own deadline allows
+# (X-leaktest-wg0-flake: a fixed three tries ran out while gluetun kept
+# restarting). No pause between attempts: each one starts with an interface
+# check, and every check and probe is a container start. A probe that never
+# gets a clean attempt by the deadline is skipped and fails
+# vpn_interface_held_down, a harness failure of its own, with counts saying
+# why (held_report). A probe that gets out is a leak whatever the interface
+# did, and fails at once. The phase's capture and counter judge every attempt.
+# The time budget (the runner's review of #988) bounds the retries only: each
+# probe's first attempt always runs, as before, so a phase with no flaps
+# behaves as it always did. A retry starts only while the time left covers
+# the slowest attempt seen in the phase, and at least HELD_ATTEMPT_MIN
+# seconds; a retry's interface checks wait no longer than the time left
+# (never under their 10 s floor). So a flapping phase ends close to its
+# deadline with a clear verdict, inside the step's 900 s.
 held_bad=""
 held_dead=""  # an interface check never ran by its deadline, or the phase ran out: no bracket can be had
 held_until="" # the phase's own deadline (held_start), well inside the step's 900 s
+held_ups=0    # how many times phase B found the interface back up
+held_was_up=unknown # 1: the last check read it up; empty: down. A return counts once, and only after a down read
+held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
+held_need=""  # the time a retry needs before it may start (held_start, then the slowest seen)
+held_retry="" # set while a retry runs: its interface checks are capped at the time left
 held_start() {
-  local wait=${HELD_PHASE_WAIT:-300}
-  [[ $wait =~ ^[0-9]{1,4}$ ]] || wait=300
+  local wait=${HELD_PHASE_WAIT:-180} need=${HELD_ATTEMPT_MIN:-30}
+  [[ $wait =~ ^(0|[1-9][0-9]{0,3})$ ]] || wait=180  # no leading zero: (( )) would read it as octal
+  [[ $need =~ ^(0|[1-9][0-9]{0,3})$ ]] || need=30
   held_until=$((SECONDS + wait))
+  held_need=$need
+}
+held_took() {  # $1: when the attempt started; the slowest attempt raises the bar for the next
+  local took=$((SECONDS - $1))
+  ((took > held_need)) && held_need=$took
+  return 0
+}
+held_seen() {  # $1: an interface check's result; counts each return of the interface once
+  if (($1 == 0)); then
+    [[ -n $held_was_up ]] || held_ups=$((held_ups + 1))  # not from unknown
+    held_was_up=1
+  elif (($1 == 1)); then
+    held_was_up=""
+  fi
 }
 held() {  # $1: the probe's line, or - for one only the capture judges; the rest: the probe
-  local n=$1 rc after try saved index index_rc
+  local n=$1 rc after try=0 saved index index_rc start same
   shift
-  for ((try = 1; try <= HELD_TRIES; try++)); do
-    [[ -n $held_until ]] && ((SECONDS >= held_until)) && held_dead=1
+  while :; do
+    # No deadline set is no deadline kept: fail closed, for every probe.
+    [[ -n $held_until && -n $held_need ]] || held_dead=1
     [[ -z $held_dead ]] || break
+    # A retry starts only with the time it needs still left; the first attempt always runs.
+    ((try > 0 && held_until - SECONDS < held_need)) && break
+    held_retry=""; ((try > 0)) && held_retry=1
+    try=$((try + 1))
+    start=$SECONDS
     saved=$not_run
     held_down; rc=$?
     if ((rc == 0)); then
       index=$(iface_index); index_rc=$?
       "$@" >/dev/null 2>&1; rc=$?
       iface_seen_up >/dev/null 2>&1; after=$?
+      held_seen "$after"
+      held_retry=""
       if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
       # Down both times and the same interface: gluetun didn't recreate it
       # in between (its ifindex would differ).
-      if ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]]; then
+      same=""
+      ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]] && same=1
+      held_took "$start"
+      if [[ -n $same ]]; then
         [[ $n == - ]] && return
         if ((rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi
         return
@@ -427,19 +468,31 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       ((after == NOT_RUN)) && { held_dead=1; break; }
     elif ((rc == NOT_RUN)); then
       held_dead=1; break  # its deadline already passed: not_run stays set
+    else
+      held_took "$start"
     fi
     not_run=$saved  # a discarded attempt's unrun probe is no verdict either
   done
+  held_retry=""
   held_bad=1
-  [[ $n == - ]] || echo "skip $n"
+  if [[ $n == - ]]; then held_skipped+=("udp_ifdown $try"); else held_skipped+=("$n $try"); echo "skip $n"; fi
+}
+held_report() {  # counts only: each skipped probe's attempts, and the interface's returns
+  local s
+  for s in "${held_skipped[@]}"; do
+    echo "count held_attempts_${s% *} ${s##* }"
+  done
+  echo "count held_iface_returns_ifdown $held_ups"
 }
 held_down() {  # 0: the interface is down now (taken down again if it came back); NOT_RUN: unknown
   local rc
   iface_seen_up >/dev/null 2>&1; rc=$?
+  held_seen "$rc"
   ((rc == 1)) && return 0
   ((rc == 0)) || return "$rc"
   probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down >/dev/null 2>&1
   iface_seen_up >/dev/null 2>&1; rc=$?
+  held_seen "$rc"
   ((rc == 1)) && return 0
   ((rc == 0)) && return 1
   return "$rc"
@@ -453,7 +506,10 @@ iface_index() { probe sh -c 'cat "/sys/class/net/$1/ifindex" 2>/dev/null; true' 
 # taken as a verdict. Past the deadline it's still NOT_RUN, which fails.
 iface_seen_up() {
   local wait=${IFACE_WAIT:-120} until rc saved=$not_run
-  [[ $wait =~ ^[0-9]{1,5}$ ]] && ((wait >= 10)) || wait=10
+  [[ $wait =~ ^[1-9][0-9]{0,4}$ ]] || wait=10  # no leading zero: (( )) would read it as octal
+  # A phase B retry's checks: no longer than the time left before its deadline.
+  [[ -n $held_retry ]] && ((held_until - SECONDS < wait)) && wait=$((held_until - SECONDS))
+  ((wait >= 10)) || wait=10
   until=$((SECONDS + wait))
   while :; do
     not_run=""
@@ -671,7 +727,7 @@ held_start
 down_probes ifdown example.edu held
 # Every probe ran with the interface down (held): one that never got a clean
 # attempt fails here, apart from any leak line.
-if [[ -z $held_bad ]]; then pass vpn_interface_down_during_probes; else bad vpn_interface_held_down; fi
+if [[ -z $held_bad ]]; then pass vpn_interface_down_during_probes; else held_report; bad vpn_interface_held_down; fi
 judge_capture ifdown
 judge_counter ifdown
 # The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules

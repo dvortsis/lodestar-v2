@@ -380,6 +380,7 @@ placement:
   - X-log-url-redact-5
   - X-flake-boot-shell
   - X-flake-subs-stall
+  - X-flake-log-history-win
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
@@ -436,7 +437,10 @@ placement:
   - X-win-service-cwd-fallback
   - X-win-service-relative-paths
   - X-win-service-relative-paths-2
+  - X-win-data-dir-unusable-log
+  - X-msi-upgrade-env-value
   - X-leak-test-capture-kill
+  - X-leaktest-wg0-flake
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
@@ -457,6 +461,7 @@ placement:
   - X-cloud-infra
   - X-cloud-infra-2
   - X-test-vm
+  - X-test-vm-fix
   - X-gluetun-guard-reboot
   - X-gluetun-guard-reboot-nits
   - X-scrub-guard-fields
@@ -554,6 +559,12 @@ placement:
   - CR-1c
   - CR-SPEC
   - CR-COL-3
+  - CR-LEDGER
+  - CR-LOOKUP-END
+  - CR-HINT-FIRST
+  - X-sampler-cooldown-split
+  - X-crawler-sim-calibrate
+  - CR-COL-5
 - ws: ws-cr-live
   match:
   - CR-AB-*
@@ -645,6 +656,7 @@ placement:
   - X-watch-stall-retry
   - /^ENR-[a-z]+$/
   - ENR-terms-api
+  - X-snapshot-claims-retention
 - ws: ws-m7-w5
   match:
   - ENR-11
@@ -1211,7 +1223,7 @@ roadmap:
     members: []
   - id: cr4
     label: Build crawler experiments
-    plain: Admission, hints, streaming, prefixes and uTP, each behind an off switch.
+    plain: Admission, hints, streaming, prefixes and uTP, then the lookup-cost changes (measure, end on values, hint first) and the sampler split, each behind an off switch.
     col: 0
     row: 0
     members:
@@ -1222,6 +1234,12 @@ roadmap:
     - CR-1a-S
     - CR-1b
     - CR-4
+    - CR-LEDGER
+    - CR-LOOKUP-END
+    - CR-HINT-FIRST
+    - X-sampler-cooldown-split
+    - X-crawler-sim-calibrate
+    - CR-COL-5
   - id: crab
     label: Live A/B on the experiment host
     plain: Paired on/off runs plus a bitmagnet comparator. Needs your host.
@@ -1245,6 +1263,7 @@ roadmap:
     row: 0
     members:
     - CR-1c
+    - CR-AB-LC
     - CR-AB-1
     - CR-5
     - CR-COMB
@@ -1766,9 +1785,9 @@ owner_queue:
   when: Any time
 - n: 24
   type: action
-  action: Run operator-apply.yml again from the Actions tab on main. `OWNER_USER_ID` and `OPERATOR_STOP` are set, so it can go ahead now (§2.67)
-  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25; after it passes, the runner posts check 5
-  when: Any time
+  action: Run operator-apply.yml again from the Actions tab on main. `OWNER_USER_ID` and `OPERATOR_STOP` are set (§2.67)
+  unblocks: Operator runs; after it passes, the runner posts check 5
+  when: 'On hold: the operator is unfunded until you fund it again (§2.75)'
 - n: 25
   type: review
   action: 'Runner call you may want to veto (§2.19; you delegated it on 2026-11-14, §2.71): the PIA bridge helper keeps main''s VM sudo model for now, with a test tying the sudoers lines to what the fleet steps run, and a separate slice (X-fleet-sudo-narrow) then narrows sudo to root-owned fixed-verb helpers for every fleet step'
@@ -1789,6 +1808,16 @@ owner_queue:
   action: 'Runner calls you may want to veto (§2.19, §2.26; docs/decisions/2026-11-14-runner-ui-review-placement.md): the three-step setup with a checklist instead of the nine-step wizard stays declined (U1, D7; §2.9, §2.13, §2.39); failed watch-folder files get Retry in the UI; with five badges on a row, safety and verification stay and the rest collapse into +N; worker display names are editable; where a platform cannot update itself, Workers shows that platform''s steps, not a button; the Insights intensity click gets Undo for 10 s'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
+- n: 29
+  type: decision
+  action: 'May docs/reviews/dht-survey-evidence/original-scheduler.rs.txt stay in the repository? It is 2,227 lines of outside code, the scheduler proposal that the 2026-11-16 crawler survey reviewed (#970). Its source is not recorded, and the repository is AGPL'
+  unblocks: Keeping the survey's evidence reproducible, or removing the file and keeping only its hash
+  when: Any time
+- n: 30
+  type: decision
+  action: 'May two crawler slices run at the same time when their owns overlap only on shared DHT files where each adds its own switch lines (node/mod.rs, node/actor.rs, lodestar/src/config.rs, crates/dht/tests)? Your rule says owns never overlap, so today X-sampler-cooldown-split, CR-LOOKUP-END, CR-1c and CR-HINT-FIRST run one at a time. The runner recommends yes for additive lines only, with the second to land bringing main in'
+  unblocks: Building the four crawler switches in parallel, a few days sooner on the path to 100
+  when: Any time; until then they run one at a time
 
 gates:
 - id: G-v05
@@ -1994,10 +2023,10 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-13'
+  updated: '2026-11-20'
   now:
   - label: The runner decides the owner queue, except the filters (§2.69)
-    text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68), and the API credit is in use (§2.67).'
+    text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68). The API credit now funds the owner-run build lane, whose enrichment PRs are landing (seven combined in #971), and the operator is unfunded (§2.75).'
   - label: B1 and B2 first (§2.66)
     text: By your decision, the first-run wizard's raw labels and the missing Sign out went ahead of the larger queue (X-wizard-labels-signout, merged as #811). The Sources restructure is next, then the UI guards.
   - label: 'Review fixes: Tracks Q and U, held findings named by id only'
@@ -2007,8 +2036,7 @@ notes:
   - label: v0.5.1 is published
     text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
-    text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
-      The live tests run on your Unraid box; the comparator goes first.
+    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. The CR-0 run showed that each lookup costs too much, so the plan you approved on 2026-11-20 follows that (§2.79). CR-LEDGER''s counters come first. Then, on your Unraid box: stage 1 tests admission and uTP; stage 2 tests the lookup-cost pair (CR-LOOKUP-END with CR-1c) on top of their winners, as one treatment, as you chose (§2.80); stage 3 tests hint-first, then the sampler fix. That is about 16.5 to 28.5 host-days, three to five weeks with retries. Every change is behind an off switch, and cloud runs only check that a change works as designed, never whether it gains.'
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and

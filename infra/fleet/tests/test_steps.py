@@ -558,18 +558,23 @@ case "$1" in
       k=$(cat "$STUB/iface_not_run" 2>/dev/null || echo 0)
       if [ "$k" -lt "$IFACE_NOT_RUN" ]; then echo $((k + 1)) > "$STUB/iface_not_run"; exit 125; fi
     fi
+    # IFACE_NOT_RUN_FROM=k: from phase B's k-th interface check on, none runs.
+    if [ -e "$STUB/phase_b" ] && [ -n "$IFACE_NOT_RUN_FROM" ] && [ "$1 $2" = "sh -c" ] && [ "$4" = iface ]; then
+      k=$(( $(cat "$STUB/iface_checks" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$STUB/iface_checks"
+      [ "$k" -ge "$IFACE_NOT_RUN_FROM" ] && exit 125
+    fi
     # With the interface down, only gluetun's firewall holds: off, everything leaks.
     # (Without its post-rules it leaks only flows opened earlier: the capture and
     # the host counter see those; a fresh probe still fails.)
     if [ -e "$STUB/ifdown" ] && [ -n "$FIREWALL_OFF" ]; then leak=1; else leak=; fi
     # IFACE_REUP=n: gluetun's own VPN restart brings the interface back just
     # after each of phase B's first n leak probes (REUP_LEAK: and that probe
-    # got out).
-    reup=; recreate=
+    # got out; REUP_LEAK_AT=k: only the k-th of them got out).
+    reup=; recreate=; reupno=
     case "$*" in "curl -"*|"nc -z"*|"sh -c dig"*|"sh -c echo"*)
       if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_REUP" ]; then
         k=$(cat "$STUB/reups" 2>/dev/null || echo 0)
-        if [ "$k" -lt "$IFACE_REUP" ]; then echo $((k + 1)) > "$STUB/reups"; reup=1; fi
+        if [ "$k" -lt "$IFACE_REUP" ]; then echo $((k + 1)) > "$STUB/reups"; reup=1; reupno=$((k + 1)); fi
       fi
       # IFACE_RECREATE=n: gluetun recreates the interface (a new ifindex)
       # during each of phase B's first n leak probes, and it stays down.
@@ -581,6 +586,7 @@ case "$1" in
     echo "$*" >> "$STUB/probes"
     (
       [ -n "$reup" ] && [ -n "$REUP_LEAK" ] && exit 0
+      [ -n "$reup" ] && [ "$reupno" = "${REUP_LEAK_AT-}" ] && exit 0
       case "$*" in
         "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
@@ -607,7 +613,7 @@ case "$1" in
           n=$(cat "$STUB/rx_reads" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/rx_reads"
           [ -n "$NO_COUNTER" ] && exit 1
           if [ -n "$NO_HANDSHAKE" ] || { [ -n "$RX_LATE" ] && [ "$n" -eq 0 ]; }; then echo 0; else echo 4096; fi ;;
-        "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
+        "ip link set dev "*) : > "$STUB/phase_b"; [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
         *) exit 99 ;;
       esac
     )
@@ -1066,12 +1072,15 @@ class VMScripts(unittest.TestCase):
             "the flow died": ({"FLOW_DIES": 1}, "flow_alive_down"),
             # The recreate guard: rules that never load are a failure of their own.
             "the post-rules never load": ({"NO_POST_RULES": 1}, "post_rules_before_egress"),
-            "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
+            "the interface won't go down": ({"IFDOWN_FAILS": 1, "HELD_PHASE_WAIT": 10, "HELD_ATTEMPT_MIN": 1},
+                                           "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
             "no DNS answer with the tunnel up": ({"DIG_UP_FAIL": 1}, "dns_up"),
             # gluetun's own VPN restart brings the interface back mid-phase.
-            "the interface comes back up and stays up": ({"IFACE_BACK": 1}, "vpn_interface_held_down"),
+            # (Phase B retries until its own deadline: a short one ends it.)
+            "the interface comes back up and stays up": ({"IFACE_BACK": 1, "HELD_PHASE_WAIT": 10, "HELD_ATTEMPT_MIN": 1},
+                                                         "vpn_interface_held_down"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
             # The host's own IPv6 (0d's separate check, OP-3b).
@@ -1602,15 +1611,85 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 3)
         self.assertEqual(probes.count("ip link set dev wg0 down"), 3)  # the phase's own, then one per re-up
 
+    def test_phase_b_retries_past_three_attempts_until_the_interface_stays_down(self):
+        """X-leaktest-wg0-flake: gluetun brings the interface back during each of
+        a probe's first five attempts, then it stays down. The probe keeps
+        retrying inside the phase's deadline (no longer a fixed three), and the
+        run passes."""
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=5)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
+        self.assertIn("ok ipv4_blocked_ifdown", lines)
+        self.assertFalse([l for l in lines if l.startswith("count held_")], lines)  # counts only on failure
+        probes = (self.stub / "probes").read_text().splitlines()
+        self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 6)
+        self.assertEqual(probes.count("ip link set dev wg0 down"), 6)  # the phase's own, then one per re-up
+
     def test_phase_b_fails_when_the_interface_wont_stay_down(self):
-        """The interface back during every attempt: no probe gets a clean one, so
-        each is skipped and the run fails vpn_interface_held_down, not a leak line."""
-        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000)
+        """The interface back during every attempt until the phase's deadline: no
+        probe gets a clean one, so each is skipped and the run fails
+        vpn_interface_held_down, not a leak line, and says why in counts."""
+        # 20 s: room for well over four stub attempts on a slow runner.
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
         self.assertEqual(rc, 1, raw)
         self.assertIn("fail vpn_interface_held_down", lines)
         self.assertIn("skip ipv4_blocked_ifdown", lines)
         self.assertNotIn("ok vpn_interface_down_during_probes", lines)
         self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+        # Why, in counts only, just before the failure: every skipped probe's
+        # attempts (the first used the phase up; the rest got only the first
+        # attempt every probe has), and how many times the interface came back.
+        # Nothing outside the grammar, no address.
+        counts = {l.split()[1]: int(l.split()[2]) for l in lines if l.startswith("count held_")}
+        probes = ["ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked", "dns_direct_blocked", "udp"]
+        self.assertEqual(sorted(counts), sorted([f"held_attempts_{p}_ifdown" for p in probes] + ["held_iface_returns_ifdown"]))
+        self.assertGreater(counts["held_attempts_ipv4_blocked_ifdown"], 3)
+        self.assertEqual(counts["held_iface_returns_ifdown"], sum(counts[f"held_attempts_{p}_ifdown"] for p in probes))
+        self.assertEqual([counts[f"held_attempts_{p}_ifdown"] for p in probes[1:]], [1] * 5)
+        self.assertEqual(lines[lines.index("fail vpn_interface_held_down") - 1],
+                         f"count held_iface_returns_ifdown {counts['held_iface_returns_ifdown']}")
+        self.assertEqual(remote.parse(raw.encode()), raw.splitlines())
+
+    def test_phase_b_starts_no_retry_it_has_no_time_for(self):
+        """The runner's review of #988: a retry starts only while the time left
+        covers what one needs. The first attempt runs and is discarded (the
+        interface came back); with too little time left for another, the probe
+        is skipped at once and the phase fails vpn_interface_held_down."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1, HELD_PHASE_WAIT=60, HELD_ATTEMPT_MIN=90)
+        self.assertEqual(rc, 1, raw)
+        self.assertLess(time.monotonic() - start, 60)  # never waited for the deadline
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("skip ipv4_blocked_ifdown", lines)
+        self.assertIn("count held_attempts_ipv4_blocked_ifdown 1", lines)
+        self.assertIn("ok tcp_literal_blocked_ifdown", lines)  # the others' first attempts were clean
+        probes = (self.stub / "probes").read_text().splitlines()
+        self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 1)
+
+    def test_phase_b_stops_retrying_once_the_time_left_is_too_short(self):
+        """The interface never stays down: attempts run while the time left covers
+        one (HELD_ATTEMPT_MIN), then stop, well before the phase's deadline,
+        and the phase fails vpn_interface_held_down."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=100, HELD_ATTEMPT_MIN=90)
+        self.assertEqual(rc, 1, raw)
+        self.assertLess(time.monotonic() - start, 80)  # about 10 s of attempts, not 100
+        self.assertIn("fail vpn_interface_held_down", lines)
+        attempts = [int(l.split()[2]) for l in lines if l.startswith("count held_attempts_ipv4_blocked_ifdown ")]
+        self.assertEqual(len(attempts), 1)
+        self.assertGreater(attempts[0], 1)
+
+    def test_phase_b_caps_its_interface_checks_at_the_time_left(self):
+        """A retry's interface check that never runs waits no longer than phase B
+        has left (here 20 s, not IFACE_WAIT's 100), then fails the phase. The
+        first attempt's two checks run; the retry's first check never does."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1, IFACE_NOT_RUN_FROM=3, IFACE_WAIT=100,
+                                         HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertLess(time.monotonic() - start, 80)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("fail probe_ran", lines)
 
     def test_a_leak_in_a_discarded_phase_b_attempt_is_a_leak(self):
         """A probe that gets out while the interface came back is a leak all the
@@ -1619,6 +1698,19 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(rc, 1, raw)
         self.assertIn("fail ipv4_blocked_ifdown", lines)
         self.assertIn("ok vpn_interface_down_during_probes", lines)  # the others got clean attempts
+
+    def test_a_leak_in_a_later_discarded_attempt_is_still_a_leak(self):
+        """X-leaktest-wg0-flake: the probe gets out on its fifth attempt, which is
+        discarded (the interface came back): a leak, at once, never retried; and
+        the phase's capture still judges what every attempt sent."""
+        rc, lines, raw = self.run_script("leak-test.sh", {"ifdown": [sent(47, "198.51.100.9")]},
+                                         IFACE_REUP=8, REUP_LEAK_AT=5)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail ipv4_blocked_ifdown", lines)
+        self.assertIn("fail no_egress_captured_ifdown", lines)
+        self.assertNotIn("ok ipv4_blocked_ifdown", lines)
+        probes = (self.stub / "probes").read_text().splitlines()
+        self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 5)
 
     def test_a_capture_that_already_died_is_never_signalled(self):
         """(review of #949) A capture that exited early has been reaped, and its pid
@@ -1630,14 +1722,29 @@ class VMScripts(unittest.TestCase):
         kills = (self.stub / "kills").read_text().splitlines() if (self.stub / "kills").exists() else []
         self.assertFalse([k for k in kills if k.endswith(" gone")], kills)
 
-    def test_phase_b_ends_at_its_own_deadline_as_a_failure(self):
-        """(review of #949) Past phase B's own deadline no probe runs: the phase
-        fails vpn_interface_held_down, and never passes."""
+    def test_phase_b_first_attempts_run_past_its_deadline(self):
+        """The runner's call on #988: each probe's first attempt always runs, so
+        a phase B with no flaps passes however long the first attempts take,
+        here all starting past the phase's deadline (a slow host). Only a retry
+        needs time left."""
         rc, lines, raw = self.run_script("leak-test.sh", HELD_PHASE_WAIT=0)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
+        self.assertIn("ok ipv4_blocked_ifdown", lines)
+        self.assertFalse([l for l in lines if l.startswith("count held_")], lines)
+
+    def test_phase_b_ends_at_its_own_deadline_as_a_failure(self):
+        """(review of #949) Past phase B's own deadline no retry runs: a probe
+        whose first attempt was discarded is skipped, the phase fails
+        vpn_interface_held_down, and never passes."""
+        rc, lines, raw = self.run_script("leak-test.sh", HELD_PHASE_WAIT=0, IFACE_REUP=1)
         self.assertEqual(rc, 1, raw)
         self.assertIn("fail vpn_interface_held_down", lines)
         self.assertIn("skip ipv4_blocked_ifdown", lines)
-        self.assertNotIn("example.edu", (self.stub / "probes").read_text())
+        self.assertIn("count held_attempts_ipv4_blocked_ifdown 1", lines)
+        self.assertIn("count held_iface_returns_ifdown 1", lines)
+        self.assertNotIn("count held_attempts_udp_ifdown 0", lines)  # the others ran, and passed
+        self.assertIn("ok dns_direct_blocked_ifdown", lines)
 
     def test_phase_b_discards_an_attempt_across_a_recreated_interface(self):
         """(review of #949) gluetun recreates the interface during a probe (a new
