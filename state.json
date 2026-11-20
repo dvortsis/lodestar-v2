@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T13:05Z",
+  "updated_at": "2026-11-20T13:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10272,6 +10272,13 @@
       "sha": "20f4bbae",
       "at": "2026-11-20T13:05Z",
       "note": "full + delta review MERGE; session archived; CR-HINT-FIRST/CR-1c now unblocked by sampler (still after S1-17 for actor.rs)"
+    },
+    {
+      "pr": 983,
+      "slice": "X-win-data-dir-unusable-log",
+      "sha": "b8e2a3b0",
+      "at": "2026-11-20T13:48Z",
+      "note": "review MERGE (no blocking/important); follow-ups -> X-win-data-dir-followups in same session"
     }
   ],
   "active_sessions": {
@@ -10517,17 +10524,17 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T13:05Z",
+    "updated": "2026-11-20T13:48Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-win-data-dir-unusable-log",
+        "slice": "X-win-data-dir-followups",
         "role": "build",
         "agent": "session_01MMjhnATTvyFiLGcTacVqve",
         "model": "opus",
-        "since": "2026-11-20T11:13Z",
-        "doing": "#983 open 9827e7ba; CI running (first Windows compile)",
-        "status": "active"
+        "since": "2026-11-20T13:48Z",
+        "doing": "launched in same session; brief briefs/X-win-data-dir-followups.md (write probe, optionals, guide \u00a76.2)",
+        "status": "running"
       },
       {
         "slot": 2,
