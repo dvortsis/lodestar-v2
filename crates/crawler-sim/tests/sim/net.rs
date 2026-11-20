@@ -18,8 +18,6 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use lodestar_dht::NodeId;
 use lodestar_dht::compact::{CompactNodes, NodeInfo, encode_nodes};
@@ -82,14 +80,6 @@ pub struct NetStats {
     pub values_replies: u64,
 }
 
-/// Live counters at the network edge, read while the run goes (the
-/// ledger's per-minute deltas); [`NetStats`] is read once at the end.
-#[derive(Debug, Default)]
-pub struct Edge {
-    /// `get_peers` queries received: the lookups' share of the traffic.
-    pub get_peers: AtomicU64,
-}
-
 /// One `sample_infohashes` the node sent (CR-SIM-restart's record).
 #[derive(Debug, Clone, Copy)]
 pub struct SampleAsk {
@@ -135,7 +125,6 @@ pub struct Net {
     pub stats: NetStats,
     /// Every `sample_infohashes` the node sent, in order.
     pub asks: Vec<SampleAsk>,
-    pub edge: Arc<Edge>,
 }
 
 /// A fresh public address no one else has.
@@ -241,7 +230,6 @@ impl Net {
             seq: 0,
             stats: NetStats::default(),
             asks: Vec::new(),
-            edge: Arc::default(),
         };
         (net, bootstrap)
     }
@@ -317,10 +305,7 @@ impl Net {
         match query.method {
             Method::Ping => self.stats.ping += 1,
             Method::FindNode { .. } => self.stats.find_node += 1,
-            Method::GetPeers { .. } => {
-                self.stats.get_peers += 1;
-                self.edge.get_peers.fetch_add(1, Ordering::Relaxed);
-            }
+            Method::GetPeers { .. } => self.stats.get_peers += 1,
             Method::SampleInfohashes { .. } => {
                 self.stats.sample += 1;
                 self.asks.push(SampleAsk {

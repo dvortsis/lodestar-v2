@@ -27,8 +27,8 @@ steady (after 3 warmup min), per min: admitted=78.7 rejected=57038.0 completed=7
 lookup_slots_occupied=30.83  (L: peer_active each second, of lookup_slots_capacity=32)
 peer_admitted_per_s=1.311  (λ)
 W_little=23.51s  (L / λ, CR-0's method)
-lookup_residence_seconds_total/lookup_ended_total=23.34s  (W: peer_lookup_millis / peer_lookups_answered)
-queries_sent_total{purpose=peer_lookup|hint}/admitted=24.6  (q: get_peers at the network edge)
+lookup_residence_seconds_total/lookup_ended_total=23.34s  (W per ended lookup, every reason)
+queries_sent_total{purpose=peer_lookup|hint}/lookup_ended_total=24.6  (q)
 queries_out_total/admitted=58.3  (q_all)
 stored/admitted=0.158  (y: what reached the writer)
 fetches/admitted=3.92  (peers tried)
@@ -37,7 +37,14 @@ stored/min=12.44
 queries_out_total/s=76.5
 outstanding=151.0  (mean, each second)
 timeouts/queries_out=0.386  (unanswered)
-lookup_deadlines/completed=1.26  (includes find_node lookups)
+lookup_deadlines/completed=1.26  (includes find_node and non-owned get_peers lookups)
+lookup_ended_total{reason=values}=0.105  (share of ends)
+lookup_ended_total{reason=no_values}=0.056  (share of ends)
+lookup_ended_total{reason=deadline}=0.839  (share of ends)
+lookup_ended_total{reason=query_cap}=0.000  (share of ends)
+lookup_ended_total{reason=cancelled}=0.000  (share of ends)
+lookup_ended_total{reason=shutdown}=0.000  (share of ends)
+lookup_ended_total{reason=enough_values}=0.000  (share of ends)
 
 # DHT node stats at the end (node::StatsSnapshot), one per line
 packets_in=35748

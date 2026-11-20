@@ -194,6 +194,11 @@ pub struct Dht {
     /// the hash. Off by default (docs/decisions/2026-10-30-CR-1a-H.md);
     /// not in the Settings UI.
     pub responder_hints: bool,
+    /// CR-LOOKUP-END: a peer lookup ends, and frees its slot, once it holds
+    /// enough values or its closest set has answered, and starts as soon
+    /// as it's admitted. Off by default
+    /// (docs/decisions/2026-11-20-CR-LOOKUP-END.md); not in the Settings UI.
+    pub lookup_end: bool,
     /// CR-1a-S: a peer lookup hands the fetch pool its peers in bounded
     /// batches as they arrive. Off by default
     /// (docs/decisions/2026-10-31-CR-1a-S.md); not in the Settings UI.
@@ -229,6 +234,7 @@ impl Default for Dht {
             restart_witness_dir: None,
             coordinated_admission: false,
             responder_hints: false,
+            lookup_end: false,
             streaming_peers: false,
             target_prefixes: false,
             utp: false,
@@ -794,6 +800,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_RESPONDER_HINTS", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_LOOKUP_END") {
+            config.dht.lookup_end = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_LOOKUP_END", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_STREAMING_PEERS") {
             config.dht.streaming_peers = v
                 .parse()
@@ -872,6 +883,7 @@ impl Config {
                 .safe_restart
                 .then(|| dht::RestartConfig::new(self.dht.restart_witness_dir.clone())),
             responder_hints: self.dht.responder_hints,
+            lookup_end: self.dht.lookup_end,
             target_prefixes: self.dht.target_prefixes,
             ..dht::Config::default()
         }
@@ -1501,6 +1513,32 @@ mod tests {
         assert!(
             Config::load(None, |k: &str| {
                 (k == "LODESTAR_DHT_RESPONDER_HINTS").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn lookup_end_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.lookup_end);
+        assert!(!c.dht_config().lookup_end);
+        let env = |k: &str| (k == "LODESTAR_DHT_LOOKUP_END").then(|| "true".to_string());
+        assert!(Config::load(None, env).unwrap().dht_config().lookup_end);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nlookup_end = true\n").unwrap();
+        assert!(
+            Config::load(Some(&path), no_env)
+                .unwrap()
+                .dht_config()
+                .lookup_end
+        );
+        std::fs::write(&path, "[dht]\nlookup_end = \"yes\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_LOOKUP_END").then(|| "maybe".to_string())
             })
             .is_err()
         );

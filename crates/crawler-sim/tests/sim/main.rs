@@ -892,6 +892,9 @@ fn live_lookup_is_calibrated() {
         outstanding: mean(|l| l.outstanding),
         unanswered: mean(|l| l.unanswered),
         deadlines_per_completed: mean(|l| l.deadlines_per_completed),
+        ended_share: std::array::from_fn(|i| {
+            ledgers.iter().map(|l| l.ended_share[i]).sum::<f64>() / n
+        }),
     };
     row("mean".into(), &m);
     let mut misses = Vec::new();
@@ -910,5 +913,108 @@ fn live_lookup_is_calibrated() {
         misses.is_empty(),
         "outside tolerance:\n{}",
         misses.join("\n")
+    );
+}
+
+/// CR-LOOKUP-END runs deterministically on the calibrated scenario, and
+/// with the switch on some lookups end on enough values.
+#[test]
+fn lookup_end_runs_deterministically() {
+    let on = Scenario {
+        switches: Switches {
+            lookup_end: true,
+            ..Switches::default()
+        },
+        ..scenario::live_lookup()
+    };
+    let (a, b) = (simulate(&on), simulate(&on));
+    assert_eq!(a.text, b.text, "same seed, same run");
+    assert!(a.text.contains("lookup_end=true"));
+    assert!(a.ledger.ended_share[lodestar_dht::node::LedgerEnd::EnoughValues as usize] > 0.0);
+}
+
+/// The CR-LOOKUP-END screen: the calibrated `live-lookup` scenario, the
+/// switch off against on, over `SCREEN_SEEDS`. Reports `W`, `q` and `y`
+/// beside stored per minute, and the two figures the change is kept on:
+/// stored per slot-second (`stored/s ÷ L`) and stored per DHT query
+/// (`stored ÷ queries_out`). Kept only if both rise.
+/// `cargo test -p lodestar-crawler-sim --test sim lookup_end_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn lookup_end_screen() {
+    use lodestar_dht::node::LedgerEnd;
+    let off = scenario::live_lookup();
+    let on = Scenario {
+        switches: Switches {
+            lookup_end: true,
+            ..Switches::default()
+        },
+        ..off.clone()
+    };
+    let v = screen(&off, &on);
+    let per_slot_s = |l: &run::Ledger| l.stored_per_min / 60.0 / l.slots.max(1e-9);
+    let per_query = |l: &run::Ledger| l.stored_per_min / 60.0 / l.queries_per_s.max(1e-9);
+    let share = |l: &run::Ledger, why: LedgerEnd| l.ended_share[why as usize];
+    println!(
+        "seed | arm | L | admitted/s | W_little s | W s | q | q_all | y | stored/min | stored/slot-s | stored/query | deadline | enough_values | values"
+    );
+    let mut sums = [[0.0f64; 12]; 2];
+    for (seed, pair) in SCREEN_SEEDS.zip(&v.ledgers) {
+        for (arm, l) in pair.iter().enumerate() {
+            let row = [
+                l.slots,
+                l.admitted_per_s,
+                l.w,
+                l.w_residence,
+                l.q,
+                l.q_all,
+                l.y,
+                l.stored_per_min,
+                per_slot_s(l),
+                per_query(l),
+                share(l, LedgerEnd::Deadline),
+                share(l, LedgerEnd::EnoughValues),
+            ];
+            for (s, x) in sums[arm].iter_mut().zip(row) {
+                *s += x;
+            }
+            println!(
+                "{seed} | {} | {:.2} | {:.3} | {:.2} | {:.2} | {:.1} | {:.1} | {:.3} | {:.2} | {:.5} | {:.6} | {:.3} | {:.3} | {:.3}",
+                ["off", "on"][arm],
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+                row[7],
+                row[8],
+                row[9],
+                row[10],
+                row[11],
+                share(l, LedgerEnd::Values),
+            );
+        }
+    }
+    let n = v.ledgers.len() as f64;
+    for (arm, s) in sums.iter().enumerate() {
+        println!(
+            "mean | {} | {}",
+            ["off", "on"][arm],
+            s.iter()
+                .map(|x| format!("{:.4}", x / n))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+    let rises =
+        |f: &dyn Fn(&run::Ledger) -> f64| v.ledgers.iter().filter(|p| f(&p[1]) > f(&p[0])).count();
+    println!(
+        "stored/min diffs {:?}: {:?}; stored/slot-s rose on {}/8 seeds, stored/query on {}/8",
+        v.diffs,
+        v.outcome,
+        rises(&per_slot_s),
+        rises(&per_query),
     );
 }
