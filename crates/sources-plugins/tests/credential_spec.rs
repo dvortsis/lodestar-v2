@@ -224,23 +224,6 @@ async fn the_enrichers_read_exactly_what_they_declare() {
     discogs_once(&d).await;
     use lodestar_sources::identify::Identifier;
     check(Identifier::manifest(&d), Identifier::policy(&d), &rec);
-}
-
-async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String {
-    use lodestar_sources::identify::{Identifier, MediaKind, Query};
-    let kit = Kit::new(
-        Arc::new(MemoryState::new()),
-        Arc::new(NoEgress),
-        d.policy(),
-        &UserLimits::default(),
-    );
-    let q = Query::new(
-        "Synthetic Artist - Synthetic Album",
-        Some(2001),
-        MediaKind::Music,
-    )
-    .unwrap();
-    d.lookup(&kit, &q).await.unwrap_err().0
     // AniDB (ENR-anidb), an identifier with a client name and version.
     let rec = Arc::new(Recording::default());
     let a = lodestar_sources_plugins::anidb::AniDb::new(rec.clone());
@@ -262,6 +245,23 @@ async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String 
         lodestar_sources::identify::Identifier::policy(&a),
         &rec,
     );
+}
+
+async fn discogs_once(d: &lodestar_sources_plugins::discogs::Discogs) -> String {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    let kit = Kit::new(
+        Arc::new(MemoryState::new()),
+        Arc::new(NoEgress),
+        d.policy(),
+        &UserLimits::default(),
+    );
+    let q = Query::new(
+        "Synthetic Artist - Synthetic Album",
+        Some(2001),
+        MediaKind::Music,
+    )
+    .unwrap();
+    d.lookup(&kit, &q).await.unwrap_err().0
 }
 
 /// The rest are built without a credential store, so they can't read
@@ -297,6 +297,7 @@ fn plugins_without_a_credential_store_declare_none() {
     plugins.push((
         lodestar_sources::identify::Identifier::manifest(&mb).clone(),
         *lodestar_sources::identify::Identifier::policy(&mb),
+    ));
     let srr = lodestar_sources_plugins::srrdb::Srrdb::new();
     plugins.push((
         lodestar_sources::identify::Identifier::manifest(&srr).clone(),
@@ -337,7 +338,11 @@ fn every_catalogued_plugin_is_checked() {
         nyaa::SUKEBEI_ID,
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
-        lodestar_sources_plugins::anidb::ID, lodestar_sources_plugins::discogs::ID, lodestar_sources_plugins::musicbrainz::ID, lodestar_sources_plugins::srrdb::ID, tvdb::ID,
+        lodestar_sources_plugins::anidb::ID,
+        lodestar_sources_plugins::discogs::ID,
+        lodestar_sources_plugins::musicbrainz::ID,
+        lodestar_sources_plugins::srrdb::ID,
+        tvdb::ID,
         lodestar_sources_plugins::openlibrary::ID,
         lodestar_sources_plugins::predb::ID,
     ];

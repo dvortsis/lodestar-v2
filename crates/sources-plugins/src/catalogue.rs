@@ -21,7 +21,8 @@ use lodestar_sources::Manifest;
 
 use crate::srrdb;
 use crate::{
-    academic, archive_org, arr, clients, discogs, full_scrape, musicbrainz, nyaa, prowlarr, stashdb, torrent_cache, tpdb, tvdb, wikidata,
+    academic, archive_org, arr, clients, discogs, full_scrape, musicbrainz, nyaa, prowlarr,
+    stashdb, torrent_cache, tpdb, tvdb, wikidata,
 };
 
 /// `(module, manifest)` for every plugin, in `lib.rs` order. A module

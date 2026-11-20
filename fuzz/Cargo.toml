@@ -275,6 +275,11 @@ bench = false
 [[bin]]
 name = "tvdb"
 path = "fuzz_targets/tvdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "srrdb"
 path = "fuzz_targets/srrdb.rs"
 test = false
@@ -396,6 +401,11 @@ bench = false
 [[bin]]
 name = "discogs"
 path = "fuzz_targets/discogs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "predb"
 path = "fuzz_targets/predb.rs"
 test = false

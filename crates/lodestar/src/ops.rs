@@ -904,7 +904,8 @@ mod spec_tests {
     use lodestar_sources::{Policy, SourcePlugin};
     use lodestar_sources_plugins::full_scrape::{LookupError, PrivateTrackers, SystemClock};
     use lodestar_sources_plugins::{
-        StaticCredentials, academic, archive_org, arr, catalogue, clients, discogs, full_scrape, nyaa, prowlarr, stashdb, torrent_cache, tpdb, tvdb, wikidata,
+        StaticCredentials, academic, archive_org, arr, catalogue, clients, discogs, full_scrape,
+        nyaa, prowlarr, stashdb, torrent_cache, tpdb, tvdb, wikidata,
     };
     use serde_json::{Value, json};
 
@@ -976,9 +977,15 @@ mod spec_tests {
                 lodestar_sources_plugins::musicbrainz::ID,
                 *lodestar_sources::identify::Identifier::policy(
                     &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
+                ),
+            ),
+            (
                 lodestar_sources_plugins::srrdb::ID,
                 *lodestar_sources::identify::Identifier::policy(
                     &lodestar_sources_plugins::srrdb::Srrdb::new(),
+                ),
+            ),
+            (
                 lodestar_sources_plugins::predb::ID,
                 *lodestar_sources::identify::Identifier::policy(
                     &lodestar_sources_plugins::predb::PreDb::new(),
