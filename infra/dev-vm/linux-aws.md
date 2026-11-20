@@ -53,6 +53,16 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - Exit 0 means the file was written. Exit 5 ("empty username or password") means the owner hasn't filled the secret in yet, and exit 7 that it couldn't be read. Neither prints a `FAILED` line. Exits 10–16 are PIA's own stages, printed as `FAILED (<n>)`.
 6. **Run the lane** from `linux-lane.md`, with one change: **everything root runs lives in `/opt/lodestar-run`, never under `~lodestar`.**
    - Copy the fleet stack (`compose.yaml`, `leak-test.sh`, `block-lib.sh`, `start-block.sh`, `watcher.sh`, `outage-watcher.sh`) as root from `/opt/lodestar-src/infra/fleet/steps/vm/` into `/opt/lodestar-run` (root:root, 0755 folders, 0644 or 0755 files), and run it from there as root.
+   - **Give `leak-test.sh` its own work folder, never `/opt/lodestar-run`.** The test installs its work folder's `compose.yaml` into the stack, which is `/opt/lodestar-run`. Pointing both at the same folder makes that copy fail, and the test stops at `compose_installed`. The fleet's step bootstrap uses a fresh folder each run too. As root:
+
+     ```bash
+     rm -rf /opt/lodestar-leaktest
+     install -d -o root -g root -m 0755 /opt/lodestar-leaktest
+     install -o root -g root -m 0644 /opt/lodestar-run/compose.yaml /opt/lodestar-run/block-lib.sh /opt/lodestar-leaktest/
+     systemd-run --wait --pipe --collect bash /opt/lodestar-run/leak-test.sh /opt/lodestar-leaktest /opt/lodestar-run
+     ```
+
+     The first argument is the work folder; the second is the stack, which holds `secrets/wg0.conf`. Exit 0 with a last line of `ok leak_test` is a pass.
    - `lodestar` owns nothing root executes or reads secrets from. Otherwise any code running as `lodestar` (a build script, an npm package) could rewrite a script or `compose.yaml` (say, `network_mode: host`) before root runs it, and reach the instance role.
    - Builds and the lane's own work run as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`. Results go to `~lodestar/results`; root only reads them.
    - `sudo -i` joins a multi-line command into one line, so put anything longer than one line in a script file and run that.
