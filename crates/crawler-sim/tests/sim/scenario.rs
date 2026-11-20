@@ -20,6 +20,9 @@ pub struct Scenario {
     /// Two legs with a clean restart between them; `minutes` is then
     /// leg 2's length.
     pub restart: Option<Restart>,
+    /// Print the capacity ledger (`W`, `q`, `y`, occupancy) in the report.
+    /// Off in the baselines, whose goldens predate it.
+    pub ledger: bool,
 }
 
 /// CR-SIM-restart: leg 1 starts fresh with `dht.safe_restart` on, sits out
@@ -63,6 +66,11 @@ pub struct NetConfig {
     /// as a responder storing them would (CR-1a-H's screen). Off in the
     /// baselines, whose goldens predate it.
     pub samplers_hold: bool,
+    /// Each node a reply lists is shadowed, with this chance, by a stale
+    /// contact beside it in id space that never answers: the unanswered
+    /// closest-set candidates that hold live lookups to their deadline
+    /// (`live-lookup`). 0 in the baselines.
+    pub stale_permille: u32,
 }
 
 /// Reply delay: `base + U(0, jitter)`, or `slow` instead with
@@ -180,6 +188,7 @@ pub fn base(name: &'static str) -> Scenario {
             sample_size: 20,
             held_per_node: 60,
             samplers_hold: false,
+            stale_permille: 0,
         },
         swarm: SwarmConfig {
             catalogue: 20_000,
@@ -201,6 +210,7 @@ pub fn base(name: &'static str) -> Scenario {
         pool: PoolConfig::default(),
         switches: Switches::default(),
         restart: None,
+        ledger: false,
     }
 }
 
@@ -253,5 +263,48 @@ pub fn restart_honoured() -> Scenario {
         gap_s: 120,
         safe_restart: true,
     });
+    s
+}
+
+/// X-crawler-sim-calibrate: the live lookup as CR-0's 24 h measured it
+/// (README, "The calibrated scenario"). Keys far outrun the 32 slots, as
+/// live, and stale contacts in replies keep a lookup's closest set from
+/// ever all answering, so nearly every lookup runs to its 25 s deadline.
+/// The knobs are calibrated, not the outputs: `live_lookup_is_calibrated`
+/// checks what they produce against CR-0 on every `SCREEN_SEEDS` seed.
+pub fn live_lookup() -> Scenario {
+    let mut s = base("live-lookup");
+    s.minutes = 12;
+    s.ledger = true;
+    s.net.nodes = 5_000;
+    s.net.dead_permille = 30;
+    s.net.loss_permille = 5;
+    // About 1.75 stale contacts beside every node: the closest set never
+    // all answers, so lookups end at the deadline.
+    s.net.stale_permille = 1_750;
+    s.net.latency = Latency {
+        base_ms: 60,
+        jitter_ms: 400,
+        slow_permille: 150,
+        slow_ms: 3_000,
+    };
+    // Enough sampling to bring the query rate to CR-0's 76/s.
+    s.net.bep51_permille = 700;
+    s.net.sample_interval_s = 120;
+    s.net.held_per_node = 200;
+    s.swarm.catalogue = 200_000;
+    // With the fetch outcomes below: CR-0's 3.7 attempts and 0.16 stored
+    // per admitted lookup.
+    s.swarm.live_permille = 700;
+    s.swarm.max_peers = 16;
+    // CR-0's fetch failures by attempt: 4.4% stored, 10.7% refused, 14.1%
+    // unreachable, the rest timed out.
+    s.swarm.fetch = FetchConfig {
+        unreachable_permille: 141,
+        success_permille: 51,
+        slow_permille: 0,
+        refuse_permille: 125,
+        ..s.swarm.fetch
+    };
     s
 }

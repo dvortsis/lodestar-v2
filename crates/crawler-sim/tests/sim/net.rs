@@ -10,10 +10,16 @@
 //! so lookups take about log₈(N) hops; a node within the target's
 //! neighbourhood answers with the 8 XOR-closest ids there. The 8 closest
 //! to a live hash hold its swarm and return it as `values`.
+//!
+//! With [`NetConfig::stale_permille`], a reply also lists stale contacts:
+//! addresses that never answer, with ids beside the live nodes it lists,
+//! so they sit in a lookup's closest set and must time out before it ends.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lodestar_dht::NodeId;
 use lodestar_dht::compact::{CompactNodes, NodeInfo, encode_nodes};
@@ -76,6 +82,16 @@ pub struct NetStats {
     pub values_replies: u64,
 }
 
+/// Live counters at the network edge, read while the run goes (the
+/// ledger's per-minute deltas); [`NetStats`] is read once at the end.
+#[derive(Debug, Default)]
+pub struct Edge {
+    /// `get_peers` queries received: the lookups' share of the traffic.
+    pub get_peers: AtomicU64,
+    /// Queries to an address no node has: a stale contact, never answered.
+    pub to_stale: AtomicU64,
+}
+
 /// One `sample_infohashes` the node sent (CR-SIM-restart's record).
 #[derive(Debug, Clone, Copy)]
 pub struct SampleAsk {
@@ -121,6 +137,7 @@ pub struct Net {
     pub stats: NetStats,
     /// Every `sample_infohashes` the node sent, in order.
     pub asks: Vec<SampleAsk>,
+    pub edge: Arc<Edge>,
 }
 
 /// A fresh public address no one else has.
@@ -226,6 +243,7 @@ impl Net {
             seq: 0,
             stats: NetStats::default(),
             asks: Vec::new(),
+            edge: Arc::default(),
         };
         (net, bootstrap)
     }
@@ -301,7 +319,10 @@ impl Net {
         match query.method {
             Method::Ping => self.stats.ping += 1,
             Method::FindNode { .. } => self.stats.find_node += 1,
-            Method::GetPeers { .. } => self.stats.get_peers += 1,
+            Method::GetPeers { .. } => {
+                self.stats.get_peers += 1;
+                self.edge.get_peers.fetch_add(1, Ordering::Relaxed);
+            }
             Method::SampleInfohashes { .. } => {
                 self.stats.sample += 1;
                 self.asks.push(SampleAsk {
@@ -317,6 +338,7 @@ impl Net {
             matches!(query.method, Method::SampleInfohashes { .. }).then(|| self.asks.len() - 1);
         let Some(&i) = self.by_addr.get(&to) else {
             self.stats.to_unknown += 1;
+            self.edge.to_stale.fetch_add(1, Ordering::Relaxed);
             return;
         };
         if !self.nodes[i].alive {
@@ -474,11 +496,50 @@ impl Net {
             let lo = centre.saturating_sub(K / 2).min(self.nodes.len() - K);
             (lo..lo + K).collect()
         };
-        picks
-            .into_iter()
-            .map(|j| NodeInfo {
+        let mut out: Vec<NodeInfo> = picks
+            .iter()
+            .map(|&j| NodeInfo {
                 id: self.nodes[j].id,
                 addr: self.nodes[j].addr,
+            })
+            .collect();
+        // Only near the target: the closest set is where stale entries
+        // pile up, and far hops' answers come from well-kept buckets.
+        if self.cfg.stale_permille > 0 && d <= WINDOW {
+            out.extend(picks.iter().flat_map(|&j| self.stale(j)));
+        }
+        out
+    }
+
+    /// The stale contacts beside node `j` in id space, which every reply
+    /// listing `j` lists too: `stale_permille / 1000` of them on average,
+    /// fixed per node, so the network holds a bounded set. Each keeps
+    /// `j`'s first 8 bytes, so it's as near any target as `j` is.
+    fn stale(&self, j: usize) -> Vec<NodeInfo> {
+        let key = |k: u64, purpose: u64| hash(&[self.seed, j as u64, k, purpose]);
+        let p = u64::from(self.cfg.stale_permille);
+        let n = p / 1000 + u64::from(key(0, 6) % 1000 < p % 1000);
+        (1..=n)
+            .filter_map(|k| {
+                let mut id = self.nodes[j].id.0;
+                id[8..16].copy_from_slice(&key(k, 7).to_be_bytes());
+                id[16..].copy_from_slice(&key(k, 8).to_be_bytes()[..4]);
+                let r = key(k, 9);
+                let ip = Ipv4Addr::new(
+                    PREFIXES[(r % PREFIXES.len() as u64) as usize],
+                    (r >> 8) as u8,
+                    (r >> 16) as u8,
+                    1 + ((r >> 24) % 254) as u8,
+                );
+                let addr = SocketAddr::from((ip, 1024 + ((r >> 32) % 64_000) as u16));
+                // A clash with a live address would answer as that node.
+                (lodestar_network_policy::allows(addr, false)
+                    && addr != self.me
+                    && !self.by_addr.contains_key(&addr))
+                .then_some(NodeInfo {
+                    id: NodeId(id),
+                    addr,
+                })
             })
             .collect()
     }
