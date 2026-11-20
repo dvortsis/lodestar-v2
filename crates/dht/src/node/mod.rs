@@ -12,6 +12,7 @@
 
 mod actor;
 mod hints;
+mod ledger;
 mod limits;
 mod lookup;
 mod peers;
@@ -43,6 +44,10 @@ use lodestar_metainfo::InfoHash;
 use crate::compact::NodeId;
 use crate::state::StateError;
 
+pub use ledger::{
+    FIRST_VALUES_MS, HintOutcome, HistogramSnapshot, LedgerEnd, LedgerSnapshot, QueryPurpose,
+    VALUES_BUCKETS,
+};
 pub use stream::{
     LookupEnd, LookupSession, STREAM_BATCH, STREAM_QUEUE, STREAM_SEEN, SessionAdmission,
     SessionAdmit, SessionEnd,
@@ -393,6 +398,8 @@ pub struct Stats {
     /// when one is set). Only with `target_prefixes` on or such a shard.
     pub target_prefix_queries: [AtomicU64; TargetKind::ALL.len()],
     pub target_prefix_cycles: AtomicU64,
+    /// CR-LEDGER: the lookup ledger.
+    pub ledger: ledger::Ledger,
 }
 
 impl Stats {
@@ -488,6 +495,7 @@ impl Stats {
             target_novel_nodes: std::array::from_fn(|i| g(&self.target_novel_nodes[i])),
             target_prefix_queries: std::array::from_fn(|i| g(&self.target_prefix_queries[i])),
             target_prefix_cycles: g(&self.target_prefix_cycles),
+            ledger: self.ledger.snapshot(),
         }
     }
 }
@@ -809,6 +817,8 @@ pub struct StatsSnapshot {
     pub target_novel_nodes: [u64; TargetKind::ALL.len()],
     pub target_prefix_queries: [u64; TargetKind::ALL.len()],
     pub target_prefix_cycles: u64,
+    /// CR-LEDGER.
+    pub ledger: LedgerSnapshot,
 }
 
 impl StatsSnapshot {
