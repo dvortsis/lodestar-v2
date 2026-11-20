@@ -399,16 +399,29 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
 # vpn_interface_held_down, a harness failure of its own, with counts saying
 # why (held_report). A probe that gets out is a leak whatever the interface
 # did, and fails at once. The phase's capture and counter judge every attempt.
+# The time budget (the runner's review of #988): a new attempt starts only
+# while the time left covers the slowest attempt seen in the phase, and at
+# least HELD_ATTEMPT_MIN seconds; the interface checks in phase B wait no
+# longer than the time left (never under their 10 s floor). So the phase ends
+# close to its deadline with a clear verdict, well inside the step's 900 s.
 held_bad=""
 held_dead=""  # an interface check never ran by its deadline, or the phase ran out: no bracket can be had
 held_until="" # the phase's own deadline (held_start), well inside the step's 900 s
 held_ups=0    # how many times phase B found the interface back up
 held_was_up=unknown # 1: the last check read it up; empty: down. A return counts once, and only after a down read
 held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
+held_need=""  # the time an attempt needs before it may start (held_start, then the slowest seen)
 held_start() {
-  local wait=${HELD_PHASE_WAIT:-300}
-  [[ $wait =~ ^[0-9]{1,4}$ ]] || wait=300
+  local wait=${HELD_PHASE_WAIT:-180} need=${HELD_ATTEMPT_MIN:-30}
+  [[ $wait =~ ^[0-9]{1,4}$ ]] || wait=180
+  [[ $need =~ ^[0-9]{1,4}$ ]] || need=30
   held_until=$((SECONDS + wait))
+  held_need=$need
+}
+held_took() {  # $1: when the attempt started; the slowest attempt raises the bar for the next
+  local took=$((SECONDS - $1))
+  ((took > held_need)) && held_need=$took
+  return 0
 }
 held_seen() {  # $1: an interface check's result; counts each return of the interface once
   if (($1 == 0)); then
@@ -419,12 +432,15 @@ held_seen() {  # $1: an interface check's result; counts each return of the inte
   fi
 }
 held() {  # $1: the probe's line, or - for one only the capture judges; the rest: the probe
-  local n=$1 rc after try=0 saved index index_rc
+  local n=$1 rc after try=0 saved index index_rc start same
   shift
   while :; do
-    [[ -n $held_until ]] && ((SECONDS >= held_until)) && held_dead=1
+    # No deadline set is no deadline kept: fail closed. Otherwise an attempt
+    # starts only with the time it needs still left.
+    if [[ -z $held_until || -z $held_need ]] || ((held_until - SECONDS < held_need)); then held_dead=1; fi
     [[ -z $held_dead ]] || break
     try=$((try + 1))
+    start=$SECONDS
     saved=$not_run
     held_down; rc=$?
     if ((rc == 0)); then
@@ -435,7 +451,10 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
       # Down both times and the same interface: gluetun didn't recreate it
       # in between (its ifindex would differ).
-      if ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]]; then
+      same=""
+      ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]] && same=1
+      held_took "$start"
+      if [[ -n $same ]]; then
         [[ $n == - ]] && return
         if ((rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi
         return
@@ -443,6 +462,8 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       ((after == NOT_RUN)) && { held_dead=1; break; }
     elif ((rc == NOT_RUN)); then
       held_dead=1; break  # its deadline already passed: not_run stays set
+    else
+      held_took "$start"
     fi
     not_run=$saved  # a discarded attempt's unrun probe is no verdict either
   done
@@ -478,7 +499,10 @@ iface_index() { probe sh -c 'cat "/sys/class/net/$1/ifindex" 2>/dev/null; true' 
 # taken as a verdict. Past the deadline it's still NOT_RUN, which fails.
 iface_seen_up() {
   local wait=${IFACE_WAIT:-120} until rc saved=$not_run
-  [[ $wait =~ ^[0-9]{1,5}$ ]] && ((wait >= 10)) || wait=10
+  [[ $wait =~ ^[0-9]{1,5}$ ]] || wait=10
+  # In phase B, no longer than the time left before its deadline.
+  [[ -n $held_until ]] && ((held_until - SECONDS < wait)) && wait=$((held_until - SECONDS))
+  ((wait >= 10)) || wait=10
   until=$((SECONDS + wait))
   while :; do
     not_run=""

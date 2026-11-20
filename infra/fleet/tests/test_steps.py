@@ -1067,13 +1067,14 @@ class VMScripts(unittest.TestCase):
             "the flow died": ({"FLOW_DIES": 1}, "flow_alive_down"),
             # The recreate guard: rules that never load are a failure of their own.
             "the post-rules never load": ({"NO_POST_RULES": 1}, "post_rules_before_egress"),
-            "the interface won't go down": ({"IFDOWN_FAILS": 1, "HELD_PHASE_WAIT": 10}, "vpn_interface_down"),
+            "the interface won't go down": ({"IFDOWN_FAILS": 1, "HELD_PHASE_WAIT": 10, "HELD_ATTEMPT_MIN": 1},
+                                           "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
             "no DNS answer with the tunnel up": ({"DIG_UP_FAIL": 1}, "dns_up"),
             # gluetun's own VPN restart brings the interface back mid-phase.
             # (Phase B retries until its own deadline: a short one ends it.)
-            "the interface comes back up and stays up": ({"IFACE_BACK": 1, "HELD_PHASE_WAIT": 10},
+            "the interface comes back up and stays up": ({"IFACE_BACK": 1, "HELD_PHASE_WAIT": 10, "HELD_ATTEMPT_MIN": 1},
                                                          "vpn_interface_held_down"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
@@ -1624,7 +1625,7 @@ class VMScripts(unittest.TestCase):
         probe gets a clean one, so each is skipped and the run fails
         vpn_interface_held_down, not a leak line, and says why in counts."""
         # 20 s: room for well over four stub attempts on a slow runner.
-        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=20)
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
         self.assertEqual(rc, 1, raw)
         self.assertIn("fail vpn_interface_held_down", lines)
         self.assertIn("skip ipv4_blocked_ifdown", lines)
@@ -1642,6 +1643,45 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(lines[lines.index("fail vpn_interface_held_down") - 1],
                          f"count held_iface_returns_ifdown {counts['held_iface_returns_ifdown']}")
         self.assertEqual(remote.parse(raw.encode()), raw.splitlines())
+
+    def test_phase_b_starts_no_attempt_it_has_no_time_for(self):
+        """The runner's review of #988: an attempt starts only while the time left
+        covers what one needs. With less than that left from the start, no probe
+        runs, and the phase fails vpn_interface_held_down at once."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", HELD_PHASE_WAIT=60, HELD_ATTEMPT_MIN=90)
+        self.assertEqual(rc, 1, raw)
+        self.assertLess(time.monotonic() - start, 60)  # never waited for the deadline
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("skip ipv4_blocked_ifdown", lines)
+        self.assertIn("count held_attempts_ipv4_blocked_ifdown 0", lines)
+        probes = (self.stub / "probes").read_text().splitlines()
+        self.assertNotIn("example.edu", "\n".join(probes))
+        self.assertEqual(probes.count("ip link set dev wg0 down"), 1)  # only the phase's own
+
+    def test_phase_b_stops_retrying_once_the_time_left_is_too_short(self):
+        """The interface never stays down: attempts run while the time left covers
+        one (HELD_ATTEMPT_MIN), then stop, well before the phase's deadline,
+        and the phase fails vpn_interface_held_down."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=100, HELD_ATTEMPT_MIN=90)
+        self.assertEqual(rc, 1, raw)
+        self.assertLess(time.monotonic() - start, 80)  # about 10 s of attempts, not 100
+        self.assertIn("fail vpn_interface_held_down", lines)
+        attempts = [int(l.split()[2]) for l in lines if l.startswith("count held_attempts_ipv4_blocked_ifdown ")]
+        self.assertEqual(len(attempts), 1)
+        self.assertGreater(attempts[0], 1)
+
+    def test_phase_b_caps_its_interface_checks_at_the_time_left(self):
+        """An interface check that never runs waits no longer than phase B has
+        left (here 12 s, not IFACE_WAIT's 100), then fails the phase."""
+        start = time.monotonic()
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_NOT_RUN=100000, IFACE_WAIT=100, HELD_PHASE_WAIT=12,
+                                         HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertLess(time.monotonic() - start, 80)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("fail probe_ran", lines)
 
     def test_a_leak_in_a_discarded_phase_b_attempt_is_a_leak(self):
         """A probe that gets out while the interface came back is a leak all the

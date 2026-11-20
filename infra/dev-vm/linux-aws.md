@@ -56,16 +56,22 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - **Give `leak-test.sh` its own work folder, never `/opt/lodestar-run`.** The test installs its work folder's `compose.yaml` into the stack, which is `/opt/lodestar-run`. Pointing both at the same folder makes that copy fail, and the test stops at `compose_installed`. The fleet's step bootstrap uses a fresh folder each run too. As root:
 
      ```bash
+     if systemctl is-active --quiet lodestar-leaktest; then echo "a leak test is still running"; exit 1; fi
+     systemctl reset-failed lodestar-leaktest 2>/dev/null || true
      rm -rf /opt/lodestar-leaktest
      install -d -o root -g root -m 0755 /opt/lodestar-leaktest
      install -o root -g root -m 0644 /opt/lodestar-run/compose.yaml /opt/lodestar-run/block-lib.sh /opt/lodestar-leaktest/
-     systemctl reset-failed lodestar-leaktest 2>/dev/null || true
-     systemd-run --unit=lodestar-leaktest -p StandardOutput=file:/root/leaktest.log -p StandardError=file:/root/leaktest.log \
+     systemd-run --unit=lodestar-leaktest -p StandardOutput=truncate:/root/leaktest.log \
        bash /opt/lodestar-run/leak-test.sh /opt/lodestar-leaktest /opt/lodestar-run
      ```
 
      - The first argument is the work folder; the second is the stack, which holds `secrets/wg0.conf`.
-     - The test takes several minutes, longer than one connector call, so it runs as a background unit. Poll it in later calls with `tail -n 3 /root/leaktest.log` until the last line is `ok leak_test` (a pass) or `fail leak_test`.
+     - The first line refuses to start while an earlier run is going, so its folder isn't deleted under it. `truncate:` empties the log, so it only ever holds this run.
+     - The test takes several minutes, longer than one connector call, so it runs as a background unit. Poll it in later calls with `systemctl is-active lodestar-leaktest; tail -n 3 /root/leaktest.log`.
+     - While the first line reads `active`, the test is still running. Once it doesn't, the run is over:
+       - a last log line of `ok leak_test` is a pass;
+       - `fail leak_test` is a failure, with the failed names above it;
+       - a log that ends with neither means the test was killed or hit an error. Read `systemctl status lodestar-leaktest`, and count it as a failure.
    - `lodestar` owns nothing root executes or reads secrets from. Otherwise any code running as `lodestar` (a build script, an npm package) could rewrite a script or `compose.yaml` (say, `network_mode: host`) before root runs it, and reach the instance role.
    - Builds and the lane's own work run as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`. Results go to `~lodestar/results`; root only reads them.
    - `sudo -i` joins a multi-line command into one line, so put anything longer than one line in a script file and run that.
