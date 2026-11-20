@@ -419,7 +419,7 @@ fn choose_snapshot(db: &Path, from: i64, before: &[String]) -> Option<SnapshotRe
     // that can't be scrubbed isn't used.
     if db.is_file() {
         let live = util::open_read_only(db).ok()?;
-        snapshots::apply_source_purges(&live, &snap.path).ok()?;
+        snapshots::apply_source_purges(&live, &snap.path, util::unix_now()).ok()?;
     }
     let conn = util::open_read_only(&snap.path).ok()?;
     util::quick_check(&conn).ok()?;

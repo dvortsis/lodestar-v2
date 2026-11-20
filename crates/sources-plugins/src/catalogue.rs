@@ -19,27 +19,35 @@
 
 use lodestar_sources::Manifest;
 
+use crate::srrdb;
 use crate::{
-    academic, archive_org, arr, clients, full_scrape, musicbrainz, nyaa, prowlarr, stashdb,
-    torrent_cache, tpdb, wikidata,
+    academic, archive_org, arr, clients, discogs, full_scrape, musicbrainz, nyaa, prowlarr,
+    stashdb, torrent_cache, tpdb, tvdb, wikidata,
 };
 
 /// `(module, manifest)` for every plugin, in `lib.rs` order. A module
 /// may hold more than one plugin (`nyaa` holds Nyaa and Sukebei).
 const PLUGINS: &[(&str, &Manifest)] = &[
     ("academic", &academic::MANIFEST),
+    ("anidb", &crate::anidb::MANIFEST),
+    ("anilist", &crate::anilist::MANIFEST),
     ("archive_org", &archive_org::MANIFEST),
     ("arr", &arr::MANIFEST),
     ("clients", &clients::MANIFEST),
+    ("discogs", &discogs::MANIFEST),
     ("full_scrape", &full_scrape::MANIFEST),
     ("musicbrainz", &musicbrainz::MANIFEST),
+    ("igdb", &crate::igdb::MANIFEST),
     ("nyaa", &nyaa::MANIFEST),
     ("nyaa", &nyaa::SUKEBEI_MANIFEST),
     ("openlibrary", &crate::openlibrary::MANIFEST),
+    ("predb", &crate::predb::MANIFEST),
     ("prowlarr", &prowlarr::MANIFEST),
+    ("srrdb", &srrdb::MANIFEST),
     ("stashdb", &stashdb::MANIFEST),
     ("torrent_cache", &torrent_cache::MANIFEST),
     ("tpdb", &tpdb::MANIFEST),
+    ("tvdb", &tvdb::MANIFEST),
     ("wikidata", &wikidata::MANIFEST),
 ];
 

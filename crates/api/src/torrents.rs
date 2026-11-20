@@ -514,6 +514,7 @@ pub(crate) fn hit(
         last_scrape_at: swarm.last_scrape_at,
         last_seen_at: swarm.last_seen_at,
         leechers: swarm.leechers,
+        others: None,
         matched_files,
         metadata_at: row.metadata_at,
         name: row.name.clone(),

@@ -2,7 +2,7 @@
 
 All Rust compilation and tests ran in temporary crates. No production Rust file was edited. No crawler or cloud operation was started. These tests use mock clocks and local temporary SQLite files.
 
-Toolchain: Rust/Cargo 1.99.1, Windows. Dependencies are locked in [Cargo.lock](Cargo.lock): rusqlite 0.40.2 (bundled SQLite), Tokio 1.53.3, tracing 0.1.44, tempfile 3.27.0. The proposal did not supply an exact Cargo manifest, so these results are for the explicitly disclosed harness, not an unspecified original project.
+Toolchain: Rust/Cargo 1.99.1, Windows. Dependencies are locked in [Cargo.lock.txt](Cargo.lock.txt) (the script copies it into the temporary crate as `Cargo.lock`): rusqlite 0.40.2 (bundled SQLite), Tokio 1.53.3, tracing 0.1.44, tempfile 3.27.0. The proposal did not supply an exact Cargo manifest, so these results are for the explicitly disclosed harness, not an unspecified original project.
 
 Input: the user's second attachment, SHA-256 `AFEB690C3765BF07E67A1485D96527CB2BF4BBDFEE60429EA0993F0CF7AC0E68`. Its first Rust fence contains 2,227 module lines. Attachment line = module line +23. The unchanged extracted module is now preserved as [original-scheduler.rs.txt](original-scheduler.rs.txt), UTF-8 with LF and no added trailing newline, SHA-256 `044754DD300000D7E1D612514E8C7D4153382C21F91B3772B9F590B6435D824C`. It is a review fixture, not a production module. The harness normalizes checkout line endings before verifying that digest.
 

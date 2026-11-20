@@ -1,0 +1,7 @@
+POST https://api.igdb.com/v4/games
+Accept: application/json
+Content-Type: text/plain
+Client-ID: testclientid0
+Authorization: Bearer faketoken0000igdb
+
+ERROR timed out

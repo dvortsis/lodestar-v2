@@ -1,0 +1,7 @@
+POST https://graphql.anilist.co
+Accept: application/json
+Content-Type: application/json
+
+HTTP 200
+Retry-After: 5
+Content-Type: application/json

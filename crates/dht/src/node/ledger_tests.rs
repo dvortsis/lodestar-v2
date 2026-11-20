@@ -515,4 +515,21 @@ async fn occupied_slots_never_count_queued_requests() {
     a.publish_slots();
     let l = ledger(&a);
     assert_eq!((l.slots_occupied, l.queued), (1, 1));
+    // Idle again: the running one cancelled, the queued one's caller gone,
+    // both dropped by the actor's own paths.
+    drop(_running);
+    drop(_queued);
+    a.scrape_tick(&sockets, Instant::now());
+    a.drop_cancelled_queued();
+    assert!(a.get_peers_queue.is_empty());
+    a.publish_slots();
+    let l = ledger(&a);
+    assert_eq!((l.slots_occupied, l.queued), (0, 0));
+    // And both read 0 after shutdown, whatever was held.
+    let _running = request(&mut a, &sockets, 3);
+    a.publish_slots();
+    assert_eq!(ledger(&a).slots_occupied, 1);
+    a.end_ledger_at_shutdown();
+    let l = ledger(&a);
+    assert_eq!((l.slots_occupied, l.queued), (0, 0));
 }

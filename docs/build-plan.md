@@ -342,6 +342,8 @@ A bounded soft timeout is CR-5's first candidate if the ledger still shows resid
 | 4 (CR-AB-1) | CR-1a-S, CR-1a-H, CR-1b, only where the ledger justifies them | earlier winners | ABBA/BAAB each, or skipped with its reason | 0–9 |
 | 5 | CR-5's candidate, if any, then CR-COMB | earlier winners | stacked arm; then 24 h on a fresh directory | about 1.5 plus any CR-5 arm |
 
+The stages total about 16.5–25.5 host-days. With the route-backoff run (0–3 days, only if the baseline shows IPv6 no-route events) the calendar below totals about 16.5–28.5 host-days, not counting the 1-day bitmagnet comparator or a possible CR-5 arm (about 3 days). With the 30 % retry budget, 28.5 host-days × 1.3 is about 37 days, or about 5.3 weeks.
+
 Checkpoint 1's report carries the measured ledger and this build's state as the owner's option if the projection falls short.
 
 **Before any live run** (r3):
@@ -361,7 +363,7 @@ Checkpoint 1's report carries the measured ledger and this build's state as the 
 4. **Checkpoint 1** (owner's choice, 2026-11-02). After the CR-ADM and CR-4 results, the runner projects the reachable single-node rate from the measured gains and the comparator, against all three thresholds (the 24 h mean, the worst hour and the p95 discovery-to-searchable). **It's a projection with stated uncertainty, not a measured ceiling:** isolated gains aren't necessarily additive or multiplicative, and 6 h arms don't bound a 24 h worst hour. The failure breakdown justifies testing transport first; it doesn't say how many timeouts uTP recovers. Only CR-COMB's 24 h soak measures the gate.
    - If the projection reaches ≥ 100/min: continue with step 5.
    - If it doesn't: the runner reports the projection and its uncertainty, the dominant limiter (from the failure and rejection breakdowns), the comparator's rate and the options to the owner **before** CR-5. The owner re-decides. **The runner never loosens the gate.** Sources, workers and M7 continue meanwhile; only the v0.6 tag waits.
-5. A/B in stages (r5.1, the table under "How the host tests run"): CR-AB-LC (CR-LOOKUP-END with CR-1c), then CR-AB-1 (CR-HINT-FIRST, then X-sampler-cooldown-split, then CR-1a-S, CR-1a-H and CR-1b only where the ledger shows they act on what still limits; a skip is recorded with its reason). All are built before Checkpoint 1, and CR-1c's default-on decision reads the CR-ADM result.
+5. A/B in stages (r5.1, the table under "How the host tests run"): CR-AB-LC (CR-LOOKUP-END with CR-1c), then CR-AB-1 (CR-HINT-FIRST, then X-sampler-cooldown-split, then CR-1a-S, CR-1a-H and CR-1b only where the ledger shows they act on what still limits; a skip is recorded with its reason). All are built before Checkpoint 1. CR-AB-LC decides CR-1c together with CR-LOOKUP-END (A1); the CR-ADM result only informs CR-1c's default slot count.
 6. CR-5 (profile-driven tuning, including the verified-known cache): profile first, then tune only on profiler evidence, or record a reasoned skip. Either way it completes, and CR-COMB waits for it.
 7. **CR-COMB:** combine the winners, make them default on, and run the 24 h acceptance soak on the gate metric. If the host, its public IP or its network changed since the comparator ran, re-run the comparator first.
 
@@ -463,9 +465,9 @@ flowchart LR
   | CR-COMB 24 h acceptance (fresh directory, suppression and warmup included) | about 1.5 days |
   | **Total** | **about 16.5–28.5 host-days** |
 
-  r5.1 (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`) replaces r5's 20–32 host-days and r3's 8–9 days. r3 assumed one block per treatment, where CR-SPEC requires two (O6). A block is about 34 h, including its one 6 h suppression, so a treatment takes about 3 host-days. An inconclusive treatment costs two more blocks.
+  r5.1 (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`) replaces r5's 20–32 host-days and r3's 8–9 days. r3 assumed one block per treatment, where CR-SPEC requires two (O6). A block is about 34 h, including its one 6 h suppression, so a treatment takes about 3 host-days. An inconclusive treatment costs two more blocks. The total leaves out the 1-day bitmagnet comparator and a possible CR-5 arm (about 3 days).
 
-  The r5 figures include each block's one 6 h suppression and its warmups (CR-SPEC rule 2.3). Add a retry budget of about 30 % for interruptions and repeats. **Plan for roughly three to five weeks of exclusive host time**, and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the host calendar in `runner-state` (import-pilot bookings, and the planned experiment-host runs, which need no booking since §2.68) and states the next run in every daily summary.
+  The r5.1 figures include each block's one 6 h suppression and its warmups (CR-SPEC rule 2.3). Add a retry budget of about 30 % for interruptions and repeats (28.5 host-days × 1.3 is about 5.3 weeks). **Plan for roughly three to five weeks of exclusive host time** (about 5.3 at the top), and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the host calendar in `runner-state` (import-pilot bookings, and the planned experiment-host runs, which need no booking since §2.68) and states the next run in every daily summary.
 - **CI capacity:** each push starts about 37 jobs that every PR queues behind. One push per round of fixes.
 - **Release branches:** fixes for a release land on `main` first and are cherry-picked; nothing is developed on a release branch.
 - **Hub files** (§1.3 table): unchanged.

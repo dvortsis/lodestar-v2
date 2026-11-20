@@ -1,0 +1,8 @@
+{
+ "pagination": {"page": 1, "pages": 1, "per_page": 5, "items": 3, "urls": {}},
+ "results": [
+  {"id": 900011, "type": "master", "master_id": 900011, "title": "Echo Field - Harbour", "year": "2004", "genre": ["Rock"], "thumb": "", "resource_url": "https://api.discogs.com/masters/900011"},
+  {"id": 900012, "type": "master", "master_id": 900012, "title": "Echo Field (2) - Harbour", "year": "2011", "genre": ["Jazz"], "thumb": "", "resource_url": "https://api.discogs.com/masters/900012"},
+  {"id": 900013, "type": "master", "master_id": 900013, "title": "Echo Field* - Harbour Lights", "year": 2004, "genre": ["Rock"], "thumb": "", "resource_url": "https://api.discogs.com/masters/900013"}
+ ]
+}

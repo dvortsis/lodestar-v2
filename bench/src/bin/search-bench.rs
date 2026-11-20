@@ -28,6 +28,12 @@
 //! one deadline. Gated at that deadline, [`RECOVERY_P95`]; a pass the
 //! deadline cut short took at least that long, so it counts against it.
 //!
+//! A sixth runs the keyword classes with collapse-by-group on (GS-3), as
+//! `/search?collapse=group` does: a lease, the groups count and the first
+//! collapsed page. Reported, not gated: G-v07-scale measures the keyword
+//! p95 with collapse on at 10M, and that decides whether "Group
+//! versions" stays on by default (owner-decisions §2.66).
+//!
 //! Last, it times new torrent → searchable (§3) through the live indexer
 //! at its production settings, gated at [`NRT_MAX`]. The unit tests only
 //! check that the indexer follows the store: a wall-clock budget there
@@ -618,6 +624,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         }
     }
     ok &= api_path(a, &index, &reader, now)?;
+    collapse_path(a, &index, &reader, now)?;
     ok &= recovery_path(a, &index, now)?;
     ok &= file_sets_path(a, &index, &reader, &db, now)?;
     ok &= facets_path(a, &index, now)?;
@@ -784,6 +791,90 @@ fn api_path(
         if pass { "PASS" } else { "FAIL" }
     );
     Ok(ok && pass)
+}
+
+/// The keyword classes as `/search?collapse=group` runs them (GS-3): a
+/// lease, its groups count, the first collapsed page of 50 and its rows.
+/// Reported against [`KEYWORD_P95`], not gated (module docs).
+fn collapse_path(
+    a: &Args,
+    index: &SearchIndex,
+    reader: &Store,
+    now: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use lodestar_search::collapse;
+    let index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!("\n  collapse=group (GS-3): a lease, the groups count and the first collapsed page");
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12}  target",
+        "class", "p50", "p95", "max", "groups95", "page95", "cursor95", "torr/groups"
+    );
+    for class in classes(a.seed, a.queries, a.hot).into_iter().filter(|c| {
+        c.target == Some(KEYWORD_P95)
+            && !c.cold
+            && a.only.as_deref().is_none_or(|o| c.name.contains(o))
+    }) {
+        let mut times = Vec::with_capacity(class.queries.len());
+        let (mut counting, mut paging, mut cursor) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut torrents, mut groups) = (0usize, 0usize);
+        for q in &class.queries {
+            let started = Instant::now();
+            let ast = parse(q)?.without_hidden();
+            let lease = Lease::new(index.clone(), &ast, now, class.sort, &cancel)?;
+            if let Err(why) = collapse::available(&lease) {
+                println!("  {:<24} ungrouped: {}", class.name, why.code());
+                break;
+            }
+            let t = Instant::now();
+            let g = collapse::groups(&lease, false, &cancel)?;
+            counting.push(t.elapsed());
+            let t = Instant::now();
+            let page = collapse::page(&lease, Start::Offset(0), 50, &cancel)?;
+            paging.push(t.elapsed());
+            for r in &page.rows {
+                reader.torrent(r.hit.id as i64)?;
+            }
+            times.push(started.elapsed());
+            // The second page, from the first's cursor: the path that
+            // checks groups served before. Timed apart, after the total
+            // (a first request never reads it).
+            if let Some(next) = page.next {
+                let t = Instant::now();
+                collapse::page(&lease, Start::After(next), 50, &cancel)?;
+                cursor.push(t.elapsed());
+            }
+            torrents += lease.total().value;
+            groups += g.value;
+        }
+        if times.is_empty() {
+            continue;
+        }
+        times.sort();
+        counting.sort();
+        paging.sort();
+        cursor.sort();
+        let p95 = pct(&times, 0.95);
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10} {:>10} {:>12.2}  p95 ≤ {} ms {} (not gated)",
+            class.name,
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("queries")),
+            ms(pct(&counting, 0.95)),
+            ms(pct(&paging, 0.95)),
+            if cursor.is_empty() {
+                "—".to_string()
+            } else {
+                ms(pct(&cursor, 0.95))
+            },
+            torrents as f64 / groups.max(1) as f64,
+            KEYWORD_P95.as_millis(),
+            if p95 <= KEYWORD_P95 { "within" } else { "over" }
+        );
+    }
+    Ok(())
 }
 
 /// Zero-result recovery as `/search` runs it: each class's queries with

@@ -1,0 +1,9 @@
+POST https://graphql.anilist.co
+Accept: application/json
+Content-Type: application/json
+
+HTTP 429
+Retry-After: 30
+X-RateLimit-Limit: 30
+X-RateLimit-Remaining: 0
+Content-Type: application/json

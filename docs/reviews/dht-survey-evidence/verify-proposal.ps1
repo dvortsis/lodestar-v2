@@ -43,7 +43,7 @@ tracing = "=0.1.44"
 [dev-dependencies]
 tempfile = "=3.27.0"
 '@ | Set-Content -LiteralPath (Join-Path $OutputDirectory 'Cargo.toml')
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Cargo.lock') -Destination (Join-Path $OutputDirectory 'Cargo.lock')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Cargo.lock.txt') -Destination (Join-Path $OutputDirectory 'Cargo.lock')
 $manifest = Join-Path $OutputDirectory 'Cargo.toml'
 function Scrub-LogText([string]$Text) {
     $scrubbed = $Text

@@ -138,36 +138,38 @@ on it, off against on, before it takes host time (build-plan §0.5).
 
 With `Scenario::ledger` on, the report adds the capacity ledger over the
 minutes after warmup (`run::Ledger`). Each figure is named after the
-CR-LEDGER metric it stands for, with what the sim reads it from. CR-LEDGER
-isn't on `main` yet, so the sim reads the node's existing counters and
-the network edge. When it lands, swap in its counters under the same
-names.
+CR-LEDGER metric it stands for, with what the sim reads it from: the
+node's own CR-LEDGER counters (#975) where they exist, deltas of
+`StatsSnapshot::ledger` after warmup. The report ends with the share of
+lookups by `lookup_ended_total{reason}`, so a lookup-cost change shows
+lookups ending on values instead of at the deadline.
 
 | Report name | Field | What the sim reads |
 |---|---|---|
 | `lookup_slots_occupied` | `slots` (`L`) | `peer_active`, sampled each second (of `lookup_slots_capacity`, 32) |
 | `peer_admitted_per_s` | `admitted_per_s` (`λ`) | `peer_admitted` deltas |
 | `W_little` | `w` | `L / λ`: how CR-0's 23.6 s was derived, so it's the calibrated `W` |
-| `lookup_residence_seconds_total/lookup_ended_total` | `w_residence` | CR-LEDGER's `W`. Here it's answered lookups' run time, admission to answer (`peer_lookup_millis / peer_lookups_answered`), which leaves out the few cancelled ones |
-| `queries_sent_total{purpose=peer_lookup\|hint}/admitted` | `q` | `get_peers` queries at the network edge. The node can't tell its lookups' queries from the rest |
+| `lookup_residence_seconds_total/lookup_ended_total` | `w_residence` | CR-LEDGER's `W`: residence over ends, every reason. `W_little` stays the calibrated `W` |
+| `queries_sent_total{purpose=peer_lookup\|hint}/lookup_ended_total` | `q` | CR-LEDGER's queries by purpose, per ended lookup. Nothing here sends harvest-only requests, so these are the owned requests' own queries |
 | `queries_out_total/admitted` | `q_all` | Every query: CR-0's upper bound on `q` |
 | `stored/admitted` | `y` | What reached the writer |
 | `fetches/admitted` | `fetches` | Peers tried |
 | `peers_found/admitted` | `found` | Keys whose peers were found (funnel `PeerFound`): about the share of lookups that return peers |
 | `outstanding` | `outstanding` | Mean of the `outstanding` gauge. Over `queries_out_total/s` it's the mean time a query is held |
 | `timeouts/queries_out` | `unanswered` | |
-| `lookup_deadlines/completed` | `deadlines_per_completed` | Includes the node's own `find_node` lookups |
+| `lookup_deadlines/completed` | `deadlines_per_completed` | Every lookup leg that hit a deadline: the node's own `find_node` lookups and non-owned `get_peers` lookups too |
+| `lookup_ended_total{reason=…}` | `ended_share` | CR-LEDGER's ends by reason, each over their sum |
 
-CR-LEDGER's time to first values, requests without values, values per
-request and hint outcomes aren't in the ledger. A later slice can add
-them from the same counters once they exist.
+CR-LEDGER's time to first values, values per request and hint outcomes
+aren't in the report; `StatsSnapshot::ledger` has them for a test that
+needs them.
 
 ### Calibration targets and results
 
 `live_lookup_is_calibrated` asserts each target on every one of the 8
 `SCREEN_SEEDS` and on their mean. It takes about 12 s of wall time (8
 threads; about 40 s of CPU in a debug build), and the whole `sim` test
-about 20 s.
+about 26 s.
 
 | Target (CR-0, 24 h) | Live | Tolerance | 8-seed mean | Seed range |
 |---|---|---|---|---|
@@ -202,11 +204,11 @@ Not calibrated, and why:
 As in "A/B a candidate", but read the ledger beside the sign test. The
 review's rule (§5) keeps a change only if both `y·L/W` and `y·Q/q` rise.
 `screen` returns each seed's `[off, on]` ledgers, and runs each arm's 8
-seeds on 8 threads:
+seeds on 8 threads. CR-LOOKUP-END's `lookup_end_screen` (in `main.rs`) is
+the worked example:
 
 ```rust
 let off = scenario::live_lookup();
-// `lookup_end` stands for the candidate's own switch field.
 let on = Scenario { switches: Switches { lookup_end: true, ..Default::default() }, ..off.clone() };
 let v = screen(&off, &on);
 for (seed, [a, b]) in SCREEN_SEEDS.zip(&v.ledgers) {

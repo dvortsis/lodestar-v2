@@ -1,0 +1,4 @@
+GET https://anidb.net/api/anime-titles.xml.gz
+
+HTTP 200
+Content-Type: application/x-gzip
