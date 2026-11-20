@@ -79,6 +79,10 @@ fn each_entry_is_its_plugins_own_manifest() {
         )
         .clone(),
         prowlarr::Prowlarr::unconfigured(creds()).manifest().clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::srrdb::Srrdb::new(),
+        )
+        .clone(),
         AdultEnricher::manifest(&stashdb).clone(),
         cache.manifest().clone(),
         AdultEnricher::manifest(&tpdb).clone(),

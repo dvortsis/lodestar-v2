@@ -14,6 +14,7 @@ pub mod musicbrainz;
 pub mod nostr;
 pub mod openlibrary;
 pub mod rss;
+pub mod srrdb;
 pub mod stashdb;
 pub mod torznab;
 pub mod tpdb;

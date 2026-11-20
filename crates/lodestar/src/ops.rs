@@ -970,6 +970,9 @@ mod spec_tests {
                 lodestar_sources_plugins::musicbrainz::ID,
                 *lodestar_sources::identify::Identifier::policy(
                     &lodestar_sources_plugins::musicbrainz::MusicBrainz::new(),
+                lodestar_sources_plugins::srrdb::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::srrdb::Srrdb::new(),
                 ),
             ),
         ]

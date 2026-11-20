@@ -30,6 +30,7 @@ pub mod musicbrainz;
 pub mod nyaa;
 pub mod openlibrary;
 pub mod prowlarr;
+pub mod srrdb;
 pub mod stashdb;
 pub mod torrent_cache;
 pub mod tpdb;
