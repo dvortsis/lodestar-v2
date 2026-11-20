@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T06:28Z",
+  "updated_at": "2026-11-20T06:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8929,6 +8929,11 @@
       "id": "X-lookup-shortlist-diversity",
       "note": "S1-16, low, surface 1 (DHT lookup shortlist). Hardening slice; detail by message only.",
       "at": "2026-11-20T06:28Z"
+    },
+    {
+      "id": "X-cr-col5-nits",
+      "note": "#972 review optionals: collect.py comment on dht_lookup_slots_occupied (follow CR-LEDGER metrics.md row); winners [[x]] TypeError; control_switches three shapes. Next collector PR.",
+      "at": "2026-11-20T06:37Z"
     }
   ],
   "main_health": [
@@ -10143,6 +10148,12 @@
       "slice": "GS-2b",
       "sha": "a3f8b6a9",
       "at": "2026-11-16T05:50Z"
+    },
+    {
+      "pr": 972,
+      "slice": "CR-COL-5",
+      "merge": "89560524",
+      "at": "2026-11-20T06:37Z"
     }
   ],
   "active_sessions": {
@@ -10388,7 +10399,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T06:18Z",
+    "updated": "2026-11-20T06:37Z",
     "items": [
       {
         "slot": 1,
@@ -10422,13 +10433,12 @@
       },
       {
         "slot": 4,
-        "slice": "CR-COL-5",
+        "slice": "X-snapshot-claims-retention",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-20T05:54Z",
-        "doing": "session_01MMjhnB8RzHX5A8Ytoy5pUk: building",
-        "status": "active"
+        "since": "2026-11-20T06:37Z",
+        "doing": "session_01MMjhn9t3X8PDfpkufcCKHF"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10520,7 +10530,7 @@
     }
   ],
   "heartbeat": "2026-11-16T05:50Z",
-  "updated": "2026-11-20T06:28Z",
+  "updated": "2026-11-20T06:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
