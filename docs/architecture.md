@@ -438,10 +438,10 @@ All four share **one state, the AST**, so whatever was used, the active-filter s
   - **Syntax, the expert layer:**
     - Syntax tokens are distinguished by **weight + mono font + colour** (field names, operators, quoted phrases, ranges).
     - Parse errors get an underline **and** a text message underneath that says what to change.
-    - **Autocomplete** (combobox/listbox pattern): fields, values with counts (from the term dictionaries), units, alerts and recent queries. Tab accepts. Fields show their glossary label, with the field code as secondary text.
-    - The **Builder** toggle opens an inline row builder (field / operator / value) that round-trips with the text through the server AST. Its fields also show glossary labels first, codes second.
+    - **Autocomplete** (combobox/listbox pattern): fields, values with counts (from the term dictionaries), units, alerts and recent queries. Tab accepts. Fields show their plain label from the field-label formatter (`web/src/lib/format/`, X-labels), with the field code as secondary text.
+    - The **Builder** toggle opens an inline row builder (field / operator / value) that round-trips with the text through the server AST. Its fields also show the formatter's labels first, codes second.
     - A "Syntax" link opens the cheat-sheet popover.
-- **Active-filter strip:** one removable chip per structured clause, labelled in words from the glossary ("Resolution: 2160p", "Size: 10 GB or more"), plus "Clear all". The strip always explains why the results look the way they do.
+- **Active-filter strip:** one removable chip per structured clause, labelled in words by the field-label formatter ("Resolution: 2160p", "Size: 10 GB or more"), plus "Clear all". The strip always explains why the results look the way they do.
 - **Facet rail (clicks; global scope, applies to results):**
   - Counts are **disjunctive**: each facet's counts ignore its own selection, so you can multi-select. They're labelled "≈" when sampled.
   - **Default groups, in the order people filter by** (UI review D3 and U10):
@@ -856,7 +856,7 @@ Generated screens render from the schema with no screen-specific code beyond gro
   - the HTTP-address timer reverts when nobody confirms.
 
 #### 10.10.10 First-run wizard
-The setup token and the admin password come first, on the setup screens (`/setup`). Then the wizard runs nine steps, with stepped progress and one primary action per step (`web/src/lib/features/wizard/steps.ts`):
+The Legal Notice, the setup token and the admin password come first, in that order, on the setup screens (`/setup`; the notice first per `docs/owner-decisions.md` §2.38). Then the wizard runs nine steps, with stepped progress and one primary action per step (`web/src/lib/features/wizard/steps.ts`):
 1. Network check (live port-reachability test)
 2. How it works
 3. Intensity
@@ -1130,9 +1130,15 @@ Rules (`application-interface-design`):
 - **Sizes the user types keep the unit they typed** (UI review U12, accepted under owner-queue item 17.6, delegated by `docs/owner-decisions.md` §2.69, rather than a units preference):
   - Lodestar shows sizes in IEC units, as above.
   - A size the user types now, in the query bar, a facet's typed value or natural phrasing, means what was typed. `10gb` and "over 10 GB" mean 10 GB (10 × 1000³ bytes), and `10GiB` means 10 × 1024³. This covers `size:` and `largest:`. `piece:` stays 1,024-based, because piece lengths are powers of two (`piece:16MB` is 16 MiB).
-  - The size is echoed back in the unit typed (`size:>=10GB`, "Size: 10 GB or more"), never silently rewritten to GiB.
-  - **Nothing stored changes meaning.** Every query saved before the change keeps exactly the torrents it matched: alerts, §20 filter rules and their `unless` clauses, saved Table views and the server's stored ASTs. X-units-typed rewrites their decimal spellings into the binary equal (`size:<1GB` becomes `size:<1GiB`) before the new reading applies. Built-in rule-pack and floor rules are spelled in binary units. So no content-safety rule widens or narrows.
-  - The grammar, including the single-letter forms (`1.5G`), is `docs/query-language.md`'s. X-units-typed changes it, superseding `docs/decisions/2026-11-01-FX-6-I9.md`'s "every parser version reads both spellings as 1024-based". A `/search?q=` link or API call written with GB before the change reads about 7% smaller after it: an ordinary search, not a stored rule.
+  - **Only the user's own text echoes the typed unit.** The active-filter chip and the `/search?q=` URL repeat what the user typed ("Size: 10 GB or more", `size:>=10GB`). That echo is the user's text, not a measured size, so it doesn't pass through `formatBytes`. Every measured size stays IEC (`docs/metrics.md`, "never SI").
+  - **Stored query text is always canonical.** Anything the server stores is written by the printer in bytes or IEC units, which every release reads the same way: §20 filter rules and their `unless` queries, allow entries, and alerts (already stored as AST JSON in bytes). So `size:<1GB` is stored as `size:<1000000000`, and a rollback to an older release reads the same set. No content-safety rule can widen or narrow when the user changes releases. The single-letter forms (`1.5G`) follow the same rule.
+  - **X-units-typed's scope:**
+    - the parser accepts the typed units;
+    - the printer writes canonical stored text;
+    - the UI and URL echo the typed unit;
+    - a test checks that a rule saved after the change matches the same set when the previous parser reads it.
+
+    It owns `docs/query-language.md`'s grammar and changes the rule `docs/decisions/2026-11-01-FX-6-I9.md` states, "every parser version reads both spellings as 1024-based", for typed input only. A hand-written `/search?q=` link or API call that uses GB reads about 7% smaller after the change. That is an ordinary search, not a stored rule.
 - **Null ≠ zero:** never scraped → "—"; a real 0 → "0"; estimates → "≈"; sampled → "≈" + a note.
 - **"≈" and binary units are explained once** (UI review D10):
   - The first time an account sees an estimate or a GiB size, a one-line note explains it, with **Got it**: "≈ means an estimate. GiB counts in 1,024s, so 1 GiB is about 7% more than 1 GB."
@@ -1170,14 +1176,14 @@ Rules (`application-interface-design`):
 
 #### 10.14.1 Help in the app
 UI review D8, U30 and U31. The plan above covers labels and errors. This section covers teaching: the §10.0 reader learns a term where they meet it and never has to leave the app to search the web.
-- **Every screen links to its help.** The page header carries a "Help" link to the guide chapter for that screen (`docs/user/`, written under owner decision §2.14 and the `user-docs` skill). Settings fields keep their "Learn more" links (§10.10.4), which point into the same chapters.
+- **Every screen links to its help.** The page header carries a "Help" link that opens that screen's chapter in the in-app `/help`, which fetches nothing. The chapters follow the guide (`docs/user/`, written under owner decision §2.14 and the `user-docs` skill). Settings fields keep their "Learn more" links (§10.10.4), which point into the same chapters.
 - **`/help`** is the help landing inside the app:
   - a search box over the help topics and the term explanations (`help.term.*`, below);
   - the guide's chapters by task: getting started, finding and downloading, alerts, "Is it working?", settings and safety, and "Something's wrong";
   - the keyboard and syntax guides.
 
   It's a lazy route with its own chunk, outside the Search budget (§10.1). HelpLink and TermHelp sit on Search too, so they count against its budget and stay small. It's in the overflow menu (§10.3) and the command palette ("Help: …"). Settings search offers it when nothing matches (§10.10.3).
-- **Links into the full guide** open in a new tab, the way About's links do (§10.10.13), and take their address from the build's `repository` field, so a fork points to its own guide. Nothing is fetched until the user follows one, so the system stays offline by default (`docs/owner-decisions.md` §1.2.3).
+- **Links from `/help` into the full guide on GitHub** open in a new tab, the way About's links do (§10.10.13), and take their address from the build's `repository` field, so a fork points to its own guide. Nothing is fetched until the user follows one, so the system stays offline by default (`docs/owner-decisions.md` §1.2.3).
 - **"What's this?"** (TermHelp, §10.11):
   - The first use of a glossary term on each screen carries a small "What's this?" control: junk, unverified, backfill, composition, trackers reporting, clone, "≈" and the like.
   - It opens a popover with a plain one- or two-sentence explanation and a link to the term's help topic.
