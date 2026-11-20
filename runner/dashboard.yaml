@@ -1811,6 +1811,11 @@ owner_queue:
   action: 'May docs/reviews/dht-survey-evidence/original-scheduler.rs.txt stay in the repository? It is 2,227 lines of outside code, the scheduler proposal that the 2026-11-16 crawler survey reviewed (#970). Its source is not recorded, and the repository is AGPL'
   unblocks: Keeping the survey's evidence reproducible, or removing the file and keeping only its hash
   when: Any time
+- n: 30
+  type: decision
+  action: 'May two crawler slices run at the same time when their owns overlap only on shared DHT files where each adds its own switch lines (node/mod.rs, node/actor.rs, lodestar/src/config.rs, crates/dht/tests)? Your rule says owns never overlap, so today X-sampler-cooldown-split, CR-LOOKUP-END, CR-1c and CR-HINT-FIRST run one at a time. The runner recommends yes for additive lines only, with the second to land bringing main in'
+  unblocks: Building the four crawler switches in parallel, a few days sooner on the path to 100
+  when: Any time; until then they run one at a time
 
 gates:
 - id: G-v05

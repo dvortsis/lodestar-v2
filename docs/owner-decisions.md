@@ -770,7 +770,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
 81. **Four build sessions, and as many testing sessions as needed** (owner, in the runner session, 2026-11-20 about 06:25Z): "I'm going to bed. Keep 4 running sessions, with as many additional sessions for testing as needed."
     - **Build:** four slices at a time, as before (`limits.phase_total` 4).
-    - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now only the number of testing rows the dashboard shows, not a limit.
+    - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now a reference number only; it limits nothing.
     - **Unchanged (runner's reading):** the cloud spending caps (§2.74), the host-safety rules (§2.68), at most three reviewers at a time, and every other bound.
 
 ## 3. Points still open (not decided by the owner)
