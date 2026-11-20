@@ -833,17 +833,18 @@ fn collapse_path(
             let t = Instant::now();
             let page = collapse::page(&lease, Start::Offset(0), 50, &cancel)?;
             paging.push(t.elapsed());
+            for r in &page.rows {
+                reader.torrent(r.hit.id as i64)?;
+            }
+            times.push(started.elapsed());
             // The second page, from the first's cursor: the path that
-            // checks groups served before (not in the timed total).
+            // checks groups served before. Timed apart, after the total
+            // (a first request never reads it).
             if let Some(next) = page.next {
                 let t = Instant::now();
                 collapse::page(&lease, Start::After(next), 50, &cancel)?;
                 cursor.push(t.elapsed());
             }
-            for r in &page.rows {
-                reader.torrent(r.hit.id as i64)?;
-            }
-            times.push(started.elapsed());
             torrents += lease.total().value;
             groups += g.value;
         }
