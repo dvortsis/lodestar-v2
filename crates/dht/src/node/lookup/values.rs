@@ -50,14 +50,6 @@ impl Values {
             .flat_map(|(net, vs)| vs.iter().map(move |v| (*net, *v)))
     }
 
-    /// The values held, counting each source's up to `per_source` only.
-    pub fn spread(&self, per_source: usize) -> usize {
-        self.by_source
-            .iter()
-            .map(|(_, vs)| vs.len().min(per_source))
-            .sum()
-    }
-
     /// The sources holding values.
     #[cfg(test)]
     pub fn sources(&self) -> usize {
@@ -112,6 +104,55 @@ impl Values {
         for (source, value) in other.entries() {
             self.insert(source, value);
         }
+    }
+}
+
+/// Per source, the first `per_source` distinct values it sent, whether or
+/// not another source sent them first: how many values each source vouches
+/// for, up to its share. A source repeating a value counts it once.
+/// Bounded by `per_source` per source, and one entry per source that
+/// answered with values.
+#[derive(Debug, Clone)]
+pub(crate) struct SentBy {
+    per_source: usize,
+    by_source: Vec<(Network, Vec<SocketAddr>)>,
+}
+
+impl SentBy {
+    pub fn new(per_source: usize) -> SentBy {
+        SentBy {
+            per_source,
+            by_source: Vec::new(),
+        }
+    }
+
+    /// Records that `source` sent `values`.
+    pub fn offer(&mut self, source: Network, values: &[SocketAddr]) {
+        if values.is_empty() {
+            return;
+        }
+        let i = match self.by_source.iter().position(|(n, _)| *n == source) {
+            Some(i) => i,
+            None => {
+                self.by_source.push((source, Vec::new()));
+                self.by_source.len() - 1
+            }
+        };
+        let held = &mut self.by_source[i].1;
+        for v in values {
+            if held.len() >= self.per_source {
+                break;
+            }
+            if !held.contains(v) {
+                held.push(*v);
+            }
+        }
+    }
+
+    /// The sum over sources of the values each vouches for, each up to
+    /// its share.
+    pub fn spread(&self) -> usize {
+        self.by_source.iter().map(|(_, vs)| vs.len()).sum()
     }
 }
 
@@ -208,15 +249,25 @@ mod tests {
         assert_eq!(request.held(net(1)), 56);
     }
 
+    /// X-sec-S1-18: each source vouches for at most its share, a value
+    /// it repeats counts once, and repeating another's values counts.
     #[test]
-    fn spread_counts_each_source_up_to_its_share() {
+    fn sent_by_counts_distinct_values_per_source_up_to_a_share() {
+        let mut sent = SentBy::new(4);
+        let many: Vec<_> = (0..8).map(|i| v(1, i)).collect();
+        sent.offer(net(1), &many);
+        assert_eq!(sent.spread(), 4);
+        for _ in 0..8 {
+            sent.offer(net(2), &[v(9, 1)]);
+        }
+        assert_eq!(sent.spread(), 5, "one value eight times is one");
+        sent.offer(net(2), &many[..3]);
+        assert_eq!(sent.spread(), 8, "repeats of another source count");
+        sent.offer(net(3), &[]);
+        assert_eq!(sent.by_source.len(), 2, "no entry without values");
         let mut vals = Values::default();
-        fill(&mut vals, 1, 8);
-        assert_eq!(vals.spread(4), 4);
-        fill(&mut vals, 2, 1);
-        assert_eq!(vals.spread(4), 5);
-        fill(&mut vals, 2, 4);
-        assert_eq!(vals.spread(4), 8);
+        fill(&mut vals, 1, 2);
+        fill(&mut vals, 2, 2);
         assert_eq!(vals.sources(), 2);
     }
 

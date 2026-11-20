@@ -373,35 +373,48 @@ async fn one_network_cannot_converge_a_leg_early() {
     assert_eq!(a.pending.len(), 2, "far[1] and far[2] still out");
 }
 
-/// X-sec-S1-18: values count for the source that sent them first, so a
-/// second network repeating values already held adds nothing; its own
-/// new values do.
+/// The nodes storing a hash list the same swarm: a second network
+/// repeating values already held counts, as corroboration. Without a
+/// second network, more of the same never ends the request.
 #[tokio::test(start_paused = true)]
-async fn a_second_network_counts_only_its_own_values() {
+async fn a_second_network_corroborating_the_same_values_counts() {
     let (mut a, s) = actor(true);
-    let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 1, 13));
+    let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 0, 12), at(0x30, 1, 13));
     table(&mut a, &[n1, n2, n3]);
     let mut rx = request(&mut a, &s);
     answer(&mut a, &s, &n1, peers(0, 9), &[]);
     answer(&mut a, &s, &n2, peers(0, 9), &[]);
     assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
-    answer(&mut a, &s, &n3, peers(9, 4), &[]);
-    assert_eq!(rx.try_recv().unwrap().len(), 13);
+    answer(&mut a, &s, &n3, peers(0, 9), &[]);
+    assert_eq!(rx.try_recv().unwrap().len(), 9);
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
 }
 
-/// X-sec-S1-18: eight values from one network and one from a second
-/// don't end a request; four from each do.
+/// X-sec-S1-18: each of two networks must send four distinct values
+/// (repeats of the other's count) and the request must hold eight.
 #[tokio::test(start_paused = true)]
-async fn each_network_must_hold_its_share_to_end_a_request() {
-    for (first, second, ends) in [(8, 1, false), (8, 3, false), (4, 4, true), (3, 8, false)] {
+async fn each_network_must_send_its_share_to_end_a_request() {
+    // (first network's values, second network's values, ends)
+    let cases: [(Vec<SocketAddr>, Vec<SocketAddr>, bool); 7] = [
+        (peers(0, 8), peers(8, 1), false),
+        (peers(0, 8), peers(8, 3), false),
+        (peers(0, 4), peers(4, 4), true),
+        (peers(0, 3), peers(3, 8), false),
+        // Corroboration: four of the first's values again.
+        (peers(0, 8), peers(2, 4), true),
+        // The same four values from each: only four distinct.
+        (peers(0, 4), peers(0, 4), false),
+        // One value eight times counts once.
+        (peers(0, 8), vec![peers(8, 1)[0]; 8], false),
+    ];
+    for (i, (first, second, ends)) in cases.into_iter().enumerate() {
         let (mut a, s) = actor(true);
         let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
         table(&mut a, &[n1, n2, n3]);
         let mut rx = request(&mut a, &s);
-        answer(&mut a, &s, &n1, peers(0, first), &[]);
-        answer(&mut a, &s, &n2, peers(first, second), &[]);
-        let case = format!("{first} + {second}");
+        answer(&mut a, &s, &n1, first, &[]);
+        answer(&mut a, &s, &n2, second, &[]);
+        let case = format!("case {i}");
         assert_eq!(rx.try_recv().is_ok(), ends, "{case}");
         assert_eq!(
             ended(&a, LedgerEnd::EnoughValues),
@@ -514,9 +527,10 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     /// X-sec-S1-18: with two networks answering, a request ends on values
-    /// exactly when each holds at least four distinct ones of its own.
+    /// exactly when each sends at least four distinct ones (repeats of the
+    /// other's included) and eight are distinct in all.
     #[test]
-    fn two_networks_end_a_request_only_with_a_share_each(first in 0u16..12, second in 0u16..12, overlap in 0u16..12) {
+    fn two_networks_end_a_request_only_when_each_sends_a_share(first in 0u16..12, second in 0u16..12, overlap in 0u16..12) {
         let (mut a, s) = actor(true);
         let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
         table(&mut a, &[n1, n2, n3]);
@@ -525,8 +539,8 @@ proptest! {
         // The second network repeats up to `overlap` of the first's values.
         let start = first.saturating_sub(overlap);
         answer(&mut a, &s, &n2, peers(start, second), &[]);
-        let own = (start + second).saturating_sub(first).min(second);
-        let ends = first >= 4 && own >= 4;
+        let distinct = first.max(start + second);
+        let ends = first >= 4 && second >= 4 && distinct >= 8;
         prop_assert_eq!(rx.try_recv().is_ok(), ends);
         prop_assert_eq!(ended(&a, LedgerEnd::EnoughValues), u64::from(ends));
     }
