@@ -874,17 +874,14 @@ mod tests {
     use lodestar_search::parse;
     use serde_json::Value;
 
-    /// `ALL`, `as_str` and `FromStr` all spell every mode as serde (and
-    /// so the OpenAPI schema) does.
+    /// `ALL`, `as_str` and `FromStr` all spell every mode as serde and
+    /// the OpenAPI schema do, and `ALL` lists every mode the schema has.
     #[test]
     fn collapse_modes_parse_and_print_as_the_schema_spells_them() {
-        // Exhaustive: a new mode fails to compile here until it's listed.
-        for m in CollapseMode::ALL {
-            match m {
-                CollapseMode::Group | CollapseMode::None => {}
-            }
-        }
-        assert_eq!(CollapseMode::ALL.len(), 2);
+        let schema =
+            serde_json::to_value(<CollapseMode as utoipa::PartialSchema>::schema()).unwrap();
+        let listed: Vec<&str> = CollapseMode::ALL.iter().map(|m| m.as_str()).collect();
+        assert_eq!(schema["enum"], serde_json::json!(listed), "{schema}");
         for m in CollapseMode::ALL {
             let wire = serde_json::to_value(m).unwrap();
             assert_eq!(wire, Value::from(m.as_str()), "{m:?}");

@@ -379,13 +379,21 @@ async fn collapse_takes_group_none_or_nothing_and_names_them_otherwise() {
         ),
     )
     .await;
-    for (status, body) in [(status, &get_body), (post_status, &post_body)] {
+    // Present but empty isn't the default: it's a value, and unknown.
+    let (empty_status, _, empty_body) =
+        call(&f.app, get("/api/v1/search?q=movie&collapse=", &c)).await;
+    for (status, body, value) in [
+        (status, &get_body, "bogus"),
+        (post_status, &post_body, "bogus"),
+        (empty_status, &empty_body, ""),
+    ] {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         let e = &body["error"];
         assert_eq!(e["code"], "unknown_collapse", "{body}");
         assert_eq!(e["field"], "collapse", "{body}");
         assert_eq!(
-            e["message"], "Unknown collapse \"bogus\": use group or none.",
+            e["message"],
+            format!("Unknown collapse {value:?}: use group or none."),
             "{body}"
         );
     }
