@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T14:08Z",
+  "updated_at": "2026-11-20T14:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10286,6 +10286,13 @@
       "sha": "9922a41c",
       "at": "2026-11-20T14:08Z",
       "note": "one-string copy fix; runner read the diff as the fresh reviewer"
+    },
+    {
+      "pr": 980,
+      "slice": "X-snapshot-claims-nits",
+      "sha": "b36eb8f2",
+      "at": "2026-11-20T14:12Z",
+      "note": "review CHANGES then delta MERGE; two-sighting rule (runner \u00a72.19); follow-ups -> X-snapshot-followups (same session)"
     }
   ],
   "active_sessions": {
@@ -10531,7 +10538,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T14:08Z",
+    "updated": "2026-11-20T14:12Z",
     "items": [
       {
         "slot": 1,
@@ -10540,7 +10547,7 @@
         "agent": "session_01MMjhnATTvyFiLGcTacVqve",
         "model": "opus",
         "since": "2026-11-20T13:48Z",
-        "doing": "launched in same session; brief briefs/X-win-data-dir-followups.md (write probe, optionals, guide \u00a76.2)",
+        "doing": "#985 open 428a77ee; CI running; await ready, then review",
         "status": "running"
       },
       {
@@ -10565,13 +10572,13 @@
       },
       {
         "slot": 4,
-        "slice": "X-snapshot-claims-nits",
+        "slice": "X-snapshot-followups",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-20T10:12Z",
-        "doing": "#980 ready 719ad4ad; delta review running",
-        "status": "active"
+        "since": "2026-11-20T14:12Z",
+        "doing": "same session; brief briefs/X-snapshot-followups.md (settle mtime bug, monotonic wait, tests, stuck kind)",
+        "status": "running"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
