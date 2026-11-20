@@ -55,3 +55,6 @@ Ask the runner before touching anything else.
 - Added: in `crates/dht/src/node/mod.rs`, one `Stats` field and its `StatsSnapshot` line, beside the `Config` field.
 - Added: `crates/lodestar/src/metrics.rs`, to render `dht_sample_full_seconds_total` (a counter with no labels) and its render test, plus its `docs/metrics.md` row.
 - Restart: on main there is no `persist.rs` and no `tests/restart*.rs`. The proof lives in `node/proof.rs` and `restart.rs` (with `restart/tests.rs`). This slice changes `proof.rs` only and leaves the on-disk format alone. No cooldown may come back shorter after a restart than it does today; the decisions file says how. A format change needs the runner first.
+
+## Hold (runner, 2026-11-20T09:30Z)
+This slice's `owns` overlap CR-LOOKUP-END's (`node/mod.rs`, `node/actor.rs`, `lodestar/src/config.rs`, `crates/dht/tests/**`). The owner's rule is that running slices never overlap, and the runner can't grant an exception. So the PR waits until #977 merges. Then bring `main` in (merge, no rebase), re-run the checks and open the PR. The one-line `sampler_cooldown_split: false` additions in `crates/dht/tests/{harvest,network,scrape}.rs` are approved for that point. The parallel question is owner-queue item 30.
