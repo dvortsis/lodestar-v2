@@ -38,6 +38,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         utp: None,
         shard: None,
         sample_interval_scale: 1,
+        sampler_cooldown_split: false,
     }
 }
 

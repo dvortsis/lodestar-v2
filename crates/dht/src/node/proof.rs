@@ -578,8 +578,18 @@ impl Proof {
             };
             // The gate: a suppressed run passes on its own window; a
             // resumed one carries forward what it inherited (N1).
-            let gate = self.gate_until;
             let now = clock.mono();
+            // X-sampler-cooldown-split: cooldowns in the spill filter can't
+            // be listed, so the next run samples no one until the last of
+            // them ends, bounded like the listed ones (WK-10e): never
+            // past `now + H`.
+            let spilled = sampler
+                .spill_end(now)
+                .map(|end| end.min(now + self.horizon));
+            let gate = match (self.gate_until, spilled) {
+                (Some(g), Some(s)) => Some(g.max(s)),
+                (g, s) => g.or(s),
+            };
             let snapshot = restart::capture_now(
                 clock.as_ref(),
                 run,

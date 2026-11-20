@@ -216,6 +216,12 @@ pub struct Dht {
     /// cached UDP-connect probe). Off by default
     /// (docs/decisions/2026-11-02-CR-4.md); not in the Settings UI.
     pub route_backoff: bool,
+    /// X-sampler-cooldown-split: a full BEP 51 sampler table moves its
+    /// soonest-ending cooldowns into a bounded filter instead of stopping
+    /// admission. Off by default
+    /// (docs/decisions/2026-11-20-X-sampler-cooldown-split.md); not in the
+    /// Settings UI.
+    pub sampler_cooldown_split: bool,
 }
 
 impl Default for Dht {
@@ -239,6 +245,7 @@ impl Default for Dht {
             target_prefixes: false,
             utp: false,
             route_backoff: false,
+            sampler_cooldown_split: false,
         }
     }
 }
@@ -815,6 +822,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_TARGET_PREFIXES", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT") {
+            config.dht.sampler_cooldown_split = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_UTP") {
             config.dht.utp = v.parse().map_err(|_| parse("LODESTAR_DHT_UTP", &v))?;
         }
@@ -885,6 +897,7 @@ impl Config {
             responder_hints: self.dht.responder_hints,
             lookup_end: self.dht.lookup_end,
             target_prefixes: self.dht.target_prefixes,
+            sampler_cooldown_split: self.dht.sampler_cooldown_split,
             ..dht::Config::default()
         }
     }
@@ -1439,6 +1452,30 @@ mod tests {
         std::fs::write(&path, "[dht]\ntarget_prefixes = 1\n").unwrap();
         assert!(Config::load(Some(&path), no_env).is_err());
         let bad = |k: &str| (k == "LODESTAR_DHT_TARGET_PREFIXES").then(|| "on".to_string());
+        assert!(Config::load(None, bad).is_err());
+    }
+
+    #[test]
+    fn sampler_cooldown_split_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.sampler_cooldown_split);
+        assert!(!c.dht_config().sampler_cooldown_split);
+        let env =
+            |k: &str| (k == "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT").then(|| "true".to_string());
+        assert!(
+            Config::load(None, env)
+                .unwrap()
+                .dht_config()
+                .sampler_cooldown_split
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nsampler_cooldown_split = true\n").unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert!(c.dht_config().sampler_cooldown_split);
+        std::fs::write(&path, "[dht]\nsampler_cooldown_split = 1\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        let bad = |k: &str| (k == "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT").then(|| "on".to_string());
         assert!(Config::load(None, bad).is_err());
     }
 

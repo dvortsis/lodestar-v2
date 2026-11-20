@@ -653,6 +653,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Sample work deferred by state capacity.",
             d.sample_deferred,
         );
+        render_sampler_full(&mut o, d);
         o.one(
             "dht_lookups_completed_total",
             "counter",
@@ -1511,6 +1512,24 @@ fn render_target_prefixes(o: &mut Out, d: &StatsSnapshot) {
         "counter",
         "BEP 51 sample_infohashes queries sent.",
         d.samples_sent,
+    );
+}
+
+/// X-sampler-cooldown-split's sampler-full time and filter occupancy
+/// (docs/metrics.md),
+/// exported with the switch on or off so both arms of an A/B have it.
+fn render_sampler_full(o: &mut Out, d: &StatsSnapshot) {
+    o.one(
+        "dht_sample_full_seconds_total",
+        "counter",
+        "Seconds the BEP 51 sampler could not admit a node while sampling was allowed.",
+        d.sample_full_seconds,
+    );
+    o.one(
+        "dht_sample_spill_slots",
+        "gauge",
+        "Spill filter slots in use (dht.sampler_cooldown_split), of 8388608.",
+        d.sample_spill_slots,
     );
 }
 
@@ -2376,6 +2395,38 @@ mod tests {
         }
         // Not duplicated: the have-filter and hot columns render elsewhere.
         assert!(!out.contains("have_bytes") && !out.contains("hot_columns"));
+    }
+
+    /// X-sampler-cooldown-split: the counter and gauge render their values
+    /// and have their rows in docs/metrics.md.
+    #[test]
+    fn sampler_full_seconds_renders_and_is_documented() {
+        let d = StatsSnapshot {
+            sample_full_seconds: 4321,
+            sample_spill_slots: 77,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_sampler_full(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_sample_full_seconds_total counter",
+            "lodestar_dht_sample_full_seconds_total 4321",
+            "# TYPE lodestar_dht_sample_spill_slots gauge",
+            "lodestar_dht_sample_spill_slots 77",
+        ] {
+            assert!(
+                o.0.lines().any(|l| l == line),
+                "missing {line:?} in\n{}",
+                o.0
+            );
+        }
+        let doc = include_str!("../../../docs/metrics.md");
+        for family in ["dht_sample_full_seconds_total", "dht_sample_spill_slots"] {
+            assert!(
+                doc.lines().any(|l| l.starts_with(&format!("| `{family}`"))),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
     }
 
     #[test]

@@ -196,6 +196,11 @@ pub struct Config {
     /// together sample it no faster than one install. 1 (the default) is
     /// a single install; 0 reads as 1.
     pub sample_interval_scale: u8,
+    /// X-sampler-cooldown-split (`dht.sampler_cooldown_split`): a full
+    /// sampler table moves the cooldowns that end soonest into a bounded
+    /// filter instead of stopping admission. Off keeps today's table and
+    /// allocates no filter.
+    pub sampler_cooldown_split: bool,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -267,6 +272,7 @@ impl Default for Config {
             utp: None,
             shard: None,
             sample_interval_scale: 1,
+            sampler_cooldown_split: false,
         }
     }
 }
@@ -355,6 +361,12 @@ pub struct Stats {
     pub restart_persist_errors: [AtomicU64; PersistStep::ALL.len()],
     /// Sampling ticks/admissions deferred by capacity.
     pub sample_deferred: AtomicU64,
+    /// Seconds the sampler couldn't admit anyone while sampling was
+    /// allowed (X-sampler-cooldown-split). Stored, but only ever rises.
+    pub sample_full_seconds: AtomicU64,
+    /// Gauge: spill filter slots in use (X-sampler-cooldown-split), out of
+    /// 8,388,608; past 15/16 the sampler falls back to its table alone.
+    pub sample_spill_slots: AtomicU64,
     /// BEP 33 scrapes asked for, answered, and refused because the queue
     /// was full.
     pub scrapes_requested: AtomicU64,
@@ -476,6 +488,8 @@ impl Stats {
             restart_obligations_honoured: g(&self.restart_obligations_honoured),
             restart_persist_errors: std::array::from_fn(|i| g(&self.restart_persist_errors[i])),
             sample_deferred: g(&self.sample_deferred),
+            sample_full_seconds: g(&self.sample_full_seconds),
+            sample_spill_slots: g(&self.sample_spill_slots),
             scrapes_requested: g(&self.scrapes_requested),
             scrapes_completed: g(&self.scrapes_completed),
             scrapes_dropped: g(&self.scrapes_dropped),
@@ -794,6 +808,8 @@ pub struct StatsSnapshot {
     /// By [`PersistStep::ALL`].
     pub restart_persist_errors: [u64; 6],
     pub sample_deferred: u64,
+    pub sample_full_seconds: u64,
+    pub sample_spill_slots: u64,
     pub scrapes_requested: u64,
     pub scrapes_completed: u64,
     pub scrapes_dropped: u64,
