@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<anime id="9001" restricted="false">
+  <type>TV Series</type>
+  <episodecount>12</episodecount>
+  <startdate>2004-04-01</startdate>
+  <enddate>2004-06-24</enddate>
+  <titles>
+    <title xml:lang="x-jat" type="main">Hoshi no Kakera</title>
+    <title xml:lang="en" type="official">Star Fragments</title>
+    <title xml:lang="ja" type="official">星のかけら</title>
+    <title xml:lang="en" type="syn">Fragments of Stars</title>
+    <title xml:lang="en" type="short">HnK</title>
+  </titles>
+  <creators>
+    <name id="77" type="Direction">SENTINEL Person Name</name>
+  </creators>
+  <description>SENTINEL description text</description>
+  <tags><tag id="5" weight="600"><name>SENTINEL tag</name></tag></tags>
+  <characters><character id="6" type="main character in"><name>SENTINEL Character</name></character></characters>
+  <episodes>
+    <episode id="8"><epno type="1">1</epno><title xml:lang="en">SENTINEL episode title</title></episode>
+  </episodes>
+</anime>

@@ -1,0 +1,6 @@
+{"data": {"Page": {"pageInfo": {"total": 4}, "media": [
+  {"id": 900011, "format": "TV", "isAdult": false, "countryOfOrigin": "JP", "seasonYear": 2023, "startDate": {"year": 2023}, "title": {"romaji": "Sousou no Frieren", "english": "Frieren: Beyond Journey's End", "native": "葬送のフリーレン"}, "synonyms": ["Frieren"]},
+  {"id": 900012, "format": "TV", "isAdult": false, "countryOfOrigin": "JP", "seasonYear": 2026, "startDate": {"year": 2026}, "title": {"romaji": "Sousou no Frieren 2nd Season", "english": null, "native": null}, "synonyms": ["Frieren"]},
+  {"id": 900013, "format": "ONA", "isAdult": false, "countryOfOrigin": "JP", "seasonYear": 2023, "startDate": {"year": 2023}, "title": {"romaji": "Sousou no Frieren: Marumaru no Mahou", "english": null, "native": null}, "synonyms": ["Frieren"]},
+  {"id": 900014, "format": "MUSIC", "isAdult": false, "countryOfOrigin": "JP", "seasonYear": 2023, "startDate": {"year": 2023}, "title": {"romaji": "Frieren", "english": null, "native": null}, "synonyms": []}
+]}}}

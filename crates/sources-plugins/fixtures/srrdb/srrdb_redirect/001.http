@@ -1,0 +1,5 @@
+GET https://api.srrdb.com/v1/search/harbour/lights/2004
+Accept: application/json
+
+HTTP 302
+Location: https://elsewhere.example/v1/search

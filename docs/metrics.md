@@ -777,6 +777,36 @@ These series count only with `dht.streaming_peers` on ([the decision](decisions/
 
 **"First fetch ms" isn't one measurement in both arms.** With `dht.streaming_peers` off, these series stay 0, so the CR-1a-S screen uses the mean lookup run time instead (`dht_peer_lookup_seconds_total` over `dht_peer_lookups_answered_total`), because peers arrive only when the lookup ends. That covers every answered lookup, including ones with no peers, and stops at the answer, not at a fetch. With it on, the screen adds the mean time to the first batch to the pool's mean wait from that batch to a fetch start, so it counts only requests that sent a batch and keys that then started a fetch. Compare the two arms only with that caveat: an off-to-on change is a rough guide, not a like-for-like speed-up.
 
+## Lookup ledger (CR-LEDGER, 2026-11-20)
+
+These series measure lookup cost directly, instead of deriving it from other counters ([the decision](decisions/2026-11-20-CR-LEDGER.md), `docs/build-plan.md` §0.5). They always count; no switch turns them on, and they change no packet, timer or decision. A **peer request** is one slot: an owned request (final or streaming), or a harvest-only one, with all of its address-family legs. It starts when it leaves the queue and runs (the same start as `dht_peer_lookup_seconds_total`), and it ends once. An admitted request waits in the queue for the next maintenance tick (up to 1 s, longer while lookups are parked for the bootstrap), holding its slot; that wait isn't residence. Queued requests that never start (`dht_peer_queued_dropped_total`) aren't in the ledger. Every label is a fixed set. No series has an infohash, endpoint, port or node-id label.
+
+| Series | Type | Labels | Meaning |
+|---|---|---|---|
+| `dht_lookup_ended_total{reason}` | counter | `reason`: `values`, `no_values`, `deadline`, `query_cap`, `cancelled`, `shutdown` | Peer requests that ended, one count each. Precedence: `cancelled` (the caller dropped its receiver), then `deadline` (the 25 s request deadline), then `query_cap` (a leg spent the request's 64-query budget before its closest set had answered), then `values` or `no_values` (every leg converged on its closest set or ran out of candidates, with or without values). `shutdown` means the request was still running when the actor stopped. |
+| `dht_lookup_residence_seconds_total{reason}` | counter | as above | Slot residence of those requests, start to end, by the same reason. |
+| `dht_queries_sent_total{purpose}` | counter | `purpose`: `peer_lookup`, `hint`, `scrape`, `bootstrap`, `refresh`, `explore`, `sample`, `ping` | DHT queries sent, by what they were for. `peer_lookup` is a peer request's ordinary routing `get_peers`. `hint` is a responder hint's direct `get_peers`. `scrape` is a BEP 33 lookup. `bootstrap` is the self-lookup, routers included. `refresh` is stale-bucket and join refresh `find_node`. `explore` is the sampler's exploration `find_node`. `sample` is `sample_infohashes`. `ping` covers table pings and querier verification. The actor never sends `announce_peer`. The purposes sum to `dht_queries_out_total`. |
+| `dht_lookup_first_values_seconds` | histogram | `le`: 0.5, 1, 2, 4, 8, 12, 16, 20, 25, `+Inf` | Seconds from a request's start to its first reply with values, observed when the request ends. Only requests that got values are counted (`_count`). |
+| `dht_lookup_without_values_total` | counter | — | Ended requests that never got a reply with values. |
+| `dht_lookup_values` | histogram | `le`: 0, 1, 2, 4, 8, 16, 32, 64, `+Inf` | Distinct peer values each ended request found across its legs. At most 64, as many as a final reply holds. |
+| `dht_hint_outcomes_total{outcome}` | counter | `outcome`: `values`, `no_values`, `unanswered`, `guard_skipped` | What each responder hint (CR-1a-H) came to. `values` and `no_values` mean the hinted `get_peers` was answered (an error reply counts as `no_values`). `unanswered` means it timed out, or its request ended first. `guard_skipped` means it wasn't sent because the per-IP guard refused it; that's also in `dht_hint_fallbacks_total` as `throttled` or `guard_full`. Stays 0 with `dht.responder_hints` off. |
+| `dht_lookup_slots_occupied` | gauge | — | Occupied lookup slots: peer requests running now, each holding one slot. Never counts requests waiting in the queue (those are `dht_lookup_queued`). Set on each maintenance tick; equals `dht_peer_active`. |
+| `dht_lookup_queued` | gauge | — | Admitted peer requests waiting in the queue to start, as of the last maintenance tick. Equals `dht_peer_queued`. Running plus queued stays at most 32. |
+| `dht_lookup_slots_capacity` | gauge | — | The slots: 32, set at start. |
+
+**Identities.** Over any window:
+- the sum of `dht_lookup_ended_total` = `dht_lookup_first_values_seconds_count` + `dht_lookup_without_values_total` = `dht_lookup_values_count`;
+- the sum of `dht_queries_sent_total` = `dht_queries_out_total`;
+- `dht_hint_outcomes_total` for `values`, `no_values` and `unanswered` together = `dht_hint_queries_total`, once every hinted query has resolved.
+
+**Reading CR-0's figures from the ledger.** Take rates over the same window, leaving `reason="shutdown"` out of every sum (it's recorded as the process stops, so it rarely reaches a scrape anyway), with `ended` = the sum of `rate(dht_lookup_ended_total)`:
+- **`W`** (seconds a lookup runs) = the sum of `rate(dht_lookup_residence_seconds_total)` ÷ `ended`. A slot is held for `W` plus the queue wait (up to one tick). Read it per `reason` too: a `W` held up by `deadline` and `query_cap` is a lookup that doesn't converge.
+- **`q`** (queries per lookup) = `rate(dht_queries_sent_total{purpose=~"peer_lookup|hint"})` ÷ `ended`. A harvest-only request spends `peer_lookup` queries too, but none runs in production.
+- **`y`** (stored per lookup) = `rate(metadata_new_verified_total)`, summed over origins, ÷ `ended`. Stored torrents from other sources count in the numerator too, so compare `y` only between arms with the same sources.
+- **`L`** (running lookups, on average) = the sum of `rate(dht_lookup_residence_seconds_total)`, by Little's law, over windows much longer than the 25 s deadline (residence is counted when a request ends). It doesn't depend on when a tick lands, while `dht_lookup_slots_occupied` is sampled once a tick. Compare both with `dht_lookup_slots_capacity`.
+
+`dht_peer_lookup_seconds_total` and `dht_peer_lookups_answered_total` are unchanged. They cover only requests answered to a waiting caller, so they're not the ledger's `ended`.
+
 ## Target prefixes (CR-1b, 2026-11-01)
 
 With `dht.target_prefixes` on ([the decision](decisions/2026-11-01-CR-1b.md)), each BEP 51 `sample_infohashes` target and each exploration `find_node` target (the lookup the sampler starts when its frontier runs low) takes the next of 256 eight-bit prefixes, with a random suffix, from a cursor per address family and kind. A pass visits each prefix once, in bit-reversed order (0, 128, 64, 192, …). With it off, every target is drawn at random as before. A target steers which routing contacts come back, not which hashes are sampled. No series has an infohash, endpoint or prefix label.

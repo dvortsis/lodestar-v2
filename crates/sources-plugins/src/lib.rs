@@ -20,18 +20,25 @@ use lodestar_sources::consent::SourceCredentials;
 use lodestar_sources::egress::CredentialError;
 
 pub mod academic;
+pub mod anidb;
+pub mod anilist;
 pub mod archive_org;
 pub mod arr;
 pub mod catalogue;
 pub mod clients;
+pub mod discogs;
 pub mod full_scrape;
+pub mod igdb;
 pub mod musicbrainz;
 pub mod nyaa;
 pub mod openlibrary;
+pub mod predb;
 pub mod prowlarr;
+pub mod srrdb;
 pub mod stashdb;
 pub mod torrent_cache;
 pub mod tpdb;
+pub mod tvdb;
 pub mod wikidata;
 
 /// Where a plugin reads its stored credentials (SRC-4's per-source
