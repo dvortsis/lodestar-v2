@@ -34,3 +34,22 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
 - **`a_taken_probe_name_is_skipped`:** a file already holding the first probe name is left untouched, and the check passes.
 - **The write test also checks** that an existing folder that passes keeps no probe.
 - **Every new message** is covered by the existing note test, which now includes `Unwritable`.
+
+## The runner's review (#985 at 428a77ee)
+The runner decided these fixes go in this PR.
+- **Only a denied write is a permission problem.** The probe reports `Problem::Unwritable` only for a permission error. Any other error, such as a full or write-protected drive, is a new `Problem::WriteFailed`, still under Event Log ID 6.
+  - The note says the folder "can't be written to" and gives no permission fix.
+  - It says to check the drive, and that the temp log names the system's error.
+  - Before, these errors sent the administrator to permissions for nothing. The guide has a row for it.
+- **A test now proves the probe runs after the ACL step.** The service's own folder is write-denied, and the ACL step stub lifts the deny. The start passes, and the earlier refusal shows the step ran first. Probing before that step fails the test (checked by changing the code).
+- **§6.2 reads in order:**
+  - IDs 5 and 6 come after the ID 3 steps, under "Other refusals". They name the temp log and the command that reads it.
+  - The custom-folder steps warn that the `icacls` command removes every other account's access, and should be used only on a folder that holds only Lodestar's data.
+  - Going back to the default folder says the library stays behind, and points to backup and restore (§3.7) to move it.
+- **The optionals:**
+  - the `denied` test helper's doc now says what it returns;
+  - the guide says how to remove an extra allow entry or any `(DENY)` entry;
+  - it says to choose Cancel, not Continue, in File Explorer's permission prompt;
+  - it mentions Controlled folder access;
+  - for the default folder, it says to remove a `(DENY)` entry before running Repair again.
+- **Checked against the installer:** the installer's own script refuses any Deny entry. So the guide tells the reader to look for one in `icacls` output, which they can check, rather than quoting a Repair message.

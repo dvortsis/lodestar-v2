@@ -412,8 +412,11 @@ pub enum Problem {
     File,
     /// The service's account can't list it.
     Unreadable,
-    /// The service's account can list it but not create a file in it.
+    /// The service's account can list it but may not create a file in it.
     Unwritable,
+    /// Creating a file in it failed for another reason, such as a full or
+    /// write-protected drive: no permission fix.
+    WriteFailed,
     /// It's missing and can't be made: a file or a missing drive is in the
     /// way, or creating it failed.
     Uncreatable,
@@ -425,6 +428,7 @@ impl Problem {
             Problem::File => "is a file, not a folder",
             Problem::Unreadable => "can't be read by the service account",
             Problem::Unwritable => "can't be written to by the service account",
+            Problem::WriteFailed => "can't be written to",
             Problem::Uncreatable => "can't be created",
         }
     }
@@ -433,6 +437,9 @@ impl Problem {
 /// The fix for an unusable data folder, in plain words, after "an
 /// administrator should".
 fn unusable_fix(setting: Setting, problem: Problem) -> String {
+    // Not a permission: the drive, whichever setting chose it.
+    const DRIVE: &str = "check its drive, which may be full or write-protected; the temp log \
+                         names the system's error";
     let name = match setting {
         Setting::Default => {
             return match problem {
@@ -441,6 +448,7 @@ fn unusable_fix(setting: Setting, problem: Problem) -> String {
                      the folder"
                 }
                 Problem::Unreadable | Problem::Unwritable => "run the Lodestar installer's Repair",
+                Problem::WriteFailed => DRIVE,
                 Problem::Uncreatable => {
                     "make sure %ProgramData% is a folder on a working drive, then run the \
                      Lodestar installer's Repair"
@@ -457,6 +465,7 @@ fn unusable_fix(setting: Setting, problem: Problem) -> String {
             "give the Lodestar service full control of that folder, or set {name} to a folder \
              it can use"
         ),
+        Problem::WriteFailed => DRIVE.to_owned(),
         Problem::Unwritable => format!(
             "give the Lodestar service permission to change files in that folder, or set {name} \
              to a folder it can write to"
@@ -584,10 +593,13 @@ fn probe_write(dir: &Path, stamp: u128) -> Option<(Problem, String)> {
                 return None;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
-            Err(e) => return Some((Problem::Unwritable, e.to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Some((Problem::Unwritable, e.to_string()));
+            }
+            Err(e) => return Some((Problem::WriteFailed, e.to_string())),
         }
     }
-    last.map(|e| (Problem::Unwritable, e.to_string()))
+    last.map(|e| (Problem::WriteFailed, e.to_string()))
 }
 
 /// A link, junction or any other reparse point.
@@ -2258,8 +2270,8 @@ mod tests {
         );
     }
 
-    /// Whether this process can list `dir`, or with `write`, create a file
-    /// in it.
+    /// Whether this process is denied listing `dir`, or with `write`,
+    /// creating a file in it.
     fn denied(dir: &Path, write: bool) -> bool {
         if !write {
             return std::fs::read_dir(dir).is_err();
@@ -2380,13 +2392,38 @@ mod tests {
         assert!(env.contains("folder it can write to"), "{env}");
         let _svc_locked = Locked(&svc);
         assert!(deny_access(&svc, true, true));
+        let secured = std::cell::Cell::new(false);
         let default = unusable_as(
-            load_checked(&svc, None, |_| None, || Ok(())),
+            load_checked(
+                &svc,
+                None,
+                |_| None,
+                || {
+                    secured.set(true);
+                    Ok(())
+                },
+            ),
             Setting::Default,
             Problem::Unwritable,
             &svc,
         );
+        assert!(secured.get(), "refused before the ACL step");
         assert!(default.contains("Repair"), "{default}");
+        // The ACL step making it writable lets the start through, so nothing
+        // was written to it before that step.
+        let (c, _) = load_checked(
+            &svc,
+            None,
+            |_| None,
+            || {
+                deny_access(&svc, true, false)
+                    .then_some(())
+                    .ok_or_else(|| "not lifted".to_owned())
+            },
+        )
+        .unwrap();
+        assert!(c.is_ok());
+        assert!(deny_access(&svc, true, true));
         assert!(deny_access(&locked, true, false) && deny_access(&svc, true, false));
         // An existing folder that passes keeps no probe either.
         let before = std::fs::read_dir(&svc).unwrap().count();
@@ -2443,6 +2480,7 @@ mod tests {
                 Problem::File,
                 Problem::Unreadable,
                 Problem::Unwritable,
+                Problem::WriteFailed,
                 Problem::Uncreatable,
             ] {
                 let refusal = Refusal::Unusable(setting, problem);

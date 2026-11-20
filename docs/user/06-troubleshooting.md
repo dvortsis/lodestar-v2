@@ -33,32 +33,6 @@ At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is pri
 
 It names the data folder and says to run the installer's **Repair** as an administrator. It holds only the folder's path and that fix, so anyone who can open Event Viewer can read it. The exact reason is still in the file below.
 
-**(Newer than v0.5.1)** Event ID **5** means a path setting isn't a full path. It's one of `LODESTAR_DATA_DIR`, `LODESTAR_DHT_WITNESS_DIR`, `--config` or `%ProgramData%`. In the config file, it's `data_dir`, `restart_witness_dir` or a `blocklist` file. A full path starts with a drive letter, a colon and a backslash, such as `D:\Lodestar`. The file below names the setting. Set it to a full path or remove it, then run `Start-Service Lodestar`.
-
-In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lodestar"`. `"D:\Lodestar"` in double quotes is an error.
-
-**(Newer than v0.5.1)** Event ID **6** means the service can't use its data folder. The note names the folder and the setting that chose it: `LODESTAR_DATA_DIR`, `data_dir` in the config file, or the default, `C:\ProgramData\Lodestar`. It also says which of four problems it found:
-
-| The note says the folder | What to do |
-|---|---|
-| is a file, not a folder | Move or rename that file. For the default folder, the service then creates the folder at its next start. |
-| can't be read by the service account | For the default folder, run the installer's **Repair**. For your own folder, see below. |
-| can't be written to by the service account | The same as for "can't be read". |
-| can't be created | A file is in the way, or the drive doesn't exist. The file below names the file in the way; move it away. For the default folder, don't create the folder yourself: make sure `C:\ProgramData` is a folder, then run **Repair**. For your own folder, create it, then see below. |
-
-**Recommended:** use the default folder. The service keeps it private. To go back to it, remove `LODESTAR_DATA_DIR` or `data_dir`, then run `Start-Service Lodestar`.
-
-If you keep your own folder, such as `D:\Lodestar`, make it private to the **service account**, `NT SERVICE\Lodestar`, the account Windows runs Lodestar's service as. A new folder shares the permissions of the drive it's on, which usually let every user read it. In an [elevated PowerShell](glossary.md#elevated-powershell), run:
-
-```powershell
-icacls "D:\Lodestar" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "NT SERVICE\Lodestar:(OI)(CI)F"
-```
-
-**Result:** `icacls "D:\Lodestar"` lists only `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators` and `NT SERVICE\Lodestar`. If it also shows a `(DENY)` entry for `NT SERVICE\Lodestar`, remove it with `icacls "D:\Lodestar" /remove:d "NT SERVICE\Lodestar"`. Then run `Start-Service Lodestar`. To undo the change, run `icacls "D:\Lodestar" /inheritance:e`.
-
-> [!WARNING]
-> Never give **Everyone** or **Users** access to the data folder: it holds your library, your password and your keys. Instead, give access to `NT SERVICE\Lodestar` only, with the command above.
-
 Windows doesn't know why. Lodestar writes the reason to `C:\Windows\Temp\lodestar-service.log`, which only administrators can read. It names the folder and the extra account. When the one problem is a single extra user account, it also gives the exact command that removes it.
 
 > [!WARNING]
@@ -112,6 +86,43 @@ To fix it:
    **Result:** `Status` shows `Running`, and the web page loads. If it shows `Stopped`, the check refused again: repeat step 1 and read the new reason.
 
 If the account isn't yours, or Repair stopped with another message, someone else may have put files in the folder. Then, as an administrator, move everything in it to a safe place and check it. Delete the folder and run Repair, which creates it again. If you aren't sure, ask for help first ([section 6.3](#63-get-help)).
+
+**Other refusals: event IDs 5 and 6.** These stop the service with the same error 3. The temp log, `C:\Windows\Temp\lodestar-service.log`, gives the exact reason. To read it, open an [elevated PowerShell](glossary.md#elevated-powershell), as in step 1 above, and run:
+
+```powershell
+Get-Content "C:\Windows\Temp\lodestar-service.log" -Tail 20
+```
+
+**(Newer than v0.5.1)** Event ID **5** means a path setting isn't a full path. It's one of `LODESTAR_DATA_DIR`, `LODESTAR_DHT_WITNESS_DIR`, `--config` or `%ProgramData%`. In the config file, it's `data_dir`, `restart_witness_dir` or a `blocklist` file. A full path starts with a drive letter, a colon and a backslash, such as `D:\Lodestar`. The temp log names the setting. Set it to a full path or remove it, then run `Start-Service Lodestar`.
+
+In `config.toml`, write the path as `'D:\Lodestar'` (single quotes) or `"D:/Lodestar"`. `"D:\Lodestar"` in double quotes is an error.
+
+**(Newer than v0.5.1)** Event ID **6** means the service can't use its data folder. The note names the folder and the setting that chose it: `LODESTAR_DATA_DIR`, `data_dir` in the config file, or the default, `C:\ProgramData\Lodestar`. It also says what it found:
+
+| The note says the folder | What to do |
+|---|---|
+| is a file, not a folder | Move or rename that file. For the default folder, the service then creates the folder at its next start. |
+| can't be read by the service account | For the default folder, run the installer's **Repair**. For your own folder, see below. Windows Security's **Controlled folder access** can also block it: allow `lodestar.exe` there, or use a folder it doesn't protect. |
+| can't be written to by the service account | For the default folder, run **Repair**. If Repair stops and `icacls "C:\ProgramData\Lodestar"` shows a `(DENY)` entry, remove it with `icacls "C:\ProgramData\Lodestar" /remove:d "<account>"`, using the account it shows, then run **Repair** again. For your own folder, see below. |
+| can't be written to | The drive may be full or write-protected. The temp log names Windows' error. Free some space or make the drive writable, or set the setting to a folder on another drive. |
+| can't be created | A file is in the way, or the drive doesn't exist. The temp log names the file in the way; move it away. For the default folder, don't create the folder yourself: make sure `C:\ProgramData` is a folder, then run **Repair**. For your own folder, create it, then see below. |
+
+**Recommended:** use the default folder. The service keeps it private. To go back to it, remove `LODESTAR_DATA_DIR` or `data_dir`, then run `Start-Service Lodestar`. Your library stays in the old folder, and the default folder starts empty. To bring the library with you, back it up first and restore it into the default folder ([section 3.7](03-keep-lodestar-safe.md#37-back-up-and-restore)).
+
+If you keep your own folder, such as `D:\Lodestar`, make it private to the **service account**, `NT SERVICE\Lodestar`, the account Windows runs Lodestar's service as. A new folder shares the permissions of the drive it's on, which usually let every user read it.
+
+> [!WARNING]
+> The command below removes every other account's access to the folder and to everything in it. Use it only on a folder that holds nothing but Lodestar's data. Never give **Everyone** or **Users** access to the folder instead: it holds your library, your password and your keys. Give access to `NT SERVICE\Lodestar` only, as below.
+
+In an [elevated PowerShell](glossary.md#elevated-powershell), run:
+
+```powershell
+icacls "D:\Lodestar" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "NT SERVICE\Lodestar:(OI)(CI)F"
+```
+
+**Result:** `icacls "D:\Lodestar"` lists only `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators` and `NT SERVICE\Lodestar`. If it lists another account, remove that entry: `icacls "D:\Lodestar" /remove:g "<account>"` for an allow entry, or `/remove:d "<account>"` for a `(DENY)` entry, including one for **Everyone**. Then run `Start-Service Lodestar`. To undo the change, run `icacls "D:\Lodestar" /inheritance:e`.
+
+If File Explorer later says you don't have permission to open the folder, select **Cancel**, not **Continue**: **Continue** adds your own account to the folder.
 
 ## 6.3 Get help
 
