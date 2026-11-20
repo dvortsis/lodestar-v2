@@ -32,6 +32,7 @@ queries_sent_total{purpose=peer_lookup|hint}/admitted=24.6  (q: get_peers at the
 queries_out_total/admitted=58.3  (q_all)
 stored/admitted=0.158  (y: what reached the writer)
 fetches/admitted=3.92  (peers tried)
+peers_found/admitted=0.569  (lookups that found peers)
 stored/min=12.44
 queries_out_total/s=76.5
 outstanding=151.0  (mean, each second)

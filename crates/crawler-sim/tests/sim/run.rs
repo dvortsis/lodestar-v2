@@ -80,6 +80,9 @@ pub struct Ledger {
     pub y: f64,
     /// Fetch attempts (peers tried) per admitted lookup.
     pub fetches: f64,
+    /// Keys whose peers were found (funnel `PeerFound`) per admitted
+    /// lookup: about the share of lookups that return peers.
+    pub found: f64,
     pub stored_per_min: f64,
     pub queries_per_s: f64,
     /// Mean queries awaiting an answer (each second); over `queries_per_s`
@@ -616,7 +619,9 @@ pub fn steady(minutes: &[Minute], f: fn(&Minute) -> u64) -> f64 {
     steady.iter().map(f).sum::<u64>() as f64 / steady.len().max(1) as f64
 }
 
-/// The ledger over the minutes after warmup.
+/// The ledger over the minutes after warmup. A restart's leg 2 starts its
+/// deltas from zero while the network's edge counters keep leg 1's, so its
+/// first minute overcounts `get_peers`; warmup leaves it out.
 pub fn ledger(minutes: &[Minute]) -> Ledger {
     let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
     let sum = |f: fn(&Minute) -> u64| steady.iter().map(f).sum::<u64>() as f64;
@@ -628,12 +633,13 @@ pub fn ledger(minutes: &[Minute]) -> Ledger {
     Ledger {
         slots,
         admitted_per_s,
-        w: slots / admitted_per_s.max(f64::MIN_POSITIVE),
+        w: slots * secs / admitted,
         w_residence: sum(|m| m.lookup_millis) / 1000.0 / sum(|m| m.answered).max(1.0),
         q: sum(|m| m.get_peers) / admitted,
         q_all: queries / admitted,
         y: sum(|m| m.stored) / admitted,
         fetches: sum(|m| m.fetch_started) / admitted,
+        found: sum(|m| m.peers_found) / admitted,
         stored_per_min: sum(|m| m.stored) * 60.0 / secs,
         queries_per_s: queries / secs,
         outstanding: sum(|m| m.outstanding.sum) / secs,
@@ -685,6 +691,11 @@ pub fn write_ledger(t: &mut String, l: &Ledger) {
             "fetches/admitted",
             format!("{:.2}", l.fetches),
             "peers tried",
+        ),
+        (
+            "peers_found/admitted",
+            format!("{:.3}", l.found),
+            "lookups that found peers",
         ),
         ("stored/min", format!("{:.2}", l.stored_per_min), ""),
         ("queries_out_total/s", format!("{:.1}", l.queries_per_s), ""),
@@ -1023,4 +1034,37 @@ pub fn write_net(t: &mut String, n: &NetStats, glue_dropped: u64, queued_at_end:
         t,
         "discoveries_dropped={glue_dropped} pool_queue_at_end={queued_at_end}"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ledger leaves warmup out and reads `W` by Little's law.
+    #[test]
+    fn ledger_skips_warmup_and_applies_littles_law() {
+        let minute = |admitted: u64, active: u64| Minute {
+            admitted,
+            stored: admitted / 6,
+            get_peers: admitted * 25,
+            queries_out: admitted * 60,
+            timeouts: admitted * 20,
+            dht_active: Gauge {
+                sum: active * 60,
+                max: active,
+            },
+            ..Minute::default()
+        };
+        let mut minutes: Vec<Minute> = (0..WARMUP_MINUTES).map(|_| minute(1_000, 1)).collect();
+        minutes.extend((0..2).map(|_| minute(78, 30)));
+        let l = ledger(&minutes);
+        assert_eq!(l.slots, 30.0);
+        assert!((l.admitted_per_s - 1.3).abs() < 1e-9);
+        assert!((l.w - 30.0 / 1.3).abs() < 1e-9);
+        assert_eq!((l.q, l.q_all, l.y), (25.0, 60.0, 13.0 / 78.0));
+        assert!((l.unanswered - 1.0 / 3.0).abs() < 1e-9);
+        // Nothing admitted: finite, not NaN.
+        let none = ledger(&(0..5).map(|_| minute(0, 0)).collect::<Vec<_>>());
+        assert!(none.w.is_finite() && none.q.is_finite());
+    }
 }

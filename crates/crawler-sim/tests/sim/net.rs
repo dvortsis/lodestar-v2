@@ -88,8 +88,6 @@ pub struct NetStats {
 pub struct Edge {
     /// `get_peers` queries received: the lookups' share of the traffic.
     pub get_peers: AtomicU64,
-    /// Queries to an address no node has: a stale contact, never answered.
-    pub to_stale: AtomicU64,
 }
 
 /// One `sample_infohashes` the node sent (CR-SIM-restart's record).
@@ -338,7 +336,6 @@ impl Net {
             matches!(query.method, Method::SampleInfohashes { .. }).then(|| self.asks.len() - 1);
         let Some(&i) = self.by_addr.get(&to) else {
             self.stats.to_unknown += 1;
-            self.edge.to_stale.fetch_add(1, Ordering::Relaxed);
             return;
         };
         if !self.nodes[i].alive {
@@ -653,6 +650,29 @@ mod tests {
         assert!(n.heap.is_empty());
         let replies: Vec<bool> = n.asks.iter().map(|a| a.reply.is_some()).collect();
         assert_eq!(replies, [true, false, false]);
+    }
+
+    /// Stale contacts are off by default, listed only near the target,
+    /// fixed per node, beside it in id space and never a live address.
+    #[tokio::test]
+    async fn stale_contacts_sit_beside_near_picks_only() {
+        let mut n = net();
+        let target = [0x5a; 20];
+        let pos = n.rank(&target);
+        let near = pos.min(n.nodes.len() - 1);
+        let far = (pos + n.nodes.len() / 2) % n.nodes.len();
+        assert_eq!(n.closer(&target, near).len(), K, "off: the K picks only");
+        n.cfg.stale_permille = 1_750;
+        let reply = n.closer(&target, near);
+        assert!(reply.len() > K, "near replies list stale contacts");
+        assert_eq!(reply, n.closer(&target, near), "fixed per node");
+        let picks = &reply[..K];
+        for s in &reply[K..] {
+            assert!(!n.by_addr.contains_key(&s.addr), "never a live address");
+            assert!(picks.iter().any(|p| p.id.0[..8] == s.id.0[..8]));
+        }
+        assert!(far.abs_diff(pos) > WINDOW);
+        assert_eq!(n.closer(&target, far).len(), K, "far replies list none");
     }
 
     /// Samples rotate through what a node holds once per interval, and

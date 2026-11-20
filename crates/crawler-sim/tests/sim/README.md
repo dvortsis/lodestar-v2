@@ -121,9 +121,11 @@ on it, off against on, before it takes host time (build-plan §0.5).
 - **Stale contacts** (`NetConfig::stale_permille`, 1,750‰): about 1.75
   addresses beside every node in id space that never answer. Replies
   from inside a target's neighbourhood list them next to the nodes they
-  list, so a lookup's closest set never all answers. It keeps querying
-  until the 25 s deadline, as live.
-  Far hops list none, so the sampler isn't flooded with them.
+  list. Each one in the closest set must time out (4 s, at most 3 in
+  flight) before the lookup can end, and each closer responder lists
+  more, so most lookups run to the 25 s deadline, as live.
+  - Far hops list none, which keeps most of them out of the sampler's frontier.
+  - Some still reach it: in the golden, about 6,000 of 24,572 `sample_infohashes` go to stale contacts.
 - **Keys far outrun the slots:** 70% BEP 51 nodes on 120 s intervals over
   a 200,000-hash catalogue, with the production pool defaults.
 - **Fetch outcomes per attempt as CR-0's:** 4.4% stored, 10.7% refused,
@@ -151,6 +153,7 @@ names.
 | `queries_out_total/admitted` | `q_all` | Every query: CR-0's upper bound on `q` |
 | `stored/admitted` | `y` | What reached the writer |
 | `fetches/admitted` | `fetches` | Peers tried |
+| `peers_found/admitted` | `found` | Keys whose peers were found (funnel `PeerFound`): about the share of lookups that return peers |
 | `outstanding` | `outstanding` | Mean of the `outstanding` gauge. Over `queries_out_total/s` it's the mean time a query is held |
 | `timeouts/queries_out` | `unanswered` | |
 | `lookup_deadlines/completed` | `deadlines_per_completed` | Includes the node's own `find_node` lookups |
@@ -169,8 +172,8 @@ about 20 s.
 | Target (CR-0, 24 h) | Live | Tolerance | 8-seed mean | Seed range |
 |---|---|---|---|---|
 | Queries unanswered | 0.382 | ±0.03 | 0.385 | 0.378–0.391 |
-| `L`, slots occupied | 30.3 | ±1.0 | 30.82 | 30.80–30.85 |
-| `W`, slot residence | 23.6 s | ±1.5 s | 23.11 s | 22.53–23.51 s |
+| `L`, slots occupied | 30.68 | ±1.0 | 30.82 | 30.80–30.85 |
+| `W`, slot residence | 23.86 s | ±1.5 s | 23.11 s | 22.53–23.51 s |
 | Admitted lookups/s | 1.286 | ±0.10 | 1.334 | 1.311–1.369 |
 | `y`, stored per admitted | 0.160 | ±0.04 | 0.164 | 0.149–0.181 |
 | Fetch attempts per admitted | 3.66 | ±0.6 | 3.84 | 3.65–4.18 |
@@ -181,15 +184,17 @@ about 20 s.
 
 The live figures:
 - **From CR-0's counters over the window:** unanswered is `dht_timeouts_total / dht_queries_out_total`; admitted, `y`, fetch attempts and stored per minute come from the same counters.
-- **From the hourly samples:** `L` and outstanding are means of the `dht_peer_active` and `dht_outstanding` gauges.
+- **From the 73 baseline samples in `samples-hourly.jsonl`** (about 20 minutes apart): `L` and outstanding are means of the `dht_peer_active` and `dht_outstanding` gauges. The review's 30.3 and 23.6 s also averaged 3 warmup samples.
 - **Derived:** `W = L / λ`.
 
-The y and stored tolerances are wider: about 150 stores per seed carry
-about 8% Poisson noise.
+The y and stored tolerances are wider: the 9 measured minutes hold about
+110–130 stores per seed, about 9% Poisson noise.
 
 Not calibrated, and why:
 - **`q`, lookups' own queries:** 24.4 per admitted lookup (seeds 24.0–24.8). CR-0 can't separate lookup queries from sampling and maintenance. The review's 40–55 was an estimate, and the sim puts the lookup share lower with sampling taking the rest. CR-LEDGER's queries by purpose will settle it. If live `q` comes out far from 24, recalibrate: fewer stale contacts, and slower sampling to keep the total.
 - **Reply latency:** CR-0 kept no latency histogram. The scripted distribution is constrained only through the mean hold time (outstanding over queries/s: 2.1 s live, 1.96 s here) and `W`.
+- **Lookups that return peers, and how many of the K closest answer:** CR-0 has no live figure for either. The sim reports `peers_found/admitted`, 0.57 on seed 1, so CR-LEDGER's `lookup_without_values_total` can be compared with it later. The share of hashes with a swarm (70%) is set against fetch attempts per admitted lookup, not against a live share.
+- **Fetch duration:** CR-0's attempts took about 3.8 s on average (review §3.5). Here, 70% time out at 8 s and unreachable peers fail at 4 s, about 6.3 s. That overstates fetch-socket pressure, so a CR-1c screen that leans on socket use should lower `timeout_ms` first.
 - **Deadlines per completed:** 1.24 here, against CR-0's 1.05. Both include non-owned lookups, and CR-0's also include IPv6 lookups, so it's reported, not matched.
 
 ### Screening a lookup-cost change on it
@@ -201,6 +206,7 @@ seeds on 8 threads:
 
 ```rust
 let off = scenario::live_lookup();
+// `lookup_end` stands for the candidate's own switch field.
 let on = Scenario { switches: Switches { lookup_end: true, ..Default::default() }, ..off.clone() };
 let v = screen(&off, &on);
 for (seed, [a, b]) in SCREEN_SEEDS.zip(&v.ledgers) {

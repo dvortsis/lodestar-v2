@@ -66,10 +66,11 @@ pub struct NetConfig {
     /// as a responder storing them would (CR-1a-H's screen). Off in the
     /// baselines, whose goldens predate it.
     pub samplers_hold: bool,
-    /// Each node a reply lists is shadowed, with this chance, by a stale
-    /// contact beside it in id space that never answers: the unanswered
-    /// closest-set candidates that hold live lookups to their deadline
-    /// (`live-lookup`). 0 in the baselines.
+    /// Stale contacts per node, in permille of one (floor, plus the
+    /// remainder as a chance): addresses beside the node in id space that
+    /// never answer, listed with it in replies from near a target. Each
+    /// must time out before a lookup can end (`live-lookup`). 0 in the
+    /// baselines.
     pub stale_permille: u32,
 }
 
@@ -268,8 +269,9 @@ pub fn restart_honoured() -> Scenario {
 
 /// X-crawler-sim-calibrate: the live lookup as CR-0's 24 h measured it
 /// (README, "The calibrated scenario"). Keys far outrun the 32 slots, as
-/// live, and stale contacts in replies keep a lookup's closest set from
-/// ever all answering, so nearly every lookup runs to its 25 s deadline.
+/// live. Stale contacts near every target must each time out (4 s, at
+/// most 3 in flight) before a lookup can end, and each closer responder
+/// lists more, so most lookups run to the 25 s deadline.
 /// The knobs are calibrated, not the outputs: `live_lookup_is_calibrated`
 /// checks what they produce against CR-0 on every `SCREEN_SEEDS` seed.
 pub fn live_lookup() -> Scenario {
@@ -279,8 +281,8 @@ pub fn live_lookup() -> Scenario {
     s.net.nodes = 5_000;
     s.net.dead_permille = 30;
     s.net.loss_permille = 5;
-    // About 1.75 stale contacts beside every node: the closest set never
-    // all answers, so lookups end at the deadline.
+    // About 1.75 stale contacts beside every node: most lookups end at
+    // the deadline.
     s.net.stale_permille = 1_750;
     s.net.latency = Latency {
         base_ms: 60,
@@ -298,7 +300,8 @@ pub fn live_lookup() -> Scenario {
     s.swarm.live_permille = 700;
     s.swarm.max_peers = 16;
     // CR-0's fetch failures by attempt: 4.4% stored, 10.7% refused, 14.1%
-    // unreachable, the rest timed out.
+    // unreachable, the rest timed out. Success and refusal are permille
+    // of the 85.9% reachable: 0.859 × 51 = 4.4%, 0.859 × 125 = 10.7%.
     s.swarm.fetch = FetchConfig {
         unreachable_permille: 141,
         success_permille: 51,

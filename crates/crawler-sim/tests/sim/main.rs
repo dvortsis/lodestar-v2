@@ -831,8 +831,8 @@ fn target_prefixes_screen() {
 fn calibration(l: &run::Ledger) -> [(&'static str, f64, f64, f64); 10] {
     [
         ("unanswered", 0.382, 0.03, l.unanswered),
-        ("L slots", 30.3, 1.0, l.slots),
-        ("W s", 23.6, 1.5, l.w),
+        ("L slots", 30.68, 1.0, l.slots),
+        ("W s", 23.86, 1.5, l.w),
         ("admitted/s", 1.286, 0.1, l.admitted_per_s),
         ("y", 0.160, 0.04, l.y),
         ("fetches", 3.66, 0.6, l.fetches),
@@ -886,6 +886,7 @@ fn live_lookup_is_calibrated() {
         q_all: mean(|l| l.q_all),
         y: mean(|l| l.y),
         fetches: mean(|l| l.fetches),
+        found: mean(|l| l.found),
         stored_per_min: mean(|l| l.stored_per_min),
         queries_per_s: mean(|l| l.queries_per_s),
         outstanding: mean(|l| l.outstanding),
