@@ -289,6 +289,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "anidb"
+path = "fuzz_targets/anidb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
 test = false
