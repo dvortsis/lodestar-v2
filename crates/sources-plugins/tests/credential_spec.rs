@@ -345,8 +345,8 @@ fn plugins_without_a_credential_store_declare_none() {
     }
 }
 
-/// The three above and these nine are every plugin in the catalogue, so
-/// a new one has to be added here.
+/// Every plugin in the catalogue is named here, so a new one has to be
+/// added here.
 #[test]
 fn every_catalogued_plugin_is_checked() {
     let checked = [
