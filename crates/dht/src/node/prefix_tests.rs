@@ -201,7 +201,8 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
     reply(&mut a, tid, &contacts(&[901, 902]));
     assert_eq!(a.stats.snapshot().target_novel_nodes, [0, 2]);
 
-    // A ping's contacts aren't a target's; one already queued isn't new.
+    // A ping's contacts aren't a target's, and aren't offered at all.
+    let before = a.sampler.frontier_len();
     assert_eq!(
         a.try_query(&sockets, family, to, Some(id), Method::Ping, Purpose::Ping),
         Sent::Yes
@@ -213,9 +214,10 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
         .unwrap();
     reply(&mut a, ping, &contacts(&[901, 903]));
     assert_eq!(a.stats.snapshot().target_novel_nodes, [0, 2]);
-    assert!(
-        a.sampler.frontier_len() >= 3,
-        "the ping's new contact is still queued"
+    assert_eq!(
+        a.sampler.frontier_len(),
+        before,
+        "a ping's contacts aren't queued"
     );
 }
 

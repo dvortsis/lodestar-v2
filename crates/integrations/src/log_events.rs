@@ -40,6 +40,16 @@ lodestar_log::catalogue! {
         message: "Transmission added the torrent but not its label",
         fields: { error: Error },
     }
+    /// The loopback gate held back a request to a companion Lodestar runs
+    /// because it isn't ready yet (X-cmp09-starting-status). Logged once
+    /// per port per process.
+    COMPANION_NOT_READY {
+        id: "integrations.companion_not_ready",
+        component: Integrations,
+        level: Warn,
+        message: "A request to a companion Lodestar runs was held back: it isn't ready yet",
+        fields: { port: Label },
+    }
     /// One delivery attempt of a notification.
     NOTIFY_ATTEMPT {
         id: "integrations.notify_attempt",

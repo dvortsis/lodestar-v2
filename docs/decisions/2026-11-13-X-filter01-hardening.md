@@ -1,4 +1,4 @@
-# X-filter01-hardening decisions
+# X-filter01-hardening decisions (#855)
 
 Non-blocking findings from the review of X-filter01-fix (#843), named by the runner. Every hold stays fail-closed; these tighten it. Detail of the fix it follows stays held under `docs/security/v1/README.md` §5.
 

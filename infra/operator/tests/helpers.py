@@ -49,8 +49,10 @@ def event_env(body=INSTRUCTION, **over) -> dict:
 class FakeGitHub:
     """Comment posts, the App installation and token calls, and list endpoints."""
 
-    def __init__(self, token="ghs_TESTTOKEN", perms=None, repos=None, lists=None, selection="selected"):
+    def __init__(self, token="ghs_TESTTOKEN", perms=None, repos=None, lists=None, selection="selected",
+                 run_created=T0):
         self.calls, self.token, self.selection = [], token, selection
+        self.run_created = run_created.strftime("%Y-%m-%dT%H:%M:%SZ") if run_created else None
         self.perms = {"pull_requests": "write", "metadata": "read"} if perms is None else perms
         self.repos = ["o/r"] if repos is None else repos
         self.lists = lists or {}
@@ -62,24 +64,70 @@ class FakeGitHub:
         if path.endswith("/access_tokens"):
             return {"token": self.token, "permissions": self.perms, "repository_selection": self.selection,
                     "repositories": [{"full_name": r} for r in self.repos]}
+        if method == "GET" and path.rsplit("/", 1)[-1].isdigit() and "/actions/runs/" in path:
+            return {"id": int(path.rsplit("/", 1)[-1]), "created_at": self.run_created}  # the wake's own run
+        if method == "POST" and path == "/graphql":
+            return graphql_reviews(body, lambda n: self.lists.get(f"/repos/o/r/pulls/{n}/reviews", []))
         if method == "GET":
             for prefix, items in self.lists.items():
                 if path.startswith(prefix):
                     return items if path.endswith("&page=1") or "&page=" not in path else []
-            return []
+            return no_runs(path)
         return None
 
     def bodies(self):
         return [c[2]["body"] for c in self.calls if isinstance(c[2], dict) and "body" in c[2]]
 
 
+def no_runs(path):
+    """A GET answer for the tripwire's fakes: no operator-wake.yml runs in the
+    window for the session check, an empty page for anything else."""
+    if "/actions/workflows/operator-wake.yml/runs" in path:
+        return {"total_count": 0, "workflow_runs": []}
+    return []
+
+
+def graphql_reviews(body, reviews_of, total_of=None) -> dict:
+    """The tripwire's review-summary query, answered from REST-shaped reviews:
+    each `pN:` alias gets PR N's reviews (its last 50) and their total."""
+    import re
+    repo = {}
+    for n in re.findall(r"p(\d+):pullRequest", (body or {}).get("query", "")):
+        rs = list(reviews_of(n))
+        total = len(rs) if total_of is None else total_of(n)
+        repo[f"p{n}"] = {"reviews": {"totalCount": total, "nodes": [
+            {"submittedAt": r.get("submitted_at"), "author": {"__typename": "User", "databaseId": (r.get("user") or {}).get("id")}}
+            for r in rs[-50:]]}}
+    return {"data": {"repository": repo}}
+
+
+STATUS_EVENT = {"running": "session.status_running", "idle": "session.status_idle",
+                "rescheduling": "session.status_rescheduled", "terminated": "session.status_terminated"}
+
+
+def served(state: dict) -> tuple[dict, list[dict]]:
+    """A scripted state as the API serves it: (the session object, its status
+    event). The object carries the status and never a stop reason; the stop
+    reason is on the `session.status_idle` event only. `unlisted: True` is a
+    status the event list doesn't show yet."""
+    obj = {k: v for k, v in state.items() if k not in ("stop_reason", "unlisted")}
+    if state.get("unlisted"):
+        return obj, []
+    event = {"type": STATUS_EVENT[state["status"]], "id": "sevt_status"}
+    if "stop_reason" in state:
+        event["stop_reason"] = state["stop_reason"]
+    return obj, [event]
+
+
 class FakeAnthropic:
-    """The Managed Agents calls the bridge and apply make, with scripted session states."""
+    """The Managed Agents calls the bridge and apply make, with scripted session
+    states. Each state is split as the API splits it (see `served`)."""
 
     def __init__(self, sessions=None, states=None, events=None):
         self.calls, self.sessions = [], list(sessions or [])
         self.states = list(states or [{"status": "idle", "stop_reason": {"type": "end_turn"}}])
         self.events = list(events or [])
+        self.status_event: list[dict] = []
         self.agent_version = 1
 
     def __call__(self, method, path, body):
@@ -90,9 +138,10 @@ class FakeAnthropic:
         if method == "POST" and p == "/v1/sessions":
             return {"id": "sesn_FAKE", "status": "running"}
         if method == "GET" and p.endswith("/events"):
-            return {"data": self.events, "next_page": None}
+            return {"data": self.events + self.status_event, "next_page": None}
         if method == "GET" and p.startswith("/v1/sessions/"):
-            return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+            obj, self.status_event = served(self.states.pop(0) if len(self.states) > 1 else self.states[0])
+            return obj
         if method == "POST" and p == "/v1/environments":
             return {"id": "env_FAKE"}
         if method == "POST" and p == "/v1/agents":
@@ -108,6 +157,21 @@ class FakeAnthropic:
 
     def paths(self, method=None):
         return [p for m, p, _ in self.calls if method is None or m == method]
+
+
+class FakeUpload:
+    """The bridge's file upload: records (name, bytes) and hands out IDs.
+    `fail_at` makes that upload (counting from 0) raise, as a refused or lost
+    request would."""
+
+    def __init__(self, fail_at=None):
+        self.files, self.fail_at = [], fail_at
+
+    def __call__(self, name: str, data: bytes) -> str:
+        if self.fail_at == len(self.files):
+            raise RuntimeError("LEAKMARK upload failed")
+        self.files.append((name, data))
+        return f"file_{len(self.files)}"
 
 
 _KEY = None

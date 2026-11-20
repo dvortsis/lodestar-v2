@@ -20,6 +20,8 @@ export class CompanionsStore {
 	loadFailed = $state(false);
 	/** What the last detection found. */
 	detected = $state<Detected[] | null>(null);
+	/** Companions Lodestar runs that the last detection found still starting, by id. */
+	starting = $state<string[]>([]);
 	private ctl = new AbortController();
 	readonly signal = this.ctl.signal;
 	private live = true;
@@ -114,7 +116,9 @@ export class CompanionsStore {
 	}
 
 	async detect() {
-		this.detected = (await api.post('/companions/detect', {})).found;
+		const r = await api.post('/companions/detect', {});
+		this.detected = r.found;
+		this.starting = r.starting;
 	}
 
 	/** Adds a companion at a target the server found, or at an address typed in. */

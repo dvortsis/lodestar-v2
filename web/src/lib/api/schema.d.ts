@@ -307,7 +307,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Runs detection on its fixed targets and lists what answered. */
+        /**
+         * Runs detection on its fixed targets and lists what answered, and the
+         *     companions Lodestar runs that are still starting.
+         */
         post: operations["detectCompanions"];
         delete?: never;
         options?: never;
@@ -3885,6 +3888,29 @@ export interface components {
             /** @description How many went in (sent or already there). */
             sent: number;
         };
+        /**
+         * @description A cluster port that couldn't open, and when it's tried next. Fixed
+         *     labels only: never error text, an address, a path or key material.
+         */
+        ClusterStartFailure: {
+            kind: components["schemas"]["ClusterStartKind"];
+            /**
+             * Format: int64
+             * @description When it's tried again, in unix seconds.
+             */
+            next_retry_at: number;
+            step: components["schemas"]["ClusterStartStep"];
+        };
+        /**
+         * @description Why the cluster port failed to open.
+         * @enum {string}
+         */
+        ClusterStartKind: "addr_in_use" | "addr_not_available" | "permission_denied" | "io" | "store" | "secrets" | "tls" | "corrupt" | "random" | "pki" | "task_failed";
+        /**
+         * @description What the cluster port was doing when it failed to open.
+         * @enum {string}
+         */
+        ClusterStartStep: "bind" | "store" | "secrets" | "pki" | "pauses" | "server";
         /** @description `POST /collections`. */
         CollectionCreate: {
             /** @description 1–200 characters. */
@@ -4688,6 +4714,12 @@ export interface components {
         };
         DetectedCompanions: {
             found: components["schemas"]["DetectedCompanion"][];
+            /**
+             * @description Companions Lodestar runs that are still starting, so detection
+             *     couldn't look for them yet: try again in a moment. Never one that
+             *     is in `found`.
+             */
+            starting: string[];
         };
         Detection: {
             /** @description Corrections that say adult or not. */
@@ -4821,8 +4853,8 @@ export interface components {
             rediscovered: number;
             /**
              * Format: double
-             * @description DHT responses per query sent since the start (the NAT-saturation
-             *     signal); null with the DHT off. Snapshot.
+             * @description Answered share of resolved queries since start (the NAT-saturation
+             *     signal); null with the DHT off or until a query resolves. Snapshot.
              */
             reply_ratio: number | null;
             /**
@@ -9355,8 +9387,8 @@ export interface components {
         SettingsTestFailure: {
             /**
              * @description `bad_credentials`, `banned`, `origin_refused`, `session_refused`,
-             *     `address_refused`, `unreachable`, `rejected`, `timeout`, `blocked`,
-             *     `invalid`, `protocol` or `unsupported`.
+             *     `address_refused`, `unreachable`, `companion_not_ready`, `rejected`,
+             *     `timeout`, `blocked`, `invalid`, `protocol` or `unsupported`.
              */
             code: string;
             /** @description A sentence for people; never the URL or a credential. */
@@ -11295,6 +11327,7 @@ export interface components {
         WorkerList: {
             /** @description "Allow workers" is on and the cluster port is serving. */
             allowed: boolean;
+            start_failure: null | components["schemas"]["ClusterStartFailure"];
             /** @description Every joined worker, by id. Empty on a single machine. */
             workers: components["schemas"]["Worker"][];
         };
@@ -13076,7 +13109,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`). */
+            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_starting`, `companion_unauthorized`, `companion_protocol`). */
             409: {
                 headers: {
                     [name: string]: unknown;

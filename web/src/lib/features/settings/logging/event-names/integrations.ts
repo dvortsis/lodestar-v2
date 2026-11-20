@@ -20,6 +20,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_integrations_client_label_failed_n,
 		m.settings_logging_ev_integrations_client_label_failed_h
 	],
+	'integrations.companion_not_ready': [
+		m.settings_logging_ev_integrations_companion_not_ready_n,
+		m.settings_logging_ev_integrations_companion_not_ready_h
+	],
 	'integrations.notify_attempt': [
 		m.settings_logging_ev_integrations_notify_attempt_n,
 		m.settings_logging_ev_integrations_notify_attempt_h

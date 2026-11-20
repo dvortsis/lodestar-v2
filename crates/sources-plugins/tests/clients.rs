@@ -5,17 +5,20 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_integrations::clients::{BasicAuth, ClientConfig, Listed};
 use lodestar_integrations::secret::Secret;
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::testing::{FakeCtx, Replayer, wait_for};
-use lodestar_sources::{Consent, Discovery, Distribution, SourcePlugin, UserLimits, floors};
+use lodestar_sources::{
+    BoxFuture, Consent, Discovery, Distribution, Fetch, HttpError, Request, Response, SourcePlugin,
+    UserLimits, floors,
+};
 use lodestar_sources_plugins::clients::{
-    self, ClientKind, Clients, MAX_LIST_BYTES, MAX_LISTED, MAX_LISTED_NAME, MAX_SIZE,
-    STRATEGY_EXPORT, STRATEGY_LIST, TorrentState, parse_list, to_found,
+    self, ClientKind, Clients, MAX_EXPORT_TRIES, MAX_LIST_BYTES, MAX_LISTED, MAX_LISTED_NAME,
+    MAX_SIZE, STRATEGY_EXPORT, STRATEGY_LIST, TorrentState, parse_list, to_found,
 };
 use lodestar_store::SourceId;
 use proptest::prelude::*;
@@ -460,4 +463,104 @@ fn the_fuzz_export_seed_reaches_the_export_branch() {
     let l = parse_list(ClientKind::QBittorrent, list).unwrap();
     let f = to_found(&l.torrents[0], Some(export)).unwrap();
     assert_eq!(f.strategy, STRATEGY_EXPORT);
+}
+
+/// A qBittorrent that logs in and lists two torrents, behind a loopback
+/// gate that refuses every export as not ready. It records the path of
+/// each request (and an export's hash).
+#[derive(Default)]
+struct ExportsNotReady {
+    seen: Mutex<Vec<String>>,
+}
+
+impl ExportsNotReady {
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    fn lists(&self) -> usize {
+        self.seen().iter().filter(|r| r.as_str() == "list").count()
+    }
+}
+
+impl Fetch for ExportsNotReady {
+    fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+        let ok = |headers: Vec<(String, String)>, body: &str| {
+            Ok(Response {
+                status: 200,
+                headers,
+                body: body.as_bytes().to_vec(),
+            })
+        };
+        let url = req.url.as_str();
+        let (seen, answer) = if url.ends_with("/api/v2/auth/login") {
+            let cookie = ("Set-Cookie".into(), "SID=REDACTED; HttpOnly; path=/".into());
+            ("login".to_owned(), ok(vec![cookie], "Ok."))
+        } else if url.contains("/api/v2/torrents/info") {
+            let list = format!(
+                r#"[{{"hash":"{BUNNY}","name":"Big Buck Bunny (2008)","size":525312,"state":"uploading","total_size":525312}},{{"hash":"{SINTEL}","name":"Sintel (2010)","size":4096,"state":"uploading","total_size":4096}}]"#
+            );
+            let json = ("Content-Type".into(), "application/json".into());
+            ("list".to_owned(), ok(vec![json], &list))
+        } else if let Some((_, hash)) = url.split_once("/api/v2/torrents/export?hash=") {
+            (
+                format!("export {hash}"),
+                Err(HttpError::NotReady("not ready".into())),
+            )
+        } else if url.ends_with("/api/v2/auth/logout") {
+            ("logout".to_owned(), ok(Vec::new(), ""))
+        } else {
+            (format!("unexpected {url}"), ok(Vec::new(), ""))
+        };
+        self.seen.lock().unwrap().push(seen);
+        Box::pin(async move { answer })
+    }
+}
+
+/// X-cmp09-starting-status: an export the loopback gate refuses as not
+/// ready isn't a try (nothing was sent), and no other export is asked for
+/// in that poll: each poll asks for one, every torrent is found at once
+/// with the list's claims, and past `MAX_EXPORT_TRIES` polls the first
+/// torrent's export is still asked for.
+#[tokio::test(start_paused = true)]
+async fn an_export_refused_as_not_ready_is_not_a_try() {
+    let p = qbittorrent();
+    let fetch = Arc::new(ExportsNotReady::default());
+    let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(7).unwrap(), fetch.clone());
+    let running = ctx.start(p.clone());
+    let polls = MAX_EXPORT_TRIES as usize + 2;
+    wait_for("the polls", || fetch.lists() > polls).await;
+    running.stop_within().await.unwrap();
+
+    let seen = fetch.seen();
+    assert!(
+        !seen.iter().any(|r| r.starts_with("unexpected")),
+        "{seen:?}"
+    );
+    // Each complete poll (from one list to the next) asks for exactly one
+    // export, the first torrent's: it isn't given up on, and the second
+    // torrent's isn't asked for once the first was refused.
+    let starts: Vec<usize> = (0..seen.len()).filter(|&i| seen[i] == "list").collect();
+    for w in starts.windows(2) {
+        let exports: Vec<&String> = seen[w[0]..w[1]]
+            .iter()
+            .filter(|r| r.starts_with("export"))
+            .collect();
+        assert_eq!(
+            exports,
+            [&format!("export {BUNNY}")],
+            "{:?}",
+            &seen[w[0]..w[1]]
+        );
+    }
+    assert!(starts.len() > polls);
+
+    // Both found at once, with the list's claims.
+    let got = ctx.drain();
+    assert_private(&got);
+    for h in [BUNNY, SINTEL] {
+        let found = by_key(&got, h);
+        assert_eq!(found.len(), 1, "{h}");
+        assert_eq!(found[0].found.strategy, STRATEGY_LIST);
+    }
 }

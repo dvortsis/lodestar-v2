@@ -213,6 +213,11 @@ pub enum HttpError {
     /// refusal in a row, up to `egress::DOWN_DELAY_MAX`, or sooner when
     /// the route comes back (SRC-14b).
     EgressDown(String),
+    /// The address is a companion Lodestar runs that isn't ready yet, so
+    /// nothing was sent (the loopback gate). Not the host's fault, so it
+    /// doesn't back it off; the egress paces it as it does
+    /// [`EgressDown`](Self::EgressDown).
+    NotReady(String),
 }
 
 impl std::fmt::Display for HttpError {
@@ -224,6 +229,7 @@ impl std::fmt::Display for HttpError {
             HttpError::Unrecorded(e) => write!(f, "no recorded exchange: {e}"),
             HttpError::NoEgress => f.write_str("no HTTP egress configured for this plugin"),
             HttpError::EgressDown(e) => write!(f, "egress down: {e}"),
+            HttpError::NotReady(e) => f.write_str(e),
         }
     }
 }
@@ -2087,6 +2093,7 @@ mod tests {
     async fn a_body_failing_part_way_is_recorded_like_a_buffered_one() {
         for (err, backs_off) in [
             (HttpError::EgressDown("vpn".into()), false),
+            (HttpError::NotReady("not ready".into()), false),
             (HttpError::Transport("reset".into()), true),
         ] {
             let mut s = Streamer::new(10, 100, Duration::ZERO);

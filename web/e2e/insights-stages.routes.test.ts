@@ -83,6 +83,20 @@ test('discover: unique harvested is ≈, unmeasured series are not available', a
 	await expect(page.getByRole('link', { name: 'Download CSV' }).first()).toBeVisible();
 });
 
+test('discover: an unknown reply ratio reads —, never 0%, with its help line', async ({
+	page,
+	mock,
+	go
+}) => {
+	const f = discoverFixture();
+	mock.on('getInsightsDiscover', { ...f, kpi: { ...f.kpi, reply_ratio: null } });
+	await go('/insights/discover');
+	await expect(page.getByTestId('insights-stage-reply_ratio-value')).toHaveText('—');
+	await expect(page.getByTestId('insights-stage-reply_ratio-na')).toBeVisible();
+	await expect(page.getByTestId('insights-stage-reply_ratio-help')).toBeVisible();
+	await expect(page.getByTestId('insights-stage-reply_ratio-help')).toContainText('answered');
+});
+
 test('fetch: a loss links to its reason and the chip resets it', async ({ page, mock, go }) => {
 	mock.on('getInsightsFetch', fetchFixture());
 	await go('/insights/fetch');

@@ -1100,6 +1100,7 @@ impl<'a> Doc<'a> {
                 ends,
                 apart,
                 over: metered.work.is_none(),
+                work: metered.work.unwrap_or(0),
                 marks: metered.marks,
             })
     }

@@ -44,6 +44,7 @@ use lodestar_companions::manager::{
     Parts, Prelaunch, Refusal, Routes, RowError, Rows, Run, Snapshot, Supervised, field_of,
     monitored,
 };
+use lodestar_companions::supervise::bind::Bindings;
 use lodestar_companions::supervise::logs::Redactor;
 use lodestar_companions::supervise::{Launcher, Limits, Sandbox, Status, Supervisor, Timings};
 use lodestar_companions::{Catalogue, CompanionId, Entry, Version, unraid};
@@ -134,6 +135,15 @@ impl Run for Unwired {
     }
     fn stop<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, ()> {
         Box::pin(async {})
+    }
+    fn ready_run(&self, _: &CompanionId) -> Option<u64> {
+        None
+    }
+    fn recheck<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+    fn refusal(&self, _: &CompanionId) -> Option<&'static str> {
+        None
     }
 }
 
@@ -231,6 +241,17 @@ pub struct Companions {
     tasks: Vec<tokio::task::JoinHandle<()>>,
     /// Releasing what crashes left handed over, once the sink is wired.
     release: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The one client every companion request goes through: the managed
+    /// path's, the watch's and the guided path's. It knows the ports of
+    /// the companions Lodestar runs ([`Bindings`]), so a request to one
+    /// goes only to `127.0.0.1`, and one that carries anything only while
+    /// the child started there is running and was found ready. `None`
+    /// when it couldn't be built (logged as `companion_http`).
+    pub(crate) http: Option<Arc<CompanionHttp>>,
+    /// The companions' ports and readiness, behind the loopback gate and
+    /// `http`: read by tests.
+    #[cfg(test)]
+    pub(crate) bindings: Arc<Bindings>,
 }
 
 impl Companions {
@@ -280,6 +301,8 @@ pub async fn start(
     store: Arc<Mutex<Store>>,
     integrations: watch::Receiver<crate::settings::integrations::Integrations>,
 ) -> Option<Companions> {
+    // No catalogue, no companions this run, and no gate. It can't happen:
+    // the catalogue is compiled in, and its tests load it.
     let catalogue = lodestar_companions::builtin().ok()?;
     start_with(data, store, integrations, catalogue, host()).await
 }
@@ -296,6 +319,18 @@ async fn start_with(
     let wiring = Arc::new(Wiring::default());
     let routes = Arc::new(CompanionRoutes::new(store.clone()));
     let (run, api) = (wiring.clone(), wiring.clone());
+    let bindings = Arc::new(Bindings::new());
+    // Before any source or download client is built (serve starts the
+    // companions first): from here, a request through any guarded client
+    // to a companion's port waits for that companion to be ready.
+    // `CompanionHttp`'s own loopback client applies its finer rule instead.
+    // Set once per process; a later start in the same process (tests)
+    // keeps the first.
+    reserve_installed(&bindings, &data, catalogue, host);
+    let _ = lodestar_integrations::net::set_loopback_gate(Arc::new(ReadyPorts(bindings.clone())));
+    let http = CompanionHttp::new()
+        .ok()
+        .map(|h| Arc::new(h.with_bindings(bindings.clone())));
     let opened =
         tokio::task::spawn_blocking(move || manager_with(data, store, catalogue, host, run, api))
             .await
@@ -323,7 +358,7 @@ async fn start_with(
     // kills companions an earlier run left behind. Nothing is native in a
     // container (Q17).
     if !host.in_container {
-        match supervise(&folder, routes).await {
+        match supervise(&folder, routes, http.clone(), bindings.clone()).await {
             Ok((supervised, api)) => wiring.wire(supervised, api),
             Err(code) => lodestar_log::log_event!(
                 INSTALL_FAILED,
@@ -399,7 +434,55 @@ async fn start_with(
         wiring,
         tasks,
         release: Mutex::new(None),
+        http,
+        #[cfg(test)]
+        bindings,
     })
+}
+
+/// The process's loopback gate (X-cmp09-fix-2): a port Lodestar runs a
+/// companion on is allowed only while that companion is ready; every
+/// other port always.
+struct ReadyPorts(Arc<Bindings>);
+
+impl lodestar_integrations::net::LoopbackGate for ReadyPorts {
+    fn allow(&self, port: u16) -> bool {
+        !self.0.managed(port) || self.0.ready(port)
+    }
+}
+
+/// At serve, before recovery and before any start: the port of every
+/// catalogue companion with a folder here (installed, or left mid-install
+/// by a crash) or a hand-over marker is a managed port from now on, not
+/// ready, so neither the gate nor `CompanionHttp` treats it as a hand-run
+/// companion's. Only a start that claims it and is found ready opens it; a
+/// failed recovery or a start that fails first leaves it refused. A folder
+/// or marker that can't be read counts as there. Nothing is native in a
+/// container (Q17).
+fn reserve_installed(bindings: &Bindings, data: &Path, catalogue: &Catalogue, host: Host) {
+    if host.in_container {
+        return;
+    }
+    for entry in catalogue.entries() {
+        let there = !matches!(
+            lodestar_companions::layout::Install::existing(data, &entry.id),
+            Ok(None)
+        ) || lodestar_companions::manager::handed_over(data, &entry.id);
+        if let Some(p) = loopback_port(catalogue, &entry.id).filter(|_| there) {
+            // Claimed and let go at once: managed, held by none, not ready.
+            if bindings.claim(p) {
+                bindings.release(p);
+            }
+        }
+    }
+}
+
+/// The loopback port a catalogue companion is reached on, as the manager
+/// starts it: its health check's port.
+fn loopback_port(catalogue: &Catalogue, id: &CompanionId) -> Option<u16> {
+    let entry = catalogue.get(id.as_str())?;
+    let health = entry.health.as_ref()?;
+    Some(entry.port(health.port.as_str())?.number.get())
 }
 
 /// The supervisor in its sandbox, with the guarded client, and CMP-8b's
@@ -407,14 +490,15 @@ async fn start_with(
 async fn supervise(
     data: &Path,
     routes: Arc<CompanionRoutes>,
+    http: Option<Arc<CompanionHttp>>,
+    bindings: Arc<Bindings>,
 ) -> Result<(Arc<Supervised>, Api), &'static str> {
+    let http: Arc<dyn lodestar_companions::adapter::GuardedHttp> = http.ok_or("companion_http")?;
     let launcher = Launcher::lodestar().map_err(|e| e.code())?;
     let sandbox = Sandbox::new(Limits::default(), launcher).map_err(|e| e.code())?;
     let supervisor = Supervisor::new(data.to_path_buf(), sandbox.hook(), Timings::default())
         .await
         .map_err(|e| e.code())?;
-    let http: Arc<dyn lodestar_companions::adapter::GuardedHttp> =
-        Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
     let api = Api {
         http: http.clone(),
         route: Arc::new({
@@ -422,7 +506,8 @@ async fn supervise(
             move |id: &CompanionId| routes.configured(id)
         }),
     };
-    let supervised = Supervised::new(data.to_path_buf(), supervisor, sandbox, http, routes, None);
+    let supervised = Supervised::new(data.to_path_buf(), supervisor, sandbox, http, routes, None)
+        .with_bindings(bindings);
     Ok((Arc::new(supervised), api))
 }
 
@@ -496,6 +581,18 @@ impl Run for Wiring {
     }
     fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.supervised.get().and_then(|s| s.status(id))
+    }
+    fn ready_run(&self, id: &CompanionId) -> Option<u64> {
+        self.supervised.get().and_then(|s| s.ready_run(id))
+    }
+    fn recheck<'a>(&'a self, id: &'a CompanionId, t: &'a Target) -> BoxFuture<'a, bool> {
+        match self.supervised.get() {
+            Some(s) => s.recheck(id, t),
+            None => Box::pin(async { false }),
+        }
+    }
+    fn refusal(&self, id: &CompanionId) -> Option<&'static str> {
+        self.supervised.get().and_then(|s| s.refusal(id))
     }
 }
 
@@ -3429,6 +3526,144 @@ mod tests {
         assert_eq!(routes.configured(&prowlarr), None);
         let gluetun = CompanionId::parse("gluetun").unwrap();
         assert!(routes.route(&gluetun).await.is_none());
+    }
+
+    /// X-cmp09-fix-2: serve's start of the companions sets the process's
+    /// loopback gate.
+    #[tokio::test]
+    async fn the_start_sets_the_loopback_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        // Set by this start or an earlier one in this process; nothing
+        // else sets it.
+        assert!(lodestar_integrations::net::loopback_gate_is_set());
+        c.shutdown().await;
+    }
+
+    /// The gate allows a port no companion holds, and not a held one
+    /// that isn't ready.
+    #[test]
+    fn the_gate_refuses_a_companions_port_until_ready() {
+        use lodestar_integrations::net::LoopbackGate;
+        let bindings = Arc::new(Bindings::new());
+        let gate = ReadyPorts(bindings.clone());
+        assert!(gate.allow(8080));
+        let (_tx, rx) = tokio::sync::watch::channel(lodestar_companions::supervise::Status {
+            state: lodestar_companions::supervise::State::Running,
+            restarts: 0,
+            last_exit: None,
+            run: 1,
+            up: true,
+            pid: None,
+        });
+        assert!(bindings.hold(8080, rx));
+        assert!(!gate.allow(8080) && gate.allow(9696));
+        // The catalogue's ports, as the manager starts them.
+        let cat = lodestar_companions::builtin().unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        assert_eq!(loopback_port(cat, &qbt), Some(8080));
+    }
+
+    /// X-cmp09-fix-2: an installed companion's port is refused from serve's
+    /// start, whatever its recovery or its start make of it, until a start
+    /// finds it ready; a companion with no folder leaves its port alone.
+    #[tokio::test]
+    async fn an_installed_companions_port_is_refused_until_it_is_ready() {
+        use lodestar_integrations::net::LoopbackGate;
+        let dir = tempfile::tempdir().unwrap();
+        // A folder that isn't a valid install: its recovery fails, and so
+        // would its start.
+        std::fs::create_dir_all(dir.path().join("companions/qbittorrent/9.9.9")).unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        let (q, p) = (
+            loopback_port(cat, &qbt).unwrap(),
+            loopback_port(cat, &prowlarr).unwrap(),
+        );
+        let gate = ReadyPorts(c.bindings.clone());
+        assert!(c.bindings.managed(q) && !c.bindings.ready(q));
+        assert!(!gate.allow(q));
+        // A start that fails leaves it refused.
+        assert!(c.api.manager.start(&qbt).await.is_err());
+        assert!(!gate.allow(q));
+        // No folder: untouched, for a companion you run yourself.
+        assert!(!c.bindings.managed(p) && gate.allow(p));
+        c.shutdown().await;
+    }
+
+    /// X-cmp09-starting-status: a hand-over marker left with no folder
+    /// reserves the companion's port too; with neither, it's left alone.
+    #[test]
+    fn a_hand_over_marker_alone_reserves_the_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        std::fs::create_dir_all(dir.path().join("companions")).unwrap();
+        std::fs::write(dir.path().join("companions/.handed-over-qbittorrent"), b"").unwrap();
+        let bindings = Bindings::new();
+        reserve_installed(&bindings, dir.path(), cat, NATIVE);
+        let (q, p) = (
+            loopback_port(cat, &qbt).unwrap(),
+            loopback_port(cat, &prowlarr).unwrap(),
+        );
+        assert!(bindings.managed(q) && !bindings.ready(q));
+        assert!(!bindings.managed(p));
+    }
+
+    /// X-cmp09-fix: serve's runner answers the readiness methods from the
+    /// supervisor, never with a permissive default: a companion that isn't
+    /// running is never found ready again, wired or not. (The `Run` trait
+    /// gives these no default, so a runner can't leave one out.)
+    #[tokio::test]
+    async fn serves_runner_answers_readiness_from_the_supervisor() {
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let target = Target::Loopback(lodestar_companions::inputs::PortNumber::new(8080).unwrap());
+        let unwired = Wiring::default();
+        assert!(!unwired.recheck(&qbt, &target).await);
+        assert_eq!(
+            (unwired.refusal(&qbt), unwired.ready_run(&qbt)),
+            (None, None)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            lodestar_companions::builtin().unwrap(),
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        assert!(c.wiring.supervised.get().is_some());
+        assert!(!c.wiring.recheck(&qbt, &target).await);
+        assert_eq!(
+            (c.wiring.refusal(&qbt), c.wiring.ready_run(&qbt)),
+            (None, None)
+        );
+        c.shutdown().await;
     }
 
     /// At serve, a native run hands the manager a supervisor, and shutdown

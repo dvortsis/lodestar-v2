@@ -1,0 +1,6 @@
+GET https://musicbrainz.org/ws/2/release-group?query=releasegroup%3A%22Harbour+Lights%22+AND+artist%3A%22The+Quiet+Engines%22&limit=5&fmt=json
+Accept: application/json
+
+HTTP 200
+Retry-After: 5
+Content-Type: application/json; charset=utf-8

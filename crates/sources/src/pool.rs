@@ -23,10 +23,10 @@
 //! waits for a channel slot.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
@@ -111,6 +111,8 @@ impl Fetcher for PeerWireFetcher {
         reservation: Reservation,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         let mut opts = self.0.clone();
+        reservation.late_after(opts.timeout / 2);
+        let behind = reservation.clone();
         opts.reserve = Some(Reserve(Arc::new(move |now, total| {
             let r = reservation.clone();
             Box::pin(async move { r.reserve(now, total).await })
@@ -118,7 +120,12 @@ impl Fetcher for PeerWireFetcher {
         Box::pin(async move {
             lodestar_peer_wire::fetch(peer, key, &opts)
                 .await
-                .map_err(|e| e.kind())
+                .map_err(|e| {
+                    if matches!(e, lodestar_peer_wire::Error::Behind) {
+                        behind.behind();
+                    }
+                    e.kind()
+                })
         })
     }
 }
@@ -177,6 +184,26 @@ pub struct PoolConfig {
     pub max_held_bytes: usize,
 }
 
+/// The largest info dict a pool with a budget of `max_held_bytes` fetches:
+/// its reservation (the dict, the key, the client name and the PEX list,
+/// within a 32 KiB margin) must fit beside the floor, which small dicts
+/// keep. A [`FetchOptions::max_metadata`](lodestar_peer_wire::FetchOptions)
+/// above it is never granted room.
+pub const fn largest_dict(max_held_bytes: usize) -> usize {
+    (max_held_bytes - max_held_bytes / FLOOR_SHARE as usize).saturating_sub(32 << 10)
+}
+
+/// A large claim whose room took this long in all, its first window's and
+/// its growth's, leaves its peer too little time: a timeout after it, if
+/// the peer was still sending, isn't the peer's ([`LATE_WAITS_FREE`]).
+/// Half the default fetch timeout; a fetcher with another timeout sets
+/// half of its own ([`Reservation::late_after`]).
+const LATE_ROOM: Duration = Duration::from_secs(4);
+
+/// Late wait-outs a key may have uncharged, apart from
+/// [`RESERVE_WAITS_FREE`]; the next is charged.
+pub const LATE_WAITS_FREE: u8 = 4;
+
 /// [`PoolConfig::max_held_bytes`]'s default: 64 MiB.
 pub const MAX_HELD_BYTES: usize = 64 << 20;
 
@@ -192,6 +219,13 @@ pub fn weigh(fetched: &Fetched) -> u64 {
 /// still holds. After that the rest go back into the saved queue, as they
 /// do when the consumer is gone.
 pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(5);
+
+/// Networks (an IPv4 /24, an IPv6 /48) whose peers must say a key's dict
+/// is over the size limit before the key is lost for it. A peer's
+/// `metadata_size` is its own claim, checked by nothing, so one peer or
+/// one network can't end a key; an oversize torrent gets the same answer
+/// from every peer, and each answer costs a handshake and no download.
+pub const OVERSIZE_AGREE: usize = 3;
 
 /// Reserve timeouts a key may have without one being charged as
 /// a failed fetch (runner, 2026-11-07): enough to ride out a burst, but a
@@ -209,10 +243,11 @@ pub const RESERVE_WAITS_FREE: u8 = 3;
 /// sent that whole window (*growth*). A claim that's granted never waits
 /// again, except a partial one for its growth. Two rules keep that from
 /// deadlocking:
-/// - **Growth goes first.** While a growth waits, nothing else is granted
-///   and the pool starts no fetch, so the bytes it needs can only come
-///   free: fetches that hold their whole reservation finish, and the
-///   consumer takes held results.
+/// - **Growth goes first.** While a growth waits, nothing is granted that
+///   would take the room it needs (small claims inside the floor, and a
+///   first window only if the waiting growth still fits beside it), so
+///   the bytes it needs can only come free: fetches that hold their whole
+///   reservation finish, and the consumer takes held results.
 /// - **Partial claims leave room for any one of them to grow.** A partial
 ///   claim is admitted only if the partial claims' bytes plus the largest
 ///   growth any of them still needs fit the budget. So once the rest has
@@ -221,8 +256,25 @@ pub const RESERVE_WAITS_FREE: u8 = 3;
 ///
 /// Partial claims wait in their own queue. One held back by its own rule
 /// holds up nothing else; the oldest, when it passes its rule and only
-/// lacks room, goes before new whole claims and stops dispatch, so steady
-/// small traffic can't keep a large dict out.
+/// lacks room, goes before new whole claims, so steady small traffic
+/// can't keep a large dict out.
+///
+/// Small dicts, which are most of them, keep room of their own
+/// (X-fetch-room-fix):
+/// - **A floor for small claims.** Partial and grown claims together stay
+///   within the budget less its floor ([`Budget::floor`]), so that much is
+///   always left for whole claims of [`SMALL_CLAIM`] or less and for
+///   finished results. While a growth or a room-starved partial claim
+///   waits, small claims are still granted, inside the floor only: what
+///   lies outside it then only comes free, which is what the waiting claim
+///   needs. So a waiting growth never stops a small fetch, or dispatch.
+/// - **Grown claims are capped.** Together they stay within
+///   [`Budget::grown_cap`], and one network (an IPv4 /24, an IPv6 /48) has
+///   one at a time. A growth held back by either cap waits apart, holding
+///   up nothing, as a partial claim held back by its own rule does. A
+///   growth with no other grown claim beside it is let past both the cap
+///   and the floor, so a pool can still fetch one dict larger than those
+///   leave; small claims then keep what is left of the floor.
 #[derive(Debug)]
 struct Budget {
     limit: u64,
@@ -249,25 +301,82 @@ struct BudgetState {
     /// rule and only lacks room: it goes before whole first claims, and the
     /// pool starts no fetch, until it's granted or leaves.
     starved: Option<u64>,
-    /// Waiting growths, oldest first; they go before any first reservation.
-    growth: VecDeque<u64>,
-    /// Bytes held by partial claims, and the growth each still needs.
+    /// Waiting growths, oldest first, each with the bytes it wants in all
+    /// and its first window's bytes; they go before any first reservation
+    /// outside the floor.
+    growth: VecDeque<(u64, u64, u64, bool)>,
+    /// Bytes held by partial claims, and the growth each proven one still
+    /// needs. A partial claim is proven once its first window is in (it
+    /// asks to grow); until then its announced size doesn't count toward
+    /// admission.
     partial: u64,
     needs: BTreeMap<u64, usize>,
+    /// Bytes reserved by whole claims of [`SMALL_CLAIM`] or less.
+    small: u64,
+    /// Bytes reserved by grown claims, and the networks that have one.
+    grown: u64,
+    grown_nets: HashSet<Net>,
+    /// Bytes held by partial claims, by network.
+    partial_nets: HashMap<Net, u64>,
+    /// Partial claims held now.
+    partial_claims: usize,
+    /// The growth at the front of the queue, while it waits.
+    wait: Option<FrontWait>,
     next_id: u64,
 }
 
+/// The front of the growth queue while it waits: who may pass it, and how
+/// often it has been passed.
+#[derive(Debug, Default)]
+struct FrontWait {
+    front: u64,
+    /// Partial claims held when it began to wait: the most that can pass
+    /// it.
+    before: usize,
+    passes: usize,
+    /// First windows admitted while it waits; none of them may pass it.
+    admitted: HashSet<u64>,
+    /// The networks of the claims that passed it.
+    passer_nets: HashSet<Net>,
+}
+
 impl BudgetState {
-    fn add_need(&mut self, bytes: u64, need: u64) {
+    /// Starts the front's wait record when the front changes.
+    fn refresh_wait(&mut self) {
+        match self.growth.front() {
+            None => self.wait = None,
+            Some(&(front, ..)) => {
+                if self.wait.as_ref().is_none_or(|w| w.front != front) {
+                    self.wait = Some(FrontWait {
+                        front,
+                        before: self.partial_claims,
+                        ..FrontWait::default()
+                    });
+                }
+            }
+        }
+    }
+
+    /// A partial claim's first window, its need not yet counted.
+    fn add_partial(&mut self, bytes: u64) {
         self.partial += bytes;
+        self.partial_claims += 1;
+    }
+
+    /// A partial claim's first window is in: its need counts from now.
+    fn prove(&mut self, need: u64) {
         *self.needs.entry(need).or_insert(0) += 1;
     }
 
-    fn remove_need(&mut self, bytes: u64, need: u64) {
+    fn remove_need(&mut self, bytes: u64, need: u64, proven: bool) {
         if need == 0 {
             return;
         }
         self.partial = self.partial.saturating_sub(bytes);
+        self.partial_claims = self.partial_claims.saturating_sub(1);
+        if !proven {
+            return;
+        }
         if let Some(n) = self.needs.get_mut(&need) {
             *n -= 1;
             if *n == 0 {
@@ -279,7 +388,81 @@ impl BudgetState {
     fn largest_need(&self) -> u64 {
         self.needs.last_key_value().map_or(0, |(need, _)| *need)
     }
+
+    /// Whether a claim that goes before small ones waits: a growth no cap
+    /// holds back, or a partial claim that only lacks room.
+    fn large_waits(&self) -> bool {
+        !self.growth.is_empty() || self.starved.is_some()
+    }
+
+    /// What small claims and finished results together may hold while a
+    /// large one waits: the floor, less whatever the oldest waiting growth
+    /// needs of it to fit the budget at all.
+    fn small_room(&self, limit: u64) -> u64 {
+        let floor = limit / FLOOR_SHARE;
+        match self.growth.front() {
+            Some(&(_, want, ..)) => floor.min(limit.saturating_sub(want)),
+            None => floor,
+        }
+    }
+
+    /// Whether `net` already holds its share of the room for partial
+    /// claims, so another of its claims of `want` must wait. A network's
+    /// first partial claim is always let in.
+    fn net_partials_full(&self, net: Option<Net>, want: u64, room: u64) -> bool {
+        let Some(net) = net else {
+            return false;
+        };
+        let held = self.partial_nets.get(&net).copied().unwrap_or(0);
+        held > 0 && held.saturating_add(want) > room / PARTIAL_NET_SHARE
+    }
+
+    /// Takes a claim's bytes out of the counts of its kind.
+    fn uncount(&mut self, claim: &Claim, bytes: u64, need: u64) {
+        if need > 0
+            && let Some(net) = claim.net
+            && let std::collections::hash_map::Entry::Occupied(mut held) =
+                self.partial_nets.entry(net)
+        {
+            *held.get_mut() = held.get().saturating_sub(bytes);
+            if *held.get() == 0 {
+                held.remove();
+            }
+        }
+        let proven = need > 0 && claim.proven.swap(false, Ordering::Relaxed);
+        self.remove_need(bytes, need, proven);
+        match claim.kind.swap(KIND_NONE, Ordering::Relaxed) {
+            KIND_SMALL => self.small = self.small.saturating_sub(bytes),
+            KIND_GROWN => {
+                self.grown = self.grown.saturating_sub(bytes);
+                if let Some(net) = claim.net {
+                    self.grown_nets.remove(&net);
+                }
+            }
+            KIND_LARGE => self.grown = self.grown.saturating_sub(bytes),
+            _ => {}
+        }
+    }
 }
+
+/// A whole claim of at most this is a small one, with the floor's room: a
+/// dict of one request window (64 KiB) with its client name and PEX
+/// peers, as peer-wire bounds it, and the key.
+pub const SMALL_CLAIM: u64 = 80 << 10;
+
+/// The floor is this share of the budget (a quarter), and grown claims
+/// may hold [`GROWN_SHARE`] of it (a half).
+const FLOOR_SHARE: u64 = 4;
+const GROWN_SHARE: u64 = 2;
+/// A network's partial claims may hold this share of the room beside the
+/// floor (an eighth), so several networks share it.
+const PARTIAL_NET_SHARE: u64 = 8;
+
+const KIND_NONE: u8 = 0;
+const KIND_SMALL: u8 = 1;
+const KIND_GROWN: u8 = 2;
+/// Counted with the grown bytes, without a network's place.
+const KIND_LARGE: u8 = 3;
 
 impl Budget {
     fn new(limit: usize) -> Budget {
@@ -303,15 +486,28 @@ impl Budget {
         (s.held, s.reserved)
     }
 
-    /// Room for another fetch: under the budget, and no whole reservation,
-    /// growth or room-starved partial claim waiting. A partial claim held
-    /// back by its own rule doesn't stop dispatch: it may be a liar's.
+    /// The room kept for small claims and finished results.
+    fn floor(&self) -> u64 {
+        self.limit / FLOOR_SHARE
+    }
+
+    /// The most grown claims hold together. One alone may pass it, up to
+    /// the floor.
+    fn grown_cap(&self) -> u64 {
+        self.limit / GROWN_SHARE
+    }
+
+    /// Room for another fetch: under the budget, no whole reservation
+    /// waiting and, while a growth or a room-starved partial claim waits,
+    /// room left in the floor (a fetch of a small dict would be granted;
+    /// what a fetch will ask for isn't known before its handshake). A claim
+    /// held back by a rule of its own doesn't stop dispatch: it may be a
+    /// liar's.
     fn has_room(&self) -> bool {
         let s = self.lock();
         s.queue.is_empty()
-            && s.growth.is_empty()
-            && s.starved.is_none()
             && s.reserved.saturating_add(s.held) < self.limit
+            && (!s.large_waits() || s.small.saturating_add(s.held) < s.small_room(self.limit))
     }
 
     /// Bytes the pool no longer holds.
@@ -346,10 +542,43 @@ struct Claim {
     /// Set while waiting for room and left set if the wait never ended:
     /// the fetch ran out of time waiting, not because of its peer.
     waited_out: AtomicBool,
+    /// The peer's network, for the one grown claim a network may have;
+    /// `None`: not counted by network.
+    net: Option<Net>,
+    /// Which of the budget's counts the bytes are in (`KIND_*`); changed
+    /// only under the budget's lock.
+    kind: AtomicU8,
+    /// A partial claim whose first window is in, so its need counts toward
+    /// admission; changed only under the budget's lock.
+    proven: AtomicBool,
+    /// A retry whose last attempt waited out late: its growth goes ahead of
+    /// growths without credit.
+    credit: bool,
+    /// How long its reservations have waited for room, in ms.
+    room_wait_ms: AtomicU64,
+    /// From how long a wait, in ms, its room came late ([`LATE_ROOM`]).
+    late_room_ms: AtomicU64,
+    /// It grew after waiting [`LATE_ROOM`] or longer for room in all.
+    long_wait: AtomicBool,
+    /// Its fetch ended for falling behind the pace a large dict must keep.
+    behind: AtomicBool,
 }
 
 impl Reservation {
+    #[cfg(test)]
     fn new(budget: Arc<Budget>) -> Reservation {
+        Reservation::for_peer(budget, None)
+    }
+
+    /// A claim for a fetch from a peer in `net`.
+    #[cfg(test)]
+    fn for_peer(budget: Arc<Budget>, net: Option<Net>) -> Reservation {
+        Reservation::for_retry(budget, net, false)
+    }
+
+    /// A claim for a fetch from a peer in `net`; `credit` for a retry whose
+    /// last attempt waited out late.
+    fn for_retry(budget: Arc<Budget>, net: Option<Net>, credit: bool) -> Reservation {
         let id = {
             let mut s = budget.lock();
             s.next_id += 1;
@@ -361,15 +590,23 @@ impl Reservation {
             bytes: AtomicU64::new(0),
             need: AtomicU64::new(0),
             waited_out: AtomicBool::new(false),
+            net,
+            kind: AtomicU8::new(KIND_NONE),
+            proven: AtomicBool::new(false),
+            credit,
+            room_wait_ms: AtomicU64::new(0),
+            late_room_ms: AtomicU64::new(LATE_ROOM.as_millis() as u64),
+            long_wait: AtomicBool::new(false),
+            behind: AtomicBool::new(false),
         }))
     }
 
     /// Reserves room for `now` heap bytes of a result whose heap holds at
     /// most `total` (each with the [`FetchedKey`] itself, [`weigh`]'s
     /// units), waiting while the budget has no room. `now < total` makes a
-    /// partial claim, which a later call grows (peer-wire's two steps,
-    /// `lodestar_peer_wire::Reserve`). Called again with less, it keeps
-    /// what it has.
+    /// partial claim, which a later call grows once, to `total`
+    /// (peer-wire's two steps, `lodestar_peer_wire::Reserve`). Called again
+    /// with less, it keeps what it has.
     ///
     /// A first reservation that finds nothing else reserved or held always
     /// gets its room, so even a dict larger than the whole budget is
@@ -383,6 +620,8 @@ impl Reservation {
         let claim = &*self.0;
         let budget = &*claim.budget;
         let mut queued: Option<Queued<'_>> = None;
+        let growing = claim.bytes.load(Ordering::Relaxed) > 0;
+        let asked = tokio::time::Instant::now();
         loop {
             let freed = budget.freed.notified();
             tokio::pin!(freed);
@@ -393,6 +632,13 @@ impl Reservation {
                 if let Some(q) = queued.take() {
                     claim.waited_out.store(false, Ordering::Relaxed);
                     drop(q);
+                }
+                // Both steps' waits count: together they leave the peer
+                // its time.
+                let waited = u64::try_from(asked.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let total = claim.room_wait_ms.fetch_add(waited, Ordering::Relaxed) + waited;
+                if growing && total >= claim.late_room_ms.load(Ordering::Relaxed) {
+                    claim.long_wait.store(true, Ordering::Relaxed);
                 }
                 return;
             }
@@ -408,15 +654,26 @@ impl Reservation {
     /// [`Budget`] allow it now.
     fn try_grow(&self, want: u64, want_total: u64, enqueue: bool) -> bool {
         let claim = &*self.0;
-        let mut s = claim.budget.lock();
+        let budget = &*claim.budget;
+        let mut s = budget.lock();
+        let growing = claim.bytes.load(Ordering::Relaxed) > 0;
         if self.grant(&mut s, want, want_total) {
+            drop(s);
+            // A growth leaves the partial claims: its network's next may
+            // now be let in.
+            if growing {
+                budget.freed.notify_waiters();
+            }
             return true;
         }
-        if enqueue {
-            if claim.bytes.load(Ordering::Relaxed) > 0 {
-                s.growth.push_back(claim.id);
-            } else if want < want_total {
-                s.partials.push_back(claim.id);
+        // A growth joins and leaves its queue in `grant`, as the caps let
+        // it; so does a partial claim its network's share holds back.
+        if enqueue && claim.bytes.load(Ordering::Relaxed) == 0 {
+            if want < want_total {
+                let room = budget.limit - budget.floor();
+                if !s.net_partials_full(claim.net, want, room) && !s.partials.contains(&claim.id) {
+                    s.partials.push_back(claim.id);
+                }
             } else {
                 s.queue.push_back(claim.id);
             }
@@ -427,59 +684,241 @@ impl Reservation {
     /// [`try_grow`](Self::try_grow)'s rules, under the budget's lock.
     fn grant(&self, s: &mut BudgetState, want: u64, want_total: u64) -> bool {
         let claim = &*self.0;
-        let limit = claim.budget.limit;
+        let budget = &*claim.budget;
+        let limit = budget.limit;
         let mine = claim.bytes.load(Ordering::Relaxed);
         if mine >= want {
             return true;
         }
         let growing = mine > 0;
         let partial = want < want_total;
-        let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
-        let in_turn = if growing {
-            first_in(&s.growth)
-        } else if partial {
-            s.growth.is_empty() && first_in(&s.partials)
-        } else {
-            s.growth.is_empty() && s.starved.is_none() && first_in(&s.queue)
-        };
-        if !in_turn {
-            return false;
-        }
+        let small = !growing && !partial && want <= SMALL_CLAIM;
         let used = s.reserved.saturating_add(s.held);
         let others = used.saturating_sub(mine);
         let extra = want - mine;
-        let first_partial = partial && !growing;
-        if first_partial && others > 0 {
-            let need = s.largest_need().max(want_total - want);
-            if s.partial.saturating_add(want).saturating_add(need) > limit {
-                // Held back by its own rule (perhaps a liar's claim): it
-                // holds up nothing else.
-                if s.starved == Some(claim.id) {
-                    s.starved = None;
-                    claim.budget.settled.notify_one();
-                    claim.budget.freed.notify_waiters();
+        let fits = others == 0 || used.saturating_add(extra) <= limit;
+        // Partial and grown claims stay out of the floor.
+        let large = s.partial.saturating_add(s.grown);
+        let beside_floor = large.saturating_add(extra) <= limit - budget.floor();
+        let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
+        // A first window let in while a growth waits.
+        let mut during_wait_admit = false;
+        // A growth that goes ahead of the waiting front.
+        let mut passing = false;
+        if growing {
+            // A claim grows once, to its whole size (as peer-wire asks).
+            debug_assert!(
+                claim.kind.load(Ordering::Relaxed) != KIND_GROWN,
+                "a grown claim grows again"
+            );
+            // Asking to grow, it has its first window: its need counts
+            // toward admission from now.
+            let need = claim.need.load(Ordering::Relaxed);
+            if need > 0 && !claim.proven.swap(true, Ordering::Relaxed) {
+                s.prove(need);
+            }
+            let queued = s.growth.iter().any(|&(id, ..)| id == claim.id);
+            if claim.net.is_some_and(|net| s.grown_nets.contains(&net)) {
+                // Its network has a grown claim: only that one holds it
+                // back, so it waits apart and holds up nothing. Unless a
+                // claim of its own network passed it while it waited at the
+                // front: then it keeps its turn, so no later growth goes
+                // ahead of it, and first windows stay gated on it.
+                let at_front = s.wait.as_ref().is_some_and(|w| {
+                    w.front == claim.id && claim.net.is_some_and(|n| w.passer_nets.contains(&n))
+                });
+                if queued && !at_front {
+                    s.growth.retain(|&(id, ..)| id != claim.id);
+                    budget.settled.notify_one();
+                    budget.freed.notify_waiters();
                 }
                 return false;
             }
-        }
-        if others > 0 && used.saturating_add(extra) > limit {
-            if first_partial {
-                // An honest-looking large dict that only lacks room: it
-                // goes before new whole claims and stops dispatch, or
-                // steady small traffic could keep it out for ever.
-                s.starved = Some(claim.id);
+            // Alone among grown claims, it may pass their cap, so a dict
+            // larger than the cap is still fetched; nothing passes the
+            // floor. Held back by the cap, it keeps its turn: the growths
+            // behind it wait, and the grown claims drain until it fits.
+            let under_cap = s.grown == 0 || s.grown.saturating_add(want) <= budget.grown_cap();
+            s.refresh_wait();
+            let admitted_during_wait = s
+                .wait
+                .as_ref()
+                .is_some_and(|w| w.admitted.contains(&claim.id));
+            let in_turn = match s.growth.front() {
+                None => true,
+                Some(&(front, ..)) if front == claim.id => true,
+                // A first window let in during this wait never passes it.
+                Some(_) if admitted_during_wait => false,
+                Some(&(_, front_want, front_window, _)) => {
+                    // The front may be passed by a growth queued behind it
+                    // when only the first windows of the growths behind it
+                    // keep it from growing: it can't grow until one of them
+                    // does, and they wait for it, so the first of them that
+                    // fits goes. A first window let in while a growth waits
+                    // never passes it, so the claims that can pass are the
+                    // ones whose window was in when the front began to
+                    // wait, each once; and each that grows takes more room
+                    // than its window held, so the front then waits for it
+                    // to end, which the pace rule bounds. One from the
+                    // front's own network leaves it at the front.
+                    let extra = front_want.saturating_sub(front_window);
+                    let short = large
+                        .saturating_add(extra)
+                        .saturating_sub(limit - budget.floor())
+                        .max(used.saturating_add(extra).saturating_sub(limit));
+                    let front_capped =
+                        s.grown != 0 && s.grown.saturating_add(front_want) > budget.grown_cap();
+                    let behind: u64 = s.growth.iter().skip(1).map(|&(_, _, w, _)| w).sum::<u64>()
+                        + if queued { 0 } else { mine };
+                    passing = short > 0 && short <= behind && !front_capped;
+                    passing
+                }
+            };
+            // With nothing else reserved or held, it is fetched alone,
+            // whatever its size (a fetcher whose limit is over
+            // `largest_dict`).
+            let alone = others == 0;
+            if !(in_turn && (alone || (under_cap && fits && beside_floor))) {
+                if !queued {
+                    // A retry with credit goes ahead of growths without
+                    // it, behind any credited one already waiting, and
+                    // never ahead of the front, which keeps its turn.
+                    let at = if claim.credit {
+                        s.growth
+                            .iter()
+                            .skip(1)
+                            .position(|&(.., c)| !c)
+                            .map_or(s.growth.len(), |i| i + 1)
+                    } else {
+                        s.growth.len()
+                    };
+                    s.growth.insert(at, (claim.id, want, mine, claim.credit));
+                }
+                return false;
             }
-            return false;
+            if passing && let Some(w) = s.wait.as_mut() {
+                w.passes += 1;
+                if let Some(net) = claim.net {
+                    w.passer_nets.insert(net);
+                }
+                // Only claims whose window was in when the front began to
+                // wait can pass it, each once.
+                debug_assert!(w.passes <= w.before, "a front passed {} times", w.passes);
+            }
+            s.growth.retain(|&(id, ..)| id != claim.id);
+        } else if partial {
+            let room = limit - budget.floor();
+            if s.net_partials_full(claim.net, want, room) {
+                // Only its own network's partial claims hold it back: it
+                // waits apart and holds up nothing.
+                if s.partials.contains(&claim.id) || s.starved == Some(claim.id) {
+                    s.partials.retain(|&id| id != claim.id);
+                    if s.starved == Some(claim.id) {
+                        s.starved = None;
+                    }
+                    budget.settled.notify_one();
+                    budget.freed.notify_waiters();
+                }
+                return false;
+            }
+            // Past its network's share, it keeps a place in the queue, even
+            // if it waited apart before: no later claim overtakes it.
+            if !s.partials.contains(&claim.id) {
+                s.partials.push_back(claim.id);
+            }
+            if !first_in(&s.partials) {
+                return false;
+            }
+            // While a growth waits, a first window is let in only if the
+            // front's growth would still fit beside the floor and in the
+            // budget with it (and every window let in during the wait,
+            // which are already counted). Such a window never passes that
+            // front.
+            s.refresh_wait();
+            let front = s.growth.front().copied();
+            if let Some((_, front_want, front_window, _)) = front {
+                let extra_f = front_want.saturating_sub(front_window);
+                let fits_front = large.saturating_add(want).saturating_add(extra_f)
+                    <= limit - budget.floor()
+                    && used.saturating_add(want).saturating_add(extra_f) <= limit;
+                if !fits_front {
+                    return false;
+                }
+            }
+            during_wait_admit = front.is_some();
+            if others > 0 {
+                let need = s.largest_need().max(want_total - want);
+                // Room for the largest proven growth beside the floor, as
+                // growths need: once grown claims and results drain (the
+                // pace and deadlines bound that), the proven claim with the
+                // largest need can grow. An unproven claim's announced size
+                // doesn't count toward admission until its first window is
+                // in. Claims that prove at once with needs that can't fit
+                // together wait at the front of the growth queue, where a
+                // new first window is let in only beside the front's
+                // growth, and their pace and deadlines bound that.
+                if s.partial.saturating_add(want).saturating_add(need) > room || !beside_floor {
+                    // Held back by its own rule (perhaps a liar's claim): it
+                    // holds up nothing else.
+                    if s.starved == Some(claim.id) {
+                        s.starved = None;
+                        budget.settled.notify_one();
+                        budget.freed.notify_waiters();
+                    }
+                    return false;
+                }
+            }
+            if !fits {
+                // An honest-looking large dict that only lacks room: it
+                // goes before new whole claims outside the floor, or steady
+                // small traffic could keep it out for ever.
+                s.starved = Some(claim.id);
+                return false;
+            }
+        } else {
+            // A whole claim. While a large one waits, a small one is
+            // granted inside the floor, which finished results share, and
+            // any other waits: room outside the floor then only comes free.
+            let in_floor = small
+                && s.small.saturating_add(s.held).saturating_add(extra) <= s.small_room(limit);
+            if !(first_in(&s.queue) && fits && (!s.large_waits() || in_floor)) {
+                return false;
+            }
         }
         if s.starved == Some(claim.id) {
             s.starved = None;
         }
+        if partial {
+            s.partials.retain(|&id| id != claim.id);
+        }
         s.reserved += extra;
         let old_need = claim.need.load(Ordering::Relaxed);
-        s.remove_need(mine, old_need);
+        s.uncount(claim, mine, old_need);
         let need = if partial { want_total - want } else { 0 };
         if partial {
-            s.add_need(want, need);
+            if during_wait_admit && let Some(w) = s.wait.as_mut() {
+                w.admitted.insert(claim.id);
+            }
+            s.add_partial(want);
+            if let Some(net) = claim.net {
+                *s.partial_nets.entry(net).or_insert(0) += want;
+            }
+        } else if small {
+            s.small += want;
+            claim.kind.store(KIND_SMALL, Ordering::Relaxed);
+        } else {
+            // Grown, or a whole claim over the small size (peer-wire makes
+            // none): counted with the grown bytes. Only a grown claim takes
+            // its network's place.
+            s.grown += want;
+            let kind = match claim.net {
+                Some(net) if growing => {
+                    s.grown_nets.insert(net);
+                    KIND_GROWN
+                }
+                _ => KIND_LARGE,
+            };
+            claim.kind.store(kind, Ordering::Relaxed);
         }
         claim.need.store(need, Ordering::Relaxed);
         claim.bytes.store(want, Ordering::Relaxed);
@@ -499,17 +938,41 @@ impl Reservation {
         let mut s = claim.budget.lock();
         let mine = claim.bytes.swap(0, Ordering::Relaxed);
         let need = claim.need.swap(0, Ordering::Relaxed);
-        s.remove_need(mine, need);
+        // A grown or small claim's end changes what the caps and the floor
+        // let in.
+        let counted = claim.kind.load(Ordering::Relaxed) != KIND_NONE;
+        s.uncount(claim, mine, need);
         s.reserved = s.reserved.saturating_sub(mine);
         s.held = s.held.saturating_add(weight);
         drop(s);
-        if weight < mine {
+        // A grown claim's end also lets the next of its network, or one
+        // the cap held back, grow; a small claim's frees room in the floor.
+        if weight < mine || counted {
             claim.budget.freed.notify_waiters();
         }
     }
 
     fn waited_out(&self) -> bool {
         self.0.waited_out.load(Ordering::Relaxed)
+    }
+
+    /// Its room comes late after waits of `wait` in all: half the fetch's
+    /// timeout ([`LATE_ROOM`] by default).
+    pub fn late_after(&self, wait: Duration) {
+        let ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+        self.0.late_room_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// The fetch ended for falling behind its pace: always the peer's.
+    pub fn behind(&self) {
+        self.0.behind.store(true, Ordering::Relaxed);
+    }
+
+    /// Its growth's room came late (after its late threshold
+    /// ([`Reservation::late_after`], [`LATE_ROOM`] by default)) and the peer never
+    /// fell behind: a timeout from here is the wait's, not the peer's.
+    fn late(&self) -> bool {
+        self.0.long_wait.load(Ordering::Relaxed) && !self.0.behind.load(Ordering::Relaxed)
     }
 }
 
@@ -519,7 +982,7 @@ impl Drop for Claim {
         if mine > 0 {
             let need = *self.need.get_mut();
             let mut s = self.budget.lock();
-            s.remove_need(mine, need);
+            s.uncount(self, mine, need);
             s.reserved = s.reserved.saturating_sub(mine);
             drop(s);
             self.budget.freed.notify_waiters();
@@ -538,7 +1001,7 @@ impl Drop for Queued<'_> {
         let id = self.0.id;
         s.queue.retain(|&q| q != id);
         s.partials.retain(|&q| q != id);
-        s.growth.retain(|&q| q != id);
+        s.growth.retain(|&(q, ..)| q != id);
         if s.starved == Some(id) {
             s.starved = None;
         }
@@ -650,6 +1113,9 @@ pub struct PoolStats {
     /// Fetches whose deadline ran out while they waited for a reservation.
     /// The peer isn't charged: it's tried again later.
     pub reserve_timeouts: AtomicU64,
+    /// Timeouts after a growth's room came late, not charged to the peer
+    /// ([`LATE_WAITS_FREE`]).
+    pub late_waits: AtomicU64,
 }
 
 impl PoolStats {
@@ -823,6 +1289,8 @@ pub fn spawn(
     let admission = config
         .coordinated_admission
         .then(|| Admission::new(io.peer_finders.len(), config.finder_capacity.max(1)));
+    let limit_addresses = !io.peer_finders.is_empty();
+    let places = Places::new(config.max_pending);
     let budget = Arc::new(Budget::new(config.max_held_bytes));
     let mut pool = Pool {
         cfg: config,
@@ -845,6 +1313,8 @@ pub fn spawn(
         lookups: 0,
         requests: RequestMap::default(),
         per_ip: HashMap::new(),
+        vouched: places,
+        limit_addresses,
         tasks: JoinSet::new(),
         task_keys: HashMap::new(),
         recent: HashSet::new(),
@@ -871,6 +1341,578 @@ pub fn spawn(
         },
         task,
     )
+}
+
+/// The most keys in the pool at once with a peer in use at one address:
+/// an IPv4 address, or an IPv6 /64. A peer is in use while it is still to
+/// be tried or is being fetched from. A smaller queue has a smaller limit
+/// ([`address_caps`]). Past it, a peer at that address isn't added to
+/// another key until a place frees: it waits its turn ([`wait_caps`]),
+/// and the key is still taken, with its other peers, or with none and
+/// looked up like any key found with none, so it gives way to newer keys
+/// when the queue is full.
+pub const MAX_VOUCHED_PER_IP: usize = 256;
+
+/// The most keys in the pool at once with a peer in use in one network:
+/// an IPv4 /24, or an IPv6 /48. Both limits hold at once.
+pub const MAX_VOUCHED_PER_NET: usize = 1024;
+
+/// The limits for a queue of `max_pending` keys: per address and per
+/// network. A share of the queue, so a few addresses can't hold a small
+/// one, and no more than the two constants.
+pub fn address_caps(max_pending: usize) -> (usize, usize) {
+    let address = (max_pending / 512).clamp(1, MAX_VOUCHED_PER_IP);
+    let network = (max_pending / 128).clamp(address, MAX_VOUCHED_PER_NET);
+    (address, network)
+}
+
+/// The most addresses one key waits at ([`Waits`]).
+pub const MAX_WAITS_PER_KEY: usize = 4;
+
+/// The most waiters passed over for their network when one place is
+/// given away ([`Pool::promote`]).
+const MAX_PASSED_OVER: usize = 16;
+
+/// The wait lists' bounds for a queue of `max_pending` keys: the most
+/// peers waiting at one address, and in all. Eight times the address's
+/// places, so the last in line waits eight rounds of them; and a quarter
+/// of the queue in all.
+pub fn wait_caps(max_pending: usize) -> (usize, usize) {
+    let (address, _) = address_caps(max_pending);
+    let per_address = address * 8;
+    (per_address, (max_pending / 4).max(per_address))
+}
+
+/// How many keys in the pool have a peer at each address, or in each
+/// network: one count, with its limit.
+struct Vouched {
+    cap: usize,
+    by_net: HashMap<Net, u32>,
+}
+
+impl Vouched {
+    fn new(cap: usize) -> Vouched {
+        Vouched {
+            cap,
+            by_net: HashMap::new(),
+        }
+    }
+
+    /// A place for one more key at `net`, unless it has `cap` already.
+    fn take(&mut self, net: Net) -> bool {
+        let keys = self.by_net.entry(net).or_default();
+        if *keys as usize >= self.cap {
+            // An address with no keys holds nothing (a limit of 0 never
+            // happens: the smallest is 1).
+            if *keys == 0 {
+                self.by_net.remove(&net);
+            }
+            return false;
+        }
+        *keys += 1;
+        true
+    }
+
+    /// Counts a key that already has its peer at `net`, whatever the
+    /// limit: a key that turns public keeps the peers it has.
+    fn count(&mut self, net: Net) {
+        let keys = self.by_net.entry(net).or_default();
+        *keys = keys.saturating_add(1);
+    }
+
+    fn give_back(&mut self, net: Net) {
+        let std::collections::hash_map::Entry::Occupied(mut keys) = self.by_net.entry(net) else {
+            debug_assert!(false, "a place given back that wasn't taken");
+            return;
+        };
+        *keys.get_mut() -= 1;
+        if *keys.get() == 0 {
+            keys.remove();
+            // Give the memory back after a burst of addresses has gone.
+            if self.by_net.capacity() > 4096 && self.by_net.len() * 8 < self.by_net.capacity() {
+                self.by_net.shrink_to(self.by_net.len() * 2);
+            }
+        }
+    }
+
+    fn has_room(&self, net: Net) -> bool {
+        self.by_net
+            .get(&net)
+            .is_none_or(|keys| (*keys as usize) < self.cap)
+    }
+
+    #[cfg(test)]
+    fn keys(&self, net: Net) -> u32 {
+        self.by_net.get(&net).copied().unwrap_or(0)
+    }
+}
+
+/// Which limit turned a peer away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Full {
+    Address,
+    Network,
+}
+
+/// How many public keys in the pool have a peer in use at each address and
+/// in each network. A peer is in use while it is still to be tried or is
+/// being fetched from ([`Entry::counted`]); one that has been tried holds
+/// nothing. A key counts once for each address, and once for each network,
+/// such peers are at; the counts are taken as a peer is added and given
+/// back as it is tried or goes. With them, the peers that wait for a place
+/// ([`Waits`]).
+struct Places {
+    addresses: Vouched,
+    networks: Vouched,
+    waits: Waits,
+    /// Addresses with a wait list where a place has come free, or whose
+    /// network has one free, since the last promotion
+    /// ([`Pool::promote_freed`]).
+    freed: Vec<Net>,
+    /// Networks where a place has come free since then, if a waiter was
+    /// passed over for a network.
+    freed_networks: Vec<Net>,
+    /// Addresses whose line had a waiter passed over for its network at
+    /// the last promotion there: the ones a network's free place wakes.
+    blocked: BTreeSet<Net>,
+    /// The address last promoted at for a network's place, so its lines
+    /// take turns.
+    last_woken: Option<Net>,
+}
+
+impl Places {
+    fn new(max_pending: usize) -> Places {
+        let (address, network) = address_caps(max_pending);
+        Places {
+            addresses: Vouched::new(address),
+            networks: Vouched::new(network),
+            waits: Waits::new(max_pending),
+            freed: Vec::new(),
+            freed_networks: Vec::new(),
+            blocked: BTreeSet::new(),
+            last_woken: None,
+        }
+    }
+
+    /// Places for `p` in a key whose peers in use are `have`: one at its
+    /// address and one in its network, each only if the key has no such
+    /// peer there yet. Both or neither.
+    fn take(&mut self, have: &[SocketAddr], p: SocketAddr) -> Result<(), Full> {
+        let address = net_of(p.ip());
+        let network = address.network();
+        let (mut new_address, mut new_network) = (true, true);
+        for q in have {
+            let at = net_of(q.ip());
+            new_address &= at != address;
+            new_network &= at.network() != network;
+        }
+        if new_address && !self.addresses.take(address) {
+            return Err(Full::Address);
+        }
+        if new_network && !self.networks.take(network) {
+            if new_address {
+                self.addresses.give_back(address);
+            }
+            return Err(Full::Network);
+        }
+        Ok(())
+    }
+
+    /// Counts a key that already has `peers` in use, whatever the limits:
+    /// a key that turns public keeps the peers it has.
+    fn count(&mut self, peers: &[SocketAddr]) {
+        let (addresses, networks) = nets_of(peers);
+        addresses.into_iter().for_each(|n| self.addresses.count(n));
+        networks.into_iter().for_each(|n| self.networks.count(n));
+    }
+
+    /// Gives back the places of a key whose peers in use were `peers`.
+    fn give_back(&mut self, peers: &[SocketAddr]) {
+        self.give_back_dropped(peers, &[]);
+    }
+
+    /// Gives back the places a key held for `before` and has no peer in
+    /// use for in `after`, and notes the wait lists they free a place for.
+    fn give_back_dropped(&mut self, before: &[SocketAddr], after: &[SocketAddr]) {
+        if before.is_empty() {
+            return;
+        }
+        let (had_addresses, had_networks) = nets_of(before);
+        let (addresses, networks) = nets_of(after);
+        let waited = !self.waits.lines.is_empty();
+        for n in had_addresses {
+            if addresses.binary_search(&n).is_err() {
+                self.addresses.give_back(n);
+                if waited && self.waits.lines.contains_key(&n) {
+                    self.freed.push(n);
+                }
+            }
+        }
+        for n in had_networks {
+            if networks.binary_search(&n).is_err() {
+                self.networks.give_back(n);
+                if !self.blocked.is_empty() {
+                    self.freed_networks.push(n);
+                }
+            }
+        }
+    }
+}
+
+/// A peer's turn in an address's line. It stands for the wait only while
+/// its key still has it parked under the same `seq`.
+#[derive(Debug, Clone, Copy)]
+struct Ticket {
+    seq: u64,
+    key: InfoHash,
+    peer: SocketAddr,
+    /// In the line of keys a user asked for.
+    asked: bool,
+}
+
+/// One address's line: the keys a user asked for first, then the rest,
+/// each oldest first. Tickets whose wait has ended stay until they reach
+/// the front or the line is tidied; `live` counts the others.
+#[derive(Default)]
+struct Line {
+    asked: VecDeque<Ticket>,
+    rest: VecDeque<Ticket>,
+    live: usize,
+    /// Waiters given a place from this line, ever.
+    promoted: u64,
+}
+
+/// A peer one key waits with.
+struct Parked {
+    peer: SocketAddr,
+    seq: u64,
+    /// The line's `promoted` when the key was last asked whether its
+    /// lines still move ([`Waits::still_moving`]).
+    seen: u64,
+}
+
+/// Peers waiting for a place at a full address: per address, first come
+/// first served, bounded per address, per key and in all
+/// ([`wait_caps`], [`MAX_WAITS_PER_KEY`]). A key waits with a peer its
+/// address had no place for; when a place frees, the first waiter that can
+/// take it gets the peer ([`Pool::promote`]). A full line turns the newest
+/// arrival away, so a waiter's turn comes within the turnovers ahead of
+/// it, whatever arrives later.
+struct Waits {
+    per_address: usize,
+    total: usize,
+    live: usize,
+    seq: u64,
+    /// Ordered, so the lines of one network are a range.
+    lines: BTreeMap<Net, Line>,
+    keys: HashMap<InfoHash, Vec<Parked>>,
+}
+
+impl Waits {
+    fn new(max_pending: usize) -> Waits {
+        let (per_address, total) = wait_caps(max_pending);
+        Waits {
+            per_address,
+            total,
+            live: 0,
+            seq: 0,
+            lines: BTreeMap::new(),
+            keys: HashMap::new(),
+        }
+    }
+
+    fn is_live(keys: &HashMap<InfoHash, Vec<Parked>>, t: &Ticket) -> bool {
+        keys.get(&t.key)
+            .is_some_and(|parked| parked.iter().any(|p| p.seq == t.seq))
+    }
+
+    fn is_parked(&self, key: &InfoHash) -> bool {
+        self.keys.contains_key(key)
+    }
+
+    /// Parks `peer` for `key` at the back of its address's line, or of
+    /// the asked keys' line. False if the key waits at enough addresses
+    /// already or the line, or all of them together, is full. A full line
+    /// makes room for an asked key by turning its newest waiter away.
+    fn park(&mut self, key: InfoHash, peer: SocketAddr, asked: bool) -> bool {
+        let address = net_of(peer.ip());
+        let parked = self.keys.get(&key).map_or(&[][..], Vec::as_slice);
+        // One turn a key at an address, whichever of its ports came first.
+        if parked.iter().any(|p| net_of(p.peer.ip()) == address) {
+            return true;
+        }
+        if parked.len() >= MAX_WAITS_PER_KEY {
+            return false;
+        }
+        let full = self.live >= self.total
+            || self
+                .lines
+                .get(&address)
+                .is_some_and(|l| l.live >= self.per_address);
+        if full && !(asked && self.turn_newest_away(address, key)) {
+            return false;
+        }
+        self.seq += 1;
+        let ticket = Ticket {
+            seq: self.seq,
+            key,
+            peer,
+            asked,
+        };
+        let line = self.lines.entry(address).or_default();
+        if asked {
+            line.asked.push_back(ticket);
+        } else {
+            line.rest.push_back(ticket);
+        }
+        line.live += 1;
+        self.live += 1;
+        let parked = self.keys.entry(key);
+        parked
+            .or_insert_with(|| Vec::with_capacity(1))
+            .push(Parked {
+                peer,
+                seq: self.seq,
+                seen: u64::MAX,
+            });
+        true
+    }
+
+    /// Ends the newest wait at `address` that isn't an asked key's or
+    /// `but`'s own. False if there is none.
+    fn turn_newest_away(&mut self, address: Net, but: InfoHash) -> bool {
+        let Some(line) = self.lines.get_mut(&address) else {
+            return false;
+        };
+        let keys = &self.keys;
+        let Some(at) = line
+            .rest
+            .iter()
+            .rposition(|t| t.key != but && Waits::is_live(keys, t))
+        else {
+            return false;
+        };
+        let ticket = line.rest.remove(at).expect("found");
+        self.unpark(&ticket);
+        true
+    }
+
+    /// Ends the wait `ticket` stands for.
+    fn unpark(&mut self, ticket: &Ticket) {
+        let Some(parked) = self.keys.get_mut(&ticket.key) else {
+            return;
+        };
+        let Some(at) = parked.iter().position(|p| p.seq == ticket.seq) else {
+            return;
+        };
+        parked.swap_remove(at);
+        if parked.is_empty() {
+            self.keys.remove(&ticket.key);
+            self.tidy_keys();
+        }
+        self.left(net_of(ticket.peer.ip()));
+    }
+
+    /// One wait fewer at `address`. A line that has drained gives its
+    /// memory back: once it has room for more than four times its waiters
+    /// (and 8 turns), the turns left behind are cleared out and it keeps
+    /// room for about twice the turns left. The gap between the two keeps
+    /// a line that shrinks and grows by one from reallocating each time.
+    fn left(&mut self, address: Net) {
+        self.live -= 1;
+        let line = self.lines.get_mut(&address).expect("a wait has a line");
+        line.live -= 1;
+        if line.live == 0 {
+            self.lines.remove(&address);
+        } else if line.asked.capacity() + line.rest.capacity() > 4 * line.live + 8 {
+            let keys = &self.keys;
+            for turns in [&mut line.asked, &mut line.rest] {
+                turns.retain(|t| Waits::is_live(keys, t));
+                let room = 2 * turns.len();
+                turns.shrink_to(room);
+            }
+        }
+    }
+
+    /// Gives the keys' map its memory back after a burst of waiters has
+    /// gone.
+    fn tidy_keys(&mut self) {
+        if self.keys.capacity() > 4096 && self.keys.len() * 8 < self.keys.capacity() {
+            self.keys.shrink_to(self.keys.len() * 2);
+        }
+    }
+
+    /// Ends every wait of `key`, which has left the pool or turned
+    /// private. Returns the peers it waited with.
+    fn forget(&mut self, key: &InfoHash) -> Vec<SocketAddr> {
+        let Some(parked) = self.keys.remove(key) else {
+            return Vec::new();
+        };
+        self.tidy_keys();
+        let peers: Vec<SocketAddr> = parked.iter().map(|p| p.peer).collect();
+        for p in &peers {
+            self.left(net_of(p.ip()));
+        }
+        peers
+    }
+
+    /// Takes the first waiter out of `address`'s line, to be given its
+    /// place ([`promoted`](Self::promoted)), put back
+    /// ([`put_back`](Self::put_back)) or ended ([`unpark`](Self::unpark)).
+    fn pop(&mut self, address: Net) -> Option<Ticket> {
+        let line = self.lines.get_mut(&address)?;
+        let keys = &self.keys;
+        loop {
+            let ticket = line.asked.pop_front().or_else(|| line.rest.pop_front())?;
+            if Waits::is_live(keys, &ticket) {
+                return Some(ticket);
+            }
+        }
+    }
+
+    /// Puts waiters taken with [`pop`](Self::pop) back at the front, in
+    /// the order they were taken.
+    fn put_back(&mut self, address: Net, tickets: Vec<Ticket>) {
+        let Some(line) = self.lines.get_mut(&address) else {
+            debug_assert!(tickets.is_empty(), "a live ticket has a line");
+            return;
+        };
+        for ticket in tickets.into_iter().rev() {
+            if ticket.asked {
+                line.asked.push_front(ticket);
+            } else {
+                line.rest.push_front(ticket);
+            }
+        }
+    }
+
+    /// The waiter `ticket` stands for has its place.
+    fn promoted(&mut self, ticket: &Ticket) {
+        if let Some(line) = self.lines.get_mut(&net_of(ticket.peer.ip())) {
+            line.promoted += 1;
+        }
+        self.unpark(ticket);
+    }
+
+    /// Moves `key`'s waits to the asked keys' line, at its back: a user
+    /// asked for it.
+    fn ask(&mut self, key: &InfoHash) {
+        let Some(parked) = self.keys.get_mut(key) else {
+            return;
+        };
+        for p in parked {
+            // The ticket it had is left behind, and skipped when reached.
+            self.seq += 1;
+            p.seq = self.seq;
+            let line = self
+                .lines
+                .get_mut(&net_of(p.peer.ip()))
+                .expect("a wait has a line");
+            line.asked.push_back(Ticket {
+                seq: self.seq,
+                key: *key,
+                peer: p.peer,
+                asked: true,
+            });
+        }
+    }
+
+    /// Whether any line `key` waits in has given a place since this was
+    /// last asked for the key. True the first time it is asked.
+    fn still_moving(&mut self, key: &InfoHash) -> bool {
+        let Some(parked) = self.keys.get_mut(key) else {
+            return false;
+        };
+        let mut moving = false;
+        for p in parked {
+            let promoted = self.lines[&net_of(p.peer.ip())].promoted;
+            moving |= p.seen != promoted;
+            p.seen = promoted;
+        }
+        moving
+    }
+
+    /// The bounds and the counts hold, and only `public` keys wait.
+    #[cfg(debug_assertions)]
+    fn check(&self, public: impl Fn(&InfoHash) -> bool) {
+        let mut live = 0;
+        for line in self.lines.values() {
+            let tickets = line.asked.iter().chain(&line.rest);
+            let found = tickets.filter(|t| Waits::is_live(&self.keys, t)).count();
+            assert_eq!(found, line.live, "a line's count follows its tickets");
+            assert!(line.live > 0 && line.live <= self.per_address);
+            live += line.live;
+        }
+        assert_eq!(live, self.live);
+        assert!(self.live <= self.total);
+        assert_eq!(live, self.keys.values().map(Vec::len).sum::<usize>());
+        for (key, parked) in &self.keys {
+            assert!(public(key), "only a public key in the pool waits");
+            assert!(!parked.is_empty() && parked.len() <= MAX_WAITS_PER_KEY);
+        }
+    }
+}
+
+/// What a peer counts under: an IPv4 address or the /64 of an IPv6 one,
+/// and ([`Net::network`]) the IPv4 /24 or IPv6 /48 around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Net {
+    V4(u32),
+    V6(u64),
+}
+
+impl Net {
+    /// The network an address is in: its IPv4 /24, or its IPv6 /48.
+    fn network(self) -> Net {
+        match self {
+            Net::V4(a) => Net::V4(a & 0xffff_ff00),
+            Net::V6(a) => Net::V6(a & 0xffff_ffff_ffff_0000),
+        }
+    }
+
+    /// The last address in a network.
+    fn last(self) -> Net {
+        match self {
+            Net::V4(a) => Net::V4(a | 0xff),
+            Net::V6(a) => Net::V6(a | 0xffff),
+        }
+    }
+}
+
+/// The address `ip` counts under. An IPv4-mapped or NAT64 /96 address
+/// counts as the IPv4 address inside it.
+fn net_of(ip: IpAddr) -> Net {
+    match ip {
+        IpAddr::V4(v4) => Net::V4(u32::from(v4)),
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return Net::V4(u32::from(v4));
+            }
+            let nat64 = s[0] == 0x64
+                && s[1] == 0xff9b
+                && (s[2..6] == [0; 4] || (s[2] == 1 && s[3..6] == [0; 3]));
+            if nat64 {
+                return Net::V4((u32::from(s[6]) << 16) | u32::from(s[7]));
+            }
+            Net::V6(
+                (u64::from(s[0]) << 48)
+                    | (u64::from(s[1]) << 32)
+                    | (u64::from(s[2]) << 16)
+                    | u64::from(s[3]),
+            )
+        }
+    }
+}
+
+/// Each address `peers` are at, and each network, once and sorted.
+fn nets_of(peers: &[SocketAddr]) -> (Vec<Net>, Vec<Net>) {
+    let mut addresses: Vec<Net> = peers.iter().map(|p| net_of(p.ip())).collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    let mut networks: Vec<Net> = addresses.iter().map(|n| n.network()).collect();
+    networks.dedup();
+    (addresses, networks)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -903,9 +1945,17 @@ struct Entry {
     lookup_requested: bool,
     fetch_started: bool,
     last_failure: Option<FailureKind>,
+    /// The networks whose peers have said the dict is over the size limit,
+    /// while they are fewer than [`OVERSIZE_AGREE`]: `None` for nearly
+    /// every key, so it costs a pointer.
+    oversize_from: Option<Box<(Net, Option<Net>)>>,
     /// Fetches of this key that ran out of time waiting for a reservation
     /// (X-fetch-meta-reserve); the `RESERVE_WAITS_FREE`th is charged.
     reserve_waits: u8,
+    /// Timeouts after a late room that weren't charged ([`LATE_WAITS_FREE`]).
+    late_waits: u8,
+    /// Its next fetch's growth goes ahead of growths without credit.
+    credit: bool,
     state: State,
     /// Set from the pool's counter on every state change, to invalidate
     /// old timers and requests. Pool-wide, so a key evicted and found again
@@ -916,6 +1966,35 @@ struct Entry {
 impl Entry {
     fn has_untried(&self) -> bool {
         self.tried < self.peers.len()
+    }
+
+    /// Notes that a peer in `network` said the dict is over the size
+    /// limit. `true` once peers in [`OVERSIZE_AGREE`] networks have.
+    fn oversize_said_by(&mut self, network: Net) -> bool {
+        match self.oversize_from.as_deref_mut() {
+            None => {
+                self.oversize_from = Some(Box::new((network, None)));
+                false
+            }
+            Some((first, second)) => {
+                if *first == network || *second == Some(network) {
+                    false
+                } else if second.is_none() {
+                    *second = Some(network);
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
+    /// The peers in use, which are the ones that hold places
+    /// ([`Places`]): those still to try and, while a fetch runs, the one
+    /// it is from (the last one tried).
+    fn counted(&self) -> &[SocketAddr] {
+        let fetching = usize::from(self.state == State::Fetching);
+        &self.peers[self.tried.saturating_sub(fetching)..]
     }
 }
 
@@ -991,12 +2070,21 @@ struct Pool {
     lookups: usize,
     requests: RequestMap,
     per_ip: HashMap<IpAddr, usize>,
+    /// Public keys in `entries` per address and per network their peers
+    /// are at.
+    vouched: Places,
+    /// Whether the limits in [`Places`] apply: only with a peer finder to
+    /// look up a key that goes without a peer. A pool with none (a worker
+    /// that runs no DHT) has only the peers its keys came with.
+    limit_addresses: bool,
     /// Each fetch's result, and whether it ran out of time waiting for a
     /// reservation.
-    tasks: JoinSet<(Result<Fetched, FailureKind>, bool)>,
+    tasks: JoinSet<(Result<Fetched, FailureKind>, bool, bool)>,
     /// What each fetch task is fetching, so even a panicked task is
     /// accounted for.
-    task_keys: HashMap<Id, (InfoHash, SocketAddr)>,
+    /// With the entry's generation when the fetch started, so a result
+    /// can't touch an entry made after its own was lost.
+    task_keys: HashMap<Id, (InfoHash, SocketAddr, u64)>,
     recent: HashSet<InfoHash>,
     recent_order: VecDeque<InfoHash>,
     /// Streaming peers: when keys not yet fetched got their first batch,
@@ -1071,10 +2159,10 @@ impl Pool {
                 _ = shutdown.requested() => break,
                 Some(joined) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     match joined {
-                        Ok((id, (result, waited_out))) => self.joined(id, result, waited_out),
+                        Ok((id, (result, waited_out, late))) => self.joined(id, result, waited_out, late),
                         // Only a panic ends a fetch task early: a bug, but
                         // one peer's bytes mustn't take the pool down.
-                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false),
+                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false, false),
                     }
                 }
                 // A reservation stopped waiting: dispatch may start again.
@@ -1120,12 +2208,12 @@ impl Pool {
         // with the queue.
         while let Some(joined) = self.tasks.join_next_with_id().await {
             match joined {
-                Ok((id, (result, waited_out))) => self.joined(id, result, waited_out),
+                Ok((id, (result, waited_out, late))) => self.joined(id, result, waited_out, late),
                 // Its reservation went with the task.
                 Err(e) if e.is_cancelled() => {
                     self.task_keys.remove(&e.id());
                 }
-                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false),
+                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false, false),
             }
         }
         if let Some(a) = &mut self.admission {
@@ -1169,9 +2257,17 @@ impl Pool {
 
     /// Handles a joined fetch's result. Its bytes are already held in the
     /// budget (the task settled its reservation as it finished).
-    fn joined(&mut self, id: Id, result: Result<Fetched, FailureKind>, waited_out: bool) {
+    fn joined(
+        &mut self,
+        id: Id,
+        result: Result<Fetched, FailureKind>,
+        waited_out: bool,
+        late: bool,
+    ) {
         match self.task_keys.remove(&id) {
-            Some((key, peer)) => self.on_result(key, peer, result, waited_out),
+            Some((key, peer, generation)) => {
+                self.on_result(key, peer, generation, result, waited_out, late);
+            }
             None => {
                 if let Ok(fetched) = &result {
                     self.budget.release_held(weigh(fetched));
@@ -1299,7 +2395,12 @@ impl Pool {
             e.sources |= 1u64 << d.source.get();
             // A private source can't make a public key private, but a
             // public sighting does make a private key public.
+            let was_private = e.private;
             e.private &= d.found.private_source;
+            if was_private && !e.private && self.limit_addresses {
+                // Public from here: the peers it has in use count now.
+                self.vouched.count(e.counted());
+            }
             if d.found.interest {
                 self.raise_interest(key);
             }
@@ -1313,6 +2414,11 @@ impl Pool {
             self.lose_untracked(&key, cohort, d.source, Loss::Evicted, None);
             return;
         }
+        // A place the eviction freed goes to a waiter before the new key.
+        // Here, and when fetches are started, and nowhere inside the
+        // handling of a lookup's answer: a promotion can end a key's
+        // lookup, which must not happen under the code reading it.
+        self.promote_freed();
         let cohort = d.at.div_euclid(3600);
         self.funnel.admitted(&key, cohort, d.source);
         self.entries.insert(
@@ -1332,7 +2438,10 @@ impl Pool {
                 lookup_requested: false,
                 fetch_started: false,
                 last_failure: None,
+                oversize_from: None,
                 reserve_waits: 0,
+                late_waits: 0,
+                credit: false,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -1383,7 +2492,10 @@ impl Pool {
                 lookup_requested: false,
                 fetch_started: false,
                 last_failure: None,
+                oversize_from: None,
                 reserve_waits: 0,
+                late_waits: 0,
+                credit: false,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -1401,6 +2513,7 @@ impl Pool {
         };
         let before = e.peers.len();
         let mut capped = 0;
+        let limited = self.limit_addresses && !e.private;
         for p in peers
             .iter()
             .copied()
@@ -1420,11 +2533,33 @@ impl Pool {
                 capped += 1;
                 continue;
             }
+            // Each address, and each network, has peers in use in a
+            // bounded number of public keys at once, by whatever way the
+            // peer came. Past that the peer waits for a place at its
+            // address, if the wait list has room; or else this key does
+            // without it. A private key's peers are the user's own (their
+            // client, a private tracker): never limited.
+            if limited {
+                match self.vouched.take(e.counted(), p) {
+                    Ok(()) => {}
+                    Err(Full::Address) => {
+                        self.vouched.waits.park(key, p, e.interest);
+                        continue;
+                    }
+                    Err(Full::Network) => continue,
+                }
+            }
             e.peers.push(p);
         }
-        if e.peers.len() == before {
-            return capped;
+        if e.peers.len() > before {
+            self.gained(key);
         }
+        capped
+    }
+
+    /// A key has a new peer to try: it becomes ready if it was waiting.
+    fn gained(&mut self, key: InfoHash) {
+        let e = self.entries.get_mut(&key).expect("present");
         if !e.had_peers {
             e.had_peers = true;
             self.funnel
@@ -1437,13 +2572,102 @@ impl Pool {
             // stream keeps its lookup slot until its terminal.
             State::Lookup if self.owns_stream(&key) => self.make_ready(key),
             State::Lookup => {
-                self.lookups -= 1;
-                self.requests.remove(&key);
+                if self.requests.remove(&key).is_some() {
+                    self.lookups -= 1;
+                }
+                debug_assert_eq!(self.lookups, self.requests.len());
                 self.make_ready(key);
             }
             State::LookupQueued | State::Backoff => self.make_ready(key),
         }
-        capped
+    }
+
+    /// Gives the places freed since the last call to the peers waiting
+    /// for them.
+    fn promote_freed(&mut self) {
+        if self.vouched.freed.is_empty() && self.vouched.freed_networks.is_empty() {
+            return;
+        }
+        let mut freed = std::mem::take(&mut self.vouched.freed);
+        freed.sort_unstable();
+        freed.dedup();
+        for address in freed {
+            self.promote(address);
+        }
+        // A network's free places go to the lines with a waiter passed
+        // over for it, in turn from the one after the last served, for as
+        // long as the network has room.
+        let mut networks = std::mem::take(&mut self.vouched.freed_networks);
+        networks.sort_unstable();
+        networks.dedup();
+        for network in networks {
+            let v = &self.vouched;
+            let from = v.last_woken.filter(|a| a.network() == network);
+            let lines = v.blocked.range(network..=network.last()).copied();
+            let (mut after, mut before): (Vec<Net>, Vec<Net>) =
+                lines.partition(|a| from.is_none_or(|from| *a > from));
+            after.append(&mut before);
+            for address in after {
+                if !self.vouched.networks.has_room(network) {
+                    break;
+                }
+                self.promote(address);
+                self.vouched.last_woken = Some(address);
+            }
+        }
+    }
+
+    /// Gives `address`'s free places to its waiters, first come first
+    /// served. A waiter that also needs a place in a full network is
+    /// passed over, and keeps its turn; one whose key can't use the peer
+    /// any more stops waiting. At most [`MAX_PASSED_OVER`] are passed
+    /// over at a time, so a place nobody can take costs a bounded look.
+    fn promote(&mut self, address: Net) {
+        let (cap, per_ip) = (self.cfg.max_peers_per_key, self.cfg.per_ip);
+        let mut passed = Vec::new();
+        let mut blocked = false;
+        while self.vouched.addresses.has_room(address) && passed.len() < MAX_PASSED_OVER {
+            let Some(ticket) = self.vouched.waits.pop(address) else {
+                break;
+            };
+            let p = ticket.peer;
+            let Some(e) = self.entries.get_mut(&ticket.key) else {
+                debug_assert!(false, "a wait outlived its key");
+                self.vouched.waits.unpark(&ticket);
+                continue;
+            };
+            let usable = !e.private
+                && e.peers.len() < cap
+                && !e.peers.contains(&p)
+                && self.fetcher.allows(p)
+                && cap_for(self.cfg.ip_cap.0.as_ref(), per_ip, p.ip()) > 0;
+            if !usable {
+                self.vouched.waits.unpark(&ticket);
+                continue;
+            }
+            match self.vouched.take(e.counted(), p) {
+                Ok(()) => {
+                    e.peers.push(p);
+                    self.vouched.waits.promoted(&ticket);
+                    self.gained(ticket.key);
+                }
+                Err(Full::Network) => {
+                    blocked = true;
+                    passed.push(ticket);
+                }
+                Err(Full::Address) => {
+                    passed.push(ticket);
+                    break;
+                }
+            }
+        }
+        self.vouched.waits.put_back(address, passed);
+        // Woken again when its network has a place.
+        if blocked {
+            self.vouched.blocked.insert(address);
+        } else {
+            self.vouched.blocked.remove(&address);
+        }
     }
 
     /// An accepted streaming request holds this key's lookup (CR-1a-S).
@@ -1484,9 +2708,14 @@ impl Pool {
             return;
         }
         e.interest = true;
+        self.vouched.waits.ask(&key);
+        let spent = e.attempts >= self.cfg.max_attempts;
         match e.state {
             // The stale copy in its source queue is skipped when popped.
             State::Ready => self.interest.push_back(key),
+            // Out of attempts and waiting for a place: it keeps waiting,
+            // further forward now.
+            State::Backoff if spent && !e.has_untried() && self.vouched.waits.is_parked(&key) => {}
             // Backing off after waiting out a reservation, it still has its
             // peer: ready now rather than a second lookup.
             State::Backoff if e.has_untried() => self.make_ready(key),
@@ -1529,8 +2758,17 @@ impl Pool {
         let max_attempts = self.cfg.max_attempts;
         let e = self.entries.get_mut(&key).expect("present");
         if e.attempts >= max_attempts {
-            let loss = e.last_failure.map_or(Loss::NoPeers, Loss::from);
-            self.lose(key, loss);
+            if self.vouched.waits.still_moving(&key) {
+                // Waiting for a place at an address that keeps giving
+                // them: no more lookups, but not given up.
+                if e.state == State::LookupQueued {
+                    self.waiting -= 1;
+                }
+                self.rest(key);
+            } else {
+                let loss = e.last_failure.map_or(Loss::NoPeers, Loss::from);
+                self.lose(key, loss);
+            }
             if grant.is_some() {
                 self.stats.admission_permit_returns[2].fetch_add(1, Ordering::Relaxed);
             }
@@ -1992,9 +3230,9 @@ impl Pool {
         self.stats
             .stream_peers_capped
             .fetch_add(capped as u64, Ordering::Relaxed);
-        if finished {
-            // Every finder is done: the logical lookup ends, once.
-            self.requests.remove(&key);
+        // Every finder is done: the logical lookup ends, once. (If the
+        // request is gone already, its lookup ended with it.)
+        if finished && self.requests.remove(&key).is_some() {
             self.lookups -= 1;
             self.stream_ended(key);
         }
@@ -2162,15 +3400,25 @@ impl Pool {
         }
     }
 
-    /// Schedules the next lookup, or gives up if there won't be one.
+    /// Schedules the next lookup, or gives up if there won't be one. A
+    /// key out of attempts that waits for a place at an address is kept
+    /// while a line it waits in still moves, and asked again after the
+    /// same wait.
     fn back_off(&mut self, key: InfoHash) {
-        let (base, max_attempts) = (self.cfg.retry_backoff, self.cfg.max_attempts);
+        let max_attempts = self.cfg.max_attempts;
         let e = self.entries.get_mut(&key).expect("present");
-        if e.attempts >= max_attempts {
+        if e.attempts >= max_attempts && !self.vouched.waits.still_moving(&key) {
             let loss = e.last_failure.map_or(Loss::NoPeers, Loss::from);
             self.lose(key, loss);
             return;
         }
+        self.rest(key);
+    }
+
+    /// Puts a key in back-off until its next lookup is due.
+    fn rest(&mut self, key: InfoHash) {
+        let base = self.cfg.retry_backoff;
+        let e = self.entries.get_mut(&key).expect("present");
         e.state = State::Backoff;
         e.generation = next_generation(&mut self.generations);
         let generation = e.generation;
@@ -2180,8 +3428,19 @@ impl Pool {
         self.schedule(Instant::now() + delay, key, generation);
     }
 
-    /// Starts fetches while sockets are free.
+    /// Starts fetches while sockets are free, again for as long as a
+    /// round frees a place that a waiting peer takes.
     fn dispatch(&mut self) {
+        loop {
+            self.promote_freed();
+            self.dispatch_round();
+            if self.vouched.freed.is_empty() && self.vouched.freed_networks.is_empty() {
+                break;
+            }
+        }
+    }
+
+    fn dispatch_round(&mut self) {
         if self.cfg.paused {
             return;
         }
@@ -2224,11 +3483,26 @@ impl Pool {
                 // isn't put off for ever (WK-10e).
                 let tried = e.tried;
                 let mut at = 0;
+                // Only when a peer is about to go: the addresses before.
+                let counted = self.limit_addresses
+                    && !e.private
+                    && e.peers[tried..]
+                        .iter()
+                        .any(|p| cap_for(policy, per_ip, p.ip()) == 0);
+                let before = if counted {
+                    e.counted().to_vec()
+                } else {
+                    Vec::new()
+                };
                 e.peers.retain(|p| {
                     let keep = at < tried || cap_for(policy, per_ip, p.ip()) > 0;
                     at += 1;
                     keep
                 });
+                if counted {
+                    // The addresses it has no peer at any more.
+                    self.vouched.give_back_dropped(&before, e.counted());
+                }
                 if e.has_untried() {
                     // Every untried peer's IP is busy; try again next round.
                     deferred.push(key);
@@ -2243,6 +3517,7 @@ impl Pool {
             e.state = State::Fetching;
             e.fetch_started = true;
             e.generation = next_generation(&mut self.generations);
+            let generation = e.generation;
             if let Some(at) = self.first_batch.remove(&key) {
                 let ms = Instant::now().duration_since(at).as_millis();
                 self.stats
@@ -2253,7 +3528,12 @@ impl Pool {
                     .fetch_add(1, Ordering::Relaxed);
             }
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
-            let reservation = Reservation::new(self.budget.clone());
+            let network = net_of(peer.ip()).network();
+            let credit = self
+                .entries
+                .get_mut(&key)
+                .is_some_and(|e| std::mem::take(&mut e.credit));
+            let reservation = Reservation::for_retry(self.budget.clone(), Some(network), credit);
             let fetch = self.fetcher.fetch_reserving(peer, key, reservation.clone());
             let handle = self.tasks.spawn(async move {
                 let result = fetch.await;
@@ -2263,9 +3543,12 @@ impl Pool {
                     reservation.settle(weigh(fetched));
                 }
                 let waited_out = result.is_err() && reservation.waited_out();
-                (result, waited_out)
+                let late = !waited_out
+                    && matches!(result, Err(FailureKind::TimedOut))
+                    && reservation.late();
+                (result, waited_out, late)
             });
-            self.task_keys.insert(handle.id(), (key, peer));
+            self.task_keys.insert(handle.id(), (key, peer, generation));
         }
         if full && !self.full {
             self.stats.held_full.fetch_add(1, Ordering::Relaxed);
@@ -2357,8 +3640,10 @@ impl Pool {
         &mut self,
         key: InfoHash,
         peer: SocketAddr,
+        generation: u64,
         result: Result<Fetched, FailureKind>,
         waited_out: bool,
+        late: bool,
     ) {
         if let Some(n) = self.per_ip.get_mut(&peer.ip()) {
             *n -= 1;
@@ -2367,8 +3652,14 @@ impl Pool {
             }
         }
         let weight = result.as_ref().map_or(0, weigh);
-        let Some(e) = self.entries.get_mut(&key) else {
-            // Abandoned (a purge): its bytes go with it.
+        // Abandoned: its key was purged, or lost and found again since (the
+        // entry there now is another's, with its own peers and places).
+        // Its bytes go with it.
+        let Some(e) = self
+            .entries
+            .get_mut(&key)
+            .filter(|e| e.state == State::Fetching && e.generation == generation)
+        else {
             self.budget.release_held(weight);
             return;
         };
@@ -2386,7 +3677,21 @@ impl Pool {
                 true
             }
         };
-        if waited_out {
+        // Its room came so late the peer had too little time, and the peer
+        // never fell behind: not its failure either, up to
+        // `LATE_WAITS_FREE` times for a key, apart from the waits above.
+        // The retry's growth goes ahead of growths without credit.
+        let late = late && {
+            if e.late_waits < LATE_WAITS_FREE {
+                e.late_waits += 1;
+                e.credit = true;
+                self.stats.late_waits.fetch_add(1, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        };
+        if waited_out || late {
             // The peer goes last among its untried peers, so the others go
             // first, and no attempt is used.
             let others = e.has_untried();
@@ -2417,6 +3722,7 @@ impl Pool {
         match result {
             Ok(fetched) => {
                 let e = self.entries.remove(&key).expect("present");
+                self.unvouch(&key, &e);
                 // A verified result cancels every finder still streaming.
                 if self.requests.remove(&key).is_some() {
                     self.lookups -= 1;
@@ -2447,8 +3753,21 @@ impl Pool {
             Err(kind) => {
                 self.stats.failures[failure_index(kind)].fetch_add(1, Ordering::Relaxed);
                 e.last_failure = Some(kind);
-                if kind == FailureKind::Oversize {
-                    // A property of the torrent, not the peer.
+                // The fetch is over, and the peer it tried holds no place
+                // from here.
+                if self.limit_addresses && !e.private {
+                    let from = e.tried.saturating_sub(1);
+                    self.vouched
+                        .give_back_dropped(&e.peers[from..], &e.peers[e.tried..]);
+                }
+                e.state = State::Backoff;
+                // One peer's word on the size is that peer's failure: the
+                // key goes on to its other peers. It is the torrent's once
+                // peers in enough networks agree, or when the key runs out
+                // of peers and attempts with this as its last failure.
+                let oversize = kind == FailureKind::Oversize
+                    && e.oversize_said_by(net_of(peer.ip()).network());
+                if oversize {
                     self.lose(key, Loss::Oversize);
                 } else if e.has_untried() {
                     self.make_ready(key);
@@ -2510,6 +3829,7 @@ impl Pool {
     fn drop_source(&mut self, source: SourceId) -> usize {
         let bit = 1u64 << source.get();
         let mut only = Vec::new();
+        let mut unparked = Vec::new();
         for (key, e) in &mut self.entries {
             if e.sources & bit == 0 && e.source != source {
                 continue;
@@ -2524,11 +3844,22 @@ impl Pool {
             // the dropped one's included: which of the rest were private
             // isn't known, so it's private from here (SRC-14b). A live
             // public sighting makes it public again.
+            if !e.private && self.limit_addresses {
+                self.vouched.give_back(e.counted());
+                // The peers it waited with are its own now.
+                let waited = self.vouched.waits.forget(key);
+                if !waited.is_empty() {
+                    unparked.push((*key, waited));
+                }
+            }
             e.private = true;
             if e.source == source {
                 // The lowest remaining finder; its bit is under 64.
                 e.source = SourceId::new(rest.trailing_zeros() as u8).expect("bit under 64");
             }
+        }
+        for (key, peers) in unparked {
+            self.add_peers(key, &peers);
         }
         for key in &only {
             self.lose(*key, Loss::Evicted);
@@ -2570,8 +3901,38 @@ impl Pool {
         only.len() + dropped.len()
     }
 
+    /// Gives a removed entry's places back to the addresses its peers in
+    /// use are at, and ends its waits. Called wherever an entry leaves
+    /// `entries`.
+    fn unvouch(&mut self, key: &InfoHash, e: &Entry) {
+        if self.limit_addresses && !e.private {
+            self.vouched.give_back(e.counted());
+            self.vouched.waits.forget(key);
+        }
+    }
+
+    /// The counts per address and per network, taken afresh from the
+    /// entries.
+    #[cfg(debug_assertions)]
+    fn vouched_afresh(&self) -> (HashMap<Net, u32>, HashMap<Net, u32>) {
+        let mut afresh = (HashMap::new(), HashMap::new());
+        if self.limit_addresses {
+            for e in self.entries.values().filter(|e| !e.private) {
+                let (addresses, networks) = nets_of(e.counted());
+                for n in addresses {
+                    *afresh.0.entry(n).or_default() += 1;
+                }
+                for n in networks {
+                    *afresh.1.entry(n).or_default() += 1;
+                }
+            }
+        }
+        afresh
+    }
+
     fn lose(&mut self, key: InfoHash, loss: Loss) {
         let e = self.entries.remove(&key).expect("present");
+        self.unvouch(&key, &e);
         if loss == Loss::Evicted {
             let stage = if e.fetch_started {
                 3
@@ -2616,6 +3977,19 @@ impl Pool {
     }
 
     fn snapshot(&self) -> Vec<QueuedKey> {
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            (
+                self.vouched.addresses.by_net.clone(),
+                self.vouched.networks.by_net.clone()
+            ),
+            self.vouched_afresh(),
+            "the counts per address and network follow the entries"
+        );
+        #[cfg(debug_assertions)]
+        self.vouched
+            .waits
+            .check(|key| self.entries.get(key).is_some_and(|e| !e.private));
         let mut out: Vec<QueuedKey> = self
             .entries
             .iter()
@@ -2715,6 +4089,10 @@ mod diagnostic_cost {
         attempts: u16,
         had_peers: bool,
         last_failure: Option<FailureKind>,
+        // Not a diagnostic: the size rule's networks (X-fetch-room-fix),
+        // one pointer a key. Here so the bound below still measures only
+        // the diagnostics.
+        oversize_from: Option<Box<(Net, Option<Net>)>>,
         state: State,
         generation: u32,
     }
@@ -3055,8 +4433,12 @@ mod budget {
         assert!(n >= 2, "{n} admitted");
         let (_, reserved) = b.usage();
         assert_eq!(reserved, n * (KEY + 100));
-        assert!(reserved + 4_900 <= limit, "room left for any one to grow");
-        assert!(reserved + (KEY + 100) + 4_900 > limit, "and no more");
+        let beside = limit - b.floor();
+        assert!(
+            reserved + 4_900 <= beside,
+            "room left beside the floor for any one to grow"
+        );
+        assert!(reserved + (KEY + 100) + 4_900 > beside, "and no more");
         // One more keeps waiting, held back by its own rule...
         let blocked = Reservation::new(b.clone());
         let blocked_wait = tokio::spawn({
@@ -3083,16 +4465,17 @@ mod budget {
     }
 
     /// No deadlock: partial claims all asking to grow are served one at a
-    /// time, oldest first, as the ones ahead finish. While a growth waits,
-    /// no first reservation is granted and no fetch starts.
+    /// time as the ones ahead finish. A small claim is granted meanwhile.
     #[tokio::test(start_paused = true)]
-    async fn growths_go_first_and_always_complete() {
+    async fn growths_are_served_one_by_one_and_always_complete() {
         let (now, total) = (500usize, 2_000usize);
-        // Room for exactly one small claim beside three grown windows' worth,
-        // so only growth's priority holds the small one back.
-        let limit = 3 * (KEY + now as u64) + (total - now) as u64 + KEY + 1;
+        // Beside the floor, room for three windows and one growth, not a
+        // fourth window.
+        let beside = 3 * (KEY + now as u64) + (total - now) as u64;
+        let limit = 4 * beside.div_ceil(3);
+        assert!(limit - limit / 4 < beside + KEY + now as u64);
         let b = Arc::new(Budget::new(limit as usize));
-        let claims: Vec<Reservation> = (0..3).map(|_| Reservation::new(b.clone())).collect();
+        let mut claims: Vec<Reservation> = (0..3).map(|_| Reservation::new(b.clone())).collect();
         for c in &claims {
             tokio::time::timeout(Duration::from_secs(1), c.reserve(now, total))
                 .await
@@ -3106,37 +4489,1161 @@ mod budget {
             "a fourth couldn't be sure to grow"
         );
         // All three grow: the first fits at once, the others wait for it.
-        claims[0].reserve(total, total).await;
-        let mut waits: Vec<_> = claims[1..]
-            .iter()
-            .map(|c| {
-                let c = c.clone();
-                tokio::spawn(async move { c.reserve(total, total).await })
-            })
-            .collect();
-        let small = Reservation::new(b.clone());
-        let mut small_wait = tokio::spawn({
-            let small = small.clone();
-            async move { small.reserve(1, 1).await }
-        });
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::timeout(Duration::from_secs(1), claims[0].reserve(total, total))
+            .await
+            .expect("one of the admitted claims can always grow");
+        let mut waits: Vec<_> = claims[1..].iter().map(|c| growing(c, total)).collect();
+        tokio::time::sleep(Duration::from_secs(5)).await;
         assert!(waits.iter().all(|w| !w.is_finished()));
-        assert!(
-            !small_wait.is_finished(),
-            "growth goes first, though it fits"
-        );
-        assert!(!b.has_room());
-        let mut claims = claims.into_iter();
-        drop(claims.next());
-        (&mut waits[0]).await.unwrap();
-        drop(claims.next());
-        (&mut waits[1]).await.unwrap();
-        (&mut small_wait).await.unwrap();
-        assert!(used(&b) <= limit);
-        drop((claims, small, fourth));
+        let small = Reservation::new(b.clone());
+        tokio::time::timeout(Duration::from_secs(1), small.reserve(1, 1))
+            .await
+            .expect("a waiting growth doesn't hold a small claim that fits");
+        // Each grows once the one before it has ended.
+        drop(claims.remove(0));
+        for left in [2usize, 1] {
+            until("the next growth", async || {
+                waits.iter().any(|w| w.is_finished())
+            })
+            .await;
+            assert_eq!(waits.iter().filter(|w| w.is_finished()).count(), 1);
+            let i = waits.iter().position(|w| w.is_finished()).expect("one");
+            waits.remove(i).await.unwrap();
+            assert!(used(&b) <= limit);
+            drop(claims.remove(i));
+            assert_eq!(claims.len(), left - 1);
+        }
+        drop((small, fourth));
         assert_eq!(used(&b), 0);
-        assert_eq!(b.lock().partial, 0);
+        let s = b.lock();
+        assert_eq!((s.partial, s.small, s.grown), (0, 0, 0));
+        assert!(s.needs.is_empty() && s.grown_nets.is_empty());
+    }
+
+    /// A large dict's first window is admitted only while the largest
+    /// growth still needed fits beside the floor: two claims whose growths
+    /// would each need the room the other holds aren't both let in, so the
+    /// one admitted grows at once and the other follows.
+    #[tokio::test(start_paused = true)]
+    async fn large_claims_are_admitted_only_while_one_can_grow() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let (now, total) = (64 << 10, 700_000usize);
+        let first = window(&b, 1, now, total).await;
+        let second = Reservation::for_peer(b.clone(), Some(net(2)));
+        let mut admitted = tokio::spawn({
+            let second = second.clone();
+            async move { second.reserve(now, total).await }
+        });
+        queued(&b, |s| s.partials.len() == 1).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(
+            !admitted.is_finished(),
+            "beside the first, it couldn't be sure to grow"
+        );
+        tokio::time::timeout(Duration::from_secs(1), first.reserve(total, total))
+            .await
+            .expect("the admitted claim grows at once");
+        drop(first);
+        (&mut admitted).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), second.reserve(total, total))
+            .await
+            .expect("then the other grows");
+        drop(second);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A network's partial claims hold at most an eighth of the room
+    /// beside the floor. One held back by that waits apart: another
+    /// network's claim is let in at once, and it follows when its own
+    /// network's claims make room.
+    #[tokio::test(start_paused = true)]
+    async fn one_networks_partial_claims_keep_to_their_share() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let share = (limit as u64 - b.floor()) / PARTIAL_NET_SHARE;
+        let (now, total) = (40_000usize, 50_000usize);
+        let mut mine = Vec::new();
+        while b.lock().partial_nets.get(&net(1)).copied().unwrap_or(0) + KEY + (now as u64) <= share
+        {
+            mine.push(window(&b, 1, now, total).await);
+        }
+        assert!(mine.len() >= 2, "{} let in", mine.len());
+        let next = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait = tokio::spawn({
+            let next = next.clone();
+            async move { next.reserve(now, total).await }
+        });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "past its network's share");
+        assert!(b.lock().partials.is_empty(), "it waits apart");
+        let other = window(&b, 2, now, total).await;
+        drop(mine.pop());
+        (&mut wait).await.unwrap();
+        drop((mine, next, other));
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().partial_nets.is_empty());
+    }
+
+    /// A partial claim held back by its network's share takes its place in
+    /// the queue once the share frees, even while another claim heads it:
+    /// it isn't left outside, for later claims to overtake.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_held_by_its_networks_share_keeps_its_turn() {
+        let b = Arc::new(Budget::new(1_000_000));
+        // A fills its network's share; B, from the same network, waits
+        // apart.
+        let a = window(&b, 1, 60_000, 70_000).await;
+        let held = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait_b = tokio::spawn({
+            let held = held.clone();
+            async move { held.reserve(60_000, 70_000).await }
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(b.lock().partials.is_empty(), "B waits apart");
+        // A grown claim, and C heading the queue, held by the admission
+        // rule.
+        let d = window(&b, 3, 1_000, 200_000).await;
+        d.reserve(200_000, 200_000).await;
+        let c = Reservation::for_peer(b.clone(), Some(net(2)));
+        let mut wait_c = tokio::spawn({
+            let c = c.clone();
+            async move { c.reserve(60_000, 760_000).await }
+        });
+        queued(&b, |s| s.partials.len() == 1).await;
+        // A ends: B's network has room, and B queues behind C.
+        drop(a);
+        queued(&b, |s| s.partials.len() == 2).await;
+        assert!(!wait_b.is_finished(), "C still heads the queue");
+        // C leaves: B is let in.
+        wait_c.abort();
+        let _ = (&mut wait_c).await;
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait_b)
+            .await
+            .expect("B is let in once C has gone")
+            .unwrap();
+        drop((held, d));
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().partials.is_empty());
+    }
+
+    /// An unproven claim's announced size doesn't count toward admission:
+    /// a first window that hasn't completed doesn't keep another network's
+    /// first window out. Once a claim has its window in and asks to grow,
+    /// its need counts until it has grown.
+    #[tokio::test(start_paused = true)]
+    async fn an_unproven_claims_size_does_not_hold_up_admission() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let beside = (1_000_000 - b.floor()) as usize;
+        // A claim announcing nearly all the room beside the floor, whose
+        // window hasn't come.
+        let unproven = window(&b, 1, 1_000, beside - 1_500).await;
+        // Another network's first window is let in beside it.
+        let other = window(&b, 2, 10_000, 100_000).await;
+        // It proves itself: asks to grow, and waits for the other's window
+        // to leave the room it needs.
+        let mut grow = growing(&unproven, beside - 1_500);
+        queued(&b, |s| !s.growth.is_empty()).await;
+        assert_eq!(b.lock().largest_need(), (beside - 2_500) as u64);
+        drop(other);
+        (&mut grow).await.unwrap();
+        // Grown, it needs nothing more.
+        assert_eq!(b.lock().largest_need(), 0);
+        drop(unproven);
+        assert_eq!(used(&b), 0);
         assert!(b.lock().needs.is_empty());
+    }
+
+    /// Two large claims whose windows are both in, the first unable to
+    /// grow while the second's window is held: the second, queued behind
+    /// it, grows first, and the first grows once the second has ended.
+    #[tokio::test(start_paused = true)]
+    async fn a_growth_passes_a_front_its_own_window_blocks() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let front = window(&b, 1, 64 << 10, 698_698).await;
+        let behind = window(&b, 2, 64 << 10, 666_029).await;
+        let mut wait = growing(&front, 698_698);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(Duration::from_secs(1), behind.reserve(666_029, 666_029))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "the front waits for it to end");
+        drop(behind);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("the front grows once it has ended")
+            .unwrap();
+        drop(front);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front that has been passed grows as soon as the growths that
+    /// passed it end, ahead of a growth that asked later.
+    #[tokio::test(start_paused = true)]
+    async fn a_passed_front_grows_before_later_growths() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let front = window(&b, 1, 64 << 10, 698_698).await;
+        let passer = window(&b, 2, 64 << 10, 666_029).await;
+        let later = window(&b, 3, 1_000, 20_000).await;
+        let mut wait = growing(&front, 698_698);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(Duration::from_secs(1), passer.reserve(666_029, 666_029))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        let mut after = growing(&later, 20_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "it doesn't pass the front");
+        drop(passer);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("the front grows first")
+            .unwrap();
+        assert!(!after.is_finished(), "the later growth still waits");
+        drop(front);
+        tokio::time::timeout(Duration::from_secs(1), &mut after)
+            .await
+            .expect("then the later one grows")
+            .unwrap();
+        drop(later);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front passed by a claim of its own network keeps its place: that
+    /// grown claim holds it back, but a growth that asked later doesn't go
+    /// ahead of it. A worker's budget, so one network has room for two
+    /// first windows.
+    #[tokio::test(start_paused = true)]
+    async fn a_front_passed_by_its_own_network_keeps_its_place() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        let front = window(&b, 1, 64 << 10, 3_100_000).await;
+        let passer = window(&b, 1, 64 << 10, 2_000_000).await;
+        let later = window(&b, 3, 1_000, 20_000).await;
+        let mut wait = growing(&front, 3_100_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(within, passer.reserve(2_000_000, 2_000_000))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        let mut after = growing(&later, 20_000);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "it doesn't pass the front");
+        assert_eq!(
+            b.lock().growth.front().map(|g| g.0),
+            Some(front.0.id),
+            "the front keeps its place"
+        );
+        drop(passer);
+        tokio::time::timeout(within, &mut wait)
+            .await
+            .expect("the front grows first")
+            .unwrap();
+        assert!(!after.is_finished(), "the later growth still waits");
+        drop(front);
+        tokio::time::timeout(within, &mut after)
+            .await
+            .expect("then the later one grows")
+            .unwrap();
+        drop(later);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front whose network's claim was ahead of it in the queue, and grew
+    /// in its own turn, wasn't passed: held back by that grown claim, it
+    /// waits apart and holds up no other network's growth.
+    #[tokio::test(start_paused = true)]
+    async fn a_front_held_by_its_networks_earlier_claim_waits_apart() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        // Results the consumer hasn't taken stall every growth.
+        let results = Reservation::for_peer(b.clone(), Some(net(100)));
+        tokio::time::timeout(within, results.reserve(3_300_000, 3_300_000))
+            .await
+            .expect("alone, it fits");
+        results.settle(results.bytes());
+        drop(results);
+        let earlier = window(&b, 1, 64 << 10, 1_000_000).await;
+        let front = window(&b, 1, 64 << 10, 300_000).await;
+        let other = window(&b, 3, 1_000, 20_000).await;
+        let mut first = growing(&earlier, 1_000_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        let mut wait = growing(&front, 300_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        let mut after = growing(&other, 20_000);
+        queued(&b, |s| s.growth.len() == 3).await;
+        // The consumer takes the results: the earlier claim grows in turn.
+        let (held, _) = b.usage();
+        b.release_held(held);
+        tokio::time::timeout(within, &mut first)
+            .await
+            .expect("the earlier claim grows in its turn")
+            .unwrap();
+        tokio::time::timeout(within, &mut after)
+            .await
+            .expect("another network's growth isn't held up")
+            .unwrap();
+        assert!(
+            !wait.is_finished(),
+            "held back by its network's grown claim"
+        );
+        drop(earlier);
+        tokio::time::timeout(within, &mut wait)
+            .await
+            .expect("it grows once that claim ends")
+            .unwrap();
+        drop((front, other));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front held back by the grown claims' cap isn't passed, even by a
+    /// smaller growth that would fit: it keeps its turn until grown claims
+    /// end, and then grows first.
+    #[tokio::test(start_paused = true)]
+    async fn a_front_held_by_the_cap_is_not_passed() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let within = Duration::from_secs(1);
+        let grown = window(&b, 9, 1_000, 400_000).await;
+        grown.reserve(400_000, 400_000).await;
+        let front = window(&b, 1, 64 << 10, 300_000).await;
+        let behind = window(&b, 2, 64 << 10, 90_000).await;
+        // Past the cap beside the grown claim, and short of room beside
+        // the floor by less than the window behind it; the claim behind
+        // would fit under the cap.
+        let mut wait = growing(&front, 300_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        let mut after = growing(&behind, 90_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "a capped front isn't passed");
+        drop(grown);
+        tokio::time::timeout(within, &mut wait)
+            .await
+            .expect("the front grows once the grown claim ends")
+            .unwrap();
+        tokio::time::timeout(within, &mut after)
+            .await
+            .expect("then the one behind")
+            .unwrap();
+        drop((front, behind));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front that can grow isn't passed in the moment before it asks
+    /// again: a growth behind it goes ahead only while the front is short
+    /// of room.
+    #[tokio::test(start_paused = true)]
+    async fn a_front_with_room_is_not_passed() {
+        use std::task::{Context, Waker};
+        let b = Arc::new(Budget::new(1_000_000));
+        let front = window(&b, 1, 64 << 10, 698_698).await;
+        let blocker = window(&b, 2, 64 << 10, 666_029).await;
+        let later = window(&b, 3, 1_000, 20_000).await;
+        let mut wait = growing(&front, 698_698);
+        queued(&b, |s| s.growth.len() == 1).await;
+        // The blocking window ends: the front now has room, but hasn't
+        // asked again yet. The later growth, asking first, waits.
+        drop(blocker);
+        {
+            let mut asked = std::pin::pin!(later.reserve(20_000, 20_000));
+            let first = asked.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+            assert!(first.is_pending(), "it doesn't pass a front with room");
+            tokio::time::timeout(Duration::from_secs(1), &mut wait)
+                .await
+                .expect("the front grows")
+                .unwrap();
+            // Grown past the cap, the front is fetched before the later
+            // one may grow.
+            drop(front);
+            tokio::time::timeout(Duration::from_secs(1), asked)
+                .await
+                .expect("then the later one");
+        }
+        drop(later);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// While a growth waits, a first window that leaves the front room to
+    /// grow is let in. It doesn't delay the front, and never passes it.
+    #[tokio::test(start_paused = true)]
+    async fn a_window_let_in_during_a_wait_does_not_delay_the_front() {
+        let b = Arc::new(Budget::new(1_000_000));
+        // A grown claim keeps the front past the cap: it waits for it.
+        let grown = window(&b, 9, 1_000, 300_000).await;
+        grown.reserve(300_000, 300_000).await;
+        let front = window(&b, 1, 64 << 10, 300_000).await;
+        let mut wait = growing(&front, 300_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        // A small large-dict window still fits beside the front's growth.
+        let during = window(&b, 2, 1_000, 50_000).await;
+        let mut after = growing(&during, 50_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "it doesn't pass the front");
+        drop(grown);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("the front grows at once")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), &mut after)
+            .await
+            .expect("then the window let in during the wait")
+            .unwrap();
+        drop((front, during));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// While a growth waits, a first window that would take room the
+    /// front's growth needs stays out until the front has grown.
+    #[tokio::test(start_paused = true)]
+    async fn a_window_that_takes_the_fronts_room_stays_out() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let grown = window(&b, 9, 1_000, 300_000).await;
+        grown.reserve(300_000, 300_000).await;
+        let front = window(&b, 1, 64 << 10, 450_000).await;
+        let mut wait = growing(&front, 450_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        let late = Reservation::for_peer(b.clone(), Some(net(2)));
+        let mut admitted = tokio::spawn({
+            let late = late.clone();
+            async move { late.reserve(1_000, 50_000).await }
+        });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!admitted.is_finished(), "it would take the front's room");
+        drop(grown);
+        (&mut wait).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), &mut admitted)
+            .await
+            .expect("let in once the front has grown")
+            .unwrap();
+        drop((front, late));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A front that can be passed isn't starved by claims that keep
+    /// coming: no new first window that would take its room is let in
+    /// while it waits, at most the claims whose windows were in pass it,
+    /// and it grows as soon as they end.
+    #[tokio::test(start_paused = true)]
+    async fn a_passable_front_is_not_starved() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let front = window(&b, 1, 64 << 10, 698_698).await;
+        let passer = window(&b, 2, 64 << 10, 666_029).await;
+        let mut wait = growing(&front, 698_698);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(Duration::from_secs(1), passer.reserve(666_029, 666_029))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        // New claims keep asking for first windows while it waits.
+        let mut arrivals = Vec::new();
+        for n in 0..20u8 {
+            let r = Reservation::for_peer(b.clone(), Some(net(10 + n)));
+            arrivals.push((
+                r.clone(),
+                tokio::spawn(async move { r.reserve(1_000, 100_000).await }),
+            ));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let s = b.lock();
+            let w = s.wait.as_ref().expect("the front waits");
+            assert!(
+                w.admitted.is_empty(),
+                "no window let in that takes its room"
+            );
+            assert!(w.passes <= w.before);
+        }
+        assert!(arrivals.iter().all(|(_, h)| !h.is_finished()));
+        drop(passer);
+        tokio::time::timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("the front grows as soon as its passer ends")
+            .unwrap();
+        drop(front);
+        for (r, h) in arrivals {
+            tokio::time::timeout(Duration::from_secs(1), h)
+                .await
+                .expect("the arrivals follow")
+                .unwrap();
+            drop(r);
+        }
+        assert_eq!(used(&b), 0);
+    }
+
+    fn net(n: u8) -> Net {
+        net_of(IpAddr::from([198, 51, n, 1])).network()
+    }
+
+    /// A partial claim of `window` bytes, of `total`, from network `n`.
+    async fn window(b: &Arc<Budget>, n: u8, window: usize, total: usize) -> Reservation {
+        let r = Reservation::for_peer(b.clone(), Some(net(n)));
+        tokio::time::timeout(Duration::from_secs(1), r.reserve(window, total))
+            .await
+            .expect("the window fits");
+        r
+    }
+
+    fn growing(r: &Reservation, total: usize) -> tokio::task::JoinHandle<()> {
+        let r = r.clone();
+        tokio::spawn(async move { r.reserve(total, total).await })
+    }
+
+    /// Room for a large claim in net `n`: its window waits `first` behind
+    /// a whole claim, then its growth waits `then` behind another.
+    async fn room_after(b: &Arc<Budget>, n: u8, first: Duration, then: Duration) -> Reservation {
+        let (now, total) = (64 << 10, 400_000usize);
+        let within = Duration::from_secs(10);
+        let blocker = Reservation::for_peer(b.clone(), Some(net(100)));
+        tokio::time::timeout(within, blocker.reserve(700_000, 700_000))
+            .await
+            .expect("alone, it fits");
+        let r = Reservation::for_peer(b.clone(), Some(net(n)));
+        let mut admitted = tokio::spawn({
+            let r = r.clone();
+            async move { r.reserve(now, total).await }
+        });
+        tokio::time::sleep(first).await;
+        assert!(!admitted.is_finished(), "no room beside the blocker");
+        drop(blocker);
+        tokio::time::timeout(within, &mut admitted)
+            .await
+            .expect("let in once the blocker ends")
+            .unwrap();
+        let blocker = Reservation::for_peer(b.clone(), Some(net(101)));
+        let mut grows = growing(&r, total);
+        tokio::time::timeout(within, blocker.reserve(500_000, 500_000))
+            .await
+            .expect("the second blocker fits");
+        tokio::time::sleep(then).await;
+        assert!(!grows.is_finished(), "no room to grow beside the blocker");
+        drop(blocker);
+        tokio::time::timeout(within, &mut grows)
+            .await
+            .expect("grows once the blocker ends")
+            .unwrap();
+        r
+    }
+
+    /// Fetches for a late-room test: the hog's takes most of the budget
+    /// for 6 s; the others' windows wait behind it, then grow and time
+    /// out, those from `behind_ip` after falling behind their pace.
+    struct LateRoom {
+        hog: InfoHash,
+        behind_ip: std::net::IpAddr,
+    }
+
+    impl Fetcher for LateRoom {
+        fn fetch(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            Box::pin(async { Err(FailureKind::Unreachable) })
+        }
+
+        fn fetch_reserving(
+            &self,
+            peer: SocketAddr,
+            key: InfoHash,
+            reservation: Reservation,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            let (hog, behind) = (key == self.hog, peer.ip() == self.behind_ip);
+            Box::pin(async move {
+                if hog {
+                    reservation.reserve(700_000, 700_000).await;
+                    tokio::time::sleep(Duration::from_secs(6)).await;
+                    return Err(FailureKind::Invalid);
+                }
+                let total = 400_000;
+                reservation.reserve(64 << 10, total).await;
+                reservation.reserve(total, total).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if behind {
+                    reservation.behind();
+                }
+                Err(FailureKind::TimedOut)
+            })
+        }
+    }
+
+    /// A fetch whose room came late and whose peer then timed out isn't
+    /// charged: counted as late, the key is tried again. One whose peer
+    /// fell behind its pace is charged as the timeout it is, however late
+    /// its room came.
+    #[tokio::test(start_paused = true)]
+    async fn a_late_room_spares_the_peer_unless_it_fell_behind() {
+        let hog = InfoHash([1; 20]);
+        let (spared, charged) = (InfoHash([2; 20]), InfoHash([3; 20]));
+        let peer = |n: u8| SocketAddr::from(([198, 51, n, 1], 6881));
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out_tx, _out) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: 1_000_000,
+                max_attempts: 1,
+                retry_backoff: Duration::from_secs(600),
+                ..PoolConfig::default()
+            },
+            Arc::new(LateRoom {
+                hog,
+                behind_ip: peer(3).ip(),
+            }),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let source = SourceId::new(0).unwrap();
+        for (n, k) in [(1, hog), (2, spared), (3, charged)] {
+            disc_tx
+                .send(Discovery {
+                    source,
+                    found: crate::Found::key(k, 0).with_peers(vec![peer(n)]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let stats = handle.stats();
+        until("both late fetches ended", async || {
+            handle.queued().await;
+            stats.late_waits.load(Ordering::Relaxed) + stats.failure_count(FailureKind::TimedOut)
+                >= 2
+        })
+        .await;
+        assert_eq!(
+            stats.late_waits.load(Ordering::Relaxed),
+            1,
+            "the one still sending"
+        );
+        assert_eq!(
+            stats.failure_count(FailureKind::TimedOut),
+            1,
+            "the one that fell behind"
+        );
+        stop.send(true).unwrap();
+        let left = task.await.unwrap();
+        assert!(
+            left.iter().any(|q| q.info_hash == spared),
+            "spared, it waits to be tried again"
+        );
+    }
+
+    /// A credited retry's growth goes behind the front, behind credited
+    /// growths already waiting, and ahead of growths without credit.
+    #[tokio::test(start_paused = true)]
+    async fn a_credited_growth_goes_ahead_of_uncredited_ones_but_not_the_front() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        // Results the consumer hasn't taken: every growth waits, and none
+        // is short by so little that the windows behind the front could
+        // let it pass.
+        let results = Reservation::for_peer(b.clone(), Some(net(100)));
+        tokio::time::timeout(within, results.reserve(4_000_000, 4_000_000))
+            .await
+            .expect("alone, it fits");
+        results.settle(results.bytes());
+        drop(results);
+        let claim = |n: u8, credit: bool| {
+            let b = b.clone();
+            async move {
+                let r = Reservation::for_retry(b.clone(), Some(net(n)), credit);
+                tokio::time::timeout(within, r.reserve(1_000, 300_000))
+                    .await
+                    .expect("the window fits");
+                r
+            }
+        };
+        let (front, plain) = (claim(1, false).await, claim(2, false).await);
+        let (first, second) = (claim(3, true).await, claim(4, true).await);
+        let mut waits = Vec::new();
+        for r in [&front, &plain, &first, &second] {
+            waits.push(growing(r, 300_000));
+            let n = waits.len();
+            queued(&b, |s| s.growth.len() == n).await;
+        }
+        let order: Vec<u64> = b.lock().growth.iter().map(|g| g.0).collect();
+        assert_eq!(
+            order,
+            [front.0.id, first.0.id, second.0.id, plain.0.id],
+            "front, then the credited in turn, then the rest"
+        );
+        // The consumer takes the results: they all grow, in that order.
+        let (held, _) = b.usage();
+        b.release_held(held);
+        for w in waits {
+            tokio::time::timeout(within, w)
+                .await
+                .expect("it grows")
+                .unwrap();
+        }
+        drop((front, plain, first, second));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A credited growth doesn't go ahead of a front passed by its own
+    /// network, which keeps its place.
+    #[tokio::test(start_paused = true)]
+    async fn a_credited_growth_does_not_displace_a_passed_front() {
+        let b = Arc::new(Budget::new(4 << 20));
+        let within = Duration::from_secs(1);
+        let front = window(&b, 1, 64 << 10, 3_100_000).await;
+        let passer = window(&b, 1, 64 << 10, 2_000_000).await;
+        let later = Reservation::for_retry(b.clone(), Some(net(3)), true);
+        tokio::time::timeout(within, later.reserve(1_000, 20_000))
+            .await
+            .expect("the window fits");
+        let mut wait = growing(&front, 3_100_000);
+        queued(&b, |s| s.growth.len() == 1).await;
+        tokio::time::timeout(within, passer.reserve(2_000_000, 2_000_000))
+            .await
+            .expect("the claim behind passes the front its window blocks");
+        let mut after = growing(&later, 20_000);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!after.is_finished(), "credit doesn't pass the front");
+        assert_eq!(b.lock().growth.front().map(|g| g.0), Some(front.0.id));
+        drop(passer);
+        tokio::time::timeout(within, &mut wait)
+            .await
+            .expect("the front grows first")
+            .unwrap();
+        drop(front);
+        tokio::time::timeout(within, &mut after)
+            .await
+            .expect("then the credited one")
+            .unwrap();
+        drop(later);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// The late threshold follows the fetch's timeout: at a 30 s timeout,
+    /// half of it, so a room 8 s late isn't late and one 16 s late is.
+    #[tokio::test(start_paused = true)]
+    async fn the_late_threshold_follows_the_fetch_timeout() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let within = Duration::from_secs(20);
+        for (wait, late) in [(8, false), (16, true)] {
+            let blocker = Reservation::for_peer(b.clone(), Some(net(100)));
+            blocker.reserve(700_000, 700_000).await;
+            let r = Reservation::for_peer(b.clone(), Some(net(1)));
+            r.late_after(Duration::from_secs(30) / 2);
+            let mut admitted = tokio::spawn({
+                let r = r.clone();
+                async move { r.reserve(64 << 10, 400_000).await }
+            });
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            assert!(!admitted.is_finished(), "no room beside the blocker");
+            drop(blocker);
+            tokio::time::timeout(within, &mut admitted)
+                .await
+                .expect("let in once the blocker ends")
+                .unwrap();
+            tokio::time::timeout(within, r.reserve(400_000, 400_000))
+                .await
+                .expect("it grows at once");
+            assert_eq!(r.late(), late, "after {wait} s");
+            drop(r);
+        }
+        assert_eq!(used(&b), 0);
+    }
+
+    /// The real fetcher sets each reservation's late threshold to half its
+    /// own timeout.
+    #[tokio::test]
+    async fn the_peer_wire_fetcher_sets_the_late_threshold_from_its_timeout() {
+        let fetcher = PeerWireFetcher(FetchOptions {
+            timeout: Duration::from_secs(30),
+            ..FetchOptions::default()
+        });
+        let r = Reservation::new(Arc::new(Budget::new(1_000_000)));
+        // Building the fetch is enough: it's never run.
+        let _fetch = fetcher.fetch_reserving(
+            SocketAddr::from(([192, 0, 2, 1], 6881)),
+            InfoHash([1; 20]),
+            r.clone(),
+        );
+        assert_eq!(r.0.late_room_ms.load(Ordering::Relaxed), 15_000);
+    }
+
+    /// Fetches whose every growth comes late and then times out.
+    struct AlwaysLate(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Fetcher for AlwaysLate {
+        fn fetch(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            Box::pin(async { Err(FailureKind::Unreachable) })
+        }
+
+        fn fetch_reserving(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+            reservation: Reservation,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            let tries = self.0.clone();
+            Box::pin(async move {
+                tries.fetch_add(1, Ordering::SeqCst);
+                reservation.late_after(Duration::ZERO);
+                reservation.reserve(64 << 10, 400_000).await;
+                reservation.reserve(400_000, 400_000).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Err(FailureKind::TimedOut)
+            })
+        }
+    }
+
+    /// A key has `LATE_WAITS_FREE` late timeouts uncharged; the next is
+    /// charged, and the key ends once its attempts are used.
+    #[tokio::test(start_paused = true)]
+    async fn the_late_allowance_is_spent_and_then_charged() {
+        let key = InfoHash([7; 20]);
+        let peer = SocketAddr::from(([198, 51, 1, 1], 6881));
+        let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (disc_tx, discoveries) = mpsc::channel(4);
+        let (out_tx, _out) = mpsc::channel(4);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: 1_000_000,
+                max_attempts: 1,
+                retry_backoff: Duration::from_millis(100),
+                ..PoolConfig::default()
+            },
+            Arc::new(AlwaysLate(tries.clone())),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        disc_tx
+            .send(Discovery {
+                source: SourceId::new(0).unwrap(),
+                found: crate::Found::key(key, 0).with_peers(vec![peer]),
+                at: 1_700_000_000,
+                reply: false,
+            })
+            .await
+            .unwrap();
+        let stats = handle.stats();
+        until("the charged timeout", async || {
+            handle.queued().await;
+            stats.failure_count(FailureKind::TimedOut) >= 1
+        })
+        .await;
+        assert_eq!(
+            stats.late_waits.load(Ordering::Relaxed),
+            u64::from(LATE_WAITS_FREE),
+            "the allowance, uncharged"
+        );
+        assert_eq!(
+            stats.failure_count(FailureKind::TimedOut),
+            1,
+            "then charged"
+        );
+        assert_eq!(
+            tries.load(Ordering::SeqCst),
+            usize::from(LATE_WAITS_FREE) + 1,
+            "no attempt after the charged one"
+        );
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    /// A large claim whose room took [`LATE_ROOM`] or more in all, its
+    /// first window's wait and its growth's together, is late: a timeout
+    /// after it isn't its peer's. One that waited less isn't, and neither
+    /// is one whose peer fell behind its pace.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_is_late_once_its_room_took_long_in_all() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let s = Duration::from_secs(1);
+        let soon = room_after(&b, 1, s, s).await;
+        assert!(!soon.late(), "2 s in all");
+        drop(soon);
+        // Neither wait alone is `LATE_ROOM`; together they are.
+        let late = room_after(&b, 2, 2 * s, 2 * s + s / 2).await;
+        assert!(late.late(), "4.5 s in all");
+        late.behind();
+        assert!(!late.late(), "behind its pace: always the peer's");
+        drop(late);
+        assert_eq!(used(&b), 0);
+    }
+
+    /// While a growth waits, small claims are granted inside the floor and
+    /// no further: what lies outside it only comes free, so they never keep
+    /// the growth out.
+    #[tokio::test(start_paused = true)]
+    async fn small_claims_keep_to_the_floor_while_a_growth_waits() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let floor = b.floor();
+        // A grown claim holds 400,000; a second claim's growth to 350,000
+        // would pass the cap, so it waits its turn.
+        let grown = window(&b, 1, 1_000, 400_000).await;
+        grown.reserve(400_000, 400_000).await;
+        let large = window(&b, 2, 1_000, 350_000).await;
+        let mut grow = growing(&large, 350_000);
+        queued(&b, |s| !s.growth.is_empty()).await;
+        // Five small claims fit the floor, and fetches go on starting.
+        let one = 45_000usize;
+        let mut smalls = Vec::new();
+        for _ in 0..5 {
+            let r = Reservation::new(b.clone());
+            tokio::time::timeout(Duration::from_secs(1), r.reserve(one, one))
+                .await
+                .expect("a small claim inside the floor");
+            smalls.push(r);
+            assert!(b.has_room() || smalls.len() == 5);
+        }
+        // A sixth would pass the floor, though the budget has the room.
+        let sixth = Reservation::new(b.clone());
+        let mut wait = tokio::spawn({
+            let r = sixth.clone();
+            async move { r.reserve(one, one).await }
+        });
+        queued(&b, |s| !s.queue.is_empty()).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "past the floor while a growth waits");
+        {
+            let s = b.lock();
+            assert!(s.small <= floor && s.small + KEY + one as u64 > floor);
+            assert!(s.reserved + s.held + KEY + one as u64 <= limit as u64);
+        }
+        assert!(!b.has_room(), "a claim waits");
+        // A small claim ends: the sixth takes its place in the floor. The
+        // growth still waits.
+        drop(smalls.pop());
+        (&mut wait).await.unwrap();
+        assert!(!grow.is_finished());
+        // The grown claim ends: the growth has its room.
+        drop(grown);
+        (&mut grow).await.unwrap();
+        drop((smalls, sixth, large));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// While a growth waits for room, finished results share the floor
+    /// with small claims: results the consumer hasn't taken yet keep new
+    /// small claims out, so the room they free goes to the growth.
+    #[tokio::test(start_paused = true)]
+    async fn finished_results_share_the_floor_while_a_growth_waits() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let result = Reservation::new(b.clone());
+        result.reserve(1, 1).await;
+        result.settle(600_000);
+        let large = window(&b, 1, 1_000, 500_000).await;
+        let mut grow = growing(&large, 500_000);
+        queued(&b, |s| !s.growth.is_empty()).await;
+        // The consumer takes 40,000 at a time, and small claims keep
+        // asking: none is granted, and the growth has its room once enough
+        // is free.
+        let one = 40_000usize;
+        for _ in 0..20 {
+            if grow.is_finished() {
+                break;
+            }
+            let small = Reservation::new(b.clone());
+            let got =
+                tokio::time::timeout(Duration::from_millis(100), small.reserve(one, one)).await;
+            assert!(got.is_err(), "a small claim beside unconsumed results");
+            drop(small);
+            b.release_held(one as u64);
+            tokio::task::yield_now().await;
+        }
+        (&mut grow).await.unwrap();
+        drop((large, result));
+    }
+
+    /// Grown claims together stay within their cap. One held back by it
+    /// keeps its turn: a later growth that would fit waits behind it, and
+    /// it grows once enough grown claims end.
+    #[tokio::test(start_paused = true)]
+    async fn grown_claims_stay_within_their_cap() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let cap = b.grown_cap();
+        let total = 200_000usize;
+        let mut claims = Vec::new();
+        for n in 1..=3 {
+            claims.push(window(&b, n, 1_000, total).await);
+        }
+        let later = window(&b, 9, 1_000, 50_000).await;
+        claims[0].reserve(total, total).await;
+        claims[1].reserve(total, total).await;
+        let mut third = growing(&claims[2], total);
+        queued(&b, |s| s.growth.len() == 1).await;
+        let mut behind = growing(&later, 50_000);
+        queued(&b, |s| s.growth.len() == 2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!third.is_finished(), "a third would pass the cap");
+        assert!(!behind.is_finished(), "a later growth waits its turn");
+        {
+            let s = b.lock();
+            assert!(s.grown <= cap && s.grown + KEY + total as u64 > cap);
+        }
+        // A small claim still has the floor, and fetches go on starting.
+        assert!(b.has_room());
+        let small = Reservation::new(b.clone());
+        small.reserve(1_000, 1_000).await;
+        drop(claims.remove(0));
+        (&mut third).await.unwrap();
+        (&mut behind).await.unwrap();
+        assert!(b.lock().grown <= cap);
+        drop((claims, later, small));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// A network has one grown claim at a time; its next waits apart until
+    /// that one ends, while another network's grows.
+    #[tokio::test(start_paused = true)]
+    async fn a_network_has_one_grown_claim_at_a_time() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let total = 100_000usize;
+        let first = window(&b, 1, 1_000, total).await;
+        let second = window(&b, 1, 1_000, total).await;
+        let elsewhere = window(&b, 2, 1_000, total).await;
+        first.reserve(total, total).await;
+        let mut wait = growing(&second, total);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "its network has a grown claim");
+        assert!(b.lock().growth.is_empty());
+        tokio::time::timeout(Duration::from_secs(1), elsewhere.reserve(total, total))
+            .await
+            .expect("another network's claim grows");
+        drop(first);
+        (&mut wait).await.unwrap();
+        assert_eq!(b.lock().grown_nets.len(), 2);
+        drop((second, elsewhere));
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().grown_nets.is_empty());
+    }
+
+    /// Partial and grown claims together stay out of the floor, whatever
+    /// room the budget has.
+    #[tokio::test(start_paused = true)]
+    async fn large_claims_stay_out_of_the_floor() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let beside = limit as u64 - b.floor();
+        // One grown claim under the cap, then windows up to the floor's
+        // edge.
+        let grown = window(&b, 1, 1_000, 400_000).await;
+        grown.reserve(400_000, 400_000).await;
+        let mut windows = Vec::new();
+        for n in 2..60 {
+            let r = Reservation::for_peer(b.clone(), Some(net(n)));
+            let got = tokio::time::timeout(Duration::from_secs(1), r.reserve(60_000, 70_000)).await;
+            if got.is_err() {
+                break;
+            }
+            windows.push(r);
+        }
+        let s = b.lock();
+        assert!(s.partial + s.grown <= beside);
+        assert!(
+            s.partial + s.grown + KEY + 60_000 > beside,
+            "they went up to the edge"
+        );
+        assert!(
+            s.reserved + s.held < limit as u64 - KEY - 60_000,
+            "with room to spare"
+        );
+    }
+
+    /// A growth with no other grown claim beside it passes the cap, so one
+    /// dict larger than the cap is still fetched. Beside other claims it
+    /// stays out of the floor, which small claims keep whole; alone, a
+    /// dict of any size is fetched.
+    #[tokio::test(start_paused = true)]
+    async fn a_lone_growth_passes_the_cap_and_not_the_floor() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let beside = (limit as u64 - b.floor()) as usize;
+        // Up to the floor's edge, it grows.
+        let total = beside - KEY as usize;
+        let lone = window(&b, 1, 1_000, total).await;
+        tokio::time::timeout(Duration::from_secs(1), lone.reserve(total, total))
+            .await
+            .expect("alone, it grows past the cap");
+        assert!(b.lock().grown > b.grown_cap());
+        assert_eq!(b.lock().grown, limit as u64 - b.floor());
+        drop(lone);
+        // One byte more would reach into the floor: beside anything else
+        // it isn't let in, and small claims keep the floor.
+        let first = Reservation::new(b.clone());
+        first.reserve(1_000, 1_000).await;
+        let over = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait = tokio::spawn({
+            let over = over.clone();
+            async move {
+                over.reserve(1_000, total + 1).await;
+                over.reserve(total + 1, total + 1).await;
+            }
+        });
+        queued(&b, |s| s.partials.len() == 1).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(
+            !wait.is_finished(),
+            "nothing passes the floor beside others"
+        );
+        let small = Reservation::new(b.clone());
+        tokio::time::timeout(Duration::from_secs(1), small.reserve(50_000, 50_000))
+            .await
+            .expect("a small claim has the floor");
+        // With nothing else reserved or held, it is fetched alone.
+        drop((first, small));
+        (&mut wait).await.unwrap();
+        drop(over);
+        assert_eq!(used(&b), 0);
+        assert!(b.lock().growth.is_empty() && b.lock().partials.is_empty());
+    }
+
+    /// While one dict above the grown cap grows, small claims still get
+    /// the whole floor, and a second growth waits until it ends.
+    #[tokio::test(start_paused = true)]
+    async fn beside_a_lone_growth_small_claims_keep_the_floor_and_others_wait() {
+        let limit = 1_000_000usize;
+        let b = Arc::new(Budget::new(limit));
+        let floor = b.floor();
+        let total = 600_000usize;
+        assert!(total as u64 > b.grown_cap());
+        let lone = window(&b, 1, 1_000, total).await;
+        lone.reserve(total, total).await;
+        let second = window(&b, 2, 1_000, 50_000).await;
+        let mut wait = growing(&second, 50_000);
+        // The floor fills with small claims, all granted.
+        let one = 40_000usize;
+        let mut smalls = Vec::new();
+        while b.lock().small + KEY + one as u64 <= floor {
+            let r = Reservation::new(b.clone());
+            tokio::time::timeout(Duration::from_secs(1), r.reserve(one, one))
+                .await
+                .expect("a small claim in the floor");
+            smalls.push(r);
+        }
+        assert!(smalls.len() >= 5, "{} small claims", smalls.len());
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!wait.is_finished(), "a second growth waits");
+        drop(lone);
+        (&mut wait).await.unwrap();
+        drop((second, smalls));
+        assert_eq!(used(&b), 0);
     }
 
     /// A raw plaintext peer for one fetch: it announces `info`'s size and
@@ -3276,6 +5783,94 @@ mod budget {
         task.await.unwrap();
     }
 
+    /// An info dict of exactly `len` bytes, and its key.
+    fn dict_of(len: usize) -> (Vec<u8>, InfoHash) {
+        let head =
+            b"d6:lengthi1e4:name4:test12:piece lengthi16384e6:pieces20:AAAAAAAAAAAAAAAAAAAA5:x-pad";
+        let mut pad = len - head.len() - 2;
+        // The pad's length prefix takes some of the room itself.
+        while pad.to_string().len() + 1 + pad + head.len() + 1 > len {
+            pad -= 1;
+        }
+        let mut info = head.to_vec();
+        info.extend(format!("{pad}:").bytes());
+        info.resize(info.len() + pad, b'0');
+        info.push(b'e');
+        assert_eq!(info.len(), len);
+        let key = lodestar_metainfo::Info::parse(&info)
+            .unwrap()
+            .primary_hash();
+        (info, key)
+    }
+
+    /// With a worker's budget, the real fetcher fetches a dict of the
+    /// largest size the pool gives room ([`largest_dict`]) and refuses one
+    /// byte more at the handshake, before reserving anything. Real time and
+    /// TCP, with condition waits.
+    #[tokio::test]
+    async fn a_pool_fetches_its_largest_dict_and_refuses_one_byte_more() {
+        let budget = 4 << 20;
+        let largest = largest_dict(budget);
+        let (info, key) = dict_of(largest);
+        let (over_info, over_key) = dict_of(largest + 1);
+        let fits = raw_peer(info.clone(), key.0, false).await;
+        let over = raw_peer(over_info, over_key.0, false).await;
+
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out_tx, mut out) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let fetcher = PeerWireFetcher(FetchOptions {
+            allow_private: true,
+            encryption: lodestar_peer_wire::Encryption::Disable,
+            timeout: Duration::from_secs(30),
+            max_metadata: largest,
+            ..FetchOptions::default()
+        });
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_held_bytes: budget,
+                ..PoolConfig::default()
+            },
+            Arc::new(fetcher),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let source = SourceId::new(0).unwrap();
+        for (k, peer) in [(over_key, over), (key, fits)] {
+            disc_tx
+                .send(Discovery {
+                    source,
+                    found: crate::Found::key(k, 0).with_peers(vec![peer]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+        }
+        let stats = handle.stats();
+        let got = tokio::time::timeout(Duration::from_secs(60), out.recv())
+            .await
+            .expect("the largest dict")
+            .unwrap();
+        assert_eq!(got.key, key);
+        assert_eq!(got.fetched.info.len(), largest);
+        until("the larger one refused", async || {
+            handle.queued().await;
+            stats.failure_count(FailureKind::Oversize) == 1
+        })
+        .await;
+        assert_eq!(stats.reserve_timeouts.load(Ordering::Relaxed), 0);
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
     /// A partial claim that passes its own rule but lacks room goes before
     /// whole first claims and stops dispatch, so steady small traffic can't
     /// keep a large dict out; once room comes, it's granted first.
@@ -3315,3 +5910,373 @@ mod budget {
         assert_eq!(used(&b), 0);
     }
 }
+
+#[cfg(test)]
+mod vouch {
+    use super::*;
+
+    fn a(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    fn key(n: u8) -> InfoHash {
+        InfoHash([n; 20])
+    }
+
+    /// Places with these limits: keys an address, keys a network, waits
+    /// an address, waits in all.
+    fn places(address: usize, network: usize, per_address: usize, total: usize) -> Places {
+        let mut v = Places::new(0);
+        v.addresses.cap = address;
+        v.networks.cap = network;
+        v.waits.per_address = per_address;
+        v.waits.total = total;
+        v
+    }
+
+    /// The keys waiting at `address`, in the order they'd be served.
+    fn line(w: &mut Waits, address: Net) -> Vec<InfoHash> {
+        let mut tickets = Vec::new();
+        while let Some(t) = w.pop(address) {
+            tickets.push(t);
+        }
+        let keys = tickets.iter().map(|t| t.key).collect();
+        w.put_back(address, tickets);
+        keys
+    }
+
+    /// One address, whatever the port; an IPv6 address by its /64; an
+    /// IPv4-mapped or NAT64 address as the IPv4 one inside it. A network
+    /// is the /24 or the /48 around it.
+    #[test]
+    fn a_peer_counts_under_its_address_and_its_network() {
+        let net = |s: &str| net_of(s.parse::<IpAddr>().unwrap());
+        let one = net("203.0.113.7");
+        assert_eq!(nets_of(&[]), (Vec::new(), Vec::new()));
+        let (addresses, networks) = nets_of(&[a("203.0.113.7:1"), a("203.0.113.7:65535")]);
+        assert_eq!((addresses, networks), (vec![one], vec![one.network()]));
+        let (addresses, networks) = nets_of(&[a("203.0.113.7:1"), a("203.0.113.8:1")]);
+        assert_eq!((addresses.len(), networks.len()), (2, 1));
+        assert_ne!(one, net("203.0.113.8"));
+        assert_eq!(net("::ffff:203.0.113.7"), one);
+        assert_eq!(net("64:ff9b::203.0.113.7"), one);
+        assert_eq!(net("64:ff9b:1::203.0.113.7"), one);
+        assert_ne!(net("64:ff9b::203.0.113.8"), one);
+        assert_eq!(net("2001:db8:1:2::1"), net("2001:db8:1:2:ffff::9"));
+        assert_ne!(net("2001:db8:1:2::1"), net("2001:db8:1:3::1"));
+        // An IPv4 address and a /64 never share a count.
+        assert_ne!(net("0.0.0.1"), net("0:0:0:1::"));
+        assert_ne!(net("203.0.113.7"), net("ffff:ffff:cb00:7107::"));
+        // Networks: a /24, a /48.
+        assert_eq!(one.network(), net("203.0.113.200").network());
+        assert_ne!(one.network(), net("198.51.100.7").network());
+        assert_eq!(
+            net("2001:db8:1:2::1").network(),
+            net("2001:db8:1:ffff::1").network()
+        );
+        assert_ne!(
+            net("2001:db8:1:2::1").network(),
+            net("2001:db8:2:2::1").network()
+        );
+    }
+
+    /// The limits are a share of the queue, and never more than the two
+    /// constants or less than 1; the network's is never under the
+    /// address's.
+    #[test]
+    fn the_limits_follow_the_queue() {
+        assert_eq!(address_caps(200_000), (256, 1024));
+        assert_eq!(address_caps(50_000), (97, 390));
+        assert_eq!(address_caps(1_000), (1, 7));
+        assert_eq!(address_caps(100), (1, 1));
+        assert_eq!(address_caps(0), (1, 1));
+        assert_eq!(address_caps(usize::MAX), (256, 1024));
+    }
+
+    /// An address has places up to the limit and no more; a place given
+    /// back can be taken again; an address with no keys holds nothing.
+    #[test]
+    fn places_are_counted_per_address() {
+        let ip = |n: u8| net_of(IpAddr::from([203, 0, 113, n]));
+        let mut v = Vouched::new(MAX_VOUCHED_PER_IP);
+        for _ in 0..MAX_VOUCHED_PER_IP {
+            assert!(v.take(ip(1)));
+        }
+        assert!(!v.take(ip(1)));
+        assert_eq!(v.keys(ip(1)) as usize, MAX_VOUCHED_PER_IP);
+        assert!(v.take(ip(2)));
+        v.give_back(ip(1));
+        assert!(v.take(ip(1)) && !v.take(ip(1)));
+        // A key that turns public keeps its peer, past the limit too, and
+        // gives the place back like any other.
+        v.count(ip(1));
+        assert_eq!(v.keys(ip(1)) as usize, MAX_VOUCHED_PER_IP + 1);
+        v.give_back(ip(1));
+        for _ in 0..MAX_VOUCHED_PER_IP {
+            v.give_back(ip(1));
+        }
+        v.give_back(ip(2));
+        assert!(v.by_net.is_empty());
+    }
+
+    /// A peer takes a place at its address and one in its network, both
+    /// or neither, and only where the key has no peer yet.
+    #[test]
+    fn a_peer_takes_both_places_or_neither() {
+        // Two keys an address, three a network.
+        let mut v = places(2, 3, 8, 8);
+        let p = |n: u8| a(&format!("203.0.113.{n}:1"));
+        let net = net_of(p(1).ip()).network();
+        // One key with peers at two addresses of the network: two places
+        // for addresses, one for the network.
+        assert_eq!(v.take(&[], p(1)), Ok(()));
+        assert_eq!(v.take(&[p(1)], p(2)), Ok(()));
+        assert_eq!((v.addresses.by_net.len(), v.networks.keys(net)), (2, 1));
+        // Another port of an address it has takes nothing.
+        assert_eq!(v.take(&[p(1), p(2)], a("203.0.113.1:9")), Ok(()));
+        assert_eq!(v.addresses.keys(net_of(p(1).ip())), 1);
+        // Two more keys fill the network; a fourth key's peer is refused
+        // and leaves nothing behind at its own address.
+        assert_eq!(v.take(&[], p(3)), Ok(()));
+        assert_eq!(v.take(&[], p(4)), Ok(()));
+        assert_eq!(v.take(&[], p(5)), Err(Full::Network));
+        assert_eq!(v.addresses.keys(net_of(p(5).ip())), 0);
+        assert!(!v.addresses.by_net.contains_key(&net_of(p(5).ip())));
+        // Another network has its own share.
+        assert_eq!(v.take(&[], a("198.51.100.5:1")), Ok(()));
+        // The first key drops one of its two peers: that address's place
+        // comes back, the network's stays.
+        v.give_back_dropped(&[p(1), p(2)], &[p(1)]);
+        assert_eq!(v.addresses.keys(net_of(p(2).ip())), 0);
+        assert_eq!(v.networks.keys(net), 3);
+        // The keys leave: nothing is left counted.
+        v.give_back(&[p(1)]);
+        v.give_back(&[p(3)]);
+        v.give_back(&[p(4)]);
+        v.give_back(&[a("198.51.100.5:1")]);
+        assert!(v.addresses.by_net.is_empty() && v.networks.by_net.is_empty());
+        // A full address says so, and takes no place in the network.
+        let mut v = places(1, 3, 8, 8);
+        assert_eq!(v.take(&[], p(1)), Ok(()));
+        assert_eq!(v.take(&[], p(1)), Err(Full::Address));
+        assert_eq!(v.networks.keys(net), 1);
+    }
+
+    /// The wait bounds are a share of the queue too: eight times an
+    /// address's places, and a quarter of the queue in all.
+    #[test]
+    fn the_wait_bounds_follow_the_queue() {
+        assert_eq!(wait_caps(200_000), (2048, 50_000));
+        assert_eq!(wait_caps(50_000), (776, 12_500));
+        assert_eq!(wait_caps(1_000), (8, 250));
+        assert_eq!(wait_caps(16), (8, 8));
+        assert_eq!(wait_caps(usize::MAX).0, 2048);
+    }
+
+    /// A line serves its waiters oldest first, the keys a user asked for
+    /// before the rest; a waiter put back keeps its turn.
+    #[test]
+    fn a_line_is_first_come_first_served() {
+        let mut v = places(1, 1, 8, 8);
+        let w = &mut v.waits;
+        let at = a("203.0.113.1:1");
+        let address = net_of(at.ip());
+        for n in 1..=3 {
+            assert!(w.park(key(n), at, false));
+        }
+        assert!(w.park(key(4), at, true) && w.park(key(5), at, true));
+        // Parking the same peer again, or another port of its address,
+        // changes nothing.
+        assert!(w.park(key(2), at, false));
+        assert!(w.park(key(2), a("203.0.113.1:9"), false));
+        assert_eq!(w.live, 5);
+        assert_eq!(line(w, address), [4, 5, 1, 2, 3].map(key));
+        // A key asked for later joins the asked keys, behind them.
+        w.ask(&key(3));
+        assert_eq!(line(w, address), [4, 5, 3, 1, 2].map(key));
+        assert_eq!(w.live, 5);
+        // The first is served; the next is taken and put back.
+        let first = w.pop(address).unwrap();
+        w.promoted(&first);
+        let next = w.pop(address).unwrap();
+        w.put_back(address, vec![next]);
+        assert_eq!(line(w, address), [5, 3, 1, 2].map(key));
+        assert_eq!((w.live, w.lines[&address].promoted), (4, 1));
+        w.check(|_| true);
+    }
+
+    /// A full line turns the newest arrival away and keeps the waiters it
+    /// has; so does a full wait list; and a key waits at no more than
+    /// `MAX_WAITS_PER_KEY` addresses. A key a user asked for takes the
+    /// place of the newest waiter nobody asked for.
+    #[test]
+    fn the_wait_lists_are_bounded() {
+        let mut v = places(1, 1, 3, 5);
+        let w = &mut v.waits;
+        let p = |n: u8| a(&format!("203.0.113.{n}:1"));
+        let address = |n: u8| net_of(p(n).ip());
+        for n in 1..=3 {
+            assert!(w.park(key(n), p(1), false));
+        }
+        assert!(!w.park(key(4), p(1), false), "the line is full");
+        assert_eq!(line(w, address(1)), [1, 2, 3].map(key));
+        assert!(!w.is_parked(&key(4)));
+        // An asked key takes the newest other waiter's place.
+        assert!(w.park(key(5), p(1), true));
+        assert_eq!(line(w, address(1)), [5, 1, 2].map(key));
+        assert!(!w.is_parked(&key(3)));
+        // Asked keys are never turned away for one another.
+        assert!(w.park(key(6), p(1), true) && w.park(key(7), p(1), true));
+        assert_eq!(line(w, address(1)), [5, 6, 7].map(key));
+        assert!(!w.park(key(8), p(1), true), "every waiter was asked for");
+        // In all: two more fit, at other addresses, and no more.
+        assert!(w.park(key(9), p(2), false) && w.park(key(10), p(3), false));
+        assert_eq!(w.live, 5);
+        assert!(!w.park(key(11), p(4), false), "the wait list is full");
+        assert!(
+            !w.park(key(11), p(4), true),
+            "nobody waits there to give way"
+        );
+        assert!(!w.lines.contains_key(&address(4)));
+        // Per key.
+        let mut v = places(1, 1, 8, 64);
+        let w = &mut v.waits;
+        for n in 1..=MAX_WAITS_PER_KEY as u8 {
+            assert!(w.park(key(1), p(n), false));
+        }
+        assert!(!w.park(key(1), p(200), false));
+        assert!(w.park(key(2), p(200), false));
+        w.check(|_| true);
+    }
+
+    /// A key that leaves stops waiting everywhere: its turns are skipped,
+    /// a line nobody waits in is gone, and the tickets left behind are
+    /// cleared out before they outnumber the waiters.
+    #[test]
+    fn a_key_that_leaves_ends_its_waits() {
+        let mut v = places(1, 1, 1024, 4096);
+        let w = &mut v.waits;
+        let p = |n: u8| a(&format!("203.0.113.{n}:1"));
+        let address = |n: u8| net_of(p(n).ip());
+        assert!(w.park(key(1), p(1), false) && w.park(key(1), p(2), false));
+        assert!(w.park(key(2), p(1), false));
+        assert_eq!(w.forget(&key(1)).len(), 2);
+        assert!(w.forget(&key(1)).is_empty());
+        assert_eq!(line(w, address(1)), [key(2)]);
+        assert!(!w.lines.contains_key(&address(2)));
+        assert_eq!(w.live, 1);
+        // Found again, it waits at the back, once.
+        assert!(w.park(key(1), p(1), false));
+        assert_eq!(line(w, address(1)), [2, 1].map(key));
+        // Many come and go: the line doesn't keep their tickets.
+        for n in 0..1000u32 {
+            let mut k = [3; 20];
+            k[..4].copy_from_slice(&n.to_be_bytes());
+            assert!(w.park(InfoHash(k), p(1), false));
+            w.forget(&InfoHash(k));
+        }
+        let held = &w.lines[&address(1)];
+        assert!(held.asked.len() + held.rest.len() <= 2 * held.live + 17);
+        assert_eq!(line(w, address(1)), [2, 1].map(key));
+        w.check(|_| true);
+    }
+
+    /// A line that fills and drains gives its memory back: with a few
+    /// waiters left it keeps room for only a few turns, whichever end the
+    /// others left from.
+    #[test]
+    fn a_drained_line_gives_its_memory_back() {
+        let mut v = places(1, 1, 1024, 4096);
+        let w = &mut v.waits;
+        let at = a("203.0.113.1:1");
+        let address = net_of(at.ip());
+        let k = |n: u32| {
+            let mut k = [7; 20];
+            k[..4].copy_from_slice(&n.to_be_bytes());
+            InfoHash(k)
+        };
+        let room = |w: &Waits| {
+            let l = &w.lines[&address];
+            l.asked.capacity() + l.rest.capacity()
+        };
+        for from_the_front in [true, false] {
+            for n in 0..1024 {
+                assert!(w.park(k(n), at, n % 8 == 0));
+            }
+            assert!(room(w) >= 1024);
+            // All but two leave: served from the front, or gone.
+            for n in 0..1022 {
+                if from_the_front {
+                    let first = w.pop(address).unwrap();
+                    w.promoted(&first);
+                } else {
+                    w.forget(&k(n));
+                }
+            }
+            assert_eq!(w.lines[&address].live, 2);
+            assert!(room(w) <= 4 * 2 + 8, "{} turns kept", room(w));
+            w.check(|_| true);
+            let rest: Vec<InfoHash> = line(w, address);
+            assert_eq!(rest.len(), 2);
+            for key in rest {
+                w.forget(&key);
+            }
+            assert!(w.lines.is_empty() && w.keys.is_empty());
+        }
+    }
+
+    /// A key's lines "still move" the first time it is asked, and after
+    /// that only if one of them has given a place since.
+    #[test]
+    fn a_line_moves_while_it_gives_places() {
+        let mut v = places(1, 1, 8, 8);
+        let w = &mut v.waits;
+        let at = a("203.0.113.1:1");
+        let address = net_of(at.ip());
+        assert!(!w.still_moving(&key(9)), "not waiting");
+        assert!(w.park(key(1), at, false) && w.park(key(2), at, false));
+        assert!(w.park(key(3), at, false));
+        assert!(w.still_moving(&key(3)));
+        assert!(!w.still_moving(&key(3)));
+        let first = w.pop(address).unwrap();
+        w.promoted(&first);
+        assert!(w.still_moving(&key(3)));
+        assert!(!w.still_moving(&key(3)));
+        // A waiter that only leaves isn't a place given.
+        w.forget(&key(2));
+        assert!(!w.still_moving(&key(3)));
+    }
+
+    /// A place given back is noted for the address's line, and a
+    /// network's place once a waiter has been passed over for a network;
+    /// nothing is noted where nobody waits.
+    #[test]
+    fn a_freed_place_is_noted_for_its_waiters() {
+        let mut v = places(1, 2, 8, 8);
+        let p = |n: u8| a(&format!("203.0.113.{n}:1"));
+        let address = |n: u8| net_of(p(n).ip());
+        let other = a("198.51.100.1:1");
+        assert_eq!(v.take(&[], p(1)), Ok(()));
+        assert_eq!(v.take(&[], p(2)), Ok(()));
+        assert_eq!(v.take(&[], other), Ok(()));
+        v.give_back(&[other]);
+        assert!(v.freed.is_empty(), "nobody waits at all");
+        assert_eq!(v.take(&[], p(1)), Err(Full::Address));
+        assert!(v.waits.park(key(1), p(1), false));
+        assert!(v.waits.park(key(2), p(3), false));
+        assert!(v.waits.park(key(3), other, false));
+        // The key at .2 leaves: its address has no line, and no waiter
+        // has been passed over for a network.
+        v.give_back(&[p(2)]);
+        assert!(v.freed.is_empty() && v.freed_networks.is_empty());
+        // With one passed over, a network's place is noted too.
+        v.blocked.insert(address(3));
+        v.give_back(&[p(1)]);
+        assert_eq!(v.freed, [address(1)]);
+        assert_eq!(v.freed_networks, [address(1).network()]);
+    }
+}
+
+#[cfg(test)]
+#[path = "pool_budget_model.rs"]
+mod budget_model;

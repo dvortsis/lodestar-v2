@@ -251,6 +251,28 @@ impl CoordinatorTls {
     }
 }
 
+impl CoordinatorTls {
+    /// Whether `worker` still has a certificate that stands: on record, not
+    /// revoked, and not expired. A session's own certificate can expire
+    /// while a renewed one stands; the worker reconnects with that.
+    pub fn worker_stands(&self, worker: WorkerId) -> bool {
+        let Some(now) = self
+            .time
+            .current_time()
+            .and_then(|t| i64::try_from(t.as_secs()).ok())
+        else {
+            return false;
+        };
+        self.shared
+            .trust
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .issued
+            .values()
+            .any(|i| i.worker == worker && !i.revoked && now <= i.not_after)
+    }
+}
+
 /// Serves the coordinator's current certificate, so a renewal or a CA
 /// switch needs no new `ServerConfig`.
 #[derive(Debug)]

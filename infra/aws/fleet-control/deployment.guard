@@ -89,4 +89,8 @@ rule cleanup_identity when Resources.LodestarFleetCleanupInvoker exists {
     Resources.SchedulePermission.Properties.SourceAccount.Ref == 'AWS::AccountId'
     Resources.SchedulePermission.Properties.FunctionName.Ref == 'Expiration'
     Parameters.EnableExpiration.Default == 'false'
+    # X-cleanup-fits-quota: an S3 lease per mode bounds concurrency instead. A
+    # reservation cannot deploy on an account whose concurrency limit is 10.
+    Resources.Expiration.Properties.ReservedConcurrentExecutions !exists
+    Resources.Emergency.Properties.ReservedConcurrentExecutions !exists
 }

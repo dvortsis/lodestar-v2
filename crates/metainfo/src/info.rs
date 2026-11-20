@@ -24,6 +24,13 @@ pub struct Limits {
     /// Bytes per path, summed over segments.
     pub max_path_bytes: usize,
     pub max_name_bytes: usize,
+    /// Path segments summed over every file path and symlink target the
+    /// parse builds, so the whole file tree's cost is bounded, not only
+    /// each path's.
+    pub max_total_path_segments: usize,
+    /// Path bytes summed the same way, before and after the encoding is
+    /// resolved.
+    pub max_total_path_bytes: usize,
     /// Unknown info keys are kept as a bencode blob up to this size.
     pub max_extra_bytes: usize,
 }
@@ -37,6 +44,10 @@ impl Limits {
         max_path_depth: 64,
         max_path_bytes: 4096,
         max_name_bytes: 4096,
+        // 200,000 files of 8 segments and 100 bytes fit with room to spare;
+        // see docs/decisions/2026-11-14-X-metainfo01-fix.md.
+        max_total_path_segments: 2_000_000,
+        max_total_path_bytes: 32 << 20,
         max_extra_bytes: 64 << 10,
     };
 
@@ -231,6 +242,49 @@ impl Warnings {
     }
 }
 
+/// The combined cost of the paths a parse builds, charged before each
+/// file's path is copied out of the input.
+struct PathBudget {
+    segments: usize,
+    bytes: usize,
+    max_segments: usize,
+    max_bytes: usize,
+}
+
+impl PathBudget {
+    fn new(limits: &Limits) -> PathBudget {
+        PathBudget {
+            segments: 0,
+            bytes: 0,
+            max_segments: limits.max_total_path_segments,
+            max_bytes: limits.max_total_path_bytes,
+        }
+    }
+
+    fn charge(&mut self, segments: usize, bytes: usize) -> Result<(), Error> {
+        self.segments = self.segments.saturating_add(segments);
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.segments > self.max_segments {
+            return Err(Error::LimitExceeded {
+                what: "total path segments",
+                limit: self.max_segments,
+            });
+        }
+        if self.bytes > self.max_bytes {
+            return Err(Error::LimitExceeded {
+                what: "total path bytes",
+                limit: self.max_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    fn charge_path(&mut self, path: &[impl AsRef<[u8]>]) -> Result<(), Error> {
+        let bytes = path.iter().map(|s| s.as_ref().len()).sum();
+        self.charge(path.len(), bytes)
+    }
+}
+
 impl Info {
     pub fn parse(raw: &[u8]) -> Result<Info, Error> {
         Info::parse_with(raw, &ParseOptions::default())
@@ -372,7 +426,7 @@ impl Info {
                 encoding: detected,
             },
         };
-        let (path_encoding, mut paths) = resolve_paths(&drafts, detected);
+        let (path_encoding, mut paths) = resolve_paths(&drafts, detected, limits)?;
         enforce_path_limits(&mut paths, limits)?;
 
         let files = drafts
@@ -507,10 +561,13 @@ type OwnedPath = Vec<Vec<u8>>;
 /// bytes survive. Only if one of them can't be written losslessly in
 /// `detected` is the legacy text decoded to UTF-8 instead, because the right
 /// file name matters more than the legacy bytes.
+type Resolved = (TextEncoding, Vec<(OwnedPath, Option<OwnedPath>)>);
+
 fn resolve_paths(
     drafts: &[Draft<'_>],
     detected: TextEncoding,
-) -> (TextEncoding, Vec<(OwnedPath, Option<OwnedPath>)>) {
+    limits: &Limits,
+) -> Result<Resolved, Error> {
     let raw = |s: &[u8]| s.to_vec();
     let legacy = drafts
         .iter()
@@ -521,17 +578,17 @@ fn resolve_paths(
             .ok()
             .and_then(|t| detected.encode_exact(t))
     };
-    if !legacy || detected == TextEncoding::UTF8 {
-        (TextEncoding::UTF8, map_paths(drafts, raw, raw))
+    Ok(if !legacy || detected == TextEncoding::UTF8 {
+        (TextEncoding::UTF8, map_paths(drafts, raw, raw, limits)?)
     } else if labelled().next().is_none() {
-        (detected, map_paths(drafts, raw, raw))
+        (detected, map_paths(drafts, raw, raw, limits)?)
     } else if labelled().all(|s| reencode(s).is_some()) {
-        let files = map_paths(drafts, |s| reencode(s).unwrap_or_else(|| s.to_vec()), raw);
-        (detected, files)
+        let reencoded = |s: &[u8]| reencode(s).unwrap_or_else(|| s.to_vec());
+        (detected, map_paths(drafts, reencoded, raw, limits)?)
     } else {
         let decode = |s: &[u8]| detected.decode(s).into_owned().into_bytes();
-        (TextEncoding::UTF8, map_paths(drafts, raw, decode))
-    }
+        (TextEncoding::UTF8, map_paths(drafts, raw, decode, limits)?)
+    })
 }
 
 /// Re-checks the byte limit on resolved paths: decoding legacy text to
@@ -563,23 +620,30 @@ fn enforce_path_limits(
 }
 
 /// Converts every path and target segment: `labelled` for `path.utf-8`
-/// segments, `legacy` for everything else.
+/// segments, `legacy` for everything else. Conversion can grow text, so the
+/// total budget is charged again, file by file, on what's built.
 fn map_paths(
     drafts: &[Draft<'_>],
     labelled: impl Fn(&[u8]) -> Vec<u8>,
     legacy: impl Fn(&[u8]) -> Vec<u8>,
-) -> Vec<(OwnedPath, Option<OwnedPath>)> {
-    let legacy_path = |p: &[&[u8]]| p.iter().map(|s| legacy(s)).collect();
-    drafts
-        .iter()
-        .map(|d| {
-            let path = match &d.path_utf8 {
-                Some(p) => p.iter().map(|s| labelled(s)).collect(),
-                None => legacy_path(&d.path),
-            };
-            (path, d.symlink_target.as_deref().map(legacy_path))
-        })
-        .collect()
+    limits: &Limits,
+) -> Result<Vec<(OwnedPath, Option<OwnedPath>)>, Error> {
+    let mut budget = PathBudget::new(limits);
+    let legacy_path = |p: &[&[u8]]| -> OwnedPath { p.iter().map(|s| legacy(s)).collect() };
+    let mut out = Vec::with_capacity(drafts.len());
+    for d in drafts {
+        let path = match &d.path_utf8 {
+            Some(p) => p.iter().map(|s| labelled(s)).collect(),
+            None => legacy_path(&d.path),
+        };
+        budget.charge_path(&path)?;
+        let target = d.symlink_target.as_deref().map(legacy_path);
+        if let Some(t) = &target {
+            budget.charge_path(t)?;
+        }
+        out.push((path, target));
+    }
+    Ok(out)
 }
 
 /// The info dictionary re-encoded without `pieces`, for the optional raw
@@ -632,6 +696,7 @@ fn parse_v1_files<'a>(
             let mut draft = file_props(dict, "length", limits, warnings)?;
             draft.path = vec![name_raw];
             draft.path_utf8 = name_utf8.map(|n| vec![n]);
+            charge_draft(&mut PathBudget::new(limits), &draft)?;
             Ok((vec![draft], true))
         }
         (None, Some(files)) => {
@@ -648,6 +713,7 @@ fn parse_v1_files<'a>(
                 });
             }
             let mut out = Vec::with_capacity(files.len());
+            let mut budget = PathBudget::new(limits);
             for f in files.iter() {
                 let f = f
                     .as_dict()
@@ -661,6 +727,7 @@ fn parse_v1_files<'a>(
                     // BEP 47 lets padding files omit their path.
                     if draft.attrs.contains(FileAttrs::PADDING) {
                         draft.path = PADDING_PATH.to_vec();
+                        charge_draft(&mut budget, &draft)?;
                         out.push(draft);
                         continue;
                     }
@@ -674,12 +741,25 @@ fn parse_v1_files<'a>(
                     .get(b"path.utf-8")
                     .and_then(|p| path_list(p, "path.utf-8", limits).ok())
                     .filter(|p| !p.is_empty() && p.iter().all(|s| std::str::from_utf8(s).is_ok()));
+                charge_draft(&mut budget, &draft)?;
                 out.push(draft);
             }
             Ok((out, false))
         }
         (None, None) => Err(Error::MissingField("length or files")),
     }
+}
+
+/// Charges the path a draft will be stored under (its `path.utf-8` when it
+/// has one) and its symlink target. A legacy `path` kept beside a
+/// `path.utf-8` is only a list of slices into the input, one bencode item
+/// each, so the item budget bounds it.
+fn charge_draft(budget: &mut PathBudget, d: &Draft<'_>) -> Result<(), Error> {
+    budget.charge_path(d.path_utf8.as_ref().unwrap_or(&d.path))?;
+    if let Some(t) = &d.symlink_target {
+        budget.charge_path(t)?;
+    }
+    Ok(())
 }
 
 /// Size, attributes, symlink target and hashes from a v1 file dictionary
@@ -796,24 +876,37 @@ fn parse_file_tree<'a>(
         .ok_or(wrong_type("file tree", "dictionary"))?;
     let mut out = Vec::new();
     let mut prefix = Vec::new();
+    let mut walk = Walk {
+        out: &mut out,
+        budget: PathBudget::new(limits),
+        limits,
+        warnings,
+    };
     // Recursion depth is bounded by the bencode depth limit.
-    walk_tree(tree, &mut prefix, 0, &mut out, limits, warnings)?;
+    walk_tree(tree, &mut prefix, 0, &mut walk)?;
     if out.is_empty() {
         return Err(invalid("file tree", "no files"));
     }
     Ok(out)
 }
 
+/// What a file-tree walk carries down: the files so far and their budget.
+struct Walk<'w, 'a> {
+    out: &'w mut Vec<Draft<'a>>,
+    budget: PathBudget,
+    limits: &'w Limits,
+    warnings: &'w mut Warnings,
+}
+
 fn walk_tree<'a>(
     node: &Dict<'a>,
     prefix: &mut Vec<&'a [u8]>,
     prefix_bytes: usize,
-    out: &mut Vec<Draft<'a>>,
-    limits: &Limits,
-    warnings: &mut Warnings,
+    walk: &mut Walk<'_, 'a>,
 ) -> Result<(), Error> {
+    let limits = walk.limits;
     if node.is_empty() {
-        warnings.push(Warning::MalformedV2);
+        walk.warnings.push(Warning::MalformedV2);
         return Ok(());
     }
     let mut entries: Vec<_> = node.iter().collect();
@@ -851,7 +944,7 @@ fn walk_tree<'a>(
             let props = props
                 .as_dict()
                 .ok_or(wrong_type("file tree", "dictionary"))?;
-            if out.len() >= limits.max_files {
+            if walk.out.len() >= limits.max_files {
                 return Err(Error::LimitExceeded {
                     what: "file count",
                     limit: limits.max_files,
@@ -864,19 +957,25 @@ fn walk_tree<'a>(
                 _ => None,
             };
             if size > 0 && pieces_root.is_none() {
-                warnings.push(Warning::MalformedV2);
+                walk.warnings.push(Warning::MalformedV2);
             }
-            out.push(Draft {
+            // Charged before the prefix is copied into this file.
+            walk.budget.charge(prefix.len(), bytes)?;
+            let symlink_target = symlink_target(props, attrs, limits);
+            if let Some(t) = &symlink_target {
+                walk.budget.charge_path(t)?;
+            }
+            walk.out.push(Draft {
                 path: prefix.clone(),
                 path_utf8: None,
                 size,
                 attrs,
-                symlink_target: symlink_target(props, attrs, limits),
+                symlink_target,
                 pieces_root,
                 hashes: FileHashes::default(),
             });
         } else {
-            walk_tree(child, prefix, bytes, out, limits, warnings)?;
+            walk_tree(child, prefix, bytes, walk)?;
         }
         prefix.pop();
     }

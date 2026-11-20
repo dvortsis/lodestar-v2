@@ -32,12 +32,14 @@
 //! request if it has one, [`Timings::stop_deadline`], then a kill. Each
 //! step is bounded, so the whole is bounded.
 
+pub mod bind;
 pub mod egress;
 pub mod limits;
 #[cfg(target_os = "linux")]
 pub mod limits_linux;
 #[cfg(windows)]
 pub mod limits_windows;
+pub mod listener;
 pub mod logs;
 pub mod pidfile;
 pub mod process;
@@ -115,6 +117,9 @@ pub enum Attention {
     CrashLoop,
     /// It can't be started as configured; the [`SpawnError`] code.
     Refused(&'static str),
+    /// Its port stayed in use by another program through the crash
+    /// window, so it was never started.
+    PortInUse,
 }
 
 impl Attention {
@@ -122,6 +127,7 @@ impl Attention {
         match self {
             Attention::CrashLoop => "crash_loop",
             Attention::Refused(code) => code,
+            Attention::PortInUse => "port_in_use",
         }
     }
 }
@@ -169,6 +175,18 @@ pub struct Status {
     pub restarts: u32,
     /// How its last run ended: its exit code, or 128 + the signal.
     pub last_exit: Option<i32>,
+    /// Which run of it this is: one more at each start of the process, so
+    /// a restart is told apart from the run before (`bind`). Its own
+    /// health checks moving it between running and unhealthy don't change
+    /// it.
+    pub run: u64,
+    /// Whether run `run`'s process is up: set as it starts, cleared the
+    /// moment it's found gone or is told to stop, before the stop and the
+    /// clean-up that follow (`bind`).
+    pub up: bool,
+    /// The process id of run `run`, set as it starts: the process the
+    /// listener on its port must belong to (`bind`, `listener`).
+    pub pid: Option<u32>,
 }
 
 /// A companion's health check: the adapter (CMP-8a), the guarded client
@@ -357,6 +375,9 @@ impl Supervisor {
             state: if held { State::Held } else { State::Starting },
             restarts: 0,
             last_exit: None,
+            run: 0,
+            up: false,
+            pid: None,
         });
         let (control, control_rx) = mpsc::unbounded_channel();
         let logs = LogRing::default();
@@ -479,7 +500,8 @@ async fn supervise(
 ) {
     let redactor = Arc::new(logs::Redactor::new(&c.secrets));
     let set = |state: State| status.send_modify(|s| s.state = state);
-    let mut crashes: VecDeque<Instant> = VecDeque::new();
+    // Each crash in the window, and whether it was a port in use.
+    let mut crashes: VecDeque<(Instant, bool)> = VecDeque::new();
     let mut in_a_row = 0u32;
     // Needs attention survives a hold: a route that comes back doesn't
     // clear it, only your restart does.
@@ -538,10 +560,21 @@ async fn supervise(
             continue;
         }
         set(State::Starting);
-        let (spec, h) = (c.spawn.clone(), hook.clone());
-        let spawned = tokio::task::spawn_blocking(move || process::spawn(&spec, h.as_ref()))
-            .await
-            .unwrap_or(Err(SpawnError::Start(std::io::ErrorKind::Other)));
+        // A port another program holds already: it isn't started, and the
+        // try counts as a crash, so it backs off and, if the port stays
+        // taken, waits for you (X-cmp09-fix).
+        let port_busy = match loopback_port(&c) {
+            Some(p) => still_taken(p).await,
+            None => false,
+        };
+        let spawned = if port_busy {
+            Err(SpawnError::Start(std::io::ErrorKind::AddrInUse))
+        } else {
+            let (spec, h) = (c.spawn.clone(), hook.clone());
+            tokio::task::spawn_blocking(move || process::spawn(&spec, h.as_ref()))
+                .await
+                .unwrap_or(Err(SpawnError::Start(std::io::ErrorKind::Other)))
+        };
         let ended = match spawned {
             Ok(started) => run(&c, started, &t, &status, &logs, &redactor, &mut control).await,
             Err(
@@ -572,15 +605,21 @@ async fn supervise(
                 }
                 in_a_row = in_a_row.saturating_add(1);
                 let now = Instant::now();
-                crashes.push_back(now);
+                crashes.push_back((now, port_busy));
                 while crashes
                     .front()
-                    .is_some_and(|at| now.duration_since(*at) >= t.crash_window)
+                    .is_some_and(|(at, _)| now.duration_since(*at) >= t.crash_window)
                 {
                     crashes.pop_front();
                 }
                 if crashes.len() >= t.crash_limit {
-                    parked = Some(Attention::CrashLoop);
+                    // Only a port that was in use every time is reported
+                    // as that; any real crash among them is a crash loop.
+                    parked = Some(if crashes.iter().all(|(_, busy)| *busy) {
+                        Attention::PortInUse
+                    } else {
+                        Attention::CrashLoop
+                    });
                     continue;
                 }
                 let delay = backoff(in_a_row, &t);
@@ -601,6 +640,47 @@ async fn supervise(
         }
     }
     set(State::Stopped);
+}
+
+/// The loopback port a companion's health check reaches, if it has one.
+fn loopback_port(c: &Companion) -> Option<u16> {
+    match c.probe.as_ref()?.target {
+        Target::Loopback(p) => Some(p.get()),
+        _ => None,
+    }
+}
+
+/// Whether another program already holds `127.0.0.1:port`: a listener
+/// bound there and dropped at once. Only "in use" (or, on Windows, an
+/// exclusive hold's "access denied") counts; any other failure leaves the
+/// start to the companion.
+fn port_taken(port: u16) -> bool {
+    match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+        Ok(_) => false,
+        Err(e) => {
+            e.kind() == std::io::ErrorKind::AddrInUse
+                || (cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied)
+        }
+    }
+}
+
+/// How long a port found in use may take to come free before the start
+/// counts it: what an earlier run started may still be exiting.
+const PORT_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether `127.0.0.1:port` is still in use after [`PORT_GRACE`], looked
+/// at every 100 ms.
+async fn still_taken(port: u16) -> bool {
+    let until = Instant::now() + PORT_GRACE;
+    loop {
+        if !port_taken(port) {
+            return false;
+        }
+        if Instant::now() >= until {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Waits for a restart, stop or hold; a closed channel is a stop. A
@@ -646,7 +726,14 @@ async fn run(
             .0
             .push(tokio::spawn(read_into(err, ring.clone(), redactor.clone())));
     }
-    status.send_modify(|s| s.state = State::Running);
+    status.send_modify(|s| {
+        s.state = State::Running;
+        s.run += 1;
+        s.up = true;
+        s.pid = Some(pid);
+    });
+    // Down from the moment it's found gone or told to stop.
+    let down = || status.send_modify(|s| s.up = false);
     let began = Instant::now();
     let mut tick = tokio::time::interval_at(began + t.health_every, t.health_every);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -655,6 +742,7 @@ async fn run(
     let (ended, exit) = loop {
         tokio::select! {
             r = child.wait() => {
+                down();
                 break (Ended::Crashed { ran: began.elapsed() }, r.ok().map(exit_code));
             }
             _ = tick.tick(), if c.probe.is_some() && check.is_none() => {
@@ -681,6 +769,7 @@ async fn run(
                 failures += 1;
                 status.send_modify(|s| s.state = State::Unhealthy { failures });
                 if failures >= t.health_failures {
+                    down();
                     let exit = stop_child(&mut child, c.stop.as_deref(), t.stop_deadline).await;
                     break (Ended::Crashed { ran: began.elapsed() }, exit);
                 }
@@ -693,6 +782,7 @@ async fn run(
                     Some(Control::Hold) => Ended::Held,
                     Some(Control::Stop) | None => Ended::Stopped,
                 };
+                down();
                 let exit = stop_child(&mut child, c.stop.as_deref(), t.stop_deadline).await;
                 break (ended, exit);
             }

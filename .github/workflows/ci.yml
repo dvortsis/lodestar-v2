@@ -65,6 +65,9 @@ jobs:
       # The merge-guard hook runs before every Bash call in every session; a
       # syntax error there would exit 2 and block them all.
       - run: bash -n .claude/hooks/merge-guard.sh
+      # The import pilot's size figures (X-index-bytes-1m); stdlib only and
+      # instant, so here, where every PR runs, rather than behind a filter.
+      - run: python3 -m unittest discover -s docs/operations/imports/pilots/smoke -p 'test_*.py'
       # main's history was rewritten on 2026-10-30 (docs/owner-decisions.md
       # §2.25). A head that still contains the old root or the old main tip
       # would merge the removed history back in, so it fails here.
@@ -180,7 +183,9 @@ jobs:
       - name: clippy (Windows-only code)
         if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # --no-fail-fast: one failing test binary doesn't hide failures in the
+      # rest; the step still fails if any test fails (X-ci-no-fail-fast).
+      - run: cargo test --workspace --no-fail-fast
       # Disk numbers for the next time this job runs short (X-ci-disk).
       - name: disk after test build
         if: always() && runner.os == 'Linux'
@@ -195,7 +200,7 @@ jobs:
       # build the production types (maps, hashers, sockets).
       - name: dht and sources tests without test seams
         if: runner.os == 'Linux'
-        run: cargo test -p lodestar-dht -p lodestar-sources
+        run: cargo test -p lodestar-dht -p lodestar-sources --no-fail-fast
       # DUR-26: the updater's persistence tests are Unix-only; a cfg that
       # compiled them out must not pass as zero tests run.
       - name: updater tests selected
@@ -397,7 +402,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p lodestar-sources-importers
+      - run: cargo test -p lodestar-sources-importers --no-fail-fast
 
   fuzz:
     name: fuzz (${{ matrix.target }})
@@ -548,6 +553,11 @@ jobs:
         run: |
           python -m pip install --no-deps --require-hashes -r infra/fleet/requirements-test.txt
           ./infra/fleet/run_tests.sh -v
+      # The PIA helper's cloud-init (X-pia-vm-helper, runner-approved): renders
+      # the template offline and ties its sudoers lines to every sudo command the
+      # fleet steps and deliver-pia run. No root, network, secrets or cloud.
+      - name: Cloud-init sudoers tie test and PIA helper checks
+        run: bash infra/akamai/terraform/tests/test_linux_privilege_boundary.sh --offline
       # The fleet's CloudFormation templates (OP-2a): built from build_templates.py,
       # then policy tests over the parsed JSON. Standard library only; no cloud call.
       - name: Fleet AWS templates

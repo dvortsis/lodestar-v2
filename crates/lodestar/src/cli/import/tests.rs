@@ -384,7 +384,11 @@ fn space_is_estimated_per_torrent_and_refused_when_short() {
     let store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
     let s = space(&config, &store, Some(1_000));
     assert_eq!((s.per_record, s.measured), (DEFAULT_RECORD_BYTES, false));
-    assert_eq!(s.needed, Some(1_000 * DEFAULT_RECORD_BYTES * 125 / 100));
+    // Plus the WAL the import may grow before a checkpoint.
+    assert_eq!(
+        s.needed,
+        Some(1_000 * DEFAULT_RECORD_BYTES * 125 / 100 + lodestar_store::BULK_WAL_BYTES)
+    );
 }
 
 #[test]
@@ -416,8 +420,8 @@ fn a_pilot_of_a_source_too_big_for_the_disk_is_accepted_and_the_rest_refused() {
     let config = data(&dir.path().join("data"));
     let args = magnetico(&src);
     // Room for one batch of 500 with its 25 % headroom (625 torrents' worth),
-    // not for all 1,200 (1,500).
-    let free = 700 * DEFAULT_RECORD_BYTES;
+    // not for all 1,200 (1,500), on top of the import's WAL.
+    let free = 700 * DEFAULT_RECORD_BYTES + lodestar_store::BULK_WAL_BYTES;
     with_free(free, || {
         // Inspect sizes the whole source, and points at a pilot.
         let r = block_on(inspect(&config, &args, true));
@@ -450,9 +454,12 @@ fn a_pilot_of_a_source_too_big_for_the_disk_is_accepted_and_the_rest_refused() {
         assert_eq!((j.control, j.counters.read), (Control::Paused, 1_000));
     });
     // The last 200 (250 with headroom) fit where the 700 before didn't.
-    with_free(300 * DEFAULT_RECORD_BYTES, || {
-        block_on(resume(&config, 1, &args, None, true)).unwrap();
-    });
+    with_free(
+        300 * DEFAULT_RECORD_BYTES + lodestar_store::BULK_WAL_BYTES,
+        || {
+            block_on(resume(&config, 1, &args, None, true)).unwrap();
+        },
+    );
     assert_eq!(job(&config, 1).counters.read, 1_200);
 }
 
@@ -463,16 +470,19 @@ fn resume_without_a_limit_is_refused_when_the_rest_does_not_fit() {
     magnetico_db(&src, 1_200);
     let config = data(&dir.path().join("data"));
     let args = magnetico(&src);
-    with_free(700 * DEFAULT_RECORD_BYTES, || {
-        block_on(start(&config, &args, Some(1), true, None)).unwrap();
-        let r = block_on(resume(&config, 1, &args, None, true));
-        assert!(
-            matches!(&r, Err(Failure::Failed(m)) if m.contains("free space")),
-            "{r:?}"
-        );
-        // A limited leg still fits.
-        block_on(resume(&config, 1, &args, Some(1), true)).unwrap();
-    });
+    with_free(
+        700 * DEFAULT_RECORD_BYTES + lodestar_store::BULK_WAL_BYTES,
+        || {
+            block_on(start(&config, &args, Some(1), true, None)).unwrap();
+            let r = block_on(resume(&config, 1, &args, None, true));
+            assert!(
+                matches!(&r, Err(Failure::Failed(m)) if m.contains("free space")),
+                "{r:?}"
+            );
+            // A limited leg still fits.
+            block_on(resume(&config, 1, &args, Some(1), true)).unwrap();
+        },
+    );
     assert_eq!(job(&config, 1).counters.read, 1_000);
 }
 
@@ -899,4 +909,156 @@ fn start_stores_a_hash_sukebei_claims_as_adult() {
         let (bit, class) = row(i);
         assert!(!bit && class != adult, "{i}");
     }
+}
+
+/// `status` only reads: it answers while another connection is writing
+/// (as the running server does), and while a writing verb holds the store
+/// to itself it says so plainly once the busy timeout runs out, instead of
+/// a bare "database is locked". Writing verbs still refuse beside it.
+#[test]
+fn status_reads_beside_a_writer_and_names_a_command_holding_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 600);
+    let config = data(&dir.path().join("data"));
+    block_on(start(&config, &magnetico(&src), Some(1), true, None)).unwrap();
+
+    // A writer with a transaction open, as the server has while it writes.
+    let server = Store::open(config.db_path(), config.store_config()).unwrap();
+    server
+        .connection()
+        .execute_batch("BEGIN IMMEDIATE; UPDATE settings SET value = value WHERE 0;")
+        .unwrap();
+    status(&config, None, false).unwrap();
+    status(&config, Some(1), true).unwrap();
+    server.connection().execute_batch("COMMIT;").unwrap();
+    drop(server);
+
+    // An import holds the store to itself.
+    let import = open_exclusive(&config).unwrap();
+    let began = std::time::Instant::now();
+    for r in [status(&config, None, false), status(&config, Some(1), true)] {
+        assert!(
+            matches!(&r, Err(Failure::Refused(m))
+                if m.contains("lodestar import status` again") && m.contains("Ctrl-C")),
+            "{r:?}"
+        );
+    }
+    let r = block_on(inspect(&config, &magnetico(&src), true));
+    assert!(
+        matches!(&r, Err(Failure::Refused(m)) if m.contains("lodestar import inspect` again")),
+        "{r:?}"
+    );
+    // Bounded by the store's busy timeout per call, with room to spare.
+    assert!(began.elapsed() < std::time::Duration::from_secs(60));
+    // No second writer beside it.
+    let r = run(
+        &config,
+        ImportArgs {
+            action: Action::Pause { job: 1 },
+        },
+    );
+    assert!(matches!(&r, Err(Failure::Refused(_))), "{r:?}");
+    let r = block_on(resume(&config, 1, &magnetico(&src), None, true));
+    assert!(matches!(&r, Err(Failure::Refused(_))), "{r:?}");
+    drop(import);
+
+    // Free again: it reads.
+    status(&config, Some(1), false).unwrap();
+}
+
+/// While an import holds the store, `status` shows that import's live
+/// progress from its side file: for no job named, or its own job. Another
+/// job, a stale file or none gives the plain refusal. The run removes its
+/// file when it ends.
+#[test]
+fn status_shows_a_running_imports_live_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 600);
+    let config = data(&dir.path().join("data"));
+    // The file is gone as soon as the run returns, inside the runtime, not
+    // only once the runtime is torn down.
+    let data_dir = config.data_dir.clone();
+    block_on(async {
+        start(&config, &magnetico(&src), Some(1), true, None).await?;
+        assert!(!progress::path(&data_dir).exists(), "removed by the run");
+        Ok(())
+    })
+    .unwrap();
+    // The run wrote its file at start, handed it its batch, then removed it.
+    assert!(progress::tests::counted(&config.data_dir, "written") >= 1);
+    assert!(progress::tests::counted(&config.data_dir, "saved") >= 1);
+    assert!(
+        !progress::path(&config.data_dir).exists(),
+        "the run removed its file"
+    );
+
+    let import = open_exclusive(&config).unwrap();
+    let counters = ImportCounters {
+        read: 500,
+        new: 500,
+        ..ImportCounters::default()
+    };
+    let live = progress::Writer::start(&config.data_dir, 1, "magnetico", unix_now(), &counters);
+    // What status prints: the live view, in the same words and keys.
+    let p = progress::read(&config.data_dir, unix_now()).unwrap();
+    let text = live_text(&p, p.updated_at + 3);
+    assert!(
+        text.starts_with("Job 1 (magnetico): importing now. 500 read: 500 new"),
+        "{text}"
+    );
+    assert!(text.contains("updated 3 s ago"), "{text}");
+    let out = live_json(&p);
+    let job = &out[0];
+    assert_eq!(job["phase"], Phase::Reading.label());
+    assert_eq!(job["control"], Control::Running.label());
+    assert_eq!(job["live"], true);
+    assert_eq!(job["counters"]["read"], 500);
+    let normal = ["job", "source", "phase", "control", "reason", "counters"];
+    let normal = normal.iter().chain(&[
+        "waiting_candidates",
+        "created_at",
+        "updated_at",
+        "finished_at",
+    ]);
+    for key in normal {
+        assert!(job.get(key).is_some(), "{key} missing: {out}");
+    }
+    let counter_keys: Vec<_> = counters_json(&ImportCounters::default())
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    for key in counter_keys {
+        assert!(job["counters"].get(&key).is_some(), "counter {key} missing");
+    }
+    status(&config, None, false).unwrap();
+    status(&config, None, true).unwrap();
+    status(&config, Some(1), false).unwrap();
+    let r = status(&config, Some(2), false);
+    assert!(
+        matches!(&r, Err(Failure::Refused(m)) if m.contains("lodestar import status` again")),
+        "{r:?}"
+    );
+    drop(live);
+    let r = status(&config, None, false);
+    assert!(matches!(&r, Err(Failure::Refused(_))), "no file: {r:?}");
+    drop(import);
+    status(&config, Some(1), false).unwrap();
+
+    // The full status lists the same keys, with "live": false.
+    let full = job_json(&self::job(&config, 1));
+    let live = &live_json(&p)[0];
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let mut live_keys = keys(live);
+    live_keys.retain(|k| k != "run_started_at");
+    assert_eq!(keys(&full), live_keys);
+    assert_eq!(full["live"], false);
+    assert_eq!(keys(&full["counters"]), keys(&live["counters"]));
 }

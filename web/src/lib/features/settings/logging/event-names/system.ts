@@ -112,6 +112,14 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_system_companions_dir_left_n,
 		m.settings_logging_ev_system_companions_dir_left_h
 	],
+	'system.network_lost': [
+		m.settings_logging_ev_system_network_lost_n,
+		m.settings_logging_ev_system_network_lost_h
+	],
+	'system.network_watch_unsupported': [
+		m.settings_logging_ev_system_network_watch_unsupported_n,
+		m.settings_logging_ev_system_network_watch_unsupported_h
+	],
 	'system.running_as_root': [
 		m.settings_logging_ev_system_running_as_root_n,
 		m.settings_logging_ev_system_running_as_root_h
@@ -123,6 +131,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'system.data_dir_mismatch': [
 		m.settings_logging_ev_system_data_dir_mismatch_n,
 		m.settings_logging_ev_system_data_dir_mismatch_h
+	],
+	'system.data_dir_open': [
+		m.settings_logging_ev_system_data_dir_open_n,
+		m.settings_logging_ev_system_data_dir_open_h
 	],
 	'system.data_dir_user_share': [
 		m.settings_logging_ev_system_data_dir_user_share_n,

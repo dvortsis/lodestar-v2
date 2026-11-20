@@ -29,7 +29,7 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::{
     AdultMark, Error, Filtered, Held, Prepared, Result, SourceId, Store, add_sources, begin_write,
-    filter, find_any, flags, insert_new, mark_adult_found, rules, write_enrichment,
+    filter, find_any, flags, insert_new, mark_adult_found, rules,
 };
 
 /// The version of this contract a job was created under.
@@ -1712,10 +1712,8 @@ fn commit_torrent(
         .source_at
         .filter(|at| (1..=batch.at).contains(at))
         .unwrap_or(batch.at);
+    // `insert_new` writes the enrichment too.
     let id = insert_new(tx, p, flags, discovered_at, batch.at, batch.source)?;
-    if let Some(e) = &p.enrichment {
-        write_enrichment(tx, id, e)?;
-    }
     adult_claimed(tx, id, &hashes, adult_mark)?;
     tx.prepare_cached(
         "INSERT INTO import_quality (torrent_id, completeness, verification, privacy, repair,

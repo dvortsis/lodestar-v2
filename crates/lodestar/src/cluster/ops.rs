@@ -28,7 +28,7 @@
 //!
 //! WK-13 adds quarantine, release and purge beside `revoke`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
@@ -54,6 +54,9 @@ use crate::logging::events;
 /// How often the follower checks for a newly built cluster server, to
 /// re-apply saved pauses to it.
 const FOLLOW_EVERY: Duration = Duration::from_millis(100);
+/// How often the follower tries again to save a floor pause whose save
+/// failed.
+const RETRY_EVERY: Duration = Duration::from_secs(5);
 
 /// Each worker's saved settings: `workers.prefs.<id>`.
 pub const PREFS_PREFIX: &str = "workers.prefs.";
@@ -145,6 +148,15 @@ impl Saved {
         ok.then_some(s)
     }
 
+    /// Whether a row that doesn't parse may hold a pause: unless it's JSON
+    /// that says `"paused": false`, it's read as paused (fails closed).
+    pub(crate) fn maybe_paused(text: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|v| v.get("paused").and_then(serde_json::Value::as_bool))
+            != Some(false)
+    }
+
     /// Saved paused (the cluster tick seeds a new server with it, WK-10d).
     pub(crate) fn paused(&self) -> bool {
         self.paused
@@ -184,6 +196,17 @@ pub struct Workers {
     /// A read-write connection for the settings rows.
     store: Arc<Mutex<Store>>,
     saved: Mutex<BTreeMap<WorkerId, Saved>>,
+    /// Floor-budget pauses whose save failed: applied like saved ones, and
+    /// saved again by the follower (at most every [`RETRY_EVERY`]) until
+    /// they land. An admin's resume or revoke ends them.
+    unsaved: Mutex<BTreeSet<WorkerId>>,
+    /// Pauses held in memory only, never written: a saved row this start
+    /// couldn't read (read as paused, failing closed; the row itself is
+    /// left alone), or a paused row the planner had no room for. Applied
+    /// like saved ones; an admin's resume or revoke ends them.
+    held: Mutex<BTreeSet<WorkerId>>,
+    /// When the follower last tried to save `unsaved`.
+    retried: Mutex<Option<std::time::Instant>>,
     /// The server saved pauses were last applied to.
     applied_to: Mutex<Weak<ClusterServer>>,
     /// Held across every change to a worker's settings, from reading them
@@ -229,6 +252,7 @@ impl Workers {
     ) -> Result<Arc<Workers>, lodestar_store::Error> {
         let store = Store::open(db, config)?;
         let mut saved = BTreeMap::new();
+        let mut held = BTreeSet::new();
         for (key, text) in store.settings_with_prefix(PREFS_PREFIX)? {
             let Some(id) = key
                 .strip_prefix(PREFS_PREFIX)
@@ -237,17 +261,24 @@ impl Workers {
             else {
                 continue;
             };
+            let w = WorkerId(id);
             let Some(s) = Saved::parse(&text) else {
                 lodestar_log::log_event!(
                     events::WORKERS_PREFS_SKIPPED,
                     worker = lodestar_log::Count(u64::from(id))
                 );
+                // Its settings go back to the defaults, but not its pause:
+                // a row that can't be read is read as paused.
+                if Saved::maybe_paused(&text) {
+                    held.insert(w);
+                }
                 continue;
             };
-            let w = WorkerId(id);
             if placement.set_settings(w, s.settings()).is_ok() && placement.pin(w, s.pin()).is_ok()
             {
                 saved.insert(w, s);
+            } else if s.paused {
+                held.insert(w);
             }
         }
         let workers = Arc::new(Workers {
@@ -255,6 +286,9 @@ impl Workers {
             placement,
             store: Arc::new(Mutex::new(store)),
             saved: Mutex::new(saved),
+            unsaved: Mutex::new(BTreeSet::new()),
+            held: Mutex::new(held),
+            retried: Mutex::new(None),
             applied_to: Mutex::new(Weak::new()),
             edits: tokio::sync::Mutex::new(()),
         });
@@ -271,10 +305,18 @@ impl Workers {
                 workers.save_floor_pause(w).await;
             });
         }));
+        // Every session start asks it, on this server and on every server
+        // started later (before it serves), so a pause stands whatever a
+        // server forgot.
+        let me = Arc::downgrade(&workers);
+        workers.cluster.set_pause_source(Arc::new(move |w| {
+            me.upgrade().is_some_and(|ws| ws.is_paused(w))
+        }));
         let weak = Arc::downgrade(&workers);
         tokio::spawn(async move {
             while let Some(w) = weak.upgrade() {
                 w.follow();
+                w.save_unsaved().await;
                 drop(w);
                 tokio::time::sleep(FOLLOW_EVERY).await;
             }
@@ -295,9 +337,80 @@ impl Workers {
                     server.pause(*w);
                 }
             }
+            for w in lock(&self.unsaved).iter().chain(lock(&self.held).iter()) {
+                server.pause(*w);
+            }
+            // Again here, in case the server started while the source
+            // was being set.
+            if let Some(source) = self.cluster.pause_source() {
+                server.set_pause_source(source);
+            }
             *last = Arc::downgrade(&server);
         }
         Some(server)
+    }
+
+    /// Whether `w`'s pause is in force: saved, or held unsaved.
+    fn is_paused(&self, w: WorkerId) -> bool {
+        lock(&self.saved).get(&w).is_some_and(|s| s.paused)
+            || lock(&self.unsaved).contains(&w)
+            || lock(&self.held).contains(&w)
+    }
+
+    /// Saves each pause held unsaved, until it lands. One for a worker
+    /// gone meanwhile is dropped. Failures stay quiet here: the first was
+    /// logged.
+    async fn save_unsaved(&self) {
+        if lock(&self.unsaved).is_empty() {
+            return;
+        }
+        {
+            let mut last = lock(&self.retried);
+            if last.is_some_and(|at| at.elapsed() < RETRY_EVERY) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let Some(server) = self.cluster.server() else {
+            return;
+        };
+        let certs = server.try_certificates().await;
+        self.save_unsaved_with(&server, certs).await;
+    }
+
+    /// One round of [`save_unsaved`](Self::save_unsaved), given the
+    /// certificate lookup's answer. A failed lookup (`None`) skips the
+    /// round and keeps every held pause. A worker is gone only when it
+    /// isn't connected and the lookup found no certificate of it that
+    /// stands; its pause is then dropped.
+    async fn save_unsaved_with(&self, server: &ClusterServer, certs: Option<Vec<IssuedCert>>) {
+        let Some(certs) = certs else {
+            return;
+        };
+        let now = unix_now();
+        let standing: BTreeSet<WorkerId> = certs
+            .into_iter()
+            .filter(|c| !c.revoked && now <= c.not_after)
+            .map(|c| c.worker)
+            .collect();
+        let connected: BTreeSet<WorkerId> = server
+            .snapshot()
+            .workers
+            .into_iter()
+            .filter(|s| s.connected)
+            .map(|s| s.worker)
+            .collect();
+        let pending: Vec<WorkerId> = lock(&self.unsaved).iter().copied().collect();
+        for w in pending {
+            let _edit = self.edits.lock().await;
+            if !lock(&self.unsaved).contains(&w) {
+                continue;
+            }
+            let gone = !standing.contains(&w) && !connected.contains(&w);
+            if gone || self.set_paused(w, true).await.is_ok() {
+                lock(&self.unsaved).remove(&w);
+            }
+        }
     }
 
     /// The planner this API pins and budgets; WK-10's tick syncs it.
@@ -422,6 +535,7 @@ impl Workers {
         let Some(server) = self.follow() else {
             return Ok(WorkerList {
                 allowed: false,
+                start_failure: self.cluster.start_failure(),
                 workers: Vec::new(),
             });
         };
@@ -433,6 +547,7 @@ impl Workers {
             .collect();
         Ok(WorkerList {
             allowed: self.cluster.allowed(),
+            start_failure: self.cluster.start_failure(),
             workers,
         })
     }
@@ -482,14 +597,19 @@ impl Workers {
         let _edit = self.edits.lock().await;
         let server = self.server()?;
         self.check(&server, w).await?;
+        if lock(&self.held).contains(&w) {
+            self.release_held(w).await?;
+        }
         self.set_paused(w, false).await?;
+        lock(&self.unsaved).remove(&w);
+        lock(&self.held).remove(&w);
         self.server()?.resume(w);
         self.one(&server, w).await
     }
 
     /// Saves the pause of a worker the sink paused for too many floor
-    /// reports. A failure is logged; the server's pause stands until a
-    /// restart.
+    /// reports. A failure is logged once; the pause is then held unsaved
+    /// (applied to every session, and saved again until it lands).
     ///
     /// Under `edits`, so it orders with an admin's calls (#607's review): a
     /// worker revoked meanwhile isn't saved again, and one an admin resumed
@@ -502,7 +622,7 @@ impl Workers {
     async fn save_floor_pause(&self, w: WorkerId) -> Option<&'static str> {
         let _edit = self.edits.lock().await;
         let code = if let Some(server) = self.follow()
-            && self.check(&server, w).await.is_err()
+            && self.gone(&server, w).await
         {
             Some("unknown_worker")
         } else {
@@ -510,10 +630,16 @@ impl Workers {
             if let Some(server) = self.follow() {
                 server.pause(w);
             }
-            saved.err().map(|e| match e {
+            let code = saved.err().map(|e| match e {
                 WorkersError::PrefsFull => "prefs_full",
                 _ => "failed",
-            })
+            });
+            // Not saved: held, applied at every session start, and saved
+            // again until it lands.
+            if code.is_some() {
+                lock(&self.unsaved).insert(w);
+            }
+            code
         };
         if let Some(code) = code {
             lodestar_log::log_event!(
@@ -549,10 +675,18 @@ impl Workers {
         // Disconnect (and take the leases back) first, then forget: a sync
         // in between can't rejoin it with the defaults.
         let (certificates, leases) = server.revoke_worker(w).await.map_err(failed)?;
-        // Its floor reports not written yet go too (#607's review).
-        self.cluster.forget_floor_reports(w);
+        // Its floor reports not written yet go too (#607's review), and so
+        // do the ones written: the owner's choice of 2026-11-14
+        // (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`). Each key is
+        // judged under the floor again by whoever fetches it next. A
+        // delete that fails is tried again by the floor writer until it
+        // lands; the revocation stands either way.
+        let cluster = self.cluster.clone();
+        let _ = tokio::task::spawn_blocking(move || cluster.revoke_floor_reports(w)).await;
         self.placement.forget(w);
         lock(&self.saved).remove(&w);
+        lock(&self.unsaved).remove(&w);
+        lock(&self.held).remove(&w);
         // The revocation stands either way. A row left behind only gives
         // an id that can never reconnect its old settings at the next
         // start, so this failing doesn't fail the revoke.
@@ -578,6 +712,9 @@ impl Workers {
         self.check(&server, w).await?;
         let mut s = self.saved(w);
         s.apply(&patch);
+        // A pause held in memory is written with the row, so it outlives
+        // this process.
+        s.paused |= self.held_or_unsaved(w);
         let full = |_: PrefsFull| WorkersError::PrefsFull;
         self.placement.set_settings(w, s.settings()).map_err(full)?;
         self.placement.pin(w, s.pin()).map_err(full)?;
@@ -586,7 +723,58 @@ impl Workers {
         // and the plan is corrected by the next PATCH or restart.
         self.persist(w, Some(s)).await?;
         lock(&self.saved).insert(w, s);
+        lock(&self.held).remove(&w);
+        lock(&self.unsaved).remove(&w);
         self.one(&server, w).await
+    }
+
+    /// Whether `w` is known to be gone: not connected, and a certificate
+    /// lookup that answered found none of it that stands. A failed lookup
+    /// never reads as gone.
+    async fn gone(&self, server: &ClusterServer, w: WorkerId) -> bool {
+        let Some(certs) = server.try_certificates().await else {
+            return false;
+        };
+        let now = unix_now();
+        let standing = certs
+            .iter()
+            .any(|c| c.worker == w && !c.revoked && now <= c.not_after);
+        let connected = server
+            .snapshot()
+            .workers
+            .iter()
+            .any(|s| s.worker == w && s.connected);
+        !standing && !connected
+    }
+
+    fn held_or_unsaved(&self, w: WorkerId) -> bool {
+        lock(&self.held).contains(&w) || lock(&self.unsaved).contains(&w)
+    }
+
+    /// Writes `w`'s row as resumed when its pause is held in memory: a
+    /// JSON object keeps its other fields with `"paused": false`; anything
+    /// else becomes the defaults. So the next server doesn't pause it
+    /// again.
+    async fn release_held(&self, w: WorkerId) -> Result<(), WorkersError> {
+        let store = self.store.clone();
+        let key = prefs_key(w);
+        tokio::task::spawn_blocking(move || {
+            let mut store = lock(&store);
+            let text = store.setting_text(&key)?;
+            let resumed = text
+                .as_deref()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+                .and_then(|mut v| {
+                    v.as_object_mut()?
+                        .insert("paused".into(), serde_json::Value::Bool(false));
+                    Some(v.to_string())
+                })
+                .unwrap_or_else(|| Saved::default().text());
+            store.update_settings_text(&[(&key, &resumed)], &[])
+        })
+        .await
+        .map_err(failed)?
+        .map_err(failed)
     }
 }
 
@@ -801,6 +989,7 @@ mod tests {
             list,
             WorkerList {
                 allowed: false,
+                start_failure: None,
                 workers: vec![]
             }
         );
@@ -1067,7 +1256,7 @@ mod tests {
     }
 
     /// #607's delta review: revoking a worker forgets its floor reports not
-    /// written yet and its budget window.
+    /// written yet and its budget window, and refuses its later reports.
     #[tokio::test]
     async fn revoking_a_worker_forgets_its_floor_reports() {
         let dir = tempfile::tempdir().unwrap();
@@ -1082,7 +1271,8 @@ mod tests {
         assert!(!h.floor_report_for_test(w, 255, 999));
         c.workers.revoke(w.0).await.unwrap();
         assert_eq!(h.floor_pending_for_test(w), 0);
-        assert!(h.floor_report_for_test(w, 1, 1000), "a fresh window");
+        assert!(!h.floor_report_for_test(w, 1, 1000), "refused from now on");
+        assert_eq!(h.floor_pending_for_test(w), 0);
         c.stop().await;
     }
 
@@ -1237,6 +1427,219 @@ mod tests {
         let a = c.workers.placement().assignment(w).expect("planned");
         assert_eq!((a.pool_cap, a.dht), (1234, None));
         assert_eq!(a.budget.up_kbps, 1000);
+        c.stop().await;
+    }
+
+    #[test]
+    fn a_row_that_cannot_be_read_counts_as_paused_unless_it_says_otherwise() {
+        assert!(Saved::maybe_paused("not json"));
+        assert!(Saved::maybe_paused("{\"v\":9}"));
+        assert!(Saved::maybe_paused("{\"v\":9,\"paused\":true}"));
+        assert!(!Saved::maybe_paused("{\"v\":9,\"paused\":false}"));
+    }
+
+    #[tokio::test]
+    async fn a_saved_row_that_cannot_be_read_keeps_its_worker_paused() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        c.stop().await;
+        let mut store =
+            Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        store
+            .update_settings_text(&[(&prefs_key(w), "{\"v\":1")], &[])
+            .unwrap();
+        drop(store);
+
+        let c = coordinator(dir.path(), true).await;
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(9)).await.unwrap()));
+        c.wait_status(w, StatusDto::Paused).await;
+        drop(s);
+        // The row itself is left as it was.
+        let row = |dir: &Path| {
+            Store::open(dir.join("lodestar.db"), StoreConfig::default())
+                .unwrap()
+                .settings_with_prefix(PREFS_PREFIX)
+                .unwrap()
+        };
+        assert_eq!(
+            row(dir.path()),
+            vec![(prefs_key(w), "{\"v\":1".to_string())]
+        );
+        // An admin's resume ends the pause.
+        c.workers.resume(w.0).await.unwrap();
+        let s = c.connect(&creds).await;
+        assert!(granted(&s.claim(claim(8)).await.unwrap()));
+        drop(s);
+        c.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_pause_held_unsaved_applies_to_every_session_until_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        lock(&c.workers.unsaved).insert(w);
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(9)).await.unwrap()));
+        drop(s);
+        // The server forgets it (a live unpause): the next session is
+        // paused again.
+        let server = c.cluster.handle().server().unwrap();
+        server.unpause(w);
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(8)).await.unwrap()));
+        drop(s);
+        // Behind the follower on `edits`, so its round can't race this one.
+        let certs = server.try_certificates().await;
+        c.workers.save_unsaved_with(&server, certs).await;
+        assert!(c.workers.saved(w).paused);
+        assert!(lock(&c.workers.unsaved).is_empty());
+        // An admin's resume ends it.
+        c.workers.resume(w.0).await.unwrap();
+        let s = c.connect(&creds).await;
+        assert!(granted(&s.claim(claim(7)).await.unwrap()));
+        drop(s);
+        c.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_certificate_lookup_keeps_every_held_pause() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        lock(&c.workers.unsaved).insert(w);
+        let server = c.cluster.handle().server().unwrap();
+        // The lookup failed: the round is skipped, nothing saved or dropped.
+        c.workers.save_unsaved_with(&server, None).await;
+        assert!(lock(&c.workers.unsaved).contains(&w));
+        assert!(!c.workers.saved(w).paused);
+        assert!(c.workers.is_paused(w));
+        // An answer that lists it: saved, and no longer held unsaved.
+        let certs = server.try_certificates().await;
+        assert!(
+            certs
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|x| x.worker == w))
+        );
+        c.workers.save_unsaved_with(&server, certs).await;
+        assert!(c.workers.saved(w).paused);
+        assert!(lock(&c.workers.unsaved).is_empty());
+        c.stop().await;
+    }
+
+    /// Writes an unreadable row for `w` and restarts, so its pause is held.
+    async fn restarted_with_held_pause(dir: &Path, w: WorkerId) -> Coord {
+        let mut store = Store::open(dir.join("lodestar.db"), StoreConfig::default()).unwrap();
+        store
+            .update_settings_text(&[(&prefs_key(w), "{\"v\":9,\"paused\":true}")], &[])
+            .unwrap();
+        drop(store);
+        let c = coordinator(dir, true).await;
+        assert!(lock(&c.workers.held).contains(&w));
+        c
+    }
+
+    #[tokio::test]
+    async fn a_held_pause_stands_through_the_source_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        c.stop().await;
+        let c = restarted_with_held_pause(dir.path(), w).await;
+        // The server forgets it: the source alone pauses the next session.
+        c.cluster.handle().server().unwrap().unpause(w);
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(9)).await.unwrap()));
+        drop(s);
+        c.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_settings_change_writes_a_held_pause_with_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        c.stop().await;
+        let c = restarted_with_held_pause(dir.path(), w).await;
+        let patch = WorkerPatch {
+            budget: None,
+            dht: None,
+            intensity: Some(WorkerIntensity::Low),
+            pool_cap: None,
+        };
+        c.workers.update(w.0, patch).await.unwrap();
+        assert!(c.workers.saved(w).paused);
+        c.stop().await;
+        // Restarted on the same database: still paused, from the row.
+        let c = coordinator(dir.path(), true).await;
+        assert!(c.workers.saved(w).paused);
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(9)).await.unwrap()));
+        drop(s);
+        c.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_resume_of_a_held_pause_stands_on_the_next_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        c.stop().await;
+        let c = restarted_with_held_pause(dir.path(), w).await;
+        c.workers.resume(w.0).await.unwrap();
+        // The row says resumed, keeping its other fields.
+        let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        let row = store.setting_text(&prefs_key(w)).unwrap().unwrap();
+        drop(store);
+        let v: serde_json::Value = serde_json::from_str(&row).unwrap();
+        assert_eq!(
+            (v["v"].as_u64(), v["paused"].as_bool()),
+            (Some(9), Some(false))
+        );
+        c.stop().await;
+        // A new server and `Workers`: the worker stays resumed.
+        let c = coordinator(dir.path(), true).await;
+        assert!(!lock(&c.workers.held).contains(&w));
+        let s = c.connect(&creds).await;
+        assert!(granted(&s.claim(claim(9)).await.unwrap()));
+        drop(s);
+        c.stop().await;
+    }
+
+    /// A revoke removes that worker's written floor reports and nothing
+    /// else: another worker's report and a local or user row stay.
+    #[tokio::test]
+    async fn a_revoke_removes_only_that_workers_floor_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        let other = WorkerId(w.0 + 100);
+        {
+            let mut store =
+                Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+            // Written now, so the hold's own expiry doesn't touch them.
+            let at = unix_now();
+            store.tombstone_from_worker(&[[1; 20]], w.0, at).unwrap();
+            store
+                .tombstone_from_worker(&[[2; 20]], other.0, at)
+                .unwrap();
+        }
+        c.workers.revoke(w.0).await.unwrap();
+        let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        assert_eq!(
+            store.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        drop(store);
         c.stop().await;
     }
 

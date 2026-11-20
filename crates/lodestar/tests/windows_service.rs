@@ -662,6 +662,9 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
         .arg("--config")
         .arg(&config)
+        // Lodestar's default priority, whatever the developer's environment
+        // says: the new copy is checked below normal below.
+        .env_remove("LODESTAR_PRIORITY")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -745,6 +748,51 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     assert_eq!(info["method"], "relaunch", "{info}");
     let log = std::fs::read_to_string(&jsonl).unwrap();
     assert!(log.contains("app.relaunch"), "{log}");
+    // The new copy starts at normal priority for the hand-over
+    // (X-win-portable-restart-load), then lowers itself as any start does:
+    // serving, it's the one copy left on this config, below normal.
+    let config = config.display().to_string().replace('\'', "''");
+    // What the last poll saw, for the failure message.
+    let mut last: Vec<String> = Vec::new();
+    let mut last_err = String::new();
+    let priority = wait_for(Duration::from_secs(30), || {
+        let out = Command::new("powershell.exe")
+            .env_remove("PSModulePath")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(format!(
+                "Get-CimInstance Win32_Process -Filter \"Name='lodestar.exe'\" | \
+                 Where-Object {{ $_.CommandLine -like '*{config}*' }} | \
+                 ForEach-Object {{ (Get-Process -Id $_.ProcessId).PriorityClass }}"
+            ))
+            .output()
+            .ok()?;
+        let classes: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        last = classes.clone();
+        last_err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        (classes == ["BelowNormal"]).then_some(classes)
+    });
+    assert!(
+        priority.is_some(),
+        "the new copy isn't below normal (saw {last:?}; PowerShell said {last_err:?})\n{}",
+        dump(&console, &jsonl, &seen)
+    );
+    // And the new copy logged lowering itself, after the hand-over. The old
+    // copy may not have: Restart now is asked for soon after it serves,
+    // and it can exit before its startup thread's PowerShell finishes.
+    let lowered = wait_for(Duration::from_secs(30), || {
+        let log = std::fs::read_to_string(&jsonl).unwrap_or_default();
+        let after = &log[log.find("app.relaunch")?..];
+        after.contains("windows.priority_lowered").then_some(())
+    });
+    assert!(
+        lowered.is_some(),
+        "the new copy didn't log lowering its priority\n{}",
+        dump(&console, &jsonl, &seen)
+    );
     (first, second)
 }
 

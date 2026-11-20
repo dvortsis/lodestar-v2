@@ -84,6 +84,11 @@ pub struct WriterStats {
     pub unverified: UnverifiedStats,
     /// Torrent-cache files judged and committed (SRC-13b).
     pub torrent_cache: crate::torrent_cache::CacheStats,
+    /// Ranges of stored torrents the core re-judge's breaker stopped,
+    /// still to judge again, and the torrents they cover
+    /// ([`crate::core_rejudge::Stall`]): gauges, as of its last batch.
+    pub core_stalled_ranges: AtomicU64,
+    pub core_stalled_rows: AtomicU64,
 }
 
 pub(crate) struct WriterIo {
@@ -141,6 +146,11 @@ pub(crate) struct Writer {
     pub health: Option<HealthHandle>,
     /// The import-candidate refile sweep.
     pub candidates: CandidateSweep,
+    /// The core re-judge of stored torrents after a core change.
+    pub core_rejudge: CoreSweep,
+    /// Holds a commit decided but couldn't write: written again until they
+    /// are, never dropped.
+    pub hold_retry: HoldRetry,
     /// The unverified-item and claims refile sweep (SRC-2).
     pub sweep: unverified::Sweep,
     /// The verification cursor (`sources.verify_unverified`).
@@ -244,6 +254,91 @@ impl CandidateSweep {
     }
 }
 
+/// The core re-judge's progress this run ([`crate::core_rejudge`]): its
+/// place is in the store, so a restart resumes it there.
+#[derive(Debug, Default)]
+pub(crate) struct CoreSweep {
+    /// Nothing is left to judge again: done, or judged already.
+    pub done: bool,
+    /// Its start was logged on this run.
+    pub started: bool,
+    /// Batches failed in a row: after [`CORE_REJUDGE_SINGLE`] of them, it
+    /// judges one torrent at a time.
+    pub failures: u32,
+    /// The wait after a store error.
+    pub backoff: Backoff,
+    /// When the ranges the breaker stopped are next tried, once only they
+    /// are left ([`crate::core_rejudge::RETRY_PHASE`]), in Unix seconds;
+    /// the passes that wait for the re-judge run meanwhile. `None` once
+    /// due, so the first run after a start tries them at once.
+    pub stall_retry_at: Option<i64>,
+    /// Tries in a row the breaker stopped again: each waits twice as long.
+    pub stall_tries: u32,
+}
+
+impl CoreSweep {
+    /// Has a batch to judge now.
+    fn ready(&self) -> bool {
+        !self.done && self.backoff.ready() && self.stall_retry_at.is_none()
+    }
+
+    /// Lets the passes that wait for it run: it's done, waiting out a
+    /// store failure, or waiting to try its stalled ranges again.
+    fn yields(&self) -> bool {
+        self.done || !self.backoff.ready() || self.stall_retry_at.is_some()
+    }
+
+    /// The stalled ranges are tried again once `stall_retry_at` passes.
+    fn stall_due(&mut self, now: i64) {
+        if self.stall_retry_at.is_some_and(|at| now >= at) {
+            self.stall_retry_at = None;
+        }
+    }
+
+    /// Waits before the stalled ranges are tried again: from
+    /// [`STALL_RETRY_FIRST`], doubling for each try the breaker stopped
+    /// again, up to [`STALL_RETRY_MAX`].
+    fn stall_wait(&mut self, now: i64) {
+        let wait = STALL_RETRY_FIRST
+            .saturating_mul(1 << self.stall_tries.min(10))
+            .min(STALL_RETRY_MAX);
+        self.stall_tries = self.stall_tries.saturating_add(1);
+        self.stall_retry_at = Some(now.saturating_add(wait));
+    }
+}
+
+/// Holds whose commit failed ([`Writer::retry_holds`]): each is written
+/// again, with the stored torrent under its hashes deleted, until it is.
+#[derive(Debug, Default)]
+pub(crate) struct HoldRetry {
+    pub holds: Vec<unverified::Hold>,
+    /// The wait after a store error.
+    pub backoff: Backoff,
+}
+
+impl HoldRetry {
+    /// Has holds to write now.
+    fn ready(&self) -> bool {
+        !self.holds.is_empty() && self.backoff.ready()
+    }
+
+    /// Queues `holds` for writing again. A waiting hold is replaced only
+    /// by a newer hold of the same kind, rule and adult flag that covers
+    /// all its hashes: those are then written under the newer hold's
+    /// sealed name and evidence, and only the replaced hold's own filter
+    /// hit isn't written. So the same hold failing again keeps one entry.
+    /// Any other hold waits beside it and both are written, leaving the
+    /// store's precedence to decide; holds are never merged.
+    fn queue(&mut self, holds: impl IntoIterator<Item = unverified::Hold>) {
+        let key = |h: &unverified::Hold| (h.held, h.rule.clone(), h.adult_hold);
+        for h in holds {
+            self.holds
+                .retain(|q| !(key(q) == key(&h) && q.hashes.iter().all(|x| h.hashes.contains(x))));
+            self.holds.push(h);
+        }
+    }
+}
+
 /// A result under a current lease, ready to commit, or verified metadata
 /// from a torrent cache, which came through no lease.
 struct Committing {
@@ -334,6 +429,8 @@ struct Outcome {
     failed: Option<lodestar_store::Error>,
     /// Results the authoritative blocklist rejected.
     blocked: Vec<usize>,
+    /// Stored torrents the batch's holds deleted with them.
+    deleted: Vec<i64>,
     /// Results the store refused: every source that found them had
     /// stopped (`Inserted::Refused`, SRC-14b). Never stored.
     refused: Vec<usize>,
@@ -407,8 +504,10 @@ impl Writer {
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
                 () = std::future::ready(()), if self.backfill_ready() => self.backfill().await,
-                () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
-                () = std::future::ready(()), if self.sweep.ready() => self.refile_unverified().await,
+                () = std::future::ready(()), if self.core_rejudge.yields() && self.candidates.ready() => self.refile_candidates().await,
+                () = std::future::ready(()), if self.core_rejudge.ready() => self.rejudge_core().await,
+                () = std::future::ready(()), if self.core_rejudge.yields() && self.sweep.ready() => self.refile_unverified().await,
+                () = std::future::ready(()), if self.hold_retry.ready() => self.retry_holds().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
@@ -416,10 +515,14 @@ impl Writer {
                     }
                     self.note_engine();
                     self.candidates.backoff.retry_due(unix_now());
+                    self.core_rejudge.backoff.retry_due(unix_now());
+                    self.core_rejudge.stall_due(unix_now());
                     self.sweep.backoff.retry_due(unix_now());
                     self.backfill_backoff.retry_due(unix_now());
+                    self.hold_retry.backoff.retry_due(unix_now());
                     self.verify(&io.retry).await;
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
+                    self.note_judged().await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
                     }
@@ -453,6 +556,11 @@ impl Writer {
         self.commit(Vec::new(), Vec::new(), swarm, vec![stop], &io.retry)
             .await;
         self.save_queue(queue).await;
+        // One more try for holds still waiting, whatever their backoff.
+        if !self.hold_retry.holds.is_empty() {
+            self.retry_holds().await;
+        }
+        self.note_judged().await;
         let store = self.store.take().expect("store");
         tokio::task::spawn_blocking(move || {
             if let Err(e) = store.checkpoint() {
@@ -857,6 +965,9 @@ impl Writer {
                 if let Some(e) = o.failed.take() {
                     // The batch is lost but its promotions committed in
                     // their own transactions: they're accounted below.
+                    // Its holds are written again until they are, but
+                    // not a promotion's, written in its own transaction.
+                    self.hold_retry.queue(commit_holds(&committing, &o.blocked));
                     self.stats.errors.fetch_add(1, Ordering::Relaxed);
                     let lost = |leased: bool| {
                         (0..committing.len())
@@ -880,7 +991,8 @@ impl Writer {
             Err(e) => {
                 // The batch and its counters are lost; keep going. Its
                 // leases stay held, so the keys aren't fetched again in
-                // this run.
+                // this run. Its holds are written again until they are.
+                self.hold_retry.queue(commit_holds(&committing, &[]));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 let cache = committing.iter().filter(|c| !c.leased).count() as u64;
                 self.gate
@@ -1060,6 +1172,10 @@ impl Writer {
             Ordering::Relaxed,
         );
         for (d, id) in touches.into_iter().zip(outcome.touched) {
+            // Deleted by the batch's own hold: neither stored nor retried.
+            if id.is_some_and(|id| outcome.deleted.contains(&id)) {
+                continue;
+            }
             if let Some(id) = id {
                 if self.adult.has(d.source) {
                     adult_ids.push(id);
@@ -1305,7 +1421,7 @@ impl Writer {
         let held = self.held.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
         let n = holds.len() as u64;
-        let (store, written, result) = tokio::task::spawn_blocking(move || {
+        let (store, written, result, holds) = tokio::task::spawn_blocking(move || {
             let now = unix_now();
             let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
             let pending = held.pend(&hashes);
@@ -1337,7 +1453,7 @@ impl Writer {
             })();
             // Written or failed: the store says which hold.
             hold_committed(&store, Some(pending), true);
-            (store, written, result)
+            (store, written, result, holds)
         })
         .await
         .expect("cache hold task");
@@ -1347,8 +1463,61 @@ impl Writer {
         match result {
             Ok(()) => {}
             Err(e) => {
+                // Those not written are written again until they are.
+                self.hold_retry
+                    .queue(holds.into_iter().skip(written as usize));
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 cs.errors.fetch_add(n - written, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
+    /// Writes again the holds a failed commit decided
+    /// ([`HoldRetry`]): each with the stored torrents under its hashes
+    /// deleted in its own transaction, marked for intake first. Those not
+    /// written wait out a backoff and are all tried again.
+    async fn retry_holds(&mut self) {
+        let mut store = self.store.take().expect("store");
+        let held = self.held.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let holds = std::mem::take(&mut self.hold_retry.holds);
+        let (store, left, error) = tokio::task::spawn_blocking(move || {
+            let now = unix_now();
+            let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
+            let pending = held.pend(&hashes);
+            // One transaction per hold, every hold each pass: one that
+            // keeps failing never holds up the rest. A write, as a commit
+            // writes a hold, deletes every stored torrent under its hashes.
+            let mut left = Vec::new();
+            let mut error = None;
+            for h in holds {
+                let f = h.filtered(now, quarantine_secs);
+                let written = store.write(&WriteBatch {
+                    filtered: std::slice::from_ref(&f),
+                    ..WriteBatch::default()
+                });
+                if let Err(e) = written {
+                    error.get_or_insert(e);
+                    left.push(h);
+                }
+            }
+            // Written or failed: the store says which hold.
+            hold_committed(&store, Some(pending), true);
+            (store, left, error)
+        })
+        .await
+        .expect("hold retry task");
+        self.store = Some(store);
+        self.hold_retry.holds = left;
+        match error {
+            None => self.hold_retry.backoff.succeeded(),
+            Some(e) => {
+                self.hold_retry.backoff.failed(unix_now());
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::log_events::STORE_WRITE_FAILED,
                     error = crate::log_events::store_error(&e)
@@ -1360,7 +1529,9 @@ impl Writer {
     /// The backfill has a batch to enrich now: not done, and not waiting
     /// out a store error.
     fn backfill_ready(&self) -> bool {
-        !self.backfill_done && self.backfill_backoff.ready()
+        // The core re-judge goes first, before any other background pass,
+        // except while it waits out a store failure.
+        self.core_rejudge.yields() && !self.backfill_done && self.backfill_backoff.ready()
     }
 
     /// Enriches the next batch of stored torrents that lack an up-to-date
@@ -1780,6 +1951,161 @@ impl Writer {
                     error = crate::log_events::store_error(&e)
                 );
             }
+        }
+    }
+
+    /// Judges the next batch of stored torrents again by today's core, if
+    /// the store was judged by an older one ([`crate::core_rejudge`]).
+    /// What it holds is marked for intake before the write, as the
+    /// backfill's holds are.
+    async fn rejudge_core(&mut self) {
+        let store = self.store.take().expect("store");
+        let filter = self.filter.clone();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        let adult = self.adult;
+        // A batch that keeps failing goes one torrent at a time, so one
+        // the store can't read past never holds up the rest.
+        let limit = if self.core_rejudge.failures >= CORE_REJUDGE_SINGLE {
+            1
+        } else {
+            CORE_REJUDGE_BATCH
+        };
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let ctx = crate::enrich::Backfill {
+                filter: Some(&filter),
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+                adult,
+            };
+            let pending = std::cell::RefCell::new(None);
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
+            };
+            let result =
+                crate::core_rejudge::rejudge_stored(&mut store, &filter, limit, &ctx, &mark);
+            // Committed, rejected or failed: the store says which hold.
+            hold_committed(&store, pending.into_inner(), false);
+            (store, result)
+        })
+        .await
+        .expect("core rejudge task");
+        self.store = Some(store);
+        let stalled = match &result {
+            Ok(Some(b)) => Some(b.stalled),
+            Ok(None) => Some(Default::default()),
+            Err(_) => None,
+        };
+        if let Some(st) = stalled {
+            self.stats
+                .core_stalled_ranges
+                .store(st.ranges, Ordering::Relaxed);
+            self.stats
+                .core_stalled_rows
+                .store(st.rows, Ordering::Relaxed);
+        }
+        match result {
+            Ok(Some(b)) => {
+                let counts = |p: lodestar_store::CorePass| {
+                    (p.found as u64, p.held as u64, p.unreadable as u64)
+                };
+                if !std::mem::replace(&mut self.core_rejudge.started, true) {
+                    let (judged, held, unreadable) = counts(b.before);
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_STARTED,
+                        judged = judged,
+                        held = held,
+                        unreadable = unreadable
+                    );
+                }
+                if let Some(stall) = b.stall {
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_STALLED,
+                        rows = stall.rows,
+                        ranges = b.stalled.ranges
+                    );
+                }
+                if let Some(stall) = b.cleared {
+                    self.core_rejudge.stall_tries = 0;
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_STALL_CLEARED,
+                        rows = stall.rows,
+                        ranges = b.stalled.ranges
+                    );
+                }
+                // Both phases just ended with stalled ranges left: they're
+                // tried again after a wait, not at once. (After a start
+                // they're tried at once.)
+                if b.waiting && b.phase_done {
+                    self.core_rejudge.stall_wait(unix_now());
+                }
+                // A rejected batch (the rules changed under it) runs again.
+                if b.finished {
+                    let (judged, held, unreadable) = counts(b.after);
+                    lodestar_log::log_event!(
+                        crate::log_events::CORE_REJUDGE_DONE,
+                        judged = judged,
+                        held = held,
+                        unreadable = unreadable
+                    );
+                    self.core_rejudge.done = true;
+                }
+                self.core_rejudge.failures = 0;
+                self.core_rejudge.backoff.succeeded();
+            }
+            Ok(None) => {
+                self.core_rejudge.done = true;
+                self.core_rejudge.failures = 0;
+                self.core_rejudge.backoff.succeeded();
+            }
+            Err(e) if crate::core_rejudge::is_breaker(&e) => {
+                // A stalled range judged again still mostly won't read: it
+                // went to the back of the list, and the next try waits
+                // longer. Only the core's holds on torrents that did read
+                // were written.
+                self.core_rejudge.stall_wait(unix_now());
+            }
+            Err(e) => {
+                // The store failed (a torrent's own bad rows are held, not
+                // errors): the same place again after a backoff. The error
+                // carries no name.
+                self.core_rejudge.failures += 1;
+                self.core_rejudge.backoff.failed(unix_now());
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::CORE_REJUDGE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
+    /// Records the store's high-water id as judged by today's core
+    /// ([`crate::core_rejudge::note_judged`]), once the re-judge is done:
+    /// a torrent stored above it later came from a build that doesn't
+    /// keep the marker. On the flush tick and at a clean stop.
+    async fn note_judged(&mut self) {
+        if !self.core_rejudge.done {
+            return;
+        }
+        let mut store = self.store.take().expect("store");
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let result = crate::core_rejudge::note_judged(&mut store);
+            (store, result)
+        })
+        .await
+        .expect("core marker task");
+        self.store = Some(store);
+        if let Err(e) = result {
+            // The next tick tries again; a torrent above the old mark is
+            // only judged once more.
+            self.stats.errors.fetch_add(1, Ordering::Relaxed);
+            lodestar_log::log_event!(
+                crate::log_events::STORE_WRITE_FAILED,
+                error = crate::log_events::store_error(&e)
+            );
         }
     }
 
@@ -2301,10 +2627,51 @@ const BACKFILL_BATCH: usize = 256;
 
 /// Import candidates judged per refile step: one short transaction each.
 const REFILE_BATCH: usize = 512;
+/// Stored torrents the core re-judge reads per batch at most; a batch also
+/// stops at `core_rejudge::BATCH_TIME`, since one torrent can take up to
+/// the core's budget to judge.
+const CORE_REJUDGE_BATCH: usize = 256;
+/// Core re-judge batches failed in a row before it goes one at a time.
+const CORE_REJUDGE_SINGLE: u32 = 3;
 /// The wait after a sweep's first store error in a row, doubling after
 /// each further one up to the cap (seconds).
 const RETRY_FIRST: i64 = 5;
 const RETRY_MAX: i64 = 300;
+/// The first wait before stalled core re-judge ranges are tried again,
+/// doubling after each try the breaker stops again up to the cap
+/// (seconds).
+const STALL_RETRY_FIRST: i64 = 300;
+const STALL_RETRY_MAX: i64 = 6 * 3600;
+
+/// The holds a batch decided, as [`transaction`] writes them: for a
+/// commit that failed, so they're written again ([`HoldRetry`]). Those
+/// in `written` (a promotion's, in its own transaction) are left out.
+fn commit_holds(committing: &[Committing], written: &[usize]) -> Vec<unverified::Hold> {
+    committing
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !written.contains(i))
+        .filter_map(|(_, c)| {
+            let d = c.verdict.as_ref()?;
+            let held = match d.action {
+                Action::Drop => Held::Tombstone,
+                Action::Quarantine => Held::Quarantine,
+                _ => return None,
+            };
+            Some(unverified::Hold {
+                hashes: c.results.torrent.swarm_hashes().map(|h| h.0).collect(),
+                rule: d.rule.id(),
+                action: d.action.code(),
+                held,
+                sealed: c.sealed.clone(),
+                evidence: d.evidence_codes(),
+                adult_hold: c.results.fix == Some(true)
+                    && lodestar_filter::reclassify::adult_hold(d),
+                core: matches!(d.rule, lodestar_filter::RuleRef::Core(_)),
+            })
+        })
+        .collect()
+}
 
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
@@ -2494,6 +2861,7 @@ fn transaction(
                 promoted_as,
                 failed: Some(e),
                 blocked: promo_held,
+                deleted: Vec::new(),
                 refused: Vec::new(),
                 touched: Vec::new(),
                 swarm: Vec::new(),
@@ -2503,12 +2871,21 @@ fn transaction(
         Err(e) => return Err(e),
     };
     let mut refused = Vec::new();
-    let stored = rest
+    let mut held_since = Vec::new();
+    let stored: Vec<_> = rest
         .iter()
         .zip(&written.prepared)
-        .filter_map(|(&i, ins)| match ins.stored() {
-            Some(id) => Some((i, id, matches!(ins, Inserted::New(_)))),
-            None => {
+        .filter_map(|(&i, ins)| match ins {
+            Inserted::New(id) | Inserted::Existing(id) => {
+                Some((i, *id, matches!(ins, Inserted::New(_))))
+            }
+            // Held since it was judged (the store read its holds in the
+            // write's own transaction): never stored.
+            Inserted::Held => {
+                held_since.push(i);
+                None
+            }
+            Inserted::Refused => {
                 refused.push(i);
                 None
             }
@@ -2518,11 +2895,19 @@ fn transaction(
         .chain(promoted)
         .map(|(i, id, new)| (i, id, new, hashes_of(i)))
         .collect();
+    // Stored, then deleted by a hold in the same batch: blocked, so it's
+    // neither counted stored nor learnt as had.
+    let (stored, gone): (Vec<_>, Vec<_>) = stored
+        .into_iter()
+        .partition(|s: &(usize, i64, bool, Vec<InfoHash>)| !written.deleted.contains(&s.1));
+    blocked.extend(gone.iter().map(|s| s.0));
+    blocked.extend(held_since);
     Ok(Outcome {
         stored,
         promoted_as,
         failed: None,
         blocked,
+        deleted: written.deleted,
         refused,
         stale_class: written.stale_class || stale_promo,
         touched: written.touched[extra..].to_vec(),
@@ -2800,6 +3185,11 @@ mod tests {
             health: None,
             candidates: Default::default(),
             // Off unless a test starts it.
+            core_rejudge: CoreSweep {
+                done: true,
+                ..Default::default()
+            },
+            hold_retry: Default::default(),
             sweep: unverified::Sweep {
                 done: true,
                 ..Default::default()
@@ -3146,6 +3536,140 @@ mod tests {
         e.load_class_rules(&[]);
         assert_eq!(rejudge(&e, &mut r, 0, 1000).decision, None);
         assert_eq!((r.fix, stored_type(&r)), (None, detected));
+    }
+
+    /// The writer runs the core re-judge to its end: a stored torrent
+    /// today's core holds is held, intake refuses its hash, and the store
+    /// is marked as judged by today's core.
+    #[tokio::test]
+    async fn the_writer_rejudges_stored_torrents_by_a_newer_core() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"name".to_vec(),
+                    OwnedValue::Bytes(
+                        format!("{}rolea lexa.mp4", "word ".repeat(600)).into_bytes(),
+                    ),
+                ),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = Info::parse(&raw).unwrap();
+        let id = store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.core_rejudge.done = false;
+        // The re-judge goes first: the backfill waits for it.
+        w.backfill_done = false;
+        assert!(!w.backfill_ready());
+        let mut steps = 0;
+        while w.core_rejudge.ready() {
+            w.rejudge_core().await;
+            steps += 1;
+            assert!(steps < 10, "the re-judge ends");
+        }
+        assert!(w.core_rejudge.started && w.backfill_ready());
+        let hash = info.primary_hash().0;
+        assert!(w.held.contains(&hash));
+        let store = w.store.as_ref().unwrap();
+        assert!(store.torrent(id).unwrap().is_none());
+        assert_eq!(
+            store.setting_i64(lodestar_store::CORE_JUDGED_KEY).unwrap(),
+            Some(lodestar_filter::CORE_VERSION)
+        );
+    }
+
+    /// A pass that ends with stalled ranges left waits before it tries
+    /// them again: the batch that ends it sets the wait, and no retry runs
+    /// meanwhile (a retry the breaker stopped would have rotated the
+    /// ranges). The passes that wait for the re-judge run.
+    #[tokio::test]
+    async fn the_first_retry_of_stalled_ranges_waits() {
+        use crate::core_rejudge::{BREAKER_ROWS, STALLS_KEY};
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for i in 0..BREAKER_ROWS * 2 {
+            let raw = to_vec(&OwnedValue::Dict(
+                [
+                    (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                    (
+                        b"name".to_vec(),
+                        OwnedValue::Bytes(
+                            format!("{}film {i}.mp4", "word ".repeat(600)).into_bytes(),
+                        ),
+                    ),
+                    (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                    (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .collect(),
+            ));
+            let info = Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1,
+                    metadata_at: 1,
+                    extra_flags: 0,
+                    source: SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        // None of them reads: the breaker stops every batch.
+        store
+            .connection()
+            .execute("UPDATE torrent_files SET codec = 250", [])
+            .unwrap();
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.core_rejudge.done = false;
+        let before = unix_now();
+        let mut batches = 0;
+        while w.core_rejudge.ready() {
+            w.rejudge_core().await;
+            batches += 1;
+            assert!(batches < 10, "the pass ends");
+        }
+        // Each phase: the batch the breaker stops, then the phase's end.
+        assert_eq!(batches, 4, "no retry ran");
+        let at = w.core_rejudge.stall_retry_at.expect("waiting");
+        assert!(at >= before + STALL_RETRY_FIRST, "{at} {before}");
+        assert!(w.core_rejudge.yields() && !w.core_rejudge.done);
+        let kept = w
+            .store
+            .as_ref()
+            .unwrap()
+            .setting_text(STALLS_KEY)
+            .unwrap()
+            .unwrap();
+        let phases: Vec<&str> = kept.split(';').skip(1).map(|r| &r[..1]).collect();
+        assert_eq!(phases, ["1", "2"], "in the order they stopped: {kept}");
+        assert_eq!(w.stats.core_stalled_ranges.load(Ordering::Relaxed), 2);
+        // Once due, a retry runs; the breaker stops it again, and the next
+        // waits twice as long.
+        w.core_rejudge.stall_due(at);
+        assert!(w.core_rejudge.ready());
+        let t = unix_now();
+        w.rejudge_core().await;
+        let next = w.core_rejudge.stall_retry_at.expect("waiting again");
+        assert!(next >= t + 2 * STALL_RETRY_FIRST, "{next} {t}");
     }
 
     /// The writer's sweep holds back a waiting import candidate the core
@@ -3705,6 +4229,44 @@ mod tests {
         assert!(w.held.contains(&stored), "the adult hold, now a tombstone");
     }
 
+    /// The passes that wait for the core re-judge run once it's done, and
+    /// while it waits out a store failure.
+    #[test]
+    fn the_core_rejudge_yields_while_it_waits() {
+        let mut c = CoreSweep::default();
+        assert!(c.ready() && !c.yields());
+        c.backoff.failed(1_000);
+        assert!(!c.ready() && c.yields());
+        c.backoff.retry_due(i64::MAX);
+        assert!(c.ready() && !c.yields());
+        c.done = true;
+        assert!(!c.ready() && c.yields());
+    }
+
+    /// With only stalled ranges left, the core re-judge waits between
+    /// tries, longer after each the breaker stops again, up to a cap, and
+    /// the passes that wait for it run meanwhile.
+    #[test]
+    fn stalled_ranges_are_tried_again_after_a_growing_wait() {
+        let mut c = CoreSweep::default();
+        let waits: Vec<i64> = (0..8)
+            .map(|_| {
+                c.stall_wait(1_000);
+                assert!(!c.ready() && c.yields());
+                c.stall_due(1_000);
+                assert!(!c.ready(), "not before it's due");
+                let wait = c.stall_retry_at.unwrap() - 1_000;
+                c.stall_due(1_000 + wait);
+                assert!(c.ready() && !c.yields());
+                wait
+            })
+            .collect();
+        assert_eq!(waits, [300, 600, 1200, 2400, 4800, 9600, 19_200, 21_600]);
+        c.stall_tries = u32::MAX;
+        c.stall_wait(i64::MAX);
+        assert_eq!(c.stall_retry_at, Some(i64::MAX));
+    }
+
     /// The sweeps' backoff doubles after each error in a row, up to its
     /// cap.
     #[test]
@@ -3891,6 +4453,43 @@ mod tests {
                 panic!("{put:?}")
             };
             (store, id)
+        }
+
+        /// A promoted item (stored under its own id) whose verified
+        /// torrent a rule added since holds: the next commit of it deletes
+        /// the row with the hold (FILTER-15).
+        #[tokio::test]
+        async fn a_promoted_torrent_held_later_is_deleted_with_its_hold() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let r = results_named("Big Buck Bunny");
+            let key = r.key;
+            let (store, id) = with_item(key.0);
+            let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+            let (retry, _rx) = mpsc::channel(4);
+            w.commit(
+                vec![leased(&coordinator, r)],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+            assert_eq!(w.stats.unverified.promoted.load(Ordering::Relaxed), 1);
+            assert_eq!(w.store.as_ref().unwrap().find(&key).unwrap(), Some(id));
+            super::drop_rule(&w.filter, "bunny");
+            w.commit(
+                vec![leased(&coordinator, results_named("Big Buck Bunny"))],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(store.find(&key).unwrap(), None);
+            assert!(store.torrent(id).unwrap().is_none());
+            assert_eq!(store.held_among(&[key.0]).unwrap(), [true]);
         }
 
         /// The duplicate-insert gate (plan SRC-2): the crawler (or a
@@ -5904,5 +6503,470 @@ mod tests {
         assert!(dht_ns <= 0.05 * insert, "the crawl's commits");
         assert!(noted_ns <= 0.05 * promoted, "a feed's commits");
         assert!(scrape_ns <= 0.05 * insert, "a full scrape's commits");
+    }
+
+    /// FILTER-15: a held commit over a torrent already stored deletes it
+    /// with its hold, in the commit's own transaction, however the hold
+    /// was decided; a commit that fails keeps its holds and writes them
+    /// again until they're written.
+    mod held_over_stored {
+        use super::*;
+
+        fn parts() -> (Writer, Arc<Coordinator>, mpsc::Sender<Discovery>) {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+            let w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+            let (retry, rx) = mpsc::channel(64);
+            std::mem::forget(rx);
+            (w, coordinator, retry)
+        }
+
+        async fn commit(
+            w: &mut Writer,
+            c: &Coordinator,
+            r: Results,
+            retry: &mpsc::Sender<Discovery>,
+        ) {
+            w.commit(vec![leased(c, r)], vec![], vec![], vec![], retry)
+                .await;
+        }
+
+        fn find(w: &Writer, key: InfoHash) -> Option<i64> {
+            w.store.as_ref().unwrap().find(&key).unwrap()
+        }
+
+        /// The torrent is gone and its hash held, as one write left them.
+        fn held_not_stored(w: &Writer, key: InfoHash, id: i64) {
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(store.find(&key).unwrap(), None, "not found");
+            assert!(store.torrent(id).unwrap().is_none(), "not stored");
+            assert_eq!(store.held_among(&[key.0]).unwrap(), [true], "held");
+            assert!(w.held.contains(&key.0), "refused by intake");
+        }
+
+        fn rule(filter: &Handle, query: &str, action: Action) {
+            filter.update_engine(|e| {
+                let notes = e.load_rules(&lodestar_store::RuleSet {
+                    rules: vec![lodestar_store::RuleRow {
+                        id: 1,
+                        query: query.into(),
+                        action: action.code(),
+                        enabled: true,
+                        shadow_until: None,
+                        unless_query: None,
+                    }],
+                    ..Default::default()
+                });
+                assert!(notes.is_empty(), "{notes:?}");
+                e.version += 1;
+            });
+        }
+
+        /// A remote worker's result judged again at commit under a drop
+        /// or quarantine rule added since the torrent was stored.
+        #[tokio::test]
+        async fn a_rule_added_since_deletes_the_stored_torrent() {
+            for action in [Action::Drop, Action::Quarantine] {
+                let (mut w, c, retry) = parts();
+                let r = results_named("Big Buck Bunny");
+                let key = r.key;
+                commit(&mut w, &c, r, &retry).await;
+                let id = find(&w, key).expect("stored");
+                rule(&w.filter, "bunny", action);
+                commit(&mut w, &c, results_named("Big Buck Bunny"), &retry).await;
+                held_not_stored(&w, key, id);
+                let store = w.store.as_ref().unwrap();
+                let quarantined = store.quarantine_rule(&key.0).unwrap().is_some();
+                assert_eq!(quarantined, action == Action::Quarantine, "{action:?}");
+            }
+        }
+
+        /// The built-in worker's verdict, kept at commit: a torrent too
+        /// large to judge is held under CS-0a and the stored row goes.
+        #[tokio::test]
+        async fn a_local_verdict_too_large_to_judge_deletes_the_stored_torrent() {
+            let (mut w, c, retry) = parts();
+            let r = results_named("Some Show");
+            let key = r.key;
+            commit(&mut w, &c, r, &retry).await;
+            let id = find(&w, key).expect("stored");
+            let engine = w.filter.current();
+            let mut r = results_named("Some Show");
+            r.worker = WorkerId::LOCAL;
+            r.version = engine.version;
+            r.verdict = Verdict {
+                decision: Some(engine.unjudgeable()),
+                shadow: Vec::new(),
+            };
+            commit(&mut w, &c, r, &retry).await;
+            held_not_stored(&w, key, id);
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(
+                store.quarantine_rule(&key.0).unwrap().as_deref(),
+                Some("CS-0a")
+            );
+        }
+
+        /// A refetch of an import's partial file list whose verified
+        /// metadata the core holds: the partial row is deleted with the
+        /// hold, not upgraded or left stored.
+        #[tokio::test]
+        async fn a_refetch_the_core_holds_deletes_the_partial_row() {
+            let (mut w, c, retry) = parts();
+            let raw = info_named("rolea lexa");
+            let info = Info::parse(&raw).unwrap();
+            let id = w
+                .store
+                .as_mut()
+                .unwrap()
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: None,
+                    discovered_at: 1,
+                    metadata_at: 1,
+                    extra_flags: flags::FILES_PARTIAL | flags::IMPORTED,
+                    source: SourceId::new(0).unwrap(),
+                }])
+                .unwrap()[0]
+                .id();
+            let mut r = results_named("rolea lexa");
+            let key = r.key;
+            assert_eq!(w.store.as_ref().unwrap().partial_hashes(10).unwrap(), [key]);
+            r.token = c.restore(
+                r.worker,
+                r.key,
+                lodestar_cluster::RestoredLease {
+                    cohort: crate::REFETCH_COHORT,
+                    source: SourceId::new(1).unwrap(),
+                    sources: 0b10,
+                    strategy: crate::strategy::REFETCH,
+                    discovered_at: 3600,
+                },
+                0,
+            );
+            w.commit(vec![r], vec![], vec![], vec![], &retry).await;
+            held_not_stored(&w, key, id);
+            assert!(
+                w.store
+                    .as_ref()
+                    .unwrap()
+                    .partial_hashes(10)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        /// A torrent stored before an always-adult source found it: judged
+        /// again as adult at commit, held by the Adult-only core, and the
+        /// stored row goes.
+        #[tokio::test]
+        async fn a_newly_adult_torrent_is_deleted_with_its_hold() {
+            let (mut w, c, retry) = parts();
+            commit(&mut w, &c, results(), &retry).await;
+            let key = results().key;
+            let id = find(&w, key).expect("stored: not adult yet");
+            // The lease's source (1) is now always-adult.
+            w.adult = AdultSources(0b10);
+            commit(&mut w, &c, results(), &retry).await;
+            held_not_stored(&w, key, id);
+        }
+
+        /// A cache's file judged again at commit under a rule added since,
+        /// over a torrent already stored.
+        #[tokio::test]
+        async fn a_cache_file_held_at_commit_deletes_the_stored_torrent() {
+            let (mut w, _c, retry) = parts();
+            let cache = w
+                .store
+                .as_mut()
+                .unwrap()
+                .register_source("torrent_cache", "1", 1)
+                .unwrap();
+            let first = cached(&w, "Big Buck Bunny", cache);
+            let key = first.key;
+            w.commit_cache(vec![first], &retry).await;
+            let id = find(&w, key).expect("stored");
+            let again = cached(&w, "Big Buck Bunny", cache);
+            rule(&w.filter, "bunny", Action::Drop);
+            w.commit_cache(vec![again], &retry).await;
+            held_not_stored(&w, key, id);
+        }
+
+        /// A hold written after a result was judged, which the writer's
+        /// own set doesn't know of: the write reads it in its transaction
+        /// and the result is blocked, never stored.
+        #[tokio::test]
+        async fn a_hash_held_after_judging_is_never_stored() {
+            let (mut w, c, retry) = parts();
+            let r = results_named("Big Buck Bunny");
+            let key = r.key;
+            w.store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'U-1', 1)",
+                    [&key.0[..]],
+                )
+                .unwrap();
+            assert!(!w.held.contains(&key.0), "the writer's set doesn't know");
+            commit(&mut w, &c, r, &retry).await;
+            assert_eq!(find(&w, key), None);
+            assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
+            assert_eq!(w.stats.blocked.load(Ordering::Relaxed), 1);
+        }
+
+        /// One batch with two results for the same key, one held at commit:
+        /// the other is stored, then deleted with the hold in the same
+        /// transaction, so it's counted blocked, never stored, and the
+        /// have-filter never learns the key.
+        #[tokio::test]
+        async fn a_row_the_batch_stores_and_its_hold_deletes_is_blocked() {
+            let (mut w, c, retry) = parts();
+            let cache = w
+                .store
+                .as_mut()
+                .unwrap()
+                .register_source("torrent_cache", "1", 1)
+                .unwrap();
+            let admitted = match cached(&w, "Big Buck Bunny", cache).judged {
+                crate::torrent_cache::Judged::Store(a) => *a,
+                j => panic!("not admitted: {j:?}"),
+            };
+            let key = admitted.key;
+            let from_cache = Committing::lease_free(admitted, cache, unix_now(), false);
+            let engine = w.filter.current();
+            let mut r = results_named("Big Buck Bunny");
+            assert_eq!(r.key, key);
+            r.worker = WorkerId::LOCAL;
+            r.version = engine.version;
+            r.verdict = Verdict {
+                decision: Some(engine.unjudgeable()),
+                shadow: Vec::new(),
+            };
+            let r = leased(&c, r);
+            w.commit_all(vec![r], vec![from_cache], vec![], vec![], vec![], &retry)
+                .await;
+            assert_eq!(find(&w, key), None);
+            assert!(!w.have.contains(&key), "the have-filter never learnt it");
+            let cs = &w.stats.torrent_cache;
+            assert_eq!(cs.stored.load(Ordering::Relaxed), 0);
+            assert_eq!(cs.held.load(Ordering::Relaxed), 1, "the cache's, blocked");
+            assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
+            // The leased result's own hold: CS-0a quarantines.
+            assert_eq!(w.stats.quarantined.load(Ordering::Relaxed), 1);
+        }
+
+        /// A hold waiting for hashes {1, 2}, then a newer hold under another
+        /// rule for {2} only: both are written, so hash 1 keeps the first
+        /// hold's rule, whatever the second's strength.
+        async fn first_rule_kept(first: (Held, &str, bool), second: (Held, &str, bool)) {
+            let (mut w, _c, _retry) = parts();
+            let hold = |hashes: &[u8], (held, rule, core): (Held, &str, bool)| unverified::Hold {
+                hashes: hashes.iter().map(|&h| [h; 20]).collect(),
+                rule: rule.into(),
+                action: if held == Held::Tombstone {
+                    Action::Drop.code()
+                } else {
+                    Action::Quarantine.code()
+                },
+                held,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core,
+            };
+            w.hold_retry.queue([hold(&[1, 2], first)]);
+            for _ in 0..3 {
+                w.hold_retry.queue([hold(&[2], second)]);
+            }
+            assert_eq!(w.hold_retry.holds.len(), 2, "side by side, once each");
+            w.retry_holds().await;
+            assert!(w.hold_retry.holds.is_empty());
+            let table = match first.0 {
+                Held::Tombstone => "tombstones",
+                Held::Quarantine => "quarantine",
+            };
+            let rule: String = w
+                .store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .query_row(
+                    &format!("SELECT rule FROM {table} WHERE hash = ?1"),
+                    [&[1u8; 20][..]],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(rule, first.1, "{first:?} then {second:?}");
+        }
+
+        /// Holds are never merged across rules: a waiting hold's other
+        /// hashes keep its own rule, so none is weakened. A floor or core
+        /// tombstone under a newer quarantine, a kept quarantine under a
+        /// newer core one, a floor tombstone under a newer pattern one, and
+        /// one pattern rule under another.
+        #[tokio::test]
+        async fn a_newer_hold_never_takes_over_a_waiting_holds_other_hashes() {
+            let (t, q) = (Held::Tombstone, Held::Quarantine);
+            first_rule_kept((t, "CS-8a", true), (q, "U-1", false)).await;
+            first_rule_kept((q, "CS-0a", true), (q, "CS-4a", true)).await;
+            first_rule_kept((t, "CS-8a", true), (t, "CS-4a", true)).await;
+            first_rule_kept((q, "CS-2a", true), (q, "CS-4a", true)).await;
+        }
+
+        /// Two holds under different rules for the same hashes are never
+        /// collapsed into one: the rule is part of what a replacement must
+        /// match. A kept quarantine stays the never-expiring row when a
+        /// core one follows it, and a floor tombstone waits beside a
+        /// pattern one.
+        #[tokio::test]
+        async fn holds_for_the_same_hashes_under_different_rules_both_wait() {
+            let hold = |held, rule: &str| unverified::Hold {
+                hashes: vec![[1; 20], [2; 20]],
+                rule: rule.into(),
+                action: if held == Held::Tombstone {
+                    Action::Drop.code()
+                } else {
+                    Action::Quarantine.code()
+                },
+                held,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: true,
+            };
+            let mut q = HoldRetry::default();
+            q.queue([hold(Held::Tombstone, "CS-8a")]);
+            q.queue([hold(Held::Tombstone, "CS-4a")]);
+            assert_eq!(q.holds.len(), 2, "a floor and a pattern tombstone");
+
+            let (mut w, _c, _retry) = parts();
+            w.hold_retry.queue([hold(Held::Quarantine, "CS-0a")]);
+            w.hold_retry.queue([hold(Held::Quarantine, "CS-4a")]);
+            assert_eq!(w.hold_retry.holds.len(), 2, "a kept and a core quarantine");
+            w.retry_holds().await;
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(
+                store.quarantine_rule(&[1; 20]).unwrap().as_deref(),
+                Some("CS-0a")
+            );
+        }
+
+        /// The same hold failing again keeps one entry, and so does one
+        /// replaced by a hold of its rule covering all its hashes; any
+        /// other hold for one of its hashes waits beside it.
+        #[test]
+        fn the_retry_queue_replaces_only_a_hold_a_newer_one_covers() {
+            let hold = |hashes: &[u8], rule: &str| unverified::Hold {
+                hashes: hashes.iter().map(|&h| [h; 20]).collect(),
+                rule: rule.into(),
+                action: Action::Drop.code(),
+                held: Held::Tombstone,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: false,
+            };
+            let mut q = HoldRetry::default();
+            for _ in 0..3 {
+                q.queue([hold(&[1], "U-1"), hold(&[2], "U-1")]);
+            }
+            assert_eq!(q.holds.len(), 2, "the same holds again");
+            q.queue([hold(&[1, 2], "U-1")]);
+            assert_eq!(q.holds.len(), 1, "covered by a newer hold of the rule");
+            q.queue([hold(&[2], "U-1")]);
+            q.queue([hold(&[1], "U-2")]);
+            assert_eq!(q.holds.len(), 3, "neither covers {{1, 2}}: beside it");
+            let mut held: Vec<[u8; 20]> = q.holds.iter().flat_map(|h| h.hashes.clone()).collect();
+            held.sort_unstable();
+            held.dedup();
+            assert_eq!(held, [[1; 20], [2; 20]], "every hash still waits");
+        }
+
+        /// Every waiting hold is tried on each pass: one that keeps failing
+        /// never holds up those behind it, and only it waits again.
+        #[tokio::test]
+        async fn a_failing_hold_doesnt_hold_up_the_rest() {
+            let (mut w, c, retry) = parts();
+            for name in ["Big Buck Bunny", "Bunny Returns"] {
+                commit(&mut w, &c, results_named(name), &retry).await;
+            }
+            let (stuck, freed) = (
+                results_named("Big Buck Bunny"),
+                results_named("Bunny Returns"),
+            );
+            let (stuck_id, freed_id) = (find(&w, stuck.key).unwrap(), find(&w, freed.key).unwrap());
+            let hold = |key: InfoHash| unverified::Hold {
+                hashes: vec![key.0],
+                rule: "U-1".into(),
+                action: Action::Drop.code(),
+                held: Held::Tombstone,
+                sealed: None,
+                evidence: Vec::new(),
+                adult_hold: false,
+                core: false,
+            };
+            w.hold_retry.holds = vec![hold(stuck.key), hold(freed.key)];
+            // The first hold's write always fails (a trigger takes no
+            // parameter, so the hash is inlined).
+            let hex: String = stuck.key.0.iter().map(|b| format!("{b:02x}")).collect();
+            w.store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .execute_batch(&format!(
+                    "CREATE TEMP TRIGGER fail_one BEFORE INSERT ON tombstones
+                     WHEN NEW.hash = x'{hex}' BEGIN SELECT RAISE(ABORT, 'test'); END"
+                ))
+                .unwrap();
+            w.retry_holds().await;
+            held_not_stored(&w, freed.key, freed_id);
+            assert_eq!(find(&w, stuck.key), Some(stuck_id), "its write failed");
+            assert_eq!(w.hold_retry.holds.len(), 1, "only the failing hold waits");
+            assert_eq!(w.hold_retry.holds[0].hashes, vec![stuck.key.0]);
+            assert!(!w.hold_retry.ready(), "after a backoff");
+        }
+
+        /// A commit that fails keeps its holds: the stored row stays until
+        /// the hold is written again, then goes with it.
+        #[tokio::test]
+        async fn a_failed_commits_holds_are_written_again() {
+            let (mut w, c, retry) = parts();
+            let r = results_named("Big Buck Bunny");
+            let key = r.key;
+            commit(&mut w, &c, r, &retry).await;
+            let id = find(&w, key).expect("stored");
+            rule(&w.filter, "bunny", Action::Drop);
+            let fail = |w: &Writer, on: bool| {
+                let sql = if on {
+                    "CREATE TEMP TRIGGER fail_hold BEFORE INSERT ON tombstones
+                     BEGIN SELECT RAISE(ABORT, 'test'); END"
+                } else {
+                    "DROP TRIGGER fail_hold"
+                };
+                w.store
+                    .as_ref()
+                    .unwrap()
+                    .connection()
+                    .execute_batch(sql)
+                    .unwrap();
+            };
+            fail(&w, true);
+            commit(&mut w, &c, results_named("Big Buck Bunny"), &retry).await;
+            assert_eq!(find(&w, key), Some(id), "the write failed");
+            assert_eq!(w.hold_retry.holds.len(), 1, "kept");
+            // Still failing: kept, after a backoff.
+            w.retry_holds().await;
+            assert_eq!(w.hold_retry.holds.len(), 1);
+            assert!(!w.hold_retry.ready(), "waits out the backoff");
+            fail(&w, false);
+            w.hold_retry.backoff.retry_due(i64::MAX);
+            assert!(w.hold_retry.ready());
+            w.retry_holds().await;
+            assert!(w.hold_retry.holds.is_empty());
+            held_not_stored(&w, key, id);
+        }
     }
 }

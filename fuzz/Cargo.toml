@@ -18,6 +18,7 @@ lodestar-dht = { path = "../crates/dht" }
 lodestar-filter = { path = "../crates/filter" }
 lodestar-integrations = { path = "../crates/integrations" }
 lodestar-metainfo = { path = "../crates/metainfo" }
+lodestar-peer-wire = { path = "../crates/peer-wire" }
 lodestar-pipeline = { path = "../crates/pipeline" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
@@ -30,11 +31,21 @@ lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 lodestar-update = { path = "../crates/update", features = ["testing"] }
 base64 = "=0.22.1"
 semver = "=1.0.28"
-serde_json = "1.0.154"
+# `raw_value` (additive) lets `tpdb` read a numeric id's exact digits; not
+# `arbitrary_precision`, which would change how every crate here reads
+# numbers (X-fuzz-tpdb-harness).
+serde_json = { version = "1.0.154", features = ["raw_value"] }
+# `tpdb`'s reader of a repeated key (the first is kept, as the plugin does).
+serde = "1.0.229"
 sha2 = "0.11"
 # The plugins' own pin: `verified_claims` compares trackers in its form.
 url = "2.5.8"
 lodestar-utp = { path = "../crates/utp" }
+# `peer_fetch` plays a peer over an in-memory stream, with a runtime's
+# clock for the fetch's timers; `mse` plays both sides over a pipe.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "time", "io-util"] }
+# `mse` seeds both sides' key exchange from its input.
+rand = "0.10"
 
 # Each target is a separate binary; see README.md for running them.
 [[bin]]
@@ -255,6 +266,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "musicbrainz"
+path = "fuzz_targets/musicbrainz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "openlibrary"
+path = "fuzz_targets/openlibrary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
 test = false
@@ -327,6 +352,27 @@ bench = false
 [[bin]]
 name = "socks_reply"
 path = "fuzz_targets/socks_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "peer_wire"
+path = "fuzz_targets/peer_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "peer_fetch"
+path = "fuzz_targets/peer_fetch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mse"
+path = "fuzz_targets/mse.rs"
 test = false
 doc = false
 bench = false

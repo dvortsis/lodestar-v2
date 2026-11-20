@@ -669,6 +669,112 @@ async fn renewal_over_the_protocol_is_rate_limited() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pause_stands_when_the_sessions_certificate_expires_after_a_renewal() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[7])).await.unwrap()[0]);
+        assert!(c.server.pause(nas.worker()));
+        c.advance(RENEW_MIN_INTERVAL_SECS as u64);
+        let renewal = nas.begin_renewal().unwrap();
+        let grant = a.renew(renewal.public_key()).await.unwrap().unwrap();
+        let renewed = nas.renewed(renewal, grant, c.clock.now_secs()).unwrap();
+
+        // The session's own certificate expires; the renewed one stands.
+        let left = nas.not_after() - c.clock.now_secs() + 1;
+        c.advance(left.unsigned_abs());
+        assert!(c.clock.now_secs() <= renewed.not_after());
+        a.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert!(matches!(event(&mut a).await, WorkerEvent::Ended(_)));
+        let w = &c.server.snapshot().workers;
+        assert!(
+            w.iter().any(|s| s.worker == nas.worker() && s.paused),
+            "{w:?}"
+        );
+        assert_eq!(c.server.authority().held_by(nas.worker()), 1, "lease kept");
+
+        // Back with the renewed certificate: still paused.
+        let b = c.session(&renewed).await;
+        let denied = b.claim(found(&*c.clock, &[1])).await.unwrap();
+        assert!(
+            matches!(
+                denied[0],
+                GrantItem::Denied {
+                    reason: DenyReason::Draining,
+                    ..
+                }
+            ),
+            "{denied:?}"
+        );
+        assert_eq!(c.server.authority().held_by(nas.worker()), 1);
+
+        // Once no certificate stands, the worker is forgotten and its
+        // lease goes back.
+        let left = renewed.not_after() - c.clock.now_secs() + 1;
+        c.advance(left.unsigned_abs());
+        b.heartbeat().await.unwrap();
+        c.server.tick().await;
+        let s = c.server.snapshot();
+        assert!(!s.workers.iter().any(|x| x.worker == nas.worker()), "{s:?}");
+        assert_eq!(c.server.authority().held_by(nas.worker()), 0);
+        assert_eq!(s.leases + s.pending, 1);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revoked_worker_with_a_lapsed_session_is_forgotten() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[7])).await.unwrap()[0]);
+        c.advance(RENEW_MIN_INTERVAL_SECS as u64);
+        let renewal = nas.begin_renewal().unwrap();
+        let grant = a.renew(renewal.public_key()).await.unwrap().unwrap();
+        nas.renewed(renewal, grant, c.clock.now_secs()).unwrap();
+        let left = nas.not_after() - c.clock.now_secs() + 1;
+        c.advance(left.unsigned_abs());
+        a.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert!(matches!(event(&mut a).await, WorkerEvent::Ended(_)));
+        assert_eq!(c.server.authority().held_by(nas.worker()), 1);
+        // Revoked while away: every certificate goes, and so does it.
+        c.server.revoke(nas.worker()).await.unwrap();
+        let s = c.server.snapshot();
+        assert!(!s.workers.iter().any(|x| x.worker == nas.worker()), "{s:?}");
+        assert_eq!(c.server.authority().held_by(nas.worker()), 0);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_session_starts_paused_when_its_pause_is_saved() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let saved = nas.worker();
+        c.server
+            .set_pause_source(Arc::new(move |w: WorkerId| w == saved));
+        let a = c.session(&nas).await;
+        let denied = a.claim(found(&*c.clock, &[1])).await.unwrap();
+        assert!(matches!(
+            denied[0],
+            GrantItem::Denied {
+                reason: DenyReason::Draining,
+                ..
+            }
+        ));
+        // A live resume lifts it for this session.
+        assert!(c.server.resume(nas.worker()));
+        token_of(&a.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ticks_run_maintain_hourly_so_the_coordinator_certificate_renews() {
     guard(async {
         let c = coordinator(config()).await;
@@ -761,6 +867,8 @@ struct RegrantCheck {
     held: std::sync::Mutex<Vec<[u8; 20]>>,
     stored: std::sync::Mutex<Vec<[u8; 20]>>,
     unknown: std::sync::Mutex<Vec<[u8; 20]>>,
+    /// Keys a given worker must not be given.
+    excluded: std::sync::Mutex<Vec<(WorkerId, [u8; 20])>>,
     short: std::sync::atomic::AtomicBool,
     gate: std::sync::Mutex<
         Option<(
@@ -802,6 +910,10 @@ impl StoredKeys for RegrantCheck {
                 }
             })
             .collect()
+    }
+
+    fn excludes(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        self.excluded.lock().unwrap().contains(&(worker, key.0))
     }
 }
 
@@ -860,6 +972,150 @@ async fn a_stored_or_held_key_is_never_granted_again() {
         assert_eq!(reported, vec![(key(2), 7)]);
         let s = c.server.snapshot();
         assert_eq!((s.regrants, s.leases, s.pending), (1, 1, 0));
+    })
+    .await;
+}
+
+/// A key the store check excludes for one worker is denied to that
+/// worker's claim as stored, and granted to another worker's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_excluded_key_is_denied_to_that_worker_only() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let (nas, pi) = (c.join("nas").await, c.join("pi").await);
+        let (a, b) = (c.session(&nas).await, c.session(&pi).await);
+        check.excluded.lock().unwrap().push((nas.worker(), key(1)));
+        let got = a.claim(found(&*c.clock, &[1, 2])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(1),
+                reason: DenyReason::Stored
+            }
+        );
+        token_of(&got[1]);
+        token_of(&b.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+        let s = c.server.snapshot();
+        assert_eq!((s.leases, s.pending), (2, 0));
+        assert_eq!(s.denied_excluded, 1);
+        // A key the store denies anyway isn't counted as excluded.
+        check.stored.lock().unwrap().push(key(3));
+        check.excluded.lock().unwrap().push((nas.worker(), key(3)));
+        let got = a.claim(found(&*c.clock, &[3])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(3),
+                reason: DenyReason::Stored
+            }
+        );
+        assert_eq!(c.server.snapshot().denied_excluded, 1);
+        // One the store can't read is counted: the exclusion decides it.
+        check.unknown.lock().unwrap().push(key(4));
+        check.excluded.lock().unwrap().push((nas.worker(), key(4)));
+        let got = a.claim(found(&*c.clock, &[4])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(4),
+                reason: DenyReason::Stored
+            }
+        );
+        assert_eq!(c.server.snapshot().denied_excluded, 2);
+        // A draining worker's excluded key is denied as draining, and not
+        // counted.
+        check.excluded.lock().unwrap().push((nas.worker(), key(5)));
+        assert!(c.server.drain(nas.worker()));
+        let got = a.claim(found(&*c.clock, &[5])).await.unwrap();
+        assert_eq!(
+            got[0],
+            GrantItem::Denied {
+                key: key(5),
+                reason: DenyReason::Draining
+            }
+        );
+        assert_eq!(c.server.snapshot().denied_excluded, 2);
+        assert!(c.server.lease(&InfoHash(key(1))).is_some());
+    })
+    .await;
+}
+
+/// A waiting key the store check excludes for its only target waits for
+/// another one, and goes to the next target that comes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_excluded_key_waits_for_another_target() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let pi = c.join("pi").await;
+        let mut x = c.session(&pi).await;
+        check.excluded.lock().unwrap().push((pi.worker(), key(1)));
+        leases_left_by_a_silent_worker(&c, &x, &[1, 2]).await;
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut x).await else {
+            panic!("no re-grant");
+        };
+        let keys: Vec<[u8; 20]> = items.iter().map(|i| i.key()).collect();
+        assert_eq!(keys, vec![key(2)]);
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (1, 1, 1));
+        // Not dropped and not reported: it waits.
+        x.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert_eq!(c.server.snapshot().pending, 1);
+
+        // The next target takes it, though it holds more leases than the
+        // excluded one.
+        let mut b = c.local().await;
+        for g in b.claim(found(&*c.clock, &[7, 8, 9])).await.unwrap() {
+            token_of(&g);
+        }
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        let keys: Vec<[u8; 20]> = items.iter().map(|i| i.key()).collect();
+        assert_eq!(keys, vec![key(1)]);
+        let s = c.server.snapshot();
+        assert_eq!((s.pending, s.regrants), (0, 2));
+        assert_eq!(
+            c.server.lease(&InfoHash(key(1))).unwrap().holder,
+            WorkerId::LOCAL
+        );
+    })
+    .await;
+}
+
+/// A key that becomes excluded for its target while the re-grant's store
+/// check runs isn't sent to it: it waits again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_excluded_during_the_regrant_check_waits() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let pi = c.join("pi").await;
+        let x = c.session(&pi).await;
+        leases_left_by_a_silent_worker(&c, &x, &[1]).await;
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let ticking = {
+            let server = c.server.clone();
+            tokio::spawn(async move { server.tick().await })
+        };
+        entered.await.unwrap();
+        // Reserved for x before the exclusion lands.
+        assert_eq!(
+            c.server.lease(&InfoHash(key(1))).unwrap().holder,
+            pi.worker()
+        );
+        check.excluded.lock().unwrap().push((pi.worker(), key(1)));
+        release.send(()).unwrap();
+        ticking.await.unwrap();
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 1));
+        assert_eq!(x.leases(), 0);
     })
     .await;
 }
@@ -1335,6 +1591,50 @@ async fn a_drain_survives_a_reconnect_until_resumed() {
         assert!(c.server.resume(nas.worker()));
         assert!(!c.server.resume(nas.worker()));
         token_of(&a.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_that_stops_on_its_own_rests_before_it_claims_again() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[1, 2])).await.unwrap()[0]);
+        // Not asked to drain: it stops on its own.
+        a.drained().await.unwrap();
+        assert_eq!(
+            event(&mut a).await,
+            WorkerEvent::Ended(Some(StopReason::Drained))
+        );
+        let s = c.server.snapshot();
+        assert_eq!((s.leases, s.pending), (0, 2));
+
+        // Back at once: no new key, and none of the waiting ones.
+        let a = c.session(&nas).await;
+        let denied = a.claim(found(&*c.clock, &[3])).await.unwrap();
+        assert!(
+            matches!(
+                denied[0],
+                GrantItem::Denied {
+                    reason: DenyReason::Busy,
+                    ..
+                }
+            ),
+            "{denied:?}"
+        );
+        c.server.tick().await;
+        assert_eq!(c.server.snapshot().pending, 2, "nothing re-granted to it");
+
+        // Once the rest is over, its waiting keys go back to it and it
+        // claims again.
+        c.clock
+            .advance(Duration::from_secs(REST_AFTER_DRAIN_SECS.unsigned_abs()));
+        a.heartbeat().await.unwrap();
+        c.server.tick().await;
+        assert_eq!(c.server.snapshot().pending, 0);
+        token_of(&a.claim(found(&*c.clock, &[3])).await.unwrap()[0]);
     })
     .await;
 }

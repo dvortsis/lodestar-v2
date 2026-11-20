@@ -499,6 +499,7 @@ impl ReadBufs {
             ends: &self.ends,
             apart: &self.apart,
             over: self.read.work.is_none(),
+            work: self.read.work.unwrap_or(0),
             marks: self.read.marks,
         }
     }
@@ -506,7 +507,6 @@ impl ReadBufs {
     /// Lets go of a large torrent's buffers, so a thread doesn't keep
     /// them for good.
     fn trim(&mut self) {
-        const KEEP: usize = 1 << 16;
         if self.tokens.capacity() > KEEP {
             self.tokens = Vec::new();
         }
@@ -527,6 +527,39 @@ struct Scratch {
     folders: Vec<Folder>,
 }
 
+/// The most entries a per-thread buffer keeps between torrents
+/// ([`ReadBufs::trim`], [`Scratch::trim`]): past it, it's let go of after
+/// use. Typical torrents' texts stay well under it, so they reuse theirs.
+const KEEP: usize = 1 << 16;
+
+thread_local! {
+    /// The joined reading's buffers ([`Core::pattern_signals`]), kept per
+    /// thread so they carry over between torrents, and trimmed after each
+    /// ([`Scratch::trim`]).
+    static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
+}
+
+impl Scratch {
+    /// Lets go of a large torrent's buffers, as [`ReadBufs::trim`] does,
+    /// so a thread doesn't keep them for good (X-filter-scratch-trim). A
+    /// buffer within [`KEEP`] entries is kept, so typical torrents reuse
+    /// theirs.
+    fn trim(&mut self) {
+        fn trim<T>(v: &mut Vec<T>) {
+            if v.capacity() > KEEP {
+                *v = Vec::new();
+            }
+        }
+        trim(&mut self.tokens);
+        trim(&mut self.flags);
+        trim(&mut self.at);
+        for f in &mut self.folders {
+            trim(&mut f.tokens);
+            trim(&mut f.flags);
+        }
+    }
+}
+
 /// Texts whose positions fit this many, or four per token, get a flag
 /// table in `signals`. The tokenizer's positions never pass its tokens,
 /// so only a stored fixture is ever scanned sparse.
@@ -539,10 +572,59 @@ const ADULT_WINDOW: u32 = 12;
 /// characters, and how much each costs the first time). A torrent past it
 /// is held as too large to judge (CS-0a); every torrent within it is read
 /// whole. The core's time to judge one at the budget, whatever its
-/// text, is held under 15 ms on the reference runner, with 2-12 ms
+/// text, is held under 15 ms on the reference runner, with 2–12 ms
 /// measured across every input shape (`budget_worst_case` in
 /// `tests/props.rs`).
 pub const BUDGET: u64 = 9_000_000;
+
+/// The core's version: what a stored torrent was judged by. It goes up
+/// whenever a change to the core could judge a stored torrent differently,
+/// so the store re-judges every torrent judged by an older one (§20.5).
+/// 1 is every core before X-filter01-fix (#843): the released one, which
+/// read text one way, and the later one, which read it both ways. A store
+/// that records none was judged by one of them.
+pub const CORE_VERSION: i64 = 2;
+
+/// Version 1 of the core's limits (detail held, docs/security/v1 §5).
+const V1_TOKENS: usize = 128;
+const V1_FILES: usize = 1_000;
+
+/// Whether version 1 of the core read `item` whole: within its limits,
+/// in both readings. Unmetered: it reads each path of a torrent within
+/// those limits once, and twice only where the earlier reading differs.
+pub fn read_whole_by_v1(item: &Item) -> bool {
+    if item.files.len() > V1_FILES || item.files.iter().any(|f| f.padding) {
+        return false;
+    }
+    let mut out = Vec::new();
+    let mut fits = |text: &str| {
+        out.clear();
+        crate::normalize::tokens(text, &mut out);
+        if out.len() > V1_TOKENS {
+            return false;
+        }
+        // The earlier reading differs only where a text holds a mark.
+        if !crate::normalize::splits([text]) {
+            return true;
+        }
+        out.clear();
+        normalize::with_splitting(|t| t.text(text, &mut out));
+        out.len() <= V1_TOKENS
+    };
+    fits(item.name) && item.files.iter().all(|f| fits(&f.path.join("/")))
+}
+
+/// Whether a core re-judge reads stored torrent `item` first (§20.5):
+/// version 1 didn't read it whole, or it reads differently in the earlier
+/// reading, which the released core used alone. Every other stored
+/// torrent is judged again after these.
+pub fn rejudge_first(item: &Item) -> bool {
+    let paths: Vec<String> = item.files.iter().map(|f| f.path.join("/")).collect();
+    !read_whole_by_v1(item)
+        || crate::normalize::splits(
+            std::iter::once(item.name).chain(paths.iter().map(String::as_str)),
+        )
+}
 
 /// The most files a torrent within the budget can have: each costs some
 /// of it, however short its path. Every file of a torrent the core judges
@@ -758,6 +840,36 @@ fn near_index(second: &[u32]) -> Vec<(u32, u32)> {
     near
 }
 
+/// What judging signals costs ([`Core::judge`]), in units of
+/// [`BUDGET`], whatever the content type: each text kept for the rules,
+/// and each rule's search for a pair, as Adult reads them (two rules for
+/// each of ages and roles). Where [`indexed`], sorting the sexual terms
+/// and a binary search for each age or role; otherwise a scan of each
+/// pair.
+fn pairing_work(texts: &[(Field, Signals)]) -> u64 {
+    /// A text kept for the rules: its signals, and each rule's look.
+    const TEXT: u64 = 120;
+    /// A signal kept.
+    const SIGNAL: u64 = 2;
+    /// A step of a sort or search.
+    const STEP: u64 = 1;
+    let log2 = |n: usize| u64::from(usize::BITS - n.leading_zeros());
+    texts
+        .iter()
+        .map(|(_, s)| {
+            let firsts = (s.ages.len() + s.roles.len()) as u64;
+            let sexual = s.sexual.len();
+            let kept = firsts + (sexual + s.codes.len()) as u64;
+            let search = if indexed(s.ages.len().max(s.roles.len()), sexual) {
+                sexual as u64 * log2(sexual) + 2 * firsts * (log2(sexual) + 1)
+            } else {
+                2 * firsts * sexual as u64
+            };
+            TEXT + kept * SIGNAL + search * STEP
+        })
+        .fold(0, u64::saturating_add)
+}
+
 /// The signals of a torrent's name (first) and files, as the pattern
 /// rules read them ([`Core::pattern_signals`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -766,6 +878,9 @@ pub(crate) struct PatternSignals {
     /// The read passed the budget: the torrent is too large to judge
     /// (CS-0a), and `texts` are empty.
     over: bool,
+    /// The read's work and judging its signals' ([`pairing_work`]), in
+    /// units of [`BUDGET`]; zero where it's over.
+    work: u64,
     /// A text reads differently in the earlier reading
     /// ([`Core::pattern_hits_split`]).
     marks: bool,
@@ -944,6 +1059,24 @@ impl Core {
         }
     }
 
+    /// What this core's reading and judging `item` whole costs, in units
+    /// of [`BUDGET`], or `None` where it's past the budget: [`read_cost`]
+    /// and judging the signals it finds. For tests and the budget's bench.
+    #[doc(hidden)]
+    pub fn read_cost(&self, item: &Item) -> Option<u64> {
+        if past_budget_unread(item) {
+            return None;
+        }
+        let s = self.pattern_signals(item, &TermSet::default(), None);
+        (!s.over).then_some(s.work)
+    }
+
+    /// Whether this core holds `item` as too large to judge (CS-0a):
+    /// [`too_large`], or judging what it reads passes the budget.
+    pub fn too_large(&self, item: &Item) -> bool {
+        too_large(item) || self.read_cost(item).is_none()
+    }
+
     /// The locked rules that read no words (CS-1a/1b, CS-8a, and CS-0a for
     /// a torrent too large to judge): final when one hits.
     pub fn floor_hit(&self, item: &Item) -> Option<Hit> {
@@ -974,8 +1107,8 @@ impl Core {
     /// The hits of the earlier reading, with the characters
     /// [`Tokenizer::splitting`] names as word breaks, where `marks` (the
     /// joined reading found one in the name or a path); `None` otherwise,
-    /// when both readings are the same. Rare, so it pays for a tokenizer
-    /// of its own.
+    /// when both readings are the same. Read with the thread's tokenizer
+    /// for that reading ([`normalize::with_splitting`]).
     pub(crate) fn pattern_hits_split(
         &self,
         item: &Item,
@@ -985,11 +1118,13 @@ impl Core {
         if !marks {
             return None;
         }
-        let mut tok = Tokenizer::splitting();
-        tok.meter(normalize::CUT_ONLY);
-        let mut scratch = Scratch::default();
-        let s = self.patterns_with(&mut tok, &mut scratch, item, neutral, None);
-        if tok.over() {
+        let (s, over) = normalize::with_splitting(|tok| {
+            tok.meter(normalize::CUT_ONLY);
+            let mut scratch = Scratch::default();
+            let s = self.patterns_with(tok, &mut scratch, item, neutral, None);
+            (s, tok.over())
+        });
+        if over {
             // A text of this reading reached the token cap: it isn't read
             // whole, so the torrent is too large to judge.
             return Some(vec![self.too_large_hit()]);
@@ -1178,23 +1313,26 @@ impl Core {
     ) -> PatternSignals {
         thread_local! {
             // Kept per thread: its buffers carry over between torrents.
-            static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
             static READ: std::cell::RefCell<ReadBufs> = Default::default();
         }
         // The thread's tokenizer, whose word plans keyword entries' pass
         // over the same torrent just made (`normalize::with_tokenizer`).
         let judge = |read: normalize::Read| {
+            let over = |marks| PatternSignals {
+                texts: Vec::new(),
+                over: true,
+                work: 0,
+                marks,
+            };
             if read.over {
-                return PatternSignals {
-                    texts: Vec::new(),
-                    over: true,
-                    marks: read.marks,
-                };
+                return over(read.marks);
             }
             let mut s = normalize::with_tokenizer(|tok| {
                 SCRATCH.with(|s| match s.try_borrow_mut() {
                     Ok(mut scratch) => {
-                        self.patterns_with(tok, &mut scratch, item, neutral, Some(read))
+                        let s = self.patterns_with(tok, &mut scratch, item, neutral, Some(read));
+                        scratch.trim();
+                        s
                     }
                     Err(_) => {
                         self.patterns_with(tok, &mut Scratch::default(), item, neutral, Some(read))
@@ -1202,6 +1340,18 @@ impl Core {
                 })
             });
             s.marks = read.marks;
+            // Judging the signals counts too, in both readings where the
+            // earlier one is read: the torrent is read whole only if it's
+            // judged within the budget. Twice this reading's is enough:
+            // the earlier reading's signals come from the same text, and
+            // the meter already bounds its tokens with this reading's.
+            let readings = if read.marks { 2 } else { 1 };
+            s.work = read
+                .work
+                .saturating_add(pairing_work(&s.texts).saturating_mul(readings));
+            if s.work > BUDGET {
+                return over(read.marks);
+            }
             s
         };
         if let Some(read) = read {
@@ -1314,6 +1464,7 @@ impl Core {
         PatternSignals {
             texts,
             over: false,
+            work: 0,
             marks: false,
         }
     }
@@ -1544,6 +1695,7 @@ mod tests {
             ends: &ends,
             apart: &apart,
             over: false,
+            work: 0,
             marks: false,
         };
         let none = TermSet::default();
@@ -1570,6 +1722,7 @@ mod tests {
                 ends: &e,
                 apart: &a,
                 over: false,
+                work: 0,
                 marks: false,
             };
             assert_eq!(c.patterns(&item, &none, Some(read_of)).0, own, "{files:?}");
@@ -1590,6 +1743,85 @@ mod tests {
             c.patterns(&item, &none, Some(forced)).0,
             c.patterns(&item, &none, None).0
         );
+    }
+
+    /// The joined reading's per-thread buffers are back within [`KEEP`]
+    /// after judging a torrent whose name is as long as the budget allows,
+    /// and a typical torrent's are kept for the next one
+    /// (X-filter-scratch-trim).
+    #[test]
+    fn the_joined_readings_buffers_are_trimmed_after_a_long_text() {
+        let c = core();
+        let none = TermSet::default();
+        let judge = |name: &str| {
+            let item = Item {
+                hashes: &[],
+                name,
+                files: &[],
+                content_type: ContentType::Video,
+            };
+            let s = c.pattern_signals(&item, &none, None);
+            // Judged within the budget, so the buffers were used.
+            assert!(!s.over, "{} bytes over the budget", name.len());
+        };
+        let held = || {
+            SCRATCH.with(|s| {
+                let s = s.borrow();
+                let folders = s.folders.iter();
+                [s.tokens.capacity(), s.flags.capacity(), s.at.capacity()]
+                    .into_iter()
+                    .chain(folders.flat_map(|f| [f.tokens.capacity(), f.flags.capacity()]))
+                    .max()
+                    .unwrap_or(0)
+            })
+        };
+
+        judge("Show Name Season 1 1080p WEB-DL");
+        let typical = held();
+        assert!(typical > 0 && typical <= KEEP, "{typical}");
+
+        // About 300,000 tokens: within the budget, far past the bound.
+        judge(&"a ".repeat(300_000));
+        assert!(held() <= KEEP, "{} entries kept", held());
+    }
+
+    /// End to end through the core: an earlier reading that reaches the
+    /// token cap, metered with `CUT_ONLY` on the thread's splitting
+    /// tokenizer, leaves it unmetered, so `read_whole_by_v1`'s unmetered
+    /// earlier reading after it on the same thread still reads its text
+    /// whole. A meter left running would read that text as nothing, and
+    /// a text past version 1's limits in the earlier reading would pass
+    /// for whole (X-filter-split-nits).
+    #[test]
+    fn a_cut_earlier_reading_leaves_the_next_one_whole() {
+        let c = core();
+        let none = TermSet::default();
+        let item = |name| Item {
+            hashes: &[],
+            name,
+            files: &[],
+            content_type: ContentType::Video,
+        };
+        // Within version 1's limit joined, past it apart: `a` and `b` are
+        // one word joined and two apart.
+        let small = "a\u{0600}b ".repeat(V1_TOKENS / 2 + 8);
+        let mut joined = Vec::new();
+        normalize::tokens(&small, &mut joined);
+        let mut apart = Vec::new();
+        normalize::with_splitting(|t| t.text(&small, &mut apart));
+        assert!(joined.len() <= V1_TOKENS, "{} joined", joined.len());
+        assert!(apart.len() > V1_TOKENS, "{} apart", apart.len());
+        assert!(!read_whole_by_v1(&item(&small)), "before");
+
+        // An earlier reading past the token cap: held as too large.
+        let huge = "a\u{0600}".repeat(normalize::MAX_TOKENS + 1);
+        let hits = c.pattern_hits_split(&item(&huge), &none, true);
+        assert_eq!(hits, Some(vec![c.too_large_hit()]));
+
+        assert!(!read_whole_by_v1(&item(&small)), "after the cut");
+        // And the next earlier reading through the core reads whole too.
+        let hits = c.pattern_hits_split(&item(&small), &none, true).unwrap();
+        assert!(!hits.contains(&c.too_large_hit()), "{hits:?}");
     }
 
     proptest! {
@@ -1720,7 +1952,7 @@ mod tests {
             normalize::tokens(name, &mut tokens);
             let mut ends = vec![tokens.len()];
             normalize::paths_apart(files.iter().map(|f| &f.path[..]), &mut tokens, &mut ends, &mut apart);
-            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false, marks: false };
+            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart, over: false, work: 0, marks: false };
             let neutral = TermSet::of(&neutral);
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };

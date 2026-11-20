@@ -130,7 +130,7 @@ impl From<GuidedError> for ApiError {
 
 /// What these routes ask of the binary. `id` is as the request gave it.
 pub trait CompanionsGuidedApi: Send + Sync + std::fmt::Debug {
-    fn detect(&self) -> BoxFuture<'_, Result<Vec<DetectedCompanion>, GuidedError>>;
+    fn detect(&self) -> BoxFuture<'_, Result<DetectedCompanions, GuidedError>>;
     fn set_target(
         &self,
         id: String,
@@ -187,7 +187,8 @@ fn check_id(id: &str) -> ApiResult<()> {
     }
 }
 
-/// Runs detection on its fixed targets and lists what answered.
+/// Runs detection on its fixed targets and lists what answered, and the
+/// companions Lodestar runs that are still starting.
 #[utoipa::path(
     operation_id = "detectCompanions",
     post,
@@ -206,8 +207,7 @@ pub(crate) async fn detect_companions(
     headers: HeaderMap,
 ) -> ApiResult<Json<DetectedCompanions>> {
     same_origin_json(&headers)?;
-    let found = api(handle)?.detect().await.map_err(ApiError::from)?;
-    Ok(Json(DetectedCompanions { found }))
+    Ok(Json(api(handle)?.detect().await.map_err(ApiError::from)?))
 }
 
 /// Adds the companion at `target`, once detection confirms it answers
@@ -224,7 +224,7 @@ pub(crate) async fn detect_companions(
         (status = 400, description = "`bad_template_input` with `field`: a port or address that can't be used.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
+        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_not_ready`, `companion_starting`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),

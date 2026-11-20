@@ -31,7 +31,7 @@ use lodestar_companions::adapter::{BoxFuture, GuardedHttp, Target};
 use lodestar_companions::configure::{
     ConfigSink, DownloadClientEntry, IndexerManagerEntry, SinkError,
 };
-use lodestar_companions::detect::{self, CompanionHttp};
+use lodestar_companions::detect;
 use lodestar_companions::manager::{self, Snapshot};
 use lodestar_companions::watch::{self, Seen, Watched};
 use lodestar_integrations::secret::Secret;
@@ -251,8 +251,8 @@ pub fn start(
     ops: Arc<dyn OpsApi>,
     store: Arc<Mutex<Store>>,
     gate: channel::Sender<requires::Snapshot>,
+    http: Arc<dyn GuardedHttp>,
 ) -> Result<Wired, &'static str> {
-    let http: Arc<dyn GuardedHttp> = Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
     let endpoints: Endpoints = Arc::new(move || {
         let (ops, store) = (ops.clone(), store.clone());
         Box::pin(async move {
@@ -308,12 +308,11 @@ pub async fn serve(
             reason = code
         );
     };
-    let http: Arc<dyn GuardedHttp> = match CompanionHttp::new() {
-        Ok(h) => Arc::new(h),
-        Err(_) => {
-            failed("companion_http");
-            return None;
-        }
+    // The companions' one client, shared with the managed path, so a
+    // managed companion's port is reached the same way from here.
+    let Some(http) = companions.http.clone().map(|h| h as Arc<dyn GuardedHttp>) else {
+        failed("companion_http");
+        return None;
     };
     let wired = match start(
         added_of(&stored),
@@ -322,6 +321,7 @@ pub async fn serve(
         ops.clone(),
         store.clone(),
         gate,
+        http.clone(),
     ) {
         Ok(w) => w,
         Err(code) => {
@@ -739,7 +739,7 @@ use lodestar_api::companions::CompanionsError;
 use lodestar_api::companions_guided::{CompanionsGuidedApi, GuidedError};
 use lodestar_api::dto::companions::Companion;
 use lodestar_api::dto::companions_guided::{
-    CompanionForgotten, CompanionTarget, DetectedCompanion,
+    CompanionForgotten, CompanionTarget, DetectedCompanion, DetectedCompanions,
 };
 use lodestar_companions::adapter::{AdapterError, Credentials, EnteredUrl};
 use lodestar_companions::credentials::{CredentialKey, Field};
@@ -855,6 +855,8 @@ fn adapter_code(e: AdapterError) -> &'static str {
         AdapterError::Refused(code) => code,
         AdapterError::Unauthorized => "companion_unauthorized",
         AdapterError::Timeout | AdapterError::Unreachable => "companion_unreachable",
+        AdapterError::NotReady => "companion_not_ready",
+        AdapterError::Starting => "companion_starting",
         AdapterError::Blocked => "address_refused",
         AdapterError::NotThisCompanion => "not_detected",
         _ => "companion_protocol",
@@ -1277,9 +1279,7 @@ impl Guided {
 }
 
 impl CompanionsGuidedApi for Guided {
-    fn detect(
-        &self,
-    ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<DetectedCompanion>, GuidedError>> {
+    fn detect(&self) -> lodestar_api::ops::BoxFuture<'_, Result<DetectedCompanions, GuidedError>> {
         Box::pin(async move {
             let _one = self
                 .detecting
@@ -1296,15 +1296,23 @@ impl CompanionsGuidedApi for Guided {
                 let http = self.http.clone();
                 set.spawn(async move {
                     let d = detect::detector(&id)?;
-                    let found = d.detect(http.as_ref(), &target).await.ok().flatten()?;
-                    Some((i, id, found))
+                    // Found, or still starting (a companion Lodestar runs):
+                    // anything else is "not here".
+                    match d.detect(http.as_ref(), &target).await {
+                        Ok(Some(found)) => Some((i, id, Some(found))),
+                        Err(AdapterError::Starting) => Some((i, id, None)),
+                        _ => None,
+                    }
                 });
             }
             let mut found = Vec::new();
+            let mut starting: Vec<(usize, CompanionId)> = Vec::new();
             let _ = tokio::time::timeout(self.detect_cap, async {
                 while let Some(r) = set.join_next().await {
-                    if let Ok(Some(hit)) = r {
-                        found.push(hit);
+                    match r {
+                        Ok(Some((i, id, Some(hit)))) => found.push((i, id, hit)),
+                        Ok(Some((i, id, None))) => starting.push((i, id)),
+                        _ => {}
                     }
                 }
             })
@@ -1324,7 +1332,18 @@ impl CompanionsGuidedApi for Guided {
                     version: d.version.map(|v| v.as_str().to_owned()),
                 });
             }
-            Ok(out)
+            starting.sort_by_key(|(i, _)| *i);
+            let mut still: Vec<String> = Vec::new();
+            for (_, id) in starting {
+                let id = id.as_str();
+                if !out.iter().any(|o| o.id == id) && !still.iter().any(|s| s == id) {
+                    still.push(id.to_owned());
+                }
+            }
+            Ok(DetectedCompanions {
+                found: out,
+                starting: still,
+            })
         })
     }
 
@@ -1651,6 +1670,18 @@ mod tests {
 
     fn id(s: &str) -> CompanionId {
         CompanionId::parse(s).unwrap()
+    }
+
+    /// X-cmp09-starting-status: a companion that isn't ready has its own
+    /// code, which the web app words apart from unreachable.
+    #[test]
+    fn not_ready_has_its_own_code() {
+        assert_eq!(adapter_code(AdapterError::NotReady), "companion_not_ready");
+        assert_eq!(adapter_code(AdapterError::Starting), "companion_starting");
+        assert_eq!(
+            adapter_code(AdapterError::Unreachable),
+            "companion_unreachable"
+        );
     }
 
     fn client(id: &str) -> DownloadClient {

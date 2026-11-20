@@ -731,3 +731,146 @@ fn raw_info_is_the_hashed_span_whatever_the_encoding_key_says() {
         Err(Error::MissingField("info"))
     ));
 }
+
+/// Options with only the two combined path budgets changed.
+fn budget(segments: usize, bytes: usize) -> ParseOptions {
+    ParseOptions {
+        limits: Limits {
+            max_total_path_segments: segments,
+            max_total_path_bytes: bytes,
+            ..Limits::DEFAULT
+        },
+        encoding_hint: None,
+    }
+}
+
+/// Parses `v` at exactly its cost, then one segment and one byte under it.
+fn holds_at_the_edge(v: &OwnedValue, segments: usize, bytes: usize) {
+    let raw = to_vec(v);
+    assert!(Info::parse_with(&raw, &budget(segments, bytes)).is_ok());
+    assert_eq!(
+        Info::parse_with(&raw, &budget(segments - 1, bytes)),
+        Err(Error::LimitExceeded {
+            what: "total path segments",
+            limit: segments - 1
+        })
+    );
+    assert_eq!(
+        Info::parse_with(&raw, &budget(segments, bytes - 1)),
+        Err(Error::LimitExceeded {
+            what: "total path bytes",
+            limit: bytes - 1
+        })
+    );
+}
+
+#[test]
+fn combined_path_budget_counts_every_layout() {
+    // v1: dir/a.txt, dir/b.mkv and a link whose target is a/b.
+    let files = vec![
+        v1_file(&["dir", "a.txt"], 1),
+        v1_file(&["dir", "b.mkv"], 1),
+        d(vec![
+            ("attr", b("l")),
+            ("path", path(&["link"])),
+            ("symlink path", path(&["a", "b"])),
+        ]),
+    ];
+    holds_at_the_edge(&multi("x", files, 16_384, 1), 2 + 2 + 1 + 2, 8 + 8 + 4 + 2);
+
+    // A single file is charged its name.
+    let single = d(vec![
+        ("length", i(1)),
+        ("name", b("single")),
+        ("piece length", i(16_384)),
+        ("pieces", pieces(1)),
+    ]);
+    holds_at_the_edge(&single, 1, 6);
+
+    // v2: each file is charged its whole path, the shared `dir` included.
+    let v2 = d(vec![
+        ("file tree", v2_tree()),
+        ("meta version", i(2)),
+        ("name", b("v2")),
+        ("piece length", i(16_384)),
+    ]);
+    holds_at_the_edge(&v2, 2 + 2 + 1, 8 + 8 + 9);
+
+    // Hybrid: the stored v1 list costs more than the tree, so it decides.
+    holds_at_the_edge(&hybrid((10, 70_000)), 2 + 2 + 2 + 2 + 1, 8 + 9 + 8 + 9 + 9);
+
+    // Hybrid: here the tree costs more than the v1 list, so it decides.
+    let tree = d(vec![(
+        "dir",
+        d(vec![("sub", d(vec![("a", v2_leaf(1, 1))]))]),
+    )]);
+    let deep_tree = with(
+        with(
+            multi("hy", vec![v1_file(&["a"], 1)], 16_384, 1),
+            "file tree",
+            tree,
+        ),
+        "meta version",
+        i(2),
+    );
+    holds_at_the_edge(&deep_tree, 3, 3 + 3 + 1);
+}
+
+#[test]
+fn combined_path_budget_holds_after_decoding() {
+    // Legacy GBK paths decoded to UTF-8 (one labelled path can't be written
+    // in GBK) grow past a byte budget the input bytes fit in.
+    let gbk = |s: &str| encoding_rs::GBK.encode(s).0.into_owned();
+    let files = vec![
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第一集"))])),
+            ("path.utf-8", path(&["한국어"])),
+        ]),
+        d(vec![
+            ("length", i(1)),
+            (
+                "path",
+                l(vec![b(
+                    [gbk("第二集 高清中文字幕"), vec![0xff; 1000]].concat()
+                )]),
+            ),
+        ]),
+    ];
+    let raw = to_vec(&multi("x", files, 16_384, 1));
+    let input_bytes = 9 + 19 + 1000;
+    let info = Info::parse_with(&raw, &budget(10, input_bytes * 4)).unwrap();
+    assert_eq!(info.path_encoding, TextEncoding::UTF8);
+    let built: usize = info.files.iter().flat_map(|f| &f.path).map(Vec::len).sum();
+    assert!(built > input_bytes + 1000, "decoding grew the paths");
+    assert_eq!(
+        Info::parse_with(&raw, &budget(10, input_bytes)),
+        Err(Error::LimitExceeded {
+            what: "total path bytes",
+            limit: input_bytes
+        })
+    );
+}
+
+#[test]
+fn budget_fuzz_seeds_reach_the_file_tree() {
+    let seed = |name: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/seeds/metainfo")
+            .join(name);
+        Info::parse(&std::fs::read(path).unwrap()).unwrap()
+    };
+    let deep = seed("budget-deep-tree.info");
+    assert_eq!(deep.files.len(), 1);
+    assert_eq!(deep.files[0].path.len(), Limits::DEFAULT.max_path_depth);
+    assert_eq!(seed("budget-wide-tree.info").files.len(), 256);
+    let hybrid = seed("budget-hybrid-mismatch.info");
+    assert_eq!(hybrid.version, MetaVersion::Hybrid);
+    assert!(hybrid.warnings.contains(&Warning::HybridMismatch));
+    let paths: Vec<_> = seed("budget-noncanonical.info")
+        .files
+        .iter()
+        .map(|f| f.path.concat())
+        .collect();
+    assert_eq!(paths, [&b"ab"[..], b"ay", b"z"]);
+}

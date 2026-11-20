@@ -39,8 +39,8 @@ pub fn reindex(config: &Config, server_up: impl FnOnce() -> bool) -> Outcome<Vec
     let db = config.db_path();
     if !db.is_file() {
         return Err(Failure::Failed(format!(
-            "no store at {}; nothing to index",
-            db.display()
+            "{} Nothing to index.",
+            super::util::no_store(&db)
         )));
     }
     let lock = match StoreLock::acquire(&db) {

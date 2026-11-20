@@ -36,6 +36,35 @@ ssh_keys:
   ed25519_public: ${trimspace(host_key_public)}
 %{ endif ~}
 write_files:
+  # PIA VPN helper (X-pia-vm-helper, from #632): a root-owned script with a
+  # fixed verb list, allowed by this rule. Main's sudo model stays (users.sudo
+  # above): the fleet steps and deliver-pia still run as root through
+  # non-interactive sudo, and a test ties these lines to every command they
+  # run (tests/test_linux_privilege_boundary.sh). Narrowing to fixed-verb
+  # helpers only is X-fleet-sudo-narrow.
+  - path: /etc/sudoers.d/90-lodestar-vpn-helper
+    owner: root:root
+    permissions: '0440'
+    content: |
+      Defaults!/usr/local/sbin/lodestar-vpn-helper secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      lodestar ALL=(root) NOPASSWD: /usr/local/sbin/lodestar-vpn-helper
+  - path: /etc/lodestar/vpn/compose.yaml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      ${indent(6, compose_vpn_content)}
+  - path: /etc/lodestar/vpn/ca.rsa.4096.crt
+    owner: root:root
+    permissions: '0644'
+    content: |
+      ${indent(6, pia_ca_cert_content)}
+  - path: /usr/local/sbin/lodestar-vpn-helper
+    owner: root:root
+    permissions: '0750'
+    # cloud-init/lodestar-vpn-helper.sh, gzipped (Linode caps user data at
+    # 65,535 base64 characters).
+    encoding: gz+b64
+    content: ${vpn_helper_gz}
   - path: /etc/ssh/sshd_config.d/99-lodestar.conf
     owner: root:root
     permissions: '0644'
@@ -83,6 +112,11 @@ write_files:
       systemctl restart ssh
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/secrets
+      # The PIA helper's stack: root-owned, read-only to everyone else.
+      install -d -o root -g root -m 0755 /etc/lodestar /etc/lodestar/vpn
+      # Its wg0.conf lives on tmpfs, root-only; the helper recreates it after a reboot.
+      install -d -o root -g root -m 0755 /run/lodestar
+      install -d -o root -g root -m 0700 /run/lodestar/vpn
       # Never start a crawler on an unverified tunnel.
       docker --version
       docker compose version

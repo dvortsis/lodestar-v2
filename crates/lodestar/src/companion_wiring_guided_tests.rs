@@ -738,13 +738,57 @@ fn gate(silent: bool) -> Arc<Gate> {
 async fn detection_runs_its_probes_at_once() {
     let http = gate(false);
     let f = fixture_with(http.clone());
-    let found = f.guided.detect().await.unwrap();
+    let detected = f.guided.detect().await.unwrap();
+    assert!(detected.starting.is_empty());
+    let found = detected.found;
     let qbt: Vec<_> = found.iter().filter(|d| d.id == "qbittorrent").collect();
     assert_eq!(qbt.len(), 1, "{found:?}");
     assert_eq!(qbt[0].target, CompanionTarget::Loopback { port: 8080 });
     assert!(found.iter().all(|d| d.id != "prowlarr"), "{found:?}");
     // Nothing is written by detection.
     assert!(texts(&f.store).unwrap().is_empty());
+}
+
+/// Says every target is a companion Lodestar runs that is still starting.
+struct Starting;
+
+impl GuardedHttp for Starting {
+    fn send<'a>(
+        &'a self,
+        _: ProbeRequest<'a>,
+    ) -> BoxFuture<'a, Result<ProbeResponse, AdapterError>> {
+        Box::pin(async { Err(AdapterError::Starting) })
+    }
+}
+
+/// X-companion-starting-steps: a companion still starting is listed as
+/// starting, once each in probe order, and not as found; anything else
+/// that failed is still "not here".
+#[tokio::test]
+async fn detection_lists_what_is_still_starting() {
+    let f = fixture_with(Arc::new(Starting));
+    let got = f.guided.detect().await.unwrap();
+    assert!(got.found.is_empty(), "{got:?}");
+    assert!(got.starting.iter().any(|id| id == "qbittorrent"), "{got:?}");
+    let mut once = got.starting.clone();
+    once.dedup();
+    assert_eq!(once, got.starting);
+    // Unreachable everywhere: nothing found, nothing starting.
+    let f = fixture_with(Arc::new(Unreachable));
+    let got = f.guided.detect().await.unwrap();
+    assert!(got.found.is_empty() && got.starting.is_empty(), "{got:?}");
+}
+
+/// Finds nothing anywhere.
+struct Unreachable;
+
+impl GuardedHttp for Unreachable {
+    fn send<'a>(
+        &'a self,
+        _: ProbeRequest<'a>,
+    ) -> BoxFuture<'a, Result<ProbeResponse, AdapterError>> {
+        Box::pin(async { Err(AdapterError::Unreachable) })
+    }
 }
 
 /// Detection ends at its cap with what it has, and a second one while it
@@ -755,7 +799,11 @@ async fn detection_is_capped_and_one_at_a_time() {
     let mut f = fixture_with(http.clone());
     Arc::get_mut(&mut f.guided).unwrap().detect_cap = Duration::from_millis(200);
     let started = std::time::Instant::now();
-    assert_eq!(f.guided.detect().await.unwrap(), []);
+    let none = f.guided.detect().await.unwrap();
+    assert!(
+        none.found.is_empty() && none.starting.is_empty(),
+        "{none:?}"
+    );
     assert!(started.elapsed() < Duration::from_secs(10));
 
     Arc::get_mut(&mut f.guided).unwrap().detect_cap = Duration::from_secs(600);

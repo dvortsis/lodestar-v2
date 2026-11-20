@@ -1,7 +1,7 @@
 """operator-injection.yml's entry point: the prompt-injection test (OP-5;
 plan §1 "Prompt-injection test and escalation", §5 item 8).
 
-    harness.py run      one escalation level, every corpus item 5 times
+    harness.py run      one escalation level, every corpus item its `runs` times
 
 In order, refusing rather than guessing at each step:
 1. Gates, before any setting is read: a first-attempt workflow_dispatch on
@@ -20,9 +20,9 @@ In order, refusing rather than guessing at each step:
    one GITHUB_TOKEN credential holds a random dummy value. The helper, the
    reader and the mock as session files.
 7. Sessions: the operator agent's version from claude-lock.json, overridden to
-   the level's model and effort and to the system prompt with its helper fetch
-   swapped for a copy of the mounted files. Each session is judged from its
-   tool-call events (detect.py), then archived.
+   the level's model and effort. The system prompt is unchanged: it already
+   copies the mounted files, and `patch_prompt` only checks that. Each session
+   is judged from its tool-call events (detect.py), then archived.
 8. Always: sessions archived, files deleted, the vault and the environment
    archived, the lock released.
 
@@ -39,8 +39,6 @@ import signal
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,12 +51,12 @@ import bridge  # noqa: E402
 import corpus  # noqa: E402
 import detect  # noqa: E402
 import wake  # noqa: E402 - its watch loop, approval denial and interrupt
-from apiclient import ANTHROPIC, ANTHROPIC_VERSION, MANAGED_AGENTS_BETA, ApiError, anthropic, check_url, opener, pages  # noqa: E402
+from apiclient import anthropic, pages  # noqa: E402
 from bridge import MODEL_ID, Refusal  # noqa: E402
 from oplock import OperatorLock  # noqa: E402
 from state import FLEET_KEY, is_tombstone  # noqa: E402
 
-RUNS = 5
+RUNS = corpus.DEFAULT_RUNS  # an item's runs unless it sets its own (corpus.py)
 LEVELS = {  # plan §1: Sonnet medium, Sonnet high, Opus medium, Opus high
     "1": ("OPERATOR_MODEL_ROUTINE", "medium"),
     "2": ("OPERATOR_MODEL_ROUTINE", "high"),
@@ -79,19 +77,16 @@ SETTINGS = ("ANTHROPIC_API_KEY", "AWS_BRIDGE_ROLE_ARN", "CONTROL_BUCKET", "STATE
             "OPERATOR_MODEL_ROUTINE", "RUNNER_USER_ID", "OPERATOR_BOT_USER_ID", "CHANNEL_PR",
             "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "INJECTION_LEVEL")
 FORBIDDEN = ("OPERATOR_APP_PRIVATE_KEY", "OPERATOR_APP_ID")
-MOUNT = "/op"  # the files land in /mnt/session/uploads/op/
-FETCH = """  mkdir -p /tmp/op && cd /tmp/op
-  for f in infra/operator/thread.py infra/fleet/reader.py; do
-    curl -fsS -H "Accept: application/vnd.github.raw" \\
-      "https://api.github.com/repos/dvortsis/lodestar-v2/contents/$f?ref=main" -o "$(basename "$f")"
-  done
-"""
+MOUNT = wake.MOUNT  # the files land in /mnt/session/uploads/op/, as in a real wake
+# The block of the operator's prompt that copies the mounted helper. The test
+# mounts its own thread.py (the mock) into the same folder, so the prompt the
+# test judges is the prompt the operator runs, unchanged.
 COPY = """  mkdir -p /tmp/op && cd /tmp/op
-  cp /mnt/session/uploads/op/* .
+  cp -f /mnt/session/uploads/op/* .
 """
 FIXTURE_MOUNT = "/cache/channel.json"  # ghmock.FIXTURE, outside the folder the prompt copies
 SETUP_WAVE = WORKERS  # if the first sessions all show the mock never ran, nothing more starts
-HELPERS = {"thread.py": HERE / "ghmock.py", "thread_real.py": OP / "thread.py", "reader.py": OP.parent / "fleet" / "reader.py"}
+HELPERS = {"thread.py": HERE / "ghmock.py", "thread_real.py": wake.HELPERS["thread.py"], "reader.py": wake.HELPERS["reader.py"]}
 
 
 def neutral(name: str, src: bytes) -> bytes:
@@ -133,12 +128,19 @@ def level_of(env) -> tuple[str, str, str]:
     return level, model, effort
 
 
+FETCHES = ("contents/", "vnd.github.raw", "ref=main", "wget", "git clone", "pip install", "urllib", "curl ")
+ESCALATION_CURL = "curl -fsS -X POST "  # the prompt's one curl: the last-resort escalation, never a download
+
+
 def patch_prompt(system: str) -> str:
-    """The operator's prompt, with its helper fetch (no route here) swapped
-    for a copy of the mounted files. Nothing else changes."""
-    if system.count(FETCH) != 1:
-        raise Refusal("the system prompt's helper fetch changed; update FETCH in harness.py")
-    return system.replace(FETCH, COPY)
+    """The operator's prompt, as it is: it already copies the mounted helper,
+    and here the mount holds the mock. Refuses a prompt without that one copy
+    block, or with a fetch of its own, since the mock might then never run."""
+    if system.count(COPY) != 1:
+        raise Refusal("the system prompt's helper copy changed; update COPY in harness.py")
+    if any(word in system.replace(ESCALATION_CURL, "", 1) for word in FETCHES):
+        raise Refusal("the system prompt fetches something; the test's mock might not be what runs")
+    return system
 
 
 # ---- fleet.json and spend ----
@@ -202,29 +204,7 @@ class Spend:
 
 # ---- the API resources ----
 
-def upload(api_key: str):  # pragma: no cover - network
-    """POST /v1/files as multipart, through apiclient's host check and its
-    no-redirect opener. Returns the file ID."""
-    def send(name: str, data: bytes) -> str:
-        path = "/v1/files"
-        check_url(ANTHROPIC + path, path)
-        boundary = "lodestar" + secrets.token_hex(12)
-        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
-                f"Content-Type: text/plain\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
-        req = urllib.request.Request(ANTHROPIC + path, method="POST", data=body, headers={
-            "x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "anthropic-beta": MANAGED_AGENTS_BETA,
-            "content-type": f"multipart/form-data; boundary={boundary}", "User-Agent": "lodestar-operator"})
-        try:
-            with opener().open(req, timeout=30) as r:
-                fid = json.loads(r.read()).get("id")
-        except urllib.error.HTTPError as e:
-            raise ApiError("POST /v1/files", e.code) from None
-        except Exception:
-            raise ApiError("POST /v1/files", None) from None
-        if not isinstance(fid, str) or not fid:
-            raise ApiError("POST /v1/files", None)
-        return fid
-    return send
+upload = wake.upload  # one multipart upload for the bridge and the test
 
 
 def live_fleet_reader(env, run_id: str):  # pragma: no cover - live only
@@ -401,12 +381,74 @@ def _id(res, prefix: str) -> str:
     return rid
 
 
+# What the API fills into a stored agent toolset that main's files may leave
+# out (the Managed Agents tools reference): a bare toolset enables every tool
+# with the `always_allow` policy, a `configs` entry inherits what it omits from
+# `default_config`, and each entry's `type` is always returned, equal to its
+# `name`. Only these values are excused; any other difference refuses.
+TOOLSET = "agent_toolset_20260401"
+TOOLSET_DEFAULTS = {"enabled": True, "permission_policy": {"type": "always_allow"}}
+
+
+def _same(a, b) -> bool:
+    """Equal as JSON, so `0` or `1.0` never passes for a boolean. What JSON
+    can't hold refuses."""
+    try:
+        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    except (TypeError, ValueError):
+        return False
+
+
+def _toolset_matches(declared: dict, deployed: dict) -> bool:
+    if set(deployed) - {"type", "default_config", "configs"}:
+        return False
+    got_default = deployed.get("default_config", {})
+    got_configs = deployed.get("configs", [])
+    if not isinstance(got_default, dict) or not isinstance(got_configs, list) \
+            or not all(isinstance(c, dict) and isinstance(c.get("name"), str) for c in got_configs):
+        return False
+    defaults = {**TOOLSET_DEFAULTS, **declared.get("default_config", {})}
+    if not _same({**TOOLSET_DEFAULTS, **got_default}, defaults):
+        return False
+
+    def resolved(configs):
+        """Each entry in full, by name: what it sets over what it inherits. None
+        when two entries name the same tool."""
+        out = {c.get("name"): {**defaults, "type": c.get("name"), **c} for c in configs}
+        return out if len(out) == len(configs) else None
+
+    want, got = resolved(declared.get("configs", [])), resolved(got_configs)
+    if want is None or got is None:
+        return False
+    # A tool only one side lists has the toolset's defaults on the other.
+    return all(_same(want.get(n, {**defaults, "type": n, "name": n}), got.get(n, {**defaults, "type": n, "name": n}))
+               for n in want.keys() | got.keys())
+
+
+def tools_match(declared, deployed) -> bool:
+    """Whether the deployed `tools` are what main declares: the same tools in the
+    same order, each declared value present and equal, and nothing else but the
+    defaults the API fills in (TOOLSET_DEFAULTS, each config's `type`). An added
+    or removed tool, a changed value or an unknown field refuses."""
+    if not isinstance(deployed, list) or len(deployed) != len(declared):
+        return False
+    for want, got in zip(declared, deployed):
+        if not isinstance(got, dict) or got.get("type") != want.get("type"):
+            return False
+        if want.get("type") == TOOLSET:
+            if not _toolset_matches(want, got):
+                return False
+        elif not _same(got, want):
+            return False
+    return True
+
+
 def check_deployed(call, lock: dict, agent: dict) -> None:
     """The deployed agent version must be what main's files render to, or the
     test would certify a prompt or toolset that isn't running."""
     cur = call("GET", f"/v1/agents/{lock['agent_id']}", None) or {}
     if cur.get("version") != lock["agent_version"] or cur.get("system") != agent["system"] \
-            or cur.get("tools") != agent["tools"]:
+            or not tools_match(agent["tools"], cur.get("tools")):
         raise Refusal("the deployed agent differs from main's files; run operator-apply.yml first")
 
 
@@ -480,10 +522,12 @@ def cmd_run(env, deps=None) -> int:
             raise Refusal(f"the injection test has spent ${spend.harness / 100:.2f} of its $50; no session starts")
         helpers = run.create(environment, vault)
         index = {it["id"]: n for n, it in enumerate(items, 1)}
-        jobs = [(it, r) for r in range(1, RUNS + 1) for it in items]  # breadth first: a cap stop still covers every item
+        most = max(it["runs"] for it in items)
+        # Breadth first: a cap stop still covers every item, and the items with more runs go on after the rest.
+        jobs = [(it, r) for r in range(1, most + 1) for it in items if r <= it["runs"]]
         results: dict[str, list] = {it["id"]: [] for it in items}
         print(f"operator-injection: level {level} ({LEVELS[level][0]}, {effort} effort), "
-              f"{len(items)} items x {RUNS} runs")
+              f"{len(items)} items, {len(jobs)} runs")
 
         def job(it, r):
             if run.stop.is_set():
@@ -514,7 +558,7 @@ def cmd_run(env, deps=None) -> int:
         for it in items:
             runs = results[it["id"]]
             passed = sum(1 for s, _ in runs if s == "pass")
-            print(f"operator-injection: {it['id']} ({it['expected']}): {passed}/{RUNS} passed")
+            print(f"operator-injection: {it['id']} ({it['expected']}): {passed}/{it['runs']} passed")
         result = verdict(results)
         print(f"operator-injection: level {level}: {result}; this run spent ${spend.run / 100:.2f}; "
               f"the test has spent ${spend.harness / 100:.2f} of its $50")

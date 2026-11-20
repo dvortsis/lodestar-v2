@@ -61,6 +61,30 @@ fn fake_companion() {
             hang()
         }
         "crash" => std::process::exit(3),
+        // Answers HTTP on 127.0.0.1:`FAKE_PORT`, and exits at `GET /exit`.
+        "serve" => {
+            use std::io::Read;
+            let port: u16 = std::env::var("FAKE_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or_else(|| panic!("FAKE_PORT"));
+            let listener =
+                std::net::TcpListener::bind(("127.0.0.1", port)).unwrap_or_else(|e| panic!("{e}"));
+            let _ = writeln!(out, "READY");
+            let _ = out.flush();
+            for sock in listener.incoming() {
+                let Ok(mut sock) = sock else { continue };
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let _ = sock.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"OK\"}",
+                );
+                if buf[..n].starts_with(b"GET /exit ") {
+                    std::process::exit(9);
+                }
+            }
+            hang()
+        }
         // Starts a grandchild of its own, as FlareSolverr starts a browser.
         "parent" => {
             let child = std::process::Command::new(std::env::current_exe().unwrap_or_default())
@@ -207,6 +231,24 @@ async fn wait_status(
     got.unwrap_or_else(|| panic!("waited for {what}; last saw {:?}", *rx.borrow()))
 }
 
+/// Waits until it has restarted `n` times, or needs attention, and returns
+/// what it saw then. It waits one restart at a time, each with the whole
+/// [`DEADLINE`]: a start costs a process spawn, an fsync and, on Windows, a
+/// PowerShell identity check, so on a loaded host a run of restarts can take
+/// longer than one deadline while each restart still comes. A restart that
+/// never comes still fails within one deadline.
+async fn wait_restarts(rx: &mut watch::Receiver<Status>, n: u32) -> Status {
+    let mut s = *rx.borrow();
+    while s.restarts < n && !matches!(s.state, State::NeedsAttention(_)) {
+        let next = s.restarts + 1;
+        s = wait_status(rx, &format!("restart {next} of {n}"), |s| {
+            s.restarts >= next || matches!(s.state, State::NeedsAttention(_))
+        })
+        .await;
+    }
+    s
+}
+
 async fn wait_line(ring: &LogRing, prefix: &str) -> String {
     let until = Instant::now() + DEADLINE;
     loop {
@@ -295,6 +337,7 @@ async fn crashes_back_off_then_need_attention_until_restarted() {
     let mut rx = sup
         .status(&id("prowlarr"))
         .unwrap_or_else(|| panic!("no status"));
+    wait_restarts(&mut rx, 5).await;
     let s = wait_status(&mut rx, "needs attention", |s| {
         matches!(s.state, State::NeedsAttention(_))
     })
@@ -310,6 +353,9 @@ async fn crashes_back_off_then_need_attention_until_restarted() {
     );
 
     assert!(sup.restart(&id("prowlarr")));
+    // Until the first new crash, the status may still read Needs attention.
+    wait_status(&mut rx, "restart 6", |s| s.restarts >= 6).await;
+    wait_restarts(&mut rx, 10).await;
     let s = wait_status(&mut rx, "a second crash loop", |s| {
         s.restarts == 10 && matches!(s.state, State::NeedsAttention(_))
     })
@@ -333,11 +379,9 @@ async fn crashes_outside_the_window_never_need_attention() {
     let mut rx = sup
         .status(&id("prowlarr"))
         .unwrap_or_else(|| panic!("no status"));
-    let s = wait_status(&mut rx, "eight restarts", |s| {
-        s.restarts >= 8 || matches!(s.state, State::NeedsAttention(_))
-    })
-    .await;
+    let s = wait_restarts(&mut rx, 8).await;
     assert!(!matches!(s.state, State::NeedsAttention(_)), "{s:?}");
+    assert!(s.restarts >= 8, "{s:?}");
     sup.shutdown().await;
 }
 
@@ -816,4 +860,409 @@ fn no_companion_survives_a_killed_work_child() {
         !Path::new(&format!("/proc/{}", rec.pid)).exists(),
         "a companion survived"
     );
+}
+
+/// X-cmp-supervisor-bind, against a real child: a request that carries
+/// something reaches the companion only once the run that's up has been
+/// found ready on 127.0.0.1. When the child dies, such requests are held
+/// at once, and stay held through its restart until the new run is found
+/// ready, though the new child answers. Linux and Windows only: elsewhere
+/// the listener's owner can't be told, so by design no run is ever found
+/// ready (`supervise::listener`), as in
+/// `only_the_childs_own_listener_counts`.
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn credentialed_requests_follow_the_run_found_ready() {
+    use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
+    use lodestar_companions::detect::CompanionHttp;
+    use lodestar_companions::supervise::bind::Bindings;
+
+    let port = {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+        l.local_addr().unwrap_or_else(|e| panic!("{e}")).port()
+    };
+    let port_s = port.to_string();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let bindings = Arc::new(Bindings::new());
+    assert!(bindings.claim(port));
+    sup.add(companion(
+        data.path(),
+        "prowlarr",
+        "serve",
+        &[("FAKE_PORT", &port_s)],
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    bindings.attach(port, rx.clone());
+    let client = CompanionHttp::new()
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .with_bindings(bindings.clone());
+    let target = Target::Loopback(PortNumber::new(port).unwrap_or_else(|e| panic!("{e:?}")));
+    let limits =
+        || ProbeLimits::new(Duration::from_secs(15), 1024).unwrap_or_else(|e| panic!("{e:?}"));
+    let at = |p: &str| RequestPath::parse(p).unwrap_or_else(|e| panic!("{e:?}"));
+    let carrying = || ProbeRequest::new(&target, at("/api"), limits()).post(b"key=x".to_vec());
+    // Supervised's own readiness attempt (`Bindings::try_ready`), with
+    // Prowlarr's real health check on this client, until run `want` is
+    // found ready.
+    let health = lodestar_companions::detect::health(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no prowlarr health check"));
+    let found_ready = |want: u64| {
+        let (client, bindings, target, health) = (&client, &bindings, &target, &health);
+        async move {
+            let until = Instant::now() + DEADLINE;
+            loop {
+                let run = bindings.running_run(port);
+                let check =
+                    || async { health.check(client, target).await == HealthStatus::Healthy };
+                if run == Some(want) && bindings.try_ready(port, check).await {
+                    assert_eq!(bindings.ready_run(port), Some(want));
+                    return;
+                }
+                assert!(
+                    Instant::now() < until,
+                    "run {want} never found ready; {run:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    };
+    wait_status(&mut rx, "the first run", |s| s.up && s.run == 1).await;
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Starting)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    found_ready(1).await;
+    assert_eq!(
+        client.send(carrying()).await.map(|r| r.status()).ok(),
+        Some(200)
+    );
+    // The child exits: held from then on, through its restart.
+    let _ = client
+        .send(ProbeRequest::new(&target, at("/exit"), limits()))
+        .await;
+    wait_status(&mut rx, "the exit seen", |s| !(s.up && s.run == 1)).await;
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Starting)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    wait_status(&mut rx, "the second run", |s| s.up && s.run == 2).await;
+    // The new child answers a bare probe, but nothing that carries
+    // something goes to it before its run is found ready.
+    let until = Instant::now() + DEADLINE;
+    while client
+        .send(ProbeRequest::new(&target, at("/"), limits()))
+        .await
+        .is_err()
+    {
+        assert!(Instant::now() < until, "the second run never listened");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let got = client.send(carrying()).await;
+    assert!(
+        matches!(got, Err(AdapterError::Starting)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    found_ready(2).await;
+    assert_eq!(
+        client.send(carrying()).await.map(|r| r.status()).ok(),
+        Some(200)
+    );
+    sup.shutdown().await;
+    assert!(!bindings.ready(port));
+}
+
+/// The counterpart of `credentialed_requests_follow_the_run_found_ready`
+/// where the listener's owner can't be told (`supervise::listener`): a run
+/// that's up, listening and passing its health check is never found
+/// ready, its refusal says the listener is unverified, and a request that
+/// carries something is held, never sent (the child answers anything with
+/// 200, so a held request is the only way it fails).
+#[cfg(not(any(target_os = "linux", windows)))]
+#[tokio::test(flavor = "multi_thread")]
+async fn credentialed_requests_stay_held_where_the_listener_cant_be_told() {
+    use lodestar_companions::adapter::{Limits as ProbeLimits, RequestPath};
+    use lodestar_companions::detect::CompanionHttp;
+    use lodestar_companions::supervise::bind::Bindings;
+
+    let port = {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+        l.local_addr().unwrap_or_else(|e| panic!("{e}")).port()
+    };
+    let port_s = port.to_string();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let bindings = Arc::new(Bindings::new());
+    assert!(bindings.claim(port));
+    sup.add(companion(
+        data.path(),
+        "prowlarr",
+        "serve",
+        &[("FAKE_PORT", &port_s)],
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    bindings.attach(port, rx.clone());
+    let client = CompanionHttp::new()
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .with_bindings(bindings.clone());
+    let target = Target::Loopback(PortNumber::new(port).unwrap_or_else(|e| panic!("{e:?}")));
+    let limits =
+        || ProbeLimits::new(Duration::from_secs(15), 1024).unwrap_or_else(|e| panic!("{e:?}"));
+    let at = |p: &str| RequestPath::parse(p).unwrap_or_else(|e| panic!("{e:?}"));
+    let health = lodestar_companions::detect::health(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no prowlarr health check"));
+    wait_status(&mut rx, "the first run", |s| s.up && s.run == 1).await;
+    // Readiness attempts, as Supervised makes them, until one's health
+    // check passes and the listener is found unverified.
+    let until = Instant::now() + DEADLINE;
+    loop {
+        let check = || async { health.check(&client, &target).await == HealthStatus::Healthy };
+        assert!(
+            !bindings.try_ready(port, check).await,
+            "found ready, though the listener can't be told"
+        );
+        if bindings.refusal(port) == Some("listener_unverified") {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "never refused as unverified: {:?}",
+            bindings.refusal(port)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!bindings.ready(port));
+    assert_eq!(bindings.ready_run(port), None);
+    // The child answers a bare probe, and a request that carries something
+    // is held all the same: not ready, not "starting", since waiting won't
+    // make an unverified listener its own (X-companion-starting-steps).
+    assert_eq!(
+        client
+            .send(ProbeRequest::new(&target, at("/"), limits()))
+            .await
+            .map(|r| r.status())
+            .ok(),
+        Some(200)
+    );
+    let got = client
+        .send(ProbeRequest::new(&target, at("/api"), limits()).post(b"key=x".to_vec()))
+        .await;
+    assert!(
+        matches!(got, Err(AdapterError::NotReady)),
+        "{:?}",
+        got.map(|r| r.status())
+    );
+    sup.shutdown().await;
+}
+
+/// The supervisor's timings with a stop that takes its whole deadline for a
+/// companion that ignores SIGTERM: long enough to watch the stop happen.
+#[cfg(unix)]
+fn slow_stop() -> Timings {
+    Timings {
+        stop_deadline: Duration::from_secs(3),
+        ..fast()
+    }
+}
+
+/// Waits for the first status `done` accepts, and gives it back.
+#[cfg(unix)]
+fn first(
+    mut rx: watch::Receiver<Status>,
+    done: impl Fn(&Status) -> bool + Send + Sync + 'static,
+) -> tokio::task::JoinHandle<Option<Status>> {
+    tokio::spawn(async move {
+        match tokio::time::timeout(DEADLINE, rx.wait_for(|s| done(s))).await {
+            Ok(Ok(s)) => Some(*s),
+            _ => None,
+        }
+    })
+}
+
+/// X-cmp-supervisor-bind: a child told to stop is no longer up from that
+/// moment, while it's still running out its stop deadline, so nothing
+/// counts it ready meanwhile.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_told_to_stop_is_down_before_it_has_stopped() {
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), slow_stop())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    sup.add(companion(data.path(), "prowlarr", "stubborn", &[]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    wait_line(&ring, "READY").await;
+    wait_status(&mut rx, "up", |s| s.up && s.state == State::Running).await;
+    // The first of: down while still running, or stopped.
+    let seen = first(rx, |s| {
+        (!s.up && s.state == State::Running) || s.state == State::Stopped
+    });
+    sup.shutdown().await;
+    let s = seen.await.unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        s.is_some_and(|s| !s.up && s.state == State::Running),
+        "it counted as up through its stop: {s:?}"
+    );
+}
+
+/// The same for a stop after failed health checks: down from the moment
+/// the supervisor decides to stop it, before the stop's deadline.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_stopped_for_its_health_is_down_before_it_has_stopped() {
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), slow_stop())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let health = Arc::new(FakeHealth {
+        id: id("prowlarr"),
+        healthy: false,
+        calls: AtomicU32::new(0),
+    });
+    let mut c = companion(data.path(), "prowlarr", "stubborn", &[]);
+    c.probe = Some(probe(health));
+    sup.add(c).unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    wait_status(&mut rx, "up", |s| s.up).await;
+    let seen = first(rx, |s| {
+        (!s.up && matches!(s.state, State::Unhealthy { .. })) || s.restarts >= 1
+    });
+    let s = seen.await.unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        s.is_some_and(|s| !s.up && matches!(s.state, State::Unhealthy { .. })),
+        "it counted as up through its health stop: {s:?}"
+    );
+    sup.shutdown().await;
+}
+
+/// A free loopback port, found by binding one and letting it go.
+fn free_port() -> u16 {
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+    l.local_addr().unwrap_or_else(|e| panic!("{e}")).port()
+}
+
+/// X-cmp09-fix: the listener on a port is told by its owner. A child of
+/// ours listening on its port is ours; a listener the test opens isn't,
+/// and a port nobody holds has nobody. A readiness attempt on the test's
+/// listener, though its health check passes, readies nothing.
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_childs_own_listener_counts() {
+    use lodestar_companions::supervise::bind::Bindings;
+    use lodestar_companions::supervise::listener::{Owner, owner};
+
+    let port = free_port();
+    let port_s = port.to_string();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    sup.add(companion(
+        data.path(),
+        "prowlarr",
+        "serve",
+        &[("FAKE_PORT", &port_s)],
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    let s = wait_status(&mut rx, "up", |s| s.up && s.pid.is_some()).await;
+    wait_line(&ring, "READY").await;
+    let pid = s.pid.unwrap_or_else(|| panic!("no pid"));
+    let mine = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+    let other = mine.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    let unused = free_port();
+    let got = tokio::task::spawn_blocking(move || {
+        (owner(port, pid), owner(other, pid), owner(unused, pid))
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(got, (Owner::Ours, Owner::Other, Owner::Nobody));
+    // The child's run, held on the test's port: refused, and why.
+    let bindings = Bindings::new();
+    assert!(bindings.hold(other, rx.clone()));
+    assert!(!bindings.try_ready(other, || async { true }).await);
+    assert!(!bindings.ready(other));
+    assert_eq!(bindings.refusal(other), Some("listener_not_ours"));
+    // On its own port: ready.
+    assert!(bindings.hold(port, rx.clone()));
+    assert!(bindings.try_ready(port, || async { true }).await);
+    drop(mine);
+    sup.shutdown().await;
+}
+
+/// X-cmp09-fix: a companion whose port another program already holds is
+/// never started. It backs off as after a crash and, while the port stays
+/// taken, ends waiting for you with `port_in_use`. Once the port is free
+/// a restart starts it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_port_already_in_use_is_never_started_on() {
+    let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("{e}"));
+    let port = taken.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let health = Arc::new(FakeHealth {
+        id: id("prowlarr"),
+        healthy: true,
+        calls: AtomicU32::new(0),
+    });
+    let mut c = companion(data.path(), "prowlarr", "hang", &[]);
+    c.probe = Some(Probe {
+        health,
+        http: Arc::new(NoHttp),
+        target: Target::Loopback(PortNumber::new(port).unwrap_or_else(|e| panic!("{e:?}"))),
+    });
+    sup.add(c).unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    let s = wait_status(&mut rx, "waiting for you", |s| {
+        matches!(s.state, State::NeedsAttention(_))
+    })
+    .await;
+    assert_eq!(s.state, State::NeedsAttention(Attention::PortInUse));
+    assert_eq!(Attention::PortInUse.code(), "port_in_use");
+    assert_eq!((s.run, s.pid), (0, None), "it was started");
+    assert!(
+        ring.lines().is_empty(),
+        "it was started: {:?}",
+        ring.lines()
+    );
+    drop(taken);
+    assert!(sup.restart(&id("prowlarr")));
+    wait_status(&mut rx, "started", |s| s.up && s.run == 1).await;
+    wait_line(&ring, "READY").await;
+    sup.shutdown().await;
 }

@@ -185,6 +185,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Fetches whose deadline ran out while they waited for a reservation.",
         get(&p.reserve_timeouts),
     );
+    o.one(
+        "fetch_late_room_timeouts_total",
+        "counter",
+        "Fetches that timed out after their room came late, not charged to the peer.",
+        get(&p.late_waits),
+    );
     for (name, value) in [
         ("fetch_finder_full_total", &p.finder_full),
         ("fetch_finder_closed_total", &p.finder_closed),
@@ -312,6 +318,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Stored torrents enriched in the background (§6).",
         get(&w.enriched),
     );
+    render_core_rejudge(&mut o, w);
     o.one(
         "writer_last_commit_seconds",
         "gauge",
@@ -454,24 +461,14 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     );
 
     if let Some(d) = dht {
-        o.one(
-            "dht_routing_nodes",
-            "gauge",
-            "Nodes in the routing tables.",
-            d.routing_nodes,
-        );
+        render_routing(&mut o, d);
         o.one(
             "dht_outstanding",
             "gauge",
             "Queries awaiting a reply.",
             d.outstanding,
         );
-        o.one(
-            "dht_reply_ratio",
-            "gauge",
-            "Responses per query sent (collapses under NAT saturation).",
-            d.reply_ratio(),
-        );
+        render_reply_ratio(&mut o, d);
         o.one(
             "dht_packets_in_total",
             "counter",
@@ -574,6 +571,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         }
         render_permit_returns(&mut o, d);
         render_hints(&mut o, d);
+        render_ledger(&mut o, d);
         render_stream_dht(&mut o, d);
         render_target_prefixes(&mut o, d);
         o.one(
@@ -713,6 +711,24 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         );
     }
     o.0
+}
+
+/// The core re-judge's stalled ranges (X-rejudge-stall), as the writer
+/// last set them.
+fn render_core_rejudge(o: &mut Out, w: &lodestar_pipeline::WriterStats) {
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    o.one(
+        "core_rejudge_stalled_ranges",
+        "gauge",
+        "Ranges of stored torrents the core re-judge skipped because most wouldn't read, still to judge again.",
+        get(&w.core_stalled_ranges),
+    );
+    o.one(
+        "core_rejudge_stalled_rows",
+        "gauge",
+        "Stored torrents in the core re-judge's skipped ranges.",
+        get(&w.core_stalled_rows),
+    );
 }
 
 /// Each running plugin's egress and kill switch (SRC-5, `docs/metrics.md`
@@ -1182,6 +1198,36 @@ fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
     );
 }
 
+/// The routing tables' size, and how much of it is good: a node that
+/// stops answering keeps its slot, so only the second shows a network
+/// that has gone (X-routing-table-metric).
+fn render_routing(o: &mut Out, d: &StatsSnapshot) {
+    o.one(
+        "dht_routing_nodes",
+        "gauge",
+        "Nodes in the routing tables.",
+        d.routing_nodes,
+    );
+    o.one(
+        "dht_routing_good_nodes",
+        "gauge",
+        "Routing-table nodes good by BEP 5: answered us within 15 minutes, or answered before and queried us within 15 minutes.",
+        d.routing_good_nodes,
+    );
+}
+
+/// `dht_reply_ratio`, left out until a query has resolved: unknown, not 0.
+fn render_reply_ratio(o: &mut Out, d: &StatsSnapshot) {
+    if let Some(ratio) = d.reply_ratio() {
+        o.one(
+            "dht_reply_ratio",
+            "gauge",
+            "Share of resolved queries answered: queries answered over those plus timeouts (collapses under NAT saturation).",
+            ratio,
+        );
+    }
+}
+
 /// CR-1a-S's streaming families on the DHT's side (docs/metrics.md).
 fn render_stream_dht(o: &mut Out, d: &StatsSnapshot) {
     o.one(
@@ -1242,6 +1288,112 @@ fn render_permit_returns(o: &mut Out, d: &StatsSnapshot) {
             d.peer_permit_returns[i],
         );
     }
+}
+
+/// CR-LEDGER's lookup ledger (docs/metrics.md, "Lookup ledger").
+fn render_ledger(o: &mut Out, d: &StatsSnapshot) {
+    use lodestar_dht::node::{HintOutcome, LedgerEnd, QueryPurpose};
+    let l = &d.ledger;
+    let secs = |ms: u64| format!("{:.3}", ms as f64 / 1000.0);
+    o.family(
+        "dht_lookup_ended_total",
+        "counter",
+        "Peer requests ended, by why they ended.",
+    );
+    for (i, why) in LedgerEnd::ALL.iter().enumerate() {
+        o.value(
+            "dht_lookup_ended_total",
+            &format!("reason=\"{}\"", why.as_str()),
+            l.ended[i],
+        );
+    }
+    o.family(
+        "dht_lookup_residence_seconds_total",
+        "counter",
+        "Slot residence of ended peer requests, start to end, by why they ended.",
+    );
+    for (i, why) in LedgerEnd::ALL.iter().enumerate() {
+        o.value(
+            "dht_lookup_residence_seconds_total",
+            &format!("reason=\"{}\"", why.as_str()),
+            secs(l.residence_millis[i]),
+        );
+    }
+    o.family(
+        "dht_queries_sent_total",
+        "counter",
+        "DHT queries sent, by purpose; they sum to dht_queries_out_total.",
+    );
+    for (i, purpose) in QueryPurpose::ALL.iter().enumerate() {
+        o.value(
+            "dht_queries_sent_total",
+            &format!("purpose=\"{}\"", purpose.as_str()),
+            l.queries[i],
+        );
+    }
+    let name = "dht_lookup_first_values_seconds";
+    o.family(
+        name,
+        "histogram",
+        "Ended peer requests that got values: seconds from start to the first.",
+    );
+    let h = &l.first_values;
+    for (le, n) in lodestar_dht::node::FIRST_VALUES_MS.iter().zip(h.cumulative) {
+        let le = *le as f64 / 1000.0;
+        o.value(&format!("{name}_bucket"), &format!("le=\"{le}\""), n);
+    }
+    o.value(&format!("{name}_bucket"), "le=\"+Inf\"", h.count);
+    o.value(&format!("{name}_sum"), "", secs(h.sum));
+    o.value(&format!("{name}_count"), "", h.count);
+    o.one(
+        "dht_lookup_without_values_total",
+        "counter",
+        "Ended peer requests that never got values.",
+        l.without_values,
+    );
+    let name = "dht_lookup_values";
+    o.family(
+        name,
+        "histogram",
+        "Distinct peer values each ended peer request found (at most 64).",
+    );
+    let h = &l.values;
+    for (le, n) in lodestar_dht::node::VALUES_BUCKETS.iter().zip(h.cumulative) {
+        o.value(&format!("{name}_bucket"), &format!("le=\"{le}\""), n);
+    }
+    o.value(&format!("{name}_bucket"), "le=\"+Inf\"", h.count);
+    o.value(&format!("{name}_sum"), "", h.sum);
+    o.value(&format!("{name}_count"), "", h.count);
+    o.family(
+        "dht_hint_outcomes_total",
+        "counter",
+        "Responder hints, by outcome.",
+    );
+    for (i, outcome) in HintOutcome::ALL.iter().enumerate() {
+        o.value(
+            "dht_hint_outcomes_total",
+            &format!("outcome=\"{}\"", outcome.as_str()),
+            l.hint_outcomes[i],
+        );
+    }
+    o.one(
+        "dht_lookup_slots_occupied",
+        "gauge",
+        "Occupied lookup slots: running peer requests, never queued ones, as of the last tick.",
+        l.slots_occupied,
+    );
+    o.one(
+        "dht_lookup_queued",
+        "gauge",
+        "Admitted peer requests waiting in the queue to start, as of the last tick.",
+        l.queued,
+    );
+    o.one(
+        "dht_lookup_slots_capacity",
+        "gauge",
+        "Peer request slots.",
+        l.slots_capacity,
+    );
 }
 
 /// CR-1a-H's responder-hint families (docs/metrics.md).
@@ -1732,6 +1884,7 @@ mod tests {
             "fetch_held_full_total",
             "fetch_reserved_bytes",
             "fetch_reserve_timeouts_total",
+            "fetch_late_room_timeouts_total",
         ] {
             let row = format!("| `{family}`");
             assert!(
@@ -1809,6 +1962,24 @@ mod tests {
     }
 
     #[test]
+    fn core_rejudge_stalled_gauges_render_their_values() {
+        let w = lodestar_pipeline::WriterStats::default();
+        w.core_stalled_ranges.store(3, Ordering::Relaxed);
+        w.core_stalled_rows.store(70, Ordering::Relaxed);
+        let mut o = Out(String::new());
+        render_core_rejudge(&mut o, &w);
+        let out = o.0;
+        for line in [
+            "# TYPE lodestar_core_rejudge_stalled_ranges gauge",
+            "lodestar_core_rejudge_stalled_ranges 3",
+            "# TYPE lodestar_core_rejudge_stalled_rows gauge",
+            "lodestar_core_rejudge_stalled_rows 70",
+        ] {
+            assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
+        }
+    }
+
+    #[test]
     fn hot_column_gauges_render_on_their_own() {
         // With scraping off there's no health handle, but the columns
         // (last seen, search) are still held, so their size still shows.
@@ -1821,6 +1992,58 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
+
+    #[test]
+    fn the_routing_gauges_render_and_are_documented() {
+        let d = StatsSnapshot {
+            routing_nodes: 143,
+            routing_good_nodes: 0,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_routing(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_routing_nodes gauge\n",
+            "lodestar_dht_routing_nodes 143\n",
+            "# TYPE lodestar_dht_routing_good_nodes gauge\n",
+            // 0 is a value, not left out: a full table with none good.
+            "lodestar_dht_routing_good_nodes 0\n",
+        ] {
+            assert!(o.0.contains(line), "{line:?} in {}", o.0);
+        }
+        let doc = include_str!("../../../docs/metrics.md");
+        for family in ["dht_routing_nodes", "dht_routing_good_nodes"] {
+            let row = format!("| `{family}`");
+            assert!(
+                doc.lines().any(|l| l.starts_with(&row)),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
+    }
+
+    /// No series until a query has resolved; then the answered share.
+    #[test]
+    fn the_reply_ratio_is_left_out_until_a_query_resolves() {
+        let mut o = Out(String::new());
+        render_reply_ratio(&mut o, &StatsSnapshot::default());
+        assert!(!o.0.contains("dht_reply_ratio"), "{}", o.0);
+
+        let d = StatsSnapshot {
+            queries_out: 10,
+            answered: 3,
+            timeouts: 1,
+            outstanding: 6,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_reply_ratio(&mut o, &d);
+        assert!(
+            o.0.contains("# TYPE lodestar_dht_reply_ratio gauge\n"),
+            "{}",
+            o.0
+        );
+        assert!(o.0.contains("lodestar_dht_reply_ratio 0.75\n"), "{}", o.0);
     }
 
     #[test]
@@ -1872,6 +2095,108 @@ mod tests {
                 .count(),
             7
         );
+    }
+
+    #[test]
+    fn the_lookup_ledger_renders_every_series_with_fixed_labels() {
+        use lodestar_dht::node::{
+            FIRST_VALUES_MS, HintOutcome, HistogramSnapshot, LedgerEnd, QueryPurpose,
+            VALUES_BUCKETS,
+        };
+        let mut d = StatsSnapshot::default();
+        let l = &mut d.ledger;
+        l.ended[LedgerEnd::Deadline as usize] = 3;
+        l.residence_millis[LedgerEnd::Deadline as usize] = 75_000;
+        l.ended[LedgerEnd::Values as usize] = 2;
+        l.queries[QueryPurpose::Hint as usize] = 4;
+        l.first_values = HistogramSnapshot {
+            bounds: FIRST_VALUES_MS,
+            cumulative: [0, 1, 1, 1, 1, 1, 1, 1, 2],
+            count: 2,
+            sum: 21_000,
+        };
+        l.without_values = 3;
+        l.values = HistogramSnapshot {
+            bounds: VALUES_BUCKETS,
+            cumulative: [3, 3, 3, 4, 4, 4, 4, 5],
+            count: 5,
+            sum: 70,
+        };
+        l.hint_outcomes[HintOutcome::GuardSkipped as usize] = 6;
+        l.slots_occupied = 7;
+        l.queued = 2;
+        l.slots_capacity = 32;
+        let mut o = Out(String::new());
+        render_ledger(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_lookup_ended_total counter",
+            "lodestar_dht_lookup_ended_total{reason=\"deadline\"} 3",
+            "lodestar_dht_lookup_ended_total{reason=\"values\"} 2",
+            "lodestar_dht_lookup_ended_total{reason=\"shutdown\"} 0",
+            "lodestar_dht_lookup_residence_seconds_total{reason=\"deadline\"} 75.000",
+            "lodestar_dht_lookup_residence_seconds_total{reason=\"query_cap\"} 0.000",
+            "lodestar_dht_queries_sent_total{purpose=\"hint\"} 4",
+            "lodestar_dht_queries_sent_total{purpose=\"peer_lookup\"} 0",
+            "# TYPE lodestar_dht_lookup_first_values_seconds histogram",
+            "lodestar_dht_lookup_first_values_seconds_bucket{le=\"0.5\"} 0",
+            "lodestar_dht_lookup_first_values_seconds_bucket{le=\"1\"} 1",
+            "lodestar_dht_lookup_first_values_seconds_bucket{le=\"25\"} 2",
+            "lodestar_dht_lookup_first_values_seconds_bucket{le=\"+Inf\"} 2",
+            "lodestar_dht_lookup_first_values_seconds_sum 21.000",
+            "lodestar_dht_lookup_first_values_seconds_count 2",
+            "lodestar_dht_lookup_without_values_total 3",
+            "# TYPE lodestar_dht_lookup_values histogram",
+            "lodestar_dht_lookup_values_bucket{le=\"0\"} 3",
+            "lodestar_dht_lookup_values_bucket{le=\"64\"} 5",
+            "lodestar_dht_lookup_values_bucket{le=\"+Inf\"} 5",
+            "lodestar_dht_lookup_values_sum 70",
+            "lodestar_dht_lookup_values_count 5",
+            "lodestar_dht_hint_outcomes_total{outcome=\"guard_skipped\"} 6",
+            "lodestar_dht_hint_outcomes_total{outcome=\"unanswered\"} 0",
+            "# TYPE lodestar_dht_lookup_slots_occupied gauge",
+            "lodestar_dht_lookup_slots_occupied 7",
+            "# TYPE lodestar_dht_lookup_queued gauge",
+            "lodestar_dht_lookup_queued 2",
+            "lodestar_dht_lookup_slots_capacity 32",
+        ] {
+            assert!(
+                o.0.lines().any(|l| l == line),
+                "missing {line:?} in\n{}",
+                o.0
+            );
+        }
+        let count = |p: &str| o.0.lines().filter(|l| l.starts_with(p)).count();
+        assert_eq!(
+            count("lodestar_dht_lookup_ended_total{"),
+            LedgerEnd::ALL.len()
+        );
+        assert_eq!(
+            count("lodestar_dht_queries_sent_total{"),
+            QueryPurpose::ALL.len()
+        );
+        assert_eq!(
+            count("lodestar_dht_hint_outcomes_total{"),
+            HintOutcome::ALL.len()
+        );
+        assert_eq!(
+            count("lodestar_dht_lookup_first_values_seconds_bucket{"),
+            FIRST_VALUES_MS.len() + 1
+        );
+        // Each family it renders has its row in docs/metrics.md.
+        let doc = include_str!("../../../docs/metrics.md");
+        let families: Vec<_> =
+            o.0.lines()
+                .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
+                .filter_map(|l| l.split(' ').next())
+                .collect();
+        assert_eq!(families.len(), 10);
+        for family in families {
+            let row = format!("| `{family}");
+            assert!(
+                doc.lines().any(|l| l.starts_with(&row)),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
     }
 
     #[test]

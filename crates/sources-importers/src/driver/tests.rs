@@ -100,6 +100,7 @@ fn opts<'a>(source: SourceId, engine: &'a Engine, stop: &'a AtomicBool) -> Optio
         limit: None,
         now,
         progress: None,
+        threads: 0,
     }
 }
 
@@ -549,6 +550,102 @@ fn rules_judge_names_and_candidates_as_at_ingest() {
     assert!(store.import_quality(stored(5).unwrap()).unwrap().is_some());
 }
 
+/// X-import-rate-1m: the same source imported with one thread and with four
+/// leaves the same store. The 1,200 records include, across the batches:
+/// - your drop, quarantine and flag rules;
+/// - a hash on the floor;
+/// - records an always-adult source claims, some of which only the adult
+///   reading holds.
+///
+/// The rows, filter hits, tombstones, quarantine (less its sealed bytes,
+/// whose nonces are random), provenance and counters all match.
+#[test]
+fn one_thread_and_four_import_the_same() {
+    use lodestar_filter::{Action, Sealer};
+    let dir = tempfile::tempdir().unwrap();
+    let rows: Vec<TorrentRow> = (1..=ROWS)
+        .map(|i| match i % 50 {
+            7 => named(i, &format!("alpha dropme {i}")),
+            13 => named(i, &format!("beta quarantineme {i}")),
+            21 => named(i, &format!("gamma flagme {i}")),
+            33 => named(i, SPREAD),
+            _ => TorrentRow::good(i, &[("d/a", i64::from(i)), ("d/b", 4)]),
+        })
+        .collect();
+    let path = fixture(dir.path(), "a.sqlite3", &rows);
+    let sealer = Sealer::new(&[7; 32]);
+    let import = |threads: usize| {
+        let (mut store, source) = mem();
+        let (adult, _) = adult_source(&mut store);
+        // Every SPREAD record (held only on the adult reading) and a few
+        // plain ones are claimed.
+        for i in (33..=ROWS).step_by(50).chain([2, 300, 1_150]) {
+            claim(&mut store, adult, i);
+        }
+        for (word, action) in [
+            ("dropme", Action::Drop),
+            ("quarantineme", Action::Quarantine),
+            ("flagme", Action::Flag),
+        ] {
+            store.add_rule(word, action.code(), None, None).unwrap();
+        }
+        let mut engine = stand_in();
+        assert!(engine.load_rules(&store.rule_set().unwrap()).is_empty());
+        engine.core.cs.add_hash(hash(400), Origin::Confirmed);
+        let stop = AtomicBool::new(false);
+        let mut a = adapter(&path);
+        let id = create(&mut store, &a);
+        let mut o = opts(source, &engine, &stop);
+        o.filter.sealer = Some(&sealer);
+        o.threads = threads;
+        let r = block_on(run(&mut store, id, &mut a, &o)).unwrap();
+        assert_eq!(r.ended, Ended::Exhausted);
+        (r.counters, dump(&store))
+    };
+    let (one, rows_one) = import(1);
+    let (four, rows_four) = import(4);
+    assert_eq!(one, four);
+    assert!(
+        one.filtered > 0 && one.quarantined > 0 && one.new > 0,
+        "the fixture exercises the filter: {one:?}"
+    );
+    assert_eq!(rows_one.len(), rows_four.len());
+    for (a, b) in rows_one.iter().zip(&rows_four) {
+        assert_eq!(a, b);
+    }
+}
+
+/// Every row an import writes, as text, in a stable order, less the
+/// quarantine's sealed bytes.
+fn dump(store: &Store) -> Vec<String> {
+    let mut out = provenance_rows(store);
+    for sql in [
+        "SELECT id || '|' || hex(info_hash) || '|' || hex(name) || '|' || size || '|' || flags
+             || '|' || coalesce(content_type, '') || '|' || coalesce(junk_score, '')
+             || '|' || coalesce(hex(comp), '') || '|' || sources || '|' || discovered_at
+         FROM torrents ORDER BY id",
+        "SELECT torrent_id || '|' || codec || '|' || coalesce(dict_id, '') || '|' || hex(data)
+         FROM torrent_files ORDER BY torrent_id",
+        "SELECT torrent_id || '|' || parser_ver || '|' || hex(data) FROM torrent_parsed
+         ORDER BY torrent_id",
+        "SELECT hex(hash) || '|' || hex(rule) || '|' || action || '|' || at || '|'
+             || coalesce(hex(evidence), '')
+         FROM filter_hits ORDER BY id",
+        "SELECT hex(hash) || '|' || hex(rule) || '|' || at FROM tombstones ORDER BY hash",
+        "SELECT hex(hash) || '|' || hex(rule) || '|' || at || '|' || expires_at
+             || '|' || (sealed IS NOT NULL)
+         FROM quarantine ORDER BY hash",
+    ] {
+        let mut stmt = store.connection().prepare(sql).unwrap();
+        out.extend(
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap),
+        );
+    }
+    out
+}
+
 /// Changes made elsewhere between batches: a job paused by another
 /// connection commits nothing more, and a source written mid-import
 /// blocks the job, each with exactly the committed batches kept.
@@ -609,6 +706,44 @@ fn changes_between_batches_stop_the_run_truthfully() {
     assert!(j.counters.conserved());
 }
 
+/// X-import-rate-1m: a batch prepared on several threads gives exactly
+/// the rows one preparer gives, record for record and in order.
+#[test]
+fn preparing_on_several_threads_matches_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let rows: Vec<TorrentRow> = (1..=300u32)
+        .map(|i| {
+            let files: Vec<(String, i64)> = (0..(i % 7 + 1))
+                .map(|f| (format!("d{}/f{f}.bin", i % 5), i64::from(f + 1) * 1000))
+                .collect();
+            let files: Vec<(&str, i64)> = files.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+            TorrentRow::good(i, &files)
+        })
+        .collect();
+    let path = fixture(dir.path(), "p.sqlite3", &rows);
+    let mut a = adapter(&path);
+    let batch = block_on(a.read(&[], NOW)).unwrap().unwrap();
+    assert!(
+        batch.records.len() >= MIN_PARALLEL_RECORDS,
+        "{}",
+        batch.records.len()
+    );
+    let (store, _) = mem();
+    let shown = |v: Vec<Option<(lodestar_metainfo::Info, Result<Prepared, Error>)>>| {
+        v.into_iter()
+            .map(|r| r.map(|(info, p)| (info.name.raw, p.map_err(|e| e.to_string()))))
+            .collect::<Vec<_>>()
+    };
+    let one = shown(prepare_all(&mut [store.preparer()], &batch.records));
+    let mut four: Vec<Preparer> = (0..4).map(|_| store.preparer()).collect();
+    let many = shown(prepare_all(&mut four, &batch.records));
+    assert_eq!(one.len(), batch.records.len());
+    assert_eq!(one, many);
+    // Preparers keep no state between batches: the same batch again
+    // gives the same rows.
+    assert_eq!(shown(prepare_all(&mut four, &batch.records)), many);
+}
+
 /// The pilots' pass line (IMP-4b decisions file): 100,000 synthetic
 /// Magnetico torrents, three files each, into a file-backed store through
 /// the full filter. Run it in release, on its own:
@@ -643,6 +778,10 @@ fn throughput_on_a_synthetic_100k_source() {
     let stop = AtomicBool::new(false);
     let mut a = adapter(&path);
     let id = create(&mut store, &a);
+    // As the offline CLI runs it.
+    store
+        .set_bulk_writes(Some(lodestar_store::BULK_CACHE_MIB))
+        .unwrap();
     let started = std::time::Instant::now();
     let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
     let secs = started.elapsed().as_secs_f64();

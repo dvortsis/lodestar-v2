@@ -900,7 +900,8 @@ async fn a_full_table_commits_within_the_budget() {
     r.tick();
     let now = Instant::now();
     for i in 0..restart::MAX_ENTRIES as u32 {
-        let a = SocketAddr::from((i.to_be_bytes(), 6881));
+        // One address per /24, inside every block's share.
+        let a = SocketAddr::from(((i << 8).to_be_bytes(), 6881));
         assert!(r.sampler.reserve(a, u64::from(i) + 1, now));
         assert!(
             r.sampler

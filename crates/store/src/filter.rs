@@ -104,6 +104,277 @@ pub(crate) fn kept_hold_sql(col: &str) -> String {
     )
 }
 
+/// The core version the stored torrents were judged by (the filter's
+/// `CORE_VERSION`), with [`CORE_SEEN_KEY`]: every torrent up to that id
+/// was judged by this version or a newer one. A store without it was
+/// judged by version 1.
+pub const CORE_JUDGED_KEY: &str = "filter.core.judged";
+/// The highest torrent id a build that keeps the marker has seen judged.
+/// A torrent above it was stored by a build that doesn't (an older one),
+/// so its judgment isn't known: it's judged again.
+pub const CORE_SEEN_KEY: &str = "filter.core.seen";
+/// A core re-judge under way: the version it judges by...
+pub const CORE_PASS_KEY: &str = "filter.core.pass";
+/// ...the last torrent id it finished, so a restart resumes there...
+pub const CORE_AFTER_KEY: &str = "filter.core.after";
+/// ...its phase and where it started (the second phase starts there)...
+pub const CORE_PHASE_KEY: &str = "filter.core.phase";
+pub const CORE_START_KEY: &str = "filter.core.start";
+/// ...and its totals so far ([`CorePass`]).
+pub const CORE_FOUND_KEY: &str = "filter.core.found";
+pub const CORE_HELD_KEY: &str = "filter.core.held";
+pub const CORE_UNREADABLE_KEY: &str = "filter.core.unreadable";
+
+/// How big a stored file list [`Store::files_bounded`] reads.
+#[derive(Debug, Clone, Copy)]
+pub struct FilesBound {
+    /// Files, and directories.
+    pub files: usize,
+    /// Bytes of every path, summed, as decoding would copy them.
+    pub path_bytes: u64,
+    /// Path segments, summed.
+    pub segments: u64,
+    /// Bytes the list may decompress to.
+    pub raw_bytes: usize,
+}
+
+/// A core re-judge's place and totals: counts only, no names or hashes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CorePass {
+    /// 1: the torrents it judges first; 2: every other.
+    pub phase: i64,
+    /// The id it started after, where its second phase starts too.
+    pub start: i64,
+    /// The last torrent id it finished in this phase.
+    pub after: i64,
+    /// Torrents judged again, in either phase.
+    pub found: i64,
+    /// Of those, held back (dropped or quarantined)...
+    pub held: i64,
+    /// ...and of those, held because they couldn't be judged at all.
+    pub unreadable: i64,
+}
+
+impl CorePass {
+    /// A new pass after torrent id `start`, in its first phase.
+    pub fn starting(start: i64) -> CorePass {
+        CorePass {
+            phase: 1,
+            start,
+            after: start,
+            ..CorePass::default()
+        }
+    }
+}
+
+const CORE_PASS_KEYS: [&str; 7] = [
+    CORE_PASS_KEY,
+    CORE_PHASE_KEY,
+    CORE_START_KEY,
+    CORE_AFTER_KEY,
+    CORE_FOUND_KEY,
+    CORE_HELD_KEY,
+    CORE_UNREADABLE_KEY,
+];
+
+fn put_setting(tx: &Transaction<'_>, key: &str, value: i64) -> Result<()> {
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn max_id(tx: &Transaction<'_>) -> Result<i64> {
+    Ok(
+        tx.query_row("SELECT coalesce(max(id), 0) FROM torrents", [], |r| {
+            r.get(0)
+        })?,
+    )
+}
+
+impl Store {
+    /// Where a core re-judge to `version` stands: its place and totals (a
+    /// new pass's are zero), or `None` when every stored torrent was judged
+    /// by `version` or a newer core. A store judged by an older one is
+    /// judged again from the start; one judged by `version` only above
+    /// [`CORE_SEEN_KEY`] (stored since by an older build). A store judged
+    /// by a newer core has its marker lowered to `version` first (a
+    /// downgrade), so a later upgrade judges again what this one stores.
+    pub fn core_rejudge_due(&mut self, version: i64) -> Result<Option<CorePass>> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let get = |key: &str| -> Result<Option<i64>> {
+            Ok(tx
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                    r.get(0)
+                })
+                .optional()?)
+        };
+        let judged = get(CORE_JUDGED_KEY)?.unwrap_or(1);
+        if judged > version {
+            put_setting(&tx, CORE_JUDGED_KEY, version)?;
+        }
+        let due = if get(CORE_PASS_KEY)? == Some(version) {
+            // A pass under way: on from its place.
+            Some(CorePass {
+                phase: get(CORE_PHASE_KEY)?.unwrap_or(1),
+                start: get(CORE_START_KEY)?.unwrap_or(0),
+                after: get(CORE_AFTER_KEY)?.unwrap_or(0),
+                found: get(CORE_FOUND_KEY)?.unwrap_or(0),
+                held: get(CORE_HELD_KEY)?.unwrap_or(0),
+                unreadable: get(CORE_UNREADABLE_KEY)?.unwrap_or(0),
+            })
+        } else if judged < version {
+            Some(CorePass::starting(0))
+        } else {
+            let seen = get(CORE_SEEN_KEY)?.unwrap_or(0);
+            (max_id(&tx)? > seen).then_some(CorePass::starting(seen))
+        };
+        tx.commit()?;
+        Ok(due)
+    }
+
+    /// Records a core re-judge to `version` as `pass` says: every torrent
+    /// up to id `pass.after` finished, with these totals.
+    pub fn set_core_rejudge(&mut self, version: i64, pass: &CorePass) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let values = [
+            version,
+            pass.phase,
+            pass.start,
+            pass.after,
+            pass.found,
+            pass.held,
+            pass.unreadable,
+        ];
+        for (key, value) in CORE_PASS_KEYS.into_iter().zip(values) {
+            put_setting(&tx, key, value)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that every stored torrent was judged by `version`, up to
+    /// the highest id stored now, and the pass's place and totals go.
+    pub fn finish_core_rejudge(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        put_setting(&tx, CORE_JUDGED_KEY, version)?;
+        let seen = max_id(&tx)?;
+        put_setting(&tx, CORE_SEEN_KEY, seen)?;
+        for key in CORE_PASS_KEYS {
+            tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that this build judged every torrent stored now by
+    /// `version`: moves [`CORE_SEEN_KEY`] up to the highest id. Only when
+    /// the store is judged by `version` and no pass is under way, so it
+    /// never covers a torrent an older build stored.
+    pub fn advance_core_seen(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        tx.execute(
+            "UPDATE settings SET value = max(value, (SELECT coalesce(max(id), 0) FROM torrents))
+             WHERE key = ?1
+               AND EXISTS (SELECT 1 FROM settings WHERE key = ?2 AND value = ?3)
+               AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?4)",
+            params![CORE_SEEN_KEY, CORE_JUDGED_KEY, version, CORE_PASS_KEY],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks an empty store as judged by `version` when it records no
+    /// core version yet: whatever this build stores next, it judges.
+    pub fn seed_core_marker(&mut self, version: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let marked: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM settings WHERE key = ?1)
+                 OR EXISTS (SELECT 1 FROM torrents)",
+            [CORE_JUDGED_KEY],
+            |r| r.get(0),
+        )?;
+        if !marked {
+            put_setting(&tx, CORE_JUDGED_KEY, version)?;
+            put_setting(&tx, CORE_SEEN_KEY, 0)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Stored torrent `id`'s file list, or a [`Error::Corrupt`] refusal
+    /// when it's bigger than `bound` allows: its shape is read before
+    /// anything is decoded, and its decompressed size is capped, so no
+    /// stored list can make the read allocate more than `bound` says.
+    /// [`Store::files`] stays as it is.
+    pub fn files_bounded(
+        &mut self,
+        id: i64,
+        bound: &FilesBound,
+    ) -> Result<Option<crate::FileTree>> {
+        // Its size first, so a blob past the bound is never read.
+        let size: Option<i64> = self
+            .conn
+            .prepare_cached("SELECT length(data) FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| r.get(0))
+            .optional()?;
+        let Some(size) = size else {
+            return Ok(None);
+        };
+        if usize::try_from(size).map_or(true, |n| n > bound.raw_bytes) {
+            return Err(Error::Corrupt("file list over the bound"));
+        }
+        let (codec, dict_id, data): (i64, Option<i64>, Vec<u8>) = self
+            .conn
+            .prepare_cached("SELECT codec, dict_id, data FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let codec = crate::Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
+        let raw = self
+            .codec
+            .decompress_capped(codec, dict_id, &data, bound.raw_bytes)?;
+        let shape = crate::filetree::shape(&raw, bound.files, bound.files)?;
+        crate::within_path_limits(&shape)?;
+        if shape.path_bytes > bound.path_bytes || shape.components > bound.segments {
+            return Err(Error::Corrupt("file list over the bound"));
+        }
+        Ok(Some(crate::filetree::decode(&raw)?))
+    }
+
+    /// A stored torrent's swarm hashes as stored, read raw: for one whose
+    /// row won't decode, so it can still be held. A hash of the wrong
+    /// length is left out.
+    pub fn raw_hashes(&self, id: i64) -> Result<Vec<[u8; 20]>> {
+        // The two hash columns, either one unreadable.
+        type Hashes = (Option<Vec<u8>>, Option<Vec<u8>>);
+        let row: Option<Hashes> = self
+            .conn
+            .query_row(
+                "SELECT CAST(info_hash AS BLOB), CAST(info_hash_v2 AS BLOB) FROM torrents
+                 WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((v1, v2)) = row else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        if let Some(h) = v1.and_then(|h| <[u8; 20]>::try_from(h.as_slice()).ok()) {
+            out.push(h);
+        }
+        // A v2 hash's swarm hash is its first 20 bytes.
+        let truncated = v2
+            .filter(|h| h.len() == 32)
+            .and_then(|h| <[u8; 20]>::try_from(&h[..20]).ok());
+        if let Some(h) = truncated.filter(|h| !out.contains(h)) {
+            out.push(h);
+        }
+        Ok(out)
+    }
+}
+
 /// Whether a stored rule is one of [`KEPT_RULES`], with or without a
 /// suffix: [`kept_hold_sql`] in Rust. Only [`Store::release`] lifts such a
 /// hold, never a release by rule or a batch.
@@ -115,10 +386,11 @@ pub fn is_kept_hold(rule: &str) -> bool {
 
 /// The stored rule of a floor drop a remote worker reported (WK-10d),
 /// followed by the worker's id: `worker-floor:7`. Such a row is a floor
-/// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
-/// replaces it, a rollback keeps it over a weaker hold, and no release
-/// removes it. The only way out is WK-13's purge-by-worker, which deletes
-/// a removed worker's rows by rule.
+/// hold ([`is_floor_hold`]) that no release removes, but it gives way to
+/// any other hold written over it (a filter rule, an expired adult hold),
+/// so the key stays held past its expiry. Otherwise it goes only when it
+/// expires ([`Store::expire_worker_floor`]) or its worker is revoked
+/// ([`Store::purge_worker_floor`]).
 pub const WORKER_FLOOR_PREFIX: &str = "worker-floor:";
 
 /// Whether a stored tombstone rule is a floor hold: the locked floor's
@@ -232,22 +504,30 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
     let mut hit = tx.prepare_cached(
         "INSERT INTO filter_hits (hash, rule, action, at, evidence) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    // As before, a later hold replaces an earlier one (and the insert
-    // triggers fire), except over a worker's floor report, which only a
-    // local floor rule may take over (#604's review): otherwise a weaker
-    // rule there could later be released and free the hash.
-    let mut tomb = tx.prepare_cached(&format!(
-        "INSERT OR REPLACE INTO tombstones (hash, rule, at)
-         SELECT ?1, ?2, ?3 WHERE {} OR NOT EXISTS (
-             SELECT 1 FROM tombstones WHERE hash = ?1 AND {}
-         )",
-        local_floor_sql("?2"),
-        worker_floor_sql("rule")
-    ))?;
-    let mut quarantine = tx.prepare_cached(
+    // A later hold replaces an earlier one (and the insert triggers
+    // fire). A worker's floor report gives way to any rule here: it lasts
+    // only its hold time, so the key stays held under a rule that doesn't
+    // expire (X-sec-S6-02-03 part 2b).
+    let mut tomb = tx
+        .prepare_cached("INSERT OR REPLACE INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)")?;
+    // A later quarantine replaces an earlier one, except over a floor
+    // hold, which only another floor hold takes over, or a kept hold
+    // (`KEPT_RULES`), which only a floor or kept hold does: otherwise a
+    // weaker rule there could later be released by rule and free the hash.
+    let mut quarantine = tx.prepare_cached(&format!(
         "INSERT OR REPLACE INTO quarantine (hash, rule, sealed, at, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE {floor_new}
+             OR ({kept_new} AND NOT EXISTS (
+                 SELECT 1 FROM quarantine WHERE hash = ?1 AND {floor_old}
+             ))
+             OR NOT EXISTS (
+                 SELECT 1 FROM quarantine WHERE hash = ?1 AND ({kept_old} OR {floor_old})
+             )",
+        floor_new = floor_hold_sql("?2"),
+        kept_new = kept_hold_sql("?2"),
+        floor_old = floor_hold_sql("rule"),
+        kept_old = kept_hold_sql("rule"),
+    ))?;
     for f in filtered {
         let Some(first) = f.hashes.first() else {
             continue;
@@ -368,9 +648,10 @@ impl Store {
 
     /// Records a remote worker's floor drops (CS-1a, CS-1b, CS-8a or a
     /// hash list, reported as `Lost(Blocked)`) as tombstones under
-    /// `worker-floor:<worker>` (WK-10d), so the keys are never claimed,
-    /// fetched or stored again. A hash already tombstoned keeps its row (a
-    /// local floor row is never renamed). Returns how many rows were added.
+    /// `worker-floor:<worker>` (WK-10d), so the keys aren't claimed,
+    /// fetched or stored again while the row holds them. A hash already
+    /// tombstoned keeps its row (a local floor row is never renamed).
+    /// Returns how many rows were added.
     pub fn tombstone_from_worker(
         &mut self,
         hashes: &[[u8; 20]],
@@ -394,6 +675,137 @@ impl Store {
         }
         tx.commit()?;
         Ok(added)
+    }
+
+    /// [`tombstone_from_worker`](Self::tombstone_from_worker), only for
+    /// hashes the store has nothing under: no stored torrent, no item
+    /// awaiting verification and no import candidate. A row under a hold
+    /// is something the main node judges itself; a worker's report never
+    /// removes one. The checks and the writes are one write transaction,
+    /// so no commit lands between them, and a failure part way writes
+    /// nothing. Returns the rows added and the hashes skipped because the
+    /// store has something under them (so a caller's in-memory hold on
+    /// them can go).
+    pub fn tombstone_from_worker_unless_stored(
+        &mut self,
+        hashes: &[[u8; 20]],
+        worker: u32,
+        at: i64,
+    ) -> Result<(usize, Vec<[u8; 20]>)> {
+        if hashes.is_empty() {
+            return Ok((0, Vec::new()));
+        }
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        let tx = crate::begin_write(&mut self.conn)?;
+        let (mut added, mut stored) = (0, Vec::new());
+        {
+            // What a hold's insert would otherwise take away (the
+            // tombstone triggers): an unverified item or an import
+            // candidate under the hash.
+            let mut pending = tx.prepare_cached(
+                "SELECT EXISTS (
+                     SELECT 1 FROM unverified_items WHERE network = 0 AND key = ?1
+                 ) OR EXISTS (
+                     SELECT 1 FROM import_candidates WHERE hash = ?1
+                         OR (hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1)
+                 )",
+            )?;
+            let mut ins = tx.prepare_cached(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (hash) DO NOTHING",
+            )?;
+            for h in hashes {
+                let awaiting: bool = pending.query_row([&h[..]], |r| r.get(0))?;
+                if awaiting || crate::find_any(&tx, std::iter::once(InfoHash(*h)))?.is_some() {
+                    stored.push(*h);
+                    continue;
+                }
+                added += ins.execute(params![&h[..], rule, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok((added, stored))
+    }
+
+    /// Deletes workers' floor reports written before `before` (Unix
+    /// seconds); the caller sets how long a report holds its key. Only
+    /// `worker-floor:` rows go; a local floor row, a list's or a user's is
+    /// never touched. Returns each hash let go with the worker whose row
+    /// it was (`None` for a rule whose id doesn't parse), for the caller
+    /// to reconcile its in-memory state.
+    pub fn expire_worker_floor(&mut self, before: i64) -> Result<Vec<([u8; 20], Option<u32>)>> {
+        self.expire_worker_floor_with(before, |_| {})
+    }
+
+    /// [`expire_worker_floor`](Self::expire_worker_floor), with
+    /// `before_commit` given the rows deleted inside the write transaction,
+    /// before it commits: until then every other connection still reads
+    /// those keys as held. If the commit fails nothing is deleted, though
+    /// `before_commit` has run.
+    pub fn expire_worker_floor_with(
+        &mut self,
+        before: i64,
+        before_commit: impl FnOnce(&[([u8; 20], Option<u32>)]),
+    ) -> Result<Vec<([u8; 20], Option<u32>)>> {
+        let sql = format!(
+            "DELETE FROM tombstones WHERE at < ?1 AND {} RETURNING hash, rule",
+            worker_floor_sql("rule")
+        );
+        let tx = crate::begin_write(&mut self.conn)?;
+        let gone: Vec<([u8; 20], Option<u32>)> = {
+            let mut stmt = tx.prepare(&sql)?;
+            let rows = stmt.query_map(params![before], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (hash, rule) = row?;
+                let worker = rule
+                    .strip_prefix(WORKER_FLOOR_PREFIX)
+                    .and_then(|id| id.parse::<u32>().ok());
+                out.push((hash20(hash)?, worker));
+            }
+            out
+        };
+        before_commit(&gone);
+        tx.commit()?;
+        if !gone.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(gone)
+    }
+
+    /// Deletes one worker's floor reports (`worker-floor:<worker>`), for a
+    /// revoke. Another worker's rows, and every local, list or user hold,
+    /// are left alone. Returns the hashes let go, as
+    /// [`expire_worker_floor`](Self::expire_worker_floor) does.
+    pub fn purge_worker_floor(&mut self, worker: u32) -> Result<Vec<[u8; 20]>> {
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        self.delete_returning(
+            "DELETE FROM tombstones WHERE rule = ?1 RETURNING hash",
+            params![rule],
+        )
+    }
+
+    /// Runs a `DELETE … RETURNING hash` and collects the hashes.
+    fn delete_returning(
+        &mut self,
+        sql: &str,
+        args: impl rusqlite::Params,
+    ) -> Result<Vec<[u8; 20]>> {
+        let gone: Vec<[u8; 20]> = {
+            let mut stmt = self.conn.prepare(sql)?;
+            let rows = stmt.query_map(args, |r| r.get::<_, Vec<u8>>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(hash20(row?)?);
+            }
+            out
+        };
+        if !gone.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(gone)
     }
 
     /// Releases a held hash (removes its tombstone or quarantine row), so
@@ -420,11 +832,12 @@ impl Store {
     pub fn delete_torrents(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<i64>> {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut ids = Vec::new();
+        // Every stored torrent under each hash, as either of its own.
         for h in hashes {
-            if let Some(id) = crate::find_any(&tx, std::iter::once(InfoHash(*h)))?
-                && !ids.contains(&id)
-            {
-                ids.push(id);
+            for id in crate::all_by_hash(&tx, h)? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
             }
         }
         {
@@ -510,7 +923,8 @@ impl Store {
             }
             // The adult mark is the one hold filtering can't rebuild (the
             // correction went with the torrent), so it replaces another
-            // rule's tombstone, except a floor hold, which stays.
+            // rule's tombstone, a worker's floor report included (that
+            // lasts only its hold time); a local floor row stays.
             tx.execute(
                 &format!(
                     "INSERT INTO tombstones (hash, rule, at)
@@ -519,7 +933,7 @@ impl Store {
                      ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
                      WHERE NOT {}",
                     kept_hold_sql("rule"),
-                    floor_hold_sql("tombstones.rule")
+                    local_floor_sql("tombstones.rule")
                 ),
                 params![now, adult],
             )?;
@@ -553,8 +967,9 @@ impl Store {
     ) -> Result<usize> {
         let mut total = 0;
         let mut deleted_any = false;
-        // A worker's floor report isn't released by rule here: only WK-13's
-        // purge-by-worker removes it. Nor is a kept hold: only `release`.
+        // A worker's floor report isn't released by rule here: only its
+        // expiry or its worker's revoke removes it. Nor is a kept hold:
+        // only `release`.
         for rule in rules
             .iter()
             .filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX) && !is_kept_hold(r))
@@ -1067,6 +1482,363 @@ mod tests {
     use super::*;
     use crate::StoreConfig;
 
+    /// A worker's report on a key the store has anything under (an item
+    /// awaiting verification, an import candidate by either hash) leaves
+    /// that row in place, journals no deletion, and holds nothing; a key
+    /// with nothing under it is held.
+    #[test]
+    fn a_worker_report_leaves_unverified_and_import_rows_alone() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let v2 = format!("{}{}", "54".repeat(20), "00".repeat(12));
+        s.conn
+            .execute_batch(&format!(
+                "INSERT OR IGNORE INTO sources (id, plugin, version, state, added_at)
+                     VALUES (0, 'dht', '1', 0, 0);
+                 INSERT INTO unverified_items (network, key, source_id, sources, flags, claims,
+                     first_at, last_at) VALUES (0, x'{u}', 0, 1, 0, x'01000000000000', 0, 0);
+                 INSERT INTO import_sources (id, adapter, dataset, schema_sig)
+                     VALUES (1, 'magnetico', x'01', x'02');
+                 INSERT INTO import_jobs (id, source, adapter_ver, contract_ver, phase, control,
+                     options, created_at, updated_at) VALUES (1, 1, 1, 1, 2, 0, x'', 0, 0);
+                 INSERT INTO import_candidates (hash, job, name, missing, privacy, at)
+                     VALUES (x'{c}', 1, CAST('a' AS BLOB), 6, 0, 0);
+                 INSERT INTO import_candidates (hash, hash_v2, job, name, missing, privacy, at)
+                     VALUES (x'{d}', x'{v2}', 1, CAST('b' AS BLOB), 6, 0, 0);",
+                u = "51".repeat(20),
+                c = "52".repeat(20),
+                d = "53".repeat(20),
+            ))
+            .unwrap();
+        let count =
+            |s: &Store, sql: &str| -> i64 { s.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        let keys = [[0x51; 20], [0x52; 20], [0x54; 20], [0x55; 20]];
+        let (added, kept) = s.tombstone_from_worker_unless_stored(&keys, 7, 10).unwrap();
+        assert_eq!((added, kept), (1, keys[..3].to_vec()));
+        assert_eq!(count(&s, "SELECT count(*) FROM unverified_items"), 1);
+        assert_eq!(count(&s, "SELECT count(*) FROM import_candidates"), 2);
+        assert_eq!(count(&s, "SELECT count(*) FROM snapshot_deletions"), 0);
+        assert_eq!(
+            s.held_among(&keys).unwrap(),
+            vec![false, false, false, true]
+        );
+    }
+
+    /// The checks and the writes are one transaction: a write that fails
+    /// part way leaves nothing written.
+    #[test]
+    fn a_worker_report_that_fails_part_way_writes_nothing() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.conn
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER fail_second BEFORE INSERT ON main.tombstones
+                     WHEN new.hash = x'{}' BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                "62".repeat(20)
+            ))
+            .unwrap();
+        assert!(
+            s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
+                .is_err()
+        );
+        assert_eq!(
+            s.held_among(&[[0x61; 20]]).unwrap(),
+            vec![false],
+            "rolled back"
+        );
+        s.conn
+            .execute_batch("DROP TRIGGER temp.fail_second")
+            .unwrap();
+        assert_eq!(
+            s.tombstone_from_worker_unless_stored(&[[0x61; 20], [0x62; 20]], 7, 10)
+                .unwrap(),
+            (2, vec![])
+        );
+    }
+
+    /// Rows of other kinds, written as their own paths write them.
+    fn put_row(s: &Store, hash: u8, rule: &str, at: i64) {
+        s.conn
+            .execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                params![&[hash; 20][..], rule, at],
+            )
+            .unwrap();
+    }
+
+    fn rules(s: &Store) -> std::collections::BTreeMap<u8, String> {
+        s.tombstones(100)
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.hash[0], t.rule))
+            .collect()
+    }
+
+    /// Expiry lets go of workers' reports older than the cutoff and
+    /// nothing else: a newer report, a local floor row and a user's or a
+    /// list's row stay.
+    #[test]
+    fn expiry_lets_go_of_old_worker_reports_only() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        s.tombstone_from_worker(&[[2; 20]], 7, 50).unwrap();
+        put_row(&s, 3, "CS-1a", 1);
+        put_row(&s, 4, "user", 1);
+        put_row(&s, 5, "WORKER-FLOOR:7", 1);
+        put_row(&s, 6, "worker-floor:x", 1);
+        let mut gone = s.expire_worker_floor(20).unwrap();
+        gone.sort();
+        assert_eq!(gone, vec![([1; 20], Some(7)), ([6; 20], None)]);
+        let left = rules(&s);
+        assert!(!left.contains_key(&1));
+        assert!(!left.contains_key(&6));
+        assert_eq!(left[&2], "worker-floor:7");
+        assert_eq!(left[&3], "CS-1a");
+        assert_eq!(left[&4], "user");
+        assert_eq!(left[&5], "WORKER-FLOOR:7", "the prefix is exact");
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20]]).unwrap(),
+            vec![false, true]
+        );
+        // Held again by the next report.
+        s.tombstone_from_worker(&[[1; 20]], 8, 60).unwrap();
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// Expiry's hook runs before its delete commits: another connection
+    /// still reads the key as held then, and free after.
+    #[test]
+    fn expirys_hook_runs_before_the_delete_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let mut seen = Vec::new();
+        let gone = s
+            .expire_worker_floor_with(20, |rows| {
+                seen = rows.to_vec();
+                assert_eq!(reader.held_among(&[[1; 20]]).unwrap(), vec![true]);
+            })
+            .unwrap();
+        assert_eq!(seen, vec![([1; 20], Some(7))]);
+        assert_eq!(gone, seen);
+        assert_eq!(reader.held_among(&[[1; 20]]).unwrap(), vec![false]);
+    }
+
+    /// The main node's own judgement, as its writer records a floor hit:
+    /// a tombstone under the rule, over anything a worker reported.
+    fn judged(s: &mut Store, hash: [u8; 20], rule: &'static str, held: Held, at: i64) {
+        let tx = s.conn.transaction().unwrap();
+        let hashes = [hash];
+        write(
+            &tx,
+            &[Filtered {
+                hashes: &hashes,
+                rule,
+                action: 4,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at,
+                expires_at: at + 1_000_000,
+                adult_hold: false,
+            }],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    /// After a worker's report lapses, the key is held again when the main
+    /// node's own judgement of its next fetch holds it, and stays so after
+    /// any later lapse of worker reports.
+    #[test]
+    fn a_lapsed_report_is_held_again_by_the_main_nodes_judgement() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20]], 7, 10).unwrap();
+        assert_eq!(s.expire_worker_floor(11).unwrap(), vec![([1; 20], Some(7))]);
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+        judged(&mut s, [1; 20], "CS-1a", Held::Tombstone, 20);
+        assert_eq!(rules(&s)[&1], "CS-1a");
+        assert!(s.expire_worker_floor(i64::MAX).unwrap().is_empty());
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![true]);
+    }
+
+    /// A key a revoked worker reported that another source also holds
+    /// stays held: a hold written over the report, or a quarantine row.
+    #[test]
+    fn a_key_also_held_by_another_source_stays_held_through_a_revoke() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20], [2; 20], [3; 20]], 7, 10)
+            .unwrap();
+        judged(&mut s, [1; 20], "user", Held::Tombstone, 20);
+        judged(&mut s, [2; 20], "CS-3", Held::Quarantine, 20);
+        assert_eq!(s.purge_worker_floor(7).unwrap().len(), 2, "[2] and [3]");
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20], [3; 20]]).unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(rules(&s)[&1], "user");
+    }
+
+    /// A purge removes one worker's reports: another worker's, the local
+    /// floor's and a user's rows stay.
+    #[test]
+    fn a_purge_removes_only_that_workers_reports() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.tombstone_from_worker(&[[1; 20], [2; 20]], 7, 10).unwrap();
+        s.tombstone_from_worker(&[[3; 20]], 8, 10).unwrap();
+        s.tombstone_from_worker(&[[6; 20]], 70, 10).unwrap();
+        put_row(&s, 4, "CS-8a", 1);
+        put_row(&s, 5, "user", 1);
+        assert_eq!(s.purge_worker_floor(7).unwrap().len(), 2);
+        let left = rules(&s);
+        assert!(!left.contains_key(&1) && !left.contains_key(&2));
+        assert_eq!(left[&3], "worker-floor:8");
+        assert_eq!(left[&6], "worker-floor:70", "not a prefix match");
+        assert_eq!(left[&4], "CS-8a");
+        assert_eq!(left[&5], "user");
+        assert!(s.purge_worker_floor(7).unwrap().is_empty());
+    }
+
+    /// A worker's report holds only hashes not stored, checked and written
+    /// in one transaction; a stored torrent is neither held nor touched.
+    #[test]
+    fn a_worker_report_holds_only_hashes_not_stored() {
+        use lodestar_metainfo::Info;
+        let raw = b"d6:lengthi1048576e4:name9:floor.bin12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let key = info.v1.unwrap().0;
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        s.insert(&[crate::NewTorrent {
+            info: &info,
+            raw_info: Some(raw),
+            discovered_at: 1,
+            metadata_at: 1,
+            extra_flags: 0,
+            source: crate::SourceId::new(0).unwrap(),
+        }])
+        .unwrap();
+        let (added, stored) = s
+            .tombstone_from_worker_unless_stored(&[key, [6; 20]], 7, 10)
+            .unwrap();
+        assert_eq!((added, stored), (1, vec![key]));
+        assert_eq!(s.held_among(&[key, [6; 20]]).unwrap(), vec![false, true]);
+        assert!(s.find(&InfoHash(key)).unwrap().is_some(), "still stored");
+        assert_eq!(
+            s.tombstone_from_worker_unless_stored(&[], 7, 10).unwrap(),
+            (0, vec![])
+        );
+    }
+
+    /// The bounded read gives the list `files` gives within the bound,
+    /// and refuses one past it in files, path bytes or segments.
+    #[test]
+    fn the_bounded_file_list_read_refuses_a_list_past_the_bound() {
+        use lodestar_metainfo::Info;
+        let raw = b"d5:filesld6:lengthi1e4:pathl1:a2:bbeed6:lengthi1e4:pathl3:ccceee4:name1:n12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let id = s
+            .insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        let wide = FilesBound {
+            files: 100,
+            path_bytes: 100,
+            segments: 100,
+            raw_bytes: 1 << 20,
+        };
+        assert_eq!(s.files_bounded(id, &wide).unwrap(), s.files(id).unwrap());
+        for bound in [
+            FilesBound { files: 1, ..wide },
+            FilesBound {
+                path_bytes: 2,
+                ..wide
+            },
+            FilesBound {
+                segments: 2,
+                ..wide
+            },
+            FilesBound {
+                raw_bytes: 4,
+                ..wide
+            },
+        ] {
+            assert!(s.files_bounded(id, &bound).is_err(), "{bound:?}");
+        }
+        assert_eq!(s.files_bounded(id + 1, &wide).unwrap(), None);
+    }
+
+    /// A path deeper than metainfo allows is refused before decoding,
+    /// however few bytes it takes.
+    #[test]
+    fn the_bounded_file_list_read_refuses_a_deep_path() {
+        use lodestar_metainfo::Info;
+        let raw = b"d6:lengthi1e4:name1:n12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let info = Info::parse(raw).unwrap();
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let id = s
+            .insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id();
+        // 300 nested directories with empty names, and one file.
+        let dirs = 300u64;
+        let mut blob = vec![1, 0, 0];
+        let varint = |out: &mut Vec<u8>, mut v: u64| {
+            while v >= 0x80 {
+                out.push(v as u8 | 0x80);
+                v >>= 7;
+            }
+            out.push(v as u8);
+        };
+        varint(&mut blob, dirs);
+        varint(&mut blob, 1);
+        for i in 0..dirs {
+            varint(&mut blob, i);
+        }
+        blob.extend((0..dirs).map(|_| 0));
+        varint(&mut blob, dirs);
+        blob.extend([1, b'f', 1]);
+        assert!(crate::filetree::decode(&blob).is_ok(), "a valid blob");
+        s.conn
+            .execute(
+                "UPDATE torrent_files SET codec = 0, dict_id = NULL, data = ?2 WHERE torrent_id = ?1",
+                params![id, blob],
+            )
+            .unwrap();
+        let bound = FilesBound {
+            files: 1_000,
+            path_bytes: 1 << 20,
+            segments: 1 << 20,
+            raw_bytes: 1 << 20,
+        };
+        assert!(s.files_bounded(id, &bound).is_err());
+        // And one past the bound in stored bytes isn't read.
+        assert!(
+            s.files_bounded(
+                id,
+                &FilesBound {
+                    raw_bytes: 16,
+                    ..bound
+                }
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn the_latest_hit_is_the_newest_applied_one() {
         let s = Store::open_in_memory(StoreConfig::default()).unwrap();
@@ -1129,6 +1901,55 @@ mod tests {
             assert_eq!((&hit.rule, hit.at), (rule, *at));
             assert_eq!(s.latest_hit(h).unwrap().as_ref(), Some(hit));
         }
+    }
+
+    /// A later quarantine never replaces a kept hold unless it's kept too;
+    /// it replaces any other, as before.
+    #[test]
+    fn a_later_quarantine_leaves_a_kept_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let [kept] = KEPT_RULES;
+        let f = |rule, at, adult_hold| Filtered {
+            hashes: &[[1; 20]],
+            rule,
+            action: 4,
+            held: Some(Held::Quarantine),
+            sealed: None,
+            evidence: &[],
+            at,
+            expires_at: at + 10,
+            adult_hold,
+        };
+        let rule = |s: &Store| -> (String, i64) {
+            s.conn
+                .query_row(
+                    "SELECT rule, at FROM quarantine WHERE hash = ?1",
+                    [&[1u8; 20][..]],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        let put = |s: &mut Store, row: Filtered<'_>| {
+            let tx = s.conn.transaction().unwrap();
+            write(&tx, &[row]).unwrap();
+            tx.commit().unwrap();
+        };
+        put(&mut s, f("U-1", 10, false));
+        put(&mut s, f(kept, 20, false));
+        assert_eq!(rule(&s), (kept.to_owned(), 20), "a kept hold takes over");
+        put(&mut s, f("U-1", 30, true));
+        put(&mut s, f("CS-3", 40, false));
+        assert_eq!(rule(&s), (kept.to_owned(), 20), "and nothing else does");
+        put(&mut s, f(kept, 50, true));
+        assert_eq!(rule(&s), (format!("{kept}+adult"), 50), "but a kept one");
+        // The floor outranks a kept hold.
+        let [floor, ..] = FLOOR_RULES;
+        put(&mut s, f(floor, 60, false));
+        assert_eq!(rule(&s), (floor.to_owned(), 60), "and the floor");
+        // Which nothing but the floor replaces, a kept hold included.
+        put(&mut s, f(kept, 70, false));
+        put(&mut s, f("CS-3", 80, false));
+        assert_eq!(rule(&s), (floor.to_owned(), 60), "the floor stays");
     }
 
     /// The adult-hold mark is a suffix on the stored rule id; reads strip
@@ -1311,9 +2132,9 @@ mod tests {
     fn a_release_of_a_rules_hashes_leaves_a_kept_hold() {
         let mut s = with_kept_holds("L-1");
         let [kept] = KEPT_RULES;
-        for rule in [kept, "CS-0a+adult"] {
+        for rule in [kept.to_owned(), format!("{kept}+adult")] {
             assert_eq!(
-                s.release_rule_hashes(rule, &KEPT_AND_OTHER, |_| {})
+                s.release_rule_hashes(&rule, &KEPT_AND_OTHER, |_| {})
                     .unwrap(),
                 0
             );
@@ -1360,6 +2181,11 @@ mod tests {
         for rule in [
             "CS-0a",
             "CS-0a+adult",
+            "CS-0a+",
+            "xCS-0a",
+            "CS-0a ",
+            "CS-0a\u{00e9}",
+            "CS-0a+\u{00e9}",
             "CS-0ab",
             "CS-0",
             "cs-0a",
@@ -1631,7 +2457,8 @@ mod tests {
             vec![true, false]
         );
 
-        // An adult hold expiring over [3] doesn't replace the report.
+        // An adult hold expiring over [3] replaces the report: the key
+        // stays held under the mark filtering can't rebuild.
         let tx = s.conn.transaction().unwrap();
         let adult = [[3u8; 20]];
         write(
@@ -1657,10 +2484,11 @@ mod tests {
             .into_iter()
             .find(|t| t.hash == [3; 20])
             .unwrap();
-        assert_eq!(t3.rule, "worker-floor:7");
+        assert_eq!(t3.rule, "CS-5a");
 
         // A later hold under another rule (ingest, refile, hold_claims)
-        // doesn't take the row over; a local floor rule may (below).
+        // takes the row over too, so the key stays held past the report's
+        // expiry.
         let weaker = [[2u8; 20]];
         let hold = |s: &mut Store, rule: &'static str, at: i64| {
             let tx = s.conn.transaction().unwrap();
@@ -1689,7 +2517,9 @@ mod tests {
                 .find(|t| t.hash == h)
                 .map(|t| t.rule)
         };
-        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("worker-floor:7"));
+        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("SRC-2"));
+        // A report for the checks below.
+        assert_eq!(s.tombstone_from_worker(&[[9; 20]], 7, 30).unwrap(), 1);
         // The prefix is exact: another case is a different rule.
         assert_eq!(s.tombstone_from_worker(&[[8; 20]], 1, 1).unwrap(), 1);
         s.conn
@@ -1701,22 +2531,19 @@ mod tests {
         assert!(s.release(&[8; 20]).unwrap(), "not a worker's report");
 
         // No release removes a report: by hash, many, or by its rule.
-        assert!(!s.release(&[2; 20]).unwrap());
-        assert_eq!(
-            s.release_many(&[[2; 20], [3; 20]]).unwrap(),
-            vec![false, false]
-        );
+        assert!(!s.release(&[9; 20]).unwrap());
+        assert_eq!(s.release_many(&[[9; 20]]).unwrap(), vec![false]);
         assert_eq!(
             s.release_rules(&["worker-floor:7".into()], |_| {}).unwrap(),
             0
         );
         assert_eq!(
-            s.release_rule_hashes("worker-floor:7", &[[2; 20]], |_| {})
+            s.release_rule_hashes("worker-floor:7", &[[9; 20]], |_| {})
                 .unwrap(),
             0
         );
-        assert_eq!(s.held_among(&[[2; 20], [3; 20]]).unwrap(), vec![true, true]);
-        // A local floor rule may take over a report.
+        assert_eq!(s.held_among(&[[9; 20], [3; 20]]).unwrap(), vec![true, true]);
+        // A local floor rule takes over as well.
         hold(&mut s, "CS-8a", 40);
         assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("CS-8a"));
         // The locked floor's own rows are released as before.

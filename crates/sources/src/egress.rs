@@ -723,6 +723,9 @@ pub struct PluginEgress {
     /// Refusals before sending since the route last let a request
     /// through, for [`down_delay`].
     down_streak: AtomicU32,
+    /// Refusals by the loopback gate since a request was last answered,
+    /// for [`down_delay`].
+    not_ready_streak: AtomicU32,
     /// Where the source's stored state is read before each request
     /// ([`EgressCredentials::source_enabled`]); set by the factory.
     states: Option<Arc<dyn EgressCredentials>>,
@@ -758,6 +761,7 @@ impl PluginEgress {
             notice: None,
             counters: Arc::default(),
             down_streak: Default::default(),
+            not_ready_streak: Default::default(),
             states: None,
         };
         match egress.client {
@@ -945,13 +949,14 @@ impl PluginEgress {
                 body,
             }) => {
                 Counters::bump(&self.counters.answered);
+                self.not_ready_streak.store(0, Ordering::Relaxed);
                 Ok(Response {
                     status,
                     headers,
                     body,
                 })
             }
-            Err(e) => Err(self.failed(e).await),
+            Err(e) => Err(self.failed(e, None).await),
         }
     }
 
@@ -959,11 +964,24 @@ impl PluginEgress {
     /// policy's; a failed connection may mean the route just went down,
     /// so it re-probes: the status then says so, and a route outage is
     /// the kill switch's error, not the host's (which would back it off).
-    async fn failed(&self, e: NetError) -> HttpError {
+    ///
+    /// A refusal by the loopback gate (a companion Lodestar runs that
+    /// isn't ready) is paced as a kill switch refusal is, by its own
+    /// streak, and cut short by `pace_by`.
+    async fn failed(&self, e: NetError, pace_by: Option<Instant>) -> HttpError {
         match e {
             NetError::Blocked(_) | NetError::InvalidUrl(_) => {
                 Counters::bump(&self.counters.policy_refusals);
                 refused(&e)
+            }
+            NetError::NotReady => {
+                Counters::bump(&self.counters.policy_refusals);
+                let streak = self.not_ready_streak.load(Ordering::Relaxed);
+                self.not_ready_streak
+                    .store(streak.saturating_add(1), Ordering::Relaxed);
+                let paced = Instant::now() + down_delay(streak);
+                tokio::time::sleep_until(pace_by.map_or(paced, |by| by.min(paced))).await;
+                HttpError::NotReady(lodestar_integrations::net::NOT_READY.into())
             }
             e => {
                 if matches!(e, NetError::Connect | NetError::Timeout)
@@ -1029,6 +1047,7 @@ impl PluginEgress {
                 body,
             }) => {
                 Counters::bump(&self.counters.answered);
+                self.not_ready_streak.store(0, Ordering::Relaxed);
                 Ok(StreamResponse {
                     status,
                     headers,
@@ -1040,7 +1059,7 @@ impl PluginEgress {
                     )),
                 })
             }
-            Err(e) => Err(self.failed(e).await),
+            Err(e) => Err(self.failed(e, Some(pace_by)).await),
         }
     }
 }

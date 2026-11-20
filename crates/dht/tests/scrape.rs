@@ -96,6 +96,48 @@ impl Client {
         }
     }
 
+    /// Makes the node count this client as proven: a query that isn't
+    /// read-only, so the node pings back, and an answer to that ping.
+    async fn prove(&mut self, to: SocketAddr) {
+        self.tid += 1;
+        let tid = self.tid.to_be_bytes();
+        let msg = Message {
+            transaction_id: &tid,
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Query(Query {
+                id: NodeId([0xcd; 20]),
+                method: Method::Ping,
+            }),
+        };
+        self.socket.send_to(&msg.encode(), to).await.unwrap();
+        let mut buf = vec![0u8; 2048];
+        loop {
+            let (n, from) = tokio::time::timeout(wait::DEADLINE, self.socket.recv_from(&mut buf))
+                .await
+                .expect("the node's ping in time")
+                .unwrap();
+            let Ok(m) = krpc::parse(&buf[..n]) else {
+                continue;
+            };
+            if from == to && matches!(m.body, Body::Query(_)) {
+                let pong = Message {
+                    transaction_id: m.transaction_id,
+                    version: None,
+                    ip: None,
+                    read_only: false,
+                    body: Body::Response(Response {
+                        id: NodeId([0xcd; 20]),
+                        ..Default::default()
+                    }),
+                };
+                self.socket.send_to(&pong.encode(), to).await.unwrap();
+                return;
+            }
+        }
+    }
+
     /// get_peers for a token, then announce_peer.
     async fn announce(&mut self, to: SocketAddr, h: InfoHash, seed: bool) {
         let reply = self.ask(to, get_peers(h, false, false)).await;
@@ -156,6 +198,11 @@ async fn answers_scrapes_only_when_asked_and_only_for_stored_hashes() {
     let r = response(&plain);
     assert!(r.seeds_bloom.is_none() && r.peers_bloom.is_none());
     assert_eq!(r.values.len(), 2);
+
+    // Filters go only to an address that has answered the node.
+    let unproven = asker.ask(addr, get_peers(h, true, false)).await;
+    assert!(response(&unproven).seeds_bloom.is_none());
+    asker.prove(addr).await;
 
     let scraped = asker.ask(addr, get_peers(h, true, false)).await;
     let r = response(&scraped);

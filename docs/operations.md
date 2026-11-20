@@ -40,6 +40,7 @@ Common environment variables (the update settings have their own `LODESTAR_UPDAT
 | `LODESTAR_SCRAPE_ENABLED` | Tracker and DHT scrapes (§9): `true` or `false` | `true` |
 | `LODESTAR_SECURE_COOKIES` | `true` when Lodestar sits behind a TLS reverse proxy (same as `http.secure_cookies`) | `false` |
 | `LODESTAR_LOG` | `error`, `warn`, `info`, `debug` or a `tracing` filter. While it's set, **Settings → Logging** is read-only; leave it unset to change logging in the app | `info` |
+| `LODESTAR_EXIT_ON_NETWORK_LOSS` | Newer than v0.5.1; Linux only, ignored elsewhere with one log line. `true` makes Lodestar stop and exit with status 75 when only the loopback interface and no default route have been left for 30 seconds, so a restart policy starts it again inside the network of the container it shares, such as gluetun after gluetun restarts. Lodestar's gluetun templates set it; never set it on a native install | `false` |
 | `LODESTAR_DHT_SAFE_RESTART` | Development only; unavailable in v0.5.1. `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
 | `LODESTAR_DHT_WITNESS_DIR` | Development only; unavailable in v0.5.1. The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
 
@@ -166,18 +167,22 @@ service, no firewall rules, no helper. Unpack it under your own user folder
 `Start Lodestar.cmd`, which keeps the data in the `data` folder beside it.
 
 **Commands from §10 on Windows.** Stop the service first
-(`Stop-Service Lodestar`) for any command marked "server stopped". Then, in an
-administrator PowerShell window (only Administrators can read the data
-folder), tell the command where the data is and run it. The MSI:
+(`Stop-Service Lodestar`) for any command marked "server stopped". Then run
+the command in an administrator PowerShell window (only Administrators can
+read the data folder). The MSI's `lodestar.exe` finds the service's data
+folder, `C:\ProgramData\Lodestar`, by itself, as the service does:
 
 ```powershell
-$env:LODESTAR_DATA_DIR = 'C:\ProgramData\Lodestar'
 & 'C:\Program Files\Lodestar\lodestar.exe' stats
 ```
 
-For the portable ZIP, set `LODESTAR_DATA_DIR` to its `data` folder and run the
-`lodestar.exe` beside `Start Lodestar.cmd`. Without the variable the command
-looks for a `data` folder in the folder you're in, and stops with "no store".
+Like the service, a command refuses that folder (exit status 3) if it isn't
+private, however it was named, and says how to fix it.
+
+For the portable ZIP, run the `lodestar.exe` beside `Start Lodestar.cmd` from
+that folder: it finds the `data` folder there. From anywhere else, set
+`LODESTAR_DATA_DIR` to that `data` folder first, or the command stops with
+"no store" and names the folder it looked in.
 
 Follow [Chapter 4](user/04-install-on-windows-and-linux.md) for the guided
 steps, and `packaging/windows/README.md` for every option.
@@ -385,7 +390,7 @@ docker run --rm -it -e PUID=99 -e PGID=100 \
 
 Outside Docker, run `lodestar import …` directly.
 
-**Check the source first.** `inspect` only reads. It's safe while Lodestar runs:
+**Check the source first.** `inspect` only reads. It's safe while Lodestar runs. While an import runs it can't read Lodestar's database, and says so:
 ```bash
 lodestar import inspect --source magnetico --path /import/database.sqlite3
 lodestar import inspect --source bitmagnet --host <host> --password-file <file>
@@ -398,6 +403,8 @@ lodestar import start --source magnetico --path /import/database.sqlite3 --limit
 lodestar import status
 lodestar import resume 1 --source magnetico --path /import/database.sqlite3
 ```
+- **`status` only reads, and works while Lodestar runs.** While an import runs, it waits a few seconds, then shows that import's progress, and how long ago it was updated, for that job only. Other jobs and the full status show once the import pauses or finishes. If another lodestar command is using the database instead, `status` says so and asks you to run it again later. After an import stops, however it stopped, `status` shows the full status again.
+- **Memory and space:** while it writes, an import uses up to 256 MiB more memory as a database cache, never more than `mmap_mib` under `[store]` in `config.toml` (256 by default). On a NAS or container with little memory, lower `mmap_mib` before you import. The space check also leaves about 300 MB for the database's working file.
 - **Ctrl-C pauses the job at the last saved batch.** A second Ctrl-C quits at once. Either way, `resume` carries on from the last saved batch, with the same source flags. Nothing is imported twice.
 - **`resume` checks the source is the same database** the job started on. If it changed, the job is blocked and says why. Start a new job for the new database.
 - **Start Lodestar again afterwards.** It indexes the imported torrents and re-fetches incomplete file lists.

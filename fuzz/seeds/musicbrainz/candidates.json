@@ -1,0 +1,243 @@
+{
+ "created": "2026-11-15T00:00:00.000Z",
+ "count": 4,
+ "offset": 0,
+ "release-groups": [
+  {
+   "id": "e1000000-0000-4000-8000-e00000000001",
+   "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "score": 100,
+   "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "count": 3,
+   "title": "Echoes",
+   "first-release-date": "1999-01-01",
+   "primary-type": "Album",
+   "artist-credit": [
+    {
+     "name": "Low Tide",
+     "joinphrase": "",
+     "artist": {
+      "id": "9a000000-0000-4000-8000-e00005765032",
+      "name": "Low Tide",
+      "sort-name": "SENTINEL-SORT",
+      "disambiguation": "SENTINEL-DISAMBIGUATION",
+      "aliases": [
+       {
+        "sort-name": "SENTINEL-ALIAS",
+        "name": "SENTINEL-ALIAS",
+        "locale": null,
+        "type": null,
+        "primary": null,
+        "begin-date": null,
+        "end-date": null
+       }
+      ]
+     }
+    }
+   ],
+   "releases": [
+    {
+     "id": "7e000000-0000-4000-8000-e00000000000",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000001",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000002",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    }
+   ],
+   "tags": [
+    {
+     "count": 1,
+     "name": "SENTINEL-TAG"
+    }
+   ]
+  },
+  {
+   "id": "e1000000-0000-4000-8000-e00000000002",
+   "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "score": 100,
+   "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "count": 3,
+   "title": "Echoes",
+   "first-release-date": "2010-05",
+   "primary-type": "Album",
+   "artist-credit": [
+    {
+     "name": "Paper Kites And Co",
+     "joinphrase": "",
+     "artist": {
+      "id": "9a000000-0000-4000-8000-e00012393235",
+      "name": "Paper Kites And Co",
+      "sort-name": "SENTINEL-SORT",
+      "disambiguation": "SENTINEL-DISAMBIGUATION",
+      "aliases": [
+       {
+        "sort-name": "SENTINEL-ALIAS",
+        "name": "SENTINEL-ALIAS",
+        "locale": null,
+        "type": null,
+        "primary": null,
+        "begin-date": null,
+        "end-date": null
+       }
+      ]
+     }
+    }
+   ],
+   "releases": [
+    {
+     "id": "7e000000-0000-4000-8000-e00000000000",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000001",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000002",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    }
+   ],
+   "tags": [
+    {
+     "count": 1,
+     "name": "SENTINEL-TAG"
+    }
+   ]
+  },
+  {
+   "id": "e1000000-0000-4000-8000-e00000000003",
+   "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "score": 100,
+   "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "count": 3,
+   "title": "Echoes",
+   "first-release-date": "2010-02-01",
+   "primary-type": "Single",
+   "artist-credit": [
+    {
+     "name": "Paper Kites And Co",
+     "joinphrase": "",
+     "artist": {
+      "id": "9a000000-0000-4000-8000-e00012393235",
+      "name": "Paper Kites And Co",
+      "sort-name": "SENTINEL-SORT",
+      "disambiguation": "SENTINEL-DISAMBIGUATION",
+      "aliases": [
+       {
+        "sort-name": "SENTINEL-ALIAS",
+        "name": "SENTINEL-ALIAS",
+        "locale": null,
+        "type": null,
+        "primary": null,
+        "begin-date": null,
+        "end-date": null
+       }
+      ]
+     }
+    }
+   ],
+   "releases": [
+    {
+     "id": "7e000000-0000-4000-8000-e00000000000",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000001",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000002",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes",
+     "status": "Official"
+    }
+   ],
+   "tags": [
+    {
+     "count": 1,
+     "name": "SENTINEL-TAG"
+    }
+   ]
+  },
+  {
+   "id": "e1000000-0000-4000-8000-e00000000004",
+   "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "score": 100,
+   "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+   "count": 3,
+   "title": "Echoes of Home",
+   "first-release-date": "2010",
+   "primary-type": "EP",
+   "artist-credit": [
+    {
+     "name": "Low Tide",
+     "joinphrase": "",
+     "artist": {
+      "id": "9a000000-0000-4000-8000-e00005765032",
+      "name": "Low Tide",
+      "sort-name": "SENTINEL-SORT",
+      "disambiguation": "SENTINEL-DISAMBIGUATION",
+      "aliases": [
+       {
+        "sort-name": "SENTINEL-ALIAS",
+        "name": "SENTINEL-ALIAS",
+        "locale": null,
+        "type": null,
+        "primary": null,
+        "begin-date": null,
+        "end-date": null
+       }
+      ]
+     }
+    }
+   ],
+   "releases": [
+    {
+     "id": "7e000000-0000-4000-8000-e00000000000",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes of Home",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000001",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes of Home",
+     "status": "Official"
+    },
+    {
+     "id": "7e000000-0000-4000-8000-e00000000002",
+     "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+     "title": "Echoes of Home",
+     "status": "Official"
+    }
+   ],
+   "tags": [
+    {
+     "count": 1,
+     "name": "SENTINEL-TAG"
+    }
+   ]
+  }
+ ]
+}

@@ -42,8 +42,7 @@ fn at(port: u16) -> SocketAddr {
 
 /// A `sample_infohashes` reply from `from` listing `hashes`.
 fn sample_reply(a: &mut Actor, sockets: &[SendSocket], from: SocketAddr, hashes: &[InfoHash]) {
-    a.next_tid += 1;
-    let tid = a.next_tid;
+    let tid = a.tids.next_id().unwrap();
     a.pending.insert(
         tid,
         Pending {

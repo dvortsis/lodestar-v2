@@ -2,7 +2,10 @@
 //! 2026-11-06-v06-companions §4 CMP-8a, Q12; architecture §18.9, §18.10).
 //!
 //! **Where detection looks (Q12), and nowhere else:**
-//! - loopback (`127.0.0.1`, then `::1`) on each catalogue port;
+//! - loopback (`127.0.0.1`, then `::1`) on each catalogue port. Only a bare
+//!   probe ever looks for a companion on `::1`, and once `127.0.0.1` has
+//!   answered on a port, that port's requests go nowhere else
+//!   ([`CompanionHttp`]);
 //! - each catalogue container name on Docker's network, on the same ports;
 //! - one URL you enter.
 //!
@@ -22,9 +25,10 @@
 //! set. No text a companion sent reaches anything Lodestar stores, shows or
 //! logs. Detection never sends a credential.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::{
@@ -43,6 +47,7 @@ use crate::adapter::{
 use crate::catalogue::{Catalogue, Entry, Exposure, Proto};
 use crate::flaresolverr;
 use crate::inputs::CompanionId;
+use crate::supervise::bind::Bindings;
 
 pub mod gluetun;
 pub mod prowlarr;
@@ -184,9 +189,11 @@ pub(crate) fn not_found_or(
 /// is unreachable; an answer that broke a rule is unhealthy.
 pub(crate) fn health_of(e: AdapterError) -> HealthStatus {
     match e {
-        AdapterError::Timeout | AdapterError::Unreachable | AdapterError::Blocked => {
-            HealthStatus::Unreachable
-        }
+        AdapterError::Timeout
+        | AdapterError::Unreachable
+        | AdapterError::NotReady
+        | AdapterError::Starting
+        | AdapterError::Blocked => HealthStatus::Unreachable,
         _ => HealthStatus::Unhealthy,
     }
 }
@@ -256,6 +263,30 @@ impl Resolve for LocalOnly {
     }
 }
 
+/// The resolver for entered URLs: `localhost` is `127.0.0.1` alone, never
+/// `::1`, which the system resolver may hand back first (Windows does), so
+/// a companion you named as `localhost` is asked where Lodestar's own
+/// companions listen. Every other name goes to the system.
+struct LocalhostIsV4(Arc<dyn Resolve>);
+
+impl Resolve for LocalhostIsV4 {
+    fn resolve<'a>(&'a self, host: &'a str) -> NetFuture<'a, io::Result<Vec<IpAddr>>> {
+        Box::pin(async move {
+            if is_localhost(host) {
+                return Ok(vec![IpAddr::from([127, 0, 0, 1])]);
+            }
+            self.0.resolve(host).await
+        })
+    }
+}
+
+/// `localhost`, in any case, with or without the root's trailing dot.
+fn is_localhost(host: &str) -> bool {
+    host.strip_suffix('.')
+        .unwrap_or(host)
+        .eq_ignore_ascii_case("localhost")
+}
+
 /// The [`GuardedHttp`] that `crates/lodestar` hands the adapters (CMP-5g).
 ///
 /// - **Policy:** the SSRF guard's download-client mode: public and private
@@ -274,9 +305,42 @@ impl Resolve for LocalOnly {
 ///   request's own headers and [`PROBE_USER_AGENT`]. The one session cookie
 ///   a request names is handed back in the answer, for the adapter to send
 ///   itself (CMP-8b's qBittorrent sign-in).
+/// - **One loopback address a port:** a loopback target is tried on
+///   `127.0.0.1`, and on `::1` only when nothing listens there and the
+///   request is a bare probe (a `GET` with no header, no body and no
+///   query).
+///   - Once `127.0.0.1` has answered on a port, every later request to
+///     that port goes to it alone, for as long as this value lives.
+///   - A port a bare probe found on `::1` is remembered as that until
+///     `127.0.0.1` answers. Every later request still asks `127.0.0.1`
+///     first, and an answer there takes the port for good. While nothing
+///     listens there, a request that carries a cookie, a key or a body
+///     goes on to `::1`, the address the probe found the companion on.
+///   - Before any probe, a request that carries anything stops at
+///     `127.0.0.1`.
+///   - The memory is this value's own: another `CompanionHttp` starts
+///     with none.
+/// - **A companion Lodestar runs** (X-cmp-supervisor-bind): a port the
+///   supervisor holds a child on ([`Bindings`]) is asked on `127.0.0.1`
+///   alone, never on `::1`, and a request that carries anything goes out
+///   only while that child is running and was found ready in its current
+///   run. Otherwise it's refused before any connection: as
+///   [`AdapterError::Starting`] while a start is under way
+///   ([`Bindings::starting`]), and as [`AdapterError::NotReady`] otherwise
+///   (X-companion-starting-steps).
+///   Bare probes still go (they find it ready), to `127.0.0.1` alone; one
+///   that finds nothing there gets the same answer.
+/// - **`localhost` in a URL you entered** is `127.0.0.1` alone.
 pub struct CompanionHttp {
     fixed: GuardedClient,
     entered: GuardedClient,
+    /// The ports of companions Lodestar runs, when this client serves the
+    /// supervisor too.
+    bindings: Option<Arc<Bindings>>,
+    /// The loopback address each port's requests go to: `false` once
+    /// `127.0.0.1` has answered (for good), `true` while only `::1` has.
+    /// At most one entry a port.
+    loopback: Mutex<HashMap<u16, bool>>,
 }
 
 impl std::fmt::Debug for CompanionHttp {
@@ -300,9 +364,23 @@ impl CompanionHttp {
                 .map_err(|_| AdapterError::Protocol("HTTP client"))
         };
         Ok(CompanionHttp {
-            fixed: build(Arc::new(LocalOnly(Arc::clone(&resolver))))?,
-            entered: build(resolver)?,
+            // The loopback and container targets: this client applies the
+            // managed-port rule itself (bare probes before a companion is
+            // ready included), so the process's loopback gate is off for
+            // it alone (X-cmp09-fix-2). Entered URLs keep the gate.
+            fixed: build(Arc::new(LocalOnly(Arc::clone(&resolver))))?.without_loopback_gate(),
+            entered: build(Arc::new(LocalhostIsV4(resolver)))?,
+            bindings: None,
+            loopback: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The same, serving the supervisor too: the ports in `bindings` are
+    /// companions Lodestar runs (see the type's notes). One such client is
+    /// shared by every path, so a probe by any of them serves the rest.
+    pub fn with_bindings(mut self, bindings: Arc<Bindings>) -> CompanionHttp {
+        self.bindings = Some(bindings);
+        self
     }
 
     async fn once(
@@ -322,11 +400,7 @@ impl CompanionHttp {
         let headers = req.headers_mut();
         headers.insert(USER_AGENT, ReqHeaderValue::from_static(PROBE_USER_AGENT));
         for (name, value) in &request.headers {
-            let name = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
-                .map_err(|_| AdapterError::Protocol("header name"))?;
-            let mut v = ReqHeaderValue::from_bytes(value.expose().as_bytes())
-                .map_err(|_| AdapterError::Protocol("header value"))?;
-            v.set_sensitive(value.is_secret());
+            let (name, v) = wire_header(name, value)?;
             headers.append(name, v);
         }
         if let Some(body) = &request.body {
@@ -363,15 +437,57 @@ impl CompanionHttp {
         match request.target {
             Target::Loopback(port) => {
                 let p = port.get();
-                let v4 = parse(&format!("http://127.0.0.1:{p}{path}"))?;
-                match self.once(&self.fixed, v4, request).await {
-                    // Nothing on IPv4 loopback: a companion may listen on
-                    // `::1` only.
-                    Err(AdapterError::Unreachable) => {
-                        let v6 = parse(&format!("http://[::1]:{p}{path}"))?;
-                        self.once(&self.fixed, v6, request).await
+                let url = |v6: bool| {
+                    let host = if v6 { "[::1]" } else { "127.0.0.1" };
+                    parse(&format!("http://{host}:{p}{path}"))
+                };
+                // A request that can't be built never tells where the
+                // companion listens.
+                sendable(request)?;
+                // A companion Lodestar runs: `127.0.0.1` alone, and what
+                // carries something only to the child that's ready there.
+                if let Some(b) = self.bindings.as_ref().filter(|b| b.managed(p)) {
+                    if b.ready(p) {
+                        return self.once(&self.fixed, url(false)?, request).await;
                     }
-                    other => other,
+                    // Not ready: still starting while a start is under way,
+                    // and otherwise not ready (stopped, removed, failed, or
+                    // waiting for you). Only for a managed port, so detection
+                    // still reads nothing at an unmanaged one as "not here".
+                    let why = not_ready(b, p);
+                    // What carries something is refused before it's sent.
+                    if !bare(request) {
+                        return Err(why);
+                    }
+                    // A bare probe goes, as before; nothing there yet is why.
+                    return match self.once(&self.fixed, url(false)?, request).await {
+                        Err(AdapterError::Unreachable | AdapterError::Timeout) => Err(why),
+                        got => got,
+                    };
+                }
+                let remembered = self.loopback_of(p);
+                // `127.0.0.1` keeps a port for good.
+                if remembered == Some(false) {
+                    return self.once(&self.fixed, url(false)?, request).await;
+                }
+                // Everything asks `127.0.0.1` first. With nothing there, a
+                // bare probe goes looking on `::1`, and what carries
+                // something follows only where a probe has found the port.
+                let look = bare(request) || remembered == Some(true);
+                match self.once(&self.fixed, url(false)?, request).await {
+                    Err(AdapterError::Unreachable) if look => {
+                        let got = self.once(&self.fixed, url(true)?, request).await;
+                        if got.is_ok() && bare(request) {
+                            self.remember_loopback(p, true);
+                        }
+                        got
+                    }
+                    got => {
+                        if listening(&got) {
+                            self.remember_loopback(p, false);
+                        }
+                        got
+                    }
                 }
             }
             Target::Container(name, port) => {
@@ -386,6 +502,79 @@ impl CompanionHttp {
     }
 }
 
+impl CompanionHttp {
+    fn loopback_of(&self, port: u16) -> Option<bool> {
+        let map = self.loopback.lock().unwrap_or_else(PoisonError::into_inner);
+        map.get(&port).copied()
+    }
+
+    /// `127.0.0.1` takes a port for good, over `::1` too; `::1` is
+    /// remembered only while nothing is.
+    fn remember_loopback(&self, port: u16, v6: bool) {
+        let mut map = self.loopback.lock().unwrap_or_else(PoisonError::into_inner);
+        if v6 {
+            map.entry(port).or_insert(true);
+        } else {
+            map.insert(port, false);
+        }
+    }
+}
+
+/// A request header as it goes on the wire, marked sensitive if secret.
+fn wire_header(
+    name: &crate::adapter::HeaderName,
+    value: &crate::adapter::HeaderValue,
+) -> Result<(reqwest::header::HeaderName, ReqHeaderValue), AdapterError> {
+    let name = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
+        .map_err(|_| AdapterError::Protocol("header name"))?;
+    let mut v = ReqHeaderValue::from_bytes(value.expose().as_bytes())
+        .map_err(|_| AdapterError::Protocol("header value"))?;
+    v.set_sensitive(value.is_secret());
+    Ok((name, v))
+}
+
+/// Whether every header of `request` can go on the wire: what
+/// [`CompanionHttp::once`] would refuse before it connects.
+fn sendable(request: &ProbeRequest<'_>) -> Result<(), AdapterError> {
+    request
+        .headers
+        .iter()
+        .try_for_each(|(name, value)| wire_header(name, value).map(drop))
+}
+
+/// A probe that carries nothing: no header (so no cookie and no key), no
+/// body and no query. [`ProbeRequest::new`] with a plain path builds
+/// exactly this.
+fn bare(request: &ProbeRequest<'_>) -> bool {
+    matches!(request.method, Method::Get)
+        && request.headers.is_empty()
+        && request.body.is_none()
+        && !request.path.as_str().contains('?')
+}
+
+/// Why a managed port that isn't ready is refused: still starting while a
+/// start is under way ([`Bindings::starting`]), and otherwise not ready.
+fn not_ready(b: &Bindings, port: u16) -> AdapterError {
+    if b.starting(port) {
+        AdapterError::Starting
+    } else {
+        AdapterError::NotReady
+    }
+}
+
+/// Whether the outcome shows something accepted the connection: an answer,
+/// or a failure that can only follow one.
+fn listening(got: &Result<ProbeResponse, AdapterError>) -> bool {
+    !matches!(
+        got,
+        Err(AdapterError::Unreachable
+            | AdapterError::NotReady
+            | AdapterError::Starting
+            | AdapterError::Timeout
+            | AdapterError::Blocked)
+    )
+}
+
 impl GuardedHttp for CompanionHttp {
     fn send<'a>(
         &'a self,
@@ -394,9 +583,20 @@ impl GuardedHttp for CompanionHttp {
         Box::pin(async move {
             // One deadline for everything, both loopback families and the
             // whole body included, so a slow drip can't outlast it.
+            // Past the deadline at a managed port that isn't ready, the
+            // answer is the same as a probe that found nothing there.
             tokio::time::timeout(request.limits.timeout(), self.dispatch(&request))
                 .await
-                .unwrap_or(Err(AdapterError::Timeout))
+                .unwrap_or_else(|_| {
+                    Err(match (request.target, self.bindings.as_deref()) {
+                        (Target::Loopback(port), Some(b))
+                            if b.managed(port.get()) && !b.ready(port.get()) =>
+                        {
+                            not_ready(b, port.get())
+                        }
+                        _ => AdapterError::Timeout,
+                    })
+                })
         })
     }
 }
@@ -435,6 +635,7 @@ fn net_error(e: NetError) -> AdapterError {
     match e {
         NetError::Blocked(_) => AdapterError::Blocked,
         NetError::Resolve | NetError::Connect => AdapterError::Unreachable,
+        NetError::NotReady => AdapterError::NotReady,
         NetError::Timeout => AdapterError::Timeout,
         NetError::TooLarge => AdapterError::TooLarge,
         NetError::InvalidUrl(_) => AdapterError::Protocol("URL"),
@@ -445,6 +646,63 @@ fn net_error(e: NetError) -> AdapterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only [`ProbeRequest::new`]'s request is bare: anything that could
+    /// carry a key, a cookie or a password isn't, whatever its values.
+    #[test]
+    fn only_a_request_that_carries_nothing_is_bare() {
+        let t = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
+        let new = || ProbeRequest::new(&t, RequestPath::parse("/x").unwrap(), Limits::PROBE);
+        assert!(bare(&new()));
+        assert!(bare(&new().session_cookie(&[])));
+        let name = crate::adapter::HeaderName::new("X-Api-Key").unwrap();
+        let plain = crate::adapter::HeaderValue::plain("v").unwrap();
+        let secret = crate::adapter::HeaderValue::secret(Secret::new("k")).unwrap();
+        assert!(!bare(&new().header(name, plain)));
+        assert!(!bare(&new().header(name, secret)));
+        assert!(!bare(&new().post(Vec::new())));
+        assert!(!bare(&new().put(b"{}".to_vec())));
+        let query = RequestPath::parse("/x?apikey=k").unwrap();
+        assert!(!bare(&ProbeRequest::new(&t, query, Limits::PROBE)));
+    }
+
+    /// `127.0.0.1` keeps a port for good and takes one remembered as `::1`;
+    /// ports don't mix.
+    #[test]
+    fn ipv4_loopback_keeps_a_port_and_takes_one_from_ipv6() {
+        let http = CompanionHttp::new().unwrap();
+        assert_eq!(http.loopback_of(8080), None);
+        http.remember_loopback(8080, false);
+        http.remember_loopback(8080, true);
+        assert_eq!(http.loopback_of(8080), Some(false), "kept for good");
+        http.remember_loopback(9696, true);
+        assert_eq!(http.loopback_of(9696), Some(true));
+        http.remember_loopback(9696, false);
+        assert_eq!(http.loopback_of(9696), Some(false), "127.0.0.1 takes it");
+        http.remember_loopback(9696, true);
+        assert_eq!(http.loopback_of(9696), Some(false));
+        assert_eq!(http.loopback_of(8081), None);
+    }
+
+    /// An answer, or a failure that only an answer can cause, shows a
+    /// listener; a refusal, a timeout or the guard's refusal doesn't.
+    #[test]
+    fn only_an_exchange_shows_a_listener() {
+        for e in [
+            AdapterError::Unreachable,
+            AdapterError::NotReady,
+            AdapterError::Starting,
+            AdapterError::Timeout,
+            AdapterError::Blocked,
+        ] {
+            assert!(!listening(&Err(e)));
+        }
+        for e in [AdapterError::TooLarge, AdapterError::Protocol("x")] {
+            assert!(listening(&Err(e)));
+        }
+        let ok = ProbeResponse::new(200, Vec::new(), &Limits::PROBE);
+        assert!(listening(&ok));
+    }
 
     #[test]
     fn entered_urls_join_on_the_same_host() {
@@ -561,6 +819,8 @@ mod tests {
         );
         assert_eq!(net_error(NetError::Connect), AdapterError::Unreachable);
         assert_eq!(net_error(NetError::Resolve), AdapterError::Unreachable);
+        // Not ready is its own error, never unreachable.
+        assert_eq!(net_error(NetError::NotReady), AdapterError::NotReady);
         assert_eq!(net_error(NetError::Timeout), AdapterError::Timeout);
         assert_eq!(net_error(NetError::TooLarge), AdapterError::TooLarge);
         assert!(matches!(
@@ -573,6 +833,8 @@ mod tests {
     fn health_and_detection_read_errors_the_same_way() {
         assert_eq!(health_of(AdapterError::Blocked), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::Timeout), HealthStatus::Unreachable);
+        assert_eq!(health_of(AdapterError::NotReady), HealthStatus::Unreachable);
+        assert_eq!(health_of(AdapterError::Starting), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::TooLarge), HealthStatus::Unhealthy);
         let lo = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
         let entered = Target::Entered(EnteredUrl::parse("http://10.0.0.2").unwrap());
@@ -585,6 +847,16 @@ mod tests {
         assert_eq!(
             not_found_or(AdapterError::Blocked, &lo),
             Err(AdapterError::Blocked)
+        );
+        // Still starting at a fixed target is said, not read as "not here".
+        assert_eq!(
+            not_found_or(AdapterError::Starting, &lo),
+            Err(AdapterError::Starting)
+        );
+        // Not ready is said, not read as "not here".
+        assert_eq!(
+            not_found_or(AdapterError::NotReady, &entered),
+            Err(AdapterError::NotReady)
         );
     }
 

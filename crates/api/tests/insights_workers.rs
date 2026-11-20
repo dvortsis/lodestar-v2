@@ -165,6 +165,7 @@ impl WorkersApi for Fleet {
         Box::pin(async move {
             Ok(WorkerList {
                 allowed: true,
+                start_failure: None,
                 workers: self.0.clone(),
             })
         })

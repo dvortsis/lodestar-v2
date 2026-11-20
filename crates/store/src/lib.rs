@@ -54,8 +54,10 @@ pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
-    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, KEPT_RULES, LATEST_HITS_CHUNK,
-    Quarantined, Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX, is_floor_hold,
+    CORE_AFTER_KEY, CORE_FOUND_KEY, CORE_HELD_KEY, CORE_JUDGED_KEY, CORE_PASS_KEY, CORE_PHASE_KEY,
+    CORE_SEEN_KEY, CORE_START_KEY, CORE_UNREADABLE_KEY, CorePass, FLOOR_RULES, FilesBound,
+    FilterHit, FilterState, Filtered, Held, HoldRow, KEPT_RULES, LATEST_HITS_CHUNK, Quarantined,
+    Refiled, SHADOW, Tombstone, WORKER_FLOOR_PREFIX, is_floor_hold, is_kept_hold,
 };
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
@@ -153,11 +155,21 @@ pub enum Error {
     /// A usenet item met a promote or verify path: nothing verifies one
     /// (UN-0, `unverified::Network::Usenet`).
     NeverVerified,
+    /// SQLite kept another journal mode when asked for WAL: its VFS has no
+    /// shared memory (X-store-wal-nits). The store refuses to open rather
+    /// than run without it.
+    WalUnavailable,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::Sqlite(e) if self.is_busy() => write!(
+                f,
+                "the store is busy ({e}): another connection or program is using it. Nothing is \
+                 wrong with the store; try again shortly. If this keeps happening, check that \
+                 the data folder isn't on a network share or under /mnt/user."
+            ),
             Error::Sqlite(e) => write!(f, "sqlite: {e}"),
             Error::Codec(e) => e.fmt(f),
             Error::Compression(e) => write!(f, "compression: {e}"),
@@ -171,7 +183,26 @@ impl fmt::Display for Error {
             Error::NotFound(what) => write!(f, "not found: {what}"),
             Error::ImportNotRunning => write!(f, "the import job isn't taking batches"),
             Error::NeverVerified => write!(f, "a usenet item is never verified"),
+            Error::WalUnavailable => write!(
+                f,
+                "the data folder can't use SQLite's WAL journal: keep it on a local disk, not a network share"
+            ),
         }
+    }
+}
+
+impl Error {
+    /// Whether another connection's lock refused this call (SQLite busy or
+    /// locked): nothing is wrong with the store, and the same call can be
+    /// tried again once that connection lets go.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            Error::Sqlite(e) if matches!(
+                e.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+            )
+        )
     }
 }
 
@@ -389,10 +420,7 @@ impl Preparer {
             }
             other => other?,
         };
-        if shape.depth > limits.max_path_depth || shape.longest_path > limits.max_path_bytes as u64
-        {
-            return Err(Error::Corrupt("file tree over its limits"));
-        }
+        within_path_limits(&shape)?;
         if shape.components > max_components || shape.path_bytes > max_path_bytes {
             return Err(Error::Corrupt(OVER_BUDGET));
         }
@@ -410,6 +438,22 @@ impl Preparer {
         prepare(&mut self.codec, self.archive_raw, info, raw_info)
     }
 }
+
+/// Refuses a file tree with a path deeper or longer than metainfo allows,
+/// which no writer stores: checked before anything decodes it.
+pub(crate) fn within_path_limits(shape: &filetree::Shape) -> Result<()> {
+    let limits = lodestar_metainfo::Limits::DEFAULT;
+    if shape.depth > limits.max_path_depth || shape.longest_path > limits.max_path_bytes as u64 {
+        return Err(Error::Corrupt("file tree over its limits"));
+    }
+    Ok(())
+}
+
+/// The `settings` key [`Store::sweep_held_stored`] sets once it has run.
+pub const HELD_SWEEP_KEY: &str = "store.held_sweep";
+
+/// Held hashes [`Store::sweep_held_stored`] reads per transaction.
+pub const SWEEP_BATCH: usize = 2_000;
 
 /// A prepared torrent to commit, with its provenance.
 #[derive(Debug, Clone, Copy)]
@@ -477,6 +521,10 @@ pub struct Written {
     /// The classification rules changed since the batch was enriched: its
     /// torrents are marked for background enrichment.
     pub stale_class: bool,
+    /// Stored torrents a held decision in `filtered` covers, deleted with
+    /// the hold. Ids are never reused, so hot-column slots left behind are
+    /// never read again.
+    pub deleted: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,24 +542,31 @@ pub enum Inserted {
     /// this way; [`Store::insert`] and `WriteBatch::torrents` (imports)
     /// never return it.
     Refused,
+    /// Not written: one of its swarm hashes is held (a tombstone or a
+    /// quarantine row), read in the write's own transaction, so a hold
+    /// written since the batch was judged still keeps it out. Only
+    /// [`WriteBatch::prepared`] returns it.
+    Held,
 }
 
 impl Inserted {
     /// The torrent's id.
     ///
     /// # Panics
-    /// On [`Inserted::Refused`], which only `WriteBatch::prepared`
-    /// returns: read those with [`stored`](Self::stored).
+    /// On [`Inserted::Refused`] or [`Inserted::Held`], which only
+    /// `WriteBatch::prepared` returns: read those with
+    /// [`stored`](Self::stored).
     pub fn id(self) -> i64 {
         self.stored()
             .expect("only WriteBatch::prepared is refused; read it with stored()")
     }
 
-    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused).
+    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused)
+    /// or [`Held`](Inserted::Held).
     pub fn stored(self) -> Option<i64> {
         match self {
             Inserted::New(id) | Inserted::Existing(id) => Some(id),
-            Inserted::Refused => None,
+            Inserted::Refused | Inserted::Held => None,
         }
     }
 }
@@ -631,8 +686,8 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        if active.is_some_and(|id| codec_has(&conn, id).ok() != Some(true)) {
-            return Err(Error::Corrupt("active file dictionary is missing"));
+        if let Some(id) = active {
+            active_dict_present(&conn, id)?;
         }
         codec.set_active(active);
         Ok(Store {
@@ -761,25 +816,32 @@ impl Store {
             .collect::<Result<_>>()?;
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         filter::write(&tx, batch.filtered)?;
+        // Nothing stays stored under a hash this batch holds back.
+        let deleted = delete_held(&tx, batch.filtered)?;
         let stale_class = match batch.class_gen {
             Some(g) if rules::class_gen(&tx)? != g => {
                 let mut stmt = tx.prepare_cached(
                     "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
                 )?;
-                for ins in out.iter().chain(&prepared) {
-                    stmt.execute([ins.id()])?;
+                // Only what was stored: a refused or held item has no row.
+                for id in out.iter().chain(&prepared).filter_map(|i| i.stored()) {
+                    stmt.execute([id])?;
                 }
                 true
             }
             _ => false,
         };
         tx.commit()?;
+        if !deleted.is_empty() {
+            self.scrub_wal();
+        }
         Ok(Written {
             torrents: out,
             prepared,
             touched,
             swarm,
             stale_class,
+            deleted,
         })
     }
 
@@ -1045,7 +1107,9 @@ impl Store {
     /// swarm hash: that keeps the key private even beside a public import,
     /// as `Gate::check` and the writer's `stored_private` hold. They are
     /// left out here, not after, so `limit` counts only keys that can be
-    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`).
+    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`). Nor
+    /// one held under either swarm hash (a tombstone or a quarantine row):
+    /// nothing is stored under it, so it's never fetched again.
     pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.info_hash FROM torrents t \
@@ -1053,6 +1117,10 @@ impl Store {
              AND NOT EXISTS (SELECT 1 FROM unverified_items u \
                  WHERE u.network = ?3 AND u.flags & ?4 != 0 \
                  AND u.key IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             AND NOT EXISTS (SELECT 1 FROM tombstones h \
+                 WHERE h.hash IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             AND NOT EXISTS (SELECT 1 FROM quarantine h \
+                 WHERE h.hash IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
              ORDER BY t.id LIMIT ?5",
         )?;
         let rows = stmt.query_map(
@@ -1073,6 +1141,69 @@ impl Store {
             ))
         })
         .collect()
+    }
+
+    /// Deletes, once, every stored torrent under a hash that's held (a
+    /// tombstone or a quarantine row), as a hold's own write now does, and
+    /// logs them so the search indexer drops their documents. It walks
+    /// the hold tables in batches of [`SWEEP_BATCH`] hashes, one short
+    /// transaction each, and sets the marker ([`HELD_SWEEP_KEY`]) with the
+    /// last, so it runs to the end once and never again. Returns the
+    /// deleted ids, `None` when it ran before.
+    pub fn sweep_held_stored(&mut self) -> Result<Option<Vec<i64>>> {
+        if self.setting_i64(HELD_SWEEP_KEY)?.is_some() {
+            return Ok(None);
+        }
+        let tables = ["tombstones", "quarantine"];
+        let mut ids = Vec::new();
+        for (t, table) in tables.iter().enumerate() {
+            let mut after: Vec<u8> = Vec::new();
+            loop {
+                // One short transaction per batch of held hashes, in key
+                // order, so the write lock is never held for long.
+                let tx = begin_write(&mut self.conn)?;
+                let held: Vec<Vec<u8>> = tx
+                    .prepare_cached(&format!(
+                        "SELECT hash FROM {table} WHERE hash > ?1 ORDER BY hash LIMIT ?2"
+                    ))?
+                    .query_map(params![after, SWEEP_BATCH as i64], |r| r.get(0))?
+                    .collect::<std::result::Result<_, _>>()?;
+                {
+                    // Cached: the delete carries Insights' trigger.
+                    let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+                    let mut log =
+                        tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+                    for h in &held {
+                        for id in all_by_hash(&tx, h)? {
+                            // Gone already when another hash found it.
+                            if delete.execute([id])? > 0 {
+                                log.execute([id])?;
+                                ids.push(id);
+                            }
+                        }
+                    }
+                }
+                let last = held.len() < SWEEP_BATCH;
+                if last && t == tables.len() - 1 {
+                    // The marker with the last batch: a stop before it
+                    // runs the sweep again, which deletes nothing twice.
+                    tx.execute(
+                        "INSERT INTO settings (key, value) VALUES (?1, 1)
+                         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                        [HELD_SWEEP_KEY],
+                    )?;
+                }
+                tx.commit()?;
+                match held.last() {
+                    Some(h) if !last => after.clone_from(h),
+                    _ => break,
+                }
+            }
+        }
+        if !ids.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(Some(ids))
     }
 
     /// Torrents changed since `after` (a `reindex_log` sequence number):
@@ -1220,7 +1351,72 @@ impl Store {
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
+
+    /// Tunes this connection for a long run of large write transactions
+    /// (an offline import, X-import-rate-1m) with a page cache of
+    /// `Some(cache_mib)`, or back to SQLite's defaults with `None`. Only
+    /// this connection changes; nothing is written to the file.
+    ///
+    /// - **Page cache:** `cache_mib`, at most [`BULK_CACHE_MIB`] and at
+    ///   least SQLite's 2 MiB, instead of SQLite's 2 MiB. The caller sizes
+    ///   it to the memory it may use (the CLI: `store.mmap_mib`). A
+    ///   batch's dirty pages then stay in memory until it commits instead
+    ///   of spilling into the WAL mid-transaction (and being rewritten
+    ///   there), and the hash and id b-trees' inner pages stay cached
+    ///   between batches, so each lookup and insert doesn't read them
+    ///   again once the file outgrows `mmap_size`.
+    /// - **WAL auto-checkpoint:** every [`BULK_CHECKPOINT_PAGES`] pages
+    ///   (256 MiB at the store's 16 KiB pages) instead of SQLite's 1,000
+    ///   (16 MiB): one checkpoint, with its `fsync`, every few dozen
+    ///   batches instead of one every batch. The WAL stays bounded by it.
+    /// - **Prepared-statement cache:** [`BULK_STATEMENTS`] statements
+    ///   instead of rusqlite's 16. An import batch's commit runs more
+    ///   distinct statements than 16 for each record, so with the default
+    ///   they evicted each other and were compiled again record by record.
+    pub fn set_bulk_writes(&self, cache_mib: Option<u64>) -> Result<()> {
+        let (cache_kib, checkpoint, statements) = match cache_mib {
+            Some(mib) => (
+                (mib.min(BULK_CACHE_MIB) as i64 * 1024).max(DEFAULT_CACHE_KIB),
+                BULK_CHECKPOINT_PAGES,
+                BULK_STATEMENTS,
+            ),
+            None => (
+                DEFAULT_CACHE_KIB,
+                DEFAULT_CHECKPOINT_PAGES,
+                DEFAULT_STATEMENTS,
+            ),
+        };
+        self.conn.set_prepared_statement_cache_capacity(statements);
+        self.conn.pragma_update(None, "cache_size", -cache_kib)?;
+        self.conn.query_row(
+            &format!("PRAGMA wal_autocheckpoint = {checkpoint}"),
+            [],
+            |_| Ok(()),
+        )?;
+        Ok(())
+    }
 }
+
+/// [`Store::set_bulk_writes`]'s largest page cache. An offline import runs
+/// with the server stopped, so this is memory the server would otherwise
+/// hold; the CLI takes less when `store.mmap_mib` is smaller.
+pub const BULK_CACHE_MIB: u64 = 256;
+/// [`Store::set_bulk_writes`]'s WAL auto-checkpoint, in pages.
+pub const BULK_CHECKPOINT_PAGES: i64 = 16_384;
+/// The most the WAL grows under [`Store::set_bulk_writes`] before a
+/// checkpoint: [`BULK_CHECKPOINT_PAGES`] of the store's 16 KiB pages
+/// (`schema::configure` sets the page size), plus one batch's
+/// transaction on top, which the auto-checkpoint waits for. Free space
+/// for an import counts it.
+pub const BULK_WAL_BYTES: u64 = BULK_CHECKPOINT_PAGES as u64 * 16_384 + (32 << 20);
+/// [`Store::set_bulk_writes`]'s prepared-statement cache.
+pub const BULK_STATEMENTS: usize = 128;
+/// rusqlite's default prepared-statement cache.
+const DEFAULT_STATEMENTS: usize = 16;
+/// SQLite's default page cache (`-2000`: 2,000 KiB).
+const DEFAULT_CACHE_KIB: i64 = 2000;
+/// SQLite's default WAL auto-checkpoint, in pages.
+const DEFAULT_CHECKPOINT_PAGES: i64 = 1000;
 
 /// Derives a torrent's rows from its info dict (the prepare step).
 fn prepare(
@@ -1269,6 +1465,44 @@ fn finders_in(touches: &[Touch], stopped: u64) -> HashMap<InfoHash, u64> {
     finders
 }
 
+/// Whether any of `hashes` is held: a tombstone or a quarantine row.
+fn is_held(tx: &Connection, hashes: impl Iterator<Item = InfoHash>) -> Result<bool> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM tombstones WHERE hash = ?1)
+             OR EXISTS (SELECT 1 FROM quarantine WHERE hash = ?1)",
+    )?;
+    for h in hashes {
+        if stmt.query_row([&h.0[..]], |r| r.get::<_, bool>(0))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Deletes the stored torrents under any hash a held decision in
+/// `filtered` covers, and logs them so the search indexer drops their
+/// documents: in the hold's own transaction, as every other hold path
+/// does. Returns the deleted ids.
+fn delete_held(tx: &Connection, filtered: &[Filtered<'_>]) -> Result<Vec<i64>> {
+    let mut ids = Vec::new();
+    for f in filtered.iter().filter(|f| f.held.is_some()) {
+        for h in f.hashes {
+            for id in all_by_hash(tx, h)? {
+                if ids.contains(&id) {
+                    continue;
+                }
+                // Cached: the delete carries Insights' trigger.
+                tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                    .execute([id])?;
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([id])?;
+                ids.push(id);
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// [`commit_one`] under a live source: `t`'s own when it's running, else
 /// the lowest live one that also found it in this batch. With none left,
 /// nothing is written ([`Inserted::Refused`]).
@@ -1279,6 +1513,10 @@ fn commit_live(
     stopped: u64,
     finders: &HashMap<InfoHash, u64>,
 ) -> Result<Inserted> {
+    // Held since it was judged: nothing is stored under a held hash.
+    if is_held(tx, t.torrent.swarm_hashes())? {
+        return Ok(Inserted::Held);
+    }
     if stopped & t.source.bit() as u64 == 0 {
         return commit_one(tx, codec, t);
     }
@@ -1555,6 +1793,18 @@ fn add_sources(conn: &Connection, id: i64, bits: u64) -> Result<()> {
     Ok(())
 }
 
+/// The active file dictionary `id` is stored: `Corrupt` only when the read
+/// answered and it isn't there. A read that fails (a busy or locked store
+/// above all) stays its own error, so a store that's only busy is never
+/// reported as corrupt.
+fn active_dict_present(conn: &Connection, id: i64) -> Result<()> {
+    if codec_has(conn, id)? {
+        Ok(())
+    } else {
+        Err(Error::Corrupt("active file dictionary is missing"))
+    }
+}
+
 fn codec_has(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
     conn.query_row("SELECT 1 FROM zstd_dicts WHERE id = ?1", [id], |_| Ok(()))
         .optional()
@@ -1567,6 +1817,21 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      SELECT id FROM torrents
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
+
+/// Every stored torrent under a swarm hash, as either of its own: what a
+/// hold on it deletes.
+const ALL_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
+     UNION
+     SELECT id FROM torrents
+     WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1";
+
+/// The ids [`ALL_BY_HASH`] finds under `hash`.
+pub(crate) fn all_by_hash(tx: &Connection, hash: &[u8]) -> Result<Vec<i64>> {
+    Ok(tx
+        .prepare_cached(ALL_BY_HASH)?
+        .query_map([hash], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?)
+}
 
 /// Begins a write transaction, taking the write lock up front (`BEGIN
 /// IMMEDIATE`) and waiting for it up to the busy timeout. A deferred one
@@ -1629,6 +1894,138 @@ fn get_u64(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X-import-rate-1m: bulk writes change only this connection's page
+    /// cache and WAL auto-checkpoint, and setting them back restores
+    /// SQLite's defaults. Another connection keeps the defaults throughout.
+    #[test]
+    fn bulk_writes_tune_only_this_connection_and_go_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        let other = Store::open(&db, StoreConfig::default()).unwrap();
+        let read = |s: &Store| {
+            let cache: i64 = s
+                .conn
+                .pragma_query_value(None, "cache_size", |r| r.get(0))
+                .unwrap();
+            let checkpoint: i64 = s
+                .conn
+                .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))
+                .unwrap();
+            (cache, checkpoint)
+        };
+        let defaults = (-DEFAULT_CACHE_KIB, DEFAULT_CHECKPOINT_PAGES);
+        assert_eq!(read(&store), defaults, "SQLite's own defaults");
+        store.set_bulk_writes(Some(1024)).unwrap();
+        assert_eq!(
+            read(&store),
+            (-(BULK_CACHE_MIB as i64) * 1024, BULK_CHECKPOINT_PAGES),
+            "held to the most"
+        );
+        assert_eq!(read(&other), defaults);
+        store.set_bulk_writes(Some(64)).unwrap();
+        assert_eq!(read(&store).0, -64 * 1024, "the caller's size below it");
+        store.set_bulk_writes(Some(0)).unwrap();
+        assert_eq!(
+            read(&store).0,
+            -DEFAULT_CACHE_KIB,
+            "never below SQLite's own"
+        );
+        store.set_bulk_writes(None).unwrap();
+        assert_eq!(read(&store), defaults);
+    }
+
+    /// A store with an active file dictionary, on disk, and a second
+    /// connection holding it exclusively (as an import does).
+    fn store_with_dict(dir: &std::path::Path) -> std::path::PathBuf {
+        let db = dir.join("lodestar.db");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO zstd_dicts (id, kind, created_at, samples, data) \
+                 VALUES (7, 'file', 1, 1, x'00')",
+                [],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 7)",
+                [FILE_DICT_SETTING],
+            )
+            .unwrap();
+        drop(store);
+        db
+    }
+
+    fn hold_exclusively(db: &std::path::Path) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open(db).unwrap();
+        c.pragma_update(None, "locking_mode", "EXCLUSIVE").unwrap();
+        c.execute_batch("BEGIN IMMEDIATE; COMMIT;").unwrap();
+        c
+    }
+
+    /// The active-dictionary check maps a refused read to the busy error,
+    /// not to `Corrupt`; a dictionary that's really missing is `Corrupt`.
+    #[test]
+    fn a_busy_dictionary_check_is_busy_and_a_missing_one_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store_with_dict(dir.path());
+        let read_only = || {
+            rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap()
+        };
+        // Free: present, and an id that isn't stored is corrupt.
+        let reader = read_only();
+        active_dict_present(&reader, 7).unwrap();
+        let missing = active_dict_present(&reader, 8).unwrap_err();
+        assert!(matches!(missing, Error::Corrupt(_)), "{missing}");
+        assert!(!missing.is_busy());
+        // The lock can't be taken while another connection has the store
+        // open, so the reader opens again once it's held.
+        drop(reader);
+
+        // Held: no wait (busy timeout 0), and the error says busy.
+        let held = hold_exclusively(&db);
+        let reader = read_only();
+        reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let busy = active_dict_present(&reader, 7).unwrap_err();
+        assert!(busy.is_busy(), "{busy}");
+        let says = busy.to_string();
+        assert!(
+            says.contains("try again") && !says.contains("corrupt"),
+            "{says}"
+        );
+        assert!(!matches!(busy, Error::Corrupt(_)));
+        drop(held);
+        active_dict_present(&reader, 7).unwrap();
+    }
+
+    /// Opening a store another connection holds exclusively fails as busy
+    /// once the busy timeout runs out, never as corrupt; free again, it
+    /// opens, and a store whose active dictionary is gone is corrupt.
+    #[test]
+    fn opening_a_held_store_is_busy_never_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store_with_dict(dir.path());
+        let held = hold_exclusively(&db);
+        let began = std::time::Instant::now();
+        let e = Store::open_reader(&db, StoreConfig::default()).unwrap_err();
+        assert!(e.is_busy(), "{e}");
+        // Bounded by the store's busy timeout, with room to spare.
+        assert!(began.elapsed() < std::time::Duration::from_secs(60));
+        drop(held);
+        Store::open_reader(&db, StoreConfig::default()).unwrap();
+
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute("DELETE FROM zstd_dicts WHERE id = 7", [])
+            .unwrap();
+        drop(c);
+        let e = Store::open_reader(&db, StoreConfig::default()).unwrap_err();
+        assert!(matches!(e, Error::Corrupt(_)), "{e}");
+    }
 
     #[test]
     fn hash_lookup_uses_indexes() {

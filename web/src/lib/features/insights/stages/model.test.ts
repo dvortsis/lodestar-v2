@@ -210,6 +210,7 @@ describe('mapDiscover', () => {
 		expect(find(model.more, 'keyspace').value).toBeNull();
 		expect(find(model.more, 'seen_filter').value).toBeNull();
 		expect(find(model.kpis, 'reply_ratio').value).toBe(0.75);
+		expect(find(model.kpis, 'reply_ratio').help).toMatch(/answered/);
 	});
 	it('draws harvested and reported on separate charts (no dual axis), gaps as null', () => {
 		expect(model.charts.map((c) => c.id)).toEqual(['discover-harvested', 'discover-reported']);

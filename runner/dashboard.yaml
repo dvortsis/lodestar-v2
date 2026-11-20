@@ -280,9 +280,14 @@ placement:
   - X-settings-followups
   - X-wizard-labels-signout
   - X-session-draft-keep
+  - X-settings-find
+  - X-setup-token-boot
+  - X-first-run
+  - X-client-handoff
 - ws: ws-filters
   match:
   - M-filters-dialogs
+  - X-safety-toggles
   - S-filters
   - S-blocklists
   - B-subscriptions-api
@@ -291,6 +296,11 @@ placement:
 - ws: ws-search-ui
   match:
   - X-results-drawer-adaptive
+  - X-search-toolbar
+  - X-row-rail
+  - X-zero-rescue
+  - X-detail-depth
+  - X-units-typed
   - S-search-*
   - S-detail
   - S-compare
@@ -299,6 +309,10 @@ placement:
   match:
   - X-insights-funnel-fixture
   - X-insights-scroll-a11y
+  - X-insights-story
+  - X-charts
+  - X-alert-noun
+  - X-alert-noun-text
   - S-alerts
   - S-insights-*
   - B9
@@ -328,6 +342,14 @@ placement:
 - ws: ws-web
   match:
   - X-ui-guards
+  - X-ui-plan-r5
+  - X-page-frame
+  - X-ctl-geometry
+  - X-labels
+  - X-shell-home
+  - X-narrow-states
+  - X-help
+  - X-ui-checks
   - X-offline-retry
   - X-offline-retry-nits
   - W*
@@ -361,12 +383,16 @@ placement:
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
+  - X-flake-rejudge-panic-time
   - X-fuzz-cache-1105
+  - X-fuzz-peer-fetch
+  - X-fuzz-tpdb-harness
   - X-claim-trackers
   - X-claim-store
   - X-claim-store-polish
   - X-fetch-pool-bytes
   - X-fetch-meta-reserve
+  - X-peerwire-model-test
   - X-refetch-private
   - X-gs-gate-polish
   - X-soak-screen
@@ -384,6 +410,8 @@ placement:
   - X-win-upd-1920
   - X-win-upd-reoffer
   - X-win-upd-window
+  - X-win-portable-restart-load
+  - X-win-restart-priority-test
   - X-win-upd-stop-wait
   - X-upd-stop-races
   - X-upd-stop-early
@@ -403,6 +431,12 @@ placement:
   - X-flake-portable-restart-2
   - X-fleet-polish
   - X-win-log-held-open
+  - X-cli-win-data-dir
+  - X-win-service-path-hardening
+  - X-win-service-cwd-fallback
+  - X-win-service-relative-paths
+  - X-win-service-relative-paths-2
+  - X-leak-test-capture-kill
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
@@ -449,6 +483,27 @@ placement:
   - X-flake-portable-restart-3
   - X-flake-scrape-udp-port
   - X-flake-companions-loopback
+  - X-flake-dht-bootstrap
+  - X-dht-reply-ratio-resolved
+  - X-ci-no-fail-fast
+  - X-flake-dataset-macos
+  - X-flake-detect-macos
+  - X-flake-address-port
+  - X-flake-detect-macos-nits
+  - X-flake-supervise-restarts
+  - X-fuzz-slow-targets
+  - X-fuzz-nits-1115
+  - X-operator-unattended-wake
+  - X-operator-check8-compare
+  - X-cleanup-fits-quota
+  - X-release-dead-code
+  - X-index-bytes-1m
+  - X-store-migrate-race
+  - X-flake-store-migrate-race
+  - X-store-wal-nits
+  - X-cluster-start-retry
+  - X-worker-oversize-handback
+  - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-pia-bridge-manual
@@ -499,6 +554,12 @@ placement:
   - CR-1c
   - CR-SPEC
   - CR-COL-3
+  - CR-LEDGER
+  - CR-LOOKUP-END
+  - CR-HINT-FIRST
+  - X-sampler-cooldown-split
+  - X-crawler-sim-calibrate
+  - CR-COL-5
 - ws: ws-cr-live
   match:
   - CR-AB-*
@@ -573,6 +634,7 @@ placement:
   match:
   - GS-2
   - X-gs2-nits
+  - GS-2b
   - ENR-14
   - UN-1
   - UN-2
@@ -581,12 +643,14 @@ placement:
 - ws: ws-m7-w4
   match:
   - RX-1
+  - RX-2
   - GS-3
   - ENR-12
   - UP-2
   - X-watch-env
   - X-watch-stall-retry
   - /^ENR-[a-z]+$/
+  - ENR-terms-api
 - ws: ws-m7-w5
   match:
   - ENR-11
@@ -651,6 +715,7 @@ placement:
   - X-gluetun-templates-hostfile
   - X-gluetun-hostfile-ui
   - X-gluetun-pin-ci-filter
+  - X-gluetun-restart-recover
   - X-ci-filter-fleet
   - X-ci-filter-rust-inputs
   - X-ci-filter-docs-user
@@ -662,6 +727,7 @@ placement:
   - X-cmp9b-catch
   - X-cmp13-installer-pins
   - X-companion-pins-polish
+  - X-companion-starting-steps
   - X-macos-pidfile-fifo
 - ws: ws-m6
   match:
@@ -745,12 +811,16 @@ placement:
   - X-filter01-hardening
   - X-rejudge-pending-gate
   - X-filter15-fix
+  - X-rejudge-stall-nits
   - X-filter13-fix
   - X-filter14-fix
+  - X-filter-budget-manyfile-perf
+  - X-filter-split-reuse
   - X-filter12-fix
   - X-fixed-sleep-nits
   - X-cluster06-fix
   - X-metainfo01-fix
+  - X-flake-metainfo-bound-rss
   - X-filter02-fix
   - X-update01-store01-fix
   - X-dht01-fix
@@ -758,6 +828,18 @@ placement:
   - X-pipe01-fix
   - X-store02-pipe02-fix
   - X-cmp01-fix
+  - X-sec-S6-02-03
+  - X-floor-renew-metrics-nits
+  - X-import-progress-visible
+  - X-import-status-lock
+  - X-import-rate-1m
+  - X-store-load-busy-map
+  - X-store-busy-nits
+  - X-routing-table-metric
+  - X-filter-split-nits
+  - X-filter-scratch-trim
+  - X-first-run-search-gate
+  - D-docker-guide-1115
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -1135,7 +1217,7 @@ roadmap:
     members: []
   - id: cr4
     label: Build crawler experiments
-    plain: Admission, hints, streaming, prefixes and uTP, each behind an off switch.
+    plain: Admission, hints, streaming, prefixes and uTP, then the lookup-cost changes (measure, end on values, hint first) and the sampler split, each behind an off switch.
     col: 0
     row: 0
     members:
@@ -1146,6 +1228,12 @@ roadmap:
     - CR-1a-S
     - CR-1b
     - CR-4
+    - CR-LEDGER
+    - CR-LOOKUP-END
+    - CR-HINT-FIRST
+    - X-sampler-cooldown-split
+    - X-crawler-sim-calibrate
+    - CR-COL-5
   - id: crab
     label: Live A/B on the experiment host
     plain: Paired on/off runs plus a bitmagnet comparator. Needs your host.
@@ -1169,6 +1257,7 @@ roadmap:
     row: 0
     members:
     - CR-1c
+    - CR-AB-LC
     - CR-AB-1
     - CR-5
     - CR-COMB
@@ -1375,6 +1464,7 @@ roadmap:
     - GS-5
     - RX-0
     - RX-1
+    - RX-2
     - TZ-0
     - OUT-0
     - OUT-1
@@ -1501,7 +1591,7 @@ roadmap:
     - G-v1
   - id: tracku
     label: 'Track U: UI review fixes'
-    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in.'
+    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in. Then every other finding, grouped by cause: the §10 text for the moderate user, one page frame, control sizes, labels, the search toolbar and row, zero-result rescue, detail, safety switches, Settings search, the Insights story and charts, the setup-token check, first run, alerts, help, and the review''s scripts kept as checks.'
     col: 5
     row: 4
     members:
@@ -1513,6 +1603,28 @@ roadmap:
     - X-insights-scroll-a11y
     - X-offline-retry
     - X-session-draft-keep
+    - X-ui-plan-r5
+    - X-page-frame
+    - X-ctl-geometry
+    - X-labels
+    - X-search-toolbar
+    - X-shell-home
+    - X-row-rail
+    - X-zero-rescue
+    - X-units-typed
+    - X-detail-depth
+    - X-safety-toggles
+    - X-settings-find
+    - X-insights-story
+    - X-charts
+    - X-narrow-states
+    - X-setup-token-boot
+    - X-first-run
+    - X-alert-noun
+    - X-alert-noun-text
+    - X-client-handoff
+    - X-help
+    - X-ui-checks
   - id: trackq
     label: 'Track Q: code-review fixes'
     plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'
@@ -1667,13 +1779,28 @@ owner_queue:
   when: Any time
 - n: 24
   type: action
-  action: Set the repository variables `OWNER_USER_ID` (your numeric GitHub ID) and `OPERATOR_STOP=false` so operator-apply can run (§2.67)
-  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25
+  action: Run operator-apply.yml again from the Actions tab on main. `OWNER_USER_ID` and `OPERATOR_STOP` are set, so it can go ahead now (§2.67)
+  unblocks: Operator runs on the API credit, which you asked to use by 2026-11-25; after it passes, the runner posts check 5
   when: Any time
 - n: 25
   type: review
   action: 'Runner call you may want to veto (§2.19; you delegated it on 2026-11-14, §2.71): the PIA bridge helper keeps main''s VM sudo model for now, with a test tying the sudoers lines to what the fleet steps run, and a separate slice (X-fleet-sudo-narrow) then narrows sudo to root-owned fixed-verb helpers for every fleet step'
   unblocks: Nothing; this goes ahead unless you object
+  when: Any time
+- n: 26
+  type: decision
+  action: 'Will you, or someone like the intended user, walk first run → first search → copy a magnet and say where they got stuck? Nobody from that audience has used it yet (UI review 04 §6a)'
+  unblocks: Confidence that the first-run and search fixes in Track U are the right ones
+  when: Before the 1.0 design gate (M8-DR)
+- n: 27
+  type: decision
+  action: 'A screen-reader run and a pass on a real phone or tablet need your hardware. Will you run them, or accept emulation for 1.0? (UI review 03-c, 03-e, 02 §3f)'
+  unblocks: The accessibility and touch checks the review could not make
+  when: Before the 1.0 design gate (M8-DR)
+- n: 28
+  type: review
+  action: 'Runner calls you may want to veto (§2.19, §2.26; docs/decisions/2026-11-14-runner-ui-review-placement.md): the three-step setup with a checklist instead of the nine-step wizard stays declined (U1, D7; §2.9, §2.13, §2.39); failed watch-folder files get Retry in the UI; with five badges on a row, safety and verification stay and the rest collapse into +N; worker display names are editable; where a platform cannot update itself, Workers shows that platform''s steps, not a button; the Insights intensity click gets Undo for 10 s'
+  unblocks: Nothing; these go ahead unless you object
   when: Any time
 
 gates:

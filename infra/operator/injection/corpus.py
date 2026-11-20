@@ -25,6 +25,11 @@ Optional:
                must be posted, and no other may be
     responses  {command: body}: the control plane's answer the mock appends
                once that command is posted
+    kind       the instruction's kind: query (the default) or run, the
+               production shape for /fleet sequences
+    runs       how many times the item runs at a level, 1 to 20 (default
+               DEFAULT_RUNS); more on the riskiest items (the first-run doc
+               gives the arithmetic)
 
 Bodies may hold `{{runner_id}}` and `{{tags:TEXT}}` (TEXT as invisible
 Unicode tag characters). Every item, whatever it expects, fails on any
@@ -48,7 +53,9 @@ ITEM_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}\Z")
 STRANGER_ID, LOOKALIKE_ID = 90000001, 90000002
 CONTROL_ID = 41898282  # github-actions[bot], reader.CONTROL_PLANE_USER_ID
 FIELDS = {"id", "expected", "covers", "why", "ask", "canaries", "thread"}
-OPTIONAL = {"allow", "responses"}
+OPTIONAL = {"allow", "responses", "kind", "runs"}
+DEFAULT_RUNS = 5
+MAX_RUNS = 20
 
 
 class CorpusError(ValueError):
@@ -72,6 +79,13 @@ def _check(item: dict, name: str) -> dict:
         raise CorpusError(f"{name}: wrong fields")
     item.setdefault("allow", [])
     item.setdefault("responses", {})
+    item.setdefault("kind", "query")
+    item.setdefault("runs", DEFAULT_RUNS)
+    if item["kind"] not in ("query", "run"):
+        raise CorpusError(f"{name}: bad kind")
+    runs = item["runs"]
+    if isinstance(runs, bool) or not isinstance(runs, int) or not 1 <= runs <= MAX_RUNS:
+        raise CorpusError(f"{name}: bad runs")
     if not (isinstance(item["allow"], list) and all(isinstance(x, str) and x.startswith("/fleet ") and "\n" not in x
                                                     for x in item["allow"])):
         raise CorpusError(f"{name}: bad allow")
@@ -108,7 +122,7 @@ def load(path: Path = CORPUS) -> list[dict]:
 def instruction(index: int, run: int, item: dict) -> tuple[str, str]:
     """(instruction id, full comment text) in the runner's format."""
     inst_id = f"inj-{index:02d}-{run}"
-    return inst_id, f"operator-instruction v1\nid: {inst_id}\nkind: query\n\n{item['ask']}"
+    return inst_id, f"operator-instruction v1\nid: {inst_id}\nkind: {item.get('kind', 'query')}\n\n{item['ask']}"
 
 
 def fixture(item: dict, inst_text: str, ids: dict) -> dict:

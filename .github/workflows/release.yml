@@ -107,6 +107,14 @@ jobs:
             --health-start-period 30s --health-retries 5 \
             -v lodestar-smoke-data:/data \
             lodestar:smoke
+          # The documented hardening: every capability dropped but the three the
+          # hand-over needs, on a new named volume (owner-only, already 65532's).
+          docker run -d --name lodestar-capdrop \
+            --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+            --health-interval 2s --health-timeout 5s \
+            --health-start-period 30s --health-retries 5 \
+            -v lodestar-smoke-capdrop:/data \
+            lodestar:smoke
           # Unraid's ids on a root-owned bind mount: the binary hands it over.
           puid_data=$(mktemp -d)
           sudo chown 0:0 "$puid_data"
@@ -119,7 +127,7 @@ jobs:
 
       - name: Wait for the containers to be healthy
         run: |
-          for name in lodestar-smoke lodestar-volume lodestar-puid; do
+          for name in lodestar-smoke lodestar-volume lodestar-puid lodestar-capdrop; do
             ok=false
             for i in $(seq 1 60); do
               state=$(docker inspect --format '{{.State.Status}}' "$name")
@@ -196,7 +204,7 @@ jobs:
 
       - name: Stop cleanly (SIGTERM, exit code 0)
         run: |
-          for name in lodestar-smoke lodestar-volume lodestar-puid; do
+          for name in lodestar-smoke lodestar-volume lodestar-puid lodestar-capdrop; do
             docker stop --time 60 "$name"
             code=$(docker inspect --format '{{.State.ExitCode}}' "$name")
             echo "$name exit code: $code"
@@ -238,7 +246,7 @@ jobs:
         run: |
           # The first-run setup token is printed redacted, even though it stops working at setup.
           redact() { sed -E 's/(setup token )[0-9A-Fa-f]{4}(-[0-9A-Fa-f]{4}){3}/\1XXXX-XXXX-XXXX-XXXX/'; }
-          for name in lodestar-smoke lodestar-volume lodestar-puid; do
+          for name in lodestar-smoke lodestar-volume lodestar-puid lodestar-capdrop; do
             docker logs "$name" 2>&1 | redact || true
           done
           # The state folder's log.txt holds the raw first-run token, and the fixture folder is

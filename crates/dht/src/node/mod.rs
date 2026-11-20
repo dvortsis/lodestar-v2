@@ -12,6 +12,8 @@
 
 mod actor;
 mod hints;
+mod ledger;
+mod limits;
 mod lookup;
 mod peers;
 mod prefixes;
@@ -22,6 +24,7 @@ pub mod shard;
 mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod tids;
 mod tokens;
 mod transport;
 
@@ -41,6 +44,10 @@ use lodestar_metainfo::InfoHash;
 use crate::compact::NodeId;
 use crate::state::StateError;
 
+pub use ledger::{
+    FIRST_VALUES_MS, HintOutcome, HistogramSnapshot, LedgerEnd, LedgerSnapshot, QueryPurpose,
+    VALUES_BUCKETS,
+};
 pub use stream::{
     LookupEnd, LookupSession, STREAM_BATCH, STREAM_QUEUE, STREAM_SEEN, SessionAdmission,
     SessionAdmit, SessionEnd,
@@ -270,6 +277,11 @@ pub struct Stats {
     pub queries_in_unsolicited: AtomicU64,
     pub responses_in: AtomicU64,
     pub errors_in: AtomicU64,
+    /// Queries answered: a response or error matched to a query still
+    /// awaiting it, from the address asked. Each query resolves once, as
+    /// answered here or as a timeout, so a late, duplicate, unknown or
+    /// spoofed reply never counts.
+    pub answered: AtomicU64,
     pub queries_out: AtomicU64,
     pub timeouts: AtomicU64,
     /// Queries not sent because of the rate limit or outstanding cap.
@@ -281,6 +293,9 @@ pub struct Stats {
     pub spoofed: AtomicU64,
     /// Gauge: nodes across routing tables.
     pub routing_nodes: AtomicU64,
+    /// Gauge: those of them that are good by BEP 5 (answered us within 15
+    /// minutes, or answered before and queried us within 15 minutes).
+    pub routing_good_nodes: AtomicU64,
     /// Gauge: queries awaiting an answer.
     pub outstanding: AtomicU64,
     pub harvested_sample: AtomicU64,
@@ -383,6 +398,8 @@ pub struct Stats {
     /// when one is set). Only with `target_prefixes` on or such a shard.
     pub target_prefix_queries: [AtomicU64; TargetKind::ALL.len()],
     pub target_prefix_cycles: AtomicU64,
+    /// CR-LEDGER: the lookup ledger.
+    pub ledger: ledger::Ledger,
 }
 
 impl Stats {
@@ -392,6 +409,7 @@ impl Stats {
 
     pub fn snapshot(&self) -> StatsSnapshot {
         let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let routing_nodes = g(&self.routing_nodes);
         StatsSnapshot {
             packets_in: g(&self.packets_in),
             packets_out: g(&self.packets_out),
@@ -400,13 +418,18 @@ impl Stats {
             queries_in_unsolicited: g(&self.queries_in_unsolicited),
             responses_in: g(&self.responses_in),
             errors_in: g(&self.errors_in),
+            answered: g(&self.answered),
             queries_out: g(&self.queries_out),
             timeouts: g(&self.timeouts),
             throttled: g(&self.throttled),
             replies_dropped: g(&self.replies_dropped),
             send_errors: g(&self.send_errors),
             spoofed: g(&self.spoofed),
-            routing_nodes: g(&self.routing_nodes),
+            routing_nodes,
+            // Two atomics, stored one after the other on the tick: a
+            // snapshot taken between them could pair one tick's good
+            // count with another's size. Good is a subset of the size.
+            routing_good_nodes: g(&self.routing_good_nodes).min(routing_nodes),
             outstanding: g(&self.outstanding),
             harvested_sample: g(&self.harvested_sample),
             harvested_get_peers: g(&self.harvested_get_peers),
@@ -472,6 +495,7 @@ impl Stats {
             target_novel_nodes: std::array::from_fn(|i| g(&self.target_novel_nodes[i])),
             target_prefix_queries: std::array::from_fn(|i| g(&self.target_prefix_queries[i])),
             target_prefix_cycles: g(&self.target_prefix_cycles),
+            ledger: self.ledger.snapshot(),
         }
     }
 }
@@ -715,6 +739,7 @@ pub struct StatsSnapshot {
     pub queries_in_unsolicited: u64,
     pub responses_in: u64,
     pub errors_in: u64,
+    pub answered: u64,
     pub queries_out: u64,
     pub timeouts: u64,
     pub throttled: u64,
@@ -722,6 +747,7 @@ pub struct StatsSnapshot {
     pub send_errors: u64,
     pub spoofed: u64,
     pub routing_nodes: u64,
+    pub routing_good_nodes: u64,
     pub outstanding: u64,
     pub harvested_sample: u64,
     pub harvested_get_peers: u64,
@@ -791,17 +817,22 @@ pub struct StatsSnapshot {
     pub target_novel_nodes: [u64; TargetKind::ALL.len()],
     pub target_prefix_queries: [u64; TargetKind::ALL.len()],
     pub target_prefix_cycles: u64,
+    /// CR-LEDGER.
+    pub ledger: LedgerSnapshot,
 }
 
 impl StatsSnapshot {
-    /// Responses per query sent. A collapsing ratio is the symptom of NAT
-    /// saturation the dashboard warns about (§5).
-    pub fn reply_ratio(&self) -> f64 {
-        if self.queries_out == 0 {
-            0.0
-        } else {
-            (self.responses_in + self.errors_in) as f64 / self.queries_out as f64
-        }
+    /// The share of resolved queries that were answered: queries answered
+    /// (by a matched response or error) over those plus timeouts. Reply
+    /// packets that match no query awaiting them, such as one arriving
+    /// after its query timed out, don't count. A collapsing ratio is the symptom
+    /// of NAT saturation the dashboard warns about (§5). Queries still
+    /// awaiting their reply have no outcome yet and don't count, so the
+    /// ratio doesn't dip while lookups are under way. `None` until a
+    /// query has resolved: unknown, not 0%.
+    pub fn reply_ratio(&self) -> Option<f64> {
+        let resolved = self.answered + self.timeouts;
+        (resolved > 0).then(|| self.answered as f64 / resolved as f64)
     }
 }
 
@@ -1172,5 +1203,77 @@ impl Node {
             Ok(result) => result,
             Err(e) => Err(StateError::Io(io::Error::other(e))),
         }
+    }
+}
+
+#[cfg(test)]
+mod reply_ratio_tests {
+    use super::StatsSnapshot;
+
+    fn stats(sent: u64, answered: u64, timeouts: u64) -> StatsSnapshot {
+        StatsSnapshot {
+            queries_out: sent,
+            responses_in: answered,
+            answered,
+            timeouts,
+            outstanding: sent - answered - timeouts,
+            ..StatsSnapshot::default()
+        }
+    }
+
+    /// Unknown until a query has resolved, however many are out.
+    #[test]
+    fn nothing_resolved_is_unknown() {
+        assert_eq!(StatsSnapshot::default().reply_ratio(), None);
+        assert_eq!(stats(40, 0, 0).reply_ratio(), None);
+    }
+
+    /// Queries still awaiting their reply don't lower the ratio: the same
+    /// answers and timeouts give the same ratio whatever is in flight.
+    #[test]
+    fn queries_in_flight_dont_lower_it() {
+        let settled = stats(10, 9, 1).reply_ratio();
+        assert_eq!(settled, Some(0.9));
+        for in_flight in [1, 10, 1_000] {
+            assert_eq!(stats(10 + in_flight, 9, 1).reply_ratio(), settled);
+        }
+    }
+
+    /// Timeouts lower it.
+    #[test]
+    fn timeouts_lower_it() {
+        assert_eq!(stats(4, 4, 0).reply_ratio(), Some(1.0));
+        assert_eq!(stats(4, 1, 3).reply_ratio(), Some(0.25));
+        assert_eq!(stats(4, 0, 4).reply_ratio(), Some(0.0));
+    }
+
+    /// Reply packets that answered no query (late, duplicate, unknown or
+    /// spoofed) don't raise it: only matched answers count.
+    #[test]
+    fn stray_reply_packets_dont_raise_it() {
+        let mut s = stats(4, 1, 3);
+        s.responses_in += 50;
+        s.errors_in += 50;
+        assert_eq!(s.reply_ratio(), Some(0.25));
+    }
+}
+
+#[cfg(test)]
+mod routing_gauge_tests {
+    use super::Stats;
+    use std::sync::atomic::Ordering;
+
+    /// A snapshot between the tick's two stores can't show more good
+    /// nodes than nodes, whichever way the table moved.
+    #[test]
+    fn good_never_reads_above_the_size() {
+        let s = Stats::default();
+        s.routing_good_nodes.store(5, Ordering::Relaxed);
+        s.routing_nodes.store(3, Ordering::Relaxed);
+        let snap = s.snapshot();
+        assert_eq!((snap.routing_nodes, snap.routing_good_nodes), (3, 3));
+        s.routing_nodes.store(9, Ordering::Relaxed);
+        let snap = s.snapshot();
+        assert_eq!((snap.routing_nodes, snap.routing_good_nodes), (9, 5));
     }
 }

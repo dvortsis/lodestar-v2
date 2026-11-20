@@ -63,9 +63,11 @@ use lodestar_pipeline::spool::Kind;
 /// A worker's fetch-pool byte budget (X-fetch-pool-bytes' note for WK-10:
 /// the same as WK-7's fetched queue).
 pub const HELD_BYTES: usize = 4 << 20;
-/// A worker's largest info dict: its bound must fit inside the byte budget
-/// with room for the first window and the request (X-fetch-meta-reserve).
-pub const MAX_METADATA: usize = HELD_BYTES - (32 << 10);
+/// A worker's largest info dict: its bound must fit beside the pool's
+/// floor (a quarter of the budget, kept for small dicts), with room for the
+/// key, the client name and the PEX list (X-fetch-room-fix). Larger dicts
+/// are left to a later hand-back to the main node.
+pub const MAX_METADATA: usize = lodestar_sources::pool::largest_dict(HELD_BYTES);
 /// Sockets a worker opens at most (X-fetch-meta-reserve's proposal for a
 /// 4 MiB budget over TCP). WK-10c sizes it with the measured RSS.
 pub const MAX_SOCKETS: usize = 200;

@@ -76,6 +76,7 @@ def metrics_text(t, suppression_until=100, stuck=False, extra=""):
                 dht_peer_admitted_total=int(t * 2))
     lines = ["# HELP lodestar_torrents Torrents stored."] + [f"lodestar_{k} {v:g}" for k, v in vals.items()]
     lines += [f"lodestar_writer_stored_total {int(t // 10)}", f"lodestar_fetch_attempts_total {int(t // 5)}",
+              "lodestar_dht_routing_nodes 140", "lodestar_dht_routing_good_nodes 0",
               f"lodestar_fetch_success_total {int(t // 10)}", f"lodestar_writer_errors_total 0",
               'lodestar_fetch_failures_total{kind="timed_out"} ' + str(int(t // 30)),
               'lodestar_fetch_failures_total{kind="203.0.113.9"} 1',
@@ -1049,6 +1050,7 @@ class PublicationTests(Base):
             names = {line.split("{")[0].split(" ")[0] for line in prom.read_text().splitlines()}
             self.assertTrue(all(n.removeprefix("lodestar_") in collect.KEEP for n in names), names)
             self.assertIn('lodestar_fetch_failures_total{kind="timed_out"}', prom.read_text())
+            self.assertIn("lodestar_dht_routing_nodes 140\n", prom.read_text())
 
     def test_lodestar_restart_inside_the_container_ends_the_run(self):
         def metrics(t):
@@ -1126,6 +1128,14 @@ class PublicationTests(Base):
         self.assertIn("lodestar_store_wal_bytes 4096", clean)
         self.assertIn('lodestar_search_result_cache_bytes{kind="facets"} 77', clean)
         self.assertFalse(set(collect.STORAGE) & set(collect.REQUIRED))
+
+    def test_snapshots_keep_the_routing_table_size_unlabelled_and_optional(self):
+        extra = 'lodestar_dht_routing_nodes{family="ipv4"} 9\n'
+        clean = collect.sanitize_snapshot(metrics_text(100, extra=extra))
+        self.assertIn("lodestar_dht_routing_nodes 140\n", clean)
+        self.assertIn("lodestar_dht_routing_good_nodes 0\n", clean)
+        self.assertNotIn('family="ipv4"', clean)
+        self.assertFalse({"dht_routing_nodes", "dht_routing_good_nodes"} & set(collect.REQUIRED))
 
     def test_counter_list_matches_the_analyzer(self):
         self.assertEqual(collect.COUNTERS, analyze_cr0.COUNTERS)

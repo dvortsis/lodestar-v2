@@ -8,65 +8,65 @@ pool: sockets=400 per_ip=2 max_pending=20000 max_lookups=256 lookup_wait=30s ret
 
 # per minute: counter deltas; gauges sampled each second as mean/max
 min admitted rejected completed peers_found fetch_started fetched stored harvested dht_active dht_queued pool_lookups pool_active
-  1 259 38434 211 28 61 20 20 27091 23/32 0/0 24/32 3/7
-  2 302 45319 269 33 86 32 32 21834 29/32 0/0 30/32 4/7
-  3 298 43051 279 40 104 29 29 17399 29/32 0/0 31/32 5/9
-  4 287 44158 270 30 80 27 27 13186 29/32 0/0 31/32 4/9
-  5 294 44713 289 38 85 38 38 11716 29/32 0/0 31/32 4/8
-  6 273 41820 266 34 75 28 28 10202 30/32 0/0 31/33 3/7
-  7 283 43856 278 31 72 29 29 8834 30/32 0/0 31/32 3/6
-  8 301 44588 293 31 73 24 24 7700 30/32 0/0 31/32 4/7
-  9 288 43376 285 25 72 21 21 6962 30/32 0/0 31/33 4/9
- 10 288 42745 285 30 62 22 22 5564 30/32 0/0 31/33 3/5
-steady (after 3 warmup min), per min: admitted=287.7 rejected=43608.0 completed=280.9 fetched=27.0 stored=27.0
+  1 260 38378 227 33 69 27 27 27139 23/32 0/0 25/32 3/10
+  2 291 44791 255 24 68 18 18 21945 29/32 0/0 30/32 3/9
+  3 297 44742 286 36 87 31 31 17673 29/32 0/0 31/32 4/9
+  4 292 43890 283 31 72 28 28 12982 30/32 0/0 31/32 4/8
+  5 293 45194 284 33 92 30 30 11776 30/32 0/0 31/32 4/7
+  6 281 43397 274 34 92 32 32 10376 30/32 0/0 31/33 4/10
+  7 297 45022 286 34 82 30 30 9273 29/32 0/0 31/32 3/7
+  8 294 44526 289 27 57 22 22 7738 29/32 0/0 31/33 2/7
+  9 307 42559 303 34 75 28 28 6915 30/32 0/0 31/32 4/8
+ 10 315 42855 304 30 72 35 35 5618 30/32 0/0 31/32 3/9
+steady (after 3 warmup min), per min: admitted=297.0 rejected=43920.4 completed=289.0 fetched=29.3 stored=29.3
 
 # DHT node stats at the end (node::StatsSnapshot), one per line
-packets_in=47885
-packets_out=55958
+packets_in=48351
+packets_out=56429
 malformed_in=0
 queries_in=0
-responses_in=47486
-errors_in=399
-queries_out=55958
-timeouts=7866
-throttled=140
+responses_in=47953
+errors_in=398
+queries_out=56429
+timeouts=7876
+throttled=130
 send_errors=0
 spoofed=0
 routing_nodes=72
-outstanding=68
-harvested_sample=130488
+outstanding=69
+harvested_sample=131435
 harvest_dropped=0
-lookups_completed=2725
-samples_sent=11526
-sample_failures=977
-sample_cooling=1816
-sample_inflight=3
+lookups_completed=2791
+samples_sent=11655
+sample_failures=957
+sample_cooling=1797
+sample_inflight=2
 sample_stale=0
 sample_frontier=0
 sample_deferred=0
-peer_admitted=2873
-peer_rejected=432060
-peer_rejected_capacity=432060
+peer_admitted=2927
+peer_rejected=435354
+peer_rejected_capacity=435354
 peer_rejected_paused=0
 peer_rejected_caller_closed=0
 peer_ack_failed=0
-peer_command_full=34637
+peer_command_full=33137
 peer_command_closed=0
-peer_cancelled=109
-peer_queued_dropped_caller_closed=8
+peer_cancelled=94
+peer_queued_dropped_caller_closed=10
 peer_queued_dropped_paused=0
-peer_active=32
+peer_active=30
 peer_queued=0
-lookup_scheduled=39
+lookup_scheduled=36
 lookup_deadlines=0
 denied=0
 
 # fetch pool stats at the end (PoolStats)
-pending=20000 active=2 waiting=19998 lookups=31 lookup_backlog=0
-fetched=270 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=466681 retry_unaccepted=336074
-failures: Unreachable=230 TimedOut=129 Refused=139 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
-lost: NoPeers=0 TimedOut=0 Refused=0 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=110218 GaveUp=0 Unreachable=0
-evicted_service: unaccepted=108558 lookup=1626 peers=0 fetch=34
+pending=20000 active=1 waiting=19999 lookups=32 lookup_backlog=0
+fetched=281 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=468470 retry_unaccepted=337011
+failures: Unreachable=236 TimedOut=116 Refused=132 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
+lost: NoPeers=0 TimedOut=0 Refused=0 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=111154 GaveUp=0 Unreachable=0
+evicted_service: unaccepted=109520 lookup=1604 peers=0 fetch=30
 admission_waits=0
 admission_wait_cancelled=0
 admission_wakeups=0
@@ -87,12 +87,12 @@ dht_stream_seen_full=0
 dht_stream_terminals=0
 dht_stream_first_batches=0
 dht_stream_first_batch_millis=0
-funnel: Harvested=130488 PeerFound=320 Fetched=270 Lost=0
+funnel: Harvested=131435 PeerFound=316 Fetched=281 Lost=0
 
 # scripted network
-queries=55958 ping=0 find_node=7733 get_peers=36699 sample=11526 other=0
-to_dead=6033 to_unknown=0 lost=2037 rate_limited=0 errors=246 unsupported=157 sample_early=0 replies=47888 values_replies=2215
+queries=56429 ping=0 find_node=7849 get_peers=36925 sample=11655 other=0
+to_dead=6047 to_unknown=0 lost=2029 rate_limited=0 errors=248 unsupported=155 sample_early=0 replies=48353 values_replies=2175
 discoveries_dropped=0 pool_queue_at_end=20000
 
-outcome_log events=131528 fnv64=6c95e530ac96ceac
-fingerprint=4fb7882c31fa4365
+outcome_log events=132482 fnv64=f867605aab74457b
+fingerprint=a1bdfed4f972a652

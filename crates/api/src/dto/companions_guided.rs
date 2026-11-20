@@ -46,6 +46,10 @@ pub struct DetectedCompanion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct DetectedCompanions {
     pub found: Vec<DetectedCompanion>,
+    /// Companions Lodestar runs that are still starting, so detection
+    /// couldn't look for them yet: try again in a moment. Never one that
+    /// is in `found`.
+    pub starting: Vec<String>,
 }
 
 /// `POST /companions/{id}/paste`: qBittorrent's temporary WebUI password

@@ -223,6 +223,9 @@ pub enum ClientError {
     Auth(AuthFailure),
     /// No connection: DNS, refused, reset, TLS.
     Unreachable,
+    /// A companion Lodestar runs on this address isn't ready yet, so
+    /// nothing was sent ([`crate::net::NetError::NotReady`]).
+    NotReady,
     /// The client answered and said no. The reason is the client's own,
     /// trimmed to one printable line of at most 200 characters.
     Rejected(String),
@@ -285,6 +288,7 @@ impl fmt::Display for ClientError {
                 "the client refuses this address; check its IP allow-list, or whether it banned this address after failed logins",
             ),
             ClientError::Unreachable => f.write_str("couldn't reach the client"),
+            ClientError::NotReady => f.write_str(crate::net::NOT_READY),
             ClientError::Rejected(why) => write!(f, "the client refused: {why}"),
             ClientError::AlreadyThere => f.write_str("the torrent is already in the client"),
             ClientError::Unsupported(feature) => {
@@ -316,6 +320,7 @@ impl From<NetError> for ClientError {
             NetError::TooLarge => ClientError::Protocol("the response was too large"),
             NetError::Redirect => ClientError::Protocol("the client redirected"),
             NetError::Resolve | NetError::Connect | NetError::Http => ClientError::Unreachable,
+            NetError::NotReady => ClientError::NotReady,
         }
     }
 }

@@ -78,7 +78,7 @@ use zeroize::Zeroizing;
 
 use crate::clock::{Clock, ClockTime};
 use crate::frame::{self, MAX_JOIN_REQUEST};
-use crate::leases::LOSS_BLOCKED;
+use crate::leases::{HandBack, LOSS_BLOCKED, LOSS_OVERSIZE, REST_AFTER_DRAIN_SECS};
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
@@ -168,6 +168,13 @@ pub trait StoredKeys: Send + Sync + 'static {
             .map(|s| if s { KeyCheck::Stored } else { KeyCheck::Free })
             .collect()
     }
+    /// Whether `worker` must not be given `key`: its claim of it is denied
+    /// as stored, and a re-grant of it goes to another target. By default
+    /// never. Called under the lease authority's lock, so it must be a
+    /// quick in-memory answer that takes none of the server's locks.
+    fn excludes(&self, _worker: WorkerId, _key: &InfoHash) -> bool {
+        false
+    }
 }
 
 /// One key's answer before a grant or a re-grant
@@ -214,6 +221,34 @@ pub trait InboundSink: Send + Sync + 'static {
     /// Hints a remote worker found for keys the built-in worker holds.
     /// In memory only (§18.7).
     fn local_hints(&self, _hints: Vec<HintItem>) {}
+    /// A key a remote worker found too large, now leased to the built-in
+    /// worker under `token`: start its fetch there. [`LocalIntake::Full`]
+    /// if it can't be taken now; the server then ends it as an oversize
+    /// loss. Mustn't block.
+    fn handed_back(&self, _key: InfoHash, _token: Token, _lease: Lease) -> LocalIntake {
+        LocalIntake::Full
+    }
+    /// The built-in worker refuses `key` before fetching (held, or blocked
+    /// by the content filter). Asked before a key a remote worker found too
+    /// large is granted to it: a refused key ends as blocked instead and is
+    /// never granted. Only reads; mustn't block.
+    fn refuses_local(&self, _key: &InfoHash) -> bool {
+        false
+    }
+}
+
+/// What [`InboundSink::handed_back`] did with a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalIntake {
+    /// In the built-in worker's fetch pool.
+    Fetching,
+    /// The built-in worker refuses it now (its hold or filter verdict
+    /// changed since the server asked): the sink ended its lease as
+    /// blocked.
+    Refused,
+    /// No room: the lease is still the built-in worker's, for the server
+    /// to end.
+    Full,
 }
 
 /// Whether grants may go out now (§19.5 backpressure): of `wanted` keys
@@ -397,6 +432,7 @@ struct Counters {
     harvested: AtomicU64,
     outcomes: AtomicU64,
     stale_reports: AtomicU64,
+    handed_back: AtomicU64,
     regrants: AtomicU64,
     busy: AtomicU64,
     hints_relayed: AtomicU64,
@@ -409,6 +445,7 @@ struct Counters {
     busy_check_failed: AtomicU64,
     busy_unknown: AtomicU64,
     busy_capped: AtomicU64,
+    denied_excluded: AtomicU64,
     reconcile_returned: AtomicU64,
     reconcile_unknown: AtomicU64,
     reconcile_refused: AtomicU64,
@@ -458,6 +495,8 @@ pub struct FleetSnapshot {
     pub fetched: u64,
     /// Reports with a stale fencing token, ignored.
     pub stale_reports: u64,
+    /// Keys a remote worker found too large, handed to the built-in worker.
+    pub handed_back: u64,
     pub regrants: u64,
     /// Claimed keys denied because grants were held back (§19.5).
     pub busy: u64,
@@ -488,6 +527,12 @@ pub struct FleetSnapshot {
     /// Claimed keys denied as busy because the worker holds its lease cap
     /// (CLUSTER-02), per key.
     pub busy_capped: u64,
+    /// Claimed keys denied as stored only because the store check
+    /// excludes them for the claiming worker
+    /// ([`StoredKeys::excludes`]), per key: the store found them free or
+    /// couldn't read them. A key denied for another reason (a draining or
+    /// paused worker) isn't counted.
+    pub denied_excluded: u64,
     /// Leases a worker's reconcile list left out, given back for re-grant
     /// (WK-11b).
     pub reconcile_returned: u64,
@@ -525,7 +570,14 @@ pub struct ClusterServer {
     counters: Counters,
     next_session: AtomicU64,
     shutdown: watch::Sender<bool>,
+    /// Whether a worker's pause is saved ([`ClusterServer::set_pause_source`]):
+    /// asked at every session start.
+    pause_source: Mutex<Option<PauseSource>>,
 }
+
+/// Says whether a worker is paused by a saved pause (WK-14). Called
+/// without the server's locks held; it must not call back into the server.
+pub type PauseSource = Arc<dyn Fn(WorkerId) -> bool + Send + Sync>;
 
 impl std::fmt::Debug for ClusterServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -720,7 +772,15 @@ impl ClusterServer {
             counters: Counters::default(),
             next_session: AtomicU64::new(1),
             shutdown: watch::channel(false).0,
+            pause_source: Mutex::new(None),
         }))
+    }
+
+    /// Sets where saved pauses are read: every session starts paused if
+    /// `source` says its worker is, whatever this server remembers, so a
+    /// saved pause stands across reconnects and certificate renewals.
+    pub fn set_pause_source(&self, source: PauseSource) {
+        *lock(&self.pause_source) = Some(source);
     }
 
     /// Runs `f` on the PKI on a blocking thread.
@@ -774,8 +834,10 @@ impl ClusterServer {
 
     /// [`revoke`](Self::revoke), saying what it did: `(certificates,
     /// leases)`, the certificates refused from now on and the leases taken
-    /// back for other workers (WK-14's Danger zone result). The connection is stopped here, before this returns, so a
-    /// snapshot taken afterwards no longer lists the worker.
+    /// back: waiting for other workers, or dropped past the worker's
+    /// allowance or queue share (`LeaseAuthority::expire`). WK-14's Danger
+    /// zone shows the result. The connection is stopped here, before this
+    /// returns, so a snapshot taken afterwards no longer lists the worker.
     pub async fn revoke_worker(&self, worker: WorkerId) -> Result<(usize, usize), ClusterError> {
         let certificates = self
             .with_pki(move |p| {
@@ -806,6 +868,12 @@ impl ClusterServer {
         self.with_pki(|p| p.pki.coordinator.certificates())
             .await
             .unwrap_or_default()
+    }
+
+    /// [`certificates`](Self::certificates), or `None` if the lookup
+    /// itself failed (an empty list means there are none).
+    pub async fn try_certificates(&self) -> Option<Vec<crate::IssuedCert>> {
+        self.with_pki(|p| p.pki.coordinator.certificates()).await
     }
 
     /// The heartbeat interval: a revoked worker's connection is closed
@@ -937,6 +1005,7 @@ impl ClusterServer {
             harvested: get(&c.harvested),
             outcomes: get(&c.outcomes),
             stale_reports: get(&c.stale_reports),
+            handed_back: get(&c.handed_back),
             regrants: get(&c.regrants),
             busy: get(&c.busy),
             fetched: get(&c.fetched),
@@ -957,6 +1026,7 @@ impl ClusterServer {
             busy_check_failed: get(&c.busy_check_failed),
             busy_unknown: get(&c.busy_unknown),
             busy_capped: get(&c.busy_capped),
+            denied_excluded: get(&c.denied_excluded),
             reconcile_returned: get(&c.reconcile_returned),
             reconcile_unknown: get(&c.reconcile_unknown),
             reconcile_refused: get(&c.reconcile_refused),
@@ -1338,6 +1408,9 @@ impl ClusterServer {
         let (stop_tx, mut stop) = mpsc::channel(1);
         let (drain_tx, mut drain) = mpsc::channel(1);
         let now_ms = self.clock.now_ms();
+        // Read before the fleet lock: the source takes locks of its own.
+        let source = lock(&self.pause_source).clone();
+        let saved_pause = source.is_some_and(|f| f(peer.worker));
         let state_draining;
         {
             let mut fleet = lock(&self.fleet);
@@ -1384,6 +1457,9 @@ impl ClusterServer {
             // would otherwise be refused and keep the leases it lost.
             state.last_round_ms = None;
             state.capabilities = hello.capabilities;
+            if saved_pause && peer.worker != WorkerId::LOCAL {
+                state.paused = true;
+            }
             self.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
             state_draining = fleet.workers.get(&peer.worker).is_some_and(|s| s.draining);
         }
@@ -1514,17 +1590,41 @@ impl ClusterServer {
                         let check = check.clone();
                         let keys: Vec<InfoHash> =
                             batch.items.iter().map(|i| InfoHash(i.key)).collect();
-                        match tokio::task::spawn_blocking(move || check.key_checks(&keys)).await {
-                            Ok(s) if s.len() == batch.items.len() => Some(s),
+                        let w = peer.worker;
+                        let checked = tokio::task::spawn_blocking(move || {
+                            let checks = check.key_checks(&keys);
+                            // A key not for this worker is denied as stored.
+                            // `only` marks those the store alone would have
+                            // let through (free, or a failed read), which
+                            // `claim` counts where it answers stored.
+                            let mut only = Vec::with_capacity(keys.len());
+                            let checks = checks
+                                .into_iter()
+                                .zip(&keys)
+                                .map(|(c, k)| {
+                                    let x = check.excludes(w, k);
+                                    only.push(x && matches!(c, KeyCheck::Free | KeyCheck::Unknown));
+                                    if x { KeyCheck::Stored } else { c }
+                                })
+                                .collect::<Vec<_>>();
+                            (checks, only)
+                        });
+                        match checked.await {
+                            Ok((s, only)) if s.len() == batch.items.len() => Some((s, only)),
                             // Fails closed: a check that died or came back
                             // short grants nothing (#607's review).
                             _ => None,
                         }
                     }
-                    None => Some(vec![KeyCheck::Free; batch.items.len()]),
+                    None => Some((
+                        vec![KeyCheck::Free; batch.items.len()],
+                        vec![false; batch.items.len()],
+                    )),
                 };
                 let items = match checks {
-                    Some(checks) => self.claim(peer, &mut batch.items, &checks, checked_at),
+                    Some((checks, only)) => {
+                        self.claim(peer, &mut batch.items, &checks, &only, checked_at)
+                    }
                     None => {
                         bump(&self.counters.check_failures);
                         self.counters
@@ -1573,7 +1673,11 @@ impl ClusterServer {
                         state.session = None;
                         state.holding = None;
                     }
+                    // And it rests before it gets keys again.
+                    let now = self.clock.now_secs();
                     self.leases.evict(w);
+                    self.leases
+                        .rest(w, now.saturating_add(REST_AFTER_DRAIN_SECS));
                 }
                 self.regrant().await;
                 Flow::Stop(StopReason::Drained)
@@ -1786,6 +1890,7 @@ impl ClusterServer {
         peer: &Peer,
         items: &mut [ClaimItem],
         checks: &[KeyCheck],
+        excluded_only: &[bool],
         checked_at: u64,
     ) -> Vec<GrantItem> {
         let w = peer.worker;
@@ -1810,6 +1915,10 @@ impl ClusterServer {
             if draining {
                 out[i] = deny(DenyReason::Draining);
             } else if matches!(check, KeyCheck::Stored | KeyCheck::Held) {
+                // Denied as stored only because it's excluded for `w`.
+                if excluded_only.get(i).copied().unwrap_or(false) {
+                    bump(&self.counters.denied_excluded);
+                }
                 out[i] = deny(DenyReason::Stored);
             } else if check == KeyCheck::Unknown {
                 // Not known to be stored: "claim again later" (#615's review).
@@ -1964,6 +2073,60 @@ impl ClusterServer {
                     FetchedReport::Committed => continue,
                     FetchedReport::Stale => None,
                 },
+                // Too large for that worker: the built-in worker, which
+                // fetches larger dicts, takes it instead (once per key, and
+                // within the worker's hand-back allowance).
+                // A key it refuses is never granted to it: it ends here as
+                // blocked, as the built-in worker's own intake would end it.
+                // The authority records the loss as blocked, while the sink
+                // is told the worker's own `Lost { oversize }`: the refusal
+                // is the server's, so it deliberately stays off the worker's
+                // floor budget, which counts the blocked losses a worker
+                // reports itself.
+                // The worker's claim carries no size: the built-in worker
+                // fetches under its own bound, as for any other key.
+                Outcome::Lost { reason }
+                    if reason == LOSS_OVERSIZE
+                        && self.sink.as_ref().is_some_and(|s| s.refuses_local(&key)) =>
+                {
+                    self.leases
+                        .report(w, &key, token, Some(LOSS_BLOCKED))
+                        .inspect(|_| bump(&self.counters.outcomes))
+                }
+                Outcome::Lost { reason } if reason == LOSS_OVERSIZE && self.sink.is_some() => {
+                    match self.leases.hand_to_local(w, &key, token, now) {
+                        HandBack::Handed(local, lease) => {
+                            let intake = self.sink.as_ref().map_or(LocalIntake::Full, |sink| {
+                                sink.handed_back(key, local, lease)
+                            });
+                            match intake {
+                                LocalIntake::Fetching => {
+                                    bump(&self.counters.handed_back);
+                                    continue;
+                                }
+                                // Ended by the sink, as blocked.
+                                LocalIntake::Refused => {
+                                    bump(&self.counters.outcomes);
+                                    Some(lease)
+                                }
+                                // No room: an oversize loss, as before
+                                // hand-backs. Never parked: a parked key
+                                // would count against no remote worker's
+                                // limits, and goes to a remote worker
+                                // again when it's re-granted.
+                                LocalIntake::Full => self
+                                    .leases
+                                    .report(WorkerId::LOCAL, &key, local, Some(LOSS_OVERSIZE))
+                                    .inspect(|_| bump(&self.counters.outcomes)),
+                            }
+                        }
+                        HandBack::Lost(lease) => {
+                            bump(&self.counters.outcomes);
+                            Some(lease)
+                        }
+                        HandBack::Stale => None,
+                    }
+                }
                 Outcome::PeerFound { reason } | Outcome::Lost { reason } => self
                     .leases
                     .report(w, &key, token, Some(reason))
@@ -1979,6 +2142,17 @@ impl ClusterServer {
         {
             sink.outcomes(w, accepted);
         }
+    }
+
+    /// [`outcome`](Self::outcome) as if from `worker`'s session.
+    #[cfg(test)]
+    pub(crate) fn outcome_as(&self, worker: WorkerId, items: &[OutcomeItem]) {
+        let peer = Peer {
+            worker,
+            identity: None,
+            session: 0,
+        };
+        self.outcome(&peer, items);
     }
 
     async fn renew(&self, identity: PeerIdentity, public_key: [u8; 32]) -> ToWorker {
@@ -2033,6 +2207,17 @@ impl ClusterServer {
                 .identity
                 .as_ref()
                 .is_none_or(|id| self.tls.still_valid(id));
+            if !standing && self.tls.worker_stands(w) {
+                // Only this session's certificate lapsed; a renewed one
+                // stands. The session ends and the worker reconnects with
+                // that, keeping its state (a pause or drain included) and
+                // its leases, which its reconnect lists.
+                if let Some(slot) = state.session.take() {
+                    slot.stop(StopReason::Shutdown);
+                }
+                state.holding = None;
+                continue;
+            }
             if !standing {
                 // Connected or not, a worker without a standing
                 // certificate loses its leases (§19.6).
@@ -2113,10 +2298,15 @@ impl ClusterServer {
                 return;
             }
             // Leased to their targets now, so no other claim or re-grant
-            // can take them while the check runs; nothing is sent yet.
-            let batches =
-                self.leases
-                    .regrant_pending(&targets, MAX_GRANT_BATCH, self.clock.now_secs());
+            // can take them while the check runs; nothing is sent yet. A
+            // key goes to no target the check excludes it for.
+            let skip = |w: WorkerId, k: &InfoHash| check.excludes(w, k);
+            let batches = self.leases.regrant_pending_except(
+                &targets,
+                MAX_GRANT_BATCH,
+                self.clock.now_secs(),
+                &skip,
+            );
             // Marked for the target's session already, so its reconcile
             // meanwhile leaves them (WK-11b).
             for (w, keys) in &batches {
@@ -2141,10 +2331,13 @@ impl ClusterServer {
             .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
             .collect();
         let n = keys.len();
-        let answer = tokio::task::spawn_blocking(move || check.key_checks(&keys))
-            .await
-            .ok()
-            .filter(|a| a.len() == n);
+        let answer = {
+            let check = check.clone();
+            tokio::task::spawn_blocking(move || check.key_checks(&keys))
+        }
+        .await
+        .ok()
+        .filter(|a| a.len() == n);
         let batches = reserved.disarm();
         let mut fleet = lock(&self.fleet);
         // A check that died or came back short counts here; a key's own
@@ -2154,6 +2347,7 @@ impl ClusterServer {
             vec![KeyCheck::Unknown; n]
         });
         let mut answer = answer.into_iter();
+        let stored = &check;
         for (w, ks) in batches {
             let mut send = Vec::with_capacity(ks.len());
             for (key, token) in ks {
@@ -2168,6 +2362,13 @@ impl ClusterServer {
                 if !current {
                     continue;
                 }
+                // Excluded for `w` since it was reserved (the store check
+                // changed meanwhile): it waits again.
+                let check = if check == KeyCheck::Free && stored.excludes(w, &key) {
+                    KeyCheck::Unknown
+                } else {
+                    check
+                };
                 // Each ends only under `w`'s current token.
                 match check {
                     KeyCheck::Free => send.push((key, token)),

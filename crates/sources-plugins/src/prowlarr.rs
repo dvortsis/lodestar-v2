@@ -803,9 +803,12 @@ fn answer(r: Result<lodestar_sources::Response, HttpError>) -> Result<Vec<u8>, F
     match r {
         Ok(res) if res.status == 200 => Ok(res.body),
         Ok(res) if matches!(res.status, 401 | 403) => Err(Failure::Refused),
-        Err(HttpError::Blocked { .. } | HttpError::BadUrl | HttpError::NoEgress) => {
-            Err(Failure::NotSent)
-        }
+        Err(
+            HttpError::Blocked { .. }
+            | HttpError::BadUrl
+            | HttpError::NoEgress
+            | HttpError::NotReady(_),
+        ) => Err(Failure::NotSent),
         _ => Err(Failure::Other),
     }
 }
@@ -1577,6 +1580,9 @@ mod usenet_poll_tests {
         });
         assert_eq!(answer(blocked), Err(Failure::NotSent));
         assert_eq!(answer(Err(HttpError::NoEgress)), Err(Failure::NotSent));
+        // A companion that isn't ready: refused before sending.
+        let not_ready = Err(HttpError::NotReady("not ready".into()));
+        assert_eq!(answer(not_ready), Err(Failure::NotSent));
         let timeout = Err(HttpError::Transport("timeout".into()));
         assert_eq!(answer(timeout), Err(Failure::Other));
         // Blocked for half a day: every round is due and answered

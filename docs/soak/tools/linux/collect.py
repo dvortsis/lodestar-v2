@@ -145,8 +145,49 @@ PLAIN = frozenset((
     "fetch_admission_holds_total", "fetch_admission_waiters", "fetch_admission_permits_in_use",
     "dht_utp_in_total", "utp_retransmits_total", "utp_connection_timeouts_total",
     "dht_sample_sent_total", "dht_throttled_total",
+    # X-routing-table-metric: routing-table size and its good nodes. Only the second falls
+    # when the network goes (a VPN restart). Both absent with the DHT off.
+    "dht_routing_nodes", "dht_routing_good_nodes",
 ))
-MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 250
+
+# CR-COL-5: CR-LEDGER's lookup ledger (build-plan §0.5 "Path to 100"; docs/metrics.md,
+# "Lookup ledger (CR-LEDGER, 2026-11-20)"), from which the analyzer reads W, q and y and
+# r5.1 A1's mechanism check. Names relayed by the runner, 2026-11-20.
+LEDGER_END_REASONS = frozenset(("values", "no_values", "deadline", "query_cap", "cancelled", "shutdown"))
+LEDGER_VALUE_REASONS = ("values",)  # the reasons that mean "the lookup ended on values"
+# They sum to dht_queries_out_total.
+LEDGER_PURPOSES = frozenset(("peer_lookup", "hint", "scrape", "bootstrap", "refresh", "explore", "sample", "ping"))
+LEDGER_PEER_PURPOSE = "peer_lookup"
+LEDGER_HINT_OUTCOMES = frozenset(("values", "no_values", "unanswered", "guard_skipped"))
+LEDGER_FIRST_VALUES_EDGES = frozenset(("0.5", "1", "2", "4", "8", "12", "16", "20", "25", "+Inf"))
+LEDGER_VALUES_EDGES = frozenset(("0", "1", "2", "4", "8", "16", "32", "64", "+Inf"))
+LEDGER = {
+    "residence": "dht_lookup_residence_seconds_total",   # {reason}: slot-seconds by end reason
+    "ended": "dht_lookup_ended_total",                   # {reason}: one per started peer request
+    "queries": "dht_queries_sent_total",                 # {purpose}: DHT queries sent
+    "occupied": "dht_lookup_slots_occupied",             # gauge: active plus queued requests
+    "cap": "dht_lookup_slots_capacity",                  # gauge: the configured slot count
+    "no_values": "dht_lookup_without_values_total",
+    "first_values": "dht_lookup_first_values_seconds",   # histogram
+    "values": "dht_lookup_values",                       # histogram
+    "hints": "dht_hint_outcomes_total",                  # {outcome}
+}
+LABELLED.update({
+    LEDGER["residence"]: (("reason", LEDGER_END_REASONS),),
+    LEDGER["ended"]: (("reason", LEDGER_END_REASONS),),
+    LEDGER["queries"]: (("purpose", LEDGER_PURPOSES),),
+    LEDGER["first_values"] + "_bucket": (("le", LEDGER_FIRST_VALUES_EDGES),),
+    LEDGER["values"] + "_bucket": (("le", LEDGER_VALUES_EDGES),),
+    LEDGER["hints"]: (("outcome", LEDGER_HINT_OUTCOMES),),
+})
+PLAIN = PLAIN | frozenset((
+    LEDGER["occupied"], LEDGER["cap"], LEDGER["no_values"],
+    LEDGER["first_values"] + "_count", LEDGER["first_values"] + "_sum",
+    LEDGER["values"] + "_count", LEDGER["values"] + "_sum",
+    # Kept as they are (CR-1a-H's series): another reading of W, admission to answer.
+    "dht_peer_lookup_seconds_total", "dht_peer_lookups_answered_total",
+))
+MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 280
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
 SERIES = re.compile(r"^lodestar_([a-z_0-9]+)(\{[^{}\r\n]*\})? (" + NUMBER + r")\r?$")
@@ -1065,6 +1106,14 @@ SPEC_KINDS = ("ab", "comb", "comparator")
 SPEC_HOURS = {"ab": 6, "comb": 24, "comparator": 24}  # rule 1.3
 SPEC_WARMUP_MINUTES = 60  # rule 1.1
 TREATMENTS = {"adm": "coordinated_admission", "utp": "utp", "route": "route_backoff"}
+# CR-COL-5 (r5.1, docs/decisions/2026-11-20-path-to-100-cr-spec.md): every treatment's
+# switches, and those run from stage 2 against a stacked control (A2). The lookup-cost pair
+# is one treatment with both switches on in B (A1).
+TREATMENT_SWITCHES = {**{t: (s,) for t, s in TREATMENTS.items()}, "lc": ("lookup_end", "preset_slots")}
+STACKED = frozenset(("lc",))
+# The switches every CR-COL-3 collector records; a stage-1 run.json may hold only these.
+STAGE1_SWITCHES = ("safe_restart", "coordinated_admission", "responder_hints", "streaming_peers",
+                   "target_prefixes", "utp", "route_backoff")
 # Every crawler switch and its environment variable (crates/lodestar/src/config.rs).
 SWITCH_ENV = {
     "safe_restart": "LODESTAR_DHT_SAFE_RESTART",
@@ -1074,7 +1123,16 @@ SWITCH_ENV = {
     "target_prefixes": "LODESTAR_DHT_TARGET_PREFIXES",
     "utp": "LODESTAR_DHT_UTP",
     "route_backoff": "LODESTAR_DHT_ROUTE_BACKOFF",
+    # r5's switches (names fixed by the runner, 2026-11-20): CR-LOOKUP-END, CR-1c,
+    # CR-HINT-FIRST and X-sampler-cooldown-split.
+    "lookup_end": "LODESTAR_DHT_LOOKUP_END",
+    "preset_slots": "LODESTAR_DHT_PRESET_SLOTS",
+    "hint_first": "LODESTAR_DHT_HINT_FIRST",
+    "sampler_cooldown_split": "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT",
 }
+# LODESTAR_DHT_* variables that aren't switches. Any other is reported by name (never its
+# value), so a switch this list doesn't know isn't silently read as off.
+DHT_SETTING_ENV = frozenset(("LODESTAR_DHT_PORT", "LODESTAR_DHT_ENABLED", "LODESTAR_DHT_WITNESS_DIR"))
 PRESETS = ("low", "balanced", "aggressive")
 CHECKLIST_ITEMS = ("auto_update", "backup")
 CHECKLIST_STATES = ("excluded", "not_applicable")
@@ -1123,6 +1181,9 @@ def config_identity(env, mounts=None):
         else:
             switches[name], sources[name] = False, "default"
     preset = env.get("LODESTAR_INTENSITY")
+    known = set(SWITCH_ENV.values()) | DHT_SETTING_ENV
+    unknown = sorted(v for v in env if v.startswith("LODESTAR_DHT_") and v not in known
+                     and re.fullmatch(r"[A-Z0-9_]{1,64}", v))
     out = {"switches": switches, "switch_sources": sources,
            "env_preset": preset if preset in PRESETS else (None if preset is not None else "unset")}
     witness, data = env.get("LODESTAR_DHT_WITNESS_DIR") or None, env.get("LODESTAR_DATA_DIR") or None
@@ -1142,6 +1203,8 @@ def config_identity(env, mounts=None):
         info["outside_data_dir"] = data is not None and not (
             witness == data or witness.startswith(data.rstrip("/") + "/"))
     out["witness"] = info
+    if unknown:  # absent when empty, so a stage-1 run.json is unchanged
+        out["unknown_switch_env"] = unknown
     return out
 
 
@@ -2148,7 +2211,7 @@ def build_parser():
                    help="Default 24 (cr0, comb, comparator) or 6 (ab)")
     p.add_argument("--run-kind", choices=("cr0",) + SPEC_KINDS, default="cr0",
                    help="cr0: the v0.5.1 soak. ab, comb, comparator: a CR-SPEC crawler run")
-    p.add_argument("--treatment", choices=sorted(TREATMENTS), help="The A/B's treatment (--run-kind ab)")
+    p.add_argument("--treatment", choices=sorted(TREATMENT_SWITCHES), help="The A/B's treatment (--run-kind ab)")
     p.add_argument("--spec-commit", help="Commit of docs/decisions/2026-11-02-CR-SPEC.md in force (CR-SPEC kinds)")
     p.add_argument("--password-file", help="Admin password for the settings and Insights checks (CR-SPEC kinds)")
     p.add_argument("--ip-echo-url", default=DEFAULT_IP_ECHO, help="Fixed IP-echo service for the public-IP check")

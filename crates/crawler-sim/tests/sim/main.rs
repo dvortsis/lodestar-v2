@@ -111,6 +111,23 @@ fn comparable(golden: &str, report: &str) -> String {
     out
 }
 
+/// Runs `s` on every [`SCREEN_SEEDS`] seed, one thread each (each run
+/// has its own runtime, so the threads don't change any run's result).
+fn over_seeds(s: &Scenario) -> Vec<run::Report> {
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = SCREEN_SEEDS
+            .map(|seed| {
+                let mut s = s.clone();
+                s.seed = seed;
+                scope.spawn(move || simulate(&s))
+            })
+            .collect();
+        runs.into_iter()
+            .map(|r| r.join().expect("sim thread"))
+            .collect()
+    })
+}
+
 /// The seeds every screening uses. Fixed, so a candidate can't pick the
 /// seeds it wins on.
 pub const SCREEN_SEEDS: std::ops::Range<u64> = 1..9;
@@ -122,6 +139,9 @@ pub struct Verdict {
     /// Steady-state stored per minute, "on" minus "off", per seed in
     /// [`SCREEN_SEEDS`] order.
     pub diffs: Vec<f64>,
+    /// Each seed's capacity ledger, `[off, on]`: `W`, `q` and `y` for a
+    /// lookup-cost change (README, "The calibrated scenario").
+    pub ledgers: Vec<[run::Ledger; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,17 +161,15 @@ pub enum Outcome {
 /// candidates use (README, "A/B a candidate").
 #[allow(dead_code)] // Called by candidates' A/B tests.
 pub fn screen(off: &Scenario, on: &Scenario) -> Verdict {
-    let diffs: Vec<f64> = SCREEN_SEEDS
-        .map(|seed| {
-            let (mut a, mut b) = (off.clone(), on.clone());
-            a.seed = seed;
-            b.seed = seed;
-            simulate(&b).steady_stored - simulate(&a).steady_stored
-        })
+    let (a, b) = (over_seeds(off), over_seeds(on));
+    let pairs = || a.iter().zip(&b);
+    let diffs: Vec<f64> = pairs()
+        .map(|(a, b)| b.steady_stored - a.steady_stored)
         .collect();
     Verdict {
         outcome: sign_test(&diffs),
         diffs,
+        ledgers: pairs().map(|(a, b)| [a.ledger, b.ledger]).collect(),
     }
 }
 
@@ -203,6 +221,12 @@ fn an_inert_switch_screens_inconclusive() {
         sign_test(&[on.steady_stored - off.steady_stored]),
         Outcome::Inconclusive
     );
+}
+
+/// X-crawler-sim-calibrate: the calibrated live-lookup scenario, seed 1.
+#[test]
+fn live_lookup_matches_golden() {
+    check_golden(&scenario::live_lookup());
 }
 
 #[test]
@@ -799,4 +823,92 @@ fn target_prefixes_screen() {
             change(&novel),
         );
     }
+}
+
+/// CR-0's 24 h figures the `live-lookup` scenario is calibrated to, each
+/// with the tolerance every seed and the 8-seed mean must meet: (name,
+/// target, tolerance, value). README, "The calibrated scenario".
+fn calibration(l: &run::Ledger) -> [(&'static str, f64, f64, f64); 10] {
+    [
+        ("unanswered", 0.382, 0.03, l.unanswered),
+        ("L slots", 30.68, 1.0, l.slots),
+        ("W s", 23.86, 1.5, l.w),
+        ("admitted/s", 1.286, 0.1, l.admitted_per_s),
+        ("y", 0.160, 0.04, l.y),
+        ("fetches", 3.66, 0.6, l.fetches),
+        ("stored/min", 12.34, 3.1, l.stored_per_min),
+        ("queries/s", 76.1, 7.6, l.queries_per_s),
+        ("q_all", 59.2, 6.0, l.q_all),
+        ("outstanding", 160.0, 24.0, l.outstanding),
+    ]
+}
+
+/// X-crawler-sim-calibrate: `live-lookup` lands within tolerance of CR-0
+/// on every `SCREEN_SEEDS` seed, and on their mean. Prints the table the
+/// README quotes:
+/// `cargo test -p lodestar-crawler-sim --test sim live_lookup_is_calibrated -- --nocapture`
+#[test]
+fn live_lookup_is_calibrated() {
+    let reports = over_seeds(&scenario::live_lookup());
+    let ledgers: Vec<run::Ledger> = reports.iter().map(|r| r.ledger).collect();
+    println!(
+        "seed | L | admitted/s | W s | W_residence s | q | q_all | y | fetches | stored/min | queries/s | outstanding | unanswered | deadlines/completed"
+    );
+    let row = |name: String, l: &run::Ledger| {
+        println!(
+            "{name} | {:.2} | {:.3} | {:.2} | {:.2} | {:.1} | {:.1} | {:.3} | {:.2} | {:.2} | {:.1} | {:.1} | {:.3} | {:.2}",
+            l.slots,
+            l.admitted_per_s,
+            l.w,
+            l.w_residence,
+            l.q,
+            l.q_all,
+            l.y,
+            l.fetches,
+            l.stored_per_min,
+            l.queries_per_s,
+            l.outstanding,
+            l.unanswered,
+            l.deadlines_per_completed
+        );
+    };
+    for (seed, l) in SCREEN_SEEDS.zip(&ledgers) {
+        row(seed.to_string(), l);
+    }
+    let n = ledgers.len() as f64;
+    let mean = |f: fn(&run::Ledger) -> f64| ledgers.iter().map(f).sum::<f64>() / n;
+    let m = run::Ledger {
+        slots: mean(|l| l.slots),
+        admitted_per_s: mean(|l| l.admitted_per_s),
+        w: mean(|l| l.w),
+        w_residence: mean(|l| l.w_residence),
+        q: mean(|l| l.q),
+        q_all: mean(|l| l.q_all),
+        y: mean(|l| l.y),
+        fetches: mean(|l| l.fetches),
+        found: mean(|l| l.found),
+        stored_per_min: mean(|l| l.stored_per_min),
+        queries_per_s: mean(|l| l.queries_per_s),
+        outstanding: mean(|l| l.outstanding),
+        unanswered: mean(|l| l.unanswered),
+        deadlines_per_completed: mean(|l| l.deadlines_per_completed),
+    };
+    row("mean".into(), &m);
+    let mut misses = Vec::new();
+    for (who, l) in SCREEN_SEEDS
+        .map(|s| format!("seed {s}"))
+        .chain(["mean".to_string()])
+        .zip(ledgers.iter().chain([&m]))
+    {
+        for (name, target, tol, v) in calibration(l) {
+            if (v - target).abs() > tol {
+                misses.push(format!("{who}: {name}={v:.3}, target {target}±{tol}"));
+            }
+        }
+    }
+    assert!(
+        misses.is_empty(),
+        "outside tolerance:\n{}",
+        misses.join("\n")
+    );
 }

@@ -1,0 +1,336 @@
+//! The loopback gate (X-cmp09-fix-2). Its own test binary: the gate is
+//! set once per process, so everything runs in one test, in order.
+
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use lodestar_integrations::BoxFuture;
+use lodestar_integrations::clients::ClientError;
+use lodestar_integrations::net::{
+    AddrClass, GuardedClient, LoopbackGate, NetError, NetPolicy, Resolve, Route, Socks5Route,
+    SocksDns, loopback_gate_is_set, resolve_tcp, set_loopback_gate,
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+const TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Refuses the ports in its set.
+#[derive(Default)]
+struct Refusing(Mutex<HashSet<u16>>);
+
+impl LoopbackGate for Refusing {
+    fn allow(&self, port: u16) -> bool {
+        !self.0.lock().unwrap().contains(&port)
+    }
+}
+
+/// Fixed answers per name, the `n`th lookup of a name taking the `n`th
+/// answer (the last repeats).
+struct Answers {
+    names: HashMap<&'static str, Vec<IpAddr>>,
+    seen: Mutex<HashMap<String, usize>>,
+}
+
+impl Answers {
+    fn new(names: &[(&'static str, Vec<IpAddr>)]) -> Arc<Answers> {
+        Arc::new(Answers {
+            names: names.iter().cloned().collect(),
+            seen: Mutex::new(HashMap::new()),
+        })
+    }
+}
+
+impl Resolve for Answers {
+    fn resolve<'a>(&'a self, host: &'a str) -> BoxFuture<'a, io::Result<Vec<IpAddr>>> {
+        let mut seen = self.seen.lock().unwrap();
+        let n = seen.entry(host.to_owned()).or_default();
+        let got = self.names.get(host).map(|a| vec![a[(*n).min(a.len() - 1)]]);
+        *n += 1;
+        Box::pin(async move { got.ok_or_else(|| io::Error::other("no such name")) })
+    }
+}
+
+/// An HTTP server on 127.0.0.1 counting requests. `/hop` answers 307 to
+/// `location`; anything else answers 200.
+struct Server {
+    port: u16,
+    hits: Arc<AtomicUsize>,
+}
+
+async fn server(location: Option<String>) -> Server {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&hits);
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let (count, location) = (Arc::clone(&count), location.clone());
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                count.fetch_add(1, Ordering::SeqCst);
+                let reply = match location {
+                    Some(to) if buf[..n].starts_with(b"GET /hop ") => format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    ),
+                    _ => "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                        .to_owned(),
+                };
+                let _ = sock.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    Server { port, hits }
+}
+
+/// Everything logged in this test binary, from a global subscriber.
+fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
+    struct W(Arc<Mutex<Vec<u8>>>);
+    impl io::Write for W {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buf);
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || W(Arc::clone(&sink)))
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    for e in lodestar_integrations::log_events::CATALOGUE.events {
+        e.set_on(true);
+    }
+    buf
+}
+
+fn client(resolver: Arc<dyn Resolve>) -> GuardedClient {
+    GuardedClient::with_resolver(NetPolicy::download_client(), TIMEOUT, resolver).unwrap()
+}
+
+async fn get(c: &GuardedClient, url: &str) -> Result<u16, NetError> {
+    c.exchange("GET", url, &[], Vec::new(), 1024)
+        .await
+        .map(|e| e.status)
+}
+
+async fn follow(c: &GuardedClient, url: &str) -> Result<u16, NetError> {
+    let req = reqwest::Request::new(reqwest::Method::GET, url.parse().unwrap());
+    c.send_following(req).await.map(|r| r.status().as_u16())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_loopback_gate_refuses_a_port_until_allowed() {
+    let logs = capture_logs();
+    let managed = server(None).await;
+    let p = managed.port;
+    let other = server(Some(format!("http://127.0.0.1:{p}/"))).await;
+    let q = other.port;
+    let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let lan = IpAddr::V4(Ipv4Addr::new(192, 168, 77, 9));
+    let names = Answers::new(&[
+        ("svc.test", vec![lo]),
+        ("localhost", vec![lo]),
+        // Answers a LAN address first, loopback after.
+        ("turns.test", vec![lan, lo]),
+    ]);
+    let c = client(names.clone());
+
+    // With no gate, nothing changes.
+    assert!(!loopback_gate_is_set());
+    assert_eq!(get(&c, &format!("http://127.0.0.1:{p}/")).await, Ok(200));
+
+    // A second refused port, for the refusals that aren't "not ready": no
+    // other request goes to it, so a log of it would show.
+    let r = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let gate = Arc::new(Refusing::default());
+    gate.0.lock().unwrap().extend([p, r]);
+    set_loopback_gate(gate.clone()).unwrap();
+    assert!(loopback_gate_is_set());
+    // Set once: a second gate is refused, and the first stays.
+    assert!(set_loopback_gate(Arc::new(Refusing::default())).is_err());
+
+    let before = managed.hits.load(Ordering::SeqCst);
+    for url in [
+        format!("http://127.0.0.1:{p}/"),
+        format!("http://[::1]:{p}/"),
+        format!("http://localhost:{p}/"),
+        format!("http://svc.test:{p}/"),
+        format!("http://127.0.0.2:{p}/"),
+    ] {
+        assert_eq!(get(&c, &url).await, Err(NetError::NotReady), "{url}");
+    }
+    // A name that doesn't resolve now, on a refused port: refused as the
+    // failed lookup it is, not as not ready.
+    assert_eq!(
+        get(&c, &format!("http://nowhere.test:{r}/")).await,
+        Err(NetError::Resolve)
+    );
+    // A client whose policy never allows loopback is refused as blocked.
+    let public =
+        GuardedClient::with_resolver(NetPolicy::notification(false), TIMEOUT, names.clone())
+            .unwrap();
+    for url in [
+        format!("http://localhost:{r}/"),
+        format!("http://svc.test:{r}/"),
+    ] {
+        assert_eq!(
+            get(&public, &url).await,
+            Err(NetError::Blocked(AddrClass::Loopback)),
+            "{url}"
+        );
+    }
+    // A name that turns to loopback between the request's check and its
+    // connection is refused at the connection.
+    assert_eq!(
+        get(&c, &format!("http://turns.test:{p}/")).await,
+        Err(NetError::NotReady)
+    );
+    // A redirect hop to the port.
+    assert_eq!(
+        follow(&c, &format!("http://127.0.0.1:{q}/hop")).await,
+        Err(NetError::NotReady)
+    );
+    assert_eq!(
+        managed.hits.load(Ordering::SeqCst),
+        before,
+        "nothing reached it"
+    );
+    // Through a SOCKS5 proxy that resolves names: `localhost` is the
+    // proxy's loopback, which may be this machine's, so it's refused too;
+    // any other name is the proxy's to resolve. Refused before the proxy
+    // is ever contacted (nothing listens at its address).
+    let socks = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        TIMEOUT,
+        names.clone(),
+        &Route::Socks5(Socks5Route {
+            proxy: "127.0.0.1:9".parse().unwrap(),
+            dns: SocksDns::Proxy,
+            auth: None,
+        }),
+    )
+    .unwrap();
+    for url in [
+        format!("http://localhost:{p}/"),
+        format!("http://svc.localhost:{p}/"),
+    ] {
+        assert_eq!(get(&socks, &url).await, Err(NetError::NotReady), "{url}");
+    }
+    assert_ne!(
+        get(&socks, &format!("http://svc.test:{p}/")).await,
+        Err(NetError::NotReady)
+    );
+    // Raw TCP names and literals alike.
+    for host in ["127.0.0.1", "::1", "localhost"] {
+        let got = resolve_tcp(&*names, host, p, NetPolicy::download_client()).await;
+        assert_eq!(got, Err(NetError::NotReady), "{host}");
+    }
+
+    // Each refusal reads as not ready, never as unreachable, and is logged
+    // once per port per process, with the port.
+    let words = ClientError::from(NetError::NotReady).to_string();
+    assert_eq!(words, lodestar_integrations::net::NOT_READY);
+    assert_ne!(words, ClientError::Unreachable.to_string());
+    assert!(words.contains("isn't ready yet"), "{words}");
+    let logged = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    // The event's lines for a port: `port=<port>`, and no digit after it.
+    let logged_for = |port: u16| {
+        let field = format!("port={port}");
+        logged
+            .lines()
+            .filter(|l| l.contains("integrations.companion_not_ready"))
+            .filter(|l| {
+                l.match_indices(&field)
+                    .any(|(i, _)| !l[i + field.len()..].starts_with(|c: char| c.is_ascii_digit()))
+            })
+            .count()
+    };
+    assert_eq!(logged_for(p), 1, "{logged}");
+    // A failed lookup and a policy's block on the second port log nothing.
+    assert_eq!(logged_for(r), 0, "{logged}");
+
+    // Another loopback port is untouched, and so is the same port on
+    // another address.
+    assert_eq!(get(&c, &format!("http://127.0.0.1:{q}/")).await, Ok(200));
+    let lan_tcp = resolve_tcp(&*names, "192.168.77.9", p, NetPolicy::download_client()).await;
+    assert_eq!(lan_tcp.map(|a| a.len()), Ok(1));
+    // The companions' own client, which applies its own rule.
+    let own = client(names.clone()).without_loopback_gate();
+    assert_eq!(get(&own, &format!("http://127.0.0.1:{p}/")).await, Ok(200));
+
+    // Allowed: through again.
+    gate.0.lock().unwrap().remove(&p);
+    assert_eq!(get(&c, &format!("http://127.0.0.1:{p}/")).await, Ok(200));
+    assert_eq!(
+        follow(&c, &format!("http://127.0.0.1:{q}/hop")).await,
+        Ok(200)
+    );
+    let v6 = resolve_tcp(&*names, "::1", p, NetPolicy::download_client()).await;
+    assert_eq!(v6.map(|a| a[0].ip()), Ok(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+}
+
+/// `without_loopback_gate` is for the companions' own client alone: no
+/// other source file in the workspace names it, in any form of call.
+#[test]
+fn only_the_companions_client_opts_out_of_the_gate() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut callers = Vec::new();
+    let mut stack = vec![
+        root.join("crates"),
+        root.join("fuzz"),
+        root.join("tools"),
+        root.join("bench"),
+    ];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n == "target" || n == "node_modules")
+                {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                if text.contains("without_loopback_gate") {
+                    let rel = path
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    callers.push(rel);
+                }
+            }
+        }
+    }
+    callers.sort();
+    assert_eq!(
+        callers,
+        [
+            "crates/companions/src/detect/mod.rs",
+            "crates/integrations/src/net.rs",
+            "crates/integrations/tests/loopback_gate.rs"
+        ],
+        "a new caller of without_loopback_gate needs the runner's agreement"
+    );
+}

@@ -477,12 +477,38 @@ impl Store {
     /// Stores `source`'s claims on a torrent, replacing its earlier ones;
     /// `private_source` when they came through a private source (§18.7).
     /// False when the torrent isn't stored or one of its hashes is held.
+    /// They're stamped with the store's clock;
+    /// [`put_claims_at`](Store::put_claims_at) takes the caller's.
     pub fn put_claims(
         &mut self,
         torrent_id: i64,
         source: SourceId,
         claims: &Claims,
         private_source: bool,
+    ) -> Result<bool> {
+        self.put_one_claims(torrent_id, source, claims, private_source, None)
+    }
+
+    /// [`put_claims`](Store::put_claims), stamped as written at `at` (Unix
+    /// seconds): the identify runtime's retention reads it (ENR-terms).
+    pub fn put_claims_at(
+        &mut self,
+        torrent_id: i64,
+        source: SourceId,
+        claims: &Claims,
+        private_source: bool,
+        at: i64,
+    ) -> Result<bool> {
+        self.put_one_claims(torrent_id, source, claims, private_source, Some(at))
+    }
+
+    fn put_one_claims(
+        &mut self,
+        torrent_id: i64,
+        source: SourceId,
+        claims: &Claims,
+        private_source: bool,
+        at: Option<i64>,
     ) -> Result<bool> {
         let blob = encode(claims, self.config.compression_level)?;
         let tx = begin_write(&mut self.conn)?;
@@ -493,9 +519,83 @@ impl Store {
         if held(&tx, &hashes)? {
             return Ok(false);
         }
-        write_claims(&tx, torrent_id, source, &blob, private_source)?;
+        write_claims(&tx, torrent_id, source, &blob, private_source, at)?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// When `source`'s claims on torrent `torrent_id` were last written
+    /// (Unix seconds; 0 for a row older than the column), or `None` when it
+    /// has none.
+    pub fn claims_stored_at(&self, torrent_id: i64, source: SourceId) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT stored_at FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2",
+            )?
+            .query_row(params![torrent_id, source.get()], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Deletes `source`'s claims written before `before` or after `after`
+    /// (Unix seconds), at most `limit` rows (capped at [`MAX_PAGE`]), and
+    /// only that source's: the identify runtime's retention sweep
+    /// (ENR-terms). Each torrent that lost a row is marked for the
+    /// backfill, so a title it resolved goes too, in the same transaction.
+    /// Returns those torrents; fewer than `limit` means none is left. A
+    /// deleted row no longer matches, so repeated calls go on where the
+    /// last stopped, with no cursor. It doesn't check the source's state: a
+    /// disabled source's claims expire too.
+    pub fn drop_claims_outside(
+        &mut self,
+        source: SourceId,
+        before: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<i64>> {
+        let tx = begin_write(&mut self.conn)?;
+        let ids = {
+            // The bundled SQLite has no `DELETE … LIMIT`: the rows are
+            // chosen first, through the `(source_id, stored_at)` index.
+            let mut stmt = tx.prepare_cached(
+                "SELECT torrent_id FROM torrent_claims WHERE source_id = ?1 AND stored_at < ?2
+                 UNION ALL
+                 SELECT torrent_id FROM torrent_claims WHERE source_id = ?1 AND stored_at > ?3
+                 LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                params![source.get(), before, after, limit.clamp(1, MAX_PAGE) as i64],
+                |r| r.get::<_, i64>(0),
+            )?;
+            rows.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
+        for id in &ids {
+            drop_one(&tx, *id, source)?;
+        }
+        tx.commit()?;
+        Ok(ids)
+    }
+
+    /// Marks every torrent holding `source`'s claims for the backfill, in
+    /// one statement through the `(source_id, …)` index: the plugin's terms
+    /// stopped allowing its answers to rename the record (ENR-terms).
+    /// Returns how many were marked.
+    pub fn mark_claims_unenriched(&mut self, source: SourceId) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id IN
+                 (SELECT torrent_id FROM torrent_claims WHERE source_id = ?1)",
+            [source.get()],
+        )?)
+    }
+
+    /// Deletes `source`'s claims on torrent `torrent_id`, marking it for
+    /// the backfill: a refresh that no longer matches (ENR-terms). False
+    /// when it had none.
+    pub fn drop_claims(&mut self, torrent_id: i64, source: SourceId) -> Result<bool> {
+        let tx = begin_write(&mut self.conn)?;
+        let dropped = drop_one(&tx, torrent_id, source)?;
+        tx.commit()?;
+        Ok(dropped)
     }
 
     /// A torrent's claims, by source. Claims that don't decode are left
@@ -526,11 +626,12 @@ impl Store {
         filter::write(&tx, holds)?;
         let mut ids = Vec::new();
         for f in holds.iter().filter(|f| f.held.is_some()) {
+            // Every stored torrent under the hash, as either of its own.
             for h in f.hashes {
-                let found = crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(*h)))?;
-                if let Some(id) = found
-                    && !ids.contains(&id)
-                {
+                for id in crate::all_by_hash(&tx, h)? {
+                    if ids.contains(&id) {
+                        continue;
+                    }
                     tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
                         .execute([id])?;
                     tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
@@ -710,11 +811,10 @@ impl Store {
                         hashes.push(k);
                     }
                     for h in hashes {
-                        let found =
-                            crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(h)))?;
-                        if let Some(tid) = found
-                            && !done.torrents_deleted.contains(&tid)
-                        {
+                        for tid in crate::all_by_hash(&tx, &h)? {
+                            if done.torrents_deleted.contains(&tid) {
+                                continue;
+                            }
                             tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
                                 .execute([tid])?;
                             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
@@ -919,7 +1019,7 @@ impl Store {
             }
             crate::add_sources(&tx, id, bits)?;
             if let Some(blob) = row_claims {
-                write_claims(&tx, id, item_source, blob, claims_private != 0)?;
+                write_claims(&tx, id, item_source, blob, claims_private != 0, None)?;
             }
             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
                 .execute([id])?;
@@ -1534,29 +1634,48 @@ fn put_bt_torrent(
         crate::make_public(tx, id)?;
     }
     if let Some(blob) = blob {
-        write_claims(tx, id, item.source, blob, item.private_source)?;
+        write_claims(tx, id, item.source, blob, item.private_source, None)?;
     }
     Ok(Some(Put::Torrent(id)))
 }
 
+/// Writes a claims row, stamped `at` (Unix seconds), or with the store's
+/// clock when `None`.
 fn write_claims(
     conn: &Connection,
     torrent_id: i64,
     source: SourceId,
     blob: &[u8],
     private_source: bool,
+    at: Option<i64>,
 ) -> Result<()> {
     conn.prepare_cached(
-        "INSERT INTO torrent_claims (torrent_id, source_id, flags, data) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT DO UPDATE SET flags = excluded.flags, data = excluded.data",
+        "INSERT INTO torrent_claims (torrent_id, source_id, flags, data, stored_at)
+         VALUES (?1, ?2, ?3, ?4, COALESCE(?5, unixepoch()))
+         ON CONFLICT DO UPDATE SET flags = excluded.flags, data = excluded.data,
+             stored_at = excluded.stored_at",
     )?
     .execute(params![
         torrent_id,
         source.get(),
         i64::from(private_source),
-        blob
+        blob,
+        at
     ])?;
     Ok(())
+}
+
+/// Deletes one claims row and marks its torrent for the backfill. False
+/// when there was none.
+fn drop_one(conn: &Connection, torrent_id: i64, source: SourceId) -> Result<bool> {
+    let n = conn
+        .prepare_cached("DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2")?
+        .execute(params![torrent_id, source.get()])?;
+    if n > 0 {
+        conn.prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?
+            .execute([torrent_id])?;
+    }
+    Ok(n > 0)
 }
 
 fn read_claims(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<StoredClaims>> {

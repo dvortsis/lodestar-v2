@@ -2330,3 +2330,55 @@ async fn an_unreadable_states_reader_sends_nothing() {
     assert_eq!(server.conns(), 1, "a poisoned reader connected");
     assert_eq!(poisoned.status().counters.policy_refusals, 1);
 }
+
+// ---------------------------------------------------------------- loopback gate
+
+/// A refusal by the loopback gate is its own error with its own text, paced
+/// by a streak of its own (as a kill switch refusal is) and cut short by
+/// `pace_by`.
+#[tokio::test(start_paused = true)]
+async fn a_companion_that_isnt_ready_is_its_own_paced_error() {
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let start = Instant::now();
+    let e = egress.failed(NetError::NotReady, None).await;
+    assert_eq!(
+        e,
+        HttpError::NotReady(lodestar_integrations::net::NOT_READY.into())
+    );
+    assert_eq!(e.to_string(), lodestar_integrations::net::NOT_READY);
+    assert_eq!(start.elapsed(), down_delay(0));
+    let start = Instant::now();
+    egress.failed(NetError::NotReady, None).await;
+    assert_eq!(start.elapsed(), down_delay(1));
+    assert!(down_delay(1) > down_delay(0));
+    // `pace_by` cuts it short.
+    let start = Instant::now();
+    egress
+        .failed(NetError::NotReady, Some(start + Duration::from_millis(10)))
+        .await;
+    assert_eq!(start.elapsed(), Duration::from_millis(10));
+    assert_eq!(egress.status().counters.policy_refusals, 3);
+}
+
+/// An answered request ends the loopback gate's streak, so the next
+/// refusal is paced from the start again.
+#[tokio::test]
+async fn an_answer_ends_the_not_ready_streak() {
+    let server = serve(|_| ok("hi")).await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    for _ in 0..2 {
+        // Cut short at once: only the streak is looked at.
+        egress
+            .failed(NetError::NotReady, Some(Instant::now()))
+            .await;
+    }
+    assert_eq!(egress.not_ready_streak.load(Ordering::Relaxed), 2);
+    within(egress.fetch(&Request::get(server.url("/"))))
+        .await
+        .unwrap();
+    assert_eq!(egress.not_ready_streak.load(Ordering::Relaxed), 0);
+}

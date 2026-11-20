@@ -25,7 +25,20 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (12, V12),
     (13, V13),
     (14, V14),
+    (15, V15),
 ];
+
+/// ENR-terms (`docs/decisions/2026-11-16-ENR-terms.md`): when each
+/// source's claims on a torrent were last written (Unix seconds), so a
+/// lookup plugin's claims can be refreshed and dropped within its terms'
+/// retention. Rows written before this get 0: no identify plugin has run
+/// on any store yet, and every other source's claims are never dropped by
+/// age. The index serves the identify runtime's sweep, which deletes one
+/// source's oldest rows a bounded batch at a time. Additive only.
+const V15: &str = "
+ALTER TABLE torrent_claims ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX torrent_claims_stored ON torrent_claims (source_id, stored_at);
+";
 
 /// Sources (SRC-1, `docs/decisions/2026-11-02-SRC-1.md`, architecture
 /// §18.5): keys sources found that have claims but no metadata yet, the
@@ -928,12 +941,15 @@ pub(crate) const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// Pragmas that persist in the file and can only be set before the first
 /// table exists, then the per-connection ones.
 pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
+    // First, so switching a new file to WAL waits for a connection opening
+    // it at the same time instead of failing at once.
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     let page_count: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
     if page_count == 0 {
         conn.pragma_update(None, "page_size", 16384)?;
         conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
     }
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    use_wal(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.pragma_update(None, "mmap_size", mmap_size as i64)?;
@@ -942,8 +958,61 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     // folder (which also holds seal.key) mustn't yield purged quarantine
     // names or deleted torrents (owner, 2026-10-22).
     conn.pragma_update(None, "secure_delete", true)?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(())
+}
+
+/// Switches the file to WAL, honouring the busy timeout
+/// (X-flake-store-migrate-race).
+///
+/// `PRAGMA journal_mode=WAL` reads the file's header, then needs the
+/// exclusive lock to change it: a read upgraded to a write, which SQLite
+/// refuses at once with `SQLITE_BUSY` rather than call the busy handler. So
+/// a connection opening a new store while another held the write lock
+/// before the file was in WAL (its own WAL switch, or the `auto_vacuum`
+/// setup on a new file) failed with "database is locked" though its busy
+/// timeout was set. Here a file already in WAL is left alone (the mode
+/// lives in the file), and a busy switch first waits for the lock as a
+/// write transaction from scratch does, through the busy timeout, then
+/// looks again. A lock still held when the timeout runs out is that busy
+/// error, as before.
+///
+/// SQLite keeps the old mode, without an error, on a VFS without shared
+/// memory (macOS's network-share locking, or `unix-none`): the mode the
+/// switch reports is checked, and anything but WAL is refused (in memory,
+/// `memory`; X-store-wal-nits). On Linux the switch always reports WAL,
+/// and a filesystem that can't hold it fails later, with I/O errors.
+fn use_wal(conn: &Connection) -> Result<()> {
+    let wal = |mode: String| mode.eq_ignore_ascii_case("wal");
+    for _ in 0..3 {
+        if wal(conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?) {
+            return Ok(());
+        }
+        match conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0)) {
+            Ok(mode) => return wal_took(conn, mode),
+            Err(e)
+                if matches!(
+                    e.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) =>
+            {
+                // Waits up to the busy timeout for whoever holds the lock.
+                conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let mode = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+    wal_took(conn, mode)
+}
+
+/// Whether the switch to WAL took: `wal`, or `memory` for a store in
+/// memory, where WAL doesn't apply.
+fn wal_took(conn: &Connection, mode: String) -> Result<()> {
+    let in_memory = conn.path().is_none_or(str::is_empty);
+    if mode.eq_ignore_ascii_case("wal") || (in_memory && mode.eq_ignore_ascii_case("memory")) {
+        return Ok(());
+    }
+    Err(Error::WalUnavailable)
 }
 
 /// Brings the schema up to date. Refuses to touch a database written by a
@@ -1027,19 +1096,26 @@ fn migrate_with(
 
 /// [`migrate_with`], running `created` in the first migration's
 /// transaction when the store had no schema.
+///
+/// One `BEGIN IMMEDIATE` transaction holds the write lock from reading the
+/// version to the last migration (X-store-migrate-race): connections that
+/// open the same store at once wait for it, with their busy timeout, then
+/// find the schema current. Reading the version outside the lock let two of
+/// them both apply the same migration, and the second failed.
 fn migrate_creating(
     conn: &mut Connection,
     path: Option<&Path>,
     migrations: &[(i64, &str)],
     created: Option<&str>,
 ) -> Result<()> {
-    conn.execute_batch(
+    let tx = crate::begin_write(conn)?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
              version    INTEGER PRIMARY KEY,
              applied_at INTEGER NOT NULL
          ) STRICT;",
     )?;
-    let current: i64 = conn
+    let current: i64 = tx
         .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
             r.get::<_, Option<i64>>(0)
         })
@@ -1054,16 +1130,21 @@ fn migrate_creating(
         });
     }
     if current == latest {
+        tx.commit()?;
         return Ok(());
     }
+    // `VACUUM INTO` can't run inside a transaction, so the snapshot is read
+    // through a second connection while this one holds the lock: nothing
+    // has been written yet, and nobody else can write.
     if current > 0
         && let Some(path) = path
     {
-        take_snapshot(conn, path, current + 1)?;
+        let reader = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        reader.busy_timeout(BUSY_TIMEOUT)?;
+        take_snapshot(&reader, path, current + 1)?;
     }
     let mut first = current == 0;
     for (version, sql) in migrations.iter().filter(|(v, _)| *v > current) {
-        let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         if std::mem::take(&mut first)
             && let Some(created) = created
@@ -1074,8 +1155,8 @@ fn migrate_creating(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, unixepoch())",
             [version],
         )?;
-        tx.commit()?;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -1606,12 +1687,12 @@ mod tests {
 
     /// Older builds opening this build's store refuse it as newer and
     /// change nothing: no migration, no snapshot, the file as it was. The
-    /// v0.5.1 code path (migrations through V12) and a V13 build both
-    /// refuse a V14 store, and so do their read-only connections.
+    /// v0.5.1 code path (migrations through V12), a V13 and a V14 build
+    /// all refuse a V15 store, and so do their read-only connections.
     #[test]
     fn older_builds_refuse_a_newer_store_untouched() {
         let latest = latest_schema_version();
-        assert_eq!(latest, 14);
+        assert_eq!(latest, 15);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lodestar.db");
         drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
@@ -1625,7 +1706,7 @@ mod tests {
         };
         let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
 
-        for older in [12, 13] {
+        for older in [12, 13, 14] {
             let mut conn = Connection::open(&path).unwrap();
             configure(&conn, 0).unwrap();
             let err =
@@ -1655,6 +1736,73 @@ mod tests {
         }
     }
 
+    /// V15 on a V14 store with claims from an identify source and two
+    /// others: it runs once, every row is kept and stamped 0, the pre-V15
+    /// snapshot is taken, and the retention sweep then deletes only the
+    /// rows of the source it's given (ENR-terms).
+    #[test]
+    fn v15_stamps_claims_and_the_sweep_takes_only_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..14]).unwrap();
+        let blob = "01000000000000";
+        conn.execute_batch(&format!(
+            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES
+                 (0, 'dht', '1', 0, 0), (1, 'wikidata', '1', 0, 0), (2, 'feed', '1', 0, 0);
+             INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
+                 info_size, flags, discovered_at, metadata_at, last_seen_at, sources, first_source)
+                 VALUES (7, x'{a}', 'a', 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0),
+                        (8, x'{b}', 'b', 1, 1, 1, 1, 1, 0, 0, 0, 0, 5, 0);
+             UPDATE id_seq SET next = 9;
+             INSERT INTO torrent_claims (torrent_id, source_id, flags, data) VALUES
+                 (7, 0, 0, x'{blob}'), (7, 1, 0, x'{blob}'), (7, 2, 0, x'{blob}'),
+                 (8, 1, 0, x'{blob}'), (8, 2, 1, x'{blob}');",
+            a = "11".repeat(20),
+            b = "33".repeat(20),
+        ))
+        .unwrap();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 15);
+        assert!(dir.path().join("lodestar.pre-v15.db").exists());
+        let count = |conn: &Connection, sql: &str| -> i64 {
+            conn.query_row(sql, [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn, "SELECT count(*) FROM torrent_claims"), 5);
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT count(*) FROM torrent_claims WHERE stored_at = 0"
+            ),
+            5
+        );
+        // Once only: a second open finds it current and takes no snapshot.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 15);
+        assert!(!dir.path().join("lodestar.pre-v15.1.db").exists());
+        drop(conn);
+
+        let mut store = crate::Store::open(&path, crate::StoreConfig::default()).unwrap();
+        let wikidata = crate::SourceId::new(1).unwrap();
+        let mut gone = store
+            .drop_claims_outside(wikidata, 1, i64::MAX, 100)
+            .unwrap();
+        gone.sort_unstable();
+        assert_eq!(gone, vec![7, 8]);
+        assert_eq!(store.claims_stored_at(7, wikidata).unwrap(), None);
+        for (t, s) in [(7, 0), (7, 2), (8, 2)] {
+            let s = crate::SourceId::new(s).unwrap();
+            assert_eq!(store.claims_stored_at(t, s).unwrap(), Some(0), "{t}/{s:?}");
+        }
+        assert!(
+            store
+                .drop_claims_outside(wikidata, 1, i64::MAX, 100)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// V14 on a V13 store with data: every V13 row is kept, the pre-V14
     /// snapshot is taken, the new tables start empty, the id sequence is
     /// untouched, and V13's triggers still work beside V14's.
@@ -1681,7 +1829,7 @@ mod tests {
             c = "22".repeat(20),
         ))
         .unwrap();
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..14]).unwrap();
         assert_eq!(version(&conn), 14);
         assert!(
             dir.path().join("lodestar.pre-v14.db").exists(),
@@ -1724,6 +1872,36 @@ mod tests {
         assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
     }
 
+    /// A fresh install of this build ends with the same schema as an
+    /// upgrade from V14, the claims stamp and its index included.
+    #[test]
+    fn the_latest_schema_on_a_fresh_store_matches_an_upgraded_one() {
+        let schema = |conn: &Connection| -> Vec<(String, String)> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name, sql FROM sqlite_schema WHERE sql IS NOT NULL
+                     AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let mut fresh = Connection::open_in_memory().unwrap();
+        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        let mut upgraded = Connection::open_in_memory().unwrap();
+        migrate_with(&mut upgraded, None, &MIGRATIONS[..14]).unwrap();
+        migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
+        assert_eq!(version(&fresh), latest_schema_version());
+        assert_eq!(schema(&fresh), schema(&upgraded));
+        assert!(
+            schema(&fresh)
+                .iter()
+                .any(|(n, _)| n == "torrent_claims_stored")
+        );
+    }
+
     /// A fresh install runs V1–V14 in order and ends with the same schema
     /// as an upgrade from V13.
     #[test]
@@ -1741,10 +1919,10 @@ mod tests {
                 .unwrap()
         };
         let mut fresh = Connection::open_in_memory().unwrap();
-        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        migrate_with(&mut fresh, None, &MIGRATIONS[..14]).unwrap();
         let mut upgraded = Connection::open_in_memory().unwrap();
         migrate_with(&mut upgraded, None, &MIGRATIONS[..13]).unwrap();
-        migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
+        migrate_with(&mut upgraded, None, &MIGRATIONS[..14]).unwrap();
         assert_eq!(version(&fresh), 14);
         assert_eq!(schema(&fresh), schema(&upgraded));
         let names: Vec<String> = schema(&fresh).into_iter().map(|(n, _)| n).collect();
@@ -1875,5 +2053,238 @@ mod tests {
         );
         let backup = Connection::open(dir.path().join("t.pre-v2.1.db")).unwrap();
         assert_eq!(version(&backup), 1);
+    }
+
+    /// Opens `path` from `n` threads at once (a barrier lines them up),
+    /// returning each open's result.
+    fn open_at_once(path: &Path, n: usize) -> Vec<Result<()>> {
+        let start = std::sync::Arc::new(std::sync::Barrier::new(n));
+        let opens: Vec<_> = (0..n)
+            .map(|_| {
+                let (path, start) = (path.to_path_buf(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    crate::Store::open(&path, crate::StoreConfig::default()).map(drop)
+                })
+            })
+            .collect();
+        opens.into_iter().map(|t| t.join().unwrap()).collect()
+    }
+
+    /// Every table, index, trigger and view, by kind and name.
+    fn objects(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, name FROM sqlite_master
+                 WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn versions(conn: &Connection) -> Vec<i64> {
+        let mut stmt = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// The schema a single open creates, to compare a raced one with.
+    fn reference() -> Vec<(String, String)> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ref.db");
+        drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
+        objects(&Connection::open(&path).unwrap())
+    }
+
+    /// X-store-migrate-race: connections that open a new database at once
+    /// all succeed. One creates the schema; the others wait for its lock,
+    /// then find it current. Every migration ran once.
+    #[test]
+    fn a_new_store_opened_at_once_is_created_once() {
+        let want = reference();
+        let all: Vec<i64> = MIGRATIONS.iter().map(|(v, _)| *v).collect();
+        for _ in 0..12 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("t.db");
+            for open in open_at_once(&path, 8) {
+                open.unwrap();
+            }
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(version(&conn), latest_schema_version());
+            assert_eq!(versions(&conn), all);
+            assert_eq!(objects(&conn), want);
+            assert_eq!(fresh_marker(&conn).as_deref(), Some("1"));
+        }
+    }
+
+    /// The same for an upgrade: connections that open an older store at
+    /// once all succeed, the migrations run once, and one snapshot is
+    /// taken, not one per connection.
+    #[test]
+    fn an_older_store_opened_at_once_is_upgraded_once() {
+        let want = reference();
+        let all: Vec<i64> = MIGRATIONS.iter().map(|(v, _)| *v).collect();
+        for _ in 0..6 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("t.db");
+            {
+                let mut old = Connection::open(&path).unwrap();
+                configure(&old, 0).unwrap();
+                migrate_with(&mut old, Some(&path), &MIGRATIONS[..13]).unwrap();
+            }
+            for open in open_at_once(&path, 8) {
+                open.unwrap();
+            }
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(versions(&conn), all);
+            assert_eq!(objects(&conn), want);
+            assert_eq!(fresh_marker(&conn), None, "an upgraded store isn't fresh");
+            let snapshots: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".pre-v"))
+                .collect();
+            assert_eq!(snapshots, ["t.pre-v14.db"]);
+            assert_eq!(
+                version(&Connection::open(dir.path().join("t.pre-v14.db")).unwrap()),
+                13
+            );
+        }
+    }
+
+    /// A connection that waits past its busy timeout for another's lock
+    /// gets SQLite's busy error, not a corrupt store or a failed migration,
+    /// and changes nothing; once the lock is free it migrates. Both
+    /// connections are set up as the store sets one up (`configure`, so in
+    /// WAL; X-store-busy-nits).
+    #[test]
+    fn a_migration_that_cant_get_the_lock_says_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut holder = Connection::open(&path).unwrap();
+        configure(&holder, 0).unwrap();
+        migrate_with(&mut holder, Some(&path), &FAKE[..1]).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let mut waiter = Connection::open(&path).unwrap();
+        configure(&waiter, 0).unwrap();
+        let mode: String = waiter
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "as the store runs");
+        // Shorter than the store's own, so the test doesn't wait 5 s.
+        waiter
+            .busy_timeout(std::time::Duration::from_millis(50))
+            .unwrap();
+        let e = migrate_with(&mut waiter, Some(&path), FAKE).unwrap_err();
+        assert!(e.is_busy(), "{e:?}");
+        match e {
+            Error::Sqlite(rusqlite::Error::SqliteFailure(e, _)) => {
+                assert_eq!(e.code, rusqlite::ErrorCode::DatabaseBusy, "{e}");
+            }
+            other => panic!("expected SQLite's busy error, got {other:?}"),
+        }
+        assert!(!dir.path().join("t.pre-v2.db").exists(), "no snapshot");
+
+        holder.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(version(&holder), 1, "nothing migrated");
+        migrate_with(&mut waiter, Some(&path), FAKE).unwrap();
+        assert_eq!(version(&waiter), 2);
+    }
+
+    /// X-flake-store-migrate-race: switching to WAL waits for another
+    /// connection's lock through the busy timeout, where the bare pragma
+    /// failed at once (a read upgraded to a write), and says busy only once
+    /// the timeout has run out. A store already in WAL isn't switched
+    /// again, so a writer elsewhere doesn't hold it up.
+    #[test]
+    fn switching_to_wal_honours_the_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let holder = Connection::open(&path).unwrap();
+        holder
+            .execute_batch("CREATE TABLE t (x INTEGER); BEGIN IMMEDIATE;")
+            .unwrap();
+        let waiter = Connection::open(&path).unwrap();
+        let timeout = std::time::Duration::from_millis(200);
+        waiter.busy_timeout(timeout).unwrap();
+        let started = std::time::Instant::now();
+        let e = use_wal(&waiter).unwrap_err();
+        assert!(e.is_busy(), "{e}");
+        // Half: Windows can wake a little early, and the bare pragma
+        // failed after microseconds.
+        assert!(
+            started.elapsed() >= timeout / 2,
+            "waited {:?}",
+            started.elapsed()
+        );
+
+        holder.execute_batch("ROLLBACK").unwrap();
+        use_wal(&waiter).unwrap();
+        let mode = |c: &Connection| -> String {
+            c.pragma_query_value(None, "journal_mode", |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(mode(&waiter), "wal");
+
+        // In WAL now: a write transaction elsewhere doesn't stop a new
+        // connection's switch, which has nothing left to do.
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let late = Connection::open(&path).unwrap();
+        late.busy_timeout(timeout).unwrap();
+        use_wal(&late).unwrap();
+        assert_eq!(mode(&late), "wal");
+        holder.execute_batch("ROLLBACK").unwrap();
+    }
+
+    /// X-store-wal-nits: where SQLite can't use WAL it keeps the old mode
+    /// without an error; the store refuses to open rather than run without
+    /// WAL. A store in memory reports `memory`, and opens.
+    #[test]
+    fn a_folder_that_cant_use_wal_is_refused() {
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let uri = format!("file:{}?vfs=unix-none", dir.path().join("t.db").display());
+            let conn = Connection::open_with_flags(
+                &uri,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+                    | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            )
+            .unwrap();
+            match use_wal(&conn) {
+                Err(e @ Error::WalUnavailable) => assert!(e.to_string().contains("WAL"), "{e}"),
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
+        let memory = Connection::open_in_memory().unwrap();
+        use_wal(&memory).unwrap();
+        crate::Store::open_in_memory(crate::StoreConfig::default()).unwrap();
+    }
+
+    /// The other platforms' side of `a_folder_that_cant_use_wal_is_refused`
+    /// (whose refusal runs on Unix only): a store in an ordinary local
+    /// folder passes the check and is in WAL, so the check never refuses a
+    /// normal install. Windows has no VFS that keeps another mode.
+    #[test]
+    fn an_ordinary_folder_passes_the_wal_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let conn = Connection::open(&path).unwrap();
+        use_wal(&conn).unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        drop(conn);
+        drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
     }
 }

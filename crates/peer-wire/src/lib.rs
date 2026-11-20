@@ -24,7 +24,9 @@ pub mod testing;
 use std::fmt;
 use std::io;
 
-pub use fetch::{Deny, Encryption, FetchOptions, Fetched, Reserve, fetch, fetch_on_stream};
+pub use fetch::{
+    Deny, Encryption, FIRST_WINDOW_DEADLINE, FetchOptions, Fetched, Reserve, fetch, fetch_on_stream,
+};
 /// The uTP crate, for building the socket `FetchOptions::utp` takes.
 pub use lodestar_utp as utp;
 pub use stats::{FetchStats, Transport};
@@ -37,6 +39,14 @@ pub enum Error {
     /// The connection failed mid-exchange.
     Io(io::Error),
     Timeout,
+    /// A dict larger than one request window, whose first window didn't
+    /// arrive within [`FIRST_WINDOW_DEADLINE`] of being requested. Counted
+    /// as a timeout.
+    FirstWindow,
+    /// A large dict's peer fell behind the pace it must keep. Counted as a
+    /// timeout; apart so a caller can tell the peer's slowness from a fetch
+    /// that simply ran out of time.
+    Behind,
     /// The MSE handshake failed (or the peer hung up during it).
     Mse(&'static str),
     Handshake(&'static str),
@@ -74,7 +84,7 @@ impl Error {
     pub fn kind(&self) -> FailureKind {
         match self {
             Error::Connect(_) | Error::Denied => FailureKind::Unreachable,
-            Error::Timeout => FailureKind::TimedOut,
+            Error::Timeout | Error::FirstWindow | Error::Behind => FailureKind::TimedOut,
             Error::Io(_) | Error::NoExtensions | Error::NoMetadata | Error::Rejected => {
                 FailureKind::Refused
             }
@@ -92,6 +102,8 @@ impl fmt::Display for Error {
             Error::Connect(e) => write!(f, "connect failed: {e}"),
             Error::Io(e) => write!(f, "connection failed: {e}"),
             Error::Timeout => f.write_str("timed out"),
+            Error::FirstWindow => f.write_str("the first window didn't arrive in time"),
+            Error::Behind => f.write_str("fell behind the pace a large dict must keep"),
             Error::Mse(why) => write!(f, "encryption handshake failed: {why}"),
             Error::Handshake(why) => write!(f, "bad handshake: {why}"),
             Error::NoExtensions => f.write_str("peer lacks the extension protocol"),

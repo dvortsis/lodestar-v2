@@ -100,8 +100,11 @@ impl Services {
     /// Opens the data directory and starts every service. The HTTP
     /// listener is bound but serves nothing until [`Services::run`].
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
-        std::fs::create_dir_all(&config.data_dir)
+        // Owner-only: created so, or tightened when Lodestar's user owns
+        // it; one it doesn't own is warned about, never changed (S8-01).
+        crate::data_dir::ensure(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        crate::data_dir::secure(&config.data_dir);
         // `/system`'s start time, whichever entry point runs this (B2c).
         system::Restart::global().started();
         // A pending HTTP-address change, before the registry loads (B2c).
@@ -129,6 +132,9 @@ impl Services {
             .borrow()
             .clone();
         let mut pipeline_config = config.pipeline_config()?;
+        if config.max_metadata_clamped() {
+            lodestar_log::log_event!(crate::logging::events::FETCH_METADATA_LIMIT_CLAMPED);
+        }
         pipeline_config.pool.paused = crawl_settings.paused;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
@@ -538,8 +544,7 @@ impl Services {
         if let Some(dht) = dht_stats.clone() {
             insights.set_snapshot(Box::new(move || lodestar_api::insights::StageSnapshot {
                 dht_reply_ratio: (*dht.lock().unwrap_or_else(|e| e.into_inner()))
-                    .filter(|d| d.queries_out > 0)
-                    .map(|d| d.reply_ratio()),
+                    .and_then(|d| d.reply_ratio()),
             }));
         }
         let (stop_insights, insights_stopped) = watch::channel(false);

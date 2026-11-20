@@ -4,7 +4,7 @@ The operator agent (Managed Agents) and the workflows around it (OP-4). Plan: `d
 
 | File | What it does |
 |---|---|
-| `agent/agent.json`, `agent/system-prompt.md` | The agent: model placeholder (rendered from `OPERATOR_MODEL_ROUTINE` at medium effort), web tools off, the toolset on `auto` |
+| `agent/agent.json`, `agent/system-prompt.md` | The agent: model placeholder (rendered from `OPERATOR_MODEL_ROUTINE` at medium effort), web tools off, the toolset on `auto` except `bash`, which is `always_allow` (the owner's decision, `docs/decisions/2026-11-14-X-operator-bash-allow.md`) |
 | `agent/environment.json` | `limited` networking, `api.github.com` only, no package managers or MCP hosts |
 | `agent/vault.json` | The vault and its one credential, `GITHUB_TOKEN` (header only, `api.github.com` only, no value committed) |
 | `agent_apply.py` | `operator-apply.yml`: create or update the three, IDs in `claude-lock.json` in the control bucket |

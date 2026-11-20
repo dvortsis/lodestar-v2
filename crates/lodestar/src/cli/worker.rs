@@ -265,12 +265,15 @@ pub fn run(config: &Config, args: WorkerArgs) -> Outcome {
         &|k| std::env::var(k).ok(),
         crate::shutdown_signal(),
         report,
+        Exits::Printed,
     )
 }
 
 /// Runs the worker until `stop` resolves (or it ends by itself), with its
-/// progress lines going to `report`: the Windows service's entry, whose
-/// stop is the SCM's Stop or Shutdown (its lines have no log event yet).
+/// progress lines going to `report` and each one also logged as an event
+/// ([`log_progress`]): the Windows service's entry, whose stop is the
+/// SCM's Stop or Shutdown, and where no one reads stderr. A stop the user
+/// has to act on is logged too (`worker.exited`).
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn run_until(
     config: &Config,
@@ -279,7 +282,194 @@ pub fn run_until(
     report: Report,
 ) -> Outcome {
     let env = |k: &str| std::env::var(k).ok();
-    run_with(config, args, &|k| never_joins(&env, k), stop, report)
+    let logged: Report = Arc::new(move |line: &str| {
+        log_progress(line);
+        report(line);
+    });
+    run_with(
+        config,
+        args,
+        &|k| never_joins(&env, k),
+        stop,
+        logged,
+        Exits::Logged,
+    )
+}
+
+/// Whether a stop the user has to act on is also logged: under the
+/// service, where its error text reaches only the installer's log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exits {
+    /// The console prints the error itself.
+    Printed,
+    Logged,
+}
+
+/// The worker's own progress lines that [`classify`] recognises (the
+/// session's are in `worker::session`).
+const CONNECTING: &str = "connecting to ";
+const STOPPED: &str = "stopped";
+const DRAINED: &str = "drained: the coordinator has the work back; stopped";
+
+/// One progress line, as an event. The line's text is never logged, only
+/// which line it was and the numbers and fixed reasons it carries, so no
+/// name, address, token or error text reaches the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Progress {
+    Connecting,
+    Connected,
+    FreshSession,
+    ConnectionLost,
+    TurnedAway,
+    ConnectFailed(&'static str),
+    Retrying {
+        wait_ms: u64,
+    },
+    Draining,
+    ClockSkewed {
+        seconds: u64,
+    },
+    Renewed,
+    RenewalRefused,
+    RenewalUnsaved,
+    HandingBack,
+    HandbackTimedOut,
+    Stopped,
+    Drained,
+    /// A line with no event of its own (one newer than this table).
+    Other,
+}
+
+/// Which line `line` is, by its fixed beginning (the whole line for
+/// `stopped`).
+fn classify(line: &str) -> Progress {
+    if let Some(rest) = line.strip_prefix("connecting again in ") {
+        let secs = rest
+            .strip_suffix(" s")
+            .and_then(|n| n.parse::<f64>().ok())
+            .filter(|n| n.is_finite() && *n >= 0.0);
+        return match secs {
+            // `as` saturates; the back-off's own cap is a few minutes.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some(n) => Progress::Retrying {
+                wait_ms: (n * 1000.0).round() as u64,
+            },
+            None => Progress::Other,
+        };
+    }
+    if let Some(rest) = line.strip_prefix("this machine's clock is ") {
+        return match rest
+            .split_once(" s off")
+            .and_then(|(n, _)| n.parse::<i64>().ok())
+        {
+            Some(n) => Progress::ClockSkewed {
+                seconds: n.unsigned_abs(),
+            },
+            None => Progress::Other,
+        };
+    }
+    if let Some(rest) = line.strip_prefix("couldn't connect: ") {
+        return Progress::ConnectFailed(connect_reason(rest));
+    }
+    if line == STOPPED {
+        return Progress::Stopped;
+    }
+    const FIXED: [(&str, Progress); 12] = [
+        ("connected as worker ", Progress::Connected),
+        ("connecting again: ", Progress::FreshSession),
+        (CONNECTING, Progress::Connecting),
+        (
+            "the connection to the coordinator was lost",
+            Progress::ConnectionLost,
+        ),
+        (
+            "the coordinator turned the connection away",
+            Progress::TurnedAway,
+        ),
+        ("draining: ", Progress::Draining),
+        ("certificate renewed", Progress::Renewed),
+        (
+            "the renewed certificate was refused",
+            Progress::RenewalRefused,
+        ),
+        (
+            "couldn't save the renewed credentials",
+            Progress::RenewalUnsaved,
+        ),
+        ("stopping: handing ", Progress::HandingBack),
+        (
+            "stopping: the coordinator didn't take the work back",
+            Progress::HandbackTimedOut,
+        ),
+        (DRAINED, Progress::Drained),
+    ];
+    FIXED
+        .iter()
+        .find(|(prefix, _)| line.starts_with(prefix))
+        .map_or(Progress::Other, |&(_, p)| p)
+}
+
+/// Why a connection failed, from `ClientError`'s fixed texts; `other` for
+/// the link's and the protocol's own errors (TLS, framing), whose text
+/// isn't logged.
+fn connect_reason(error: &str) -> &'static str {
+    const REASONS: [(&str, &str); 7] = [
+        ("couldn't reach the coordinator", "unreachable"),
+        ("the coordinator didn't answer in time", "timeout"),
+        ("the coordinator refused", "refused"),
+        ("the coordinator stopped this worker", "stopped"),
+        ("the coordinator broke the cluster protocol", "protocol"),
+        ("request over a protocol limit", "invalid"),
+        ("the session has ended", "closed"),
+    ];
+    REASONS
+        .iter()
+        .find(|(prefix, _)| error.starts_with(prefix))
+        .map_or("other", |&(_, reason)| reason)
+}
+
+/// Logs one progress line as its `worker.*` event (X-worker-service-log).
+fn log_progress(line: &str) {
+    use crate::logging::events as ev;
+    use lodestar_log::{Count, log_event};
+    match classify(line) {
+        Progress::Connecting => log_event!(ev::WORKER_CONNECTING),
+        Progress::Connected => log_event!(ev::WORKER_CONNECTED),
+        Progress::FreshSession => log_event!(ev::WORKER_FRESH_SESSION),
+        Progress::ConnectionLost => log_event!(ev::WORKER_CONNECTION_LOST),
+        Progress::TurnedAway => log_event!(ev::WORKER_TURNED_AWAY),
+        Progress::ConnectFailed(reason) => {
+            log_event!(ev::WORKER_CONNECT_FAILED, reason = reason);
+        }
+        Progress::Retrying { wait_ms } => {
+            log_event!(ev::WORKER_RETRYING, wait_ms = Count(wait_ms));
+        }
+        Progress::Draining => log_event!(ev::WORKER_DRAINING),
+        Progress::ClockSkewed { seconds } => {
+            log_event!(ev::WORKER_CLOCK_SKEWED, seconds = Count(seconds));
+        }
+        Progress::Renewed => log_event!(ev::WORKER_RENEWED),
+        Progress::RenewalRefused => log_event!(ev::WORKER_RENEWAL_REFUSED),
+        Progress::RenewalUnsaved => log_event!(ev::WORKER_RENEWAL_UNSAVED),
+        Progress::HandingBack => log_event!(ev::WORKER_HANDING_BACK),
+        Progress::HandbackTimedOut => log_event!(ev::WORKER_HANDBACK_TIMED_OUT),
+        Progress::Stopped => log_event!(ev::WORKER_STOPPED),
+        Progress::Drained => log_event!(ev::WORKER_DRAINED),
+        Progress::Other => log_event!(ev::WORKER_STATUS),
+    }
+}
+
+/// The fixed reason a stop the user has to act on is logged with; none
+/// for a plain stop, whose line is logged already.
+fn exit_reason(exit: &Exit) -> Option<&'static str> {
+    match exit {
+        Exit::Shutdown | Exit::Drained => None,
+        Exit::Revoked => Some("revoked"),
+        Exit::Expired => Some("expired"),
+        Exit::Outdated { .. } => Some("outdated"),
+        Exit::IdentityMismatch => Some("identity_mismatch"),
+        Exit::Replaced => Some("replaced"),
+    }
 }
 
 /// The environment as a service sees it: never `LODESTAR_TOKEN`,
@@ -311,6 +501,7 @@ fn run_with(
     env: &dyn Fn(&str) -> Option<String>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     report: Report,
+    exits: Exits,
 ) -> Outcome {
     let layout = Layout::new(args.data.clone().unwrap_or_else(|| config.data_dir.clone()));
     if layout.is_coordinators() {
@@ -389,7 +580,7 @@ fn run_with(
                     "the coordinator's address is missing: {JOIN_AGAIN}"
                 ))
             })?;
-        report(&format!("connecting to {addr}"));
+        report(&format!("{CONNECTING}{addr}"));
         let settings = Settings::default();
         // The worker's fetch budget (WK-10b): dicts up to `MAX_METADATA`,
         // reserved against the pool's 4 MiB before they're requested.
@@ -448,6 +639,11 @@ fn run_with(
                  Start the worker again; Docker and the service manager do this by themselves."
                     .to_owned(),
             ));
+        }
+        if exits == Exits::Logged
+            && let Some(reason) = exit_reason(&exit)
+        {
+            lodestar_log::log_event!(crate::logging::events::WORKER_EXITED, reason = reason);
         }
         finish(exit, &report)
     })
@@ -513,11 +709,11 @@ fn parse_and_wipe(text: String) -> Result<JoinToken, lodestar_cluster::TokenForm
 fn finish(exit: Exit, report: &Report) -> Outcome {
     match exit {
         Exit::Shutdown => {
-            report("stopped");
+            report(STOPPED);
             Ok(())
         }
         Exit::Drained => {
-            report("drained: the coordinator has the work back; stopped");
+            report(DRAINED);
             Ok(())
         }
         Exit::Revoked => Err(Failure::Failed(format!(
@@ -693,12 +889,26 @@ mod tests {
             rotate_key: false,
             join_only: false,
         });
-        let config = crate::cli::load_config(&worker, None, |_| None).unwrap();
+        let (config, _) = crate::cli::load_config(
+            &worker,
+            None,
+            &crate::cli::Install::default(),
+            |_| None,
+            |_| Ok(()),
+        )
+        .unwrap();
         // The folder, and the config.toml read from it.
         assert_eq!(config.data_dir, dir.path());
         assert!(config.cluster.enabled);
         // Other commands keep LODESTAR_DATA_DIR.
-        let other = crate::cli::load_config(&Command::Vacuum, None, |_| None).unwrap();
+        let (other, _) = crate::cli::load_config(
+            &Command::Vacuum,
+            None,
+            &crate::cli::Install::default(),
+            |_| None,
+            |_| Ok(()),
+        )
+        .unwrap();
         assert_eq!(other.data_dir, std::path::PathBuf::from("data"));
     }
 
@@ -752,7 +962,8 @@ mod tests {
                 rotate(),
                 &|_| None,
                 std::future::pending(),
-                quiet()
+                quiet(),
+                Exits::Printed
             ),
             Err(Failure::Refused(_))
         ));
@@ -764,7 +975,8 @@ mod tests {
                 rotate(),
                 &|_| None,
                 std::future::pending(),
-                quiet()
+                quiet(),
+                Exits::Printed
             )
             .is_ok()
         );
@@ -818,9 +1030,14 @@ mod tests {
             rotate_key: false,
             join_only: true,
         };
-        let Err(Failure::Refused(m)) =
-            run_with(&config, args, &|_| None, std::future::pending(), quiet())
-        else {
+        let Err(Failure::Refused(m)) = run_with(
+            &config,
+            args,
+            &|_| None,
+            std::future::pending(),
+            quiet(),
+            Exits::Printed,
+        ) else {
             panic!("not refused");
         };
         assert!(
@@ -854,6 +1071,7 @@ mod tests {
             &|k| never_joins(&env, k),
             std::future::pending(),
             quiet(),
+            Exits::Logged,
         ) else {
             panic!("joined or ran");
         };
@@ -872,6 +1090,123 @@ mod tests {
         }
         assert!(finish(Exit::Drained, &report).is_ok());
         assert!(finish(Exit::Shutdown, &report).is_ok());
+    }
+
+    /// The fixed beginning of each line the session says: the literal
+    /// after every `self.say(`, up to its first `{` or closing quote.
+    fn session_lines() -> Vec<String> {
+        let source = include_str!("../worker/session.rs");
+        let mut lines = Vec::new();
+        for (at, _) in source.match_indices("self.say(") {
+            let rest = source[at + "self.say(".len()..].trim_start();
+            let rest = rest.strip_prefix("&format!(").unwrap_or(rest).trim_start();
+            let text = rest.strip_prefix('"').expect("a say( with a literal");
+            let end = text.find(['{', '"', '\\']).unwrap();
+            lines.push(text[..end].to_owned());
+        }
+        lines
+    }
+
+    #[test]
+    fn every_session_line_has_an_event_of_its_own() {
+        let lines = session_lines();
+        assert!(lines.len() >= 13, "{lines:?}");
+        for line in &lines {
+            // A placeholder's text: what follows the fixed part.
+            let filled = match line.as_str() {
+                "connecting again in " => format!("{line}2.5 s"),
+                "this machine's clock is " => format!("{line}-90 s off the coordinator's"),
+                _ => format!("{line}x"),
+            };
+            let p = classify(&filled);
+            assert_ne!(p, Progress::Other, "{line:?} has no event");
+        }
+    }
+
+    #[test]
+    fn progress_lines_map_to_their_events() {
+        for (line, want) in [
+            ("connecting to 192.0.2.1:8091", Progress::Connecting),
+            ("connected as worker w-1", Progress::Connected),
+            (
+                "connecting again: the worker asked for a fresh session",
+                Progress::FreshSession,
+            ),
+            (
+                "connecting again in 2.5 s",
+                Progress::Retrying { wait_ms: 2500 },
+            ),
+            ("connecting again in soon", Progress::Other),
+            ("connecting again in NaN s", Progress::Other),
+            (
+                "this machine's clock is -90 s off the coordinator's; set it",
+                Progress::ClockSkewed { seconds: 90 },
+            ),
+            (
+                "couldn't connect: couldn't reach the coordinator: connection refused",
+                Progress::ConnectFailed("unreachable"),
+            ),
+            (
+                "couldn't connect: the coordinator didn't answer in time",
+                Progress::ConnectFailed("timeout"),
+            ),
+            (
+                "couldn't connect: certificate for 192.0.2.1 is not valid",
+                Progress::ConnectFailed("other"),
+            ),
+            (STOPPED, Progress::Stopped),
+            ("stopped early", Progress::Other),
+            (DRAINED, Progress::Drained),
+            ("something new", Progress::Other),
+            ("", Progress::Other),
+        ] {
+            assert_eq!(classify(line), want, "{line:?}");
+        }
+        // The worker's own lines, as `run_with` and `finish` say them.
+        let said = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = said.clone();
+        let report: Report = Arc::new(move |l: &str| into.lock().unwrap().push(classify(l)));
+        let _ = finish(Exit::Shutdown, &report);
+        let _ = finish(Exit::Drained, &report);
+        assert_eq!(
+            *said.lock().unwrap(),
+            [Progress::Stopped, Progress::Drained]
+        );
+        assert_eq!(
+            classify(&format!("{CONNECTING}c:8091")),
+            Progress::Connecting
+        );
+    }
+
+    #[test]
+    fn only_a_stop_to_act_on_is_logged_as_an_exit() {
+        assert_eq!(exit_reason(&Exit::Shutdown), None);
+        assert_eq!(exit_reason(&Exit::Drained), None);
+        for exit in [
+            Exit::Revoked,
+            Exit::Expired,
+            Exit::Outdated {
+                coordinator_major: 9,
+            },
+            Exit::IdentityMismatch,
+            Exit::Replaced,
+        ] {
+            assert!(exit_reason(&exit).is_some(), "{exit:?}");
+        }
+    }
+
+    #[test]
+    fn a_logged_line_keeps_none_of_its_text() {
+        crate::test_log::install();
+        let marker = "lsj1workerprogressmarker";
+        log_progress(&format!("connected as worker {marker}"));
+        log_progress(&format!("couldn't connect: {marker} https://u:p@h"));
+        log_progress(&format!("an unknown line {marker}"));
+        let log = crate::test_log::text();
+        for id in ["worker.connected", "worker.connect_failed", "worker.status"] {
+            assert!(log.contains(id), "{id} not logged: {log}");
+        }
+        assert!(!log.contains(marker), "{log}");
     }
 
     #[test]

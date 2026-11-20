@@ -116,6 +116,26 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_store_write_failed_n,
 		m.settings_logging_ev_pipeline_store_write_failed_h
 	],
+	'pipeline.core_rejudge_started': [
+		m.settings_logging_ev_pipeline_core_rejudge_started_n,
+		m.settings_logging_ev_pipeline_core_rejudge_started_h
+	],
+	'pipeline.core_rejudge_done': [
+		m.settings_logging_ev_pipeline_core_rejudge_done_n,
+		m.settings_logging_ev_pipeline_core_rejudge_done_h
+	],
+	'pipeline.core_rejudge_failed': [
+		m.settings_logging_ev_pipeline_core_rejudge_failed_n,
+		m.settings_logging_ev_pipeline_core_rejudge_failed_h
+	],
+	'pipeline.core_rejudge_stalled': [
+		m.settings_logging_ev_pipeline_core_rejudge_stalled_n,
+		m.settings_logging_ev_pipeline_core_rejudge_stalled_h
+	],
+	'pipeline.core_rejudge_stall_cleared': [
+		m.settings_logging_ev_pipeline_core_rejudge_stall_cleared_n,
+		m.settings_logging_ev_pipeline_core_rejudge_stall_cleared_h
+	],
 	'pipeline.enrichment_failed': [
 		m.settings_logging_ev_pipeline_enrichment_failed_n,
 		m.settings_logging_ev_pipeline_enrichment_failed_h

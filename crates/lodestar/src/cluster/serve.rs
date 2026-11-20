@@ -41,13 +41,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use lodestar_api::dto::workers::{
+    ClusterStartFailure, ClusterStartKind as StartKind, ClusterStartStep as StartStep,
+};
 use lodestar_cluster::assign::Politeness;
 use lodestar_cluster::proto::{
     HintItem, Outcome, Payload, ReverifyReply, SnapshotAck, SnapshotKind,
 };
 use lodestar_cluster::{
     Clock, ClusterError, ClusterServer, Coordinator, FleetSnapshot, InboundSink, KeyCheck, Lease,
-    LeaseAuthority, Pki, ServerConfig, ServerHooks, StoredKeys, WorkerId,
+    LeaseAuthority, PauseSource, Pki, ServerConfig, ServerHooks, StoredKeys, WorkerId,
 };
 use lodestar_filter::Handle;
 use lodestar_integrations::SecretStore;
@@ -230,16 +233,15 @@ pub fn server_config(c: &config::Cluster) -> ServerConfig {
 /// Its text never holds key material: `ClusterError`'s doesn't.
 #[derive(Debug)]
 pub struct StartError {
-    /// `bind`, `store`, `secrets`, `pki` or `server`.
-    step: &'static str,
-    /// A fixed kind for the log line.
-    kind: &'static str,
+    step: StartStep,
+    /// A fixed kind for the log line and the workers API.
+    kind: StartKind,
     detail: String,
 }
 
 impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cluster port ({}): {}", self.step, self.detail)
+        write!(f, "cluster port ({}): {}", self.step.as_str(), self.detail)
     }
 }
 
@@ -248,13 +250,13 @@ impl std::error::Error for StartError {}
 impl StartError {
     fn bind(listen: SocketAddr, e: &std::io::Error) -> StartError {
         StartError {
-            step: "bind",
+            step: StartStep::Bind,
             kind: io_kind(e.kind()),
             detail: format!("binding cluster.listen {listen}: {e}"),
         }
     }
 
-    fn pki(step: &'static str, e: &ClusterError) -> StartError {
+    fn pki(step: StartStep, e: &ClusterError) -> StartError {
         StartError {
             step,
             kind: cluster_kind(e),
@@ -264,43 +266,46 @@ impl StartError {
 
     fn task() -> StartError {
         StartError {
-            step: "pki",
-            kind: "task_failed",
+            step: StartStep::Pki,
+            kind: StartKind::TaskFailed,
             detail: "the PKI task failed".into(),
         }
     }
 }
 
-fn io_kind(k: std::io::ErrorKind) -> &'static str {
+fn io_kind(k: std::io::ErrorKind) -> StartKind {
     use std::io::ErrorKind as K;
     match k {
-        K::AddrInUse => "addr_in_use",
-        K::AddrNotAvailable => "addr_not_available",
-        K::PermissionDenied => "permission_denied",
-        _ => "io",
+        K::AddrInUse => StartKind::AddrInUse,
+        K::AddrNotAvailable => StartKind::AddrNotAvailable,
+        K::PermissionDenied => StartKind::PermissionDenied,
+        _ => StartKind::Io,
     }
 }
 
-fn cluster_kind(e: &ClusterError) -> &'static str {
+fn cluster_kind(e: &ClusterError) -> StartKind {
     match e {
-        ClusterError::Store(_) => "store",
-        ClusterError::Secret(_) => "secrets",
-        ClusterError::Tls(_) | ClusterError::Verifier(_) => "tls",
-        ClusterError::Io(..) => "io",
-        ClusterError::Corrupt(_) => "corrupt",
-        ClusterError::Random => "random",
-        _ => "pki",
+        ClusterError::Store(_) => StartKind::Store,
+        ClusterError::Secret(_) => StartKind::Secrets,
+        ClusterError::Tls(_) | ClusterError::Verifier(_) => StartKind::Tls,
+        ClusterError::Io(..) => StartKind::Io,
+        ClusterError::Corrupt(_) => StartKind::Corrupt,
+        ClusterError::Random => StartKind::Random,
+        _ => StartKind::Pki,
     }
 }
 
 /// Floor drops remote workers reported (`Lost(Blocked)`, WK-10d), until
 /// each is a `worker-floor:<id>` tombstone in the store
-/// ([`Store::tombstone_from_worker`]).
+/// ([`Store::tombstone_from_worker_unless_stored`]), which lasts
+/// [`WORKER_FLOOR_HOLD_SECS`].
 ///
 /// - **Refused as soon as the sink sees it, everywhere:** a report goes
 ///   into this map, and into the built-in worker's `HeldSet` (its intake,
 ///   parked keys and commit refuse what that set holds), on the sink's
-///   path: short locks, nothing that waits. The claim check
+///   path: short locks, nothing that waits. (The floor writer holds the
+///   map's lock across a bounded store read when it lets keys go, at
+///   most 256 at a time, so a report can wait that long.) The claim check
 ///   ([`StoreCheck`]) reads the map before the store, so a re-claim is
 ///   denied before the row lands.
 /// - **Never dropped within the budget:** a report leaves the map only
@@ -324,6 +329,22 @@ pub(crate) struct FloorReports {
     held: Option<Arc<lodestar_filter::HeldSet>>,
     /// [`FLOOR_PENDING_CAP`], smaller in tests.
     cap: usize,
+    /// [`LAPSED_CAP`], smaller in tests.
+    lapsed_cap: usize,
+    /// Held across a whole flush and a revoke's purge, so a purge never
+    /// lands while a batch it should cover is being written.
+    writing: Mutex<()>,
+    /// Workers revoked in this run: their reports are refused.
+    revoked: Mutex<std::collections::HashSet<u32>>,
+    /// Keys a failed revoke dropped from the pending map, still to leave
+    /// the built-in held set once the retry lands.
+    to_release: Mutex<Vec<[u8; 20]>>,
+    /// Revoked workers whose written reports are still to be deleted (a
+    /// purge that failed): every flush tries them first.
+    to_purge: Mutex<std::collections::BTreeSet<u32>>,
+    /// Keys whose worker report lapsed, with their last workers
+    /// ([`LAPSED_CAP`] keys at most, oldest out).
+    lapsed: Mutex<Lapsed>,
     wake: tokio::sync::Notify,
     /// Reports taken, rows written, writes that failed (kept), reports
     /// over a worker's budget (dropped), and reports the full map turned
@@ -333,6 +354,14 @@ pub(crate) struct FloorReports {
     pub write_failures: AtomicU64,
     pub over_budget: AtomicU64,
     pub turned_away: AtomicU64,
+    /// Reports refused as [`Reported::Lapsed`].
+    pub lapsed_refused: AtomicU64,
+    /// Lapsed keys forgotten because the map was at [`LAPSED_CAP`].
+    pub lapsed_evicted: AtomicU64,
+    /// Expiry ticks the writer has finished, skipped ones included (for
+    /// tests to wait on).
+    #[cfg(test)]
+    expiries: AtomicU64,
 }
 
 /// One pending report: who reported it, and when.
@@ -353,7 +382,124 @@ enum Reported {
     /// Within its budget, but the map is full: counted, nothing else, and
     /// no budget slot used.
     TurnedAway,
+    /// From a revoked worker: dropped, nothing held.
+    Revoked,
+    /// From the worker whose own report of the key lapsed: dropped,
+    /// nothing held, no budget slot used.
+    Lapsed,
 }
+
+/// Keys whose worker report lapsed, each with the last
+/// [`LAPSED_WORKERS`] workers whose report of it lapsed, in the order the
+/// keys lapsed. A key lapsing again moves to the back.
+#[derive(Debug, Default)]
+struct Lapsed {
+    by_key: HashMap<[u8; 20], LapsedKey>,
+    /// `(key, seq)` oldest first; an entry whose seq no longer matches
+    /// `by_key` was moved or cleared.
+    order: std::collections::VecDeque<([u8; 20], u32)>,
+    next: u32,
+}
+
+/// One lapsed key: its workers, oldest first, and its place in `order`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LapsedKey {
+    workers: [u32; LAPSED_WORKERS],
+    len: u8,
+    seq: u32,
+}
+
+impl LapsedKey {
+    fn workers(&self) -> &[u32] {
+        &self.workers[..usize::from(self.len)]
+    }
+
+    /// Adds `worker` as the newest, dropping the oldest when full.
+    fn push(&mut self, worker: u32) {
+        self.remove(worker);
+        let len = usize::from(self.len);
+        if len == LAPSED_WORKERS {
+            self.workers.copy_within(1.., 0);
+            self.workers[LAPSED_WORKERS - 1] = worker;
+        } else {
+            self.workers[len] = worker;
+            self.len += 1;
+        }
+    }
+
+    /// Takes `worker` out, keeping the others' order.
+    fn remove(&mut self, worker: u32) {
+        let len = usize::from(self.len);
+        if let Some(i) = self.workers[..len].iter().position(|&w| w == worker) {
+            self.workers.copy_within(i + 1..len, i);
+            self.len -= 1;
+        }
+    }
+}
+
+impl Lapsed {
+    /// Returns how many keys the cap pushed out.
+    fn insert(&mut self, key: [u8; 20], worker: u32, cap: usize) -> u64 {
+        // Wraps after 2^32 lapses; a stale entry matching by chance only
+        // forgets a key early, which is the bound's own fallback.
+        let seq = self.next;
+        self.next = self.next.wrapping_add(1);
+        let entry = self.by_key.entry(key).or_insert(LapsedKey {
+            workers: [0; LAPSED_WORKERS],
+            len: 0,
+            seq,
+        });
+        entry.push(worker);
+        entry.seq = seq;
+        self.order.push_back((key, seq));
+        let mut evicted = 0;
+        while self.by_key.len() > cap {
+            let Some((k, q)) = self.order.pop_front() else {
+                break;
+            };
+            if self.by_key.get(&k).is_some_and(|e| e.seq == q) {
+                self.by_key.remove(&k);
+                evicted += 1;
+            }
+        }
+        self.compact();
+        evicted
+    }
+
+    /// Whether `worker`'s report of `key` is one of its last lapsed ones.
+    fn from(&self, key: &[u8; 20], worker: u32) -> bool {
+        self.by_key
+            .get(key)
+            .is_some_and(|e| e.workers().contains(&worker))
+    }
+
+    fn clear_worker(&mut self, worker: u32) {
+        self.by_key.retain(|_, e| {
+            e.remove(worker);
+            e.len > 0
+        });
+        self.compact();
+    }
+
+    /// Drops `order`'s stale entries once they're over half the live
+    /// ones (and past a small floor), so `order` stays within about one
+    /// and a half times the map.
+    fn compact(&mut self) {
+        let live = self.by_key.len();
+        if live == 0 {
+            self.order.clear();
+        } else if self.order.len() > live + live / 2 + LAPSED_SLACK {
+            let by_key = &self.by_key;
+            self.order
+                .retain(|(k, q)| by_key.get(k).is_some_and(|e| e.seq == *q));
+        }
+    }
+}
+
+/// Workers [`Lapsed`] remembers per key: the runner's choice (2026-11-14).
+const LAPSED_WORKERS: usize = 4;
+/// Stale `order` entries [`Lapsed`] allows past half the live ones.
+const LAPSED_SLACK: usize = 1024;
 
 /// A worker's floor reports per rolling window before it's paused. An
 /// honest worker reports a floor drop rarely: the hash lists refuse most
@@ -362,6 +508,10 @@ pub(crate) const FLOOR_BUDGET: usize = 100;
 pub(crate) const FLOOR_WINDOW: Duration = Duration::from_secs(3600);
 /// Reports the map holds at most (about 5 MB).
 pub(crate) const FLOOR_PENDING_CAP: usize = 100_000;
+/// Lapsed keys [`FloorReports`] remembers workers of, at most; past it
+/// the oldest is forgotten. At most about 9 MB: the map's 131,072 slots of
+/// 45 bytes, and `order`'s up to 131,072 of 24.
+pub(crate) const LAPSED_CAP: usize = 65_536;
 
 impl Default for FloorReports {
     fn default() -> FloorReports {
@@ -375,22 +525,50 @@ impl FloorReports {
     }
 
     fn with_cap(held: Option<Arc<lodestar_filter::HeldSet>>, cap: usize) -> FloorReports {
+        FloorReports::with_caps(held, cap, LAPSED_CAP)
+    }
+
+    fn with_caps(
+        held: Option<Arc<lodestar_filter::HeldSet>>,
+        cap: usize,
+        lapsed_cap: usize,
+    ) -> FloorReports {
         FloorReports {
             pending: Mutex::default(),
             recent: Mutex::default(),
             held,
             cap,
+            writing: Mutex::new(()),
+            revoked: Mutex::default(),
+            to_release: Mutex::default(),
+            to_purge: Mutex::default(),
+            lapsed: Mutex::default(),
+            lapsed_cap,
             wake: tokio::sync::Notify::new(),
             reported: AtomicU64::new(0),
             written: AtomicU64::new(0),
             write_failures: AtomicU64::new(0),
             over_budget: AtomicU64::new(0),
             turned_away: AtomicU64::new(0),
+            lapsed_refused: AtomicU64::new(0),
+            lapsed_evicted: AtomicU64::new(0),
+            #[cfg(test)]
+            expiries: AtomicU64::new(0),
         }
     }
 
     fn pending(&self) -> std::sync::MutexGuard<'_, BTreeMap<[u8; 20], Report>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lapsed(&self) -> std::sync::MutexGuard<'_, Lapsed> {
+        self.lapsed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether `worker` is one of `key`'s last [`LAPSED_WORKERS`] lapsed
+    /// reporters. The built-in worker never reports, so it's never one.
+    pub(crate) fn lapsed_from(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        worker != WorkerId::LOCAL && self.lapsed().from(&key.0, worker.0)
     }
 
     fn recent(
@@ -406,6 +584,21 @@ impl FloorReports {
     fn report(&self, worker: WorkerId, key: &InfoHash, at: i64, now: Instant) -> Reported {
         self.reported.fetch_add(1, Ordering::Relaxed);
         let mut recent = self.recent();
+        // Under `recent`, as `forget_worker` marks a worker revoked: a
+        // report lands either before the revoke (and goes with it) or is
+        // refused.
+        if self
+            .revoked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&worker.0)
+        {
+            return Reported::Revoked;
+        }
+        if self.lapsed().from(&key.0, worker.0) {
+            self.lapsed_refused.fetch_add(1, Ordering::Relaxed);
+            return Reported::Lapsed;
+        }
         let q = recent.entry(worker.0).or_default();
         while q
             .front()
@@ -440,26 +633,216 @@ impl FloorReports {
             }
         }
         q.push_back(now);
-        drop(recent);
+        // Before `recent` goes, so a revoke right after finds the key held
+        // and can let it go.
         if let Some(held) = &self.held {
             held.insert(key.0);
         }
+        drop(recent);
         self.wake.notify_one();
         Reported::Taken
     }
 
-    /// Forgets a revoked worker: its reports not written yet and its
-    /// budget window (#607's review). Its written tombstones stay until
-    /// WK-13's purge-by-worker; the built-in worker's held set keeps the
-    /// dropped keys until the next start, refusing more, never less.
-    /// Returns how many reports it dropped.
-    pub(crate) fn forget_worker(&self, worker: WorkerId) -> usize {
+    /// Forgets a revoked worker: marks it revoked (its later reports are
+    /// refused), and drops its budget window and its reports not written
+    /// yet (#607's review). Returns the dropped reports' keys; the written
+    /// ones go with [`revoke`](Self::revoke), which lets the built-in
+    /// worker's held set go of both.
+    pub(crate) fn forget_worker(&self, worker: WorkerId) -> Vec<[u8; 20]> {
         let mut recent = self.recent();
+        self.revoked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(worker.0);
         recent.remove(&worker.0);
+        self.lapsed().clear_worker(worker.0);
         let mut pending = self.pending();
-        let before = pending.len();
-        pending.retain(|_, r| r.worker != worker.0);
-        before - pending.len()
+        let mut dropped = Vec::new();
+        pending.retain(|k, r| {
+            let mine = r.worker == worker.0;
+            if mine {
+                dropped.push(*k);
+            }
+            !mine
+        });
+        dropped
+    }
+
+    /// A revoke: forgets the worker's reports not written yet and deletes
+    /// its written ones (`worker-floor:<id>`; the owner's choice of
+    /// 2026-11-14), with no flush in between, and lets the built-in
+    /// worker's held set go of each key nothing else holds. A delete that
+    /// fails is counted and logged as a failed write, kept, and tried
+    /// again by every flush until it lands. Blocking. Returns the rows
+    /// deleted.
+    pub(crate) fn revoke(
+        &self,
+        worker: WorkerId,
+        db: &std::path::Path,
+        config: StoreConfig,
+    ) -> Result<usize, lodestar_store::Error> {
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let dropped = self.forget_worker(worker);
+        self.to_purge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(worker.0);
+        let done = Store::open(db, config.clone()).and_then(|mut s| {
+            let gone = s.purge_worker_floor(worker.0)?;
+            self.release_held(&s, &gone);
+            self.release_held(&s, &dropped);
+            Ok(gone.len())
+        });
+        if done.is_ok() {
+            self.to_purge
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&worker.0);
+            // An earlier failed revoke's keys, if nothing is left to purge.
+            let _ = self.release_dropped(db, &config);
+        }
+        match &done {
+            Ok(_) => {}
+            Err(e) => {
+                self.to_release
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend(dropped.iter().copied());
+                self.write_failures.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    events::CLUSTER_FLOOR_REPORT_FAILED,
+                    error = lodestar_log::Error::new(e)
+                );
+                self.wake.notify_one();
+            }
+        }
+        done
+    }
+
+    /// Lets go of workers' reports written more than
+    /// [`WORKER_FLOOR_HOLD_SECS`] before `now`, and of each such key in
+    /// the built-in worker's held set unless something else holds it.
+    /// Blocking. Returns the rows deleted.
+    fn expire(
+        &self,
+        db: &std::path::Path,
+        config: StoreConfig,
+        now: i64,
+    ) -> Result<usize, lodestar_store::Error> {
+        self.expire_with(db, config, now, || {})
+    }
+
+    /// [`expire`](Self::expire), with `between` run once the lapsed keys
+    /// are recorded and before their delete commits (a seam for the
+    /// ordering test).
+    fn expire_with(
+        &self,
+        db: &std::path::Path,
+        config: StoreConfig,
+        now: i64,
+        between: impl FnOnce(),
+    ) -> Result<usize, lodestar_store::Error> {
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut store = Store::open(db, config)?;
+        let before = now.saturating_sub(WORKER_FLOOR_HOLD_SECS);
+        // Recorded before the delete commits, so no check reads a key free
+        // before its exclusion is in place.
+        let gone = store.expire_worker_floor_with(before, |rows| {
+            self.record_lapsed(rows);
+            between();
+        })?;
+        let gone: Vec<[u8; 20]> = gone.into_iter().map(|(k, _)| k).collect();
+        self.release_held(&store, &gone);
+        Ok(gone.len())
+    }
+
+    /// Records lapsing rows' keys under their workers. Under `recent`, as
+    /// `forget_worker` marks a worker revoked and clears its keys there: a
+    /// revoke either comes after and clears these, or came before, and its
+    /// rows (left only by a failed purge; its id never comes back) are
+    /// skipped.
+    ///
+    /// In chunks of [`RELEASE_CHUNK`], so a large expiry never holds the
+    /// map (which a claim's check reads) for long.
+    fn record_lapsed(&self, rows: &[([u8; 20], Option<u32>)]) {
+        for chunk in rows.chunks(RELEASE_CHUNK) {
+            let _recent = self.recent();
+            let revoked = self.revoked.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut lapsed = self.lapsed();
+            for (k, w) in chunk {
+                if let Some(w) = w.filter(|w| !revoked.contains(w)) {
+                    let n = lapsed.insert(*k, w, self.lapsed_cap);
+                    self.lapsed_evicted.fetch_add(n, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Takes `gone` (hashes whose worker-floor rows were just deleted) out
+    /// of the built-in worker's held set, except those the store still
+    /// holds (another rule, quarantine) or a report not written yet holds.
+    /// A store that can't answer leaves them held: over-strict, never
+    /// loose. Call with `writing` held.
+    ///
+    /// The pending map's lock is held across each chunk's check and
+    /// removal, so a report landing meanwhile (which adds to the map
+    /// before the held set) keeps its key held.
+    fn release_held(&self, store: &Store, gone: &[[u8; 20]]) {
+        let Some(held) = &self.held else {
+            return;
+        };
+        for chunk in gone.chunks(RELEASE_CHUNK) {
+            let pending = self.pending();
+            let free: Vec<[u8; 20]> = chunk
+                .iter()
+                .filter(|h| !pending.contains_key(*h))
+                .copied()
+                .collect();
+            let done = held.remove_released(&free, |hs| store.held_among(hs));
+            drop(pending);
+            if done.is_err() {
+                // The store can't answer: the rest stay held.
+                return;
+            }
+        }
+    }
+
+    /// Once no purge is left to do, lets the built-in held set go of the
+    /// keys failed revokes dropped (`to_release`). With purges still to
+    /// do, or a store that can't be opened, they wait for the next try.
+    /// Call with `writing` held.
+    fn release_dropped(
+        &self,
+        db: &std::path::Path,
+        config: &StoreConfig,
+    ) -> Result<(), lodestar_store::Error> {
+        let idle = self
+            .to_purge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        let waiting = !self
+            .to_release
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        if !idle || !waiting {
+            return Ok(());
+        }
+        let store = Store::open(db, config.clone())?;
+        let dropped = std::mem::take(
+            &mut *self
+                .to_release
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        self.release_held(&store, &dropped);
+        Ok(())
+    }
+
+    /// Lapsed keys remembered now ([`LAPSED_CAP`] at most).
+    pub(crate) fn lapsed_len(&self) -> usize {
+        self.lapsed().by_key.len()
     }
 
     fn holds(&self, key: &InfoHash) -> bool {
@@ -470,9 +853,14 @@ impl FloorReports {
         self.pending().len()
     }
 
-    /// Reports waiting to be written.
+    /// Reports waiting to be written, and purges still to do.
     fn unwritten(&self) -> usize {
         self.len()
+            + self
+                .to_purge
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .len()
     }
 
     /// Writes up to `FLOOR_BATCH` pending reports, removing each once its
@@ -482,6 +870,38 @@ impl FloorReports {
         db: &std::path::Path,
         config: StoreConfig,
     ) -> Result<usize, lodestar_store::Error> {
+        self.flush_with(db, config, || {})
+    }
+
+    /// [`flush`](Self::flush), with `between` run after the batch is taken
+    /// and before it's written (a seam for the lock test).
+    fn flush_with(
+        &self,
+        db: &std::path::Path,
+        config: StoreConfig,
+        between: impl FnOnce(),
+    ) -> Result<usize, lodestar_store::Error> {
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        // Purges a revoke couldn't finish, first.
+        let purges: Vec<u32> = self
+            .to_purge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .copied()
+            .collect();
+        if !purges.is_empty() {
+            let mut store = Store::open(db, config.clone())?;
+            for w in purges {
+                let gone = store.purge_worker_floor(w)?;
+                self.release_held(&store, &gone);
+                self.to_purge
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&w);
+            }
+        }
+        self.release_dropped(db, &config)?;
         let batch: Vec<([u8; 20], Report)> = self
             .pending()
             .iter()
@@ -491,39 +911,51 @@ impl FloorReports {
         if batch.is_empty() {
             return Ok(0);
         }
+        between();
         let mut store = Store::open(db, config)?;
         let mut by_worker: BTreeMap<(u32, i64), Vec<[u8; 20]>> = BTreeMap::new();
         for (k, r) in &batch {
             by_worker.entry((r.worker, r.at)).or_default().push(*k);
         }
+        let mut kept = Vec::new();
         for ((w, at), keys) in &by_worker {
-            // Nothing stays stored under a held hash (as `hold_claims`): a
-            // key stored after this worker's grant (another worker's
-            // result, or the built-in worker's) goes, and the indexer drops
-            // it. First, so a crash between the two leaves the report to
-            // come again (the crash window), never a torrent stored under
-            // a hold.
-            store.delete_torrents(keys)?;
-            // A key already tombstoned (by its rule or an earlier report)
-            // keeps its row; either way it's held now.
-            store.tombstone_from_worker(keys, *w, *at)?;
+            // A key the store has something under (a stored torrent, an
+            // item awaiting verification, an import candidate) is the main
+            // node's to judge: a worker's report never holds it, nor
+            // removes what's there; the checks and the write are one
+            // transaction. A key already tombstoned (by its rule or an
+            // earlier report) keeps its row; either way it's held now.
+            let (_, skipped) = store.tombstone_from_worker_unless_stored(keys, *w, *at)?;
+            kept.extend(skipped);
         }
-        let mut pending = self.pending();
-        for (k, v) in &batch {
-            if pending.get(k) == Some(v) {
-                pending.remove(k);
+        {
+            let mut pending = self.pending();
+            for (k, v) in &batch {
+                if pending.get(k) == Some(v) {
+                    pending.remove(k);
+                }
             }
         }
+        // Not held in the store, so not held in memory either.
+        self.release_held(&store, &kept);
         self.written
-            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            .fetch_add((batch.len() - kept.len()) as u64, Ordering::Relaxed);
         Ok(batch.len())
     }
 }
 
 /// Floor reports written per store transaction.
 const FLOOR_BATCH: usize = 1024;
+/// Keys let go from the built-in held set per hold of the pending map.
+const RELEASE_CHUNK: usize = 256;
 /// How long the floor writer waits before trying a failed write again.
 const FLOOR_RETRY: Duration = Duration::from_secs(5);
+/// How long a worker's floor report holds its key: 7 days, the owner's
+/// choice of 2026-11-14 (`docs/decisions/2026-11-14-X-sec-S6-02-03-r3.md`).
+/// A key let go is judged again in full by the main node on its next fetch.
+pub(crate) const WORKER_FLOOR_HOLD_SECS: i64 = 7 * 24 * 3600;
+/// How often the floor writer lets go of reports past their hold.
+const FLOOR_EXPIRE_EVERY: Duration = Duration::from_secs(3600);
 
 /// Writes floor reports as they come, until `stopped`; then once more,
 /// so a report taken before a shutdown is in the store when it ends.
@@ -531,13 +963,38 @@ async fn write_floor(
     floor: Arc<FloorReports>,
     db: PathBuf,
     config: StoreConfig,
+    clock: Arc<dyn Clock>,
     mut stopped: watch::Receiver<bool>,
 ) {
     let mut failing = false;
+    // At start, then hourly.
+    let mut expire = tokio::time::interval(FLOOR_EXPIRE_EVERY);
+    expire.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let stop = tokio::select! {
             () = floor.wake.notified() => false,
             () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
+            _ = expire.tick() => {
+                // No database yet: no server has opened, so no report was
+                // written, and opening one would create it (with workers off,
+                // nothing is created; X-store-migrate-race). The check is file
+                // I/O, so it runs off the async threads with the expiry it
+                // guards (X-store-busy-nits).
+                let (f, db, config) = (floor.clone(), db.clone(), config.clone());
+                // The clock that stamps the reports (`Sink::outcomes`).
+                let now = clock.now_secs();
+                // A failure is tried again at the next tick; holds only last
+                // longer meanwhile.
+                let _ = tokio::task::spawn_blocking(move || {
+                    if db.exists() {
+                        let _ = f.expire(&db, config, now);
+                    }
+                })
+                .await;
+                #[cfg(test)]
+                floor.expiries.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             _ = stopped.changed() => true,
         };
         loop {
@@ -658,6 +1115,10 @@ impl StoredKeys for StoreCheck {
     fn key_checks(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
         self.check_with(keys, || {})
     }
+
+    fn excludes(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        self.floor.lapsed_from(worker, key)
+    }
 }
 
 /// Opens the PKI (creating the CA on first use) and the store check's
@@ -667,12 +1128,13 @@ fn open_pki(
     errors: Arc<AtomicU64>,
     floor: Arc<FloorReports>,
 ) -> Result<(Pki, StoreCheck), StartError> {
-    let store_err = |e: lodestar_store::Error| StartError::pki("store", &ClusterError::Store(e));
+    let store_err =
+        |e: lodestar_store::Error| StartError::pki(StartStep::Store, &ClusterError::Store(e));
     let mut store = Store::open(&w.db, w.store.clone()).map_err(store_err)?;
     let secrets = SecretStore::open_or_create(&w.data_dir)
-        .map_err(|e| StartError::pki("secrets", &ClusterError::Secret(e)))?;
+        .map_err(|e| StartError::pki(StartStep::Secrets, &ClusterError::Secret(e)))?;
     let coordinator = Coordinator::open(&mut store, &secrets, w.clock.now_secs())
-        .map_err(|e| StartError::pki("pki", &e))?;
+        .map_err(|e| StartError::pki(StartStep::Pki, &e))?;
     let reader = Store::open_reader(&w.db, w.store.clone()).map_err(store_err)?;
     Ok((
         Pki {
@@ -986,8 +1448,9 @@ impl InboundSink for Sink {
     }
 
     fn outcomes(&self, worker: WorkerId, accepted: Vec<(InfoHash, Lease, Outcome)>) {
-        // A floor drop leaves a tombstone, as a local one does: the key is
-        // never claimed, fetched or stored again (WK-10d).
+        // A floor drop leaves a tombstone: the key isn't claimed, fetched
+        // or stored again while it's held (WK-10d; a worker's hold lasts
+        // `WORKER_FLOOR_HOLD_SECS`).
         let blocked = lodestar_sources::Loss::Blocked as u8;
         let (now, mono) = (self.clock.now_secs(), Instant::now());
         for (key, _, outcome) in &accepted {
@@ -1002,6 +1465,23 @@ impl InboundSink for Sink {
         if let Some(r) = &self.remote {
             r.outcomes(worker, accepted);
         }
+    }
+
+    fn handed_back(
+        &self,
+        key: InfoHash,
+        token: lodestar_cluster::Token,
+        lease: Lease,
+    ) -> lodestar_cluster::LocalIntake {
+        self.remote
+            .as_ref()
+            .map_or(lodestar_cluster::LocalIntake::Full, |r| {
+                r.handed_back(key, token, lease)
+            })
+    }
+
+    fn refuses_local(&self, key: &InfoHash) -> bool {
+        self.remote.as_ref().is_some_and(|r| r.refuses_local(key))
     }
 
     fn snapshot_ack(&self, worker: WorkerId, ack: SnapshotAck) {
@@ -1454,6 +1934,7 @@ struct Totals {
     regrants: u64,
     busy: u64,
     stale_reports: u64,
+    handed_back: u64,
     revoked: u64,
     protocol_errors: u64,
     version_refused: u64,
@@ -1463,6 +1944,7 @@ struct Totals {
     busy_check_failed: u64,
     busy_unknown: u64,
     busy_capped: u64,
+    denied_excluded: u64,
     reconcile_returned: u64,
     reconcile_unknown: u64,
     reconcile_refused: u64,
@@ -1480,6 +1962,7 @@ impl Totals {
             regrants: s.regrants,
             busy: s.busy,
             stale_reports: s.stale_reports,
+            handed_back: s.handed_back,
             revoked: s.revoked,
             protocol_errors: s.protocol_errors,
             version_refused: s.version_refused,
@@ -1489,6 +1972,7 @@ impl Totals {
             busy_check_failed: s.busy_check_failed,
             busy_unknown: s.busy_unknown,
             busy_capped: s.busy_capped,
+            denied_excluded: s.denied_excluded,
             reconcile_returned: s.reconcile_returned,
             reconcile_unknown: s.reconcile_unknown,
             reconcile_refused: s.reconcile_refused,
@@ -1506,6 +1990,7 @@ impl Totals {
             regrants: self.regrants + o.regrants,
             busy: self.busy + o.busy,
             stale_reports: self.stale_reports + o.stale_reports,
+            handed_back: self.handed_back + o.handed_back,
             revoked: self.revoked + o.revoked,
             protocol_errors: self.protocol_errors + o.protocol_errors,
             version_refused: self.version_refused + o.version_refused,
@@ -1515,6 +2000,7 @@ impl Totals {
             busy_check_failed: self.busy_check_failed + o.busy_check_failed,
             busy_unknown: self.busy_unknown + o.busy_unknown,
             busy_capped: self.busy_capped + o.busy_capped,
+            denied_excluded: self.denied_excluded + o.denied_excluded,
             reconcile_returned: self.reconcile_returned + o.reconcile_returned,
             reconcile_unknown: self.reconcile_unknown + o.reconcile_unknown,
             reconcile_refused: self.reconcile_refused + o.reconcile_refused,
@@ -1526,6 +2012,8 @@ impl Totals {
 struct State {
     /// The server serving the port now, and where.
     current: Option<(Arc<ClusterServer>, SocketAddr)>,
+    /// Why the port couldn't open, while it's tried again.
+    failing: Option<ClusterStartFailure>,
     /// Counters of the servers already stopped.
     base: Totals,
 }
@@ -1546,30 +2034,36 @@ struct Inner {
     floor: Arc<FloorReports>,
     /// `Workers`' hook for a worker over its floor budget, across servers.
     over_budget: HookSlot,
+    /// `Workers`' pause source, installed on each new server before it
+    /// serves anyone.
+    pause_source: Mutex<Option<PauseSource>>,
 }
 
-/// The workers saved as paused (WK-14's rows), for a new server. A store
-/// that won't open, or a row that won't read, pauses nobody here; `Workers`
-/// applies its own copy once it follows the server.
-fn saved_pauses(db: &std::path::Path, config: StoreConfig) -> Vec<WorkerId> {
-    let Ok(store) = Store::open(db, config) else {
-        return Vec::new();
-    };
-    let Ok(rows) = store.settings_with_prefix(super::ops::PREFS_PREFIX) else {
-        return Vec::new();
-    };
-    rows.into_iter()
+/// The workers saved as paused (WK-14's rows), for a new server. A row
+/// that doesn't parse is read as paused unless it says otherwise
+/// (`Saved::maybe_paused`); a store that can't be read is an error, and
+/// the server doesn't start (fails closed).
+fn saved_pauses(
+    db: &std::path::Path,
+    config: StoreConfig,
+) -> Result<Vec<WorkerId>, lodestar_store::Error> {
+    let store = Store::open(db, config)?;
+    let rows = store.settings_with_prefix(super::ops::PREFS_PREFIX)?;
+    Ok(rows
+        .into_iter()
         .filter_map(|(key, text)| {
             let id = key
                 .strip_prefix(super::ops::PREFS_PREFIX)?
                 .parse::<u32>()
                 .ok()
                 .filter(|&id| id != 0)?;
-            super::ops::Saved::parse(&text)
-                .filter(super::ops::Saved::paused)
-                .map(|_| WorkerId(id))
+            let paused = match super::ops::Saved::parse(&text) {
+                Some(s) => s.paused(),
+                None => super::ops::Saved::maybe_paused(&text),
+            };
+            paused.then_some(WorkerId(id))
         })
-        .collect()
+        .collect())
 }
 
 /// How long `close` waits for an aborted tick to go.
@@ -1607,7 +2101,8 @@ impl Inner {
         let (db, store) = (self.wiring.db.clone(), self.wiring.store.clone());
         let paused = tokio::task::spawn_blocking(move || saved_pauses(&db, store))
             .await
-            .unwrap_or_default();
+            .map_err(|_| StartError::task())?
+            .map_err(|e| StartError::pki(StartStep::Pauses, &ClusterError::Store(e)))?;
         let preparer = check
             .reader
             .lock()
@@ -1638,7 +2133,7 @@ impl Inner {
             admission: attached.as_ref().map(|a| a.sink.clone() as _),
         };
         let server = ClusterServer::with_hooks(pki, self.wiring.clock.clone(), config, hooks)
-            .map_err(|e| StartError::pki("server", &e))?;
+            .map_err(|e| StartError::pki(StartStep::Server, &e))?;
         let _ = sink.server.set(Arc::downgrade(&server));
         if let (Some(a), Some(r)) = (&attached, &self.wiring.remote) {
             a.serving(r, &server);
@@ -1658,6 +2153,10 @@ impl Inner {
         // (WK-14's window; `Workers` re-applies them too, later).
         for w in paused {
             server.pause(w);
+        }
+        // And every session asks `Workers` (unsaved pauses included).
+        if let Some(source) = lock(&self.pause_source).clone() {
+            server.set_pause_source(source);
         }
         let task = tokio::spawn(server.clone().serve(listener));
         let (gone, tick_gone) = watch::channel(());
@@ -1708,24 +2207,53 @@ impl Inner {
         lodestar_log::log_event!(events::CLUSTER_CLOSED, reason = reason);
     }
 
-    /// Opens the port, logging and counting a failure.
-    async fn try_open(&self) -> Option<Running> {
+    /// Opens the port. A failure is counted, and the next try is set in
+    /// `retry` (X-cluster-start-retry); a success clears it.
+    async fn try_open(&self, retry: &mut Option<StartRetry>) -> Option<Running> {
         match self.open().await {
-            Ok(r) => Some(r),
+            Ok(r) => {
+                *retry = None;
+                self.state().failing = None;
+                Some(r)
+            }
             Err(e) => {
-                self.failed(&e);
+                let next = StartRetry::after(retry.take(), &e);
+                self.counted(&e, next.said);
+                self.state().failing = Some(ClusterStartFailure {
+                    step: e.step,
+                    kind: e.kind,
+                    next_retry_at: self
+                        .wiring
+                        .clock
+                        .now_secs()
+                        .saturating_add(i64::try_from(next.wait.as_secs()).unwrap_or(i64::MAX)),
+                });
+                *retry = Some(next);
                 None
             }
         }
     }
 
+    /// Workers are off: nothing is tried, so nothing is failing.
+    fn not_trying(&self, retry: &mut Option<StartRetry>) {
+        *retry = None;
+        self.state().failing = None;
+    }
+
     fn failed(&self, e: &StartError) {
+        self.counted(e, true);
+    }
+
+    /// Counts a failed start, and logs it if `say`.
+    fn counted(&self, e: &StartError, say: bool) {
         self.start_failures.fetch_add(1, Ordering::Relaxed);
-        lodestar_log::log_event!(
-            events::CLUSTER_START_FAILED,
-            step = e.step,
-            error = lodestar_log::Error::kind(e.kind)
-        );
+        if say {
+            lodestar_log::log_event!(
+                events::CLUSTER_START_FAILED,
+                step = e.step.as_str(),
+                error = lodestar_log::Error::kind(e.kind.as_str())
+            );
+        }
     }
 }
 
@@ -1743,6 +2271,20 @@ impl std::fmt::Debug for ClusterHandle {
 }
 
 impl ClusterHandle {
+    /// Sets `Workers`' pause source: on the server serving now, and on
+    /// every server started from here on, before it serves anyone.
+    pub(crate) fn set_pause_source(&self, source: PauseSource) {
+        *lock(&self.0.pause_source) = Some(source.clone());
+        if let Some(server) = self.server() {
+            server.set_pause_source(source);
+        }
+    }
+
+    /// The pause source `Workers` set, if any.
+    pub(crate) fn pause_source(&self) -> Option<PauseSource> {
+        lock(&self.0.pause_source).clone()
+    }
+
     /// Registers what to do when a worker first goes over its floor
     /// budget (`Workers` saves the pause). One hook; a later call replaces
     /// it.
@@ -1777,10 +2319,15 @@ impl ClusterHandle {
             .count()
     }
 
-    /// Forgets a revoked worker's floor reports not written yet, and its
-    /// budget window. Returns how many reports it dropped.
-    pub(crate) fn forget_floor_reports(&self, worker: WorkerId) -> usize {
-        self.0.floor.forget_worker(worker)
+    /// A revoke's floor side ([`FloorReports::revoke`]): the worker's
+    /// reports not written yet and its budget window go, and so do its
+    /// written reports. Blocking. Returns the rows deleted.
+    pub(crate) fn revoke_floor_reports(
+        &self,
+        worker: WorkerId,
+    ) -> Result<usize, lodestar_store::Error> {
+        let w = &self.0.wiring;
+        self.0.floor.revoke(worker, &w.db, w.store.clone())
     }
 
     /// Turns "Allow workers" on or off; the port follows in the
@@ -1789,11 +2336,24 @@ impl ClusterHandle {
     // Settings → Workers calls it (WK-14); tests do today.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_allowed(&self, allowed: bool) {
-        self.0.allowed.send_replace(allowed);
+        // Only a change wakes the port's task: a settings save that leaves
+        // "Allow workers" as it was doesn't try a failing start at once or
+        // reset its back-off.
+        self.0.allowed.send_if_modified(|now| {
+            let changed = *now != allowed;
+            *now = allowed;
+            changed
+        });
     }
 
     pub fn allowed(&self) -> bool {
         *self.0.allowed.borrow()
+    }
+
+    /// Why the cluster port couldn't open, while it's being tried again
+    /// (for the workers API).
+    pub fn start_failure(&self) -> Option<ClusterStartFailure> {
+        self.0.state().failing
     }
 
     /// Where the cluster port is listening, while it is.
@@ -1844,6 +2404,12 @@ impl ClusterHandle {
             "gauge",
             "1 while the cluster port is bound and served.",
             u8::from(snapshot.is_some()),
+        );
+        o.one(
+            "cluster_start_failing",
+            "gauge",
+            "1 while Allow workers is on but the cluster port couldn't open and is being tried again.",
+            u8::from(inner.state().failing.is_some()),
         );
         let connected = snapshot
             .as_ref()
@@ -1920,6 +2486,11 @@ impl ClusterHandle {
                 totals.busy,
             ),
             (
+                "cluster_handed_back_total",
+                "Keys a remote worker found too large, handed to the built-in worker.",
+                totals.handed_back,
+            ),
+            (
                 "cluster_stale_reports_total",
                 "Reports with a stale fencing token, ignored.",
                 totals.stale_reports,
@@ -1940,6 +2511,11 @@ impl ClusterHandle {
                 totals.version_refused,
             ),
             (
+                "cluster_claims_denied_excluded_total",
+                "Claimed keys denied as stored only because the store check excludes them for that worker.",
+                totals.denied_excluded,
+            ),
+            (
                 "cluster_skew_flags_total",
                 "Times a worker's clock was flagged as too far off.",
                 totals.skew_flags,
@@ -1951,7 +2527,7 @@ impl ClusterHandle {
             ),
             (
                 "cluster_start_failures_total",
-                "Times turning the cluster port on failed (bind or PKI).",
+                "Times turning the cluster port on failed (bind or PKI), each retry included.",
                 inner.start_failures.load(Ordering::Relaxed),
             ),
             (
@@ -2006,6 +2582,12 @@ impl ClusterHandle {
             "Remote workers' floor drops not yet written as tombstones (refused to every claim meanwhile).",
             floor.len(),
         );
+        o.one(
+            "cluster_floor_lapsed_keys",
+            "gauge",
+            "Keys whose worker floor report lapsed, remembered with their workers (65,536 at most).",
+            floor.lapsed_len(),
+        );
         for (name, help, n) in [
             (
                 "cluster_floor_reports_total",
@@ -2031,6 +2613,16 @@ impl ClusterHandle {
                 "cluster_floor_reports_turned_away_total",
                 "Floor drops within a budget reported while 100,000 were already pending: counted only.",
                 &floor.turned_away,
+            ),
+            (
+                "cluster_floor_reports_lapsed_total",
+                "Floor drops refused because the same worker's report of the key lapsed: nothing held, no budget used.",
+                &floor.lapsed_refused,
+            ),
+            (
+                "cluster_floor_lapsed_evicted_total",
+                "Lapsed keys forgotten because 65,536 were already remembered (oldest out).",
+                &floor.lapsed_evicted,
             ),
         ] {
             o.one(name, "counter", help, n.load(Ordering::Relaxed));
@@ -2140,6 +2732,7 @@ impl Cluster {
             store_errors: Arc::new(AtomicU64::new(0)),
             floor: Arc::new(FloorReports::new(wiring_held)),
             over_budget: HookSlot::default(),
+            pause_source: Mutex::new(None),
         });
         let running = if enabled {
             match inner.open().await {
@@ -2159,6 +2752,7 @@ impl Cluster {
             inner.floor.clone(),
             inner.wiring.db.clone(),
             inner.wiring.store.clone(),
+            inner.wiring.clock.clone(),
             writer_stopped,
         ));
         let task = tokio::spawn(run(inner.clone(), follow, reseals, stopped, running));
@@ -2208,6 +2802,38 @@ impl FloorWriter {
     }
 }
 
+/// The first wait before a failed start is tried again.
+const START_RETRY_FIRST: Duration = Duration::from_secs(2);
+/// The longest wait between tries.
+const START_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// The next try after a failed start, while "Allow workers" stays on: 2 s,
+/// doubling to 5 minutes (X-cluster-start-retry). A run of failures logs
+/// its first, and then only a failure of another step or kind; every try
+/// is counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartRetry {
+    at: tokio::time::Instant,
+    wait: Duration,
+    /// The step and kind last logged.
+    seen: (StartStep, StartKind),
+    /// Whether this failure was logged.
+    said: bool,
+}
+
+impl StartRetry {
+    fn after(last: Option<StartRetry>, e: &StartError) -> StartRetry {
+        let wait = last.map_or(START_RETRY_FIRST, |r| (r.wait * 2).min(START_RETRY_MAX));
+        let seen = (e.step, e.kind);
+        StartRetry {
+            at: tokio::time::Instant::now() + wait,
+            wait,
+            seen,
+            said: last.is_none_or(|r| r.seen != seen),
+        }
+    }
+}
+
 /// Follows "Allow workers" and reseal requests until `stopped`.
 async fn run(
     inner: Arc<Inner>,
@@ -2216,7 +2842,10 @@ async fn run(
     mut stopped: watch::Receiver<bool>,
     mut running: Option<Running>,
 ) {
+    // Set only while workers are allowed and the port isn't open.
+    let mut retry: Option<StartRetry> = None;
     loop {
+        let due = retry.map(|r| r.at);
         tokio::select! {
             _ = stopped.changed() => break,
             changed = allowed.changed() => {
@@ -2224,11 +2853,17 @@ async fn run(
                     break;
                 }
                 let want = *allowed.borrow_and_update();
+                if !want {
+                    inner.not_trying(&mut retry);
+                }
                 match (want, running.take()) {
                     (false, Some(r)) => inner.close(r, "workers_off").await,
-                    (true, None) => running = inner.try_open().await,
+                    (true, None) => running = inner.try_open(&mut retry).await,
                     (_, r) => running = r,
                 }
+            }
+            () = tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now)), if due.is_some() => {
+                running = inner.try_open(&mut retry).await;
             }
             Some(reply) = reseals.recv() => {
                 if let Some(r) = running.take() {
@@ -2239,7 +2874,9 @@ async fn run(
                     .await
                     .unwrap_or(Err(ClusterError::Corrupt("the reseal task failed")));
                 if *allowed.borrow_and_update() {
-                    running = inner.try_open().await;
+                    running = inner.try_open(&mut retry).await;
+                } else {
+                    inner.not_trying(&mut retry);
                 }
                 let _ = reply.send(resealed);
             }
@@ -2248,6 +2885,8 @@ async fn run(
     if let Some(r) = running {
         inner.close(r, "shutdown").await;
     }
+    // Stopped: nothing is tried any more, so nothing is failing.
+    inner.state().failing = None;
 }
 
 #[cfg(test)]
@@ -2366,6 +3005,14 @@ mod tests {
         // Not even the database or the secrets key is touched.
         assert!(!dir.path().join("lodestar.db").exists());
         assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
+        // Still nothing once the floor writer's first expiry (at start)
+        // is done: it finds no database and leaves it uncreated.
+        until("the first expiry", || {
+            let n = h.0.floor.expiries.load(Ordering::Relaxed);
+            (n >= 1, n)
+        })
+        .await;
+        assert!(!dir.path().join("lodestar.db").exists());
         let off = metrics(&h);
         assert_eq!(series(&off, "lodestar_cluster_allowed"), 0);
         assert_eq!(series(&off, "lodestar_cluster_listening"), 0);
@@ -2513,7 +3160,7 @@ mod tests {
         let e = Cluster::start(wiring(dir.path(), true, addr))
             .await
             .unwrap_err();
-        assert_eq!(e.step, "bind");
+        assert_eq!((e.step, e.kind), (StartStep::Bind, StartKind::AddrInUse));
         assert!(e.to_string().contains("cluster.listen"), "{e}");
         assert!(!dir.path().join("lodestar.db").exists());
         assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
@@ -2530,7 +3177,98 @@ mod tests {
         })
         .await;
         assert_eq!(h.local_addr(), None);
+        // It's tried again with workers still allowed, nothing toggled
+        // (X-cluster-start-retry)...
+        until("a second try", || {
+            let n = series(&metrics(&h), "lodestar_cluster_start_failures_total");
+            (n >= 2, n)
+        })
+        .await;
+        assert_eq!(h.local_addr(), None);
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_listening"), 0);
+        assert_eq!(series(&m, "lodestar_cluster_start_failing"), 1);
+        // The workers API says why, in fixed labels, and when it tries next.
+        let failing = h.start_failure().expect("failing");
+        assert_eq!(
+            (failing.step, failing.kind),
+            (StartStep::Bind, StartKind::AddrInUse)
+        );
+        let now = SystemClock.now_secs();
+        assert!(
+            failing.next_retry_at > now - 2 && failing.next_retry_at <= now + 300,
+            "{failing:?} at {now}"
+        );
+        // ...and opens once the port is free.
+        drop(taken);
+        until("listening once the port is free", || {
+            (h.local_addr() == Some(addr), h.local_addr())
+        })
+        .await;
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_listening"), 1);
+        assert_eq!(series(&m, "lodestar_cluster_start_failing"), 0);
+        assert_eq!(h.start_failure(), None, "a start clears it");
         cluster.shutdown().await;
+    }
+
+    /// Turning workers off while a start keeps failing stops the tries and
+    /// clears what the API and the gauge say.
+    #[tokio::test]
+    async fn turning_workers_off_stops_the_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let taken = std::net::TcpListener::bind(any_port()).unwrap();
+        let addr = taken.local_addr().unwrap();
+        let cluster = Cluster::start(wiring(dir.path(), false, addr))
+            .await
+            .unwrap();
+        let h = cluster.handle();
+        h.set_allowed(true);
+        until("failing", || {
+            (h.start_failure().is_some(), h.start_failure())
+        })
+        .await;
+        h.set_allowed(false);
+        until("cleared", || {
+            (h.start_failure().is_none(), h.start_failure())
+        })
+        .await;
+        assert_eq!(series(&metrics(&h), "lodestar_cluster_start_failing"), 0);
+        // Allowed again, it tries at once, from the first wait.
+        drop(taken);
+        h.set_allowed(true);
+        until("listening", || {
+            (h.local_addr() == Some(addr), h.local_addr())
+        })
+        .await;
+        assert_eq!(h.start_failure(), None);
+        cluster.shutdown().await;
+    }
+
+    /// A failed start waits 2 s, then twice as long each time, up to 5
+    /// minutes. A run of failures logs its first, and then only a failure
+    /// of another step or kind.
+    #[tokio::test]
+    async fn a_failed_start_backs_off_and_logs_a_new_cause_only() {
+        let bind = StartError::bind(any_port(), &std::io::ErrorKind::AddrInUse.into());
+        let store = StartError::pki(StartStep::Store, &ClusterError::Corrupt("unreadable"));
+        let first = StartRetry::after(None, &bind);
+        assert_eq!(first.wait, START_RETRY_FIRST);
+        assert!(first.said, "a run's first failure is logged");
+        let mut r = first;
+        let mut waits = vec![r.wait.as_secs()];
+        for _ in 0..10 {
+            r = StartRetry::after(Some(r), &bind);
+            assert!(!r.said, "the same cause isn't logged again");
+            waits.push(r.wait.as_secs());
+        }
+        assert_eq!(waits, [2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300]);
+        let other = StartRetry::after(Some(r), &store);
+        assert!(other.said, "another step is logged");
+        assert_eq!(other.wait, START_RETRY_MAX, "and the wait keeps growing");
+        assert!(!StartRetry::after(Some(other), &store).said);
+        assert!(StartRetry::after(Some(other), &bind).said, "and back again");
+        assert!(r.at <= tokio::time::Instant::now() + START_RETRY_MAX);
     }
 
     #[tokio::test]
@@ -2632,7 +3370,7 @@ mod tests {
         let e = Cluster::start(wiring(dir.path(), true, any_port()))
             .await
             .unwrap_err();
-        assert_eq!(e.step, "pki", "{e}");
+        assert_eq!(e.step, StartStep::Pki, "{e}");
         assert!(e.to_string().starts_with("cluster port (pki): "), "{e}");
     }
 
@@ -2651,7 +3389,16 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 35, "{text}");
+        assert_eq!(families.len(), 41, "{text}");
+        // The lapsed-key series render, each as one series, at 0 here.
+        for name in [
+            "lodestar_cluster_claims_denied_excluded_total",
+            "lodestar_cluster_floor_lapsed_keys",
+            "lodestar_cluster_floor_lapsed_evicted_total",
+            "lodestar_cluster_floor_reports_lapsed_total",
+        ] {
+            assert_eq!(series(&text, name), 0, "{name}");
+        }
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
@@ -2899,7 +3646,7 @@ mod tests {
 
     /// WK-14's window: a worker saved as paused is paused on a new server
     /// before it serves anyone, so one that reconnects at once is never
-    /// granted a key. A row that doesn't read pauses nobody.
+    /// granted a key. A row that doesn't read is read as paused.
     #[tokio::test]
     async fn saved_pauses_are_in_before_the_server_serves() {
         let dir = tempfile::tempdir().unwrap();
@@ -2916,8 +3663,12 @@ mod tests {
                 ])
                 .unwrap();
         }
-        let saved = saved_pauses(&w.db, w.store.clone());
-        assert_eq!(saved, vec![WorkerId(9)]);
+        // A store that can't be read is an error, never "nobody paused".
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(saved_pauses(&gone, w.store.clone()).is_err());
+        let mut saved = saved_pauses(&w.db, w.store.clone()).unwrap();
+        saved.sort();
+        assert_eq!(saved, vec![WorkerId(9), WorkerId(11)]);
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         // Paused already: in the server's fleet before any connection.
@@ -3042,11 +3793,12 @@ mod tests {
         assert_eq!(rule.as_deref(), Some("worker-floor:7"));
     }
 
-    /// A key stored after its grant (another worker's result) and then
-    /// reported as a floor drop doesn't stay stored: nothing is left under
-    /// a held hash, as `hold_claims` keeps it (#604's review, N8).
+    /// A key stored after its grant (another worker's result, judged by
+    /// the coordinator's own filter as it was written) and then reported
+    /// as a floor drop stays stored and isn't held: a worker's report alone
+    /// never removes a stored torrent. The report still leaves the map.
     #[test]
-    fn a_floor_report_deletes_what_was_stored_under_it() {
+    fn a_floor_report_never_removes_or_holds_a_stored_torrent() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("lodestar.db");
         let raw = b"d6:lengthi1048576e4:name9:floor.bin12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae".to_vec();
@@ -3067,10 +3819,540 @@ mod tests {
         drop(store);
         let floor = FloorReports::new(None);
         floor.report(WorkerId(4), &key, 2, Instant::now());
-        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        // Another key, not stored: held as before.
+        floor.report(WorkerId(4), &key_n(1), 2, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 2);
+        assert_eq!(floor.len(), 0);
         let store = Store::open(&db, StoreConfig::default()).unwrap();
-        assert!(store.find(&key).unwrap().is_none(), "deleted");
-        assert_eq!(store.held_among(&[key.0]).unwrap(), vec![true]);
+        assert!(store.find(&key).unwrap().is_some(), "still stored");
+        assert_eq!(
+            store.held_among(&[key.0, key_n(1).0]).unwrap(),
+            vec![false, true]
+        );
+    }
+
+    /// A worker's report holds its key for `WORKER_FLOOR_HOLD_SECS`: past
+    /// that it's let go, so a claim's check finds it free and whoever
+    /// fetches it next judges it, and a new report holds it again.
+    #[test]
+    fn a_floor_hold_lapses_after_its_time_and_a_new_report_holds_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let at = 1_000_000;
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        let check = || {
+            StoreCheck {
+                reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+                errors: Arc::default(),
+                floor: Arc::new(FloorReports::new(None)),
+                filter: None,
+            }
+            .key_checks(&[key_n(1)])
+        };
+        assert_eq!(check(), vec![KeyCheck::Held]);
+        // Not yet.
+        let end = at + WORKER_FLOOR_HOLD_SECS;
+        assert_eq!(floor.expire(&db, StoreConfig::default(), end).unwrap(), 0);
+        assert_eq!(check(), vec![KeyCheck::Held]);
+        // Past it: claimable.
+        assert_eq!(
+            floor.expire(&db, StoreConfig::default(), end + 1).unwrap(),
+            1
+        );
+        assert_eq!(check(), vec![KeyCheck::Free]);
+        // Fetched and judged again: a new report holds it again.
+        floor.report(WorkerId(5), &key_n(1), end + 2, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        assert_eq!(check(), vec![KeyCheck::Held]);
+    }
+
+    /// Writes each `(key, worker)` report at `at` and lets them lapse.
+    fn lapse(floor: &FloorReports, db: &std::path::Path, reports: &[(usize, u32)], at: i64) {
+        for &(k, w) in reports {
+            assert_eq!(
+                floor.report(WorkerId(w), &key_n(k), at, Instant::now()),
+                Reported::Taken
+            );
+        }
+        assert_eq!(
+            floor.flush(db, StoreConfig::default()).unwrap(),
+            reports.len()
+        );
+        assert_eq!(
+            floor
+                .expire(db, StoreConfig::default(), at + WORKER_FLOOR_HOLD_SECS + 1)
+                .unwrap(),
+            reports.len()
+        );
+    }
+
+    /// Once a worker's report lapses, the store check excludes the key for
+    /// that worker only: another worker and the built-in one may have it,
+    /// and that worker's own report of it is refused while another's is
+    /// taken.
+    #[test]
+    fn a_lapsed_key_is_excluded_for_its_worker_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = Arc::new(FloorReports::new(None));
+        lapse(&floor, &db, &[(1, 4)], 1_000_000);
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+            floor: floor.clone(),
+            filter: None,
+        };
+        let keys = [key_n(1), key_n(2)];
+        assert_eq!(check.key_checks(&keys), vec![KeyCheck::Free; 2]);
+        let excluded = |w: WorkerId| {
+            keys.iter()
+                .map(|k| check.excludes(w, k))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(excluded(WorkerId(4)), vec![true, false]);
+        assert_eq!(excluded(WorkerId(5)), vec![false, false]);
+        assert_eq!(excluded(WorkerId::LOCAL), vec![false, false]);
+        let now = Instant::now();
+        assert_eq!(
+            floor.report(WorkerId(4), &key_n(1), 2_000_000, now),
+            Reported::Lapsed
+        );
+        assert_eq!(floor.len(), 0, "nothing held");
+        assert_eq!(
+            floor.report(WorkerId(5), &key_n(1), 2_000_000, now),
+            Reported::Taken
+        );
+    }
+
+    /// A key that lapses again keeps its earlier workers too, and a revoke
+    /// clears its worker's lapsed keys only.
+    #[test]
+    fn lapsed_keys_keep_their_workers_and_a_revoke_clears_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let at = 1_000_000;
+        lapse(&floor, &db, &[(1, 4), (2, 4), (3, 5)], at);
+        lapse(&floor, &db, &[(1, 6)], at + 2 * WORKER_FLOOR_HOLD_SECS);
+        let from = |w: u32, k: usize| floor.lapsed_from(WorkerId(w), &key_n(k));
+        assert!(from(4, 1) && from(6, 1) && !from(5, 1));
+        assert!(from(4, 2) && from(5, 3));
+        floor
+            .revoke(WorkerId(4), &db, StoreConfig::default())
+            .unwrap();
+        assert!(!from(4, 1) && !from(4, 2), "cleared");
+        assert!(from(5, 3) && from(6, 1), "another worker's stay");
+    }
+
+    /// The lapsed map's size and the reports refused as lapsed are
+    /// counted, and the claims denied by exclusion reach the totals.
+    #[test]
+    fn lapsed_keys_and_refusals_are_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        assert_eq!(floor.lapsed_len(), 0);
+        lapse(&floor, &db, &[(1, 4), (2, 4), (3, 5)], 1_000_000);
+        assert_eq!(floor.lapsed_len(), 3);
+        let now = Instant::now();
+        for _ in 0..2 {
+            assert_eq!(
+                floor.report(WorkerId(4), &key_n(1), 2_000_000, now),
+                Reported::Lapsed
+            );
+        }
+        floor.report(WorkerId(5), &key_n(1), 2_000_000, now);
+        assert_eq!(floor.lapsed_refused.load(Ordering::Relaxed), 2);
+        floor
+            .revoke(WorkerId(4), &db, StoreConfig::default())
+            .unwrap();
+        assert_eq!(floor.lapsed_len(), 1);
+
+        let snapshot = lodestar_cluster::FleetSnapshot {
+            denied_excluded: 4,
+            busy_capped: 9,
+            ..Default::default()
+        };
+        let totals = Totals::of(&snapshot).plus(Totals::of(&snapshot));
+        assert_eq!(totals.denied_excluded, 8);
+        assert_eq!(totals.busy_capped, 18);
+    }
+
+    /// The lapsed keys are bounded, oldest out, and forgetting one never
+    /// excludes it, or any other key, for a different worker.
+    #[test]
+    fn lapsed_keys_are_bounded_oldest_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::with_caps(None, FLOOR_PENDING_CAP, 2);
+        let at = 1_000_000;
+        lapse(&floor, &db, &[(1, 4)], at);
+        lapse(&floor, &db, &[(2, 5)], at + 2 * WORKER_FLOOR_HOLD_SECS);
+        lapse(&floor, &db, &[(3, 6)], at + 4 * WORKER_FLOOR_HOLD_SECS);
+        let from = |w: u32, k: usize| floor.lapsed_from(WorkerId(w), &key_n(k));
+        assert!(!from(4, 1), "the oldest went");
+        assert_eq!(floor.lapsed_evicted.load(Ordering::Relaxed), 1);
+        assert!(from(5, 2) && from(6, 3));
+        for w in [4, 5, 6, 7] {
+            for k in 1..=3 {
+                assert_eq!(
+                    from(w, k),
+                    (w, k) == (5, 2) || (w, k) == (6, 3),
+                    "worker {w}, key {k}"
+                );
+            }
+        }
+        // Many more, new keys and the same ones lapsing again, stay
+        // within the bound, and `order` within one and a half times it.
+        let mut lapsed = Lapsed::default();
+        let cap = 4096;
+        for i in 0..100_000u32 {
+            let mut k = [0; 20];
+            k[..4].copy_from_slice(&(i % 6000).to_be_bytes());
+            lapsed.insert(k, i % 7, cap);
+            if i % 997 == 0 {
+                lapsed.clear_worker(i % 7);
+            }
+            assert!(lapsed.by_key.len() <= cap);
+            assert!(lapsed.order.len() <= cap + cap / 2 + LAPSED_SLACK + 1);
+            assert!(
+                lapsed
+                    .by_key
+                    .values()
+                    .all(|e| e.workers().len() <= LAPSED_WORKERS)
+            );
+        }
+    }
+
+    /// Two workers taking turns on a key are both remembered, and so are
+    /// up to [`LAPSED_WORKERS`]: one more drops the oldest.
+    #[test]
+    fn workers_taking_turns_on_a_key_are_all_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let hold = 2 * WORKER_FLOOR_HOLD_SECS;
+        let from = |w: u32| floor.lapsed_from(WorkerId(w), &key_n(1));
+        // W (4) and X (5) take turns.
+        lapse(&floor, &db, &[(1, 4)], 1_000_000);
+        lapse(&floor, &db, &[(1, 5)], 1_000_000 + hold);
+        assert!(from(4) && from(5));
+        let now = Instant::now();
+        for w in [4, 5] {
+            assert_eq!(
+                floor.report(WorkerId(w), &key_n(1), 1_000_000 + 2 * hold, now),
+                Reported::Lapsed
+            );
+        }
+        // Three more: the oldest, W, is forgotten.
+        for (i, w) in [6, 7, 8].into_iter().enumerate() {
+            let at = 1_000_000 + hold * (2 + i64::try_from(i).unwrap());
+            lapse(&floor, &db, &[(1, w)], at);
+        }
+        assert!(!from(4));
+        assert!([5, 6, 7, 8].into_iter().all(from));
+    }
+
+    /// The exclusion is in place before the store lets the key go: while
+    /// the expiring row's delete is still uncommitted, the check reads the
+    /// key as held and excluded for its worker.
+    #[test]
+    fn a_key_is_excluded_before_its_row_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = Arc::new(FloorReports::new(None));
+        let at = 1_000_000;
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+            floor: floor.clone(),
+            filter: None,
+        };
+        let mut during = None;
+        let n = floor
+            .expire_with(
+                &db,
+                StoreConfig::default(),
+                at + WORKER_FLOOR_HOLD_SECS + 1,
+                || {
+                    during = Some((
+                        check.key_checks(&[key_n(1)]),
+                        check.excludes(WorkerId(4), &key_n(1)),
+                    ));
+                },
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(during, Some((vec![KeyCheck::Held], true)));
+        assert_eq!(check.key_checks(&[key_n(1)]), vec![KeyCheck::Free]);
+        assert!(check.excludes(WorkerId(4), &key_n(1)));
+    }
+
+    /// A revoked worker's rows that lapse later (left by a purge that
+    /// didn't run) stay out of the lapsed keys.
+    #[test]
+    fn a_revoked_workers_rows_that_lapse_later_stay_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let at = 1_000_000;
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        floor.report(WorkerId(5), &key_n(2), at, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 2);
+        // Revoked, but its row not purged.
+        floor.forget_worker(WorkerId(4));
+        assert_eq!(
+            floor
+                .expire(&db, StoreConfig::default(), at + WORKER_FLOOR_HOLD_SECS + 1)
+                .unwrap(),
+            2
+        );
+        assert!(!floor.lapsed_from(WorkerId(4), &key_n(1)));
+        assert!(floor.lapsed_from(WorkerId(5), &key_n(2)));
+    }
+
+    /// A revoke drops the worker's reports not written yet and deletes its
+    /// written ones; another worker's stay. A delete that fails is tried
+    /// again by the next flush.
+    #[test]
+    fn a_revoke_drops_and_deletes_a_workers_reports_and_retries_a_failed_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        let at = SystemClock.now_secs();
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        floor.report(WorkerId(5), &key_n(2), at, Instant::now());
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 2);
+        floor.report(WorkerId(4), &key_n(3), at, Instant::now());
+        assert_eq!(
+            floor
+                .revoke(WorkerId(4), &db, StoreConfig::default())
+                .unwrap(),
+            1
+        );
+        assert_eq!(floor.len(), 0, "the unwritten report is dropped");
+        let held = |keys: &[InfoHash]| {
+            let hashes: Vec<[u8; 20]> = keys.iter().map(|k| k.0).collect();
+            Store::open(&db, StoreConfig::default())
+                .unwrap()
+                .held_among(&hashes)
+                .unwrap()
+        };
+        assert_eq!(
+            held(&[key_n(1), key_n(2), key_n(3)]),
+            vec![false, true, false]
+        );
+        // A delete that can't reach the store is kept and retried.
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(
+            floor
+                .revoke(WorkerId(5), &gone, StoreConfig::default())
+                .is_err()
+        );
+        assert_eq!(floor.unwritten(), 1);
+        assert_eq!(held(&[key_n(2)]), vec![true]);
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        assert_eq!(floor.unwritten(), 0);
+        assert_eq!(held(&[key_n(2)]), vec![false]);
+    }
+
+    /// When a worker's report lapses or its worker is revoked, the built-in
+    /// worker's held set lets the key go too, so the main node judges its
+    /// next fetch; a key something else still holds (another rule, a
+    /// report not written yet) stays held there.
+    #[test]
+    fn the_built_in_held_set_follows_expiry_and_revoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        let at = 1_000_000;
+        // Expiry: [1] lapses; [2] is re-reported meanwhile, not yet written.
+        floor.report(WorkerId(4), &key_n(1), at, Instant::now());
+        floor.report(WorkerId(4), &key_n(2), at, Instant::now());
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        let end = at + WORKER_FLOOR_HOLD_SECS + 1;
+        floor.report(WorkerId(6), &key_n(2), end, Instant::now());
+        assert!(held.contains(&key_n(1).0) && held.contains(&key_n(2).0));
+        assert_eq!(floor.expire(&db, StoreConfig::default(), end).unwrap(), 2);
+        assert!(!held.contains(&key_n(1).0), "let go with the row");
+        assert!(held.contains(&key_n(2).0), "a newer report holds it");
+        floor.flush(&db, StoreConfig::default()).unwrap();
+
+        // Revoke: worker 5's [3] goes; [4], also held by the main node's
+        // own rule, stays.
+        floor.report(WorkerId(5), &key_n(3), end, Instant::now());
+        floor.report(WorkerId(5), &key_n(4), end, Instant::now());
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE tombstones SET rule = 'CS-1a' WHERE hash = ?1",
+                [&key_n(4).0[..]],
+            )
+            .unwrap();
+        assert_eq!(
+            floor
+                .revoke(WorkerId(5), &db, StoreConfig::default())
+                .unwrap(),
+            1
+        );
+        assert!(!held.contains(&key_n(3).0));
+        assert!(held.contains(&key_n(4).0));
+        assert!(held.contains(&key_n(2).0), "another worker's report stays");
+    }
+
+    /// A revoke lets the built-in held set go of the worker's reports not
+    /// written yet, and a report from that worker arriving after the
+    /// revoke (an outcome already past its lease check) is refused: never
+    /// held, never written.
+    #[test]
+    fn a_revoked_workers_late_report_is_refused_and_its_unwritten_ones_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        let at = SystemClock.now_secs();
+        floor.report(WorkerId(5), &key_n(1), at, Instant::now());
+        floor.report(WorkerId(6), &key_n(2), at, Instant::now());
+        assert!(held.contains(&key_n(1).0));
+        floor
+            .revoke(WorkerId(5), &db, StoreConfig::default())
+            .unwrap();
+        assert!(!held.contains(&key_n(1).0), "unwritten, let go");
+        assert!(held.contains(&key_n(2).0), "another worker's stays");
+        // The late report.
+        assert_eq!(
+            floor.report(WorkerId(5), &key_n(3), at, Instant::now()),
+            Reported::Revoked
+        );
+        assert!(!held.contains(&key_n(3).0) && !floor.holds(&key_n(3)));
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        let rows = Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .held_among(&[key_n(1).0, key_n(2).0, key_n(3).0])
+            .unwrap();
+        assert_eq!(rows, vec![false, true, false]);
+    }
+
+    /// A report on a key the store has something under (here an item
+    /// awaiting verification) holds nothing: after its flush the key is
+    /// out of the built-in held set too, and a claim's check doesn't
+    /// read it as held.
+    #[test]
+    fn a_report_the_store_keeps_leaves_the_built_in_held_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let key = key_n(7);
+        Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .connection()
+            .execute_batch(&format!(
+                "INSERT OR IGNORE INTO sources (id, plugin, version, state, added_at)
+                     VALUES (0, 'dht', '1', 0, 0);
+                 INSERT INTO unverified_items (network, key, source_id, sources, flags, claims,
+                     first_at, last_at) VALUES (0, x'{}', 0, 1, 0, x'01000000000000', 0, 0);",
+                key.0.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            ))
+            .unwrap();
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = Arc::new(FloorReports::new(Some(held.clone())));
+        floor.report(WorkerId(4), &key, SystemClock.now_secs(), Instant::now());
+        assert!(held.contains(&key.0), "held while the report waits");
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        assert!(!held.contains(&key.0), "kept by the store: let go");
+        assert_eq!(floor.written.load(Ordering::Relaxed), 0, "not written");
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+            floor,
+            filter: None,
+        };
+        assert_ne!(check.key_checks(&[key]), vec![KeyCheck::Held]);
+    }
+
+    /// A revoke whose delete failed lets the built-in held set go of the
+    /// worker's unwritten reports once the retry lands.
+    #[test]
+    fn a_retried_revoke_releases_the_dropped_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        floor.report(
+            WorkerId(5),
+            &key_n(1),
+            SystemClock.now_secs(),
+            Instant::now(),
+        );
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(
+            floor
+                .revoke(WorkerId(5), &gone, StoreConfig::default())
+                .is_err()
+        );
+        assert!(held.contains(&key_n(1).0), "kept until the retry lands");
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        assert!(!held.contains(&key_n(1).0));
+        assert_eq!(floor.unwritten(), 0);
+    }
+
+    /// A failed revoke followed by a successful one lets the built-in held
+    /// set go of the first one's dropped reports too.
+    #[test]
+    fn a_failed_then_successful_revoke_releases_the_dropped_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        floor.report(
+            WorkerId(5),
+            &key_n(1),
+            SystemClock.now_secs(),
+            Instant::now(),
+        );
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(
+            floor
+                .revoke(WorkerId(5), &gone, StoreConfig::default())
+                .is_err()
+        );
+        assert!(held.contains(&key_n(1).0));
+        floor
+            .revoke(WorkerId(5), &db, StoreConfig::default())
+            .unwrap();
+        floor.flush(&db, StoreConfig::default()).unwrap();
+        assert!(!held.contains(&key_n(1).0));
+        assert_eq!(floor.unwritten(), 0);
+    }
+
+    /// A flush keeps the writer's lock from taking its batch to removing
+    /// it, so a revoke can't land in between.
+    #[test]
+    fn a_flush_holds_the_writers_lock_across_its_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let floor = FloorReports::new(None);
+        floor.report(WorkerId(4), &key_n(1), 1, Instant::now());
+        let mut seen = None;
+        floor
+            .flush_with(&db, StoreConfig::default(), || {
+                seen = Some(floor.writing.try_lock().is_err());
+            })
+            .unwrap();
+        assert_eq!(
+            seen,
+            Some(true),
+            "the lock is held while the batch is written"
+        );
+        assert!(floor.writing.try_lock().is_ok(), "and released after");
     }
 
     fn key_n(i: usize) -> InfoHash {
@@ -3195,12 +4477,13 @@ mod tests {
             Reported::Taken
         );
         assert_eq!(floor.turned_away.load(Ordering::Relaxed), 0);
-        // Revoked, it's forgotten: its unwritten reports and its window.
-        assert_eq!(floor.forget_worker(WorkerId(9)), FLOOR_BUDGET);
+        // Revoked, it's forgotten: its unwritten reports and its window,
+        // and its later reports are refused.
+        assert_eq!(floor.forget_worker(WorkerId(9)).len(), FLOOR_BUDGET);
         assert_eq!(floor.len(), 1);
         assert_eq!(
             floor.report(WorkerId(9), &key_n(1), 1, now),
-            Reported::Taken
+            Reported::Revoked
         );
     }
 
@@ -3273,7 +4556,8 @@ mod tests {
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         let floor = h.0.floor.clone();
-        floor.report(WorkerId(3), &InfoHash([9; 20]), 1, Instant::now());
+        let at = SystemClock.now_secs();
+        floor.report(WorkerId(3), &InfoHash([9; 20]), at, Instant::now());
         // Pending or already written: the metrics say which.
         let mut m = String::new();
         h.render(&mut m);
@@ -3284,7 +4568,7 @@ mod tests {
         // The sessions stop, and a report still in flight lands after: the
         // writer runs until they're gone (#607's review).
         let writer = cluster.stop_serving().await;
-        floor.report(WorkerId(3), &InfoHash([10; 20]), 2, Instant::now());
+        floor.report(WorkerId(3), &InfoHash([10; 20]), at + 1, Instant::now());
         writer.finish().await;
         assert_eq!(floor.len(), 0);
         let held = Store::open(&db, StoreConfig::default())
