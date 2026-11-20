@@ -24,7 +24,8 @@
 //! claim), so its claims stay, as live.
 //!
 //! A snapshot whose claims can't be checked however often the pass tries
-//! ([`persistent`]) fails closed: the hourly pass deletes it and a
+//! ([`persistent`]) fails closed: the hourly pass deletes it once a pass
+//! an hour or more after the first finds the same, and a
 //! rollback refuses it (`super::purge_snapshots`, `super::purge_for_restore`,
 //! `super::apply_source_purges`). Any other error is retried next pass.
 //! The hourly pass spends at most [`PASS_BUDGET`] deleting claims.
@@ -769,10 +770,18 @@ mod tests {
             .execute_batch("DROP TABLE source_state")
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
+        // Seen once, it's kept and reported: a torn read can look the same.
         let r = store.purge_snapshots(T, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        assert_eq!(r.stuck, vec![(snap.clone(), "can't be checked")]);
+        // Again under an hour on: still kept.
+        let r = store.purge_snapshots(T + 1_800, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        // An hour on from the first sighting, the same again: deleted.
+        let r = store.purge_snapshots(T + 3_600, 0);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
         assert!(!snap.exists());
-        // A rollback refuses such a copy.
+        // A rollback refuses such a copy at once.
         let staged = dir.path().join("lodestar.rollback-y.tmp");
         let snap = take(&store, &db);
         std::fs::copy(&snap, &staged).unwrap();
@@ -815,11 +824,18 @@ mod tests {
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert!(r.stuck.is_empty());
         assert!(stamps(&snap, tmdb).is_empty());
+        // The clean pass cleared the record: stuck again, it's reported at
+        // once, not a day after the last report.
+        let holder = Connection::open(&snap).unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let r = store.purge_snapshots(T + 86_400 + 7_200, 0);
+        assert_eq!(r.stuck, vec![(snap.clone(), "busy")]);
+        holder.execute_batch("ROLLBACK").unwrap();
     }
 
-    /// A newer schema's claims stage meets a writer's lock (the write lock
-    /// lets it read, so the error comes from its own write): retried, never
-    /// deleted, and reported as stuck.
+    /// A newer schema's claims stage meets a writer's lock. The write lock
+    /// lets it read, so the error comes from its own first write, the
+    /// switch to WAL: retried, never deleted, and reported as stuck.
     #[test]
     fn a_lock_in_the_claims_stage_is_retried() {
         let dir = tempfile::tempdir().unwrap();
@@ -932,8 +948,76 @@ mod tests {
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
         let r = store.purge_snapshots(T, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        let r = store.purge_snapshots(T + 3_600, 0);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
         assert!(!snap.exists());
+    }
+
+    /// A pass in between that checks the claims (or meets a retried error)
+    /// resets the count: a lasting error must be seen on two passes in a
+    /// row before the snapshot goes.
+    #[test]
+    fn a_clean_pass_resets_the_two_sightings() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, i64::from(tmdb.get()), T - 30 * DAY);
+        let snap = take(&store, &db);
+        let rename = |sql: &str| {
+            Connection::open(&snap).unwrap().execute_batch(sql).unwrap();
+            super::super::set_modified(&snap, T).unwrap();
+        };
+        rename("ALTER TABLE source_state RENAME TO plugin_state");
+        assert!(store.purge_snapshots(T, 0).unchecked.is_empty());
+        // Readable again for one pass: the sighting is forgotten.
+        rename("ALTER TABLE plugin_state RENAME TO source_state");
+        let r = store.purge_snapshots(T + 3_600, 0);
+        assert!(
+            r.unchecked.is_empty() && r.stuck.is_empty(),
+            "{:?}",
+            r.warnings
+        );
+        rename("ALTER TABLE source_state RENAME TO plugin_state");
+        let r = store.purge_snapshots(T + 7_200, 0);
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        assert_eq!(r.stuck.len(), 1, "reported again after the reset");
+        let r = store.purge_snapshots(T + 10_800, 0);
+        assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
+    }
+
+    /// Each hour's pass starts at the next snapshot, so every one goes
+    /// first at least once every `n` passes.
+    #[test]
+    fn the_pass_starts_at_a_different_snapshot_each_hour() {
+        use super::super::first_index;
+        assert_eq!(first_index(T, 0), 0);
+        assert_eq!(first_index(T, 1), 0);
+        let starts: Vec<_> = (0..6).map(|h| first_index(T + h * 3_600, 3)).collect();
+        for (h, start) in starts.iter().enumerate() {
+            assert_eq!(*start, (starts[0] + h) % 3, "{starts:?}");
+        }
+        assert_eq!(first_index(T + 3_599, 3), starts[0], "the same all hour");
+        assert_eq!(first_index(-1, 3), 2, "never out of range");
+        // In a real pass: two snapshots, each with a claim due at T and
+        // another due an hour on, purged in one order, then the other.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, [tmdb, _, _]) = live(dir.path());
+        let tmdb = i64::from(tmdb.get());
+        torrent(store.connection(), 1);
+        torrent(store.connection(), 2);
+        claim(store.connection(), 1, tmdb, T - 9 * DAY - 1);
+        claim(store.connection(), 2, tmdb, T - 9 * DAY + 3_000);
+        let a = take(&store, &db);
+        let b = crate::schema::snapshot_path(&db, 100);
+        std::fs::copy(&a, &b).unwrap();
+        super::super::set_modified(&b, T).unwrap();
+        let first = store.purge_snapshots(T, 0).purged;
+        let second = store.purge_snapshots(T + 3_600, 0).purged;
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(second.len(), 2, "{second:?}");
+        assert_eq!(first[0], second[1]);
+        assert_eq!(first[1], second[0]);
     }
 
     /// A schema newer than this build's plans loses its expired claims all

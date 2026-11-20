@@ -428,7 +428,8 @@ pub struct PurgeReport {
     /// Snapshots that had something purged.
     pub purged: Vec<PathBuf>,
     /// Snapshots deleted because their identify claims couldn't be checked
-    /// against their terms (failing closed).
+    /// against their terms, on two passes at least an hour apart (failing
+    /// closed).
     pub unchecked: Vec<PathBuf>,
     /// Snapshots whose purge failed with an error the pass retries (never
     /// a reason to delete one), with the kind of error: each reported when
@@ -464,8 +465,14 @@ pub struct PurgeReport {
 ///
 /// The second map holds, for a snapshot whose purge keeps failing with an
 /// error it retries, when that was last reported ([`PurgeReport::stuck`]).
+/// The third, for a snapshot whose claims the last pass found uncheckable
+/// for a lasting reason, when that was first seen ([`CONFIRM_SECS`]).
 #[derive(Debug, Default)]
-pub(crate) struct Marks(HashMap<PathBuf, Mark>, HashMap<PathBuf, i64>);
+pub(crate) struct Marks(
+    HashMap<PathBuf, Mark>,
+    HashMap<PathBuf, i64>,
+    HashMap<PathBuf, i64>,
+);
 
 #[derive(Debug, Clone, Copy)]
 struct Mark {
@@ -674,6 +681,9 @@ impl Store {
         self.snapshot_marks
             .1
             .retain(|path, _| all.iter().any(|s| &s.path == path));
+        self.snapshot_marks
+            .2
+            .retain(|path, _| all.iter().any(|s| &s.path == path));
         // Whether a snapshot may still hold a deletion this pass didn't
         // scrub: then the journal rows it read stay.
         let mut blocked = false;
@@ -796,12 +806,13 @@ impl Store {
             rows: claims::MAX_PER_PASS,
             budget: &budget,
         };
-        if !keep.is_empty() {
-            let first = usize::try_from(now.div_euclid(3_600).rem_euclid(keep.len() as i64));
-            keep.rotate_left(first.unwrap_or(0));
-        }
+        let first = first_index(now, keep.len());
+        keep.rotate_left(first);
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
+            // When this snapshot's claims were first found uncheckable, if
+            // the last pass found them so: any other outcome now resets it.
+            let lasting = self.snapshot_marks.2.remove(&snap.path);
             match purge_one(&snap, &live, since, now, hits_before, None, Some(limit)) {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
@@ -829,7 +840,11 @@ impl Store {
                                 self.snapshot_marks.1.remove(&snap.path);
                             }
                             Err(e) if claims::persistent(&e) => {
-                                blocked |= drop_unchecked(&snap, &e.to_string(), &mut report);
+                                // A newer schema never holds the journal.
+                                let why = e.to_string();
+                                let marks = &mut self.snapshot_marks;
+                                let at = (lasting, now);
+                                blocked |= unchecked(marks, &snap, at, &why, false, &mut report);
                             }
                             Err(e) => {
                                 report.warnings.push(format!(
@@ -837,15 +852,26 @@ impl Store {
                                      failed (it's tried again next pass): {e}",
                                     snap.path.display()
                                 ));
-                                stuck(&mut self.snapshot_marks.1, &snap.path, &e, now, &mut report);
+                                let kind = error_kind(&e);
+                                stuck(
+                                    &mut self.snapshot_marks.1,
+                                    &snap.path,
+                                    kind,
+                                    now,
+                                    &mut report,
+                                );
                             }
                         }
+                    } else {
+                        self.snapshot_marks.1.remove(&snap.path);
                     }
                     continue;
                 }
                 Ok(Outcome::ClaimsUnchecked(why)) => {
                     self.snapshot_marks.0.remove(&snap.path);
-                    blocked |= drop_unchecked(&snap, &why, &mut report);
+                    let marks = &mut self.snapshot_marks;
+                    let at = (lasting, now);
+                    blocked |= unchecked(marks, &snap, at, &why, true, &mut report);
                     continue;
                 }
                 Ok(Outcome::Unchanged) => {}
@@ -869,7 +895,14 @@ impl Store {
                         "purging the snapshot {} failed (it was left as it was): {e}",
                         snap.path.display()
                     ));
-                    stuck(&mut self.snapshot_marks.1, &snap.path, &e, now, &mut report);
+                    let kind = error_kind(&e);
+                    stuck(
+                        &mut self.snapshot_marks.1,
+                        &snap.path,
+                        kind,
+                        now,
+                        &mut report,
+                    );
                     continue;
                 }
             }
@@ -924,14 +957,62 @@ fn claims_left(path: &Path) -> String {
     )
 }
 
+/// The snapshot a pass starts at, of `n`: a different one each hour, so
+/// every snapshot goes first at least once every `n` passes and a backlog
+/// in one can't starve the rest of the claims budget.
+fn first_index(now: i64, n: usize) -> usize {
+    let n = i64::try_from(n).unwrap_or(i64::MAX).max(1);
+    usize::try_from(now.div_euclid(3_600).rem_euclid(n)).unwrap_or(0)
+}
+
+/// How long a lasting error must persist, seen again on a later pass,
+/// before a snapshot fails closed: a torn read on a filesystem with weak
+/// locking (a share, Unraid's user shares), or two purges meeting on one
+/// snapshot, can report damage that isn't there.
+const CONFIRM_SECS: i64 = 3_600;
+
+/// A snapshot whose identify claims couldn't be checked for a lasting
+/// reason (`why`). Deleted only when the last pass found the same at least
+/// [`CONFIRM_SECS`] earlier (`lasting`, when it first did); otherwise kept,
+/// recorded and reported as stuck, so the next pass decides. `at` is
+/// `(lasting, now)`. Whether the journal must stay: a file couldn't be
+/// deleted, or `holds_journal` and the snapshot was kept unscrubbed.
+fn unchecked(
+    marks: &mut Marks,
+    snap: &Snapshot,
+    (lasting, now): (Option<i64>, i64),
+    why: &str,
+    holds_journal: bool,
+    report: &mut PurgeReport,
+) -> bool {
+    if lasting.is_some_and(|f| f <= now && now - f >= CONFIRM_SECS) {
+        marks.1.remove(&snap.path);
+        return drop_unchecked(snap, why, report);
+    }
+    let first = lasting.filter(|f| *f <= now).unwrap_or(now);
+    marks.2.insert(snap.path.clone(), first);
+    report.warnings.push(format!(
+        "the identify claims in the snapshot {} couldn't be checked against their terms \
+         ({why}); it's kept for now, and deleted if a pass an hour or more on finds the same",
+        snap.path.display()
+    ));
+    stuck(&mut marks.1, &snap.path, UNCHECKED, now, report);
+    holds_journal
+}
+
+/// The kind [`PurgeReport::stuck`] names for claims that couldn't be
+/// checked.
+const UNCHECKED: &str = "can't be checked";
+
 /// Records that the purge of the snapshot at `path` failed with an error
-/// it retries, and reports it in [`PurgeReport::stuck`] at most once a day
-/// while it keeps failing, so a snapshot stuck on a retried error is seen
-/// by path, not only counted. `warned` holds when each was last reported.
+/// of `kind` it retries, and reports it in [`PurgeReport::stuck`] at most
+/// once a day while it keeps failing, so a snapshot stuck on a retried
+/// error is seen by path, not only counted. `warned` holds when each was
+/// last reported.
 fn stuck(
     warned: &mut HashMap<PathBuf, i64>,
     path: &Path,
-    e: &crate::Error,
+    kind: &'static str,
     now: i64,
     report: &mut PurgeReport,
 ) {
@@ -940,7 +1021,7 @@ fn stuck(
         .is_none_or(|at| now < *at || now.saturating_sub(*at) >= 86_400);
     if due {
         warned.insert(path.to_path_buf(), now);
-        report.stuck.push((path.to_path_buf(), error_kind(e)));
+        report.stuck.push((path.to_path_buf(), kind));
     }
 }
 
