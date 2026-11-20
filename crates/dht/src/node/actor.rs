@@ -842,7 +842,7 @@ impl Actor {
             harvest,
             seen: SeenFilter::new(SEEN_CAPACITY, 0.01),
             peer_store: PeerStore::default(),
-            sampler: Sampler::default(),
+            sampler: Sampler::new(cfg.sampler_cooldown_split),
             recent: VecDeque::with_capacity(RECENT_SAMPLES),
             get_peers_queue: VecDeque::new(),
             peer_requests: Map::default(),
@@ -2782,6 +2782,11 @@ impl Actor {
         self.stats
             .sample_cooling
             .store(self.sampler.cooling() as u64, Ordering::Relaxed);
+        let sampling = self.cfg.harvest.sample && !self.paused && self.proof.may_sample(now_i);
+        self.stats.sample_full_seconds.store(
+            self.sampler.full_time(now_i, sampling).as_secs(),
+            Ordering::Relaxed,
+        );
         if now_i.duration_since(self.last_summary.0) >= crate::log_events::SUMMARY_EVERY {
             self.summarize(now_i);
         }
