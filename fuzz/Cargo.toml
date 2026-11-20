@@ -273,6 +273,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "tvdb"
+path = "fuzz_targets/tvdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "openlibrary"
 path = "fuzz_targets/openlibrary.rs"
 test = false

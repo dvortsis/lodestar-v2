@@ -19,7 +19,7 @@ use lodestar_sources_plugins::full_scrape::{StaticPrivateTrackers, SystemClock};
 use lodestar_sources_plugins::prowlarr::{Config, Manager};
 use lodestar_sources_plugins::{
     Credentials, StaticCredentials, academic, archive_org, arr, catalogue, clients, full_scrape,
-    nyaa, prowlarr, stashdb, torrent_cache, tpdb,
+    nyaa, prowlarr, stashdb, torrent_cache, tpdb, tvdb,
 };
 use lodestar_store::SourceId;
 
@@ -283,6 +283,7 @@ fn every_catalogued_plugin_is_checked() {
         torrent_cache::ID,
         lodestar_sources_plugins::wikidata::ID,
         lodestar_sources_plugins::musicbrainz::ID,
+        tvdb::ID,
         lodestar_sources_plugins::openlibrary::ID,
     ];
     let listed: BTreeSet<&str> = catalogue::manifests().map(|m| m.id).collect();
@@ -302,4 +303,36 @@ async fn the_declared_names_are_the_ones_it_uses() {
     let with = lookup_once(&stashdb::StashDb::new(stored())).await;
     let without = lookup_once(&stashdb::StashDb::new(none())).await;
     assert_ne!(with, without, "stashdb: {with}");
+}
+
+/// TheTVDB (ENR-tvdb), an Account identifier: it reads its API key and
+/// its optional PIN, under its own id, and nothing else; with the key
+/// stored it gets past it to its request, which `NoEgress` refuses.
+#[tokio::test(start_paused = true)]
+async fn tvdb_reads_exactly_what_it_declares() {
+    use lodestar_sources::identify::{Identifier, MediaKind, Query};
+    async fn once(t: &tvdb::Tvdb) -> String {
+        let kit = Kit::new(
+            Arc::new(MemoryState::new()),
+            Arc::new(NoEgress),
+            t.policy(),
+            &UserLimits::default(),
+        );
+        let q = Query::new("Synthetic Series", Some(2008), MediaKind::Tv).unwrap();
+        t.lookup(&kit, &q).await.unwrap_err().0
+    }
+    let rec = Arc::new(Recording::default());
+    let t = tvdb::Tvdb::new(rec.clone());
+    assert_eq!(once(&t).await, tvdb::NO_KEY);
+    check(t.manifest(), t.policy(), &rec);
+    assert_eq!(
+        names(t.policy().credentials),
+        BTreeSet::from(["api_key".into(), "pin".into()])
+    );
+    let stored = Arc::new(StaticCredentials::new([(
+        "api_key",
+        "00000000-fake-0000-0000-00000000fake",
+    )]));
+    let with = once(&tvdb::Tvdb::new(stored)).await;
+    assert_eq!(with, tvdb::FAILED, "past the key, to the refused request");
 }
