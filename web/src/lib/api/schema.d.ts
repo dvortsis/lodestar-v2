@@ -3911,6 +3911,11 @@ export interface components {
          * @enum {string}
          */
         ClusterStartStep: "bind" | "store" | "secrets" | "pki" | "pauses" | "server";
+        /**
+         * @description Why a search asked to collapse came back ungrouped.
+         * @enum {string}
+         */
+        CollapseUnavailable: "group_key_not_ready";
         /** @description `POST /collections`. */
         CollectionCreate: {
             /** @description 1–200 characters. */
@@ -8649,6 +8654,12 @@ export interface components {
             /** Format: int64 */
             metadata_at: number;
             name: string;
+            /**
+             * Format: int64
+             * @description Other matches in this hit's group of versions; present only on a
+             *     collapsed search's hits (`collapsed`).
+             */
+            others?: number;
             /** Format: int64 */
             piece_len: number;
             /**
@@ -8921,8 +8932,26 @@ export interface components {
         SearchResponse: {
             /** @description The query as the server understood it. */
             canonical: string;
+            /** @description Why `collapse=group` came back ungrouped; absent otherwise. */
+            collapse_unavailable?: components["schemas"]["CollapseUnavailable"];
+            /**
+             * @description The rows are groups of versions (`collapse=group` with group data
+             *     ready): each hit has `others`, `offset` counts groups, and
+             *     `groups` is sent. `total` still counts torrents. A collapsed page
+             *     can come back short, even empty, with a `next_cursor`: it stopped
+             *     at its scan bound, and the next page carries on. Sent only when
+             *     true, so ungrouped responses are as before.
+             */
+            collapsed?: boolean;
             /** @description Present only when asked for with `explain`. */
             explain?: components["schemas"]["SearchExplain"];
+            /**
+             * @description Groups among all the matches, when `collapsed`: exact while
+             *     `total` is, else an estimate (`groups_approx`).
+             */
+            groups?: number;
+            /** @description `groups` is an estimate (shown with "≈"); sent with `groups`. */
+            groups_approx?: boolean;
             hits: components["schemas"]["SearchHit"][];
             /**
              * @description The fields this query's clauses name that the index can't fully
@@ -15534,7 +15563,7 @@ export interface operations {
                 sort?: string;
                 /** @description Results per page: 1–200, 50 by default. */
                 limit?: number;
-                /** @description `offset + limit` may not pass 10,000. Not with `cursor`. */
+                /** @description `offset + limit` may not pass 10,000. Not with `cursor`. With `collapse=group` it counts groups, and a page that stops at its scan bound answers with a smaller `offset` (the groups actually before it): page collapsed results with `next_cursor`. */
                 offset?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
@@ -15542,6 +15571,8 @@ export interface operations {
                 tz?: number;
                 /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
                 cursor?: string;
+                /** @description `group`: one row per group of versions, the best under `sort`, with `others` on each hit and `groups` counted; `none` (the default). While group data isn't ready the results come ungrouped and `collapse_unavailable` says why. Send the same value with a `cursor`. */
+                collapse?: "group" | "none";
                 /** @description `1` or `true`: count every match exactly, within a time budget. */
                 exact?: boolean;
                 /** @description `1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits. */
