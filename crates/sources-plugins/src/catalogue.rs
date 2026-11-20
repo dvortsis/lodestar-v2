@@ -30,6 +30,7 @@ use crate::{
 const PLUGINS: &[(&str, &Manifest)] = &[
     ("academic", &academic::MANIFEST),
     ("anidb", &crate::anidb::MANIFEST),
+    ("anilist", &crate::anilist::MANIFEST),
     ("archive_org", &archive_org::MANIFEST),
     ("arr", &arr::MANIFEST),
     ("clients", &clients::MANIFEST),

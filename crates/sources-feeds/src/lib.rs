@@ -6,6 +6,7 @@
 //! keeping only the items it finished.
 
 pub mod anidb;
+pub mod anilist;
 pub mod archive_org;
 mod common;
 pub mod discogs;

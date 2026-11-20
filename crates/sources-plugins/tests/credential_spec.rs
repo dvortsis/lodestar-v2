@@ -303,6 +303,12 @@ fn plugins_without_a_credential_store_declare_none() {
         lodestar_sources::identify::Identifier::manifest(&srr).clone(),
         *lodestar_sources::identify::Identifier::policy(&srr),
     ));
+    // AniList (ENR-anilist) too.
+    let al = lodestar_sources_plugins::anilist::AniList::new();
+    plugins.push((
+        lodestar_sources::identify::Identifier::manifest(&al).clone(),
+        *lodestar_sources::identify::Identifier::policy(&al),
+    ));
     // Open Library (ENR-ol) too.
     let ol = lodestar_sources_plugins::openlibrary::OpenLibrary::new();
     plugins.push((
@@ -343,6 +349,7 @@ fn every_catalogued_plugin_is_checked() {
         lodestar_sources_plugins::musicbrainz::ID,
         lodestar_sources_plugins::srrdb::ID,
         tvdb::ID,
+        lodestar_sources_plugins::anilist::ID,
         lodestar_sources_plugins::openlibrary::ID,
         lodestar_sources_plugins::predb::ID,
     ];

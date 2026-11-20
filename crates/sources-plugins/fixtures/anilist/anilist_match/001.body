@@ -1,0 +1,5 @@
+{"data": {"Page": {"pageInfo": {"total": 3}, "media": [
+  {"id": 900001, "format": "MOVIE", "isAdult": false, "countryOfOrigin": "JP", "seasonYear": 1997, "startDate": {"year": 1997}, "title": {"romaji": "Perfect Blue", "english": "Perfect Blue", "native": "パーフェクトブルー"}, "synonyms": ["Pāfekuto Burū", "Perfect Blue Stage"], "description": "SENTINEL description", "staff": {"nodes": [{"name": "SENTINEL person"}]}},
+  {"id": 900002, "format": "MOVIE", "isAdult": true, "countryOfOrigin": "JP", "seasonYear": 1997, "startDate": {"year": 1997}, "title": {"romaji": "Perfect Blue", "english": null, "native": null}, "synonyms": ["SENTINEL adult"]},
+  {"id": 900003, "format": "MOVIE", "isAdult": false, "countryOfOrigin": "JP", "seasonYear": null, "startDate": {"year": 2002}, "title": {"romaji": "Perfect Blue: Yume nara Samete", "english": null, "native": null}, "synonyms": []}
+]}}}

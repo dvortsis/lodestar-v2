@@ -59,6 +59,10 @@ fn each_entry_is_its_plugins_own_manifest() {
             &lodestar_sources_plugins::anidb::AniDb::new(creds()),
         )
         .clone(),
+        lodestar_sources::identify::Identifier::manifest(
+            &lodestar_sources_plugins::anilist::AniList::new(),
+        )
+        .clone(),
         archive_org::ArchiveOrg::new().manifest().clone(),
         arr::ArrWebhooks::new().manifest().clone(),
         clients::Clients::unconfigured().manifest().clone(),

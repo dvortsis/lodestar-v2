@@ -287,6 +287,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "anilist"
+path = "fuzz_targets/anilist.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "openlibrary"
 path = "fuzz_targets/openlibrary.rs"
 test = false

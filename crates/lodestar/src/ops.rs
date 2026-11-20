@@ -939,6 +939,12 @@ mod spec_tests {
                     &lodestar_sources_plugins::anidb::AniDb::new(creds()),
                 ),
             ),
+            (
+                lodestar_sources_plugins::anilist::ID,
+                *lodestar_sources::identify::Identifier::policy(
+                    &lodestar_sources_plugins::anilist::AniList::new(),
+                ),
+            ),
             (archive_org::ID, *archive_org::ArchiveOrg::new().policy()),
             (arr::ID, *arr::ArrWebhooks::new().policy()),
             (clients::ID, *clients::Clients::unconfigured().policy()),
