@@ -284,6 +284,14 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 
   A skill default never overrides a decision made here.
 - **Explicit user decisions:** **Svelte 5**, and the **smallest, fastest UI** is the top UI priority. Skills written for React/Tremor are applied **by concept and spirit**. In particular, `data-visualization-design` keeps its data contracts, single formatter per metric, state handling, accessible alternatives, performance rules and validation hooks, but Tremor components are replaced by tiny in-house Svelte SVG chart primitives plus uPlot (lazy-loaded) for time series. `application-interface-design`'s Tailwind + daisyUI guidance applies literally, because daisyUI is CSS-only and framework-agnostic.
+- **The reader.** The UI is written for the same person as the user guide (`docs/owner-decisions.md` §2.14; applied to the UI by the runner under owner decision §2.69 item 17.1, UI review D1):
+  - **Who they are:** someone who can install an app from the Unraid app store, follow a guide, use a torrent client and paste a magnet link. They half-know port forwarding, VPNs and what a tracker is. They don't know the DHT, the query language or Lodestar's own terms, and they don't know why a number has "≈" in front of it.
+  - **What they want:** to find a thing, get it into their client, and know that Lodestar is working and safe.
+  - **Plain words first, syntax second.** Every everyday task can be done with typed words and clicks. The query language, field codes and single-key shortcuts are the expert layer on top. They are never the only way to do something.
+  - **Essentials first, detail on request.** Each screen leads with what this reader needs. Expert facts and controls sit one click away, under "More filters", "Technical details", "Advanced" or "Details". Nothing is removed for experts.
+  - **Explain in place.** A Lodestar term or sign ("junk", "unverified", "≈", "GiB") is explained where it appears, and every screen links to its help (§10.14.1).
+  - **The safe choice is the one shown** (owner decision §2.14). Every choice shows its recommended, safe answer, and an unsafe option is named plainly, with the alternative.
+  - Where a later section names an audience ("the owner" in §10.9 and §10.10), it means this reader first and the expert second.
 - **Who owns which decision:**
 
 | Subject | Owning skill | Section |
@@ -397,9 +405,10 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 
 ### 10.3 Information architecture and navigation
 - **Five stable top-level destinations:** **Search** (home), **Discover**, **Alerts**, **Insights**, **Settings**.
+  - **Search's empty state is the home page** (UI review D11). It answers the §10.0 reader's first questions with one line each: what's new, what their alerts found, and whether Lodestar is working (§10.4, States). Discover and Insights keep their places in the navigation, but a new user is never sent to them first.
   - The top bar holds the wordmark, navigation, a global status pill ("Crawling · 1.2k/h", icon + text, linking to Insights) and the command-palette trigger.
   - The current location is marked with an underline and `aria-current`.
-  - An overflow menu holds Import, Backup, Logs (§10.10.12), Syntax guide and About.
+  - An overflow menu holds Import, Backup, Logs (§10.10.12), Syntax guide, Help (§10.14.1) and About.
 - **The URL is the state:**
   - `/search?q=…&sort=…&density=…&group=…`
   - `/t/{hash}` opens the detail as a drawer when coming from Search, or as a full page from a direct link.
@@ -409,43 +418,57 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 ### 10.4 Search screen
 The primary purpose is finding the right torrent; the dominant action is grab (copy magnet or send to client).
 
+**Words and clicks first** (§10.0; UI review D2, accepted under owner decision §2.69 item 17.2). The screen is ordered by what the §10.0 reader meets:
+1. words they type;
+2. filters they click;
+3. natural phrasing, the bridge from words to filters;
+4. the query language, the expert layer.
+
+All four share **one state, the AST**, so whatever was used, the active-filter strip reads it back in words and the query bar reads it back in syntax.
+
 - **Layout (xx-large):** the query bar and active-filter strip run across the top. Below them, three regions: the facet rail, the results toolbar + list, and the detail drawer.
 - **Query bar:**
-  - 48 px tall, 16 px text, radius 8.
-  - Syntax tokens are distinguished by **weight + mono font + colour** (field names, operators, quoted phrases, ranges).
-  - Parse errors get an underline **and** a text message underneath.
-  - **Autocomplete** (combobox/listbox pattern): fields, values with counts (from the term dictionaries), units, saved searches and recent queries. Tab accepts.
-  - **Smart chips:** recognized tokens such as `2160p` are offered as "res:2160p" chips. A "Natural phrasing" action converts text like "4k movies from 2020 over 10gb" into chips, previewed before they're applied.
-  - The **Builder** toggle opens an inline row builder (field / operator / value) that round-trips with the text through the server AST.
-  - A "Syntax" link opens the cheat-sheet popover.
-- **Active-filter strip:** one removable chip per structured clause, plus "Clear all". Typed clauses and facet clicks share **one state, the AST**, so the strip always explains why the results look the way they do.
-- **Facet rail (global scope, applies to results):**
+  - 48 px tall, 16 px text, radius 8. The placeholder is a plain-words example ("Search names and files, such as lantern keeper 1080p"), not syntax.
+  - **Words:** plain words search torrent names and file names. Nothing else is needed to find something.
+  - **Natural phrasing, the bridge:**
+    - The "Natural phrasing" action converts text like "4k movies from 2020 over 10gb" into filter chips (type, year, size), previewed before they're applied.
+    - It's a visible, labelled button beside the bar, not a control that appears only on focus or hover.
+    - When the text reads as natural phrasing and plain search finds little, the chips are offered unasked, with **Apply**.
+    - Single recognized tokens such as `2160p` are offered the same way, as chips in words ("Resolution: 2160p").
+  - **Syntax, the expert layer:**
+    - Syntax tokens are distinguished by **weight + mono font + colour** (field names, operators, quoted phrases, ranges).
+    - Parse errors get an underline **and** a text message underneath that says what to change.
+    - **Autocomplete** (combobox/listbox pattern): fields, values with counts (from the term dictionaries), units, alerts and recent queries. Tab accepts. Fields show their glossary label, with the field code as secondary text.
+    - The **Builder** toggle opens an inline row builder (field / operator / value) that round-trips with the text through the server AST. Its fields also show glossary labels first, codes second.
+    - A "Syntax" link opens the cheat-sheet popover.
+- **Active-filter strip:** one removable chip per structured clause, labelled in words from the glossary ("Resolution: 2160p", "Size: 10 GB or more"), plus "Clear all". The strip always explains why the results look the way they do.
+- **Facet rail (clicks; global scope, applies to results):**
   - Counts are **disjunctive**: each facet's counts ignore its own selection, so you can multi-select. They're labelled "≈" when sampled.
-  - **Default groups, in decision order:**
+  - **Default groups, in the order people filter by** (UI review D3 and U10):
     - Type
-    - Discovered: a binned histogram with brush, plus presets 24 h / 7 d / 30 d / 1 y / Custom. A "Backfill" marker explains early-crawl dates.
-    - Size: a log-binned histogram with brush; bins are explicit and labelled.
-    - Extension: top 8 plus "Show more" with search.
     - Resolution
-    - Seeders: presets ≥ 1 / ≥ 5 / ≥ 50, plus an "Include never-scraped" toggle.
-    - Trackers reporting
-    - Junk: "N hidden · Show".
-  - **"More filters":** Language, Release group, Codecs, HDR, Year, Season/Episode, File count, Largest file, Composition thresholds (with a count-or-bytes **parameter**), Private, v2, Has NFO / subtitles / cue, Ambiguous, Imported/backfill, In library, **Network** (default `bt` only), **Source**, **Verified** (unverified hidden by default), **Official** (§18), **Adult** subtypes (shown only when "Show adult content" is on, §20.9), **Hidden by filters** (§20.3).
+    - Size: a log-binned histogram with brush; bins are explicit and labelled.
+    - Seeders: presets ≥ 1 / ≥ 5 / ≥ 50, plus an "Include never-scraped" toggle. The presets work as plain clauses even while counts aren't available.
+    - Language
+    - Year
+    - Discovered: a binned histogram with brush, plus presets 24 h / 7 d / 30 d / 1 y / Custom. Custom has typed From and To dates as well as the brush. A "Backfill" marker explains early-crawl dates.
+  - **Junk** stays at the foot of the rail as a count, not a group: "N hidden · Show".
+  - **"More filters":** **Source**, **Verified** (unverified hidden by default), Extension (top 8 plus "Show more" with search), Trackers reporting, Release group, Codecs, HDR, Season/Episode, File count, Largest file, Composition thresholds (with a count-or-bytes **parameter**), Private, v2, Has NFO / subtitles / cue, Ambiguous, Imported/backfill, In library, **Network** (default `bt` only), **Official** (§18), **Adult** subtypes (shown only when "Show adult content" is on, §20.9), **Hidden by filters** (§20.3).
   - A selected value is shown four ways: checked box, medium weight, value text and a chip in the strip.
-- **Results toolbar (parameters, deliberately separate from filters):** result count ("1,284 results" or "≈ 2.4M results"), sort, "Group versions" toggle, density control, select mode, Save search, Export. All of it persists in the URL.
-- **Result row (Comfortable):**
+- **Results toolbar (parameters, deliberately separate from filters):** result count ("1,284 results" or "≈ 2.4M results"), sort, "Group versions" toggle, density control, select mode, **Create alert** (§10.8), Export. All of it persists in the URL.
+- **Result row (Comfortable), in two tiers** (UI review D4 and U11): the facts that help a choice are always on the row; the technical facts are a click away.
   1. **Title line:** the effective title with highlighted terms. The raw name appears as a mono subline when it differs, with "resolved via files" (or folder/structure/plugin).
-  2. **Facts line:**
+  2. **Facts line (choice facts):**
      - up to 5 parsed badges (4 px tags);
      - the **composition bar** (64–120 px) with dominant-share text such as "82% video";
      - size (GiB, tabular);
      - files;
-     - seeders/leechers ("—" if never scraped; the scrape age shows on focus/hover and in the drawer);
-     - trackers "4 / 20";
-     - discovered (relative, with a backfill marker);
+     - availability as one fact in words and number ("512 seeders"; "—" if never scraped, read out as "Never scraped"; the scrape age shows on focus/hover and in the drawer);
+     - discovered (relative);
      - an "In library" badge.
   3. A **"Matched in files: …/S01E03.mkv"** line when the match came from file names.
   4. **Row actions:** Copy magnet (icon + label in Comfortable), Send, More. They show on hover/focus and **always on touch**. No information is hover-only: every value is text in the row or drawer.
+  - **Technical facts** (leechers, trackers reporting "4 / 20", the backfill marker, v2 and hybrid) are not on the Comfortable row. They are columns in Table mode and facts in the drawer (§10.5).
 - **Table mode:**
   - A real `<table>` with a sticky header, sortable columns, a column chooser and saved views.
   - Numbers are right-aligned with explicit units.
@@ -455,10 +478,10 @@ The primary purpose is finding the right torrent; the dominant action is grab (c
 
 | State | Treatment |
 |---|---|
-| Empty (no query) | Headline stats ("12.4M torrents · +1,240 in the last hour"), recent and saved searches, and three syntax examples. Next step: focus the search box. |
+| Empty (no query) | The home page (§10.3), one line each: whether Lodestar is working, in words ("Lodestar is working · 1,240 new in the last hour", or what needs attention, linking to it); what's new since the last visit (linking to Discover); alerts with new matches; recent searches. Two plain-words examples, one of them natural phrasing ("lantern keeper 1080p", "4k movies from 2020 over 10gb"), and a quiet "Syntax guide" link. Next step: focus the search box. |
 | First load | 8 skeleton rows at their final heights |
 | Refining | Previous results stay. A top progress hairline and `aria-busy`, but no skeleton flash for anything under 300 ms. |
-| No results | Zero-result recovery from per-clause counts ("Removing `trackers:>=3` gives 1,240"), plus "Clear all filters" |
+| No results | Zero-result recovery from per-clause counts ("Removing `trackers:>=3` gives 1,240"), plus "Clear all filters". When the text looks like a filter written slightly wrong (`seeders>5`), the corrected clause is offered as a one-click fix ("Did you mean `seeders:>5`?"), and natural phrasing's chips are offered too. The advice never says "try fewer words" when the user typed a filter. |
 | Error | Inline banner (what happened + Retry). The last results stay visible. |
 | Partial | "≈" counts and sampled facets are labelled as such |
 | Index rebuilding | Banner with progress; the old index keeps serving |
@@ -505,15 +528,16 @@ The primary purpose is finding the right torrent; the dominant action is grab (c
   - **Recently resolved**: ambiguous torrents that have just been identified.
 - It reuses the result row and the facet rail (collapsed by default).
 
-### 10.8 Alerts (saved searches)
+### 10.8 Alerts
+- **One noun: "alert"** (`docs/ui-glossary.md`; UI review U17, accepted under owner decision §2.69 item 17.7). The UI never calls it a "saved search". The action that makes one is **Create alert** wherever it appears: Search's results toolbar, the Alerts page and the command palette.
 - **List view:** name, query (mono), new hits since last viewed, channels, last hit time. Opening one shows its results with a "New since …" divider.
-- **Creating one:** "Save search" in the results toolbar opens a dialog with visible labels for name and notification channels.
+- **Creating one:** "Create alert" in the results toolbar opens a dialog with visible labels for name and notification channels.
 - Pausing is a toggle with no confirmation. **Deleting asks for a specific confirmation** ("Delete '4K nature docs' and its history?").
 
 ### 10.9 Insights: the process story (`dashboard-storytelling`)
 **Insights** replaces the earlier "Crawler" dashboard as a top-level destination. Its overview page tells the whole story of the process, from DHT discovery to a search result in your hands, and one drill-through page per stage holds the detail.
 
-- **Audience and decisions:** the self-hoster. Is it working? Is it growing? **Where are torrents being lost?** Is the index good and current? Is anything about to break, and what do I do about it?
+- **Audience and decisions:** the §10.0 reader first, then the owner diagnosing a problem. Is it working? Is it growing? **Where are torrents being lost?** Is the index good and current? Is anything about to break, and what do I do about it?
 - **Type:** an exploratory, progressive dashboard (`dashboard-storytelling`). The first viewport orients you, and controlled vertical scrolling follows the story order.
 - **Global context bar** (always visible, sticky):
   - time range (24 h / 7 d / 30 d / All / Custom), with the timezone shown;
@@ -625,7 +649,7 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - Plain-text plus simple HTML, with no images. It follows the copy rules (§10.14).
 
 ### 10.10 Settings and onboarding
-Settings is where an owner fixes things at 2 a.m. without reading docs. It needs to be **hard to break, easy to recover, and quick to search**. The first-run wizard (§10.10.10) uses the same field components, so a setting behaves the same everywhere.
+Settings is where the §10.0 reader sets Lodestar up and fixes it without reading the docs first, and where an expert finds any setting fast. It needs to be **hard to break, easy to recover, and quick to search**. The first-run wizard (§10.10.10) uses the same field components, so a setting behaves the same everywhere.
 
 #### 10.10.1 Principles
 - **Two save models, never mixed on one screen:**
@@ -635,6 +659,7 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
 - **Every change can be undone, and every saved value can be reset.** Undo right after saving, Reset to default per field (B2's `null` patch), and a recovery path that works even when the UI can't be reached (§10.10.6).
 - **Show the consequence before the change.** Size projections, predicted resource use, the new address after a port change, and how many items a purge removes are all shown before you commit (§10.10.7).
 - **Essentials first.** Each screen shows the settings most people need, with an **Advanced** disclosure below them. Search always finds advanced settings.
+- **Start here** (UI review D6 and U29). Most people set a handful of things and never need the other screens. The Overview leads with those few (§10.10.3). The full list of screens stays in the navigation, unchanged, for anyone who wants it.
 - **The schema is the single source.** Generated screens render from B2's runtime JSON Schema, and search, the command palette, `config.toml` snippets and the wizard all read from it. A new server setting shows up everywhere with no UI change, as long as it has its two message keys.
 
 #### 10.10.2 Navigation and layout
@@ -648,7 +673,7 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
   Screens whose features haven't shipped yet (Workers, Companions, and Sources before v0.6) don't appear in the navigation. They are never shown as empty placeholders.
 - **`/settings` is the Overview** (§10.10.3). `/settings/{screen}` opens a screen, and `#field` deep-links to one setting. Copy link appears in every field's menu.
 - **x-large and wider (≥ 1024 px):** two panes. On the left is a sticky navigation (search box, then the groups). On the right is the manuscript column (max 720 px).
-- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 21 screens are too many to scan in one.
+- **Below 1024 px:** list, then detail. `/settings` shows the search box, Needs attention and Start here (§10.10.3), then the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 21 screens are too many to scan in one.
 - **Navigation items** have an icon and a label. An item that needs attention gets an icon + text badge ("1 problem", "Restart needed"), and its accessible name says so ("Network & VPN, 1 problem"). The current screen is marked with `aria-current`. Navigation entries are links, not tabs.
 - **Inside a screen:**
   - The heading and a one-sentence purpose come first.
@@ -659,7 +684,7 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
   - **View as config.toml** shows the screen's saved values as a `config.toml` snippet, next to their `LODESTAR_*` names, ready to copy into a compose file or Unraid template.
 
 #### 10.10.3 Overview and finding a setting
-- **The Overview (`/settings`) answers "is anything wrong, and what did I change?":**
+- **The Overview (`/settings`) answers "is anything wrong, what should I set, and what did I change?",** in that order: Needs attention, then Start here, then Changed from default.
   - **Needs attention:** one row per problem, each with one action that goes to the fix, highest severity first. Examples:
     - "Port 6881 isn't reachable from the internet" (network check, B14)
     - "3 changes wait for a restart · Restart now"
@@ -670,8 +695,16 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
     - torrent details turned on in the logs, with the time remaining and Turn off now (§12.1)
     - no backup in 14 days
     - an update available, installing tonight, failed or rolled back (§12.2)
+  - **Start here** (§10.10.1): the few things most people set, one row each, with the current state in words and one action:
+    - **Download client:** "Not set up · Set up", or "qBittorrent · Connected" (Integrations).
+    - **Notifications:** "In the app only · Get alerts on your phone" (Notifications).
+    - **Updates:** "Off · Choose" (Updates, §10.10.14). Nothing is chosen for the user, because checking contacts GitHub (`docs/owner-decisions.md` §2.13).
+    - **Backups:** "No backup yet · Set a schedule", or "Last backup 3 days ago" (General → Backup & portability, §10.10.6).
+    - **Admin password:** "Set 2 months ago · Change" (Security).
+
+    The list also names any first-run step the user skipped (§10.10.10), with the same one action. A row stays after it's done and shows its state, so the list doubles as a summary of the basics. Start here only links to screens; every field still lives on its own screen.
   - **Changed from default:** a count per screen, linking to that screen with Show changed only turned on.
-  - When nothing needs attention, it says so in one line and shows the changed-settings summary. There's no illustration here; this is a working surface.
+  - When nothing needs attention, it says so in one line, then shows Start here and the changed-settings summary. There's no illustration here; this is a working surface.
 - **Settings search** (the box at the top of the navigation; `/` focuses it while on a Settings page):
   - It matches each setting's label, help text, group, `config.toml` key, `LODESTAR_*` name and synonyms (`x-keywords`, e.g. "port" finds HTTP address and DHT port). Matching is case- and accent-insensitive and works on prefixes and words, in the current locale.
   - **Results show a breadcrumb** ("Crawling › Crawler › Advanced"), the current value and its source badge.
@@ -836,7 +869,7 @@ Stepped progress, with one primary action per step:
 
 - The **Intensity**, **Storage & retention** and **Download client** steps render the same `SettingField`s, previews and **Test connection** as Settings, from the same schema. Each step saves through the multi-section patch, so validation can't drift.
 - One **"How it works"** step uses a static SVG sequence (DHT → metadata → index → search) in the spirit of `infographic-design`, with no AntV dependency and a text equivalent.
-- **Done** links to Settings for everything the wizard skipped.
+- **Done** links to the Settings Overview, whose Start here list carries every step the wizard skipped (§10.10.3). The nine steps stay as listed (`docs/owner-decisions.md` §2.9, §2.13 and §2.39; UI review U1 and D7 declined under owner decision §2.69 item 17.4).
 
 #### 10.10.11 Accessibility, performance and tests
 - **Accessibility:**
@@ -1074,6 +1107,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
 - **Controls and fields:** Button (primary / secondary / quiet / danger × dense / default, with a loading state), IconButton, Field (Input, Select, Combobox, Textarea, Checkbox, Radio, Toggle, Slider, RangeInput with units), SegmentedControl.
 - **Labels:** Tag/Badge, Chip (removable), Kbd, Mono (identifier text), RelativeTime (with an absolute-time tooltip and text).
 - **Overlays:** Tooltip, Popover, Menu, Dialog, Drawer/Sheet.
+- **Help:** HelpLink (a screen's link to its guide chapter) and TermHelp (the "What's this?" control and its popover), §10.14.1.
 - **Feedback:** Toast, Banner (info / success / warning / error, icon + text), Skeleton, EmptyState.
 - **Lists and tables:** Table (sortable, sticky, column chooser), VirtualList, Tree (virtual, ARIA).
 - **Data display:** KPI, CategoryBar (composition), HBarList, Histogram (+ brush), Sparkline, LineChart (uPlot wrapper), DataTableAlternative.
@@ -1091,7 +1125,16 @@ Rules (`application-interface-design`):
   - size = bytes, displayed in **IEC units (KiB/MiB/GiB)**, labelled consistently;
   - ingest rate = new stored torrents per hour, not harvested hashes.
 - **One formatter per metric** (`Intl.NumberFormat`), used in facets, rows, the drawer, tooltips, tables and KPIs.
+- **Sizes the user types keep the unit they typed** (UI review U12, accepted under owner decision §2.69 item 17.6, rather than a units preference):
+  - Lodestar shows sizes in IEC units, as above.
+  - A size typed in a query, a filter or natural phrasing means what was typed. `10gb` and "over 10 GB" mean 10 GB (10 × 1000³ bytes), and `10GiB` means 10 × 1024³.
+  - The size is echoed back in the unit typed (`size:>=10GB`, "Size: 10 GB or more"), never silently rewritten to GiB.
+  - The grammar, including the single-letter forms (`1.5G`), is `docs/query-language.md`'s. X-units-typed changes it, and alerts saved before the change keep matching exactly the torrents they matched.
 - **Null ≠ zero:** never scraped → "—"; a real 0 → "0"; estimates → "≈"; sampled → "≈" + a note.
+- **"≈" and binary units are explained once** (UI review D10):
+  - The first time an account sees an estimate or a GiB size, a one-line note explains it, with **Got it**: "≈ means an estimate. GiB counts in 1,024s, so 1 GiB is about 7% more than 1 GB."
+  - Dismissing it is saved per account, like a preference (§10.10.1).
+  - After that, the sign carries a "What's this?" popover (§10.14.1).
 - **Dates:** relative in rows, absolute in the drawer and in tooltips. The timezone is a setting, and the dashboard shows which one is in use.
 - **Histograms:** explicit, consistent bins (size uses log bins with labelled edges), zero baselines, and empty bins shown as empty.
 - **Validation hooks:** `data-testid` on counts, KPIs and chart containers; deterministic ordering; filter state held in the AST; stale responses can't overwrite newer ones.
@@ -1105,17 +1148,40 @@ Rules (`application-interface-design`):
   - Focus is always visible.
 - **Announcements:** result counts and new results go to a polite, throttled `aria-live` region.
 - **Shortcuts:** single-key shortcuts (`j/k/o/c/s/x`) only fire when focus is outside text inputs, and can be **turned off or remapped in Settings** (WCAG 2.1.4).
+- **A key that launches another program asks first** (UI review U33, accepted under owner decision §2.69 item 17.8, rather than turning single-key actions off by default):
+  - Today only `o` does this: it hands the magnet to whatever desktop app handles magnet links.
+  - Its first use asks: "Open this magnet in your torrent client? The `o` key hands magnet links to the app your system uses for them." The choices are **Open, and don't ask again** and **Cancel**. Cancel does nothing.
+  - The answer is saved per account. Settings → Keyboard can turn the question back on.
+  - Keys that stay inside Lodestar (`/`, `j`, `k`, `c`, `x`) never ask. `s` doesn't ask either: it sends to a client the user has already set up.
 - Supports 200% zoom and text-spacing overrides, 44 px targets on touch, and reduced motion.
 - **Not colour alone:** the composition bar has an accessible text summary and visible dominant-share text, and status uses icon + text.
 - axe-core runs in CI on every screen and in every theme.
 
 ### 10.14 UX writing
-- **Labels:** outcome-oriented ("Copy magnet", "Send to qBittorrent", "Save search", "Show 12 new results").
+- **Labels:** outcome-oriented ("Copy magnet", "Send to qBittorrent", "Create alert", "Show 12 new results").
 - **Truthful states:** "Never scraped", "Seen 3 h ago", "≈ 2.4M", "Reported by 4 of 20 trackers checked", "First seen during backfill".
 - **Errors:** what happened, then what to do.
 - **Empty states** offer one next step.
 - No AI-copy clichés and no placeholder names.
-- **Glossary** in `docs/ui-glossary.md`, used consistently: torrent, file, resolved title, raw name, discovered, last seen, seeders, trackers reporting, junk, version group, clone.
+- **Glossary** in `docs/ui-glossary.md`, used consistently: torrent, file, resolved title, raw name, discovered, last seen, seeders, trackers reporting, junk, version group, clone, alert.
+
+#### 10.14.1 Help in the app
+UI review D8, U30 and U31. The plan above covers labels and errors. This section covers teaching: the §10.0 reader learns a term where they meet it and never has to leave the app to search the web.
+- **Every screen links to its help.** The page header carries a "Help" link to the guide chapter for that screen (`docs/user/`, written under owner decision §2.14 and the `user-docs` skill). Settings fields keep their "Learn more" links (§10.10.4), which point into the same chapters.
+- **`/help`** is the help landing inside the app:
+  - a search box over the help topics and the glossary;
+  - the guide's chapters by task: getting started, finding and downloading, alerts, "Is it working?", settings and safety, and "Something's wrong";
+  - the keyboard and syntax guides.
+
+  It's a lazy route outside the Search budget (§10.1). It's in the overflow menu (§10.3) and the command palette ("Help: …"). Settings search offers it when nothing matches (§10.10.3).
+- **Links into the full guide** open in a new tab, the way About's links do (§10.10.13). Nothing is fetched until the user follows one, so the system stays offline by default (`docs/owner-decisions.md` §1.2.3).
+- **"What's this?"** (TermHelp, §10.11):
+  - The first use of a glossary term on each screen carries a small "What's this?" control: junk, unverified, backfill, composition, trackers reporting, clone, "≈" and the like.
+  - It opens a popover with a plain one- or two-sentence explanation and a link to the term's help topic.
+  - It works by click, tap and keyboard, never hover only.
+  - It appears once per screen, so dense rows and tables aren't dotted with it.
+  - The text is a message key per glossary term (`help.term.<key>`, the key from `docs/ui-glossary.md`). It's written for the §10.0 reader under the `user-docs` skill, not copied from the glossary's definitions, which are written for the people building the app.
+- **Help text follows `user-docs`:** plain and matter of fact, why before how, and the safe choice first.
 
 ### 10.15 Responsive behaviour (`responsive-layout`; Fluent reference ranges, switching where the composition actually needs to change)
 
@@ -1135,7 +1201,7 @@ Rules (`application-interface-design`):
 | `/` | Focus search |
 | `j` / `k` | Move selection |
 | `Enter` | Open detail |
-| `o` | Open magnet |
+| `o` | Open magnet in the torrent client (asks on first use, §10.13) |
 | `c` | Copy magnet |
 | `s` | Send to client |
 | `x` | Select row |
