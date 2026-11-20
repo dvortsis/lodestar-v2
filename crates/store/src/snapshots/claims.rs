@@ -519,7 +519,7 @@ mod tests {
         claim(conn, 6, wiki, T - 9 * DAY - 1); // another source's terms
         let snap = take(&store, &db);
         let mut store = store;
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         assert_eq!(r.claims, 2);
         assert_eq!(r.purged, vec![snap.clone()]);
@@ -539,10 +539,10 @@ mod tests {
         assert_eq!(stamps_in(store.connection(), tmdb).len(), 3);
         // Its time is kept, and the next pass has nothing to do.
         assert_eq!(super::super::modified(&snap), Some(T));
-        let again = store.purge_snapshots(T + 3_600, 0);
+        let again = pass(&mut store, T + 3_600);
         assert!(again.purged.is_empty() && again.warnings.is_empty());
         // A day on, the claim within its terms then is due too.
-        let later = store.purge_snapshots(T + DAY, 0);
+        let later = pass(&mut store, T + DAY);
         assert_eq!(later.claims, 1);
         assert!(stamps(&snap, tmdb).is_empty());
     }
@@ -565,7 +565,7 @@ mod tests {
             .connection()
             .execute("DELETE FROM source_state WHERE key = ?1", [CLOCK_KEY])
             .unwrap();
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert!(stamps(&snap, tmdb).is_empty());
         assert_eq!(stamps(&snap, wiki).len(), 1, "wiki's own mark is behind");
@@ -576,7 +576,7 @@ mod tests {
             CLOCK_KEY,
             &(T + 10 * DAY).to_be_bytes(),
         );
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert!(stamps(&snap, wiki).is_empty());
     }
@@ -606,7 +606,7 @@ mod tests {
         state(store.connection(), tmdb, TERMS_KEY, &record(10));
         // The live store records terms for `feed` the snapshot lacks.
         state(store.connection(), feed, TERMS_KEY, &record(10));
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         assert_eq!(r.claims, 3);
         assert_eq!(stamps(&snap, wiki), vec![(2, T - 170 * DAY)]);
@@ -614,6 +614,15 @@ mod tests {
         assert!(stamps(&snap, feed).is_empty());
         assert_eq!(max_age_secs(&[]), DEFAULT_MAX_AGE_SECS);
         assert_eq!(max_age_secs(&record(0)), 2 * DAY as u64);
+    }
+
+    /// A pass at `now`, its monotonic clock as far past a fixed start as
+    /// `now` is past `T`: the tests' clock, both ways, without sleeps.
+    fn pass(store: &mut Store, now: i64) -> super::super::PurgeReport {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let start = *START.get_or_init(Instant::now);
+        let since = Duration::from_secs(u64::try_from(now - T).unwrap_or(0));
+        store.purge_snapshots_at(now, 0, start + since)
     }
 
     /// An hour: more than any test spends.
@@ -771,14 +780,14 @@ mod tests {
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
         // Seen once, it's kept and reported: a torn read can look the same.
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
         assert_eq!(r.stuck, vec![(snap.clone(), "can't be checked")]);
         // Again under an hour on: still kept.
-        let r = store.purge_snapshots(T + 1_800, 0);
+        let r = pass(&mut store, T + 1_800);
         assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
         // An hour on from the first sighting, the same again: deleted.
-        let r = store.purge_snapshots(T + 3_600, 0);
+        let r = pass(&mut store, T + 3_600);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
         assert!(!snap.exists());
         // A rollback refuses such a copy at once.
@@ -809,18 +818,18 @@ mod tests {
         let snap = take(&store, &db);
         let holder = Connection::open(&snap).unwrap();
         holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert!(r.unchecked.is_empty() && !r.warnings.is_empty());
         assert_eq!(r.stuck, vec![(snap.clone(), "busy")]);
         // Still stuck an hour on: not reported again until a day has gone.
-        let r = store.purge_snapshots(T + 3_600, 0);
+        let r = pass(&mut store, T + 3_600);
         assert!(r.stuck.is_empty() && !r.warnings.is_empty());
-        let r = store.purge_snapshots(T + 86_400, 0);
+        let r = pass(&mut store, T + 86_400);
         assert_eq!(r.stuck.len(), 1);
         holder.execute_batch("ROLLBACK").unwrap();
         drop(holder);
         assert!(snap.exists());
-        let r = store.purge_snapshots(T + 86_400 + 3_600, 0);
+        let r = pass(&mut store, T + 86_400 + 3_600);
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert!(r.stuck.is_empty());
         assert!(stamps(&snap, tmdb).is_empty());
@@ -828,7 +837,7 @@ mod tests {
         // once, not a day after the last report.
         let holder = Connection::open(&snap).unwrap();
         holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
-        let r = store.purge_snapshots(T + 86_400 + 7_200, 0);
+        let r = pass(&mut store, T + 86_400 + 7_200);
         assert_eq!(r.stuck, vec![(snap.clone(), "busy")]);
         holder.execute_batch("ROLLBACK").unwrap();
     }
@@ -856,7 +865,7 @@ mod tests {
         holder
             .execute_batch("BEGIN IMMEDIATE; UPDATE torrents SET name = name WHERE id = 1;")
             .unwrap();
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert!(r.unchecked.is_empty(), "{:?}", r.warnings);
         assert!(
             r.warnings
@@ -868,7 +877,7 @@ mod tests {
         assert_eq!(r.stuck.len(), 1, "{:?}", r.warnings);
         holder.execute_batch("ROLLBACK").unwrap();
         drop(holder);
-        let r = store.purge_snapshots(T + 3_600, 0);
+        let r = pass(&mut store, T + 3_600);
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert!(stamps(&snap, tmdb).is_empty());
     }
@@ -947,9 +956,9 @@ mod tests {
             ))
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
-        let r = store.purge_snapshots(T + 3_600, 0);
+        let r = pass(&mut store, T + 3_600);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
         assert!(!snap.exists());
     }
@@ -969,20 +978,20 @@ mod tests {
             super::super::set_modified(&snap, T).unwrap();
         };
         rename("ALTER TABLE source_state RENAME TO plugin_state");
-        assert!(store.purge_snapshots(T, 0).unchecked.is_empty());
+        assert!(pass(&mut store, T).unchecked.is_empty());
         // Readable again for one pass: the sighting is forgotten.
         rename("ALTER TABLE plugin_state RENAME TO source_state");
-        let r = store.purge_snapshots(T + 3_600, 0);
+        let r = pass(&mut store, T + 3_600);
         assert!(
             r.unchecked.is_empty() && r.stuck.is_empty(),
             "{:?}",
             r.warnings
         );
         rename("ALTER TABLE source_state RENAME TO plugin_state");
-        let r = store.purge_snapshots(T + 7_200, 0);
+        let r = pass(&mut store, T + 7_200);
         assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
         assert_eq!(r.stuck.len(), 1, "reported again after the reset");
-        let r = store.purge_snapshots(T + 10_800, 0);
+        let r = pass(&mut store, T + 10_800);
         assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
     }
 
@@ -1012,12 +1021,150 @@ mod tests {
         let b = crate::schema::snapshot_path(&db, 100);
         std::fs::copy(&a, &b).unwrap();
         super::super::set_modified(&b, T).unwrap();
-        let first = store.purge_snapshots(T, 0).purged;
-        let second = store.purge_snapshots(T + 3_600, 0).purged;
+        let first = pass(&mut store, T).purged;
+        let second = pass(&mut store, T + 3_600).purged;
         assert_eq!(first.len(), 2, "{first:?}");
         assert_eq!(second.len(), 2, "{second:?}");
         assert_eq!(first[0], second[1]);
         assert_eq!(first[1], second[0]);
+    }
+
+    /// A snapshot of the live store holding one expired tmdb claim, with
+    /// `newer` set to a schema version past this build's plans.
+    fn one_claim(dir: &Path, newer: bool) -> (Store, PathBuf) {
+        let (store, db, [tmdb, _, _]) = live(dir);
+        torrent(store.connection(), 1);
+        claim(store.connection(), 1, i64::from(tmdb.get()), T - 30 * DAY);
+        let snap = take(&store, &db);
+        if newer {
+            run(
+                &snap,
+                &format!(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES ({}, 0)",
+                    crate::snapshots::Plan::KNOWN_THROUGH + 1
+                ),
+            );
+        }
+        (store, snap)
+    }
+
+    /// Runs `sql` on the snapshot, keeping its time `T`.
+    fn run(snap: &Path, sql: &str) {
+        Connection::open(snap).unwrap().execute_batch(sql).unwrap();
+        super::super::set_modified(snap, T).unwrap();
+    }
+
+    const HIDE: &str = "ALTER TABLE source_state RENAME TO plugin_state";
+    const SHOW: &str = "ALTER TABLE plugin_state RENAME TO source_state";
+
+    /// The hour between two sightings is measured on the monotonic clock: a
+    /// wall clock stepping forward doesn't shorten it, and one stepping
+    /// back behind the first sighting starts it again.
+    #[test]
+    fn the_two_sightings_wait_a_real_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, snap) = one_claim(dir.path(), false);
+        run(&snap, HIDE);
+        let start = Instant::now();
+        let at = |secs| start + Duration::from_secs(secs);
+        assert!(store.purge_snapshots_at(T, 0, at(0)).unchecked.is_empty());
+        // Two hours on by the wall clock, a minute by the monotonic one.
+        let r = store.purge_snapshots_at(T + 7_200, 0, at(60));
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        // The wall clock steps back behind the first sighting: start again.
+        let r = store.purge_snapshots_at(T - 100, 0, at(3_600));
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        let r = store.purge_snapshots_at(T - 50, 0, at(7_000));
+        assert!(r.unchecked.is_empty() && snap.exists(), "{:?}", r.warnings);
+        let r = store.purge_snapshots_at(T, 0, at(7_200));
+        assert_eq!(r.unchecked, vec![snap.clone()], "{:?}", r.warnings);
+    }
+
+    /// A retried error between two lasting sightings resets the count,
+    /// in a known schema (`purge_one` fails) and in a newer one (the
+    /// claims-only purge fails, at its switch to WAL).
+    #[test]
+    fn a_retried_error_resets_the_two_sightings() {
+        for newer in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut store, snap) = one_claim(dir.path(), newer);
+            run(&snap, HIDE);
+            assert!(pass(&mut store, T).unchecked.is_empty());
+            run(&snap, SHOW);
+            let holder = Connection::open(&snap).unwrap();
+            let lock = if newer {
+                "BEGIN IMMEDIATE; UPDATE torrents SET name = name WHERE id = 1;"
+            } else {
+                "BEGIN EXCLUSIVE"
+            };
+            holder.execute_batch(lock).unwrap();
+            let r = pass(&mut store, T + 3_600);
+            assert_eq!(r.stuck.len(), 1, "{newer}: {:?}", r.warnings);
+            holder.execute_batch("ROLLBACK").unwrap();
+            drop(holder);
+            run(&snap, HIDE);
+            let r = pass(&mut store, T + 7_200);
+            assert!(
+                r.unchecked.is_empty() && snap.exists(),
+                "{newer}: {:?}",
+                r.warnings
+            );
+            let r = pass(&mut store, T + 10_800);
+            assert_eq!(r.unchecked, vec![snap.clone()], "{newer}: {:?}", r.warnings);
+        }
+    }
+
+    /// The stuck record clears on a pass that skips an older schema, and on
+    /// one that purges a newer schema's claims: stuck again, it's reported
+    /// at once.
+    #[test]
+    fn skipped_and_newer_passes_clear_the_stuck_record() {
+        for newer in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut store, snap) = one_claim(dir.path(), newer);
+            if !newer {
+                // No schema version: skipped, as an older schema is.
+                run(&snap, "DELETE FROM schema_migrations");
+            }
+            let stuck = |store: &mut Store, now| {
+                let holder = Connection::open(&snap).unwrap();
+                holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+                let r = pass(store, now);
+                holder.execute_batch("ROLLBACK").unwrap();
+                r.stuck
+            };
+            assert_eq!(stuck(&mut store, T).len(), 1, "{newer}");
+            let r = pass(&mut store, T + 3_600);
+            assert!(
+                r.stuck.is_empty() && r.unchecked.is_empty(),
+                "{:?}",
+                r.warnings
+            );
+            assert_eq!(
+                stuck(&mut store, T + 7_200).len(),
+                1,
+                "{newer}: reported at once"
+            );
+        }
+    }
+
+    /// A stuck snapshot whose error changes kind is reported again at once:
+    /// a "busy" report doesn't hide a later "can't be checked".
+    #[test]
+    fn a_new_kind_of_stuck_is_reported_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, snap) = one_claim(dir.path(), false);
+        let holder = Connection::open(&snap).unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        assert_eq!(pass(&mut store, T).stuck, vec![(snap.clone(), "busy")]);
+        holder.execute_batch("ROLLBACK").unwrap();
+        drop(holder);
+        run(&snap, HIDE);
+        let r = pass(&mut store, T + 3_600);
+        assert_eq!(r.stuck, vec![(snap.clone(), "can't be checked")]);
+        // The same kind again within the day: not repeated.
+        let r = pass(&mut store, T + 3_600 + 60);
+        assert!(r.stuck.is_empty(), "{:?}", r.stuck);
     }
 
     /// A schema newer than this build's plans loses its expired claims all
@@ -1041,7 +1188,7 @@ mod tests {
             .unwrap();
         drop(newer);
         super::super::set_modified(&snap, T).unwrap();
-        let r = store.purge_snapshots(T, 0);
+        let r = pass(&mut store, T);
         assert_eq!(r.claims, 1, "{:?}", r.warnings);
         assert_eq!(stamps(&snap, tmdb), vec![(2, T - DAY)]);
         assert_eq!(super::super::modified(&snap), Some(T));
@@ -1051,7 +1198,7 @@ mod tests {
             .execute_batch("DROP INDEX torrent_claims_stored; ALTER TABLE torrent_claims DROP COLUMN stored_at;")
             .unwrap();
         super::super::set_modified(&snap, T).unwrap();
-        let r = store.purge_snapshots(T + DAY, 0);
+        let r = pass(&mut store, T + DAY);
         assert_eq!(r.claims, 0);
         assert!(r.unchecked.is_empty() && snap.exists());
     }

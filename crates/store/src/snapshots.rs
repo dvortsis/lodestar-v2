@@ -50,7 +50,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -464,15 +464,24 @@ pub struct PurgeReport {
 /// since the snapshot was taken; later ones only those since the last.
 ///
 /// The second map holds, for a snapshot whose purge keeps failing with an
-/// error it retries, when that was last reported ([`PurgeReport::stuck`]).
-/// The third, for a snapshot whose claims the last pass found uncheckable
-/// for a lasting reason, when that was first seen ([`CONFIRM_SECS`]).
+/// error it retries, when that was last reported and the kind reported
+/// ([`PurgeReport::stuck`]). The third, for a snapshot whose claims the
+/// last pass found uncheckable for a lasting reason, when that was first
+/// seen ([`CONFIRM_SECS`]).
 #[derive(Debug, Default)]
 pub(crate) struct Marks(
     HashMap<PathBuf, Mark>,
-    HashMap<PathBuf, i64>,
-    HashMap<PathBuf, i64>,
+    HashMap<PathBuf, (i64, &'static str)>,
+    HashMap<PathBuf, Sighting>,
 );
+
+/// When a lasting error was first seen: the wall clock, which can step,
+/// and the monotonic clock the one-hour wait is measured on.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Sighting {
+    at: i64,
+    mono: Instant,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Mark {
@@ -662,6 +671,18 @@ impl Store {
     /// was and named in the report's warnings. A no-op for an in-memory
     /// store or a read-only connection.
     pub fn purge_snapshots(&mut self, now: i64, hits_before: i64) -> PurgeReport {
+        self.purge_snapshots_at(now, hits_before, Instant::now())
+    }
+
+    /// [`purge_snapshots`](Store::purge_snapshots) with the monotonic clock
+    /// given: what a lasting error's one-hour wait is measured on, so a
+    /// wall clock that steps forward can't shorten it. Tests set it.
+    pub(crate) fn purge_snapshots_at(
+        &mut self,
+        now: i64,
+        hits_before: i64,
+        mono: Instant,
+    ) -> PurgeReport {
         let mut report = PurgeReport::default();
         let Some(db) = self.path.clone() else {
             return report;
@@ -843,7 +864,7 @@ impl Store {
                                 // A newer schema never holds the journal.
                                 let why = e.to_string();
                                 let marks = &mut self.snapshot_marks;
-                                let at = (lasting, now);
+                                let at = (lasting, now, mono);
                                 blocked |= unchecked(marks, &snap, at, &why, false, &mut report);
                             }
                             Err(e) => {
@@ -870,7 +891,7 @@ impl Store {
                 Ok(Outcome::ClaimsUnchecked(why)) => {
                     self.snapshot_marks.0.remove(&snap.path);
                     let marks = &mut self.snapshot_marks;
-                    let at = (lasting, now);
+                    let at = (lasting, now, mono);
                     blocked |= unchecked(marks, &snap, at, &why, true, &mut report);
                     continue;
                 }
@@ -975,21 +996,26 @@ const CONFIRM_SECS: i64 = 3_600;
 /// reason (`why`). Deleted only when the last pass found the same at least
 /// [`CONFIRM_SECS`] earlier (`lasting`, when it first did); otherwise kept,
 /// recorded and reported as stuck, so the next pass decides. `at` is
-/// `(lasting, now)`. Whether the journal must stay: a file couldn't be
-/// deleted, or `holds_journal` and the snapshot was kept unscrubbed.
+/// `(lasting, now, mono)`: the wait is measured on the monotonic clock, so
+/// a wall clock stepping forward can't shorten it, and a wall clock that
+/// stepped back behind the first sighting starts the wait again. Whether
+/// the journal must stay: a file couldn't be deleted, or `holds_journal`
+/// and the snapshot was kept unscrubbed.
 fn unchecked(
     marks: &mut Marks,
     snap: &Snapshot,
-    (lasting, now): (Option<i64>, i64),
+    (lasting, now, mono): (Option<Sighting>, i64, Instant),
     why: &str,
     holds_journal: bool,
     report: &mut PurgeReport,
 ) -> bool {
-    if lasting.is_some_and(|f| f <= now && now - f >= CONFIRM_SECS) {
+    let lasting = lasting.filter(|f| f.at <= now);
+    let waited = |f: &Sighting| mono.saturating_duration_since(f.mono).as_secs();
+    if lasting.is_some_and(|f| waited(&f) >= CONFIRM_SECS.unsigned_abs()) {
         marks.1.remove(&snap.path);
         return drop_unchecked(snap, why, report);
     }
-    let first = lasting.filter(|f| *f <= now).unwrap_or(now);
+    let first = lasting.unwrap_or(Sighting { at: now, mono });
     marks.2.insert(snap.path.clone(), first);
     report.warnings.push(format!(
         "the identify claims in the snapshot {} couldn't be checked against their terms \
@@ -1007,10 +1033,11 @@ const UNCHECKED: &str = "can't be checked";
 /// Records that the purge of the snapshot at `path` failed with an error
 /// of `kind` it retries, and reports it in [`PurgeReport::stuck`] at most
 /// once a day while it keeps failing, so a snapshot stuck on a retried
-/// error is seen by path, not only counted. `warned` holds when each was
-/// last reported.
+/// error is seen by path, not only counted. A different kind from the last
+/// one reported is reported at once. `warned` holds when each was last
+/// reported, and its kind.
 fn stuck(
-    warned: &mut HashMap<PathBuf, i64>,
+    warned: &mut HashMap<PathBuf, (i64, &'static str)>,
     path: &Path,
     kind: &'static str,
     now: i64,
@@ -1018,9 +1045,9 @@ fn stuck(
 ) {
     let due = warned
         .get(path)
-        .is_none_or(|at| now < *at || now.saturating_sub(*at) >= 86_400);
+        .is_none_or(|(at, last)| *last != kind || now < *at || now.saturating_sub(*at) >= 86_400);
     if due {
-        warned.insert(path.to_path_buf(), now);
+        warned.insert(path.to_path_buf(), (now, kind));
         report.stuck.push((path.to_path_buf(), kind));
     }
 }
@@ -1129,20 +1156,36 @@ fn open_rw(path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// Puts a snapshot's modification time back to `at` when dropped. The
+/// expiry goes by that time, and folding a WAL or purging writes the file,
+/// which moves it to now: kept, the snapshot would outlive its 90 days.
+/// Declared before the snapshot's connection, it runs after that closes,
+/// on every way out, an early `?` included.
+struct KeepTime<'a> {
+    path: &'a Path,
+    at: Option<i64>,
+}
+
+impl Drop for KeepTime<'_> {
+    fn drop(&mut self) {
+        if let Some(at) = self.at {
+            let _ = set_modified(self.path, at);
+        }
+    }
+}
+
 /// Folds a WAL left beside a snapshot (a purge interrupted between its
 /// commit and checkpoint) into the file and goes back to the rollback
 /// journal, keeping the file's modification time. `lodestar rollback`
 /// calls it before checking and copying a snapshot, so the copy holds the
 /// purge. Whether there was a WAL to fold.
 pub fn settle(path: &Path) -> rusqlite::Result<bool> {
-    let taken = modified(path);
+    let _time = KeepTime {
+        path,
+        at: modified(path),
+    };
     let conn = open_rw(path)?;
-    let folded = settle_conn(&conn)?;
-    drop(conn);
-    if let Some(taken) = taken.filter(|_| folded) {
-        let _ = set_modified(path, taken);
-    }
-    Ok(folded)
+    settle_conn(&conn)
 }
 
 fn settle_conn(conn: &Connection) -> rusqlite::Result<bool> {
@@ -1176,18 +1219,18 @@ fn purge_one(
     carry: Option<&Carry<'_>>,
     limit: Option<claims::Limit<'_>>,
 ) -> crate::Result<Outcome> {
+    // The expiry goes by the modification time: whatever happens below,
+    // it stays the time the snapshot was taken.
+    let _time = KeepTime {
+        path: &snap.path,
+        at: snap.taken_at,
+    };
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
     // folded in or nothing is written.
     let folded = settle_conn(&conn)?;
-    let restore_time = |conn: Connection| {
-        drop(conn);
-        if let Some(taken) = snap.taken_at {
-            // The expiry goes by the modification time: keep it the time
-            // the snapshot was taken.
-            let _ = set_modified(&snap.path, taken);
-        }
-    };
+    // Closes the connection; `_time` puts the time back after it.
+    let restore_time = drop::<Connection>;
     let has_migrations = has_table(&conn, "schema_migrations")?;
     let version: Option<i64> = if has_migrations {
         conn.query_row("SELECT max(version) FROM schema_migrations", [], |r| {
@@ -1540,7 +1583,10 @@ fn purge_claims_only(
     limit: Option<claims::Limit<'_>>,
     raise: bool,
 ) -> crate::Result<Option<(usize, bool)>> {
-    let taken = modified(path);
+    let _time = KeepTime {
+        path,
+        at: modified(path),
+    };
     let mut conn = open_rw(path)?;
     let folded = settle_conn(&conn)?;
     let version: Option<i64> = if has_table(&conn, "schema_migrations")? {
@@ -1550,12 +1596,8 @@ fn purge_claims_only(
     } else {
         None
     };
-    let restore = |conn: Connection, wrote: bool| {
-        drop(conn);
-        if let Some(t) = taken.filter(|_| wrote) {
-            let _ = set_modified(path, t);
-        }
-    };
+    // The time itself goes back when `_time` drops, after `conn`.
+    let restore = |conn: Connection, _wrote: bool| drop(conn);
     if !claims::stamped(&conn)? {
         restore(conn, folded);
         // V15 added the stamps: a schema this build knows since then
@@ -1637,6 +1679,11 @@ fn apply_purges_only(store: &Connection, snapshot: &Path) -> crate::Result<usize
         return Ok(0);
     }
     let taken = modified(snapshot);
+    // Its early returns come after the fold too.
+    let _time = KeepTime {
+        path: snapshot,
+        at: taken,
+    };
     let mut conn = open_rw(snapshot)?;
     settle_conn(&conn)?;
     if !has_table(&conn, "settings")? {
@@ -3887,6 +3934,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!(v, 1);
+    }
+
+    /// A snapshot `version` dated `T` with a WAL left beside it (a purge
+    /// that died mid-way), whose `schema_migrations` has no `version`
+    /// column, so the first read after the fold fails.
+    fn folded_then_failing(store: &Store, db: &Path, version: i64) -> PathBuf {
+        let open = take(store, db, version, T);
+        let conn = Connection::open(&open).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute_batch("ALTER TABLE schema_migrations RENAME COLUMN version TO v")
+            .unwrap();
+        let snap = crate::schema::snapshot_path(db, version + 1);
+        std::fs::copy(&open, &snap).unwrap();
+        std::fs::copy(side(&open, "-wal"), side(&snap, "-wal")).unwrap();
+        drop(conn);
+        std::fs::remove_file(&open).unwrap();
+        set_modified(&snap, T).unwrap();
+        snap
+    }
+
+    /// Folding a left-over WAL writes the file; an error after it must
+    /// still put the time back, or the snapshot outlives its 90 days.
+    #[test]
+    fn an_error_after_the_fold_keeps_the_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let snap = folded_then_failing(&store, &db, 10);
+        let r = store.purge_snapshots(T, 0);
+        assert!(
+            r.purged.is_empty() && !r.warnings.is_empty(),
+            "{:?}",
+            r.warnings
+        );
+        assert!(!side(&snap, "-wal").exists(), "the fold ran");
+        assert_eq!(modified(&snap), Some(T));
+        // The claims-only purge (newer schemas, the update rollback) too.
+        let snap = folded_then_failing(&store, &db, 20);
+        let terms = claims::LiveTerms::default();
+        assert!(purge_claims_only(&snap, &terms, T, None, true).is_err());
+        assert!(!side(&snap, "-wal").exists(), "the fold ran");
+        assert_eq!(modified(&snap), Some(T));
     }
 
     /// A side file that can't be deleted is reported on its own; the
