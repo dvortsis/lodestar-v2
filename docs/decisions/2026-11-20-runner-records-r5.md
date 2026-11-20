@@ -15,7 +15,7 @@ The runner's records PR after #970 (path to 100, r5 and r5.1). It records the ow
   Each is off by default (`docs/decisions/2026-11-20-path-to-100.md`, "Not changed"). `runner/slices.yaml` carries them in the slices' titles or notes.
 
 ## The API lane's reviews (runner; flagged to the owner)
-- **The runner accepted the API lane's independent per-PR reviews as the merge rule's fresh review** for #940 (ENR-mb), #966 (X-worker-service-log) and the five PRs combined in #971 (#947 ENR-tvdb, #955 ENR-discogs, #960 ENR-srrdb, #965 ENR-predb, #967 ENR-anidb).
+- **The runner accepted the API lane's independent per-PR reviews as the merge rule's fresh review** for #940 (ENR-mb), #966 (X-worker-service-log) and the seven PRs combined in #971 (#947 ENR-tvdb, #955 ENR-discogs, #960 ENR-srrdb, #965 ENR-predb, #967 ENR-anidb, #954 ENR-anilist, #968 ENR-igdb).
   - **The conditions, checked for each:** the review is a fresh read-only session posted on the PR itself with a MERGE verdict; the head it reviewed is the head that merged; CI is green.
   - **Why:** the owner approved the same kind of paid independent review under §2.67, and the lane's reviews were bought from the same credit (§2.75). Reviewing them again in a runner session would have spent review bandwidth on work already reviewed to the same bar.
   - **Not covered:** a CHANGES verdict, an unreviewed PR or a head that moved after the review goes through the runner's normal review.
@@ -31,3 +31,8 @@ The runner's records PR after #970 (path to 100, r5 and r5.1). It records the ow
 - **CR-SPEC rule 6.1 points to its amendment** (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`).
 - **The survey evidence's lock file is renamed `Cargo.lock.txt`,** so the repository doesn't carry a second Cargo lock file outside the workspace. `verify-proposal.ps1` copies it into its temporary crate as `Cargo.lock`.
 - **The outside scheduler code goes to the owner.** `docs/reviews/dht-survey-evidence/original-scheduler.rs.txt` is outside code with no recorded source. Whether it can stay in the repository is an owner-queue item.
+
+## After #971 and #974 (runner, 2026-11-20)
+- **#971 also bumped `lettre` to 0.11.24** for six RustSec advisories against 0.11.23. That turned `main`'s RustSec check green again. #971's body has the details.
+- **#974's review findings go to CR-LOOKUP-END.** Its one important finding was that the simulator ledger still read edge proxies instead of CR-LEDGER's counters. CR-LOOKUP-END owns `crates/crawler-sim/tests/sim/**` once #974 merges, and its screen needs the `ended{reason}` split, so it carries the fix. #974's decisions file still says the calibration test takes "about 20 s"; it measured about 26 s, and CR-LOOKUP-END's decisions file records that.
+- **New slices:** X-test-vm-fix (the #864 review fixes on a new branch, a runner cloud-testing slice under §2.81), and two follow-ups from the 2026-11-20 Windows service re-test on `main`: X-win-data-dir-unusable-log and X-msi-upgrade-env-value.
