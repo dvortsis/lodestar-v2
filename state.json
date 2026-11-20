@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-20T09:41Z",
+  "updated_at": "2026-11-20T10:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-20T09:41Z",
+  "last_heartbeat": "2026-11-20T10:12Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10237,6 +10237,13 @@
       "sha": "e0e3eb17",
       "at": "2026-11-20T09:22Z",
       "note": "owner decisions to \u00a72.81, r5.1 records, owner-queue n 30 (owns overlap question); three fresh Opus review rounds"
+    },
+    {
+      "pr": 976,
+      "slice": "X-snapshot-claims-retention",
+      "sha": "8cd1190e",
+      "at": "2026-11-20T10:12Z",
+      "note": "delta review MERGE; optionals \u2192 X-snapshot-claims-nits (same session)"
     }
   ],
   "active_sessions": {
@@ -10482,7 +10489,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T09:41Z",
+    "updated": "2026-11-20T10:12Z",
     "items": [
       {
         "slot": 1,
@@ -10516,12 +10523,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-snapshot-claims-retention",
+        "slice": "X-snapshot-claims-nits",
         "role": "build",
         "agent": "claude",
         "model": "opus",
-        "since": "2026-11-20T06:37Z",
-        "doing": "session_01MMjhn9t3X8PDfpkufcCKHF"
+        "since": "2026-11-20T10:12Z",
+        "doing": "review optionals O1-O4 from #976"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10612,7 +10619,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-20T09:41Z",
+  "heartbeat": "2026-11-20T10:12Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
