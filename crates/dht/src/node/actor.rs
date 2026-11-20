@@ -17,7 +17,7 @@ use lodestar_metainfo::InfoHash;
 use super::hints::{self, Hint, Hints};
 use super::ledger::{self, HintOutcome, LedgerEnd, QueryPurpose};
 use super::limits::{Answered, Network, SourceBuckets, network, source};
-use super::lookup::Lookup;
+use super::lookup::{Lookup, MAX_VALUES, Values};
 use super::peers::PeerStore;
 use super::prefixes::Prefixes;
 use super::proof::Proof;
@@ -475,7 +475,8 @@ struct PeerRequest {
     remaining: usize,
     inflight: usize,
     sent: usize,
-    peers: Set<SocketAddr>,
+    /// Its values across legs, shared out by source ([`Values`]).
+    peers: Values,
     started: Instant,
     /// Its deadline ran out (a streaming terminal says so).
     expired: bool,
@@ -1842,7 +1843,7 @@ impl Actor {
                     .copied()
                     .map(lodestar_network_policy::normalize)
                     .filter(|p| endpoint_allowed(cfg, *p) && unique.insert(*p))
-                    .take(64)
+                    .take(MAX_VALUES)
                     .collect();
                 // Only a streaming request's peers are copied.
                 if owner
@@ -1857,16 +1858,15 @@ impl Actor {
                     && !peers.is_empty()
                     && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
                 {
+                    // Filed under the responder's source, which gets its
+                    // share of the request's budget ([`Values`]).
+                    let net = source(from.ip());
                     for p in &peers {
-                        if r.peers.len() >= 64 {
-                            break;
-                        }
-                        r.peers.insert(*p);
+                        r.peers.insert(net, *p);
                     }
                     // A second network repeating values already held counts:
                     // the nodes storing a hash list the same swarm, and that
                     // agreement is the corroboration the rule asks for.
-                    let net = source(from.ip());
                     if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
                         r.value_nets.push(net);
                     }
@@ -1883,7 +1883,7 @@ impl Actor {
                         if lookup.scrape {
                             lookup.record_blooms(&id, r.seeds_bloom, r.peers_bloom);
                         }
-                        lookup.on_response(&id, others, &peers);
+                        lookup.on_response(&id, from, others, &peers);
                     }
                     None if pending.hinted => {
                         // Its nodes join by their own distance; the
@@ -1895,11 +1895,11 @@ impl Actor {
                         } else {
                             self.stats.ledger.hint(HintOutcome::NoValues);
                         }
-                        lookup.absorb(others, &peers);
+                        lookup.absorb(from, others, &peers);
                     }
                     None => {
                         lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
-                        lookup.on_response(&r.id, others, &peers);
+                        lookup.on_response(&r.id, from, others, &peers);
                     }
                 }
             }
@@ -2097,7 +2097,7 @@ impl Actor {
                 remaining: self.families.len(),
                 inflight: 0,
                 sent: 0,
-                peers: Set::default(),
+                peers: Values::default(),
                 started: Instant::now(),
                 expired: false,
                 ledger: ledger::Entry::default(),
@@ -2610,11 +2610,7 @@ impl Actor {
             };
             // A stream sent its peers as they came; they're kept here too
             // only so the ledger counts each distinct one once.
-            for p in done.peers {
-                if r.peers.len() < 64 {
-                    r.peers.insert(p);
-                }
-            }
+            r.peers.merge(&done.peers);
             r.remaining -= 1;
             if r.remaining == 0 {
                 let r = self.peer_requests.remove(&owner).expect("present");
@@ -2639,7 +2635,7 @@ impl Actor {
                 self.stats
                     .ledger
                     .end(why, &entry, millis(r.started.elapsed()));
-                let mut peers: Vec<_> = r.peers.into_iter().collect();
+                let mut peers: Vec<_> = r.peers.iter().copied().collect();
                 peers.sort_unstable();
                 if let Some(Reply::Stream(stream)) = r.reply {
                     // A cancelled request isn't a completed lookup.
@@ -2715,10 +2711,10 @@ impl Actor {
         for (owner, r) in &self.peer_requests {
             let mut found = r.peers.clone();
             for l in self.lookups.values().filter(|l| l.owner == Some(*owner)) {
-                found.extend(l.peers.iter().copied());
+                found.merge(&l.peers);
             }
             let entry = ledger::Entry {
-                values: found.len().min(64) as u64,
+                values: found.len() as u64,
                 ..r.ledger
             };
             let residence = millis(r.started.elapsed());
