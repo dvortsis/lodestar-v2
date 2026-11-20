@@ -39,34 +39,63 @@ async function nudge(page: Page) {
 
 /**
  * The shell starts its chrome and stream on the first interaction (or 30 s after load). Tests that
- * need them right away call this: once `#boot` has gone the shell's listener is attached (it goes
- * in the same mount, see `interact.ts`), so one nudge is always taken, however late the shell
- * hydrates. The caller's own assertion is the condition that the chrome or the stream got there.
+ * need them right away call this: it waits for `<main id="main">`, which only `Shell.svelte`
+ * renders, in the same mount that attaches the shell's listener. (`#boot` is no signal: on the
+ * sign-in screens the inline boot script removes it before the app starts.) So the one nudge is
+ * always taken, however late the shell mounts. The caller's own assertion is the condition that the
+ * chrome or the stream got there.
  */
 export async function engage(page: Page) {
-	await expect(page.locator('#boot')).toHaveCount(0);
+	await expect(page.locator('main#main')).toBeAttached();
 	await nudge(page);
+}
+
+/**
+ * Waits until the page's network has been quiet (nothing in flight) for `quietMs`, with a 15 s
+ * deadline. Counts from now: start it before the action whose requests it should cover.
+ */
+export function networkQuiet(page: Page, quietMs = 500) {
+	let inFlight = 0;
+	let last = Date.now();
+	const start = () => {
+		inFlight++;
+		last = Date.now();
+	};
+	const end = () => {
+		inFlight = Math.max(0, inFlight - 1);
+		last = Date.now();
+	};
+	page.on('request', start);
+	page.on('requestfinished', end);
+	page.on('requestfailed', end);
+	return async () => {
+		try {
+			await expect
+				.poll(() => inFlight === 0 && Date.now() - last >= quietMs, {
+					message: 'the page kept a request open',
+					timeout: 15_000,
+					intervals: [100]
+				})
+				.toBe(true);
+		} finally {
+			page.off('request', start);
+			page.off('requestfinished', end);
+			page.off('requestfailed', end);
+		}
+	};
 }
 
 /**
  * For a screen that must open no stream (sign-in, setup, welcome): engages, waits until the chrome
  * has mounted and taken the interaction (its toaster region, which the bare chrome has too), then
- * keeps nudging for `ms`. A stream is an absence to check, with no condition to wait for, so that
- * last window is a fixed time; it only starts once the chrome is there to start a stream.
+ * until the network has gone quiet, so every chunk the interaction loads has arrived. A stream the
+ * shell started by mistake shows in `liveEvents`' requests, or keeps the network busy and fails here.
  */
-export async function engageBare(page: Page, ms = 2_000) {
+export async function engageBare(page: Page) {
+	const quiet = networkQuiet(page);
 	await engage(page);
 	await expect(page.getByRole('region', { name: 'Notifications' })).toBeAttached();
-	const end = Date.now() + ms;
-	await expect
-		.poll(
-			async () => {
-				await nudge(page);
-				return Date.now() >= end;
-			},
-			{ timeout: ms + 10_000, intervals: [100] }
-		)
-		.toBe(true);
+	await quiet();
 }
 
 export interface EventsHandle {

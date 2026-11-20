@@ -8,6 +8,7 @@ import {
 	engage,
 	engageBare,
 	liveEvents,
+	networkQuiet,
 	openPaletteWithKey
 } from './support/events-server';
 import { interact } from './support/interact';
@@ -446,11 +447,21 @@ test.describe('401 hand-off', () => {
 		page,
 		mock
 	}) => {
+		// Signed out everywhere: with the mock's default ("signed in"), /login would send the page back
+		// to `next`, the stream's 401 to /login again, and the URL would only pass this check mid-bounce.
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: false });
 		mock.error('listSavedSearches', 401, 'login_required');
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(false)));
 		await page.goto('/alerts?x=1');
 		await engage(page);
-		await expect(page).toHaveURL(/\/login\?next=%2Falerts%3Fx%3D1$/);
+		const signIn = /\/login\?next=%2Falerts%3Fx%3D1$/;
+		await expect(page).toHaveURL(signIn);
+		// And it stays: once /login has asked who is signed in and everything has settled, it is
+		// still on /login, not bounced back to /alerts.
+		const quiet = networkQuiet(page);
+		await expect.poll(() => mock.calls('getAuthStatus').length).toBeGreaterThan(0);
+		await quiet();
+		expect(page.url()).toMatch(signIn);
 	});
 
 	test('the sign-in and setup screens have no chrome and open no stream', async ({
@@ -467,8 +478,8 @@ test.describe('401 hand-off', () => {
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
-			// engageBare() waited for the chrome to take the interaction, then kept interacting for 2 s: a
-			// stream the shell was going to start on one would be in requests() by now. Its 30 s idle
+			// engageBare() waited for the chrome to take the interaction and for the network to settle: a
+			// stream the shell was going to start on it would be in requests() by now. Its 30 s idle
 			// fallback is out of reach of any wait.
 			expect(await events.requests()).toHaveLength(0);
 		}
