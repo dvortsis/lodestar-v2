@@ -403,7 +403,7 @@ held_bad=""
 held_dead=""  # an interface check never ran by its deadline, or the phase ran out: no bracket can be had
 held_until="" # the phase's own deadline (held_start), well inside the step's 900 s
 held_ups=0    # how many times phase B found the interface back up
-held_was_up="" # the last interface check read it up (one return counts once)
+held_was_up=unknown # 1: the last check read it up; empty: down. A return counts once, and only after a down read
 held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
 held_start() {
   local wait=${HELD_PHASE_WAIT:-300}
@@ -412,7 +412,7 @@ held_start() {
 }
 held_seen() {  # $1: an interface check's result; counts each return of the interface once
   if (($1 == 0)); then
-    [[ -n $held_was_up ]] || held_ups=$((held_ups + 1))
+    [[ -n $held_was_up ]] || held_ups=$((held_ups + 1))  # not from unknown
     held_was_up=1
   elif (($1 == 1)); then
     held_was_up=""

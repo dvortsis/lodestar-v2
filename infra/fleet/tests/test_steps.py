@@ -1067,7 +1067,7 @@ class VMScripts(unittest.TestCase):
             "the flow died": ({"FLOW_DIES": 1}, "flow_alive_down"),
             # The recreate guard: rules that never load are a failure of their own.
             "the post-rules never load": ({"NO_POST_RULES": 1}, "post_rules_before_egress"),
-            "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
+            "the interface won't go down": ({"IFDOWN_FAILS": 1, "HELD_PHASE_WAIT": 10}, "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
             "no DNS answer with the tunnel up": ({"DIG_UP_FAIL": 1}, "dns_up"),
@@ -1623,7 +1623,8 @@ class VMScripts(unittest.TestCase):
         """The interface back during every attempt until the phase's deadline: no
         probe gets a clean one, so each is skipped and the run fails
         vpn_interface_held_down, not a leak line, and says why in counts."""
-        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=10)
+        # 20 s: room for well over four stub attempts on a slow runner.
+        rc, lines, raw = self.run_script("leak-test.sh", IFACE_REUP=1000000, HELD_PHASE_WAIT=20)
         self.assertEqual(rc, 1, raw)
         self.assertIn("fail vpn_interface_held_down", lines)
         self.assertIn("skip ipv4_blocked_ifdown", lines)

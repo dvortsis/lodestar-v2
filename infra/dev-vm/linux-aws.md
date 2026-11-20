@@ -59,10 +59,13 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
      rm -rf /opt/lodestar-leaktest
      install -d -o root -g root -m 0755 /opt/lodestar-leaktest
      install -o root -g root -m 0644 /opt/lodestar-run/compose.yaml /opt/lodestar-run/block-lib.sh /opt/lodestar-leaktest/
-     systemd-run --wait --pipe --collect bash /opt/lodestar-run/leak-test.sh /opt/lodestar-leaktest /opt/lodestar-run
+     systemctl reset-failed lodestar-leaktest 2>/dev/null || true
+     systemd-run --unit=lodestar-leaktest -p StandardOutput=file:/root/leaktest.log -p StandardError=file:/root/leaktest.log \
+       bash /opt/lodestar-run/leak-test.sh /opt/lodestar-leaktest /opt/lodestar-run
      ```
 
-     The first argument is the work folder; the second is the stack, which holds `secrets/wg0.conf`. Exit 0 with a last line of `ok leak_test` is a pass.
+     - The first argument is the work folder; the second is the stack, which holds `secrets/wg0.conf`.
+     - The test takes several minutes, longer than one connector call, so it runs as a background unit. Poll it in later calls with `tail -n 3 /root/leaktest.log` until the last line is `ok leak_test` (a pass) or `fail leak_test`.
    - `lodestar` owns nothing root executes or reads secrets from. Otherwise any code running as `lodestar` (a build script, an npm package) could rewrite a script or `compose.yaml` (say, `network_mode: host`) before root runs it, and reach the instance role.
    - Builds and the lane's own work run as `lodestar`: `sudo -iu lodestar bash -lc '<command>'`. Results go to `~lodestar/results`; root only reads them.
    - `sudo -i` joins a multi-line command into one line, so put anything longer than one line in a script file and run that.
