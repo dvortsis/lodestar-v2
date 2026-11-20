@@ -29,6 +29,7 @@ fixes the words.
 | `junk` | Junk | A torrent whose junk score (0–100, with reasons) is over the threshold: lure files, executables in media, mismatched names and similar. Hidden by default ("N hidden · Show"). | 垃圾 (TBD) |
 | `version_group` | Version group | Torrents of the same release in different versions (resolution, codec, edition, group). "Group versions" collapses them. | 版本组 (TBD) |
 | `clone` | Clone | A torrent with an identical payload (same files and contents) to another, under a different info hash. | 克隆 (TBD) |
+| `alert` | Alert | A search Lodestar keeps running, which tells you when new torrents match it: in the app, in an RSS feed, or on a notification channel. The only noun for it: never "saved search" (§10.8). | 提醒 (TBD) |
 
 ## 2. Related labels
 
@@ -45,8 +46,7 @@ Terms the core terms depend on, and the truthful-state strings from §10.14.
 | `backfill` | First seen during backfill | The discovered date only means "when Lodestar first saw it" (warm-up window). | 回填期间首次发现 (TBD) |
 | `estimate` | ≈ | Prefix for an estimated value ("≈ 2.4M"). The accessible name is "about". Explained once per account, then by "What's this?" (§10.12, §10.14.1). | ≈ / 约 (TBD) |
 | `size_binary` | KiB, MiB, GiB, TiB | The units Lodestar shows sizes in, counting in 1,024s: 1 GiB is 1,024 MiB, about 7% more than 1 GB. | KiB、MiB、GiB、TiB (TBD) |
-| `size_typed` | KB, MB, GB, TB | Units a user may type, counting in 1,000s: 1 GB is 1,000 MB. A size typed this way keeps its unit when Lodestar echoes it back (§10.12). | KB、MB、GB、TB (TBD) |
-| `alert` | Alert | A search Lodestar keeps running, which tells you when new torrents match it: in the app, in an RSS feed, or on a notification channel. The only noun for it: never "saved search" (§10.8). | 提醒 (TBD) |
+| `size_typed` | KB, MB, GB, TB | Units a user may type, counting in 1,000s: 1 GB is 1,000 MB. A size typed this way keeps its unit when Lodestar echoes it back. Piece lengths (`piece:`) still count in 1,024s (§10.12). | KB、MB、GB、TB (TBD) |
 | `create_alert` | Create alert | The one action that makes an alert, with the same label on Search's toolbar, the Alerts page and the command palette. Not "Save search" or "New alert". | 创建提醒 (TBD) |
 | `sampled_note` | Counts are estimated from a sample | Note on a sampled facet panel. | 计数基于抽样估计 (TBD) |
 | `incomplete` | Incomplete | A discovery cohort that hasn't finished (not yet final). | 未完成 (TBD) |
