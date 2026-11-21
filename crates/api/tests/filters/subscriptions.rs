@@ -618,6 +618,7 @@ async fn a_floor_marked_list_warns_that_its_entries_leave_the_floor() {
     ] {
         let (_, p) = preview(&f, &c, op.clone()).await;
         assert_eq!(p["preview"]["removed_from_floor"], 2, "{op}: {p}");
+        assert_eq!(p["loosens_child_safety"], true, "{op}: {p}");
         assert!(p["warning"].as_str().unwrap().contains("locked floor"));
     }
     let remove = json!({ "op": "unsubscribe", "id": id });
