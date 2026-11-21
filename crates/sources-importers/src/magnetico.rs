@@ -850,7 +850,7 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
     {
         return Err(Refusal::Unavailable("open_failed"));
     }
-    let conn = Connection::open_with_flags(&canonical, flags)
+    let mut conn = Connection::open_with_flags(&canonical, flags)
         .map_err(|_| Refusal::Unavailable("open_failed"))?;
     let mut deadline = Deadline {
         base: Instant::now(),
@@ -861,7 +861,7 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
     deadline.start_batch();
     let cancel = Arc::new(AtomicBool::new(false));
     deadline.arm();
-    harden(&conn, &deadline, &cancel).map_err(map_err)?;
+    harden(&mut conn, &deadline, &cancel).map_err(map_err)?;
     match fs::metadata(&canonical) {
         Ok(m) if FileId::of(&m) == file_id => {}
         _ => return Err(Refusal::SourceChanged),
@@ -1066,7 +1066,7 @@ fn quiescent(path: &Path) -> Result<(), Refusal> {
 }
 
 fn harden(
-    conn: &Connection,
+    conn: &mut Connection,
     deadline: &Deadline,
     cancel: &Arc<AtomicBool>,
 ) -> rusqlite::Result<()> {

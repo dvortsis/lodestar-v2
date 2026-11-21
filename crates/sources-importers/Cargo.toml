@@ -15,7 +15,7 @@ lodestar-classify.workspace = true
 lodestar-filter.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-store.workspace = true
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "hooks", "limits"] }
 # TLS for a non-loopback Bitmagnet PostgreSQL (IMP-3): rustls on ring with
 # the platform verifier, as the integrations crate uses them. All four are
 # already in the lock file.
