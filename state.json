@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T18:39Z",
+    "updated": "2026-11-21T19:46Z",
     "items": [
       {
         "slot": 1,
@@ -10662,16 +10662,16 @@
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
         "since": "2026-11-21T18:36Z",
-        "doing": "brief sent; investigate display case for release-group facet values; plan before build"
+        "doing": "bench and sizes approved; merging main after #1027, then PR"
       },
       {
         "slot": 2,
-        "slice": "X-safety-undo-danger",
+        "slice": "X-undo-danger-tests",
         "role": "build",
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
-        "since": "2026-11-21T16:22Z",
-        "doing": "PR #1027 open; fresh review plus security review running"
+        "since": "2026-11-21T19:46Z",
+        "doing": "#1027 merged; follow-up PR testing the floor-removal and CS-tombstone flag branches"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
         "since": "2026-11-21T17:08Z",
-        "doing": "option C (class constants); sizes approved; PR next"
+        "doing": "PR #1028 review fixes pushed; CI running"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-21T16:32Z",
-        "doing": "streak redesign after self-review; PR next"
+        "doing": "PR #1029 review CHANGES (flaky proptest, expired streak); fix push next"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
