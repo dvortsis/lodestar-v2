@@ -1616,7 +1616,9 @@ export default [
 	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
 	// X-labels (runner §2.26): 17,635 → 18,825 B, the value names (codecs, HDR, languages, types),
 	// and Find matching the code as well as the label (review).
-	entry('Facet rail (lazy)', facetsLazy, '18.83 KB'),
+	// X-facet-group-case (runner §2.26): 18,825 → 18,848 B, the release group's server label
+	// (`label` through valueLabel and groupLabel in label-release, and TermGroup's labelOf).
+	entry('Facet rail (lazy)', facetsLazy, '18.85 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
@@ -1642,7 +1644,9 @@ export default [
 	// for flags, review); the value names are
 	// shared with the Facet rail, which Search has loaded first, so loading them lazily saved nobody
 	// anything and grew five entries.
-	entry('Builder (on demand)', builderLazy, '8.43 KB'),
+	// X-facet-group-case (runner §2.26): 8,430 → 8,441 B, valueLabel's optional `label` argument in
+	// label-release, which the Builder shares with the Facet rail.
+	entry('Builder (on demand)', builderLazy, '8.45 KB'),
 	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
 	// load on demand, from visibility-events.ts, so they are no longer in this first view.
 	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
