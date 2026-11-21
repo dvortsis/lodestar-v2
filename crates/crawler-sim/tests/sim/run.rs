@@ -614,11 +614,13 @@ pub fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored
         d.peer_admitted
     );
     // The active/queued gauges refresh on the 1 s tick, so at the boundary
-    // they may still count up to the 32-request cap that has since finished.
+    // they may still count up to the slots (32, or more with CR-1c's
+    // `dht.preset_slots`) that have since finished.
     let held = d.peer_active + d.peer_queued;
+    let slots = d.ledger.slots_capacity;
     assert!(
-        d.peer_admitted + 32 >= done + held,
-        "admitted {} < done {done} + held {held} - 32",
+        d.peer_admitted + slots >= done + held,
+        "admitted {} < done {done} + held {held} - {slots}",
         d.peer_admitted
     );
 }

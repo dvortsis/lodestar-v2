@@ -102,10 +102,11 @@ fn the_preset_counts_are_as_documented() {
     assert_eq!(Intensity::Aggressive.peer_slots(), MAX_PEER_SLOTS);
     for i in PRESETS {
         // Never fewer slots than with the switch off, and every slot's
-        // ALPHA queries fit in half the preset's outstanding cap.
+        // ALPHA queries on both address families fit in three quarters
+        // of the preset's outstanding cap.
         assert!(i.peer_slots() >= PEER_REQUEST_CAPACITY);
         assert!(i.peer_slots() <= MAX_PEER_SLOTS);
-        assert!(i.peer_slots() * crate::node::lookup::ALPHA <= i.max_outstanding() / 2);
+        assert!(2 * i.peer_slots() * crate::node::lookup::ALPHA <= i.max_outstanding() * 3 / 4);
         let off = Config {
             intensity: i,
             ..Default::default()
