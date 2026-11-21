@@ -16,7 +16,7 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
   - any change whose preview has `removed_from_floor` > 0: a floor removal, and an unsubscribe or pause of a floor list;
   - `undo`, from the comparison below.
 - **Two cases go beyond #1019's buttons:** `add_exception` to a CS rule and `add_override`. They weaken CS rules too. The client doesn't read the flag for them (below), so nothing on screen changes for them.
-- **Sent only when true** (`skip_serializing_if`), so it's optional in `openapi.json` and `schema.d.ts`, and absent reads as false. The assessments the golden files hold, all false but one, are byte-for-byte unchanged. This is a call in this slice: it keeps the change to the wire and the goldens small, and a missing flag only means the ordinary style, which is never a security decision (`confirm` still decides the password).
+- **Sent only when true** (`skip_serializing_if`), so it's optional in `openapi.json` and `schema.d.ts`, and absent reads as false. The golden files change only where it's true: the override, `core_switch` off, false positive on a CS hold and `remove_cs1` goldens gain `"loosens_child_safety":true` and nothing else (11 files, re-blessed with `LODESTAR_BLESS=1`); `apply_undo` is unchanged, as that Undo only strengthens. This is a call in this slice: it keeps the change to the wire and the goldens small, and a missing flag only means the ordinary style, which is never a security decision (`confirm` still decides the password).
 - **It's style only.** `weakening`, `confirm` and the warning are as before for every change.
 
 ## Undo's preview and flag
