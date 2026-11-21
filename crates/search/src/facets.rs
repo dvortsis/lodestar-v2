@@ -566,6 +566,10 @@ pub struct ValueCount {
     pub selected: bool,
     /// The query excludes it (`-res:480p`).
     pub excluded: bool,
+    /// How to show it, when that differs from `value` (only `group`:
+    /// the most common spelling in the stored names, [`group_labels`]).
+    /// `value` stays what a query matches on and a click sends.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -753,6 +757,9 @@ pub fn facets(
         let mut counts = top(f, t, &f.selection(node), limit);
         if f == Facet::Adult && counts.values.is_empty() {
             continue;
+        }
+        if f == Facet::Group {
+            group_labels(searcher, index.fields(), &mut counts.values, cancel)?;
         }
         // `source` has no complement (`compile.rs`'s `provenance`): while
         // it's backfilled, documents the walk hasn't reached aren't
@@ -1295,6 +1302,7 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
                 count: *c,
                 selected,
                 excluded,
+                label: None,
             });
         } else {
             other += c;
@@ -1309,6 +1317,7 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
                 count: 0,
                 selected,
                 excluded,
+                label: None,
             });
         }
     }
@@ -1319,6 +1328,194 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
         approx: t.sampled,
         partial: false,
     }
+}
+
+/// Stored names read per listed `group` value for its spelling, at most.
+pub const LABEL_SAMPLES: usize = 8;
+/// Stored names read per request for `group` spellings, at most, unless
+/// that leaves a value fewer than [`MIN_LABEL_SAMPLES`]: a long list
+/// (`limit=100`) reads fewer names per value.
+pub const LABEL_READS: usize = 256;
+/// Names read per value even when the list is long.
+pub const MIN_LABEL_SAMPLES: usize = 3;
+
+/// Sets each `group` value's `label` to its most common spelling in the
+/// stored names of the torrents that carry it (the index keeps tag terms
+/// lower-cased, `doc.rs`, so `rarbg` shows as "RARBG").
+///
+/// - **Which torrents:** up to [`LABEL_SAMPLES`] of the term's documents
+///   in the snapshot, spread evenly over its whole posting list (every
+///   segment, by document frequency, and over each segment's doc ids),
+///   not the matches of this search, so a group reads the same in every
+///   search on one snapshot. Deleted documents are skipped.
+/// - **One vote per torrent:** a name votes for the last spelling of the
+///   value it holds as a word of its own ([`spelling_in`]), and
+///   [`choose_spelling`] takes the most votes, ties by byte order. A
+///   spelling then has to be on a large share of the group's torrents to
+///   win, whatever one junk or hostile record writes, and however
+///   recently.
+/// - **No spelling found** (the group came from a file name, or a name
+///   holds it in another case form): no label, and the value shows as
+///   sent.
+///
+/// The value itself is unchanged: it's what a query matches and a click
+/// sends.
+fn group_labels(
+    searcher: &tantivy::Searcher,
+    fields: &crate::schema::Fields,
+    values: &mut [ValueCount],
+    cancel: &CancelToken,
+) -> Result<()> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let per = (LABEL_READS / values.len()).clamp(MIN_LABEL_SAMPLES, LABEL_SAMPLES);
+    for v in values.iter_mut() {
+        cancel.check()?;
+        let term = tantivy::Term::from_field_text(
+            fields.tag,
+            &format!("{}:{}", TagKey::Group.as_str(), v.value),
+        );
+        let mut votes = Vec::new();
+        for addr in sample_docs(searcher, &term, per)? {
+            let doc: tantivy::TantivyDocument = searcher.doc(addr)?;
+            let name = doc
+                .get_first(fields.name)
+                .and_then(|n| tantivy::schema::Value::as_str(&n));
+            if let Some(s) = name.and_then(|n| spelling_in(n, &v.value)) {
+                votes.push(s.to_owned());
+            }
+        }
+        v.label = choose_spelling(votes.iter().map(String::as_str))
+            .filter(|s| *s != v.value)
+            .map(str::to_owned);
+    }
+    Ok(())
+}
+
+/// Up to `k` live documents with `term`, spread evenly over its posting
+/// lists: the `j`-th of `k` points along the term's documents (every
+/// segment's, in segment order) picks a segment by document frequency,
+/// then the first live posting at or after the point's place in that
+/// segment's doc ids. Each document once; the same snapshot always gives
+/// the same documents.
+fn sample_docs(
+    searcher: &tantivy::Searcher,
+    term: &tantivy::Term,
+    k: usize,
+) -> Result<Vec<tantivy::DocAddress>> {
+    use tantivy::DocSet;
+    use tantivy::schema::IndexRecordOption;
+    let readers = searcher.segment_readers();
+    let mut freqs = Vec::with_capacity(readers.len());
+    for r in readers {
+        freqs.push(u64::from(r.inverted_index(term.field())?.doc_freq(term).map_err(crate::index::Error::Io)?));
+    }
+    let total: u64 = freqs.iter().sum();
+    let k = (k as u64).min(total);
+    let mut out = Vec::new();
+    let (mut seg, mut before) = (0usize, 0u64);
+    let mut postings = None;
+    for j in 0..k {
+        // The middle of the j-th of k equal runs of the term's documents.
+        let point = (2 * j + 1) * total / (2 * k);
+        while point >= before + freqs[seg] {
+            before += freqs[seg];
+            seg += 1;
+            postings = None;
+        }
+        let reader = &readers[seg];
+        if postings.is_none() {
+            postings = reader
+                .inverted_index(term.field())?
+                .read_postings(term, IndexRecordOption::Basic)
+                .map_err(crate::index::Error::Io)?;
+        }
+        let Some(p) = postings.as_mut() else {
+            continue;
+        };
+        let target = ((point - before) * u64::from(reader.max_doc()) / freqs[seg]) as DocId;
+        let mut d = p.doc();
+        if target > d {
+            d = p.seek(target);
+        }
+        let alive = |d: DocId| reader.alive_bitset().is_none_or(|b| b.is_alive(d));
+        while d != TERMINATED && !alive(d) {
+            d = p.advance();
+        }
+        if d == TERMINATED {
+            continue;
+        }
+        let addr = tantivy::DocAddress::new(seg as u32, d);
+        if out.last() != Some(&addr) {
+            out.push(addr);
+        }
+        // The next point starts past this document.
+        p.advance();
+    }
+    Ok(out)
+}
+
+/// The spelling of `value` (lower case, as the index holds a tag) in
+/// `name`: the last substring whose lower case is `value` and that is a
+/// word of its own (no letter or digit on either side), else the last
+/// one at all; `None` when there's none.
+pub(crate) fn spelling_in<'a>(name: &'a str, value: &str) -> Option<&'a str> {
+    if value.is_empty() {
+        return None;
+    }
+    let mut last = None;
+    let mut last_word = None;
+    for (start, _) in name.char_indices() {
+        let Some(end) = lowered_prefix(&name[start..], value).map(|n| start + n) else {
+            continue;
+        };
+        let cut = &name[start..end];
+        // Char-wise lower case can differ from the whole string's (a
+        // final sigma): the index wrote `str::to_lowercase`.
+        if cut.to_lowercase() != value {
+            continue;
+        }
+        let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
+        if edge(name[..start].chars().next_back()) && edge(name[end..].chars().next()) {
+            last_word = Some(cut);
+        }
+        last = Some(cut);
+    }
+    last_word.or(last)
+}
+
+/// The byte length of the shortest prefix of `s` whose chars, each
+/// lower-cased, spell `value`; `None` when no prefix does.
+fn lowered_prefix(s: &str, value: &str) -> Option<usize> {
+    let mut rest = value;
+    let mut buf = [0u8; 4];
+    for (i, c) in s.char_indices() {
+        for l in c.to_lowercase() {
+            rest = rest.strip_prefix(&*l.encode_utf8(&mut buf))?;
+        }
+        if rest.is_empty() {
+            return Some(i + c.len_utf8());
+        }
+    }
+    None
+}
+
+/// The spelling with the most votes, ties going to the first in byte
+/// order (`RARBG` before `Rarbg`); `None` with no votes. The order the
+/// votes come in doesn't matter.
+pub(crate) fn choose_spelling<'a>(votes: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+    for v in votes {
+        *tally.entry(v).or_default() += 1;
+    }
+    // `max_by_key` keeps the last of equal maxima; reversed byte order
+    // makes that the first.
+    tally
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, n)| *n)
+        .map(|(s, _)| s)
 }
 
 fn histogram(h: Histo, t: &Tally, first_run: Option<i64>) -> Histogram {
