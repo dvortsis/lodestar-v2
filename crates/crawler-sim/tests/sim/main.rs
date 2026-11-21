@@ -1195,7 +1195,8 @@ fn print_screen(off: &Scenario, on: &Scenario) {
 /// once every known node is cooling. `base` at 20,000 nodes, Balanced, 90
 /// simulated minutes, seed 1, in three arms:
 /// - **A**, `dht.sampler_cooldown_split` on, with `base`'s loss (2 % each
-///   way), error replies (0.5 %) and remote rate limit (20 a second);
+///   way), error replies (0.5 %) and remote rate limit (20 a second per
+///   remote node, which our sampling never reaches);
 /// - **B**, the same with the split off;
 /// - **C**, the split on, without loss, error replies or the rate limit.
 ///
@@ -1206,10 +1207,10 @@ fn print_screen(off: &Scenario, on: &Scenario) {
 /// (the 200,000-entry table never fills at this size, so the split is
 /// inert), and C flat (about 1,730). The difference is the 6 h cooldown
 /// after one failed sample: `docs/decisions/2026-11-21-X-sampler-frontier-starve.md`.
-/// About a minute of wall time per arm.
+/// About 21 s of wall time per arm, about 65 s in all.
 /// `cargo test -p lodestar-crawler-sim --test sim sampler_starve -- --ignored --nocapture`
 #[test]
-#[ignore = "measurement: about three minutes of wall time"]
+#[ignore = "measurement: about a minute of wall time"]
 fn sampler_starve() {
     let mut a = scenario::base("sampler-starve");
     a.minutes = 90;
