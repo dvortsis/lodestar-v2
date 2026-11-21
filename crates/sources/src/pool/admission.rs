@@ -206,16 +206,19 @@ impl Admission {
 
     /// CR-HINT-FIRST: moves T1 waiters queued [`T1_MAX_WAIT`] ago or more
     /// to the back of the background queue, oldest first; returns them,
-    /// so the pool can end their hints.
-    pub fn age_t1(&mut self, now: Instant) -> Vec<Waiter> {
+    /// so the pool can end their hints. Stale copies (`!live`) are
+    /// dropped, not moved or returned.
+    pub fn age_t1(&mut self, now: Instant, live: impl Fn(&Waiter) -> bool) -> Vec<Waiter> {
         let mut aged = Vec::new();
         while let Some(&(w, since)) = self.t1.front() {
             if now.duration_since(since) < T1_MAX_WAIT {
                 break;
             }
             self.t1.pop_front();
-            self.queues[Class::Background as usize].push_back(w);
-            aged.push(w);
+            if live(&w) {
+                self.queues[Class::Background as usize].push_back(w);
+                aged.push(w);
+            }
         }
         aged
     }
@@ -453,10 +456,10 @@ mod tests {
         assert_eq!(left, Some(key(1)));
         assert_eq!(a.t1_len(), T1_WAITING);
         assert!(
-            a.age_t1(now + T1_MAX_WAIT - Duration::from_nanos(1))
+            a.age_t1(now + T1_MAX_WAIT - Duration::from_nanos(1), |_| true)
                 .is_empty()
         );
-        assert_eq!(a.age_t1(now + T1_MAX_WAIT).len(), T1_WAITING);
+        assert_eq!(a.age_t1(now + T1_MAX_WAIT, |_| true).len(), T1_WAITING);
         assert_eq!(a.t1_len(), 0);
         // Background keeps their order: the one that left first.
         let (first, class) = a.pop(|_| true).unwrap();

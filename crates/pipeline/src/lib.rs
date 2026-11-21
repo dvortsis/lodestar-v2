@@ -1783,6 +1783,7 @@ fn trusted_for_hints(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lodestar_metainfo::InfoHash;
 
     #[test]
     fn only_the_dht_plugin_is_trusted_for_hints() {
@@ -1791,7 +1792,6 @@ mod tests {
             assert!(!trusted_for_hints(other), "{other}");
         }
     }
-    use lodestar_metainfo::InfoHash;
 
     #[test]
     fn a_usenet_find_is_never_claimable() {

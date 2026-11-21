@@ -159,7 +159,18 @@ The two orders' "as is" rows are identical: without CR-ADM, T1 never holds a key
   - `a_hinted_reply_alone_never_ends_a_request`;
   - the property test `hostile_hinted_replies_end_nothing_early_and_stay_bounded`. Its replies are empty, huge, duplicate, private or port-0 values, spoofed replies, and address rotation within one /24. None ends a request on values or lets a junk endpoint in, and the hint state stays bounded.
 - `crates/sources/src/pool/admission.rs`: `t1_goes_between_and_starves_no_one`, `t1_is_bounded_and_ages_into_background`.
-- `crates/sources/tests/hint_first.rs`: eleven pool fixtures, those named above and `private_and_interactive_keys_never_take_t1`.
-- **Mutations.** 16 checked. The 12 from the first round all die, as do the first review's three survivors: interest stranding a hinted key, backlog ageing, and the private and interactive exclusion. One mutation survives as equivalent: not clearing the hint when admission ages a key. That key's hint is cleared anyway when its lookup is sent, before which it can't take T1 again. The clear is kept so the flag means what it says.
+- `crates/sources/tests/hint_first.rs`: fourteen pool fixtures, those named above, `private_and_interactive_keys_never_take_t1`, and three more:
+  - `an_aged_key_with_peers_never_returns_to_t1`;
+  - `a_t1_key_with_peers_does_not_return_to_t1_after_backoff`;
+  - `a_stale_t1_copy_is_not_aged_as_live`.
+- **A key that gets peers without a lookup spends its hint.** It goes to Ready, and if its fetch fails it backs off and is retried about `retry_backoff` (600 s) later, long after `HINT_TTL`. So the pool clears the hint when a key turns Ready. Otherwise the retry would take T1 again, and on the plain backlog an old `t1_backlog` copy would come back to life as a second place for one key.
+- **Ageing in admission's T1 moves only live waiters.** A stale copy is dropped, not counted in `fetch_hint_t1_left_total{reason="aged"}` or moved to background, as the plain backlog's ageing already did.
+- **Mutations.** 19 checked.
+  - These die:
+    - the 12 from the first round;
+    - the first review's three survivors: interest stranding a hinted key, backlog ageing, and the private and interactive exclusion;
+    - not clearing the hint at Ready (`a_t1_key_with_peers_does_not_return_to_t1_after_backoff`);
+    - ageing stale admission copies as live ones (`a_stale_t1_copy_is_not_aged_as_live`).
+  - One survives as equivalent: not clearing the hint when admission ages a key. An aged waiter leaves the queue in one of three ways, and each clears the hint itself: its lookup is sent, it turns Ready (the clear above), or interest takes it. Before the Ready clear, the peers path made this mutant observable, which is why the first delta review was right to reject "equivalent". `an_aged_key_with_peers_never_returns_to_t1` pins the behaviour whichever clear provides it. The ageing clear is kept so the flag means what it says.
 - `crates/lodestar/src/config.rs`: `hint_first_is_off_unless_asked_for`. `crates/lodestar/src/metrics.rs`: the new families render each label with its own value.
 - CR-SIM: `hint_first_marks_and_sends_deterministically` (runs in CI), and the ignored `hint_first_screen`.

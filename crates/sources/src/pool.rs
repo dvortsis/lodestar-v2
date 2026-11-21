@@ -2745,6 +2745,9 @@ impl Pool {
         }
         e.state = State::Ready;
         e.generation = next_generation(&mut self.generations);
+        // Peers came without a lookup: the hint is spent, so a retry after
+        // back-off mustn't take T1 again.
+        e.hint = false;
         let (source, interest) = (e.source, e.interest);
         if interest {
             self.interest.push_back(key);
@@ -3033,12 +3036,10 @@ impl Pool {
     fn drain_admission(&mut self) {
         if let Some(a) = &mut self.admission {
             // Their hints have expired: a requeue mustn't take T1 again.
-            for w in a.age_t1(Instant::now()) {
-                if let Some(e) = self
-                    .entries
-                    .get_mut(&w.key)
-                    .filter(|e| e.generation == w.generation)
-                {
+            let entries = &self.entries;
+            let aged = a.age_t1(Instant::now(), |w| is_waiting(entries, w));
+            for w in aged {
+                if let Some(e) = self.entries.get_mut(&w.key) {
                     e.hint = false;
                 }
                 self.stats.hint_t1_left[1].fetch_add(1, Ordering::Relaxed);

@@ -136,6 +136,20 @@ impl Harness {
             .unwrap();
     }
 
+    /// A sighting that already carries a peer, so no lookup is needed.
+    async fn discover_peers(&self, n: u32, source: SourceId) {
+        let found = Found::key(key(n), 0).with_peers(vec![SocketAddr::from(([31, 0, 0, 9], 6881))]);
+        self.disc
+            .send(Discovery {
+                source,
+                found,
+                at: 1_700_000_000,
+                reply: false,
+            })
+            .await
+            .unwrap();
+    }
+
     async fn next(&mut self) -> PeerRequest {
         tokio::time::timeout(Duration::from_secs(10), self.requests.recv())
             .await
@@ -487,6 +501,93 @@ async fn an_aged_hinted_key_never_returns_to_t1() {
     assert_eq!(load(&s.hint_lookups), 0);
     let again = h.accept(again);
     h.complete(again);
+    h.conserved().await;
+    h.stop().await;
+}
+
+/// A key aged out of T1 that then gets peers, fails its fetch and backs
+/// off must not take T1 on its retry: ageing ends its hint.
+#[tokio::test(start_paused = true)]
+async fn an_aged_key_with_peers_never_returns_to_t1() {
+    let mut h = Harness::start(config(true, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let _first = h.accept(first);
+    h.discover(1, dht(), true).await;
+    h.until("it waits", |s| load(&s.hint_t1_waits) == 1).await;
+    tokio::time::advance(Duration::from_secs(61)).await;
+    h.discover(2, dht(), false).await;
+    h.until("aged", |s| load(&s.hint_t1_left[1]) == 1).await;
+    h.discover_peers(1, other()).await;
+    h.until("the sighting", |s| load(&s.duplicates) == 1).await;
+    h.until("ready, then backing off", |s| {
+        load(&s.admission_wait_cancelled[1]) == 1
+    })
+    .await;
+    tokio::time::advance(Duration::from_secs(601)).await;
+    h.until("the retry waits", |s| load(&s.admission_waits[1]) >= 1)
+        .await;
+    assert_eq!(
+        load(&h.stats().hint_t1_waits),
+        1,
+        "re-entered T1 after ageing"
+    );
+    h.stop().await;
+}
+
+/// A T1 key that gets peers before its lookup has spent its hint, so its
+/// retry after back-off doesn't take T1 again.
+#[tokio::test(start_paused = true)]
+async fn a_t1_key_with_peers_does_not_return_to_t1_after_backoff() {
+    let mut h = Harness::start(config(true, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let _first = h.accept(first);
+    h.discover(1, dht(), true).await;
+    h.until("it waits", |s| load(&s.hint_t1_waits) == 1).await;
+    h.discover_peers(1, other()).await;
+    h.until("the sighting", |s| load(&s.duplicates) == 1).await;
+    h.until("ready, then backing off", |s| {
+        load(&s.admission_wait_cancelled[1]) == 1
+    })
+    .await;
+    tokio::time::advance(Duration::from_secs(601)).await;
+    h.until("the retry waits", |s| load(&s.admission_waits[1]) >= 1)
+        .await;
+    assert_eq!(
+        load(&h.stats().hint_t1_waits),
+        1,
+        "re-entered T1 600 s after its mark"
+    );
+    h.stop().await;
+}
+
+/// A T1 copy left stale (interest's copy was granted first) isn't aged
+/// as a live key: only the live ones count as leaving T1.
+#[tokio::test(start_paused = true)]
+async fn a_stale_t1_copy_is_not_aged_as_live() {
+    let mut h = Harness::start(config(true, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let first = h.accept(first);
+    for n in 1..=3 {
+        h.discover(n, dht(), true).await;
+    }
+    h.until("they wait", |s| load(&s.hint_t1_waits) == 3).await;
+    // Interest in the middle one: its T1 copy can't be trimmed from an end.
+    h.discover_as(2, other(), false, true, false).await;
+    h.until("the sighting", |s| load(&s.duplicates) == 1).await;
+    h.complete(first);
+    let r = h.next().await;
+    assert_eq!(r.key, key(2));
+    let held = h.accept(r);
+    tokio::time::advance(Duration::from_secs(61)).await;
+    h.discover(4, dht(), false).await;
+    h.until("it waits", |s| load(&s.admission_waits[0]) >= 4)
+        .await;
+    assert_eq!(load(&h.stats().hint_t1_left[1]), 2, "only 1 and 3 aged");
+    h.complete(held);
+    assert_eq!(h.serve(3).await, keys(&[1, 3, 4]));
     h.conserved().await;
     h.stop().await;
 }
