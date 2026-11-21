@@ -1,4 +1,4 @@
-# X-sampler-frontier-starve decisions (#PR pending)
+# X-sampler-frontier-starve decisions (#1022)
 
 A lead from the X-test-vm sampler screen, with `dht.sampler_cooldown_split` on:
 - the frontier sat at 0 for about 3.3 h, with every known node in cooldown;
@@ -15,6 +15,8 @@ The `base` network, made larger: 20,000 nodes, Balanced, 90 simulated minutes, s
 - 0.5 % error replies;
 - a remote rate limit of 20 queries a second.
 
+Run it with `cargo test -p lodestar-crawler-sim --test sim sampler_starve -- --ignored --nocapture` (about three minutes; the test's doc comment says what to expect). It's ignored, like the sim's other measurements. Its per-minute sampling counters are read only by this test, so every other sim test and golden is unchanged.
+
 Three arms:
 - **A** has the split on.
 - **B** has it off.
@@ -23,10 +25,10 @@ Three arms:
 | Minutes | A: samples/min | B: samples/min | C: samples/min | A: frontier (mean) | A: cooling (mean) |
 |---|---|---|---|---|---|
 | 1–10 | 2,912 | 2,912 | 2,950 | 2,001 | 15,673 |
-| 11–20 | 1,544 | 1,544 | 1,729 | 0.0 | 18,514 |
-| 31–40 | 1,287 | 1,287 | 1,720 | 0.2 | 18,513 |
-| 51–60 | 1,092 | 1,092 | 1,728 | 0.0 | 18,610 |
-| 81–90 | 860 | 860 | 1,732 | 0.2 | 18,734 |
+| 11–20 | 1,544 | 1,544 | 1,729 | 0.3 | 18,514 |
+| 31–40 | 1,287 | 1,287 | 1,720 | 0.4 | 18,513 |
+| 51–60 | 1,092 | 1,092 | 1,728 | 0.2 | 18,611 |
+| 81–90 | 860 | 860 | 1,732 | 0.4 | 18,734 |
 
 Whole-run totals:
 
@@ -65,12 +67,18 @@ The lever is the 6 h after a single failed sample, and the brief rules it out on
 - **Changing it shortens a cooldown.** Possible changes include a shorter first backoff, or a retry before the 6 h. Either breaks X-sampler-cooldown-split's rule, "a fix never shortens a cooldown".
 - **CR-0d's restart proof relies on it.** `actor.rs:98–99` says so: "CR-0: six hours, which the restart proof relies on". A failed sample's horizon is part of what the proof bounds.
 
-So the decision belongs to the runner, and to the owner if it changes a number the owner set. A possible direction, not built here: escalate the backoff per node (a short first cooldown after one timeout, 6 h after a second in a row). It keeps the 6 h for nodes that really don't answer, but it shortens the first cooldown, and the restart proof's horizon would need re-checking.
+So the decision belongs to the runner, and to the owner if it changes a number the owner set. The runner will place the fix as its own slice.
+
+## Proposal for that slice (not built here)
+Escalate the backoff per node: a short first cooldown after one timeout, and the 6 h after a second in a row. It keeps the 6 h for nodes that really don't answer, and lets a node that dropped one packet come back.
+- **It shortens a first cooldown.** So it needs its own switch, default off; it can't ride on `dht.sampler_cooldown_split`.
+- **It needs a re-check of CR-0d's restart-proof horizon,** which today relies on the 6 h (`actor.rs:98–99`).
+- **It needs the runner's call before it's built.**
 
 ## A metric that would show it
 Today:
 - `dht_sample_cooling` counts cooldowns, but not why each began.
 - `dht_sample_sent_total` shows the falling rate, but not the cause.
-- The actor's `sample_failures` counter exists (`Stats::sample_failures`) but isn't exported.
+- The actor's `sample_failures` counter exists (`Stats::sample_failures`), but it isn't exported.
 
-Proposed: **`dht_sample_cooling{reason}`**, a gauge of live cooldowns by why they began, with reasons `interval` (an answer), `timeout` and `failed` (an error or unsupported reply). A run in this state would show `timeout` and `failed` approaching the whole of `dht_sample_cooling`. Per the brief, adding it to `docs/metrics.md` waits for X-metrics-prefix-doc, so it's named here and sent to the runner. It needs no edit here.
+Proposed: **`dht_sample_cooling{reason}`**, a gauge of live cooldowns by why they began, with reasons `interval` (an answer), `timeout` and `failed` (an error or unsupported reply). A run in this state would show `timeout` and `failed` approaching the whole of `dht_sample_cooling`. Per the brief, adding it to `docs/metrics.md` waits for X-metrics-prefix-doc. The runner queues it, with the backoff change, as its own slice.
