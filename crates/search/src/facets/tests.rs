@@ -1441,10 +1441,17 @@ fn samples_spread_over_the_posting_list_and_skip_deleted_documents() {
     let few: Vec<TorrentDoc> = (0..3).map(|i| grouped(i, "A-G", "g")).collect();
     let small = build(&few, 2);
     let t = tantivy::Term::from_field_text(small.fields().tag, "group:g");
-    assert_eq!(sample_docs(&small.raw().1.searcher(), &t, 8).unwrap().len(), 3);
+    assert_eq!(
+        sample_docs(&small.raw().1.searcher(), &t, 8).unwrap().len(),
+        3
+    );
     // No such term: nothing.
     let none = tantivy::Term::from_field_text(small.fields().tag, "group:zzz");
-    assert!(sample_docs(&small.raw().1.searcher(), &none, 8).unwrap().is_empty());
+    assert!(
+        sample_docs(&small.raw().1.searcher(), &none, 8)
+            .unwrap()
+            .is_empty()
+    );
 
     // Delete every "GRP" spelling: the label follows the live ones.
     let mut docs: Vec<TorrentDoc> = (0..30)
@@ -1512,7 +1519,11 @@ fn spellings_are_found_as_words() {
         ("Movie-RARBG.rarbgx", "rarbg", Some("RARBG")),
         // Inside words only: the last of those.
         ("xRarbgx yRARBGy", "rarbg", Some("RARBG")),
-        ("[FitGirl Repack] Game", "fitgirl repack", Some("FitGirl Repack")),
+        (
+            "[FitGirl Repack] Game",
+            "fitgirl repack",
+            Some("FitGirl Repack"),
+        ),
         ("Nothing here", "rarbg", None),
         ("", "rarbg", None),
         ("RARBG", "", None),
@@ -1556,7 +1567,10 @@ mod label_props {
     fn fit(label: &str, value: &str) -> bool {
         let lowered: Vec<String> = label.chars().map(|c| c.to_lowercase().collect()).collect();
         label.chars().count() == value.chars().count()
-            && lowered.iter().zip(value.chars()).all(|(l, v)| *l == v.to_string())
+            && lowered
+                .iter()
+                .zip(value.chars())
+                .all(|(l, v)| *l == v.to_string())
             && label.nfkc().collect::<String>() == label
     }
 
@@ -1565,7 +1579,13 @@ mod label_props {
         value
             .chars()
             .zip(mask.iter().cycle())
-            .map(|(c, up)| if *up { c.to_uppercase().collect::<String>() } else { c.to_string() })
+            .map(|(c, up)| {
+                if *up {
+                    c.to_uppercase().collect::<String>()
+                } else {
+                    c.to_string()
+                }
+            })
             .collect()
     }
 

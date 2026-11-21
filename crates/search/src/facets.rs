@@ -1441,7 +1441,11 @@ fn sample_docs(
     let readers = searcher.segment_readers();
     let mut freqs = Vec::with_capacity(readers.len());
     for r in readers {
-        freqs.push(u64::from(r.inverted_index(term.field())?.doc_freq(term).map_err(crate::index::Error::Io)?));
+        freqs.push(u64::from(
+            r.inverted_index(term.field())?
+                .doc_freq(term)
+                .map_err(crate::index::Error::Io)?,
+        ));
     }
     let total: u64 = freqs.iter().sum();
     let k = (k as u64).min(total);
