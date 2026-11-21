@@ -308,7 +308,7 @@
 	"filters_rule_mw_4_text": "小得不像真实内容的视频，同时附带程序。",
 	"filters_rule_mw_5": "屏保程序",
 	"filters_rule_mw_5_text": "种子中任何位置的 .scr 或 .pif 文件。两者都会作为程序运行。",
-	"filters_rule_mw_6": "破解软件",
+	"filters_rule_mw_6": "破解软件（恶意软件）",
 	"filters_rule_mw_6_text": "标记为已破解的软件发布，附带破解、注册机或激活工具。",
 	"filters_rule_lu_1": "需要密码的压缩包",
 	"filters_rule_lu_1_text": "媒体被打包进压缩包，并附有让你去别处获取密码的说明。",
@@ -340,7 +340,7 @@
 	"filters_rule_sc_2_text": "针对网络游戏货币或账号的“生成器”和“外挂”。",
 	"filters_rule_uc_1": "影院录制版",
 	"filters_rule_uc_1_text": "电影的摄像机、同步录音、胶转和试映版拷贝。",
-	"filters_rule_uc_2": "破解软件",
+	"filters_rule_uc_2": "破解软件（拷贝）",
 	"filters_rule_uc_2_text": "标记为已破解的软件发布，判断方式与 MW-6 相同。",
 	"filters_rule_uc_3": "压制组风格的影视资源",
 	"filters_rule_uc_3_text": "以压制组风格命名、带有来源标签和发布组的电影和剧集。"

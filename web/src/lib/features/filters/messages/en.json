@@ -308,7 +308,7 @@
 	"filters_rule_mw_4_text": "A video too small to be real, together with a program.",
 	"filters_rule_mw_5": "Screensaver programs",
 	"filters_rule_mw_5_text": "A .scr or .pif file anywhere in the torrent. Both run as programs.",
-	"filters_rule_mw_6": "Cracked software",
+	"filters_rule_mw_6": "Cracked software (malware)",
 	"filters_rule_mw_6_text": "A software release marked as cracked, with a crack, keygen or activator.",
 	"filters_rule_lu_1": "Password-locked archives",
 	"filters_rule_lu_1_text": "Media packed in an archive with a note that sends you elsewhere for the password.",
@@ -340,7 +340,7 @@
 	"filters_rule_sc_2_text": "“Generators” and “hacks” for online-game currency or accounts.",
 	"filters_rule_uc_1": "Cinema recordings",
 	"filters_rule_uc_1_text": "Camcorder, telesync, telecine and screener copies of films.",
-	"filters_rule_uc_2": "Cracked software",
+	"filters_rule_uc_2": "Cracked software (copies)",
 	"filters_rule_uc_2_text": "A software release marked as cracked, as MW-6 reads it.",
 	"filters_rule_uc_3": "Scene film and TV rips",
 	"filters_rule_uc_3_text": "Film and TV rips named in scene style, with a source tag and a release group."

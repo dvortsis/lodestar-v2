@@ -7,6 +7,7 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
 - **The words are en and zh messages keyed by code** (`filters_rule_<code>`, `filters_rule_<code>_text`). The API has no description field (`CoreRuleState`, `PackRuleState`, `PackState`).
   - The packs reuse the Filters screen's own descriptions (`filters_pack_info_*`).
   - The pack names copy the wizard's (`wizard_pack_*`) into filters' own keys (`filters_pack_name_*`). Sharing the wizard's message modules made Rolldown split them into a shared chunk, which cost the wizard's chunk 215 B.
+- **MW-6 and UC-2 read the same flag, so their names say which concern each answers:** "Cracked software (malware)" (破解软件（恶意软件）) and "Cracked software (copies)" (破解软件（拷贝）), kept short for the names chunk. Turning either off leaves the other on (owner §2.39).
 - **A description says what the rule checks, not what it does to a match.** The action is already a badge on the row, and an override can change it, so the text would drift. Examples:
   - CS-4a: "A word for a child near a sexual term in the name or file names."
   - MW-1: "A program disguised as a media file, such as movie.mp4.exe."
@@ -32,27 +33,34 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
 - **The screen starts the import beside `GET /filters`, and shows once both are in,** so a row never changes from its code to its name under the reader.
 - **It waits at most 1.5 s for the texts** (runner, on this slice; the 1.5 s is a runner call, §2.26). After a failure, or 1.5 s without them, it shows with the codes, and a late chunk then names the rows.
   - There's no new spinner: the screen keeps its loading skeleton for that time.
-  - Tests: `names-failed.test.ts` for a chunk that fails, `names-slow.test.ts` for one that never arrives (fake timers), and `names.test.ts` for the holder.
+  - Tests:
+    - `names-failed.test.ts`: a chunk that fails;
+    - `names-slow.test.ts`: one that never arrives (fake timers);
+    - `names-late.test.ts`: one that arrives after the wait, which names the rows then;
+    - `names.test.ts`: the holder.
 
 ## Danger style for loosening child safety
 - **The rule (runner, on this slice):** a change that loosens child safety uses the danger style; everything else uses the ordinary style, strengthening included. The changes that loosen child safety are:
   - turning a CS rule off, or weakening one;
-  - removing a pending floor removal's entries from the floor.
+  - removing a pending floor removal's entries from the floor;
+  - Release and False positive on a review-queue row held by a CS rule (its code starts `CS-`, CS-0a included), which §20.5 treats as weakening (runner's review). Confirm, which adds to CS-1, stays ordinary, and so do the same buttons on a pack's hold.
 - **Where it shows:**
   - the CS row's "Turn off …" button;
   - a pending floor removal's "Remove from the floor";
+  - the queue's Release and False positive on a CS hold;
   - the dialog's Apply for those changes (`Pending.danger`, `ChangeDialog`'s `danger`).
   - All of them use `Button`'s `danger` variant, which is design tokens with no hex. Turning a CS rule back on, pack switches and your own rules keep the ordinary style.
 - **Style only.**
   - The change, the preview, the effect warning and the password are exactly as before.
   - Whether a change weakens is still the server's call (`confirm`). The danger flag is the screen's, from what the button does, and never decides whether the password is asked.
   - Tests check each case, and that the password is still asked first.
+- **Undo is left ordinary (follow-up).** The screen can't tell what Undo reverses before it runs: it sends `{op: "undo"}`, and the server says what it restores only in the preview. Styling it would mean changing how Undo works, or styling the dialog from the preview's numbers (`core_caught_30d`, `removed_from_floor`), which would apply to every change's dialog. Both are outside this slice, so it's a follow-up for the runner.
 - **A UX call to flag (§2.26):** with several CS rules on, the list shows several solid danger buttons, one per rule. `Button` has no outline danger variant, and the brief asks for the danger style on the row button, so it's used as it is.
 
 ## Packs collapsed (U32)
 - **Each pack's panel (versions, changelog, corpus status, its rules) is collapsed by default.** It sits behind a real `<button aria-expanded aria-controls>`, "Rules and versions of <pack>", with the same caret as the Sources rows.
   - The body stays in the page (`hidden`), so an unsaved override edit survives closing it.
-  - A closed pack with a version waiting shows "A newer version is waiting", so collapsing never hides that something needs a decision.
+  - A closed pack with a version waiting shows "A newer version is waiting", so collapsing never hides that something needs a decision. The badge describes the closed disclosure button (`aria-describedby`), so a screen reader hears it on the button.
 - **The "Version" row, which lists the rule ids, reads "Rule versions"** ("规则版本").
 - **Page height at 390 px.** Measured with Playwright at 390 × 844, mock data with all 33 built-in rules in the 10-rule core and 6 packs, every pack on, nothing pending, and the empty queue:
 
@@ -97,6 +105,9 @@ gzip, main ea6ff8c1 → this branch. The new limits are the runner's calls (§2.
   - About 30 other entries moved ±1–10 B the same way.
   - Main had 1 B of headroom there.
 - **The packs list and the pack panels fall to their measured sizes,** so the bytes they freed can't be quietly spent.
+
+## Specs
+- **The e2e specs that reach into a pack panel open it first:** `filters-packs.keyboard` by keyboard, and `packs.routes` by click. No other spec uses the panels' test ids.
 
 ## Left alone
 - **The review queue and the exceptions list still show a rule's code** (`Badge {rule}`): the brief covers rule rows, packs and the dialogs that name a rule. Naming them there too is a follow-up for the runner.

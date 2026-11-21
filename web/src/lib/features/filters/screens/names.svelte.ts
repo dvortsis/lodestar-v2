@@ -1,7 +1,7 @@
 // The names and descriptions of rules and packs (`rule-text.ts`), loaded once, on demand. Until
 // they're in, or when they can't load, every rule and pack is named by its code: never an empty
 // label.
-type Texts = typeof import('./rule-text');
+type Texts = Pick<typeof import('./rule-text'), 'nameOf' | 'textOf'>;
 
 let texts = $state.raw<Texts | null>(null);
 let loading: Promise<void> | undefined;
@@ -9,8 +9,9 @@ let loading: Promise<void> | undefined;
 /** Loads the texts; settles either way, and a failure lets a later call try again. */
 export function loadNames(): Promise<void> {
 	return (loading ??= import('./rule-text').then(
+		// Its two lookups, not the module namespace object.
 		(t) => {
-			texts = t;
+			texts = { nameOf: t.nameOf, textOf: t.textOf };
 		},
 		() => {
 			loading = undefined;

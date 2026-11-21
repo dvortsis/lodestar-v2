@@ -138,7 +138,10 @@ describe('a pack collapsed by default', () => {
 		const waiting = screen.getByTestId('pack-waiting-malware');
 		expect(body.contains(waiting)).toBe(false);
 		expect(waiting.textContent?.trim()).toBe('A newer version is waiting');
+		// The closed disclosure is described by it, so a screen reader hears it on the button.
+		expect(toggle.getAttribute('aria-describedby')).toBe(waiting.id);
 		await fireEvent.click(toggle);
+		expect(toggle.getAttribute('aria-describedby')).toBeNull();
 		expect(screen.queryByTestId('pack-waiting-malware')).toBeNull();
 	});
 	it('names its rules, with the code and version as secondary text', async () => {

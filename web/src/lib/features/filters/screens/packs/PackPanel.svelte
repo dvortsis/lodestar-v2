@@ -45,6 +45,7 @@
 			class="flex items-center gap-2 rounded-field text-start {FOCUS_RING} {TARGET_MIN}"
 			aria-expanded={open}
 			aria-controls="pack-body-{pack.id}"
+			aria-describedby={pending.length && !open ? `pack-waiting-${pack.id}` : undefined}
 			onclick={() => (open = !open)}
 			data-testid="pack-expand-{pack.id}"
 		>
@@ -56,7 +57,7 @@
 		</button>
 	</h3>
 	{#if pending.length && !open}
-		<div data-testid="pack-waiting-{pack.id}">
+		<div id="pack-waiting-{pack.id}" data-testid="pack-waiting-{pack.id}">
 			<Badge variant="info">{m.filters_packs_pending_title()}</Badge>
 		</div>
 	{/if}

@@ -4,7 +4,8 @@
 	// adult is left out unless "Show adult content" is on. Release, False positive and Confirm
 	// each go through the flow's dialog, and the list reloads when the overview's version moves.
 	// A torrent held as too large to judge (CS-0a) says so, and has no False positive: that rule is
-	// locked and takes no exceptions.
+	// locked and takes no exceptions. Release and False positive on a hold by a child-safety rule
+	// loosen child safety, so they use the danger style (X-safety-toggles); the flow is the same.
 	import { onDestroy } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
@@ -67,6 +68,7 @@
 
 	// The rule's own id, before any suffix a stored hold carries, as the server reads it.
 	const tooLarge = (rule: string) => rule.split('+')[0] === 'CS-0a';
+	const childSafety = (rule: string) => rule.startsWith('CS-');
 	const rows = $derived(
 		queue ? [...queue.quarantine, ...more].filter((r) => model.adult || !r.adult_hold) : []
 	);
@@ -109,9 +111,11 @@
 				{/if}
 				<Button
 					dense
+					variant={childSafety(r.rule) ? 'danger' : 'secondary'}
 					onclick={() =>
 						ask(release(r.hash), {
 							title: m.filters_queue_release_title(),
+							danger: childSafety(r.rule),
 							applyLabel: m.filters_queue_release()
 						})}
 					data-testid="queue-release-{r.hash}">{m.filters_queue_release()}</Button
@@ -119,9 +123,11 @@
 				{#if !tooLarge(r.rule)}
 					<Button
 						dense
+						variant={childSafety(r.rule) ? 'danger' : 'secondary'}
 						onclick={() =>
 							ask(falsePositive(r.hash), {
 								title: m.filters_queue_fp_title(),
+								danger: childSafety(r.rule),
 								applyLabel: m.filters_queue_fp()
 							})}
 						data-testid="queue-fp-{r.hash}">{m.filters_queue_fp()}</Button

@@ -176,6 +176,41 @@ describe('danger style for loosening child safety', () => {
 			// Still a weakening change: the password before any apply.
 			expect(net.to('/filters/apply')).toHaveLength(0);
 		});
+	it('Release and False positive on a child-safety hold are danger; on a pack hold and Confirm, not', async () => {
+		setup();
+		const PK = 'c'.repeat(40);
+		net.on('GET /filters/queue', {
+			body: {
+				...queue,
+				quarantine: [
+					queue.quarantine[0],
+					{ ...queue.quarantine[0], hash: PK, rule: 'MW-4', sealed: false, name: null }
+				]
+			}
+		});
+		const release = await screen.findByTestId(`queue-release-${H}`);
+		expect(release.className).toContain('btn-error');
+		expect(screen.getByTestId(`queue-fp-${H}`).className).toContain('btn-error');
+		// Confirming abuse strengthens: the ordinary style.
+		expect(screen.getByTestId(`queue-confirm-${H}`).className).not.toContain('btn-error');
+		const pack = await screen.findByTestId(`queue-release-${PK}`);
+		expect(pack.className).not.toContain('btn-error');
+		expect(screen.getByTestId(`queue-fp-${PK}`).className).not.toContain('btn-error');
+	});
+	const queueApply: [string, string, boolean][] = [
+		['release of a CS hold', `queue-release-${H}`, true],
+		['false positive on a CS hold', `queue-fp-${H}`, true],
+		['confirm', `queue-confirm-${H}`, false]
+	];
+	for (const [name, id, danger] of queueApply)
+		it(`${name}: Apply is ${danger ? '' : 'not '}in the danger style, and the password still comes first`, async () => {
+			setup();
+			job(weakening());
+			await fireEvent.click(await screen.findByTestId(id));
+			await screen.findByTestId('change-password');
+			expect(screen.getByTestId('change-apply').className.includes('btn-error')).toBe(danger);
+			expect(net.to('/filters/apply')).toHaveLength(0);
+		});
 	it('turning a core rule back on keeps the ordinary style', async () => {
 		setup(false, {
 			core: [{ id: 'CS-2a', on: false, floor: false, action: 'quarantine' }]
