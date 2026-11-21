@@ -1,7 +1,7 @@
 <script lang="ts">
-	import IconOpen from '~icons/ph/arrow-square-out';
-	import IconCopy from '~icons/ph/copy';
-	import IconRemove from '~icons/ph/x';
+	import IconOpen from '~icons/ph/arrow-square-out-bold';
+	import IconCopy from '~icons/ph/copy-bold';
+	import IconRemove from '~icons/ph/x-bold';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import { m } from '$lib/paraglide/messages.js';

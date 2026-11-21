@@ -8,7 +8,7 @@
 	// the first open.
 	import { createPending } from './pending.svelte';
 	import { onMount } from 'svelte';
-	import Sliders from '~icons/ph/sliders-horizontal';
+	import Sliders from '~icons/ph/sliders-horizontal-bold';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';

@@ -4,7 +4,7 @@
 import { m } from '$lib/paraglide/messages.js';
 import type { About } from '../shell/screens';
 
-export { default } from '~icons/ph/puzzle-piece';
+export { default } from '~icons/ph/puzzle-piece-bold';
 export const ABOUT: Record<string, About> = {
 	companions: { purpose: m.settings_companions_purpose }
 };

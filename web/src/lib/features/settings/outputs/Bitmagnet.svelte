@@ -15,7 +15,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
-	import IconWarning from '~icons/ph/warning';
+	import IconWarning from '~icons/ph/warning-bold';
 	import { EXPORT_URL, exportView, keepPolling, lastExportId, ourExport, type Job } from './logic';
 
 	const CONTENT = { path: { section: 'content' } } as const;

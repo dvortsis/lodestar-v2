@@ -28,7 +28,7 @@
 	role="group"
 	aria-labelledby={controlProps['aria-labelledby']}
 	aria-describedby={controlProps['aria-describedby']}
-	class="grid gap-3 sm:grid-cols-2"
+	class="grid gap-3"
 >
 	{#each COMPONENT_IDS.filter((c) => c !== 'libraries') as c (c)}
 		<label class="flex flex-col gap-1">

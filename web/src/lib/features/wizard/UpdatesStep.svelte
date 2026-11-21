@@ -4,7 +4,7 @@
 	// GitHub. A value set by the environment is shown locked.
 	import { onDestroy, untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconLock from '~icons/ph/lock-simple';
+	import IconLock from '~icons/ph/lock-simple-bold';
 	import Radio from '$lib/ui/fields/Radio.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { SettingsForm, createSettingsForm } from '../settings/form/embed';

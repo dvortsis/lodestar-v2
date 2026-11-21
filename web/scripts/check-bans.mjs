@@ -1,4 +1,5 @@
-// Fails on hex colour literals, Tailwind arbitrary values, off-ramp spacing steps and off-scale text sizes in src/**/*.{svelte,ts}.
+// Fails on hex colour literals, Tailwind arbitrary values, off-ramp spacing steps, off-scale text sizes,
+// dead breakpoint variants and unweighted Phosphor icons in src/**/*.{svelte,ts,css}.
 // Exempt: src/lib/theme/** and generated files (see bans.mjs).
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -20,7 +21,10 @@ const messages = {
 	arbitrary: 'Tailwind arbitrary value; use a token or scale value',
 	spacing:
 		'spacing step is off the ramp (design-tokens.md §5); use an allowed step or a layout token',
-	text: 'text size is off the §8 scale (caption, small, body, body-lg, title, display)'
+	text: 'text size is off the §8 scale (caption, small, body, body-lg, title, display)',
+	breakpoint:
+		'sm:/md:/lg:/xl:/2xl: compile to nothing here; use the §7 variants (medium:, large:, x-large:, xx-large:, xxx-large:)',
+	icon: 'Phosphor icon without a weight; import the -bold glyph (-fill only for selected or on states)'
 };
 
 const failures = [];

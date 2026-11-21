@@ -116,7 +116,7 @@
 		{#each result.unraid as u (u.file_name)}
 			<div class="flex flex-col gap-1 text-small" data-unraid-fields>
 				<p>{m.settings_companions_template_unraid_path({ path: u.add_container_path })}</p>
-				<dl class="grid grid-cols-1 gap-1 sm:grid-cols-2">
+				<dl class="grid grid-cols-1 gap-1">
 					{#each u.fields as f (f.label)}
 						<dt class="text-muted-text">{f.label}</dt>
 						<dd class="break-all font-mono text-caption">{f.value}</dd>

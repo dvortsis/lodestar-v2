@@ -2,7 +2,7 @@
 	// The overflow menu (§10.3): the items of MORE in nav.ts (only screens that exist), then Sign out,
 	// an action rather than a route. A separate file so the menu primitive (Bits UI + positioning)
 	// loads on first use instead of with the page.
-	import IconMore from '~icons/ph/dots-three';
+	import IconMore from '~icons/ph/dots-three-bold';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';

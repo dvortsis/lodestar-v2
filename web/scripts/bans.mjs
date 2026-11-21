@@ -19,6 +19,21 @@ export const OFF_SCALE_TEXT =
 	/(?:^|[\s"'`:!(])text-(?:xs|sm|base|lg|xl|[2-9]xl|h[1-6]|heading|headline|subtitle|large|huge|tiny|md|medium|label)(?=$|[\s"'`)!;=/,}])/;
 
 /**
+ * A Tailwind breakpoint variant from the default screens (`sm:`, `md:`, `lg:`, `xl:`, `2xl:`): the
+ * theme resets `--breakpoint-*` to the §7 ranges (`medium:` … `xxx-large:`), so these compile to
+ * nothing and the class silently does nothing (X-ui-guards). Only a class-like use counts: a
+ * prefix that starts a class or follows another variant, glued to a utility. `{ md: 1 }`, a
+ * parameter `md: string` and `cond ? sm : lg` are code, not classes, and stay allowed.
+ */
+export const DEAD_BREAKPOINT = /(?:^|[\s"'`!:])(?:2xl|xl|lg|md|sm):(?=[a-z!-])/;
+
+/**
+ * A Phosphor import without a weight (§10.2 icons: Phosphor Bold, Fill only for selected or on
+ * states). `~icons/ph/gear` is the Regular weight, which the design doesn't use (X-ui-guards).
+ */
+export const UNWEIGHTED_ICON = /~icons\/ph\/[a-z0-9-]+?(?<!-bold|-fill)(?=['"`?])/;
+
+/**
  * Spacing steps allowed in utilities (design-tokens.md §5): the §10.2 ramp as Tailwind steps,
  * where step n is n x 4px. Anything else (`p-11`, `gap-15`, `m-3.5`, `w-64`) is off the ramp.
  * Fixed sizes are not steps: they are named layout tokens from design-tokens.md §7, written
@@ -85,7 +100,7 @@ function stripFragmentValues(line) {
 	);
 }
 
-/** @returns {{ line: number, kind: 'hex' | 'arbitrary' | 'spacing' | 'text' }[]} */
+/** @returns {{ line: number, kind: 'hex' | 'arbitrary' | 'spacing' | 'text' | 'breakpoint' | 'icon' }[]} */
 export function findViolations(source) {
 	const found = [];
 	stripComments(source)
@@ -95,6 +110,8 @@ export function findViolations(source) {
 			if (ARBITRARY_VALUE.test(line)) found.push({ line: i + 1, kind: 'arbitrary' });
 			if (hasOffRampStep(line)) found.push({ line: i + 1, kind: 'spacing' });
 			if (OFF_SCALE_TEXT.test(line)) found.push({ line: i + 1, kind: 'text' });
+			if (DEAD_BREAKPOINT.test(line)) found.push({ line: i + 1, kind: 'breakpoint' });
+			if (UNWEIGHTED_ICON.test(line)) found.push({ line: i + 1, kind: 'icon' });
 		});
 	return found;
 }

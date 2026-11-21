@@ -5,8 +5,8 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconSet from '~icons/ph/check-circle';
-	import IconUnset from '~icons/ph/circle-dashed';
+	import IconSet from '~icons/ph/check-circle-bold';
+	import IconUnset from '~icons/ph/circle-dashed-bold';
 	import { ask } from './dialogs';
 	import type { SettingsForm } from './form.svelte';
 	import type { FieldKey } from './types';

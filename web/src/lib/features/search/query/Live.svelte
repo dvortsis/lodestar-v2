@@ -4,7 +4,7 @@
 	// active-filter strip (itself lazy until there is a chip). The URL is the state (§10.3): every
 	// write goes through W5, after `ensureSearchPath()`.
 	import { onDestroy, onMount, untrack } from 'svelte';
-	import IconError from '~icons/ph/warning-circle';
+	import IconError from '~icons/ph/warning-circle-bold';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { search, type Ast } from '$lib/state/search.svelte';

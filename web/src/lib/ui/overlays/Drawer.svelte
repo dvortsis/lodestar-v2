@@ -4,7 +4,7 @@
 	// The width is controlled: the feature persists it from `onWidthChange` (no storage in here).
 	import type { Snippet } from 'svelte';
 	import { drawerSlide, tokenPx } from './motion';
-	import IconX from '~icons/ph/x';
+	import IconX from '~icons/ph/x-bold';
 	import './overlays.css';
 
 	interface Props {

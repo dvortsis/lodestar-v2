@@ -3,7 +3,7 @@
 	// open and restored to the invoker on close (§10.13). Not for direct use by features.
 	import { Dialog } from 'bits-ui';
 	import type { Snippet } from 'svelte';
-	import IconX from '~icons/ph/x';
+	import IconX from '~icons/ph/x-bold';
 	import './overlays.css';
 
 	interface Props {

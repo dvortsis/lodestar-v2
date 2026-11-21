@@ -8,11 +8,11 @@
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconRestart from '~icons/ph/arrows-clockwise';
-	import IconMenu from '~icons/ph/dots-three';
-	import IconFile from '~icons/ph/file';
-	import IconInfo from '~icons/ph/info';
-	import IconLock from '~icons/ph/lock-simple';
+	import IconRestart from '~icons/ph/arrows-clockwise-bold';
+	import IconMenu from '~icons/ph/dots-three-bold';
+	import IconFile from '~icons/ph/file-bold';
+	import IconInfo from '~icons/ph/info-bold';
+	import IconLock from '~icons/ph/lock-simple-bold';
 	import Control from './Control.svelte';
 	import LazyControl from './LazyControl.svelte';
 	import { controlOf, lazyOf } from './controls.svelte';

@@ -3,10 +3,18 @@ import svelte from 'eslint-plugin-svelte';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 import svelteConfig from './svelte.config.js';
-import { ARBITRARY_VALUE, FRAGMENT_ATTRIBUTES, HEX_COLOUR, offRampSteps } from './scripts/bans.mjs';
+import {
+	ARBITRARY_VALUE,
+	DEAD_BREAKPOINT,
+	FRAGMENT_ATTRIBUTES,
+	HEX_COLOUR,
+	UNWEIGHTED_ICON,
+	offRampSteps
+} from './scripts/bans.mjs';
 
 // §10.18: no hex colours and no Tailwind arbitrary values outside the theme module; §10.2:
-// spacing utilities only on the ramp (design-tokens.md §5).
+// spacing utilities only on the ramp (design-tokens.md §5); no dead breakpoint variants and no
+// unweighted Phosphor icons (X-ui-guards).
 // Shares its patterns with scripts/check-bans.mjs.
 const noBannedLiterals = {
 	meta: { type: 'problem', schema: [] },
@@ -19,6 +27,20 @@ const noBannedLiterals = {
 				context.report({
 					node,
 					message: 'Tailwind arbitrary value: use a token or scale value.'
+				});
+			}
+			if (DEAD_BREAKPOINT.test(text)) {
+				context.report({
+					node,
+					message:
+						'sm:/md:/lg:/xl:/2xl: compile to nothing here: use medium:, large:, x-large:, xx-large: or xxx-large:.'
+				});
+			}
+			if (UNWEIGHTED_ICON.test(text)) {
+				context.report({
+					node,
+					message:
+						'Phosphor icon without a weight: import the -bold glyph (-fill only for selected or on states).'
 				});
 			}
 			const steps = offRampSteps(text);

@@ -8,10 +8,10 @@
 	import { formatCount } from '$lib/format';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import IconCheck from '~icons/ph/check-circle';
-	import IconSkip from '~icons/ph/skip-forward';
-	import IconHere from '~icons/ph/arrow-circle-right';
-	import IconLater from '~icons/ph/circle';
+	import IconCheck from '~icons/ph/check-circle-bold';
+	import IconSkip from '~icons/ph/skip-forward-bold';
+	import IconHere from '~icons/ph/arrow-circle-right-bold';
+	import IconLater from '~icons/ph/circle-bold';
 	import {
 		SETUP_STEPS,
 		STEPS,

@@ -2,7 +2,7 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import IconButton from '$lib/ui/controls/IconButton.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
-	import IconGear from '~icons/ph/gear';
+	import IconGear from '~icons/ph/gear-bold';
 
 	const variants = ['primary', 'secondary', 'quiet', 'danger'] as const;
 	let density = $state('comfortable');

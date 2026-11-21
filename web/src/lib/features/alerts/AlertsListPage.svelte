@@ -3,8 +3,8 @@
 	// counts. A table from `large` up, a stacked list below, from one data path. Live: an `alerts`
 	// event refetches the list, and the rows change in place (no reordering, no animation).
 	import { onMount, tick } from 'svelte';
-	import IconTrash from '~icons/ph/trash';
-	import IconPause from '~icons/ph/pause';
+	import IconTrash from '~icons/ph/trash-bold';
+	import IconPause from '~icons/ph/pause-bold';
 	import StateScene from '$lib/shell/StateScene.svelte';
 	import { events } from '$lib/state/events.svelte';
 	import { formatCount } from '$lib/format';

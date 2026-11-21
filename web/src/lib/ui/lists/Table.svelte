@@ -2,9 +2,9 @@
 	// Data table on VirtualList's grid semantics: sortable headers (aria-sort), a sticky header, a
 	// column chooser and a checkbox column with shift-range selection. Every piece of state
 	// (sort, visible columns, selection) is a controlled prop; the table never stores anything.
-	import IconCaretUp from '~icons/ph/caret-up';
-	import IconCaretDown from '~icons/ph/caret-down';
-	import IconColumns from '~icons/ph/columns';
+	import IconCaretUp from '~icons/ph/caret-up-bold';
+	import IconCaretDown from '~icons/ph/caret-down-bold';
+	import IconColumns from '~icons/ph/columns-bold';
 	import Popover from '../overlays/Popover.svelte';
 	import VirtualList from './VirtualList.svelte';
 	import type { Column, SortState } from './table-types';

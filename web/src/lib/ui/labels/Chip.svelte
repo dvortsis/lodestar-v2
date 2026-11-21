@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { tick, type Snippet } from 'svelte';
-	import IconClose from '~icons/ph/x';
+	import IconClose from '~icons/ph/x-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '../classes';
 

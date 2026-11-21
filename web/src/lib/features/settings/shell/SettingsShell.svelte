@@ -29,7 +29,7 @@
 	const href = (path: string) => resolve(withDensity(path, page.url.searchParams) as Route);
 </script>
 
-<div class="settings-shell p-4 xl:p-6" class:settings-overview={overview}>
+<div class="settings-shell p-4" class:settings-overview={overview}>
 	<aside class="settings-navigation flex flex-col gap-6">
 		<a
 			class="ls-focus text-title font-semibold"

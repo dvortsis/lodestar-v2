@@ -5,7 +5,7 @@
 	// with the password (POST /setup), and the server refuses any other version (409
 	// notice_required), which brings this step back with the new text.
 	import { tick } from 'svelte';
-	import IconWarning from '~icons/ph/warning-circle';
+	import IconWarning from '~icons/ph/warning-circle-bold';
 	import Checkbox from '$lib/ui/fields/Checkbox.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import NoticeBox from '../auth/NoticeBox.svelte';

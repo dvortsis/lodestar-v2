@@ -1,7 +1,7 @@
 // The screens generated from the schema (§10.10.8), in the shape the shell's registry finds
 // (shell/screens.ts). Only implemented destinations belong here: Security, filters and address
 // changes need their own guarded interactions, so a schema alone does not make them writable.
-import IconGeneral from '~icons/ph/gear';
+import IconGeneral from '~icons/ph/gear-bold';
 import { m } from '$lib/paraglide/messages.js';
 import type { Screen } from '../shell/screens';
 

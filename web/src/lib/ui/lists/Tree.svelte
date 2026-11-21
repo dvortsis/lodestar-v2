@@ -2,10 +2,10 @@
 	// WAI-ARIA tree over a flat, pre-ordered node array, virtualised through VirtualList. Only the
 	// visible rows exist as an array (the flattened row model), so 100k nodes stay cheap.
 	// Checkboxes are tri-state on directories ("Send selected files"); sizes arrive formatted.
-	import IconCaretRight from '~icons/ph/caret-right';
-	import IconFolder from '~icons/ph/folder';
-	import IconFile from '~icons/ph/file';
-	import IconCheck from '~icons/ph/check';
+	import IconCaretRight from '~icons/ph/caret-right-bold';
+	import IconFolder from '~icons/ph/folder-bold';
+	import IconFile from '~icons/ph/file-bold';
+	import IconCheck from '~icons/ph/check-bold';
 	import VirtualList from './VirtualList.svelte';
 	import {
 		buildIndex,

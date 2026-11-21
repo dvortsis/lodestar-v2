@@ -1,5 +1,5 @@
 <script lang="ts">
-	import IconDiffers from '~icons/ph/not-equals';
+	import IconDiffers from '~icons/ph/not-equals-bold';
 	import { m } from '$lib/paraglide/messages.js';
 </script>
 
