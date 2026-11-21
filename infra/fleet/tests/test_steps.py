@@ -31,6 +31,26 @@ VM = Path(steps.__file__).resolve().parent / "vm"
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def _collector_constant(name):
+    """A literal from the collector (docs/soak/tools/linux/collect.py), read without
+    importing it: SWITCH_ENV is the one list of crawler switches the fleet stack's
+    lists are checked against (X-fleet-switch-passthrough)."""
+    import ast
+    tree = ast.parse((ROOT / "docs/soak/tools/linux/collect.py").read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets):
+            value = node.value
+            if isinstance(value, ast.Call):  # frozenset((...))
+                value = value.args[0]
+            return ast.literal_eval(value)
+    raise AssertionError(f"collect.py has no {name}")
+
+
+def switch_env():
+    """Every crawler switch's environment variable, from the collector's SWITCH_ENV."""
+    return sorted(_collector_constant("SWITCH_ENV").values())
+
+
 def host_key(n: int) -> str:
     return "ssh-ed25519 " + base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + bytes([n]) * 32).decode()
 
@@ -347,6 +367,21 @@ class Compose(unittest.TestCase):
         cls.doc = yaml.safe_load((VM / "compose.yaml").read_text())
         cls.svc = cls.doc["services"]
 
+    def test_every_crawler_switch_passes_through_by_bare_name(self):
+        """X-fleet-switch-passthrough: a cloud screen or an A/B block can set any crawler
+        switch, and one it doesn't set stays unset (its shipped default)."""
+        env = self.svc["lodestar"]["environment"]
+        bare = [e for e in env if "=" not in e]
+        self.assertEqual(len(bare), len(set(bare)))
+        self.assertEqual(sorted(bare), switch_env())
+        self.assertFalse([e for e in env if e.startswith("LODESTAR_DHT_") and "=" in e])  # none pinned here
+        # Every LODESTAR_DHT_* variable Lodestar reads is a switch the collector knows,
+        # or one of the settings it knows aren't switches: a new switch can't be missed.
+        read = set(re.findall(r'env\("(LODESTAR_DHT_[A-Z_]+)"\)', (ROOT / "crates/lodestar/src/config.rs").read_text()))
+        self.assertIn("LODESTAR_DHT_ROUTE_BACKOFF", read)
+        settings = _collector_constant("DHT_SETTING_ENV")
+        self.assertEqual(sorted(read - set(settings) - set(switch_env())), [])
+
     def test_gluetun_pinned_by_digest_with_its_firewall_on(self):
         g = self.svc["gluetun"]
         self.assertRegex(g["image"], r"^qmcgaw/gluetun@sha256:[0-9a-f]{64}$")  # never a tag
@@ -444,10 +479,9 @@ class Compose(unittest.TestCase):
         # with gluetun (X-gluetun-restart-recover).
         self.assertEqual(lod["restart"], "no")
         self.assertEqual(lod["depends_on"], {"gluetun": {"condition": "service_started", "restart": True}})
-        self.assertEqual(lod["environment"], ["TZ=Etc/UTC", "LODESTAR_EXIT_ON_NETWORK_LOSS=true",
-                                              "LODESTAR_DHT_SAFE_RESTART",
-                                              "LODESTAR_DHT_COORDINATED_ADMISSION", "LODESTAR_DHT_UTP",
-                                              "LODESTAR_DHT_ROUTE_BACKOFF"])
+        self.assertEqual(lod["environment"][:2], ["TZ=Etc/UTC", "LODESTAR_EXIT_ON_NETWORK_LOSS=true"])
+        # Then every crawler switch, by bare name (test_every_crawler_switch_passes_through_by_bare_name).
+        self.assertEqual(sorted(lod["environment"][2:]), switch_env())
         self.assertIn("no-new-privileges:true", lod["security_opt"])
         self.assertEqual(set(self.svc), {"gluetun", "lodestar", "docker-proxy"})
 

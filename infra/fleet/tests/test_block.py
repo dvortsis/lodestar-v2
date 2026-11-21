@@ -25,7 +25,7 @@ from lock import MemoryStore
 from steps import remote, rules, run as steps
 from tests.helpers import Clock, FakeGitHub, event_env, make_repo
 from tests.test_live import ENV, FakeLinodeAPI, backend
-from tests.test_steps import FakeBackend, slot
+from tests.test_steps import FakeBackend, slot, switch_env
 
 VM = Path(steps.__file__).resolve().parent / "vm"
 scrub = steps._scrubber()
@@ -411,6 +411,18 @@ class StartBlockControl(unittest.TestCase):
 
 
 class StartBlock(Base):
+    def test_every_crawler_switch_is_unset_before_lodestar_starts(self):
+        """X-fleet-switch-passthrough: start_lodestar unsets block-lib's CRAWLER_SWITCHES,
+        which are exactly the switches compose passes through (the collector's SWITCH_ENV)."""
+        text = (VM / "block-lib.sh").read_text()
+        m = re.search(r"^CRAWLER_SWITCHES=\(\n(.*?)^\)$", text, re.S | re.M)
+        self.assertIsNotNone(m)
+        names = m.group(1).split()
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(sorted(names), switch_env())
+        self.assertIn('    unset "${CRAWLER_SWITCHES[@]}"\n', text)
+        self.assertNotRegex(text, r"unset LODESTAR_DHT_")  # no second list to fall behind
+
     def test_starts_a_block(self):
         self.args()
         old = self.block / "evidence" / "seg-1"
@@ -419,7 +431,8 @@ class StartBlock(Base):
         (self.block / "copied").write_text("")  # copy-off took it
         (self.stack / "witness").mkdir()
         (self.stack / "witness" / "old").write_text("a past block's witness")
-        rc, lines, raw = self.run_script("start-block.sh", LODESTAR_DHT_UTP="true")
+        # Every crawler switch set in the caller's environment, none of which may reach compose.
+        rc, lines, raw = self.run_script("start-block.sh", **{v: "true" for v in switch_env()})
         self.assertEqual(rc, 0, raw)
         self.assertEqual(lines[-1], "ok start_block")
         for n in ("args_valid", "no_block", "leak_test", "leak_test_passed", "marker_written", "lodestar_started",
@@ -438,7 +451,7 @@ class StartBlock(Base):
                          "# the collector at the rules commit\n")
         self.assertEqual((self.block / "block.env").read_text().count("\n"), 7)
         # Segment 1 is the control arm; safe restart is on for the whole block.
-        # (LODESTAR_DHT_UTP=true in the caller's environment never reaches compose.)
+        # (Every switch set to true in the caller's environment never reaches compose.)
         self.assertEqual((self.stub / "arm.env").read_text(),
                          "LODESTAR_DHT_COORDINATED_ADMISSION=false\nLODESTAR_DHT_SAFE_RESTART=true\n"
                          f"LODESTAR_IMAGE=ghcr.io/dvortsis/lodestar-v2@sha256:{DIGEST}\n")

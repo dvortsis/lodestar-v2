@@ -312,6 +312,8 @@ For Worker, use `"worker"` in place of `"main"`. Check the address against Cloud
 
 Don't restart gluetun by hand in a block: a gluetun restart needs a Lodestar restart (`docs/operations.md` §4.3), which ends the segment anyway.
 
+**The restart drill** (`docker compose restart lodestar` in `/home/lodestar/lodestar`, on a test VM) needs `LODESTAR_IMAGE` and `DOCKER_GID` set, or Compose refuses the command: `compose.yaml` requires both. Set them as start-block does: `LODESTAR_IMAGE=ghcr.io/dvortsis/lodestar-v2@sha256:<IMAGE_DIGEST from /var/lib/lodestar-block/block.env>` (or `sha256:<LOCAL_IMAGE_ID>` for a locally built image) and `DOCKER_GID=unused`. A restart doesn't recreate the container, so it keeps the image and switches it started with.
+
 ## 7. Renewing the VPN, host keys, and where the evidence lands
 - **`/fleet run renew-vpn <vm>`** delivers the PIA login again, through the same `deliver-pia` chain as after `up`. It first answers `run renew-vpn <vm>: deliver the PIA login again (deliver-pia, under this run's lock)`, then:
   - **outside a block,** with gluetun running: it restarts gluetun (and Lodestar, if running), so the new configuration takes effect: `deliver-pia: main: delivered; /run clean`;
