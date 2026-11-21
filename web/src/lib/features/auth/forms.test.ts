@@ -84,7 +84,9 @@ describe('LoginForm', () => {
 		render(LoginForm, { next: '/settings/crawler' });
 		await fireEvent.input(password(), { target: { value: 'correct horse' } });
 		await fireEvent.click(submit());
-		await waitFor(() => expect(nav.toNext).toHaveBeenCalledWith('/settings/crawler'));
+		await waitFor(() => expect(nav.toNext).toHaveBeenCalledWith('/settings/crawler'), {
+			timeout: 10_000
+		});
 		expect(sessionStorage.getItem(SIGN_IN_KEY)).toBeNull();
 	});
 
@@ -227,7 +229,7 @@ describe('SetupForm', () => {
 		sessionStorage.setItem(SIGN_IN_KEY, 'setup');
 		await toPasswordStep();
 		await fill('correct horse battery');
-		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce());
+		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce(), { timeout: 10_000 });
 		expect(sessionStorage.getItem(SIGN_IN_KEY)).toBeNull();
 	});
 

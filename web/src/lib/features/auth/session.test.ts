@@ -268,28 +268,55 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
 	});
 
+	/**
+	 * A fetch whose `GET /auth` calls wait until the test answers them, in order; other requests
+	 * answer `rest`. So a test sees the probe the app itself started, and answers it when it likes.
+	 */
+	function heldAuth(rest: (url: string) => Response | Promise<Response> = () => json(200, [])) {
+		const asked: ((r: Response | Error) => void)[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn((url: string | URL | Request) =>
+				String(url).endsWith('/auth')
+					? new Promise<Response>((ok, fail) =>
+							asked.push((r) => (r instanceof Error ? fail(r) : ok(r)))
+						)
+					: Promise.resolve(rest(String(url)))
+			)
+		);
+		return {
+			/** How many `GET /auth` were sent. */
+			get count() {
+				return asked.length;
+			},
+			/** Waits for the `n`th `GET /auth` the app sends (10 s deadline). */
+			sent: (n = 1) => vi.waitFor(() => expect(asked.length).toBe(n), { timeout: 10_000 }),
+			answer: (n: number, r: Response | Error) => asked[n - 1]!(r)
+		};
+	}
+	const WAIT = { timeout: 10_000 };
+	const blocked = () => writeDraft('crawler', { v: 1, at: 1, sections: {} }) === false;
+
 	it('a late success after Sign out keeps drafts blocked', async () => {
 		seed();
 		// A preview sent just before Sign out answers just after it.
-		let answer!: (r: Response) => void;
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: string | URL | Request) =>
-				String(url).includes('/logout')
-					? json(200, { ok: true })
-					: String(url).endsWith('/auth')
-						? authIs(false) // asked afresh: signed out
-						: new Promise<Response>((r) => (answer = r))
-			)
+		let late!: (r: Response) => void;
+		const auth = heldAuth((url) =>
+			url.includes('/logout')
+				? json(200, { ok: true })
+				: (new Promise<Response>((r) => (late = r)) as never)
 		);
-		const late = api.get('/filters');
+		const preview = api.get('/filters');
 		await logout();
-		answer(json(200, []));
-		await late.catch(() => {});
-		await probe(); // the fresh GET /auth the late success started
-		expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).endsWith('/auth'))).toBe(true);
+		late(json(200, []));
+		await preview;
+		await auth.sent(1); // the late success itself asked GET /auth afresh
+		const probing = probe(); // that same request, still in flight
+		auth.answer(1, authIs(false));
+		await probing;
+		expect(auth.count).toBe(1);
 		expect(signInPending()).toBe('signedout');
-		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
+		expect(blocked()).toBe(true);
 		expect(sessionStorage.getItem(DRAFT_PREFIX + 'crawler')).toBeNull();
 	});
 
@@ -300,28 +327,25 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 			vi.fn(async () => json(200, { ok: true }))
 		);
 		await logout();
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: string | URL | Request) =>
-				String(url).endsWith('/auth') ? authIs(true) : json(200, [])
-			)
-		);
+		const auth = heldAuth();
 		await api.get('/filters');
-		await probe();
-		expect(signInPending()).toBeNull();
-		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
+		await auth.sent(1);
+		auth.answer(1, authIs(true));
+		await vi.waitFor(() => expect(signInPending()).toBeNull(), WAIT);
+		expect(blocked()).toBe(false);
 	});
 
 	it('a reload with the block stored lifts it when GET /auth finds a live session', async () => {
 		sessionStorage.setItem(SIGN_IN_KEY, 'signedout'); // Signed out here, signed in from another tab
 		setSession('signed_out');
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => authIs(true))
-		);
-		await checkAuth();
-		await probe();
-		expect(signInPending()).toBeNull();
+		const auth = heldAuth();
+		const loaded = checkAuth(); // the page's own load check
+		await auth.sent(1);
+		auth.answer(1, authIs(true));
+		await loaded;
+		await auth.sent(2); // which, logged in while blocked, probed afresh
+		auth.answer(2, authIs(true));
+		await vi.waitFor(() => expect(signInPending()).toBeNull(), WAIT);
 		// A later expiry is an expiry again: the guard asks and keeps the draft.
 		vi.stubGlobal(
 			'fetch',
@@ -342,25 +366,74 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 		).toBe('signin');
 	});
 
-	it('a probe answered after a newer block never lifts it', async () => {
+	it.each(['signedout', 'setup'])(
+		'%s: a probe that finds the instance needs setup keeps the block',
+		async (state) => {
+			sessionStorage.setItem(SIGN_IN_KEY, state);
+			setSession('signed_out');
+			const auth = heldAuth();
+			await api.get('/filters');
+			await auth.sent(1);
+			const probing = probe();
+			auth.answer(1, json(200, { logged_in: true, setup_required: true, notice_required: false }));
+			await probing;
+			expect(signInPending()).toBe(state);
+			expect(blocked()).toBe(true);
+		}
+	);
+
+	it.each([
+		['a network error', () => new TypeError('Failed to fetch')],
+		['a 500', () => json(500, { error: { code: 'internal', message: 'boom' } })],
+		['a 401', () => expired(false)]
+	])('a probe that fails with %s keeps the block, asks once, and rejects nothing', async (_, r) => {
 		sessionStorage.setItem(SIGN_IN_KEY, 'signedout');
-		let answer!: (r: Response) => void;
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: string | URL | Request) =>
-				String(url).endsWith('/auth')
-					? new Promise<Response>((r) => (answer = r))
-					: json(200, { ok: true })
-			)
-		);
 		setSession('signed_out');
-		setSession('signed_in'); // probes GET /auth at this epoch
-		const asked = probe(); // the same one, in flight
-		await vi.waitFor(() => expect(answer).toBeDefined(), { timeout: 10_000 });
-		await logout(); // a newer block
-		answer(authIs(true));
-		await asked;
+		const auth = heldAuth();
+		await api.get('/filters');
+		await auth.sent(1);
+		const probing = probe();
+		auth.answer(1, r());
+		await expect(probing).resolves.toBeUndefined();
+		expect(auth.count).toBe(1);
 		expect(signInPending()).toBe('signedout');
+		expect(blocked()).toBe(true);
+	});
+
+	it('a newer block during a probe asks afresh; only the fresh answer can lift it', async () => {
+		sessionStorage.setItem(SIGN_IN_KEY, 'signedout');
+		setSession('signed_out');
+		const auth = heldAuth((url) =>
+			url.includes('/logout') ? json(200, { ok: true }) : json(200, [])
+		);
+		await api.get('/filters');
+		await auth.sent(1); // probing at this epoch
+		const stale = probe(); // that probe, in flight
+		await logout(); // a newer block
+		await api.get('/filters');
+		await auth.sent(2); // a fresh GET /auth at the newer epoch
+		auth.answer(1, authIs(true)); // the stale answer
+		await stale;
+		expect(signInPending()).toBe('signedout');
+		auth.answer(2, authIs(true));
+		await vi.waitFor(() => expect(signInPending()).toBeNull(), WAIT);
+	});
+
+	it('a probe answered after the form signed in and a real expiry leaves the expiry', async () => {
+		sessionStorage.setItem(SIGN_IN_KEY, 'signedout');
+		setSession('signed_out');
+		const auth = heldAuth((url) =>
+			url.includes('/filters') && signInPending() === null ? expired(false) : json(200, [])
+		);
+		await api.get('/filters'); // probes while blocked
+		await auth.sent(1);
+		const probing = probe();
+		signedIn(); // the sign-in form succeeded meanwhile
+		await expect(api.get('/filters')).rejects.toThrow(); // then the session expired
+		expect(signInPending()).toBe('expired');
+		auth.answer(1, authIs(true)); // the stale probe's answer
+		await probing;
+		expect(signInPending()).toBe('expired');
 	});
 
 	it('drops them all when the instance needs its first-run setup again', async () => {

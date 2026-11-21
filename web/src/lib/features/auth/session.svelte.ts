@@ -72,7 +72,15 @@ export function probe(): Promise<void> {
 		.get('/auth')
 		.then(
 			(a) => {
-				if (sent === epoch && a.logged_in && !a.setup_required) signedIn();
+				// Still blocked (not lifted by a sign-in, then expired, meanwhile) and no newer block.
+				const w = signInPending();
+				if (
+					(w === 'signedout' || w === 'setup') &&
+					sent === epoch &&
+					a.logged_in &&
+					!a.setup_required
+				)
+					signedIn();
 			},
 			() => {}
 		)
