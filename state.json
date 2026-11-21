@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T03:41Z",
+    "updated": "2026-11-21T05:02Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
         "since": "2026-11-21T01:34Z",
-        "doing": "briefed; #999 X-session-draft-keep merged 072e945c",
+        "doing": "unblocked by #1002; merging main, re-measuring sizes",
         "status": "running"
       },
       {
@@ -10677,12 +10677,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-results-drawer-adaptive",
+        "slice": "CR-COL-6",
         "role": "build",
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
-        "since": "2026-11-20T21:50Z",
-        "doing": "unblocked by #999; merging main, CSS 19.73 raise, opening PR",
+        "since": "2026-11-21T05:02Z",
+        "doing": "briefed; X-results-drawer-adaptive #1002 merged 59e18024",
         "status": "running"
       },
       {
