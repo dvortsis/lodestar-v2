@@ -341,6 +341,7 @@ fn response(
             .map(|v| FacetValue {
                 count: v.count,
                 excluded: v.excluded,
+                label: v.label.clone(),
                 selected: v.selected,
                 value: v.value.clone(),
             })
@@ -428,6 +429,7 @@ mod tests {
             count,
             selected: false,
             excluded: false,
+            label: None,
         }
     }
 

@@ -1332,11 +1332,12 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
 
 /// Stored names read per listed `group` value for its spelling, at most.
 pub const LABEL_SAMPLES: usize = 8;
-/// Stored names read per request for `group` spellings, at most, unless
-/// that leaves a value fewer than [`MIN_LABEL_SAMPLES`]: a long list
-/// (`limit=100`) reads fewer names per value.
+/// Stored names read per request for `group` spellings, at most, however
+/// many values are listed (a runner call, §2.26).
 pub const LABEL_READS: usize = 256;
-/// Names read per value even when the list is long.
+/// Names a value needs to get a label: a long list (`limit=100`) reads
+/// this many per value, and the values past what [`LABEL_READS`] allows
+/// at this many each show as sent.
 pub const MIN_LABEL_SAMPLES: usize = 3;
 
 /// Sets each `group` value's `label` to its most common spelling in the
@@ -1354,9 +1355,14 @@ pub const MIN_LABEL_SAMPLES: usize = 3;
 ///   spelling then has to be on a large share of the group's torrents to
 ///   win, whatever one junk or hostile record writes, and however
 ///   recently.
-/// - **No spelling found** (the group came from a file name, or a name
-///   holds it in another case form): no label, and the value shows as
-///   sent.
+/// - **What may show:** names are untrusted, so a spelling is only
+///   [`fit_label`]: the value char for char under lower-casing, and
+///   NFKC-stable.
+/// - **Bounded:** at most [`LABEL_READS`] names per request, at least
+///   [`MIN_LABEL_SAMPLES`] per value; values in list order (the top
+///   counts first) until the reads run out.
+/// - **No spelling found** (the group came from a file name, or no name
+///   holds a fit one): no label, and the value shows as sent.
 ///
 /// The value itself is unchanged: it's what a query matches and a click
 /// sends.
@@ -1370,14 +1376,20 @@ fn group_labels(
         return Ok(());
     }
     let per = (LABEL_READS / values.len()).clamp(MIN_LABEL_SAMPLES, LABEL_SAMPLES);
+    let mut left = LABEL_READS;
     for v in values.iter_mut() {
+        if left < per {
+            break;
+        }
         cancel.check()?;
         let term = tantivy::Term::from_field_text(
             fields.tag,
             &format!("{}:{}", TagKey::Group.as_str(), v.value),
         );
+        let docs = sample_docs(searcher, &term, per)?;
+        left -= docs.len();
         let mut votes = Vec::new();
-        for addr in sample_docs(searcher, &term, per)? {
+        for addr in docs {
             let doc: tantivy::TantivyDocument = searcher.doc(addr)?;
             let name = doc
                 .get_first(fields.name)
@@ -1391,6 +1403,26 @@ fn group_labels(
             .map(str::to_owned);
     }
     Ok(())
+}
+
+/// Whether `label` may show for `value` (the runner's rule, §2.26): each
+/// of its chars lower-cases to exactly the value's char in its place, so
+/// it has the same chars, only re-cased; and it's NFKC-stable, so a
+/// compatibility char (the Kelvin sign `K`, U+212A, lower-cases to `k`)
+/// never shows.
+pub(crate) fn fit_label(label: &str, value: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let mut want = value.chars();
+    for c in label.chars() {
+        let mut low = c.to_lowercase();
+        let (Some(l), None) = (low.next(), low.next()) else {
+            return false;
+        };
+        if want.next() != Some(l) {
+            return false;
+        }
+    }
+    want.next().is_none() && label.nfkc().eq(label.chars())
 }
 
 /// Up to `k` live documents with `term`, spread evenly over its posting
@@ -1457,23 +1489,27 @@ fn sample_docs(
 }
 
 /// The spelling of `value` (lower case, as the index holds a tag) in
-/// `name`: the last substring whose lower case is `value` and that is a
-/// word of its own (no letter or digit on either side), else the last
-/// one at all; `None` when there's none.
+/// `name`: the last [`fit_label`] substring that is a word of its own (no
+/// letter or digit on either side), else the last fit one at all; `None`
+/// when there's none.
 pub(crate) fn spelling_in<'a>(name: &'a str, value: &str) -> Option<&'a str> {
-    if value.is_empty() {
+    let len = value.chars().count();
+    if len == 0 {
         return None;
     }
     let mut last = None;
     let mut last_word = None;
     for (start, _) in name.char_indices() {
-        let Some(end) = lowered_prefix(&name[start..], value).map(|n| start + n) else {
-            continue;
+        // Char for char: the cut has as many chars as the value.
+        let end = name[start..]
+            .char_indices()
+            .nth(len - 1)
+            .map(|(i, c)| start + i + c.len_utf8());
+        let Some(end) = end else {
+            break;
         };
         let cut = &name[start..end];
-        // Char-wise lower case can differ from the whole string's (a
-        // final sigma): the index wrote `str::to_lowercase`.
-        if cut.to_lowercase() != value {
+        if !fit_label(cut, value) {
             continue;
         }
         let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
@@ -1483,22 +1519,6 @@ pub(crate) fn spelling_in<'a>(name: &'a str, value: &str) -> Option<&'a str> {
         last = Some(cut);
     }
     last_word.or(last)
-}
-
-/// The byte length of the shortest prefix of `s` whose chars, each
-/// lower-cased, spell `value`; `None` when no prefix does.
-fn lowered_prefix(s: &str, value: &str) -> Option<usize> {
-    let mut rest = value;
-    let mut buf = [0u8; 4];
-    for (i, c) in s.char_indices() {
-        for l in c.to_lowercase() {
-            rest = rest.strip_prefix(&*l.encode_utf8(&mut buf))?;
-        }
-        if rest.is_empty() {
-            return Some(i + c.len_utf8());
-        }
-    }
-    None
 }
 
 /// The spelling with the most votes, ties going to the first in byte

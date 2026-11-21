@@ -1469,8 +1469,8 @@ fn samples_spread_over_the_posting_list_and_skip_deleted_documents() {
 
 #[test]
 fn a_long_list_reads_fewer_names_per_group() {
-    // 100 groups listed: at least MIN_LABEL_SAMPLES names each, so every
-    // group still gets its spelling.
+    // 100 groups listed: MIN_LABEL_SAMPLES names each, until LABEL_READS
+    // runs out.
     let docs: Vec<TorrentDoc> = (0..300)
         .map(|i| {
             let g = format!("Grp{}", i % 100);
@@ -1484,15 +1484,27 @@ fn a_long_list_reads_fewer_names_per_group() {
     let (_, _, f) = run(&index, "", &params);
     let values = &f.term(Facet::Group).unwrap().values;
     assert_eq!(values.len(), 100);
-    for v in values {
+    // 256 reads at 3 each: the top 85 get their spelling, the rest show
+    // as sent.
+    let labelled = LABEL_READS / MIN_LABEL_SAMPLES;
+    for (i, v) in values.iter().enumerate() {
         let want = format!("Grp{}", v.value.trim_start_matches("grp"));
-        assert_eq!(v.label.as_deref(), Some(want.as_str()));
+        if i < labelled {
+            assert_eq!(v.label.as_deref(), Some(want.as_str()), "{i}");
+        } else {
+            assert_eq!(v.label, None, "{i}");
+        }
     }
+    // The default limit: every value gets one.
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    let values = &f.term(Facet::Group).unwrap().values;
+    assert_eq!(values.len(), DEFAULT_LIMIT);
+    assert!(values.iter().all(|v| v.label.is_some()));
 }
 
 #[test]
 fn spellings_are_found_as_words() {
-    let cases: [(&str, &str, Option<&str>); 10] = [
+    let cases: [(&str, &str, Option<&str>); 13] = [
         ("Movie.2020.1080p-RARBG", "rarbg", Some("RARBG")),
         // The last word of its own wins over an earlier one.
         ("Rarbg.Pack.Movie-RARBG", "rarbg", Some("RARBG")),
@@ -1504,9 +1516,17 @@ fn spellings_are_found_as_words() {
         ("Nothing here", "rarbg", None),
         ("", "rarbg", None),
         ("RARBG", "", None),
-        // Lower-casing that changes length (İ is "i̇").
-        ("Show-İSTANBUL", "i̇stanbul", Some("İSTANBUL")),
         ("Ünïcode-GRÜPPE", "grüppe", Some("GRÜPPE")),
+        // Lower-casing that changes the char count (İ is "i̇"): not char
+        // for char, so no label.
+        ("Show-İSTANBUL", "i̇stanbul", None),
+        // Compatibility chars lower-case to the value but aren't
+        // NFKC-stable: the Kelvin sign (U+212A) and the Angstrom sign
+        // (U+212B).
+        ("Show-\u{212A}ING", "king", None),
+        ("Show-\u{212B}NGSTROM", "ångstrom", None),
+        // A fit spelling elsewhere in the name still wins.
+        ("KING-\u{212A}ING", "king", Some("KING")),
     ];
     for (name, value, want) in cases {
         assert_eq!(spelling_in(name, value), want, "{name:?} {value:?}");
@@ -1528,7 +1548,17 @@ fn the_most_votes_win_ties_by_byte_order() {
 mod label_props {
     use proptest::prelude::*;
 
-    use super::super::{choose_spelling, spelling_in};
+    use unicode_normalization::UnicodeNormalization;
+
+    use super::super::{choose_spelling, fit_label, spelling_in};
+
+    /// The runner's rule (§2.26), stated directly.
+    fn fit(label: &str, value: &str) -> bool {
+        let lowered: Vec<String> = label.chars().map(|c| c.to_lowercase().collect()).collect();
+        label.chars().count() == value.chars().count()
+            && lowered.iter().zip(value.chars()).all(|(l, v)| *l == v.to_string())
+            && label.nfkc().collect::<String>() == label
+    }
 
     /// `value` with each char's case flipped by `mask`.
     fn recased(value: &str, mask: &[bool]) -> String {
@@ -1548,6 +1578,23 @@ mod label_props {
             if let Some(s) = spelling_in(&name, &value) {
                 prop_assert_eq!(s.to_lowercase(), value.clone());
                 prop_assert!(name.contains(s));
+                prop_assert!(fit(s, &value));
+            }
+        }
+
+        #[test]
+        fn a_label_is_the_value_re_cased_and_nfkc_stable(
+            label in "[a-zA-Z0-9\u{212A}\u{212B}\u{130}\u{FB01}\u{FF21}ÅåKkσΣς ]{0,10}",
+            value in "[a-z0-9åkσς ]{0,10}",
+        ) {
+            prop_assert_eq!(fit_label(&label, &value), fit(&label, &value));
+            // And against the label's own lower case.
+            let own = label.to_lowercase();
+            prop_assert_eq!(fit_label(&label, &own), fit(&label, &own));
+            if fit_label(&label, &value) {
+                prop_assert_eq!(label.chars().count(), value.chars().count());
+                let compat = ['\u{212A}', '\u{212B}', '\u{FB01}', '\u{FF21}', '\u{130}'];
+                prop_assert!(!label.contains(compat), "{:?}", label);
             }
         }
 
@@ -1559,7 +1606,7 @@ mod label_props {
             mask in proptest::collection::vec(any::<bool>(), 1..12),
         ) {
             let word = recased(&value, &mask);
-            prop_assume!(word.to_lowercase() == value);
+            prop_assume!(super::super::fit_label(&word, &value));
             let name = format!("{before}-{word}");
             let got = spelling_in(&name, &value);
             prop_assert!(got.is_some());
@@ -1595,4 +1642,25 @@ mod label_props {
             }
         }
     }
+}
+
+#[test]
+fn only_a_re_cased_nfkc_stable_spelling_may_show() {
+    assert!(fit_label("RARBG", "rarbg"));
+    assert!(fit_label("rarbg", "rarbg"));
+    assert!(fit_label("GRÜPPE", "grüppe"));
+    assert!(fit_label("ΑΒΓ", "αβγ"));
+    // The Kelvin sign lower-cases to `k`, the Angstrom sign to `å`; NFKC
+    // makes them K and Å, so they never show.
+    assert!(!fit_label("\u{212A}ING", "king"));
+    assert!(!fit_label("\u{212B}NGSTROM", "ångstrom"));
+    // Two chars from one (İ), or another char count.
+    assert!(!fit_label("İ", "i\u{307}"));
+    assert!(!fit_label("RARB", "rarbg"));
+    assert!(!fit_label("RARBGX", "rarbg"));
+    // Compatibility forms: a ligature, a full-width letter.
+    assert!(!fit_label("\u{FB01}", "\u{FB01}"));
+    assert!(!fit_label("\u{FF21}", "\u{FF41}"));
+    assert!(!fit_label("", "a"));
+    assert!(fit_label("", ""));
 }

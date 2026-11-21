@@ -15,8 +15,8 @@
 		name: string;
 		title: string;
 		facet: TermFacet;
-		/** The value's label (`movie` → "Movies"). */
-		labelOf?: (value: string) => string;
+		/** The value's label (`movie` → "Movies"), given the server's own `label` if it sent one. */
+		labelOf?: (value: string, label?: string | null) => string;
 		/** "Show more" is on: the server lists up to 100 values. */
 		more?: boolean;
 		/** Offer "Show more" when the server has more values than it listed. */
@@ -32,7 +32,7 @@
 		name,
 		title,
 		facet,
-		labelOf = (v) => v,
+		labelOf = (v, label) => label ?? v,
 		more = false,
 		onmore,
 		excludable = true,
@@ -52,7 +52,7 @@
 		const q = find.trim().toLowerCase();
 		if (!more || !q) return facet.values;
 		return facet.values.filter(
-			(v) => labelOf(v.value).toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
+			(v) => labelOf(v.value, v.label).toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
 		);
 	});
 	const hasMore = $derived(!!onmore && facet.distinct > facet.values.length);
@@ -88,7 +88,7 @@
 	{/if}
 	<ul class="fr-list" aria-labelledby="{id}-h">
 		{#each shown as v (v.value)}
-			{@const label = labelOf(v.value)}
+			{@const label = labelOf(v.value, v.label)}
 			{@const locked = fixed.has(v.value)}
 			<li class="fr-value" class:fr-selected={v.selected} class:fr-excluded={v.excluded}>
 				<span class="fr-label">
