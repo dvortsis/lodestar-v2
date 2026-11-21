@@ -52,7 +52,8 @@
 		const q = find.trim().toLowerCase();
 		if (!more || !q) return facet.values;
 		return facet.values.filter(
-			(v) => labelOf(v.value, v.label).toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
+			(v) =>
+				labelOf(v.value, v.label).toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
 		);
 	});
 	const hasMore = $derived(!!onmore && facet.distinct > facet.values.length);

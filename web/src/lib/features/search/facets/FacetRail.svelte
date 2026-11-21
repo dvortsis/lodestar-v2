@@ -87,7 +87,9 @@
 		v === 'yes' ? m.search_facets_yes() : v === 'no' ? m.search_facets_no() : v;
 	// Values in plain words (X-labels): `h264` reads "H.264", `fr` "French"; a query keeps the code.
 	const labelFor = (name: string) =>
-		FLAGS.has(name) ? yesNo : (v: string, label?: string | null) => valueLabel(name, v, currentLocale(), label);
+		FLAGS.has(name)
+			? yesNo
+			: (v: string, label?: string | null) => valueLabel(name, v, currentLocale(), label);
 
 	const facet = (name: string): TermFacet | undefined => data?.facets[name];
 	const blocked = (name: string) => !!data?.unavailable.includes(name);

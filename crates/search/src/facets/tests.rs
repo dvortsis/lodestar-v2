@@ -1428,7 +1428,7 @@ fn samples_spread_over_the_posting_list_and_skip_deleted_documents() {
     let index = build(&docs, 4);
     let term = tantivy::Term::from_field_text(index.fields().tag, "group:grp");
     let searcher = index.raw().1.searcher();
-    let got = sample_docs(&searcher, &term, 8).unwrap();
+    let got = sample_docs(&searcher, &term, 8, &CancelToken::new()).unwrap();
     assert_eq!(got.len(), 8);
     // Two per segment of 25, distinct.
     for seg in 0..4u32 {
@@ -1442,13 +1442,15 @@ fn samples_spread_over_the_posting_list_and_skip_deleted_documents() {
     let small = build(&few, 2);
     let t = tantivy::Term::from_field_text(small.fields().tag, "group:g");
     assert_eq!(
-        sample_docs(&small.raw().1.searcher(), &t, 8).unwrap().len(),
+        sample_docs(&small.raw().1.searcher(), &t, 8, &CancelToken::new())
+            .unwrap()
+            .len(),
         3
     );
     // No such term: nothing.
     let none = tantivy::Term::from_field_text(small.fields().tag, "group:zzz");
     assert!(
-        sample_docs(&small.raw().1.searcher(), &none, 8)
+        sample_docs(&small.raw().1.searcher(), &none, 8, &CancelToken::new())
             .unwrap()
             .is_empty()
     );
@@ -1511,14 +1513,15 @@ fn a_long_list_reads_fewer_names_per_group() {
 
 #[test]
 fn spellings_are_found_as_words() {
-    let cases: [(&str, &str, Option<&str>); 13] = [
+    let cases: [(&str, &str, Option<&str>); 14] = [
         ("Movie.2020.1080p-RARBG", "rarbg", Some("RARBG")),
         // The last word of its own wins over an earlier one.
         ("Rarbg.Pack.Movie-RARBG", "rarbg", Some("RARBG")),
         // A word beats a later match inside another word.
         ("Movie-RARBG.rarbgx", "rarbg", Some("RARBG")),
-        // Inside words only: the last of those.
-        ("xRarbgx yRARBGy", "rarbg", Some("RARBG")),
+        // Inside other words only: no vote (`flux` in "INFLUX").
+        ("xRarbgx yRARBGy", "rarbg", None),
+        ("INFLUX.2020", "flux", None),
         (
             "[FitGirl Repack] Game",
             "fitgirl repack",
@@ -1561,7 +1564,7 @@ mod label_props {
 
     use unicode_normalization::UnicodeNormalization;
 
-    use super::super::{choose_spelling, fit_label, spelling_in};
+    use super::super::{choose_spelling, fit_label, sample_ranks, spelling_in};
 
     /// The runner's rule (§2.26), stated directly.
     fn fit(label: &str, value: &str) -> bool {
@@ -1627,11 +1630,35 @@ mod label_props {
         ) {
             let word = recased(&value, &mask);
             prop_assume!(super::super::fit_label(&word, &value));
-            let name = format!("{before}-{word}");
+            // Mid-name or at the end.
+            let name = if after.is_empty() {
+                format!("{before}-{word}")
+            } else {
+                format!("{before}-{word}.{after}")
+            };
             let got = spelling_in(&name, &value);
-            prop_assert!(got.is_some());
+            prop_assert!(got.is_some(), "{:?} {:?}", name, value);
             prop_assert_eq!(got.unwrap().to_lowercase(), value);
-            let _ = after;
+        }
+
+        #[test]
+        fn samples_are_nested_and_spread_by_rank(total in 0u64..100_000, k in 1usize..=8) {
+            let few = sample_ranks(total, k);
+            let many = sample_ranks(total, 8);
+            // A short list's samples are among the long list's.
+            prop_assert!(few.iter().all(|r| many.contains(r)));
+            prop_assert!(few.windows(2).all(|w| w[0] < w[1]));
+            prop_assert!(few.iter().all(|r| *r < total.max(1)));
+            prop_assert_eq!(few.len() as u64, (k as u64).min(total));
+            // Spread: the middle document always, and from three on,
+            // documents in both halves and no two within total/16.
+            if total >= 64 {
+                prop_assert!(few.contains(&(total / 2)));
+                if k >= 3 {
+                    prop_assert!(few[0] < total / 2 && *few.last().unwrap() > total / 2);
+                    prop_assert!(few.windows(2).all(|w| w[1] - w[0] >= total / 16 - 1), "{:?}", few);
+                }
+            }
         }
 
         #[test]
@@ -1683,4 +1710,50 @@ fn only_a_re_cased_nfkc_stable_spelling_may_show() {
     assert!(!fit_label("\u{FF21}", "\u{FF41}"));
     assert!(!fit_label("", "a"));
     assert!(fit_label("", ""));
+}
+
+#[test]
+fn a_cluster_then_a_gap_cant_hand_a_group_to_one_record() {
+    // One segment: the group's 40 torrents first, 960 of another group,
+    // then one odd spelling (the review's case: doc-id spreading sampled
+    // only the record after the gap).
+    let mut docs: Vec<TorrentDoc> = (0..40)
+        .map(|i| grouped(i, &format!("Old.{i}-RARBG"), "rarbg"))
+        .collect();
+    docs.extend((40..1000).map(|i| grouped(i, &format!("Filler.{i}-NTB"), "ntb")));
+    docs.push(grouped(1000, "New.1000-rArBg", "rarbg"));
+    let index = build(&docs, 1);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+    let term = tantivy::Term::from_field_text(index.fields().tag, "group:rarbg");
+    let got = sample_docs(&index.raw().1.searcher(), &term, 8, &CancelToken::new()).unwrap();
+    assert_eq!(got.len(), 8);
+    // Several odd ones after the gap: still a minority of the ranks.
+    for i in 1001..1006 {
+        docs.push(grouped(i, &format!("New.{i}-rArBg"), "rarbg"));
+    }
+    let index = build(&docs, 1);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+}
+
+#[test]
+fn long_names_and_values_are_bounded() {
+    // A value past the query language's 64 bytes gets no label.
+    let long = "A".repeat(80);
+    let docs = vec![grouped(0, &format!("X-{long}"), &long)];
+    let index = build(&docs, 1);
+    let mut limits = BTreeMap::new();
+    limits.insert(Facet::Group, MAX_LIMIT);
+    let (_, _, f) = run(&index, "", &FacetParams::new(limits, None, false));
+    assert_eq!(group_value(&f, &long.to_lowercase()).label, None);
+    // A 16 KB name of near-misses, then the word: found, in one pass.
+    let value = "a".repeat(63) + "b";
+    let name = format!("{}-{}", "A".repeat(16_000), value.to_uppercase());
+    assert_eq!(
+        spelling_in(&name, &value),
+        Some(value.to_uppercase().as_str())
+    );
+    let near = "A".repeat(16_000);
+    assert_eq!(spelling_in(&near, &value), None);
 }
