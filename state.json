@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T10:44Z",
+    "updated": "2026-11-21T11:10Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-filter-dicp-doc",
+        "slice": "X-fleet-switch-passthrough",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-21T09:49Z",
-        "doing": "brief sent; filter DICP table and tests"
+        "since": "2026-11-21T11:10Z",
+        "doing": "brief sent; fleet VM stack passes the four new crawler switches"
       },
       {
         "slot": 2,
