@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Filters & Safety → Blocklist subscriptions (§20.13, owner §2.9): the one-click
 	// catalog, your lists with their figures, pause, resume, remove and the held-version choice.
 	// Nothing is subscribed by default. Every change goes through the filters flows' dialog (preview,
@@ -34,7 +35,6 @@
 	let Dialog = $state<Component<Record<string, unknown>>>();
 	let pending = $state({ title: '', applyLabel: '' });
 	let problem = $state('');
-	let heading = $state<HTMLElement>();
 	let ctl: AbortController | undefined;
 	let creating: Promise<ChangeFlow> | undefined;
 	let destroyed = false;
@@ -74,6 +74,7 @@
 		}
 	}
 
+	let heading = $state<HTMLElement>();
 	// A change can remove the row whose button opened the dialog: focus falls to the heading.
 	function keepFocus() {
 		requestAnimationFrame(() =>
@@ -97,7 +98,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold" tabindex="-1" bind:this={heading}>{m.blocklists_title()}</h1>
+<h1 class={PAGE_H1} tabindex="-1" bind:this={heading}>{m.blocklists_title()}</h1>
 <p class="text-muted-text">{m.blocklists_purpose()}</p>
 
 {#if problem}

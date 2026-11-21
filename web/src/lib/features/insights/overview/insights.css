@@ -9,8 +9,6 @@
 	gap: calc(var(--spacing) * 6);
 	width: 100%;
 	max-width: 96rem;
-	margin-inline: auto;
-	padding: calc(var(--spacing) * 4);
 }
 
 /* Context bar: sticky, always visible. */
@@ -339,9 +337,6 @@
 }
 
 @media (min-width: 64rem) {
-	.ins-page {
-		padding: calc(var(--spacing) * 6);
-	}
 	.ins-strip {
 		grid-template-columns: repeat(5, minmax(0, 1fr));
 	}

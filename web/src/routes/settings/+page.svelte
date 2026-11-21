@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	import { onMount, type Component } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -16,7 +17,7 @@
 </script>
 
 <svelte:head><title>{m.settings_shell_title()} · Lodestar</title></svelte:head>
-<h1 class="text-title font-semibold">{m.settings_shell_overview()}</h1>
+<h1 class={PAGE_H1} tabindex="-1">{m.settings_shell_overview()}</h1>
 <p class="mb-4">{m.settings_shell_overview_purpose()}</p>
 {#if Overview}
 	<Overview />

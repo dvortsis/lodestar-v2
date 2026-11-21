@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// The shared body of the hand-built connection screens (§10.10.8): a heading, the form's code
 	// and the schema's fields for `sections`, loaded together when the screen opens. The form is
 	// the screen's own form (`children`), because each adds its tests, clients or dialogs to the
@@ -40,7 +41,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold">{title}</h1>
+<h1 class={PAGE_H1} tabindex="-1">{title}</h1>
 <p class="text-muted-text">{purpose}</p>
 {#if failed}
 	<Lazy load={() => import('./LoadFailed.svelte')} props={{ onretry: () => attempt++ }} />

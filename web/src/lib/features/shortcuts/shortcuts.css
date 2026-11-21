@@ -64,10 +64,7 @@
 }
 
 .sc-screen {
-	@apply flex max-w-xl flex-col gap-4 p-4 text-base-content;
-}
-.sc-h1 {
-	@apply text-title font-semibold;
+	@apply flex max-w-xl flex-col gap-4 text-base-content;
 }
 .sc-h2 {
 	@apply mb-1 text-title font-semibold;

@@ -8,6 +8,7 @@
 </script>
 
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -102,17 +103,17 @@
 		<Body />
 	{:else}
 		{#await loadBody(screen)}
-			<h1 class="text-title font-semibold">{screen.title()}</h1>
+			<h1 class={PAGE_H1} tabindex="-1">{screen.title()}</h1>
 			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 		{:then Loaded}
 			<Loaded />
 		{:catch}
-			<h1 class="text-title font-semibold">{screen.title()}</h1>
+			<h1 class={PAGE_H1} tabindex="-1">{screen.title()}</h1>
 			{@render chunkFailed()}
 		{/await}
 	{/if}
 {:else}
-	<h1 class="text-title font-semibold">{screen?.title() ?? m.settings_shell_title()}</h1>
+	<h1 class={PAGE_H1} tabindex="-1">{screen?.title() ?? m.settings_shell_title()}</h1>
 	{#if !screen}
 		<p>{m.settings_shell_unavailable()}</p>
 	{:else}
