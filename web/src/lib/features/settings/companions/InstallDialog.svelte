@@ -45,13 +45,18 @@
 >
 	<div class="flex flex-col gap-4">
 		<p class="text-small">{m.settings_companions_offer_intro()}</p>
-		<dl class="grid grid-cols-1 gap-2 text-small large:grid-cols-2">
+		<dl
+			class="grid grid-cols-1 gap-2 text-small large:grid-cols-2 large:items-baseline large:gap-x-4"
+		>
 			{#each rows as [k, v], i (k)}
 				<dt class="text-muted-text">{k}</dt>
 				<dd class="break-words" data-offer-field={i} data-testid={`offer-field-${i}`}>{v}</dd>
 			{/each}
-			<dt class="text-muted-text">{m.settings_companions_offer_sha()}</dt>
-			<dd class="break-all font-mono text-caption" data-offer-sha>{offer.sha256}</dd>
+			<!-- The checksum is 64 characters: it takes the dialog's whole width, under its label. -->
+			<dt class="text-muted-text large:col-span-2">{m.settings_companions_offer_sha()}</dt>
+			<dd class="break-all font-mono text-caption large:col-span-2" data-offer-sha>
+				{offer.sha256}
+			</dd>
 		</dl>
 		{#if error}<Banner kind="error">{error}</Banner>{/if}
 	</div>

@@ -1,4 +1,4 @@
-# X-grid-two-col-large decisions (#TBD)
+# X-grid-two-col-large decisions (#1034)
 
 Slice session, 2026-11-21Z, from #1013. X-ui-guards banned breakpoints that aren't on the §10.2 ramp (`sm:`, `md:`, `lg:`, …) and removed the dead `sm:grid-cols-2` classes. Those classes never applied (the theme resets Tailwind's breakpoints, so `sm:` doesn't exist), but they marked where three screens meant to have two columns.
 
@@ -7,7 +7,8 @@ Slice session, 2026-11-21Z, from #1013. X-ui-guards banned breakpoints that aren
   - the install dialog's offer list (`companions/InstallDialog.svelte`), a `<dl>` of label | value pairs;
   - the Unraid template's fields (`companions/Templates.svelte`), the same;
   - the Logging screen's per-component levels (`logging/ComponentLevels.svelte`), a label + select per component.
-- No hex, no arbitrary value; the `<dt>`/`<dd>` pairs fill the two columns left to right, so each label sits beside its value.
+- No hex, no arbitrary value; the `<dt>`/`<dd>` pairs fill the two columns left to right, so each label sits beside its value. The gaps follow the repo's label | value lists (`FieldKeys.svelte`, `JobsScreen.svelte`): the stacked gap below `large:`, and `large:gap-x-4` between the columns; `large:items-baseline` lines up a label's and a value's text, and `large:items-end` keeps each level select level with its neighbour if a label wraps.
+- **The install dialog is capped at `max-w-lg` (512 px),** whatever the viewport, so two half-width columns would squeeze its 64-character checksum. The checksum pair therefore takes the full width under its label (`large:col-span-2`); the other five rows are label | value.
 
 ## Checked (throwaway Playwright screenshots, 390, 1024 and 1440 px, deviceScaleFactor 1, looked at)
 - No horizontal scroll at any width of the three screens (`scrollWidth <= clientWidth`, 9 of 9).
