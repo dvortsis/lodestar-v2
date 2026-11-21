@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T09:45Z",
+    "updated": "2026-11-21T09:49Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-filter-budget-remeasure",
+        "slice": "X-filter-dicp-doc",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-21T08:15Z",
-        "doing": "building: re-measure held over-budget cases with fresh calibration (briefs/X-filter-budget-main.md update)"
+        "since": "2026-11-21T09:49Z",
+        "doing": "brief sent; filter DICP table and tests"
       },
       {
         "slot": 2,
